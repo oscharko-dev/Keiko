@@ -80,11 +80,7 @@ export type EgressDestinationClass = "none" | "configured-model-endpoint" | "una
 
 // ─── Fixture categories ──────────────────────────────────────────────────────────
 export type VoiceTwinFixtureCategory =
-  | "no-voice"
-  | "stt-only"
-  | "speech-output"
-  | "full-realtime"
-  | "privacy";
+  "no-voice" | "stt-only" | "speech-output" | "full-realtime" | "privacy";
 
 export const VOICE_TWIN_FIXTURE_CATEGORIES: readonly VoiceTwinFixtureCategory[] = [
   "no-voice",

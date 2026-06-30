@@ -254,9 +254,7 @@ describe("check-package-coverage", () => {
   });
 
   it("enrolls keiko-editor in the committed coverage baseline", () => {
-    const baseline = JSON.parse(
-      readFileSync("docs/qa/package-coverage-baseline.json", "utf8"),
-    );
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
 
     expect(baseline.packages["keiko-editor"]).toMatchObject({
       files: 4,

@@ -62,8 +62,7 @@ export const KEIKO_DEFAULT_MERGE_POLICY_PACK: GitDeliveryRepoPolicyPack = {
 export interface GitDeliveryMergeSeams {
   readonly mergeAdapterFactory?: ((workspace: WorkspaceInfo) => GitMergeAdapter) | undefined;
   readonly snapshotReader?:
-    | ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>)
-    | undefined;
+    ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly strategyPolicy?: GitMergeStrategyPolicy | undefined;
   readonly now?: (() => number) | undefined;

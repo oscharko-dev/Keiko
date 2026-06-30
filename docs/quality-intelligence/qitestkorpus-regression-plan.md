@@ -44,15 +44,15 @@ A run counts as clean only when all of the following are true:
 
 ## Test Matrix
 
-| ID | Surface | Source | Purpose | Acceptance |
-| --- | --- | --- | --- | --- |
-| QI-UI-01 | Desktop UI | Existing local-knowledge capsule `Test` from `02-Girokonto-Zahlungsverkehr` | Prove capsule-based generation works from the user surface that previously failed. | Succeeded run with candidates, no fallback marker, no browser overlay. |
-| QI-API-02 | SSE API | Folder `01-Privatkredit-Ratenkredit` | Prove workspace-folder ingestion, streaming progress, and persisted evidence outside the UI. | SSE emits stage progress and terminal `done`; manifest and candidates are present. |
-| QI-UI-03 | Desktop UI | Folder `03-Versicherung-KFZ-Leben` selected through the shared local file browser | Prove the file browser can select a folder and feed QI from the UI. | Picker opens, navigates/applies selection, run succeeds, UI settles. |
-| QI-API-04 | SSE API | Single Markdown file from `04-Wertpapier-Depot-WpHG` | Prove single-file source handling and smaller evidence sets. | Run succeeds with at least one candidate and source path captured only in local evidence. |
-| QI-UI-05 | Desktop UI | File source selected through the shared local file browser | Prove file-level browsing down to a file path. | Picker can open root, navigate to a file, apply selection, and close via cancel/escape. |
-| QI-UI-06 | Desktop UI | Existing run row in the Quality Intelligence run list | Prove run deletion from the user surface. | Delete reveals confirm, confirm deletes the run, the list refetches, no `UNSUPPORTED_MEDIA_TYPE` alert appears. |
-| QI-DEG-01 | Unit/component tests | Forced provider failure and malformed model output | Prove provider/parser failures do not leave the UI spinning and can still produce deterministic baseline candidates where possible. | Tests prove visible failure reason or baseline fallback with redacted reason. |
+| ID        | Surface              | Source                                                                            | Purpose                                                                                                                             | Acceptance                                                                                                      |
+| --------- | -------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| QI-UI-01  | Desktop UI           | Existing local-knowledge capsule `Test` from `02-Girokonto-Zahlungsverkehr`       | Prove capsule-based generation works from the user surface that previously failed.                                                  | Succeeded run with candidates, no fallback marker, no browser overlay.                                          |
+| QI-API-02 | SSE API              | Folder `01-Privatkredit-Ratenkredit`                                              | Prove workspace-folder ingestion, streaming progress, and persisted evidence outside the UI.                                        | SSE emits stage progress and terminal `done`; manifest and candidates are present.                              |
+| QI-UI-03  | Desktop UI           | Folder `03-Versicherung-KFZ-Leben` selected through the shared local file browser | Prove the file browser can select a folder and feed QI from the UI.                                                                 | Picker opens, navigates/applies selection, run succeeds, UI settles.                                            |
+| QI-API-04 | SSE API              | Single Markdown file from `04-Wertpapier-Depot-WpHG`                              | Prove single-file source handling and smaller evidence sets.                                                                        | Run succeeds with at least one candidate and source path captured only in local evidence.                       |
+| QI-UI-05  | Desktop UI           | File source selected through the shared local file browser                        | Prove file-level browsing down to a file path.                                                                                      | Picker can open root, navigate to a file, apply selection, and close via cancel/escape.                         |
+| QI-UI-06  | Desktop UI           | Existing run row in the Quality Intelligence run list                             | Prove run deletion from the user surface.                                                                                           | Delete reveals confirm, confirm deletes the run, the list refetches, no `UNSUPPORTED_MEDIA_TYPE` alert appears. |
+| QI-DEG-01 | Unit/component tests | Forced provider failure and malformed model output                                | Prove provider/parser failures do not leave the UI spinning and can still produce deterministic baseline candidates where possible. | Tests prove visible failure reason or baseline fallback with redacted reason.                                   |
 
 ## Provider Diagnostic Questions
 
@@ -82,14 +82,14 @@ Manual/browser gates:
 
 ## Live Results
 
-| ID | Status | Run ID | Notes |
-| --- | --- | --- | --- |
-| QI-UI-01 | Passed | `qi-run-628f0eac-bdb3-47b9-85aa-6643390b6a11` | UI capsule run, `gpt-5.4`, 9 evidence refs, 25 candidates, 17 gateway calls, quality score 100. |
-| QI-API-02 | Passed | `qi-run-2f4b50b7-10cc-4554-9994-65a3aa681b39` | SSE folder run, 120 evidence refs, 136 candidates, 120/120 atoms covered, 0 findings, 17 gateway calls, quality score 100. This run was later deleted during QI-UI-06. |
-| QI-UI-03 | Passed | `qi-run-f4194790-5f35-4063-b6f4-307cbae22091` | Desktop UI folder run selected through the shared file browser, 120 evidence refs, 136 candidates, 120/120 atoms covered, 2 judge findings, 17 gateway calls, quality score 87.5. |
-| QI-API-04 | Passed | `qi-run-42b86f2e-da8a-4141-94b8-792f07a97a3e` | SSE single-file run, 120 evidence refs, 136 candidates, 120/120 atoms covered, 0 findings, 17 gateway calls, quality score 100. |
-| QI-UI-05 | Passed | n/a | Shared file browser: Cancel closed, Escape closed, folder root opened, file row selected, and `/Users/oscharko-dev/Keiko-Test-Data/QI-Testkorpus/04-Wertpapier-Depot-WpHG/Anforderungskatalog-Wertpapier.md` was applied to the QI file-path field. |
-| QI-UI-06 | Passed | `qi-run-2f4b50b7-10cc-4554-9994-65a3aa681b39` | Desktop UI delete verification: 7 visible runs before delete, confirm strip appeared, confirmed delete removed the row and refetched to 6 visible runs, no `UNSUPPORTED_MEDIA_TYPE`, no state-changing JSON error, no browser console errors. |
+| ID        | Status | Run ID                                        | Notes                                                                                                                                                                                                                                               |
+| --------- | ------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| QI-UI-01  | Passed | `qi-run-628f0eac-bdb3-47b9-85aa-6643390b6a11` | UI capsule run, `gpt-5.4`, 9 evidence refs, 25 candidates, 17 gateway calls, quality score 100.                                                                                                                                                     |
+| QI-API-02 | Passed | `qi-run-2f4b50b7-10cc-4554-9994-65a3aa681b39` | SSE folder run, 120 evidence refs, 136 candidates, 120/120 atoms covered, 0 findings, 17 gateway calls, quality score 100. This run was later deleted during QI-UI-06.                                                                              |
+| QI-UI-03  | Passed | `qi-run-f4194790-5f35-4063-b6f4-307cbae22091` | Desktop UI folder run selected through the shared file browser, 120 evidence refs, 136 candidates, 120/120 atoms covered, 2 judge findings, 17 gateway calls, quality score 87.5.                                                                   |
+| QI-API-04 | Passed | `qi-run-42b86f2e-da8a-4141-94b8-792f07a97a3e` | SSE single-file run, 120 evidence refs, 136 candidates, 120/120 atoms covered, 0 findings, 17 gateway calls, quality score 100.                                                                                                                     |
+| QI-UI-05  | Passed | n/a                                           | Shared file browser: Cancel closed, Escape closed, folder root opened, file row selected, and `/Users/oscharko-dev/Keiko-Test-Data/QI-Testkorpus/04-Wertpapier-Depot-WpHG/Anforderungskatalog-Wertpapier.md` was applied to the QI file-path field. |
+| QI-UI-06  | Passed | `qi-run-2f4b50b7-10cc-4554-9994-65a3aa681b39` | Desktop UI delete verification: 7 visible runs before delete, confirm strip appeared, confirmed delete removed the row and refetched to 6 visible runs, no `UNSUPPORTED_MEDIA_TYPE`, no state-changing JSON error, no browser console errors.       |
 
 ## Defects Found And Fixed
 

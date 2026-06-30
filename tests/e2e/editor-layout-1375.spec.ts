@@ -79,7 +79,10 @@ async function tabLabels(pane: Locator): Promise<readonly string[]> {
   return pane.locator(".ed-tab-label").allInnerTexts();
 }
 
-async function tabCenter(pane: Locator, file: string): Promise<{
+async function tabCenter(
+  pane: Locator,
+  file: string,
+): Promise<{
   readonly x: number;
   readonly y: number;
   readonly right: number;
@@ -220,9 +223,7 @@ test("keeps pointer-drag tab insertion feedback and next-click focus consistent"
   await page.mouse.move(source.x + 18, source.y, { steps: 3 });
   await page.mouse.move(activeTarget.right - 4, activeTarget.y, { steps: 6 });
 
-  await expect
-    .poll(async () => insertionHighlightStyles(workspace))
-    .toHaveLength(2);
+  await expect.poll(async () => insertionHighlightStyles(workspace)).toHaveLength(2);
   const highlighted = await insertionHighlightStyles(workspace);
 
   expect(new Set(highlighted.map((entry) => entry.transition))).toEqual(new Set(["none"]));

@@ -204,9 +204,7 @@ export type CompletionInteractionMode = "as-you-type" | "manual" | "deterministi
 //   - "over-cost-ceiling"         — an aligned FIM model exists but every candidate exceeds the
 //                                   caller's cost ceiling (#1206).
 export type CompletionDegradeReason =
-  | "no-infilling-model"
-  | "only-base-infilling-model"
-  | "over-cost-ceiling";
+  "no-infilling-model" | "only-base-infilling-model" | "over-cost-ceiling";
 
 export interface CompletionModelSelection {
   readonly mode: CompletionInteractionMode;
@@ -261,9 +259,7 @@ export type VoiceProfile = "none" | "speech-to-text" | "speech-output" | "full-r
 //   - "policy-disabled"      — voice is disabled by deployment policy (operator kill-switch).
 //   - "provider-unreachable" — voice providers are configured but currently unreachable.
 export type VoiceUnavailableReason =
-  | "no-voice-provider"
-  | "policy-disabled"
-  | "provider-unreachable";
+  "no-voice-provider" | "policy-disabled" | "provider-unreachable";
 
 // Transport posture for the resolved profile (ADR-0058 D3). The control/signaling plane
 // ("WebSocket is authoritative") is realized today on the loopback HTTP + SSE seam, so
@@ -429,12 +425,7 @@ export interface UsageMetadata {
 // ─── Normalised response ──────────────────────────────────────────────────────
 
 export type FinishReason =
-  | "stop"
-  | "tool_calls"
-  | "length"
-  | "content_filter"
-  | "error"
-  | "cancelled";
+  "stop" | "tool_calls" | "length" | "content_filter" | "error" | "cancelled";
 
 export interface NormalizedResponse {
   readonly modelId: string;
@@ -473,10 +464,7 @@ export type StreamEvent =
 // Pinned by keiko-model-gateway/src/capabilities.test.ts (re-exported there).
 
 export type ConversationIneligibilityReason =
-  | "embedding-only"
-  | "ocr-vision-only"
-  | "voice-only"
-  | "non-chat";
+  "embedding-only" | "ocr-vision-only" | "voice-only" | "non-chat";
 
 // Why: see header — only `kind === "chat"` is conversation-eligible by
 // construction. Pure, total, no side effects.

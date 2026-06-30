@@ -811,6 +811,7 @@ export interface AppendDesktopChatVoiceTurnInput {
   readonly chatId: string;
   readonly projectPath: string;
   readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
+  readonly modelId?: string | undefined;
   readonly memory?: ConversationMemoryRequestWire;
 }
 

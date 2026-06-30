@@ -103,9 +103,8 @@ function dispatchFormat(controllers: EditorAgentActionControllers): EditorAgentA
 function dispatchSave(controllers: EditorAgentActionControllers): EditorAgentActionDescriptor {
   const promise = controllers
     .persist(controllers.currentText())
-    .then(
-      (ok): EditorAgentActionDescriptor =>
-        ok ? { status: "succeeded" } : { status: "failed", message: "Save failed." },
+    .then((ok): EditorAgentActionDescriptor =>
+      ok ? { status: "succeeded" } : { status: "failed", message: "Save failed." },
     );
   return { status: "async", promise };
 }

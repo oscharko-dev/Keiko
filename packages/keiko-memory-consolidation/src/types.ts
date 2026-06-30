@@ -27,12 +27,7 @@ import type { MemoryUpdate } from "@oscharko-dev/keiko-contracts/memory";
 // caller pins onto the job via `transitionJob(job, "completed", { result })`.
 
 export type ConsolidationJobState =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "canceled"
-  | "skipped";
+  "queued" | "running" | "completed" | "failed" | "canceled" | "skipped";
 
 export interface ConsolidationJob {
   readonly id: string;

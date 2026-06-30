@@ -83,10 +83,7 @@ export function largeDocumentPolicyFingerprint(policy: LargeDocumentResourcePoli
 
 // ─── Preflight classification ─────────────────────────────────────────────────
 export type LargeDocumentExtractionStrategy =
-  | "standard-buffer"
-  | "progressive-pdf"
-  | "unsupported"
-  | "oversized";
+  "standard-buffer" | "progressive-pdf" | "unsupported" | "oversized";
 
 export const LARGE_DOCUMENT_EXTRACTION_STRATEGIES: readonly LargeDocumentExtractionStrategy[] = [
   "standard-buffer",
@@ -96,9 +93,7 @@ export const LARGE_DOCUMENT_EXTRACTION_STRATEGIES: readonly LargeDocumentExtract
 ] as const;
 
 export type LargeDocumentPreflightDecision =
-  | "accept-standard"
-  | "accept-progressive"
-  | "reject-oversized";
+  "accept-standard" | "accept-progressive" | "reject-oversized";
 
 export interface LargeDocumentPreflight {
   readonly strategy: LargeDocumentExtractionStrategy;
@@ -231,11 +226,7 @@ export interface ExtractionCheckpointRecord {
 
 // ─── Checkpoint compatibility ─────────────────────────────────────────────────
 export type CheckpointIncompatibilityReason =
-  | "source-hash"
-  | "parser-version"
-  | "resource-policy"
-  | "chunking-strategy"
-  | "embedding-identity";
+  "source-hash" | "parser-version" | "resource-policy" | "chunking-strategy" | "embedding-identity";
 
 export const CHECKPOINT_INCOMPATIBILITY_REASONS: readonly CheckpointIncompatibilityReason[] = [
   "source-hash",

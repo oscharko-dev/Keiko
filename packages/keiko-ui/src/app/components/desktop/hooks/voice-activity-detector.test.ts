@@ -2,7 +2,7 @@
 // the WebAudio glue (createBrowserVoiceActivityDetector) is verified only to be inert without WebAudio
 // (jsdom), since its analyser sampling cannot be driven without a real AudioContext.
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserVoiceActivityDetector,
   VoiceActivityState,
@@ -10,6 +10,10 @@ import {
 } from "./voice-activity-detector";
 
 const T: VoiceActivityThresholds = { rmsThreshold: 0.1, onsetMs: 100, trailingSilenceMs: 300 };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("VoiceActivityState", () => {
   it("fires speech-onset only after sustained above-threshold energy", () => {
@@ -67,6 +71,25 @@ describe("createBrowserVoiceActivityDetector", () => {
     const onEvent = vi.fn();
     const monitor = detector.start({} as unknown as MediaStream, onEvent);
     expect(onEvent).not.toHaveBeenCalled();
+    expect(() => monitor.stop()).not.toThrow();
+  });
+
+  it("returns an inert monitor when WebAudio cannot attach the supplied stream", () => {
+    const close = vi.fn(async () => {});
+    class ThrowingAudioContext {
+      readonly close = close;
+      createMediaStreamSource(): never {
+        throw new Error("invalid stream");
+      }
+    }
+    vi.stubGlobal("AudioContext", ThrowingAudioContext);
+    const detector = createBrowserVoiceActivityDetector(T);
+    const onEvent = vi.fn();
+
+    const monitor = detector.start({} as unknown as MediaStream, onEvent);
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledTimes(1);
     expect(() => monitor.stop()).not.toThrow();
   });
 });

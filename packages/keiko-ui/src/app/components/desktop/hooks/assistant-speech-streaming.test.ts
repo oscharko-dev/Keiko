@@ -3,7 +3,7 @@
 // browser sink is verified to be inert without WebAudio (jsdom), where the engine falls back to the
 // buffered path. The streaming wiring itself is exercised through useAssistantSpeech with a fake sink.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createBrowserAssistantSpeechStreamingSink,
   pcmBytesToInt16,
@@ -43,7 +43,71 @@ describe("pcmBytesToInt16", () => {
 });
 
 describe("createBrowserAssistantSpeechStreamingSink", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("returns undefined when WebAudio/AudioWorklet is unavailable (jsdom → buffered fallback)", () => {
     expect(createBrowserAssistantSpeechStreamingSink()).toBeUndefined();
+  });
+
+  it("closes the AudioContext on dispose and creates fresh WebAudio resources after disposal", async () => {
+    const contexts: { close: ReturnType<typeof vi.fn>; suspend: ReturnType<typeof vi.fn> }[] = [];
+    const nodes: {
+      disconnect: ReturnType<typeof vi.fn>;
+      port: { postMessage: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
+    }[] = [];
+
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        readonly audioWorklet = { addModule: vi.fn(async () => {}) };
+        readonly destination = {};
+        readonly close = vi.fn(async () => {});
+        readonly resume = vi.fn(async () => {});
+        readonly suspend = vi.fn(async () => {});
+        constructor(_options?: AudioContextOptions) {
+          contexts.push({ close: this.close, suspend: this.suspend });
+        }
+      },
+    );
+    vi.stubGlobal(
+      "AudioWorkletNode",
+      class {
+        readonly port = { postMessage: vi.fn(), close: vi.fn() };
+        readonly connect = vi.fn();
+        readonly disconnect = vi.fn();
+        constructor(_context: AudioContext, _name: string, _options?: AudioWorkletNodeOptions) {
+          nodes.push({ disconnect: this.disconnect, port: this.port });
+        }
+      },
+    );
+
+    const sink = createBrowserAssistantSpeechStreamingSink();
+    expect(sink).toBeDefined();
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(
+      sink?.play({ text: "Hello" }, aborted.signal, {
+        onStart: vi.fn(),
+        onEnded: vi.fn(),
+        onError: vi.fn(),
+      }),
+    ).resolves.toBe(true);
+
+    sink?.dispose();
+    expect(contexts[0]?.close).toHaveBeenCalledTimes(1);
+    expect(nodes[0]?.port.postMessage).toHaveBeenCalledWith(null);
+    expect(nodes[0]?.port.close).toHaveBeenCalledTimes(1);
+    expect(nodes[0]?.disconnect).toHaveBeenCalledTimes(1);
+
+    const abortedAgain = new AbortController();
+    abortedAgain.abort();
+    await sink?.play({ text: "Again" }, abortedAgain.signal, {
+      onStart: vi.fn(),
+      onEnded: vi.fn(),
+      onError: vi.fn(),
+    });
+    expect(contexts).toHaveLength(2);
   });
 });

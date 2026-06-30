@@ -14,13 +14,7 @@ export type VerificationKind = "test" | "targeted-test" | "typecheck" | "lint" |
 // `timed-out`, `cancelled`, and `resource-exceeded` distinguish the failure cause so the audit
 // ledger and CLI can report WHY a step did not pass, not merely that it failed.
 export type VerificationStatus =
-  | "passed"
-  | "failed"
-  | "skipped"
-  | "denied"
-  | "timed-out"
-  | "cancelled"
-  | "resource-exceeded";
+  "passed" | "failed" | "skipped" | "denied" | "timed-out" | "cancelled" | "resource-exceeded";
 
 // ─── Resource limits (the four documented dimensions) ────────────────────────────
 

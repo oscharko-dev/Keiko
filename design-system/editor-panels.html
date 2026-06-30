@@ -3,7 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <title>Editor · Tool Windows · Keiko Design System</title>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
@@ -21,117 +30,460 @@
       <header class="phero">
         <div class="ey">Guidelines · 13 · Editor</div>
         <h1>Tool windows</h1>
-        <p class="lead">Everything that frames the code well: the icon stripes that summon panels, the project tree, and the docked tools — Run, Problems, Terminal and Git. Tool windows are <b style="color:var(--fg)">shell</b>, not code: they live on <code style="font-family:var(--font-mono);color:var(--accent-text)">--surface</code>, defer to the editor, and share one header grammar.</p>
+        <p class="lead">
+          Everything that frames the code well: the icon stripes that summon panels, the project
+          tree, and the docked tools — Run, Problems, Terminal and Git. Tool windows are
+          <b style="color: var(--fg)">shell</b>, not code: they live on
+          <code style="font-family: var(--font-mono); color: var(--accent-text)">--surface</code>,
+          defer to the editor, and share one header grammar.
+        </p>
       </header>
 
       <!-- 01 ASSEMBLED -->
       <section class="sec" id="assembled">
-        <div class="sec-head"><div class="num">01 — SHOWCASE</div><h2>The workbench, assembled</h2><p>Left stripe, project tree, editor and a docked Run panel — the default layout. The stripe shows which tools are open; the rest stays out of the way.</p></div>
-        <div class="ev-frame" style="display:grid;grid-template-columns:44px 232px 1fr;grid-template-rows:40px 1fr 150px 34px">
-          <div class="ev-titlebar" style="grid-column:1 / 4"><span class="ev-traffic"><i></i><i></i><i></i></span><span class="ev-proj">Keiko</span><span class="ev-branch"><span class="ico" data-licon="branch" data-size="13"></span>release/0.3.0</span><span class="grow"></span><span class="ev-tools"><span class="ev-tbtn"><span class="ico" data-licon="run" data-size="15"></span></span><span class="ev-tbtn"><span class="ico" data-licon="debug" data-size="15"></span></span><span class="ev-tbtn"><span class="ico" data-licon="search" data-size="15"></span></span></span></div>
-          <div class="ev-stripe" style="grid-column:1;grid-row:2 / 4">
-            <span class="ev-sbtn on"><span class="ind"></span><span class="ico" data-licon="project" data-size="18"></span></span>
-            <span class="ev-sbtn"><span class="ico" data-licon="commit" data-size="18"></span></span>
-            <span class="ev-sbtn"><span class="ico" data-licon="pullRequest" data-size="18"></span></span>
-            <span class="ev-sbtn"><span class="ico" data-licon="structure" data-size="18"></span></span>
-            <span style="flex:1"></span>
-            <span class="ev-sbtn"><span class="ico" data-licon="bookmarks" data-size="18"></span></span>
+        <div class="sec-head">
+          <div class="num">01 — SHOWCASE</div>
+          <h2>The workbench, assembled</h2>
+          <p>
+            Left stripe, project tree, editor and a docked Run panel — the default layout. The
+            stripe shows which tools are open; the rest stays out of the way.
+          </p>
+        </div>
+        <div
+          class="ev-frame"
+          style="
+            display: grid;
+            grid-template-columns: 44px 232px 1fr;
+            grid-template-rows: 40px 1fr 150px 34px;
+          "
+        >
+          <div class="ev-titlebar" style="grid-column: 1 / 4">
+            <span class="ev-traffic"><i></i><i></i><i></i></span><span class="ev-proj">Keiko</span
+            ><span class="ev-branch"
+              ><span class="ico" data-licon="branch" data-size="13"></span>release/0.3.0</span
+            ><span class="grow"></span
+            ><span class="ev-tools"
+              ><span class="ev-tbtn"><span class="ico" data-licon="run" data-size="15"></span></span
+              ><span class="ev-tbtn"
+                ><span class="ico" data-licon="debug" data-size="15"></span></span
+              ><span class="ev-tbtn"
+                ><span class="ico" data-licon="search" data-size="15"></span></span
+            ></span>
           </div>
-          <div class="ev-panel" style="grid-column:2;grid-row:2 / 3;border-right:1px solid var(--line-soft)">
-            <div class="ev-panel-head">Project<span class="grow"></span><span class="pa"><span class="ico" data-licon="ellipsis" data-size="15"></span></span></div>
+          <div class="ev-stripe" style="grid-column: 1; grid-row: 2 / 4">
+            <span class="ev-sbtn on"
+              ><span class="ind"></span><span class="ico" data-licon="project" data-size="18"></span
+            ></span>
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="commit" data-size="18"></span
+            ></span>
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="pullRequest" data-size="18"></span
+            ></span>
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="structure" data-size="18"></span
+            ></span>
+            <span style="flex: 1"></span>
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="bookmarks" data-size="18"></span
+            ></span>
+          </div>
+          <div
+            class="ev-panel"
+            style="grid-column: 2; grid-row: 2 / 3; border-right: 1px solid var(--line-soft)"
+          >
+            <div class="ev-panel-head">
+              Project<span class="grow"></span
+              ><span class="pa"
+                ><span class="ico" data-licon="ellipsis" data-size="15"></span
+              ></span>
+            </div>
             <div class="ev-tree">
-              <div class="ev-row"><span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="nm" style="color:var(--fg)">Keiko</span></div>
-              <div class="ev-row"><span class="ev-ind"></span><span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="nm">src</span></div>
-              <div class="ev-row on"><span class="ev-ind"></span><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">client.ts</span></div>
-              <div class="ev-row mod"><span class="ev-ind"></span><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">agent.ts</span></div>
-              <div class="ev-row add"><span class="ev-ind"></span><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">runtime.ts</span></div>
-              <div class="ev-row"><span class="ev-ind"></span><span class="tw"><span class="ico" data-licon="chevronR" data-size="12"></span></span><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="nm">tests</span></div>
-              <div class="ev-row ign"><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft cfg">{}</span></span><span class="nm">tsconfig.json</span></div>
+              <div class="ev-row">
+                <span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span
+                ><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span
+                ><span class="nm" style="color: var(--fg)">Keiko</span>
+              </div>
+              <div class="ev-row">
+                <span class="ev-ind"></span
+                ><span class="tw"
+                  ><span class="ico" data-licon="chevron" data-size="12"></span></span
+                ><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span
+                ><span class="nm">src</span>
+              </div>
+              <div class="ev-row on">
+                <span class="ev-ind"></span><span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">client.ts</span>
+              </div>
+              <div class="ev-row mod">
+                <span class="ev-ind"></span><span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">agent.ts</span>
+              </div>
+              <div class="ev-row add">
+                <span class="ev-ind"></span><span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">runtime.ts</span>
+              </div>
+              <div class="ev-row">
+                <span class="ev-ind"></span
+                ><span class="tw"
+                  ><span class="ico" data-licon="chevronR" data-size="12"></span></span
+                ><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span
+                ><span class="nm">tests</span>
+              </div>
+              <div class="ev-row ign">
+                <span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft cfg">{}</span></span
+                ><span class="nm">tsconfig.json</span>
+              </div>
             </div>
           </div>
-          <div style="grid-column:3;grid-row:2 / 3;background:var(--ed-bg);min-width:0">
-            <div class="ev-tabs"><div class="ev-tab on"><span class="ev-ft ts">TS</span>client.ts</div><span class="grow"></span></div>
-            <div class="ev-code" style="padding:10px 0"><div class="ev-gutter"><span class="ev-gln">1</span><span class="ev-gln">2</span><span class="ev-gln cur">3</span><span class="ev-gln">4</span><span class="ev-gln">5</span></div><div class="ev-lines"><span class="ev-line"><span class="t-key">export</span> <span class="t-key">async</span> <span class="t-key">function</span> <span class="t-fn">fetchAgents</span><span class="t-pun">()</span> <span class="t-pun">{</span></span><span class="ev-line">  <span class="t-key">const</span> <span class="t-var">res</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">fetch</span><span class="t-pun">(</span><span class="t-var">url</span><span class="t-pun">);</span></span><span class="ev-line active">  <span class="t-key">return</span> <span class="t-var">res</span><span class="t-op">.</span><span class="t-fn">json</span><span class="t-pun">();</span><span class="ev-caret"></span></span><span class="ev-line"><span class="t-pun">}</span></span></div></div>
+          <div style="grid-column: 3; grid-row: 2 / 3; background: var(--ed-bg); min-width: 0">
+            <div class="ev-tabs">
+              <div class="ev-tab on"><span class="ev-ft ts">TS</span>client.ts</div>
+              <span class="grow"></span>
+            </div>
+            <div class="ev-code" style="padding: 10px 0">
+              <div class="ev-gutter">
+                <span class="ev-gln">1</span><span class="ev-gln">2</span
+                ><span class="ev-gln cur">3</span><span class="ev-gln">4</span
+                ><span class="ev-gln">5</span>
+              </div>
+              <div class="ev-lines">
+                <span class="ev-line"
+                  ><span class="t-key">export</span> <span class="t-key">async</span>
+                  <span class="t-key">function</span> <span class="t-fn">fetchAgents</span
+                  ><span class="t-pun">()</span> <span class="t-pun">{</span></span
+                ><span class="ev-line">
+                  <span class="t-key">const</span> <span class="t-var">res</span>
+                  <span class="t-op">=</span> <span class="t-key">await</span>
+                  <span class="t-fn">fetch</span><span class="t-pun">(</span
+                  ><span class="t-var">url</span><span class="t-pun">);</span></span
+                ><span class="ev-line active">
+                  <span class="t-key">return</span> <span class="t-var">res</span
+                  ><span class="t-op">.</span><span class="t-fn">json</span
+                  ><span class="t-pun">();</span><span class="ev-caret"></span></span
+                ><span class="ev-line"><span class="t-pun">}</span></span>
+              </div>
+            </div>
           </div>
-          <div class="ev-panel" style="grid-column:2 / 4;grid-row:3 / 4;border-top:1px solid var(--line-soft)">
-            <div class="ev-runbar"><span class="rb go"><span class="ico" data-licon="run" data-size="15"></span></span><span class="rb stop"><span class="ico" data-licon="stop" data-size="15"></span></span><span class="rb"><span class="ico" data-licon="restart" data-size="15"></span></span><span style="flex:1"></span><span style="font:600 11px var(--font-ui);letter-spacing:.04em;text-transform:uppercase;color:var(--fg-faint)">Run · client</span></div>
-            <div class="ev-console"><span class="dim">$ vitest run client</span>
-<span class="ac">✓</span> client &gt; fetches agents <span class="dim">(12ms)</span>
-<span class="ac">✓</span> client &gt; builds url <span class="dim">(3ms)</span>
-<span class="ok">Test Files  1 passed (1)</span>
-<span class="ok">     Tests  2 passed (2)</span></div>
+          <div
+            class="ev-panel"
+            style="grid-column: 2 / 4; grid-row: 3 / 4; border-top: 1px solid var(--line-soft)"
+          >
+            <div class="ev-runbar">
+              <span class="rb go"><span class="ico" data-licon="run" data-size="15"></span></span
+              ><span class="rb stop"
+                ><span class="ico" data-licon="stop" data-size="15"></span></span
+              ><span class="rb"><span class="ico" data-licon="restart" data-size="15"></span></span
+              ><span style="flex: 1"></span
+              ><span
+                style="
+                  font: 600 11px var(--font-ui);
+                  letter-spacing: 0.04em;
+                  text-transform: uppercase;
+                  color: var(--fg-faint);
+                "
+                >Run · client</span
+              >
+            </div>
+            <div class="ev-console">
+              <span class="dim">$ vitest run client</span> <span class="ac">✓</span> client &gt;
+              fetches agents <span class="dim">(12ms)</span> <span class="ac">✓</span> client &gt;
+              builds url <span class="dim">(3ms)</span>
+              <span class="ok">Test Files 1 passed (1)</span>
+              <span class="ok"> Tests 2 passed (2)</span>
+            </div>
           </div>
-          <div class="ev-stripe bottom" style="grid-column:1 / 4;grid-row:4 / 5">
-            <span class="ev-sbtn on"><span class="ico" data-licon="run" data-size="15"></span>Run</span>
-            <span class="ev-sbtn"><span class="ico" data-licon="problems" data-size="15"></span>Problems</span>
-            <span class="ev-sbtn"><span class="ico" data-licon="terminal" data-size="15"></span>Terminal</span>
-            <span class="ev-sbtn"><span class="ico" data-licon="commit" data-size="15"></span>Git</span>
+          <div class="ev-stripe bottom" style="grid-column: 1 / 4; grid-row: 4 / 5">
+            <span class="ev-sbtn on"
+              ><span class="ico" data-licon="run" data-size="15"></span>Run</span
+            >
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="problems" data-size="15"></span>Problems</span
+            >
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="terminal" data-size="15"></span>Terminal</span
+            >
+            <span class="ev-sbtn"
+              ><span class="ico" data-licon="commit" data-size="15"></span>Git</span
+            >
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">The active stripe button carries the accent wash + a 2&nbsp;px edge marker. In the tree, <span style="color:var(--ed-vcs-modified)">modified</span> and <span style="color:var(--ed-vcs-added)">added</span> files take their VCS hue; ignored files fade to <code>--fg-faint</code>.</p>
+        <p class="muted-cap" style="margin-top: 14px">
+          The active stripe button carries the accent wash + a 2&nbsp;px edge marker. In the tree,
+          <span style="color: var(--ed-vcs-modified)">modified</span> and
+          <span style="color: var(--ed-vcs-added)">added</span> files take their VCS hue; ignored
+          files fade to <code>--fg-faint</code>.
+        </p>
       </section>
 
       <!-- 02 STRIPES -->
       <section class="sec" id="stripes">
-        <div class="sec-head"><div class="num">02 — STRIPES</div><h2>Tool-window stripes</h2><p>The narrow rails on the window edges are the index to every panel. An icon's position encodes its dock side; its state encodes whether the panel is open and whether it wants attention.</p></div>
+        <div class="sec-head">
+          <div class="num">02 — STRIPES</div>
+          <h2>Tool-window stripes</h2>
+          <p>
+            The narrow rails on the window edges are the index to every panel. An icon's position
+            encodes its dock side; its state encodes whether the panel is open and whether it wants
+            attention.
+          </p>
+        </div>
         <div class="ev-grid2">
-          <div class="ev-stage" style="padding:24px;justify-content:center;gap:40px">
-            <div class="ev-stripe" style="border:1px solid var(--line-soft);border-radius:10px;height:240px">
-              <span class="ev-sbtn on"><span class="ind"></span><span class="ico" data-licon="project" data-size="18"></span></span>
-              <span class="ev-sbtn"><span class="ico" data-licon="commit" data-size="18"></span></span>
-              <span class="ev-sbtn"><span class="dot"></span><span class="ico" data-licon="pullRequest" data-size="18"></span></span>
-              <span class="ev-sbtn"><span class="ico" data-licon="structure" data-size="18"></span></span>
+          <div class="ev-stage" style="padding: 24px; justify-content: center; gap: 40px">
+            <div
+              class="ev-stripe"
+              style="border: 1px solid var(--line-soft); border-radius: 10px; height: 240px"
+            >
+              <span class="ev-sbtn on"
+                ><span class="ind"></span
+                ><span class="ico" data-licon="project" data-size="18"></span
+              ></span>
+              <span class="ev-sbtn"
+                ><span class="ico" data-licon="commit" data-size="18"></span
+              ></span>
+              <span class="ev-sbtn"
+                ><span class="dot"></span
+                ><span class="ico" data-licon="pullRequest" data-size="18"></span
+              ></span>
+              <span class="ev-sbtn"
+                ><span class="ico" data-licon="structure" data-size="18"></span
+              ></span>
             </div>
-            <div class="ev-stripe" style="border:1px solid var(--line-soft);border-radius:10px;height:240px">
-              <span class="ev-sbtn"><span class="ico" data-licon="bell" data-size="18"></span></span>
-              <span class="ev-sbtn on"><span class="ind" style="left:auto;right:2px"></span><span class="ico" data-licon="brain" data-size="18"></span></span>
-              <span class="ev-sbtn"><span class="ico" data-licon="database" data-size="18"></span></span>
+            <div
+              class="ev-stripe"
+              style="border: 1px solid var(--line-soft); border-radius: 10px; height: 240px"
+            >
+              <span class="ev-sbtn"
+                ><span class="ico" data-licon="bell" data-size="18"></span
+              ></span>
+              <span class="ev-sbtn on"
+                ><span class="ind" style="left: auto; right: 2px"></span
+                ><span class="ico" data-licon="brain" data-size="18"></span
+              ></span>
+              <span class="ev-sbtn"
+                ><span class="ico" data-licon="database" data-size="18"></span
+              ></span>
             </div>
           </div>
           <div class="stack">
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Open</span><div>An open panel's button is accent-washed with a 2&nbsp;px edge marker (left rail marks left; right rail marks right). One glance tells you the current layout.</div></div>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Attention</span><div>A panel with new content (failed run, fresh notification) shows a <span style="color:var(--danger)">danger dot</span> — the only thing on the stripe allowed to be loud.</div></div>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Right rail</span><div>The right stripe is Keiko's home: notifications, the agent (<code>brain</code>), and data sources — assistants dock opposite the project structure.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Open</span>
+              <div>
+                An open panel's button is accent-washed with a 2&nbsp;px edge marker (left rail
+                marks left; right rail marks right). One glance tells you the current layout.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Attention</span>
+              <div>
+                A panel with new content (failed run, fresh notification) shows a
+                <span style="color: var(--danger)">danger dot</span> — the only thing on the stripe
+                allowed to be loud.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Right rail</span>
+              <div>
+                The right stripe is Keiko's home: notifications, the agent (<code>brain</code>), and
+                data sources — assistants dock opposite the project structure.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 03 PROJECT TREE -->
       <section class="sec" id="tree">
-        <div class="sec-head"><div class="num">03 — PROJECT TREE</div><h2>File tree &amp; states</h2><p>The tree is mono-typed for path legibility. File and folder icons are the actual <b style="color:var(--fg)">Material Icon Theme / Atom Material Icons</b> set (the open-source standard developers already recognise), so a file's type registers before you read its name. A filename's <em>text</em> colour stays reserved for its VCS state.</p></div>
+        <div class="sec-head">
+          <div class="num">03 — PROJECT TREE</div>
+          <h2>File tree &amp; states</h2>
+          <p>
+            The tree is mono-typed for path legibility. File and folder icons are the actual
+            <b style="color: var(--fg)">Material Icon Theme / Atom Material Icons</b> set (the
+            open-source standard developers already recognise), so a file's type registers before
+            you read its name. A filename's <em>text</em> colour stays reserved for its VCS state.
+          </p>
+        </div>
         <div class="ev-grid2">
           <div class="ev-frame flat">
-            <div class="ev-panel-head" style="border-radius:0">Project<span class="grow"></span><span class="pa"><span class="ico" data-licon="search" data-size="14"></span></span><span class="pa"><span class="ico" data-licon="ellipsis" data-size="15"></span></span></div>
+            <div class="ev-panel-head" style="border-radius: 0">
+              Project<span class="grow"></span
+              ><span class="pa"><span class="ico" data-licon="search" data-size="14"></span></span
+              ><span class="pa"
+                ><span class="ico" data-licon="ellipsis" data-size="15"></span
+              ></span>
+            </div>
             <div class="ev-tree">
-              <div class="ev-row"><span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="nm" style="color:var(--fg)">src</span></div>
-              <div class="ev-row on"><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">client.ts</span></div>
-              <div class="ev-row mod"><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">agent.ts</span><span class="tag" style="color:var(--ed-vcs-modified)">M</span></div>
-              <div class="ev-row add"><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">runtime.ts</span><span class="tag" style="color:var(--ed-vcs-added)">A</span></div>
-              <div class="ev-row"><span class="ev-ind"></span><span class="tw"></span><span class="fi"><span class="ev-ft md">MD</span></span><span class="nm">README.md</span></div>
-              <div class="ev-row"><span class="tw"><span class="ico" data-licon="chevronR" data-size="12"></span></span><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="nm">tests</span></div>
-              <div class="ev-row ign"><span class="tw"></span><span class="fi"><span class="ev-ft cfg">{}</span></span><span class="nm">tsconfig.json</span></div>
-              <div class="ev-row ign"><span class="tw"><span class="ico" data-licon="chevronR" data-size="12"></span></span><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="nm">node_modules</span><span class="tag">library root</span></div>
+              <div class="ev-row">
+                <span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span
+                ><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span
+                ><span class="nm" style="color: var(--fg)">src</span>
+              </div>
+              <div class="ev-row on">
+                <span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">client.ts</span>
+              </div>
+              <div class="ev-row mod">
+                <span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">agent.ts</span
+                ><span class="tag" style="color: var(--ed-vcs-modified)">M</span>
+              </div>
+              <div class="ev-row add">
+                <span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">runtime.ts</span
+                ><span class="tag" style="color: var(--ed-vcs-added)">A</span>
+              </div>
+              <div class="ev-row">
+                <span class="ev-ind"></span><span class="tw"></span
+                ><span class="fi"><span class="ev-ft md">MD</span></span
+                ><span class="nm">README.md</span>
+              </div>
+              <div class="ev-row">
+                <span class="tw"
+                  ><span class="ico" data-licon="chevronR" data-size="12"></span></span
+                ><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span
+                ><span class="nm">tests</span>
+              </div>
+              <div class="ev-row ign">
+                <span class="tw"></span><span class="fi"><span class="ev-ft cfg">{}</span></span
+                ><span class="nm">tsconfig.json</span>
+              </div>
+              <div class="ev-row ign">
+                <span class="tw"
+                  ><span class="ico" data-licon="chevronR" data-size="12"></span></span
+                ><span class="fi"><span class="ico" data-licon="folder" data-size="14"></span></span
+                ><span class="nm">node_modules</span><span class="tag">library root</span>
+              </div>
             </div>
           </div>
           <div class="stack">
             <table class="ev-spec">
-              <thead><tr><th>State</th><th>Treatment</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>State</th>
+                  <th>Treatment</th>
+                </tr>
+              </thead>
               <tbody>
-                <tr><td class="tok">selected</td><td>accent wash + 2px edge marker</td></tr>
-                <tr><td class="tok">modified</td><td><span style="color:var(--ed-vcs-modified)">name → --ed-vcs-modified</span> + <code style="font-family:var(--font-mono)">M</code></td></tr>
-                <tr><td class="tok">added</td><td><span style="color:var(--ed-vcs-added)">name → --ed-vcs-added</span> + <code style="font-family:var(--font-mono)">A</code></td></tr>
-                <tr><td class="tok">ignored</td><td><span style="color:var(--fg-faint)">name → --fg-faint</span></td></tr>
+                <tr>
+                  <td class="tok">selected</td>
+                  <td>accent wash + 2px edge marker</td>
+                </tr>
+                <tr>
+                  <td class="tok">modified</td>
+                  <td>
+                    <span style="color: var(--ed-vcs-modified)">name → --ed-vcs-modified</span> +
+                    <code style="font-family: var(--font-mono)">M</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="tok">added</td>
+                  <td>
+                    <span style="color: var(--ed-vcs-added)">name → --ed-vcs-added</span> +
+                    <code style="font-family: var(--font-mono)">A</code>
+                  </td>
+                </tr>
+                <tr>
+                  <td class="tok">ignored</td>
+                  <td><span style="color: var(--fg-faint)">name → --fg-faint</span></td>
+                </tr>
               </tbody>
             </table>
-            <div class="note flag"><span class="tag">Library</span><div>File and folder glyphs are the real <b>Material Icon Theme</b> / <b>Atom Material Icons</b> SVGs (MIT-licensed) — the standard set, not bespoke marks — so types are recognised instantly. It is the editor's one polychrome system, like syntax; everything else in the shell stays monochrome and a filename's text colour is reserved for VCS state.</div></div>
-            <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;margin-top:4px">
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft ts">TS</span>ts/tsx</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft js">JS</span>js</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft json">{}</span>json</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft md">MD</span>md</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft css">CSS</span>css</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft html">&lt;&gt;</span>html</span>
-              <span style="display:inline-flex;align-items:center;gap:6px;font:500 11.5px var(--font-mono);color:var(--fg-faint)"><span class="ev-ft yaml">YML</span>yaml</span>
+            <div class="note flag">
+              <span class="tag">Library</span>
+              <div>
+                File and folder glyphs are the real <b>Material Icon Theme</b> /
+                <b>Atom Material Icons</b> SVGs (MIT-licensed) — the standard set, not bespoke marks
+                — so types are recognised instantly. It is the editor's one polychrome system, like
+                syntax; everything else in the shell stays monochrome and a filename's text colour
+                is reserved for VCS state.
+              </div>
+            </div>
+            <div
+              style="
+                display: flex;
+                flex-wrap: wrap;
+                gap: 14px;
+                align-items: center;
+                margin-top: 4px;
+              "
+            >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft ts">TS</span>ts/tsx</span
+              >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft js">JS</span>js</span
+              >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft json">{}</span>json</span
+              >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft md">MD</span>md</span
+              >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft css">CSS</span>css</span
+              >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft html">&lt;&gt;</span>html</span
+              >
+              <span
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font: 500 11.5px var(--font-mono);
+                  color: var(--fg-faint);
+                "
+                ><span class="ev-ft yaml">YML</span>yaml</span
+              >
             </div>
           </div>
         </div>
@@ -139,24 +491,73 @@
 
       <!-- 04 RUN + PROBLEMS -->
       <section class="sec" id="run">
-        <div class="sec-head"><div class="num">04 — RUN &amp; PROBLEMS</div><h2>Run console · problems list</h2><p>Output panels share the docked-tool header and a left toolbar of transport controls. The console paints on the editor well so log colour matches code colour; the problems list groups by file with shape-coded severities.</p></div>
+        <div class="sec-head">
+          <div class="num">04 — RUN &amp; PROBLEMS</div>
+          <h2>Run console · problems list</h2>
+          <p>
+            Output panels share the docked-tool header and a left toolbar of transport controls. The
+            console paints on the editor well so log colour matches code colour; the problems list
+            groups by file with shape-coded severities.
+          </p>
+        </div>
         <div class="ev-grid2">
           <div class="ev-frame flat">
-            <div class="ev-runbar"><span class="rb go"><span class="ico" data-licon="run" data-size="15"></span></span><span class="rb stop"><span class="ico" data-licon="stop" data-size="15"></span></span><span class="rb"><span class="ico" data-licon="restart" data-size="15"></span></span><span style="flex:1"></span><span class="rb"><span class="ico" data-licon="ellipsis" data-size="15"></span></span></div>
-            <div class="ev-console"><span class="dim">$ keiko run agent.ts</span>
-<span class="ac">→</span> connecting to local runtime…
-<span class="ok">✓</span> agent <span class="dim">a3f1</span> running
-<span class="er">✗</span> agent <span class="dim">b7c2</span> failed: timeout
-<span class="dim">exit code 1</span></div>
+            <div class="ev-runbar">
+              <span class="rb go"><span class="ico" data-licon="run" data-size="15"></span></span
+              ><span class="rb stop"
+                ><span class="ico" data-licon="stop" data-size="15"></span></span
+              ><span class="rb"><span class="ico" data-licon="restart" data-size="15"></span></span
+              ><span style="flex: 1"></span
+              ><span class="rb"
+                ><span class="ico" data-licon="ellipsis" data-size="15"></span
+              ></span>
+            </div>
+            <div class="ev-console">
+              <span class="dim">$ keiko run agent.ts</span> <span class="ac">→</span> connecting to
+              local runtime… <span class="ok">✓</span> agent <span class="dim">a3f1</span> running
+              <span class="er">✗</span> agent <span class="dim">b7c2</span> failed: timeout
+              <span class="dim">exit code 1</span>
+            </div>
           </div>
           <div class="ev-frame flat">
-            <div class="ev-panel-head" style="border-radius:0">Problems<span class="grow"></span><span class="di e" style="color:var(--ed-error);font:600 11px var(--font-mono)">2</span><span class="di w" style="color:var(--ed-warn);font:600 11px var(--font-mono)">1</span></div>
-            <div class="ev-plist" style="padding:6px 0">
-              <div class="ev-pgroup"><span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span><span class="fi"><span class="ev-ft ts">TS</span></span>client.ts<span class="tag" style="margin-left:8px;color:var(--fg-faint)">2</span></div>
-              <div class="ev-prob"><span class="sev e"><span class="ico" data-licon="error" data-size="14"></span></span><span class="msg">Property 'stastusText' does not exist on 'Response'</span><span class="loc">28:14</span></div>
-              <div class="ev-prob"><span class="sev w"><span class="ico" data-licon="alert" data-size="14"></span></span><span class="msg">'tmp' is declared but never used</span><span class="loc">31:9</span></div>
-              <div class="ev-pgroup"><span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span><span class="fi"><span class="ev-ft ts">TS</span></span>agent.ts<span class="tag" style="margin-left:8px;color:var(--fg-faint)">1</span></div>
-              <div class="ev-prob"><span class="sev e"><span class="ico" data-licon="error" data-size="14"></span></span><span class="msg">Cannot find name 'Reuntime'</span><span class="loc">4:18</span></div>
+            <div class="ev-panel-head" style="border-radius: 0">
+              Problems<span class="grow"></span
+              ><span class="di e" style="color: var(--ed-error); font: 600 11px var(--font-mono)"
+                >2</span
+              ><span class="di w" style="color: var(--ed-warn); font: 600 11px var(--font-mono)"
+                >1</span
+              >
+            </div>
+            <div class="ev-plist" style="padding: 6px 0">
+              <div class="ev-pgroup">
+                <span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                >client.ts<span class="tag" style="margin-left: 8px; color: var(--fg-faint)"
+                  >2</span
+                >
+              </div>
+              <div class="ev-prob">
+                <span class="sev e"
+                  ><span class="ico" data-licon="error" data-size="14"></span></span
+                ><span class="msg">Property 'stastusText' does not exist on 'Response'</span
+                ><span class="loc">28:14</span>
+              </div>
+              <div class="ev-prob">
+                <span class="sev w"
+                  ><span class="ico" data-licon="alert" data-size="14"></span></span
+                ><span class="msg">'tmp' is declared but never used</span
+                ><span class="loc">31:9</span>
+              </div>
+              <div class="ev-pgroup">
+                <span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                >agent.ts<span class="tag" style="margin-left: 8px; color: var(--fg-faint)">1</span>
+              </div>
+              <div class="ev-prob">
+                <span class="sev e"
+                  ><span class="ico" data-licon="error" data-size="14"></span></span
+                ><span class="msg">Cannot find name 'Reuntime'</span><span class="loc">4:18</span>
+              </div>
             </div>
           </div>
         </div>
@@ -164,37 +565,116 @@
 
       <!-- 05 TERMINAL + GIT -->
       <section class="sec" id="git">
-        <div class="sec-head"><div class="num">05 — TERMINAL &amp; GIT</div><h2>Terminal · version control</h2><p>The terminal is the editor well with a shell in it — same background, same mono. The Git log draws the commit graph in accent and reuses the VCS hues for branch state.</p></div>
+        <div class="sec-head">
+          <div class="num">05 — TERMINAL &amp; GIT</div>
+          <h2>Terminal · version control</h2>
+          <p>
+            The terminal is the editor well with a shell in it — same background, same mono. The Git
+            log draws the commit graph in accent and reuses the VCS hues for branch state.
+          </p>
+        </div>
         <div class="ev-grid2">
           <div class="ev-frame flat">
-            <div class="ev-panel-head" style="border-radius:0">Terminal<span class="grow"></span><span class="pa"><span class="ico" data-licon="plus" data-size="15"></span></span></div>
-            <div class="ev-console" style="min-height:140px"><span class="ac">keiko</span><span class="dim">@</span>release <span class="dim">~/Keiko</span> $ npm run build
-<span class="dim">› tsc -b tsconfig.packages.json</span>
-<span class="ok">✓ built 6 packages in 4.2s</span>
-<span class="ac">keiko</span><span class="dim">@</span>release <span class="dim">~/Keiko</span> $ <span class="ev-caret"></span></div>
+            <div class="ev-panel-head" style="border-radius: 0">
+              Terminal<span class="grow"></span
+              ><span class="pa"><span class="ico" data-licon="plus" data-size="15"></span></span>
+            </div>
+            <div class="ev-console" style="min-height: 140px">
+              <span class="ac">keiko</span><span class="dim">@</span>release
+              <span class="dim">~/Keiko</span> $ npm run build
+              <span class="dim">› tsc -b tsconfig.packages.json</span>
+              <span class="ok">✓ built 6 packages in 4.2s</span>
+              <span class="ac">keiko</span><span class="dim">@</span>release
+              <span class="dim">~/Keiko</span> $ <span class="ev-caret"></span>
+            </div>
           </div>
           <div class="ev-frame flat">
-            <div class="ev-panel-head" style="border-radius:0">Git<span class="grow"></span><span style="font:500 11px var(--font-mono);color:var(--fg-faint);text-transform:none;letter-spacing:0">release/0.3.0</span></div>
-            <div class="ev-git" style="padding:6px 0">
-              <div class="ev-commit"><span class="graph"><span class="ico" data-licon="commit" data-size="14"></span></span><span class="subj">fix(client): preserve v2 base url</span><span class="auth">o.scharko</span><span class="when">2h</span></div>
-              <div class="ev-commit"><span class="graph"><span class="ico" data-licon="merge" data-size="14"></span></span><span class="subj">Merge #432 from codex/runtime</span><span class="auth">l.weber</span><span class="when">4h</span></div>
-              <div class="ev-commit"><span class="graph"><span class="ico" data-licon="commit" data-size="14"></span></span><span class="subj">feat(runtime): pause &amp; resume</span><span class="auth">o.scharko</span><span class="when">1d</span></div>
-              <div class="ev-commit"><span class="graph"><span class="ico" data-licon="pullRequest" data-size="14"></span></span><span class="subj">chore: bump vitest</span><span class="auth">o.scharko</span><span class="when">2d</span></div>
+            <div class="ev-panel-head" style="border-radius: 0">
+              Git<span class="grow"></span
+              ><span
+                style="
+                  font: 500 11px var(--font-mono);
+                  color: var(--fg-faint);
+                  text-transform: none;
+                  letter-spacing: 0;
+                "
+                >release/0.3.0</span
+              >
+            </div>
+            <div class="ev-git" style="padding: 6px 0">
+              <div class="ev-commit">
+                <span class="graph"
+                  ><span class="ico" data-licon="commit" data-size="14"></span></span
+                ><span class="subj">fix(client): preserve v2 base url</span
+                ><span class="auth">o.scharko</span><span class="when">2h</span>
+              </div>
+              <div class="ev-commit">
+                <span class="graph"
+                  ><span class="ico" data-licon="merge" data-size="14"></span></span
+                ><span class="subj">Merge #432 from codex/runtime</span
+                ><span class="auth">l.weber</span><span class="when">4h</span>
+              </div>
+              <div class="ev-commit">
+                <span class="graph"
+                  ><span class="ico" data-licon="commit" data-size="14"></span></span
+                ><span class="subj">feat(runtime): pause &amp; resume</span
+                ><span class="auth">o.scharko</span><span class="when">1d</span>
+              </div>
+              <div class="ev-commit">
+                <span class="graph"
+                  ><span class="ico" data-licon="pullRequest" data-size="14"></span></span
+                ><span class="subj">chore: bump vitest</span><span class="auth">o.scharko</span
+                ><span class="when">2d</span>
+              </div>
             </div>
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Console semantics stay tiny and consistent: <span style="color:var(--ed-vcs-added)">✓ success</span>, <span style="color:var(--ed-error)">✗ error</span>, <span style="color:var(--accent-text)">→ / prompt accent</span>, everything else dim. The same three signals across Run, Terminal and Git.</p>
+        <p class="muted-cap" style="margin-top: 14px">
+          Console semantics stay tiny and consistent:
+          <span style="color: var(--ed-vcs-added)">✓ success</span>,
+          <span style="color: var(--ed-error)">✗ error</span>,
+          <span style="color: var(--accent-text)">→ / prompt accent</span>, everything else dim. The
+          same three signals across Run, Terminal and Git.
+        </p>
       </section>
 
       <section class="sec" id="principle">
-        <div class="sec-head"><div class="num">06 — PRINCIPLE</div><h2>Shell defers to code</h2></div>
-        <div class="card" style="padding:8px 22px">
+        <div class="sec-head">
+          <div class="num">06 — PRINCIPLE</div>
+          <h2>Shell defers to code</h2>
+        </div>
+        <div class="card" style="padding: 8px 22px">
           <table class="tbl">
             <tbody>
-              <tr><td class="fgw">One header grammar</td><td>Every docked tool has the same head: a micro-caps title, a trailing action cluster, optional counts. Run, Problems, Terminal and Git are visibly one family.</td></tr>
-              <tr><td class="fgw">Surface, not well</td><td>Tool windows sit on <code class="mono">--surface</code>; only consoles (Run/Terminal) borrow <code class="mono">--ed-bg</code> because they <em>are</em> code output.</td></tr>
-              <tr><td class="fgw">Colour = VCS or severity</td><td>In the tree a name's colour means version-control state; in Problems an icon's colour means severity. Colour is never decorative in a panel.</td></tr>
-              <tr><td class="fgw">Stripe = the index</td><td>The stripes are the single source of truth for “what's open”. Opening a panel is reversible from one click; nothing hides state.</td></tr>
+              <tr>
+                <td class="fgw">One header grammar</td>
+                <td>
+                  Every docked tool has the same head: a micro-caps title, a trailing action
+                  cluster, optional counts. Run, Problems, Terminal and Git are visibly one family.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Surface, not well</td>
+                <td>
+                  Tool windows sit on <code class="mono">--surface</code>; only consoles
+                  (Run/Terminal) borrow <code class="mono">--ed-bg</code> because they
+                  <em>are</em> code output.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Colour = VCS or severity</td>
+                <td>
+                  In the tree a name's colour means version-control state; in Problems an icon's
+                  colour means severity. Colour is never decorative in a panel.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Stripe = the index</td>
+                <td>
+                  The stripes are the single source of truth for “what's open”. Opening a panel is
+                  reversible from one click; nothing hides state.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -202,7 +682,7 @@
     </main>
 
     <script src="lift-glyphs.js"></script>
-    
+
     <script src="theme-control.js"></script>
   </body>
 </html>

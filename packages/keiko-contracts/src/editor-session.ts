@@ -48,11 +48,7 @@ export interface EditorDocumentSession {
 // exist on the file routes; `STALE_SESSION` is the version-aware conflict surfaced when a save is
 // attempted against a document revision that no longer matches disk.
 export type EditorSessionErrorCode =
-  | "UNSUPPORTED_FILE"
-  | "FILE_TOO_LARGE"
-  | "WRITE_CONFLICT"
-  | "DENIED"
-  | "STALE_SESSION";
+  "UNSUPPORTED_FILE" | "FILE_TOO_LARGE" | "WRITE_CONFLICT" | "DENIED" | "STALE_SESSION";
 
 export const EDITOR_SESSION_ERROR_CODES: readonly EditorSessionErrorCode[] = [
   "UNSUPPORTED_FILE",

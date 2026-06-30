@@ -46,6 +46,7 @@ import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import {
   supportsDictation,
   supportsSpeechOutput,
+  supportsRealtimeToolCalling,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
@@ -347,7 +348,13 @@ function ChatBubbleImpl({
       chatWindowId: windowId,
       element: bubbleRef.current,
     });
-  }, [activeChat?.id, message.groundedAnswer?.assistantMessageId, message.id, message.role, windowId]);
+  }, [
+    activeChat?.id,
+    message.groundedAnswer?.assistantMessageId,
+    message.id,
+    message.role,
+    windowId,
+  ]);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
@@ -1309,6 +1316,8 @@ interface VoiceDialogComposerControlsProps {
   readonly voiceMuted: boolean;
   readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  readonly canInterrupt?: boolean | undefined;
+  readonly onInterrupt?: (() => void) | undefined;
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
@@ -1357,6 +1366,8 @@ function VoiceDialogComposerControls({
   voiceMuted,
   onToggleVoiceMute,
   playbackButtonRef,
+  canInterrupt = false,
+  onInterrupt,
   voiceDialogActive,
   onToggleVoiceDialog,
   voiceDialogButtonRef,
@@ -1377,6 +1388,18 @@ function VoiceDialogComposerControls({
           buttonRef={playbackButtonRef}
           compact={compact}
         />
+        {onInterrupt !== undefined ? (
+          <button
+            type="button"
+            className={`cmp-voice-btn${compact ? " cmp-mode-compact" : ""}`}
+            aria-label="Interrupt the assistant"
+            data-tip="Interrupt the assistant"
+            disabled={!canInterrupt}
+            onClick={onInterrupt}
+          >
+            Interrupt
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -1778,6 +1801,8 @@ function ComposerCore({
     messageId: undefined,
   });
   const voiceGrounding = voiceSessionGroundingContext(activeChat);
+  const voiceGroundingToolAvailable =
+    voiceGrounding?.enabled === true && supportsRealtimeToolCalling(voiceCapability);
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
     chatContext:
@@ -1791,12 +1816,10 @@ function ComposerCore({
             },
             ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
           },
-    groundingActive: voiceGrounding?.enabled === true,
+    groundingActive: voiceGroundingToolAvailable,
+    memoryContextText: session.latestMemory?.context.text,
     onGroundedToolCall: session.runRealtimeGroundedTool,
-    onUserTranscriptCommitted: (text) =>
-      session.appendVoiceTurn?.([{ role: "user", content: text }]),
-    onAssistantTranscriptCommitted: (text) =>
-      session.appendVoiceTurn?.([{ role: "assistant", content: text }]),
+    onVoiceTurnCommitted: (messages) => session.appendVoiceTurn?.(messages),
   });
   const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
   const voiceDialogState = deriveVoiceDialogState({
@@ -2188,6 +2211,8 @@ function ComposerCore({
             voiceMuted={voiceMuted}
             onToggleVoiceMute={toggleVoiceMute}
             playbackButtonRef={playbackButtonRef}
+            canInterrupt={realtimeVoice.canInterrupt}
+            onInterrupt={realtimeVoice.interrupt}
             voiceDialogActive={voiceDialog.active}
             onToggleVoiceDialog={toggleVoiceDialog}
             voiceDialogButtonRef={voiceDialogButtonRef}
@@ -2224,6 +2249,8 @@ function ComposerCore({
               voiceMuted={realtimeVoice.muted}
               onToggleVoiceMute={toggleVoiceMute}
               playbackButtonRef={motionPlaybackButtonRef}
+              canInterrupt={realtimeVoice.canInterrupt}
+              onInterrupt={realtimeVoice.interrupt}
               voiceDialogActive={true}
               onToggleVoiceDialog={toggleVoiceDialog}
               voiceDialogButtonRef={motionVoiceDialogButtonRef}

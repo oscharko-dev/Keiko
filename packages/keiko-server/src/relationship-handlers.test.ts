@@ -207,12 +207,7 @@ function dependsOnBody(
   sourceKind: "capsule" | "capsule-set" | "workflow-run" | "memory",
   sourceId: string,
   targetKind:
-    | "capsule"
-    | "capsule-set"
-    | "workflow-run"
-    | "memory"
-    | "evidence-run"
-    | "workspace-path",
+    "capsule" | "capsule-set" | "workflow-run" | "memory" | "evidence-run" | "workspace-path",
   targetId: string,
 ): string {
   return JSON.stringify({

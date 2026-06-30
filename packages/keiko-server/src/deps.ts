@@ -221,8 +221,7 @@ export interface UiHandlerDeps {
   readonly gatewayReadinessFetch?: typeof fetch | undefined;
   // Test seam for Figma PAT setup. Production performs a bounded Figma /v1/me request.
   readonly figmaCredentialTester?:
-    | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
-    | undefined;
+    ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>) | undefined;
   // Test-only deterministic editor language route options. Production leaves this undefined so the
   // language service keeps the default deadline and real clock.
   readonly editorLanguageRouteOptions?: EditorLanguageRouteOptions | undefined;
@@ -235,14 +234,12 @@ export interface UiHandlerDeps {
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:
-    | ((request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>)
-    | undefined;
+    ((request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>) | undefined;
   // #189 GRD-004 array-batch embedding seam. Production leaves this undefined and uses
   // requestOpenAIEmbeddingBatch; tests that set localKnowledgeEmbeddingRequest only get the
   // batch path when they also provide a batch stub, so existing scalar-stub tests are unchanged.
   readonly localKnowledgeEmbeddingBatchRequest?:
-    | ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>)
-    | undefined;
+    ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined;
   // Issue #539 (Epic #532) — relationship engine handler deps. Optional so legacy tests
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
   // wiring composes a sqlite-backed RelationshipStore inside buildUiHandlerDeps.
@@ -292,22 +289,19 @@ export interface UiHandlerDeps {
   // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
   // the configured provider through the Model Gateway egress seam (gatewayFetch) and never persisted.
   readonly voiceTranscriptionRequest?:
-    | ((request: SpeechToTextRequest) => Promise<SpeechToTextOutcome>)
-    | undefined;
+    ((request: SpeechToTextRequest) => Promise<SpeechToTextOutcome>) | undefined;
   // Issue #1558 (Epic #1556) — voice speech-output synthesis seam (ADR-0095). Lets the BFF synthesis
   // route call the provider-neutral text-to-speech adapter without touching global fetch in tests.
   // Production leaves this undefined and uses requestTextToSpeech, so the answer text is forwarded
   // once to the configured provider through the Model Gateway egress seam (gatewayFetch) and the
   // synthesized audio is held only in memory for the response, never persisted.
   readonly voiceSpeechRequest?:
-    | ((request: TextToSpeechRequest) => Promise<TextToSpeechOutcome>)
-    | undefined;
+    ((request: TextToSpeechRequest) => Promise<TextToSpeechOutcome>) | undefined;
   // Streaming counterpart of voiceSpeechRequest (Issue #1556). Lets the /api/voice/speak/stream route
   // forward provider PCM chunk-by-chunk in tests without touching global fetch. Production leaves it
   // undefined and uses requestTextToSpeechStream; raw audio is streamed through, never persisted.
   readonly voiceSpeechStreamRequest?:
-    | ((request: TextToSpeechRequest) => Promise<TextToSpeechStreamOutcome>)
-    | undefined;
+    ((request: TextToSpeechRequest) => Promise<TextToSpeechStreamOutcome>) | undefined;
   // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0058 D3/D6). Lets the
   // WebSocket control plane perform the browser↔provider SDP exchange through the provider-neutral
   // realtime adapter without touching global fetch in tests. Production leaves this undefined and
@@ -315,8 +309,7 @@ export interface UiHandlerDeps {
   // through the Model Gateway egress seam (gatewayFetch); the long-lived credential never reaches the
   // browser and no SDP is persisted.
   readonly voiceRealtimeNegotiationRequest?:
-    | ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>)
-    | undefined;
+    ((request: RealtimeNegotiationRequest) => Promise<RealtimeNegotiationOutcome>) | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -369,8 +362,7 @@ export interface BuildHandlerDepsOptions {
     | undefined;
   // Optional Figma credential-test seam (tests); production calls Figma /v1/me.
   readonly figmaCredentialTester?:
-    | ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>)
-    | undefined;
+    ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>) | undefined;
   // Issue #1323 AC4 — QI retention runs once at bootstrap. These optional seams let tests assert
   // the forwarded deletion-audit events and inject a deterministic clock; production leaves them
   // undefined (default no-op sink + wall-clock). See qualityIntelligence/retentionEnforcement.ts.

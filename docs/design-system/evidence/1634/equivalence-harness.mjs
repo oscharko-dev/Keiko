@@ -21,10 +21,24 @@ const CAPTURES = [
   { file: "03-dark-hc.png", theme: null, hc: "more", forcedColors: "none", state: "loaded" },
   { file: "04-light-hc.png", theme: "light", hc: "more", forcedColors: "none", state: "loaded" },
   { file: "05-forced-colors.png", theme: null, hc: null, forcedColors: "active", state: "loaded" },
-  { file: "06-responsive.png", theme: "light", hc: null, forcedColors: "none", state: "loaded", viewport: { width: 430, height: 940 } },
+  {
+    file: "06-responsive.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "loaded",
+    viewport: { width: 430, height: 940 },
+  },
   { file: "07-loading.png", theme: "light", hc: null, forcedColors: "none", state: "loading" },
   { file: "08-error.png", theme: "light", hc: null, forcedColors: "none", state: "error" },
-  { file: "09-focus-visible.png", theme: "light", hc: null, forcedColors: "none", state: "loaded", focusInput: true },
+  {
+    file: "09-focus-visible.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "loaded",
+    focusInput: true,
+  },
 ];
 
 function escapeHtml(value) {

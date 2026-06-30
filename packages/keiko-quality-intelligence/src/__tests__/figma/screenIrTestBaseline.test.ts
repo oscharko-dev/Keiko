@@ -96,11 +96,7 @@ describe("deriveScreenTestBaseline", () => {
   // The render item must NOT assert reachability — navGraph is the single source of truth for
   // reachability and the adversarial judge flagged the contradiction on multi-screen boards.
   it('screen-render title is "renders correctly" and does NOT contain "reachable"', () => {
-    const ir = screen(
-      "s-render-title",
-      "Splash",
-      node("root", "container", { children: [] }),
-    );
+    const ir = screen("s-render-title", "Splash", node("root", "container", { children: [] }));
 
     const render = deriveScreenTestBaseline(ir).items.find((i) => i.category === "screen-render");
 

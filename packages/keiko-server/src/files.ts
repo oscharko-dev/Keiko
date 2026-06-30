@@ -113,13 +113,7 @@ export interface FilesSearchResponse {
 }
 
 export type FilesSearchFileRole =
-  | "source"
-  | "test"
-  | "config"
-  | "docs"
-  | "generated"
-  | "asset"
-  | "other";
+  "source" | "test" | "config" | "docs" | "generated" | "asset" | "other";
 
 export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
 

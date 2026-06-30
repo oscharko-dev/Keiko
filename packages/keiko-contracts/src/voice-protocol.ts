@@ -105,10 +105,7 @@ export const VOICE_REPLAY_CLASSES: readonly VoiceReplayClass[] = [
 //                    never logged or persisted raw.
 // `raw-media`      — raw audio frames; never persisted and never a control message (media plane only).
 export type VoiceRedactionClass =
-  | "content-free"
-  | "reviewable-text"
-  | "secret-bearing"
-  | "raw-media";
+  "content-free" | "reviewable-text" | "secret-bearing" | "raw-media";
 
 export const VOICE_REDACTION_CLASSES: readonly VoiceRedactionClass[] = [
   "content-free",
@@ -198,9 +195,7 @@ export const VOICE_CONTROL_MESSAGE_KINDS: readonly VoiceControlMessageKind[] = [
 // full-realtime profile it MAY mirror this control subset for lower latency than the control plane;
 // it never carries new authority and never carries raw audio. Every entry is also a control kind.
 export type VoiceDataChannelEventKind =
-  | "control.interrupt"
-  | "transcript.partial"
-  | "playback.state";
+  "control.interrupt" | "transcript.partial" | "playback.state";
 
 export const VOICE_DATA_CHANNEL_EVENT_KINDS: readonly VoiceDataChannelEventKind[] = [
   "control.interrupt",
@@ -340,6 +335,7 @@ export interface VoiceCapabilityOfferMessage extends VoiceControlEnvelope<"capab
     readonly speechToText: boolean;
     readonly speechOutput: boolean;
     readonly realtimeVoice: boolean;
+    readonly realtimeToolCalling?: boolean | undefined;
   };
 }
 
@@ -542,8 +538,7 @@ export const DEFAULT_VOICE_PROTOCOL_TIMEOUTS: VoiceProtocolTimeouts = {
 
 // ─── Validation result ──────────────────────────────────────────────────────────
 export type VoiceProtocolValidation =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 // ─── Type guards & lookups ───────────────────────────────────────────────────────
 function isRecord(value: unknown): value is Record<string, unknown> {

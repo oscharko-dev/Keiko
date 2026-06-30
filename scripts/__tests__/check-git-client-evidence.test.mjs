@@ -41,7 +41,11 @@ describe("checkGitClientEvidence", () => {
     root = mkdtempCompat("git-client-evidence-");
     write(root, "docs/git-delivery/git-client-desktop-reuse-contract.md", "# Contract\n");
     write(root, "docs/git-delivery/git-client-repository-api.md", "# API\n");
-    write(root, "docs/git-delivery/epic-1571-closeout.md", "#1573 #1574 #1575 #1576 #1577 #1578 BFF CSRF credential agent operation MIT Qodana CodeQL\n");
+    write(
+      root,
+      "docs/git-delivery/epic-1571-closeout.md",
+      "#1573 #1574 #1575 #1576 #1577 #1578 BFF CSRF credential agent operation MIT Qodana CodeQL\n",
+    );
 
     const failures = checkGitClientEvidence(root);
     expect(failures).toContain(
@@ -53,7 +57,11 @@ describe("checkGitClientEvidence", () => {
     root = mkdtempCompat("git-client-evidence-");
     write(root, "docs/git-delivery/git-client-desktop-reuse-contract.md", "# Contract\n");
     write(root, "docs/git-delivery/git-client-repository-api.md", "# API\n");
-    write(root, "docs/git-delivery/epic-1571-closeout.md", "#1573 #1574 #1575 #1576 #1577 #1578 BFF CSRF credential agent operation MIT Qodana CodeQL\n");
+    write(
+      root,
+      "docs/git-delivery/epic-1571-closeout.md",
+      "#1573 #1574 #1575 #1576 #1577 #1578 BFF CSRF credential agent operation MIT Qodana CodeQL\n",
+    );
     write(
       root,
       "docs/git-delivery/evidence/1575/manifest.json",

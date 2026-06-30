@@ -371,8 +371,7 @@ describe("searchVectorsForScope — citation fields", () => {
           "SELECT character_start, character_end FROM chunks WHERE capsule_id = :c AND id = :id",
         )
         .get({ c: String(seeded.capsuleId), id: String(ref.citation.chunkId) }) as
-        | { readonly character_start: number; readonly character_end: number }
-        | undefined;
+        { readonly character_start: number; readonly character_end: number } | undefined;
       expect(chunkRow).toBeDefined();
       expect(ref.citation.pageNumber).toBe(42);
       expect(ref.citation.pageLabel).toBe("xlii");

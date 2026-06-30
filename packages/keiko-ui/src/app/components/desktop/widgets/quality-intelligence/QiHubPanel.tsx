@@ -46,8 +46,7 @@ export interface QiHubPanelProps {
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
   /** Figma Snapshot sources from connected windows, optionally scoped to selected screen ids. */
   readonly connectedFigmaSnapshotSources?:
-    | readonly QualityIntelligenceFigmaSnapshotSource[]
-    | undefined;
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources from connected Figma Image windows. */
   readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
   /** Seam for tests. */

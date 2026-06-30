@@ -168,7 +168,9 @@ function planPlaintextProviderCredential(
   }
   // Env override: preserve the durable vaulted credential + its reference if one already exists.
   const durableRef = configuredRef ?? reference;
-  return vaultedRefs.has(durableRef) ? providerWithSecretRef(cleaned, durableRef) : { provider: cleaned };
+  return vaultedRefs.has(durableRef)
+    ? providerWithSecretRef(cleaned, durableRef)
+    : { provider: cleaned };
 }
 
 function planReferenceOnlyProviderCredential(

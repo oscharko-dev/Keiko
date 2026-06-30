@@ -44,11 +44,7 @@ export function isVoiceActionIntentSchemaVersionSupported(version: unknown): boo
 // `external-effect` — reaches outside the host (send / deploy / pay / call an external system).
 // `unknown`         — the fail-closed default: the text did not match a recognized read-only-only shape.
 export type SpokenActionEffectClass =
-  | "read-only"
-  | "mutating"
-  | "destructive"
-  | "external-effect"
-  | "unknown";
+  "read-only" | "mutating" | "destructive" | "external-effect" | "unknown";
 
 export const SPOKEN_ACTION_EFFECT_CLASSES: readonly SpokenActionEffectClass[] = [
   "read-only",
@@ -285,11 +281,7 @@ export function voiceCanProposeAction(profile: VoiceProfile): boolean {
 
 // ─── Outcomes (content-free) ──────────────────────────────────────────────────────
 export type SpokenActionOutcome =
-  | "routed"
-  | "denied"
-  | "cancelled"
-  | "superseded"
-  | "not-applicable";
+  "routed" | "denied" | "cancelled" | "superseded" | "not-applicable";
 
 export const SPOKEN_ACTION_OUTCOMES: readonly SpokenActionOutcome[] = [
   "routed",
@@ -440,8 +432,7 @@ export function buildSpokenActionAuditRecord(
 
 // ─── Validators (accumulating, never throw) ──────────────────────────────────────
 export type SpokenActionValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 function buildSpokenActionResult(reasons: readonly string[]): SpokenActionValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };

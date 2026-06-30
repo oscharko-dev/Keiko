@@ -79,8 +79,7 @@ export const KEIKO_DEFAULT_PR_POLICY_PACK: GitDeliveryRepoPolicyPack = {
 export interface GitDeliveryPullRequestSeams {
   readonly prAdapterFactory?: ((workspace: WorkspaceInfo) => GitPullRequestAdapter) | undefined;
   readonly snapshotReader?:
-    | ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>)
-    | undefined;
+    ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;

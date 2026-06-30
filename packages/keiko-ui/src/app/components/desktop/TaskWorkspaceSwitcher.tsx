@@ -302,7 +302,11 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
                 {api.instances.map((instance) => {
                   const isActive = active?.workspaceId === instance.workspaceId;
                   return (
-                    <div key={instance.workspaceId} role="listitem" className="tw-switcher-list-item">
+                    <div
+                      key={instance.workspaceId}
+                      role="listitem"
+                      className="tw-switcher-list-item"
+                    >
                       <span className="tw-switcher-list-label" title={instance.managedWorktreePath}>
                         <strong>{instance.taskId}</strong>
                         <span>{instance.lifecycleState}</span>

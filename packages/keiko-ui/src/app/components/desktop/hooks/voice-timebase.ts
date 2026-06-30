@@ -45,13 +45,7 @@ export const VOICE_TIMEBASE_BACKPRESSURE_HIGH = 160;
 
 // ─── Engine phases (state machine) ─────────────────────────────────────────────
 export type VoiceTimebasePhase =
-  | "dormant"
-  | "idle"
-  | "capturing"
-  | "transcribing"
-  | "responding"
-  | "interrupted"
-  | "closed";
+  "dormant" | "idle" | "capturing" | "transcribing" | "responding" | "interrupted" | "closed";
 
 // ─── Backpressure signal (D5) — advisory only; the engine never blocks or queues ──
 export type VoiceBackpressureLevel = "none" | "elevated" | "saturated";
@@ -60,11 +54,7 @@ export type VoiceBackpressureLevel = "none" | "elevated" | "saturated";
 // Buffering is decided by `isVoiceReplayEligible(kind)`, not by a distinct outcome: an "applied"
 // replay-eligible message is buffered; an "ignored-ephemeral" one is applied to the live view only.
 export type VoiceIngestOutcome =
-  | "applied"
-  | "duplicate"
-  | "out-of-order"
-  | "not-allowed-for-profile"
-  | "ignored-ephemeral";
+  "applied" | "duplicate" | "out-of-order" | "not-allowed-for-profile" | "ignored-ephemeral";
 
 // A control message stamped with the monotonic clock. `message` is retained for catch-up re-delivery
 // to the transport; the engine NEVER hands it to the observer or any log.

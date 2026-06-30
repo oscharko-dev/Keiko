@@ -47,10 +47,7 @@ vi.mock("next/dynamic", () => ({
           <button type="button" onClick={() => props.onSelectOpenFile?.("src/b.ts")}>
             Select b
           </button>
-          <button
-            type="button"
-            onClick={() => props.onSelectOpenFile?.(props.file ?? "")}
-          >
+          <button type="button" onClick={() => props.onSelectOpenFile?.(props.file ?? "")}>
             Select current {props.paneId ?? "pane"}
           </button>
           <button type="button" onClick={() => props.onSelectOpenFile?.("")}>

@@ -23,7 +23,8 @@ const arc = (cx, cy, r, a0, a1) => {
   return `M${f(x0)} ${f(y0)} A${r} ${r} 0 ${large} 1 ${f(x1)} ${f(y1)}`;
 };
 // ring with one seam (gap centred at `at` degrees; -90 = top)
-const ring = (cx, cy, r, at = -90, gap = 34) => arc(cx, cy, r, at + gap / 2, at + gap / 2 + (360 - gap));
+const ring = (cx, cy, r, at = -90, gap = 34) =>
+  arc(cx, cy, r, at + gap / 2, at + gap / 2 + (360 - gap));
 // rounded rect, open seam centred on the top edge
 const box = (x, y, w, h, r, gap = 3) => {
   const a = x + (w - gap) / 2;
@@ -40,26 +41,59 @@ const rect = (x, y, w, h, r) =>
   `V${f(y + h - r)} A${r} ${r} 0 0 1 ${f(x + w - r)} ${f(y + h)} H${f(x + r)} ` +
   `A${r} ${r} 0 0 1 ${f(x)} ${f(y + h - r)} V${f(y + r)} A${r} ${r} 0 0 1 ${f(x + r)} ${f(y)} Z`;
 const spokes = (cx, cy, r0, r1, n) =>
-  [...Array(n)].map((_, i) => {
-    const d = (i * 360) / n;
-    const [ax, ay] = pt(cx, cy, r0, d);
-    const [bx, by] = pt(cx, cy, r1, d);
-    return `M${f(ax)} ${f(ay)} L${f(bx)} ${f(by)}`;
-  }).join(" ");
+  [...Array(n)]
+    .map((_, i) => {
+      const d = (i * 360) / n;
+      const [ax, ay] = pt(cx, cy, r0, d);
+      const [bx, by] = pt(cx, cy, r1, d);
+      return `M${f(ax)} ${f(ay)} L${f(bx)} ${f(by)}`;
+    })
+    .join(" ");
 // four-point sparkle (closed, gestural — like `spark`)
 const star4 = (cx, cy, rO, rI) => {
   const A = [-90, -45, 0, 45, 90, 135, 180, 225];
-  return "M " + A.map((a, i) => { const [x, y] = pt(cx, cy, i % 2 ? rI : rO, a); return `${f(x)} ${f(y)}`; }).join(" L ") + " Z";
+  return (
+    "M " +
+    A.map((a, i) => {
+      const [x, y] = pt(cx, cy, i % 2 ? rI : rO, a);
+      return `${f(x)} ${f(y)}`;
+    }).join(" L ") +
+    " Z"
+  );
 };
 // toothed cog — one Lift seam centred on the top tooth
 const gearPath = (cx, cy, rOut, rIn, teeth, half, slope, gapHalf) => {
-  const start = 270 + gapHalf, end = 270 + 360 - gapHalf;
+  const start = 270 + gapHalf,
+    end = 270 + 360 - gapHalf;
   let nodes = [];
-  for (let i = 0; i < teeth; i++) { const c = 270 + i * (360 / teeth); nodes.push([c - half - slope, rIn], [c - half, rOut], [c + half, rOut], [c + half + slope, rIn]); }
-  nodes = nodes.map(([a, r]) => { let x = a; while (x <= start) x += 360; while (x >= start + 360) x -= 360; return [x, r]; })
-    .filter(([a]) => a > start + 0.01 && a < end - 0.01).sort((p, q) => p[0] - q[0]);
+  for (let i = 0; i < teeth; i++) {
+    const c = 270 + i * (360 / teeth);
+    nodes.push(
+      [c - half - slope, rIn],
+      [c - half, rOut],
+      [c + half, rOut],
+      [c + half + slope, rIn],
+    );
+  }
+  nodes = nodes
+    .map(([a, r]) => {
+      let x = a;
+      while (x <= start) x += 360;
+      while (x >= start + 360) x -= 360;
+      return [x, r];
+    })
+    .filter(([a]) => a > start + 0.01 && a < end - 0.01)
+    .sort((p, q) => p[0] - q[0]);
   const pts = [[start, rOut], ...nodes, [end, rOut]];
-  return "M " + pts.map(([a, r]) => { const [x, y] = pt(cx, cy, r, a); return `${f(x)} ${f(y)}`; }).join(" L ");
+  return (
+    "M " +
+    pts
+      .map(([a, r]) => {
+        const [x, y] = pt(cx, cy, r, a);
+        return `${f(x)} ${f(y)}`;
+      })
+      .join(" L ")
+  );
 };
 
 // ── the library — keys mirror packages/keiko-ui …/Icons.tsx where they exist ──
@@ -488,7 +522,9 @@ const LIFT = {
       <path d="M12 3.9 C 8.3 6.5 8.3 17.5 12 20.1 C 15.7 17.5 15.7 6.5 12 3.9" />
     </>
   ),
-  cloud: <path d="M7.2 18 A4.3 4.3 0 0 1 7.4 9.4 A5.8 5.8 0 0 1 18.3 10.8 A3.6 3.6 0 0 1 17.6 18 H7.2" />,
+  cloud: (
+    <path d="M7.2 18 A4.3 4.3 0 0 1 7.4 9.4 A5.8 5.8 0 0 1 18.3 10.8 A3.6 3.6 0 0 1 17.6 18 H7.2" />
+  ),
   database: (
     <>
       <path d="M5 6.5 V17.5 a7 2.6 0 0 0 14 0 V6.5" />
@@ -839,7 +875,17 @@ function LCtl({ act, force, big }) {
       aria-label={CTL_LABEL[act]}
     >
       <span className="kx-chip" style={big ? { inset: 5, borderRadius: 9 } : undefined} />
-      <svg width={G} height={G} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <svg
+        width={G}
+        height={G}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
         {CTL[act]}
       </svg>
     </button>

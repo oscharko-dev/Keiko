@@ -65,20 +65,20 @@ focused state from that keyboard pass.
 
 ## Screenshots (real product `globals.css`)
 
-| File                      | Mode                                                             |
-| ------------------------- | ---------------------------------------------------------------- |
-| `01-dark.png`             | Dark                                                             |
-| `02-light.png`            | Light                                                            |
-| `03-dark-hc.png`          | Dark · High Contrast (`[data-hc="more"]`)                        |
-| `04-light-hc.png`         | Light · High Contrast                                            |
-| `05-prefers-contrast.png` | `prefers-contrast: more`                                         |
-| `06-forced-colors.png`    | `forced-colors: active` (Windows High Contrast)                  |
-| `07-reduced-motion.png`   | `prefers-reduced-motion: reduce` (state transitions off)         |
-| `08-compact-density.png`  | `[data-density="compact"]` (tightened control heights)           |
+| File                      | Mode                                                               |
+| ------------------------- | ------------------------------------------------------------------ |
+| `01-dark.png`             | Dark                                                               |
+| `02-light.png`            | Light                                                              |
+| `03-dark-hc.png`          | Dark · High Contrast (`[data-hc="more"]`)                          |
+| `04-light-hc.png`         | Light · High Contrast                                              |
+| `05-prefers-contrast.png` | `prefers-contrast: more`                                           |
+| `06-forced-colors.png`    | `forced-colors: active` (Windows High Contrast)                    |
+| `07-reduced-motion.png`   | `prefers-reduced-motion: reduce` (state transitions off)           |
+| `08-compact-density.png`  | `[data-density="compact"]` (tightened control heights)             |
 | `09-responsive.png`       | 560px mobile viewport — intrinsic flex-wrap reflow + grid collapse |
-| `10-tablet.png`           | 900px tablet viewport                                            |
-| `11-ultrawide.png`        | 1920px ultrawide viewport                                        |
-| `12-focus-visible.png`    | Keyboard focus proof screenshot                                  |
+| `10-tablet.png`           | 900px tablet viewport                                              |
+| `11-ultrawide.png`        | 1920px ultrawide viewport                                          |
+| `12-focus-visible.png`    | Keyboard focus proof screenshot                                    |
 
 Each screenshot renders the canonical `inputs.html` markup (checkbox, radio, slider, stepper,
 combobox with open list, tag input, file dropzone + file item, segmented date field) and

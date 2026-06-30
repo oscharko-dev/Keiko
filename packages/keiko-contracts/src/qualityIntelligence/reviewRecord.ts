@@ -18,11 +18,7 @@ export const QUALITY_INTELLIGENCE_REVIEWER_KINDS: readonly QualityIntelligenceRe
 ] as const;
 
 export type QualityIntelligenceReviewState =
-  | "open"
-  | "approved"
-  | "changes-requested"
-  | "rejected"
-  | "withdrawn";
+  "open" | "approved" | "changes-requested" | "rejected" | "withdrawn";
 
 export const QUALITY_INTELLIGENCE_REVIEW_STATES: readonly QualityIntelligenceReviewState[] = [
   "open",

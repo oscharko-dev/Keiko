@@ -235,8 +235,7 @@ describe("extractDocument — normalized binary text", () => {
         "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
       )
       .get({ c: capsuleId, d: result.outcome.document.id }) as
-      | { readonly normalized_text?: string }
-      | undefined;
+      { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toContain("Hello PDF");
   });
 
@@ -263,8 +262,7 @@ describe("extractDocument — normalized binary text", () => {
         "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
       )
       .get({ c: capsuleId, d: result.outcome.document.id }) as
-      | { readonly normalized_text?: string }
-      | undefined;
+      { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toContain(
       "Controls!2: A=Control-17 | B=Encrypt backups | C=Q4 & audit",
     );
@@ -547,8 +545,7 @@ describe("extractDocument — path containment", () => {
         "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
       )
       .get({ c: capsuleId, d: result.outcome.document.id }) as
-      | { readonly normalized_text?: string }
-      | undefined;
+      { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toBe("target text");
   });
 

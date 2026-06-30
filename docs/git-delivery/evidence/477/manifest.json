@@ -6,10 +6,7 @@
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/477",
   "generatedAt": "2026-06-27T11:39:22.409Z",
-  "governedRoutes": [
-    "/api/git-delivery/pr/preview",
-    "/api/git-delivery/pr/execute"
-  ],
+  "governedRoutes": ["/api/git-delivery/pr/preview", "/api/git-delivery/pr/execute"],
   "windowRegistration": {
     "kind": "governedPullRequest",
     "seededVia": "keiko.workspace.v4",
@@ -34,8 +31,5 @@
     "PR routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
     "The UI exposes no open-anyway escape: the Open button always routes through /pr/execute and renders its governed response verbatim."
   ],
-  "artifacts": [
-    "manifest.json",
-    "governed-pr-block.png"
-  ]
+  "artifacts": ["manifest.json", "governed-pr-block.png"]
 }

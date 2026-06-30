@@ -293,8 +293,7 @@ export interface RunLauncherProps {
    * list so selected screen ids can scope large boards to one or two masks.
    */
   readonly connectedFigmaSnapshotSources?:
-    | readonly QualityIntelligenceFigmaSnapshotSource[]
-    | undefined;
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources from connected Figma Image windows. */
   readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
 }
@@ -701,8 +700,7 @@ export function RunLauncher({
   }, [capsuleId, capsuleSetId, capsuleSets, capsules, sourceKind]);
 
   const buildManualSources = useCallback(():
-    | QualityIntelligenceStartRunRequest["sources"]
-    | null => {
+    QualityIntelligenceStartRunRequest["sources"] | null => {
     const trimmedLabel = label.trim();
     if (sourceKind === "requirements" && text.trim().length > 0) {
       return [{ kind: "requirements", label: trimmedLabel || "Requirements", text }];

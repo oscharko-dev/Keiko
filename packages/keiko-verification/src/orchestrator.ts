@@ -108,8 +108,7 @@ function policyForStep(limits: VerificationResourceLimits, network: NetworkPolic
 
 // The per-step network decision: either run with a concrete policy, or fail closed before spawning.
 type NetworkResolution =
-  | { readonly kind: "run"; readonly network: NetworkPolicy }
-  | { readonly kind: "fail-closed" };
+  { readonly kind: "run"; readonly network: NetworkPolicy } | { readonly kind: "fail-closed" };
 
 // Pure resolution of a step's effective network policy from the run's enforcement mode and whether an
 // enforcing backend is available. The default mode ("inherit") and any step that does not declare

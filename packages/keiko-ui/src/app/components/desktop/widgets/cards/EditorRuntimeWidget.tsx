@@ -246,8 +246,7 @@ export interface EditorRuntimeWidgetProps {
   readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
   readonly onExternalSaveComplete?:
-    | ((requestId: number, paneId: string, file: string, ok: boolean) => void)
-    | undefined;
+    ((requestId: number, paneId: string, file: string, ok: boolean) => void) | undefined;
   readonly tabInsertTarget?: EditorTabInsertTarget | undefined;
   readonly renderTabHandle?:
     | ((
@@ -552,13 +551,9 @@ function EditorRuntimeWidget({
       if (visibleTabCapacity >= documentTabs.length) return 0;
       const maxStart = Math.max(0, documentTabs.length - visibleTabCapacity);
       const clampedStart = Math.min(Math.max(0, current), maxStart);
-      const activeIndex =
-        file === undefined || file.length === 0 ? -1 : documentTabs.indexOf(file);
+      const activeIndex = file === undefined || file.length === 0 ? -1 : documentTabs.indexOf(file);
       if (activeIndex < 0) return clampedStart;
-      if (
-        activeIndex >= clampedStart &&
-        activeIndex < clampedStart + visibleTabCapacity
-      ) {
+      if (activeIndex >= clampedStart && activeIndex < clampedStart + visibleTabCapacity) {
         return clampedStart;
       }
       if (activeIndex < clampedStart) return activeIndex;

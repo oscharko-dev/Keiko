@@ -121,8 +121,7 @@ describe("mapChunkToCitation", () => {
     const chunkRow = fixture.store._internal.db
       .prepare("SELECT character_start, character_end FROM chunks WHERE id = :id")
       .get({ id: String(chunkId) }) as
-      | { readonly character_start: number; readonly character_end: number }
-      | undefined;
+      { readonly character_start: number; readonly character_end: number } | undefined;
 
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
 

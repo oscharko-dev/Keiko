@@ -839,8 +839,8 @@ const PROBES_C4_SELECTORS = [
 
 // Combined list for iteration convenience
 const PROBES_C = [
-  ...PROBES_C1.map(p => ({ ...p, group: "C1" })),
-  ...PROBES_C3.map(p => ({ ...p, group: "C3" })),
+  ...PROBES_C1.map((p) => ({ ...p, group: "C1" })),
+  ...PROBES_C3.map((p) => ({ ...p, group: "C3" })),
 ];
 
 const MODES = [
@@ -904,20 +904,29 @@ async function collectC(page, cssText, mode) {
     { theme: mode.theme, hc: mode.hc },
   );
   // Collect C1/C3 probes (sel+prop pairs from PROBES_C) and C4 probes (PROBES_C4_SELECTORS)
-  return page.evaluate(({ cProbes, c4Probes }) => {
-    const out = {};
-    for (const { sel, prop } of cProbes) {
-      const el = document.querySelector(sel);
-      if (!el) { out[`${sel}::${prop}`] = "__MISSING__"; continue; }
-      out[`${sel}::${prop}`] = getComputedStyle(el)[prop];
-    }
-    for (const [sel, prop] of c4Probes) {
-      const el = document.querySelector(sel);
-      if (!el) { out[`${sel}::${prop}`] = "__MISSING__"; continue; }
-      out[`${sel}::${prop}`] = getComputedStyle(el)[prop];
-    }
-    return out;
-  }, { cProbes: PROBES_C, c4Probes: PROBES_C4_SELECTORS });
+  return page.evaluate(
+    ({ cProbes, c4Probes }) => {
+      const out = {};
+      for (const { sel, prop } of cProbes) {
+        const el = document.querySelector(sel);
+        if (!el) {
+          out[`${sel}::${prop}`] = "__MISSING__";
+          continue;
+        }
+        out[`${sel}::${prop}`] = getComputedStyle(el)[prop];
+      }
+      for (const [sel, prop] of c4Probes) {
+        const el = document.querySelector(sel);
+        if (!el) {
+          out[`${sel}::${prop}`] = "__MISSING__";
+          continue;
+        }
+        out[`${sel}::${prop}`] = getComputedStyle(el)[prop];
+      }
+      return out;
+    },
+    { cProbes: PROBES_C, c4Probes: PROBES_C4_SELECTORS },
+  );
 }
 
 const browser = await chromium.launch();
@@ -974,26 +983,52 @@ const catCFailures = [];
 // C1: dark identical, light differs (warm shadow ink replaces pure black)
 for (const { sel, prop, label, group } of PROBES_C) {
   const key = `${sel}::${prop}`;
-  const darkPre   = catCRaw.pre["01-dark"][key];
-  const darkPost  = catCRaw.post["01-dark"][key];
-  const lightPre  = catCRaw.pre["02-light"][key];
+  const darkPre = catCRaw.pre["01-dark"][key];
+  const darkPost = catCRaw.post["01-dark"][key];
+  const lightPre = catCRaw.pre["02-light"][key];
   const lightPost = catCRaw.post["02-light"][key];
   const darkIdentical = darkPre === darkPost;
   if (group === "C1") {
     const lightDiffers = lightPre !== lightPost;
-    catCResults[key] = { group, label, darkPre, darkPost, darkIdentical, lightPre, lightPost, lightDiffers };
+    catCResults[key] = {
+      group,
+      label,
+      darkPre,
+      darkPost,
+      darkIdentical,
+      lightPre,
+      lightPost,
+      lightDiffers,
+    };
     if (!darkIdentical)
-      catCFailures.push(`FAIL ${group} dark not identical: ${key} PRE="${darkPre}" POST="${darkPost}"`);
+      catCFailures.push(
+        `FAIL ${group} dark not identical: ${key} PRE="${darkPre}" POST="${darkPost}"`,
+      );
     if (!lightDiffers)
-      catCFailures.push(`FAIL ${group} light should differ (warm ink): ${key} PRE="${lightPre}" POST="${lightPost}"`);
+      catCFailures.push(
+        `FAIL ${group} light should differ (warm ink): ${key} PRE="${lightPre}" POST="${lightPost}"`,
+      );
   } else if (group === "C3") {
     // C3: centralized token — both dark AND light must be identical PRE/POST
     const lightIdentical = lightPre === lightPost;
-    catCResults[key] = { group, label, darkPre, darkPost, darkIdentical, lightPre, lightPost, lightIdentical };
+    catCResults[key] = {
+      group,
+      label,
+      darkPre,
+      darkPost,
+      darkIdentical,
+      lightPre,
+      lightPost,
+      lightIdentical,
+    };
     if (!darkIdentical)
-      catCFailures.push(`FAIL ${group} dark not identical: ${key} PRE="${darkPre}" POST="${darkPost}"`);
+      catCFailures.push(
+        `FAIL ${group} dark not identical: ${key} PRE="${darkPre}" POST="${darkPost}"`,
+      );
     if (!lightIdentical)
-      catCFailures.push(`FAIL ${group} light not identical (token should resolve same value): ${key} PRE="${lightPre}" POST="${lightPost}"`);
+      catCFailures.push(
+        `FAIL ${group} light not identical (token should resolve same value): ${key} PRE="${lightPre}" POST="${lightPost}"`,
+      );
   }
 }
 
@@ -1001,17 +1036,19 @@ for (const { sel, prop, label, group } of PROBES_C) {
 const catC4Results = {};
 for (const [sel, prop] of PROBES_C4_SELECTORS) {
   const key = `${sel}::${prop}`;
-  const darkPre  = catCRaw.pre["01-dark"][key];
+  const darkPre = catCRaw.pre["01-dark"][key];
   const darkPost = catCRaw.post["01-dark"][key];
-  const hcPre    = catCRaw.pre["03-dark-hc"][key];
-  const hcPost   = catCRaw.post["03-dark-hc"][key];
+  const hcPre = catCRaw.pre["03-dark-hc"][key];
+  const hcPost = catCRaw.post["03-dark-hc"][key];
   const darkIdentical = darkPre === darkPost;
   const hcDiffers = hcPre !== hcPost;
   catC4Results[key] = { darkPre, darkPost, darkIdentical, hcPre, hcPost, hcDiffers };
   if (!darkIdentical)
     catCFailures.push(`FAIL C4 dark not identical: ${key} PRE="${darkPre}" POST="${darkPost}"`);
   if (!hcDiffers)
-    catCFailures.push(`FAIL C4 HC should differ (--ed-syn-* HC overrides): ${key} PRE="${hcPre}" POST="${hcPost}"`);
+    catCFailures.push(
+      `FAIL C4 HC should differ (--ed-syn-* HC overrides): ${key} PRE="${hcPre}" POST="${hcPost}"`,
+    );
 }
 
 // ─── Write proof JSON ─────────────────────────────────────────────────────────
@@ -1032,10 +1069,19 @@ writeFileSync(
           "C1: shadow-ink rows adapt warm ink in Light (dark identical, light differs). " +
           "C3: mc-dialog-backdrop routes to --overlay-scrim (both dark+light identical — centralisation, no value change). " +
           "C4: hl-*/fpv-src route to --ed-syn-*/--ed-fg which have HC overrides (dark+light identical, HC intentionally differs).",
-        C1: { probes: Object.fromEntries(Object.entries(catCResults).filter(([,r]) => r.group === "C1")) },
-        C3: { probes: Object.fromEntries(Object.entries(catCResults).filter(([,r]) => r.group === "C3")) },
+        C1: {
+          probes: Object.fromEntries(
+            Object.entries(catCResults).filter(([, r]) => r.group === "C1"),
+          ),
+        },
+        C3: {
+          probes: Object.fromEntries(
+            Object.entries(catCResults).filter(([, r]) => r.group === "C3"),
+          ),
+        },
         C4: {
-          description: "hl-*/fpv-src: dark identical PRE/POST (same hex), HC modes differ (--ed-syn-* HC overrides improve contrast). This is intentional.",
+          description:
+            "hl-*/fpv-src: dark identical PRE/POST (same hex), HC modes differ (--ed-syn-* HC overrides improve contrast). This is intentional.",
           probes: catC4Results,
         },
         failures: catCFailures,
@@ -1047,25 +1093,34 @@ writeFileSync(
 );
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
-console.log(`\nTOTAL Category-A: ${totalProbes} computed-value probes across ${MODES.length} modes`);
+console.log(
+  `\nTOTAL Category-A: ${totalProbes} computed-value probes across ${MODES.length} modes`,
+);
 console.log(`MISSING selectors (not in DOM, skipped): ${missing.size}`);
 if (missing.size > 0) for (const s of missing) console.log(`  MISSING: ${s}`);
 console.log(`DIFFERENCES (pre vs post): ${diffs.length}`);
 for (const d of diffs.slice(0, 80)) console.log(d);
 console.log(`\nCategory-C deliberate adaptations:`);
 for (const [key, r] of Object.entries(catCResults)) {
-  const darkOk  = r.darkIdentical ? "OK" : "FAIL";
-  const lightOk = (r.group === "C1")
-    ? (r.lightDiffers   ? "OK differs (expected)" : "FAIL should differ")
-    : (r.lightIdentical ? "OK identical (expected)" : "FAIL should be identical");
+  const darkOk = r.darkIdentical ? "OK" : "FAIL";
+  const lightOk =
+    r.group === "C1"
+      ? r.lightDiffers
+        ? "OK differs (expected)"
+        : "FAIL should differ"
+      : r.lightIdentical
+        ? "OK identical (expected)"
+        : "FAIL should be identical";
   console.log(`  [${r.group}] ${key}: dark=${darkOk}  light=${lightOk}`);
   console.log(`    dark   PRE="${r.darkPre}"  POST="${r.darkPost}"`);
   console.log(`    light  PRE="${r.lightPre}"  POST="${r.lightPost}"`);
 }
-console.log(`  [C4] ${Object.keys(catC4Results).length} hl-*/fpv-src probes — dark identical, HC differs:`);
+console.log(
+  `  [C4] ${Object.keys(catC4Results).length} hl-*/fpv-src probes — dark identical, HC differs:`,
+);
 for (const [key, r] of Object.entries(catC4Results)) {
   const darkOk = r.darkIdentical ? "OK" : "FAIL";
-  const hcOk   = r.hcDiffers    ? "OK differs (expected)" : "FAIL should differ";
+  const hcOk = r.hcDiffers ? "OK differs (expected)" : "FAIL should differ";
   console.log(`    ${key}: dark=${darkOk}  hc=${hcOk}`);
 }
 if (catCFailures.length > 0) {

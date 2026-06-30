@@ -58,25 +58,25 @@ Primary documents:
 
 Current package responsibilities:
 
-| Package | Owns | Must not own |
-| --- | --- | --- |
-| `keiko-contracts` | Shared contracts, validators, branded ids, wire types | IO, provider calls, persistence, UI |
-| `keiko-security` | Redaction, safe errors, secrets, hashing, trust-boundary helpers | Product workflow logic, UI state |
-| `keiko-model-gateway` | Provider abstraction, OpenAI-compatible calls, capability routing, TLS/resilience | UI, workspace file reads, tool execution |
-| `keiko-workspace` | Repository discovery, path containment, safe reads, context packs, retrieval seams | Provider calls, UI, patch application |
-| `keiko-tools` | Controlled execution, patch writing, terminal/browser adapters, git mutation primitives | Model routing, workflow policy, credentials |
-| `keiko-harness` | Agent runtime loop, cancellation, limits, orchestration seams | Direct provider SDK calls, raw FS reads |
-| `keiko-workflows` | Reviewable developer-assist workflows and reports | Runtime server, UI components, credentials |
-| `keiko-evidence` | Evidence manifests, retention, local artifact indexing | Provider access, UI composition |
-| `keiko-verification` | Deterministic verification planning and summaries | UI, model/provider access |
-| `keiko-quality-intelligence` | Pure Quality Intelligence domain logic | Server routes, UI, provider calls |
-| `keiko-local-knowledge` | Local Knowledge capsule store and extraction lifecycle | Browser UI, direct ungoverned egress |
-| `keiko-memory-*` | MemoriaViva capture, vault, retrieval, governance, consolidation | Unscoped memory use, plaintext secret storage |
-| `keiko-editor` | Browser-tier Monaco editor/diff UI and host port contracts | Retrieval, model routing, patching, server routes |
-| `keiko-server` | Loopback BFF, routes, CSP/host/CSRF gates, runtime wiring | Long-term domain contracts |
-| `keiko-cli` | CLI lifecycle and command surface | Domain logic that belongs in packages |
-| `keiko-ui` | Next.js local UI, browser components, static export | Filesystem IO, provider tokens, direct model calls |
-| root `@oscharko-dev/keiko` | Public product facade and bundled artifact | New domain implementation |
+| Package                      | Owns                                                                                    | Must not own                                       |
+| ---------------------------- | --------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `keiko-contracts`            | Shared contracts, validators, branded ids, wire types                                   | IO, provider calls, persistence, UI                |
+| `keiko-security`             | Redaction, safe errors, secrets, hashing, trust-boundary helpers                        | Product workflow logic, UI state                   |
+| `keiko-model-gateway`        | Provider abstraction, OpenAI-compatible calls, capability routing, TLS/resilience       | UI, workspace file reads, tool execution           |
+| `keiko-workspace`            | Repository discovery, path containment, safe reads, context packs, retrieval seams      | Provider calls, UI, patch application              |
+| `keiko-tools`                | Controlled execution, patch writing, terminal/browser adapters, git mutation primitives | Model routing, workflow policy, credentials        |
+| `keiko-harness`              | Agent runtime loop, cancellation, limits, orchestration seams                           | Direct provider SDK calls, raw FS reads            |
+| `keiko-workflows`            | Reviewable developer-assist workflows and reports                                       | Runtime server, UI components, credentials         |
+| `keiko-evidence`             | Evidence manifests, retention, local artifact indexing                                  | Provider access, UI composition                    |
+| `keiko-verification`         | Deterministic verification planning and summaries                                       | UI, model/provider access                          |
+| `keiko-quality-intelligence` | Pure Quality Intelligence domain logic                                                  | Server routes, UI, provider calls                  |
+| `keiko-local-knowledge`      | Local Knowledge capsule store and extraction lifecycle                                  | Browser UI, direct ungoverned egress               |
+| `keiko-memory-*`             | MemoriaViva capture, vault, retrieval, governance, consolidation                        | Unscoped memory use, plaintext secret storage      |
+| `keiko-editor`               | Browser-tier Monaco editor/diff UI and host port contracts                              | Retrieval, model routing, patching, server routes  |
+| `keiko-server`               | Loopback BFF, routes, CSP/host/CSRF gates, runtime wiring                               | Long-term domain contracts                         |
+| `keiko-cli`                  | CLI lifecycle and command surface                                                       | Domain logic that belongs in packages              |
+| `keiko-ui`                   | Next.js local UI, browser components, static export                                     | Filesystem IO, provider tokens, direct model calls |
+| root `@oscharko-dev/keiko`   | Public product facade and bundled artifact                                              | New domain implementation                          |
 
 ## Architecture decision clusters
 

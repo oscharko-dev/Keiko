@@ -21,9 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 export type GroundingDecisionReason =
-  | "allowed"
-  | "require-citations-rejected"
-  | "no-evidence-stated";
+  "allowed" | "require-citations-rejected" | "no-evidence-stated";
 
 export interface GroundingDecision {
   // `allow=true` means the answer may fire (with or without citations). `allow=false`

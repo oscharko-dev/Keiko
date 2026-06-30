@@ -23,11 +23,7 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   };
 }
 
-function Harness({
-  cameraSmoothness = 0,
-}: {
-  readonly cameraSmoothness?: number;
-}): ReactElement {
+function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number }): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
   const ws = useWorkspace(wsRef, { cameraSmoothness });
   const files = ws.wins?.find((win) => win.id === "files-1");

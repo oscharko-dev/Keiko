@@ -1,5 +1,10 @@
 import type { DocumentStatus } from "./local-knowledge-records.js";
-import type { ChunkId, DocumentId, KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
+import type {
+  ChunkId,
+  DocumentId,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "./local-knowledge.js";
 
 export type PdfCitationPreviewAnchorQuality = "page-only" | "approximate" | "unavailable";
 
@@ -55,10 +60,7 @@ export const PDF_CITATION_PREVIEW_FAILURE_STATES = [
 ] as const;
 
 export type PdfCitationPreviewStatusState =
-  | "not-applicable"
-  | "available"
-  | "recoverable"
-  | "blocked";
+  "not-applicable" | "available" | "recoverable" | "blocked";
 
 export const PDF_CITATION_PREVIEW_STATUS_STATES = [
   "not-applicable",
@@ -141,8 +143,7 @@ export interface PdfCitationPreviewRejected {
 }
 
 export type PdfCitationPreviewAuthorizationResponse =
-  | PdfCitationPreviewAuthorized
-  | PdfCitationPreviewRejected;
+  PdfCitationPreviewAuthorized | PdfCitationPreviewRejected;
 
 export interface PdfCitationPreviewCitationStatus {
   readonly stableId: string;
@@ -172,8 +173,7 @@ export interface PdfCitationPreviewOpenAuthorized {
 }
 
 export type PdfCitationPreviewOpenResponse =
-  | PdfCitationPreviewOpenAuthorized
-  | PdfCitationPreviewRejected;
+  PdfCitationPreviewOpenAuthorized | PdfCitationPreviewRejected;
 
 export function pdfCitationPreviewFailureState(
   reason: PdfCitationPreviewReasonCode,
@@ -189,10 +189,7 @@ export function pdfCitationPreviewFailureState(
   ) {
     return "recoverable";
   }
-  if (
-    reason === "grounded-answer-missing" ||
-    reason === "not-local-knowledge-citation"
-  ) {
+  if (reason === "grounded-answer-missing" || reason === "not-local-knowledge-citation") {
     return "not-applicable";
   }
   return "blocked";

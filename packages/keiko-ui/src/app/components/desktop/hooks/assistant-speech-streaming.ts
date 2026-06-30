@@ -34,6 +34,9 @@ export interface AssistantSpeechStreamingSink {
   stop(): void;
   // Live media position in ms (frames played ÷ sample rate), or undefined when nothing has played.
   positionMs(): number | undefined;
+  // Final teardown for unmount/session disposal. After this call the sink must not reuse its
+  // AudioContext or AudioWorkletNode; a later playback creates fresh WebAudio resources.
+  dispose(): void;
 }
 
 // The provider streams 24 kHz mono signed-16-bit PCM (the fastest format to first audio). The worklet
@@ -76,8 +79,7 @@ export function pcmBytesToInt16(
 }
 
 export function createBrowserAssistantSpeechStreamingSink():
-  | AssistantSpeechStreamingSink
-  | undefined {
+  AssistantSpeechStreamingSink | undefined {
   if (!streamingSupported()) {
     return undefined;
   }
@@ -90,16 +92,44 @@ export function createBrowserAssistantSpeechStreamingSink():
       return node;
     }
     const ctx = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-    await ctx.audioWorklet.addModule(WORKLET_URL);
-    const workletNode = new AudioWorkletNode(ctx, WORKLET_NAME, {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
+    try {
+      await ctx.audioWorklet.addModule(WORKLET_URL);
+      const workletNode = new AudioWorkletNode(ctx, WORKLET_NAME, {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      workletNode.connect(ctx.destination);
+      context = ctx;
+      node = workletNode;
+      return workletNode;
+    } catch (error) {
+      await ctx.close().catch(() => {
+        // close failed while setup already failed; do not retain the context for reuse
+      });
+      throw error;
+    }
+  }
+
+  function closeContext(): void {
+    const currentNode = node;
+    const currentContext = context;
+    node = undefined;
+    context = undefined;
+    positionFrames = 0;
+    currentNode?.port.postMessage(null);
+    if (currentNode !== undefined) {
+      currentNode.port.onmessage = null;
+    }
+    currentNode?.port.close?.();
+    try {
+      currentNode?.disconnect();
+    } catch {
+      // already disconnected
+    }
+    void currentContext?.close().catch(() => {
+      // close failure must not leave a stale context/node eligible for reuse
     });
-    workletNode.connect(ctx.destination);
-    context = ctx;
-    node = workletNode;
-    return workletNode;
   }
 
   async function pump(
@@ -202,6 +232,10 @@ export function createBrowserAssistantSpeechStreamingSink():
         return undefined;
       }
       return Math.round((positionFrames / TARGET_SAMPLE_RATE) * 1000);
+    },
+
+    dispose(): void {
+      closeContext();
     },
   };
 }

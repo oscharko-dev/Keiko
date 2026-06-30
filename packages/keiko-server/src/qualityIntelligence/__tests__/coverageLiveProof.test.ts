@@ -390,9 +390,7 @@ describe("Epic #734 — Coverage Intelligence live proof (real run -> real route
       manifest = defined(loadQualityIntelligenceRun(runId, { evidenceDir }), "manifest");
       const matrix = manifest.coverageMatrix ?? [];
       baselineAtomId = defined(
-        matrix.find(
-          (r) => (r.requirementExcerptRedacted ?? "").includes("REQ-WEAK-002"),
-        ),
+        matrix.find((r) => (r.requirementExcerptRedacted ?? "").includes("REQ-WEAK-002")),
         "baseline matrix row",
       ).atomId;
       readDeps = buildDeps(evidenceDir, fakeChatPort(""));

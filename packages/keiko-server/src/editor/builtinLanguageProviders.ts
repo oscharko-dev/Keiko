@@ -16,14 +16,7 @@ import type {
 } from "./languageProvider.js";
 import { computeLineStarts, spanToRange } from "./textOffsets.js";
 
-const BUILTIN_FORMATTING_LANGUAGES = [
-  "css",
-  "scss",
-  "less",
-  "html",
-  "yaml",
-  "markdown",
-] as const;
+const BUILTIN_FORMATTING_LANGUAGES = ["css", "scss", "less", "html", "yaml", "markdown"] as const;
 
 function fullDocumentEdit(text: string, newText: string): readonly LanguageTextEdit[] {
   if (newText === text) return [];
@@ -42,7 +35,7 @@ function normalizeTrailingWhitespace(text: string): string {
 function formatJson(text: string, options: LanguageFormattingOptions | undefined): string | null {
   try {
     const parsed = JSON.parse(text) as unknown;
-    const spaces = options?.insertSpaces === false ? "\t" : options?.tabSize ?? 2;
+    const spaces = options?.insertSpaces === false ? "\t" : (options?.tabSize ?? 2);
     return `${JSON.stringify(parsed, null, spaces)}\n`;
   } catch {
     return null;
@@ -129,7 +122,10 @@ function markdownSymbols(ctx: LanguageProviderContext): LanguageSymbolsRaw {
     .filter(({ line }) => /^#{1,6}\s+/u.test(line))
     .slice(0, ctx.limits.maxSymbols)
     .map(({ line, index }) => ({
-      name: line.replace(/^#{1,6}\s+/u, "").trim().slice(0, ctx.limits.maxLabelChars),
+      name: line
+        .replace(/^#{1,6}\s+/u, "")
+        .trim()
+        .slice(0, ctx.limits.maxLabelChars),
       kind: "variable" as const,
       range: spanToRange(ctx.overlayText, lineStarts, lineStarts[index], line.length),
     }));
@@ -139,7 +135,10 @@ function markdownSymbols(ctx: LanguageProviderContext): LanguageSymbolsRaw {
   };
 }
 
-function jsonFormatting(ctx: LanguageProviderContext, options: LanguageFormattingOptions | undefined): LanguageFormattingRaw {
+function jsonFormatting(
+  ctx: LanguageProviderContext,
+  options: LanguageFormattingOptions | undefined,
+): LanguageFormattingRaw {
   const formatted = formatJson(ctx.overlayText, options);
   return {
     edits: formatted === null ? [] : fullDocumentEdit(ctx.overlayText, formatted),
@@ -196,7 +195,8 @@ export function createBuiltinTextLanguageProvider(): LanguageProvider {
   };
   return {
     descriptor,
-    supports: (languageId): boolean => languages.includes(languageId as (typeof BUILTIN_FORMATTING_LANGUAGES)[number]),
+    supports: (languageId): boolean =>
+      languages.includes(languageId as (typeof BUILTIN_FORMATTING_LANGUAGES)[number]),
     getDiagnostics: () => ({ diagnostics: [], truncated: false }),
     getCompletions: () => EMPTY_COMPLETIONS,
     getHover: () => EMPTY_HOVER,

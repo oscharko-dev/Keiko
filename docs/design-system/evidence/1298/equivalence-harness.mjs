@@ -359,8 +359,7 @@ async function collectFocusProof(page) {
   if (missingTargets.length || failedTargets.length) {
     throw new Error(
       `keyboard focus proof failed: missing=${missingTargets.join(",") || "none"} failed=${
-        failedTargets.map((record) => `${record.id}:${JSON.stringify(record)}`).join("; ") ||
-        "none"
+        failedTargets.map((record) => `${record.id}:${JSON.stringify(record)}`).join("; ") || "none"
       }`,
     );
   }
@@ -494,7 +493,9 @@ writeFileSync(
 console.log(
   `\nGROUP R (reference fidelity): ${rCounters.total} probes, gated diffs ${rDiffsGated.length}, recorded diffs ${rDiffsRecorded.length}`,
 );
-console.log(`KEYBOARD FOCUS: ${Object.keys(focusVisible).length}/${FOCUS_TARGETS.length} targets proved`);
+console.log(
+  `KEYBOARD FOCUS: ${Object.keys(focusVisible).length}/${FOCUS_TARGETS.length} targets proved`,
+);
 for (const d of rDiffsGated.slice(0, 60)) console.log("  GATED " + d);
 for (const d of rDiffsRecorded.slice(0, 30)) console.log("  recorded " + d);
 if (missing.size) {

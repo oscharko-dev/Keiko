@@ -140,9 +140,7 @@ export interface PromptEnhancementCandidateComparison {
 export type PromptEnhancementGroundingReadinessStatus = "not-required" | "ready" | "unavailable";
 
 export type PromptEnhancementGroundingReadinessReason =
-  | "no-grounding-required"
-  | "connected-context-present"
-  | "missing-concrete-scope";
+  "no-grounding-required" | "connected-context-present" | "missing-concrete-scope";
 
 export interface PromptEnhancementGroundingReadiness {
   readonly status: PromptEnhancementGroundingReadinessStatus;
@@ -156,8 +154,7 @@ export interface PromptEnhancementGroundingReadiness {
 // integrity metadata.
 export type PromptEnhancementEvidenceReferenceStatus = "recorded" | "not-recorded";
 export type PromptEnhancementEvidenceReferenceReason =
-  | "evidence-recorded"
-  | "evidence-store-not-configured";
+  "evidence-recorded" | "evidence-store-not-configured";
 
 export interface PromptEnhancementEvidenceReference {
   readonly status: PromptEnhancementEvidenceReferenceStatus;

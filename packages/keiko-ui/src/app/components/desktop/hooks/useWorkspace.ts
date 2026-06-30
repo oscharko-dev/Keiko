@@ -386,10 +386,7 @@ function usePanZoom({
       if (frameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
         window.cancelAnimationFrame(frameRef.current);
       }
-      if (
-        animationFrameRef.current !== null &&
-        typeof window.cancelAnimationFrame === "function"
-      ) {
+      if (animationFrameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
         window.cancelAnimationFrame(animationFrameRef.current);
       }
     },
@@ -398,10 +395,7 @@ function usePanZoom({
 
   const animateView = useCallback(
     (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
-      const effectiveSmoothness = Math.min(
-        100,
-        Math.max(0, cameraSmoothness * smoothnessScale),
-      );
+      const effectiveSmoothness = Math.min(100, Math.max(0, cameraSmoothness * smoothnessScale));
       if (
         effectiveSmoothness <= 0 ||
         prefersReducedCameraMotion() ||
@@ -429,9 +423,7 @@ function usePanZoom({
           : interpolateView(
               animationStartRef.current,
               animationTargetRef.current,
-              easeCamera(
-                Math.min(1, (now - animationStartedAtRef.current) / durationMs),
-              ),
+              easeCamera(Math.min(1, (now - animationStartedAtRef.current) / durationMs)),
             );
       animationTargetRef.current = target;
       animationStartedAtRef.current = now;
@@ -457,10 +449,7 @@ function usePanZoom({
   );
 
   const settleCameraAnimation = useCallback((): void => {
-    if (
-      animationFrameRef.current !== null &&
-      typeof window.cancelAnimationFrame === "function"
-    ) {
+    if (animationFrameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
       window.cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = null;
       setView(animationTargetRef.current);

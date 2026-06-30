@@ -12,7 +12,10 @@ import type {
   RetrievalReference,
   StoredPdfCitationPreviewCitation,
 } from "@oscharko-dev/keiko-contracts";
-import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  GroundedAnswer,
+  LocalKnowledgeEvidenceCitation,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,

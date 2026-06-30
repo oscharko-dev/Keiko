@@ -15,7 +15,10 @@ async function collectHtmlFiles(staticRoot: string): Promise<readonly string[]> 
   try {
     const raw = await readdir(staticRoot, { withFileTypes: true });
     entries = raw.map(
-      (entry: { isDirectory: () => boolean; name: string }): { isDirectory: () => boolean; name: string } => ({
+      (entry: {
+        isDirectory: () => boolean;
+        name: string;
+      }): { isDirectory: () => boolean; name: string } => ({
         isDirectory: () => entry.isDirectory(),
         name: entry.name,
       }),
@@ -79,7 +82,8 @@ export async function loadCspHeader(hashesFile: string): Promise<string> {
 
   // If persisted hashes are stale or incompatible with current exported HTML,
   // prefer derived hashes so startup can recover from stale artifacts.
-  const hashes = exportHashes.length > 0 && !hashesMatch(fileHashes, exportHashes) ? exportHashes : fileHashes;
+  const hashes =
+    exportHashes.length > 0 && !hashesMatch(fileHashes, exportHashes) ? exportHashes : fileHashes;
   return buildCspHeader(hashes);
 }
 

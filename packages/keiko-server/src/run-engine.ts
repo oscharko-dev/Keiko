@@ -270,14 +270,12 @@ function dispatchExplain(
     sink,
     ...(reservedRunId === undefined ? {} : { idSource: { newRunId: (): string => reservedRunId } }),
   });
-  const result = session.result.then(
-    (runResult): DispatchOutcome => ({
-      status: runResult.outcome === "completed" ? "completed" : statusOrFailed(runResult.outcome),
-      report: runResult.report ?? { status: runResult.outcome },
-      appliable: undefined,
-      result: runResult,
-    }),
-  );
+  const result = session.result.then((runResult): DispatchOutcome => ({
+    status: runResult.outcome === "completed" ? "completed" : statusOrFailed(runResult.outcome),
+    report: runResult.report ?? { status: runResult.outcome },
+    appliable: undefined,
+    result: runResult,
+  }));
   return {
     dispatched: {
       result,

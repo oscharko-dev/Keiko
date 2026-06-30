@@ -638,7 +638,9 @@ export function PdfCitationPreviewWindow({
               <p className="pdfv-context-eyebrow">Active citation</p>
               <h3 className="pdfv-context-title">
                 <span className="pdfv-context-marker">{activeCitation.citation.marker}</span>
-                <span className="pdfv-context-document">{activeCitation.display.documentLabel}</span>
+                <span className="pdfv-context-document">
+                  {activeCitation.display.documentLabel}
+                </span>
                 <span className="pdfv-context-page">
                   {citationContextPageLabel(activeCitation.display)}
                 </span>
@@ -705,9 +707,7 @@ export function PdfCitationPreviewWindow({
                           activateContextCitation(citation.citation.stableId);
                         }}
                       >
-                        <span className="grounded-citation-range">
-                          {citation.citation.marker}
-                        </span>
+                        <span className="grounded-citation-range">{citation.citation.marker}</span>
                         <span className="grounded-citation-action-label">
                           {active ? "Active" : citationContextPageLabel(citation.display)}
                         </span>

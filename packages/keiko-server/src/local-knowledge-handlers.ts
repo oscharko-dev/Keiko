@@ -1061,7 +1061,9 @@ export function configuredEmbeddingProviders(
   config: GatewayConfig | undefined,
 ): readonly ModelProviderConfig[] {
   if (config === undefined || config.providers.length === 0) return [];
-  return config.providers.filter((provider) => isConfiguredEmbeddingModel(config, provider.modelId));
+  return config.providers.filter((provider) =>
+    isConfiguredEmbeddingModel(config, provider.modelId),
+  );
 }
 
 function createCapsuleStorageReference(capsuleId: string): string {

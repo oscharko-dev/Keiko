@@ -13,19 +13,13 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 export type QualityIntelligenceReviewTransitionEvent =
-  | "approve"
-  | "request-changes"
-  | "reject"
-  | "withdraw"
-  | "revise";
+  "approve" | "request-changes" | "reject" | "withdraw" | "revise";
 
 export const QUALITY_INTELLIGENCE_REVIEW_TRANSITION_EVENTS: readonly QualityIntelligenceReviewTransitionEvent[] =
   ["approve", "request-changes", "reject", "withdraw", "revise"] as const;
 
 export type QualityIntelligenceReviewTransitionErrorCode =
-  | "TRANSITION_NOT_ALLOWED"
-  | "UNKNOWN_FROM_STATE"
-  | "UNKNOWN_EVENT";
+  "TRANSITION_NOT_ALLOWED" | "UNKNOWN_FROM_STATE" | "UNKNOWN_EVENT";
 
 export class QualityIntelligenceReviewTransitionError extends Error {
   public readonly code: QualityIntelligenceReviewTransitionErrorCode;

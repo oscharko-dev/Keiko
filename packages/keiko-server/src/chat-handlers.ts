@@ -1203,6 +1203,7 @@ export interface VoiceTurnAppendRequest {
   readonly chatId: string;
   readonly projectPath: string;
   readonly messages: readonly VoiceTurnAppendMessage[];
+  readonly modelId: string | undefined;
   readonly memory: ParsedConversationMemoryRequest | undefined;
 }
 
@@ -1222,33 +1223,67 @@ function parseVoiceTurnAppendMessage(value: unknown): VoiceTurnAppendMessage | u
   return { role, content };
 }
 
-function voiceTurnAppendRequestFromBody(
+function parseOptionalVoiceTurnModelId(
   body: Record<string, unknown>,
-): VoiceTurnAppendRequest | RouteResult {
-  const chatId = typeof body.chatId === "string" ? body.chatId : "";
-  const projectPath = typeof body.projectPath === "string" ? body.projectPath : "";
-  if (chatId.length === 0 || projectPath.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
+  deps: UiHandlerDeps,
+): string | RouteResult | undefined {
+  if (body.modelId === undefined) return undefined;
+  if (typeof body.modelId !== "string" || body.modelId.trim().length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+    };
   }
-  if (!Array.isArray(body.messages) || body.messages.length === 0) {
+  const modelId = body.modelId.trim();
+  const capability = chatCapability(deps, modelId);
+  if (capability?.kind !== "chat") {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+    };
+  }
+  return modelId;
+}
+
+function parseVoiceTurnAppendMessages(
+  value: unknown,
+): readonly VoiceTurnAppendMessage[] | RouteResult {
+  if (!Array.isArray(value) || value.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "messages must be a non-empty array.") };
   }
-  if (body.messages.length > MAX_VOICE_TURN_MESSAGES) {
+  if (value.length > MAX_VOICE_TURN_MESSAGES) {
     return { status: 400, body: errorBody("BAD_REQUEST", "messages contains too many entries.") };
   }
-  const messages = body.messages.map(parseVoiceTurnAppendMessage);
+  const messages = value.map(parseVoiceTurnAppendMessage);
   if (messages.some((message) => message === undefined)) {
     return {
       status: 400,
       body: errorBody("BAD_REQUEST", "messages must contain committed user or assistant text."),
     };
   }
+  return messages as readonly VoiceTurnAppendMessage[];
+}
+
+function voiceTurnAppendRequestFromBody(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+): VoiceTurnAppendRequest | RouteResult {
+  const chatId = typeof body.chatId === "string" ? body.chatId : "";
+  const projectPath = typeof body.projectPath === "string" ? body.projectPath : "";
+  if (chatId.length === 0 || projectPath.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
+  }
+  const messages = parseVoiceTurnAppendMessages(body.messages);
+  if (isRouteResult(messages)) return messages;
+  const modelId = parseOptionalVoiceTurnModelId(body, deps);
+  if (isRouteResult(modelId)) return modelId;
   const memory = parseMemoryRequest(body.memory);
   if (isRouteResult(memory)) return memory;
   return {
     chatId,
     projectPath,
-    messages: messages as readonly VoiceTurnAppendMessage[],
+    messages,
+    modelId,
     memory,
   };
 }
@@ -1258,15 +1293,21 @@ function sanitizeVoiceTurnText(text: string, deps: UiHandlerDeps): string {
 }
 
 function voiceTurnCombinedText(messages: readonly VoiceTurnAppendMessage[]): string {
-  return messages.map((message) => message.content).join("\n").trim();
+  return messages
+    .map((message) => message.content)
+    .join("\n")
+    .trim();
 }
 
-function voiceTurnAsSendRequest(request: VoiceTurnAppendRequest, content: string): SendDesktopChatRequest {
+function voiceTurnAsSendRequest(
+  request: VoiceTurnAppendRequest,
+  content: string,
+): SendDesktopChatRequest {
   return {
     chatId: request.chatId,
     projectPath: request.projectPath,
     content,
-    modelId: undefined,
+    modelId: request.modelId,
     documentContext: [],
     attachments: [],
     memory: request.memory,
@@ -1274,11 +1315,10 @@ function voiceTurnAsSendRequest(request: VoiceTurnAppendRequest, content: string
   };
 }
 
-async function collectVoiceTurnMemoryActions(
+async function collectVoiceTurnLocalMemoryActions(
   deps: UiHandlerDeps,
   request: VoiceTurnAppendRequest,
   context: ConversationMemoryRuntimeContext | undefined,
-  modelId: string,
 ): Promise<readonly ConversationMemoryActionWire[]> {
   if (context === undefined || request.memory?.enabled !== true) {
     return [];
@@ -1298,6 +1338,13 @@ async function collectVoiceTurnMemoryActions(
       if (action !== null) actions.push(action);
     }
   }
+  return actions;
+}
+
+function voiceTurnSalienceTexts(request: VoiceTurnAppendRequest): {
+  readonly userText: string;
+  readonly assistantText: string;
+} {
   const userText = request.messages
     .filter((message) => message.role === "user")
     .map((message) => message.content)
@@ -1308,18 +1355,38 @@ async function collectVoiceTurnMemoryActions(
     .map((message) => message.content)
     .join("\n")
     .trim();
-  const salientActions = await captureSalientFromTurn(
+  return { userText, assistantText };
+}
+
+function logVoiceSalienceCaptureFailure(error: unknown, deps: UiHandlerDeps): void {
+  const raw = error instanceof Error ? error.message : String(error);
+  // eslint-disable-next-line no-console
+  console.error("voice salience capture failed", redact(raw, currentRedactionSecrets(deps)));
+}
+
+function scheduleVoiceTurnSalienceCapture(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+  context: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+): void {
+  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
+    return;
+  }
+  const { userText, assistantText } = voiceTurnSalienceTexts(request);
+  const content = userText.length > 0 ? userText : voiceTurnCombinedText(request.messages);
+  void captureSalientFromTurn(
     deps,
     {
-      content: userText.length > 0 ? userText : voiceTurnCombinedText(request.messages),
+      content,
       memory: request.memory,
     },
     context,
     modelId,
     assistantText,
-  );
-  actions.push(...salientActions);
-  return actions;
+  ).catch((error: unknown) => {
+    logVoiceSalienceCaptureFailure(error, deps);
+  });
 }
 
 export async function buildVoiceTurnMemoryResult(
@@ -1335,8 +1402,18 @@ export async function buildVoiceTurnMemoryResult(
     return emptyMemoryResult(false);
   }
   const content = voiceTurnCombinedText(request.messages);
-  const memory = await buildMemoryResult(voiceTurnAsSendRequest(request, content), deps, memoryContext);
-  const actions = await collectVoiceTurnMemoryActions(deps, request, memoryContext, chat.selectedModel);
+  const memory = await buildMemoryResult(
+    voiceTurnAsSendRequest(request, content),
+    deps,
+    memoryContext,
+  );
+  const actions = await collectVoiceTurnLocalMemoryActions(deps, request, memoryContext);
+  scheduleVoiceTurnSalienceCapture(
+    deps,
+    request,
+    memoryContext,
+    request.modelId ?? chat.selectedModel,
+  );
   return { ...memory, actions };
 }
 
@@ -1380,7 +1457,7 @@ export async function handleAppendDesktopVoiceTurn(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
-  const request = voiceTurnAppendRequestFromBody(body);
+  const request = voiceTurnAppendRequestFromBody(body, deps);
   if (isRouteResult(request)) return request;
   const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
   if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;

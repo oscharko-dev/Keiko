@@ -44,15 +44,15 @@ browser harness consumes.
 
 ## Screenshots
 
-| File | Mode |
-| ---- | ---- |
-| `01-dark.png` | Dark |
-| `02-light.png` | Light |
-| `03-dark-hc.png` | Dark, High Contrast (`[data-hc="more"]`) |
-| `04-light-hc.png` | Light, High Contrast |
-| `05-prefers-contrast.png` | `prefers-contrast: more` |
-| `06-forced-colors.png` | `forced-colors: active` (Windows High Contrast) |
-| `07-reduced-motion.png` | `prefers-reduced-motion: reduce` |
+| File                      | Mode                                            |
+| ------------------------- | ----------------------------------------------- |
+| `01-dark.png`             | Dark                                            |
+| `02-light.png`            | Light                                           |
+| `03-dark-hc.png`          | Dark, High Contrast (`[data-hc="more"]`)        |
+| `04-light-hc.png`         | Light, High Contrast                            |
+| `05-prefers-contrast.png` | `prefers-contrast: more`                        |
+| `06-forced-colors.png`    | `forced-colors: active` (Windows High Contrast) |
+| `07-reduced-motion.png`   | `prefers-reduced-motion: reduce`                |
 
 Each screenshot renders the full `states.html` proof page: the vocabulary section (eleven
 badges), the generated per-family state proof for all checked cells, and the applicability matrix

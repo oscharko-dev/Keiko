@@ -145,13 +145,7 @@ const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 // Engineering note: NO fake progress percentage. The status string is the
 // only progress signal — UI copy must reflect that.
 export type SendStatus =
-  | "idle"
-  | "queued"
-  | "contacting"
-  | "streaming"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  "idle" | "queued" | "contacting" | "streaming" | "completed" | "failed" | "cancelled";
 
 const TERMINAL_SEND_STATUSES: readonly SendStatus[] = ["completed", "failed", "cancelled"] as const;
 
@@ -1501,31 +1495,36 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return;
       }
       const projectPath = state.activeProject?.path ?? chat.projectPath;
+      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       try {
         const result = await appendDesktopChatVoiceTurn({
           chatId: chat.id,
           projectPath,
           messages,
+          ...(modelId === undefined ? {} : { modelId }),
           memory: buildMemoryRequest(chat, state.activeProject ?? { path: projectPath }),
         });
-        if (!mountedRef.current || activeChatIdRef.current !== chat.id) {
+        if (!mountedRef.current) {
           return;
         }
         notifyChatUpsert(result.chat);
-        if (result.memory !== undefined) setLatestMemory(result.memory);
+        if (activeChatIdRef.current === chat.id && result.memory !== undefined) {
+          setLatestMemory(result.memory);
+        }
         setState((previous) => {
-          if (previous.activeChat?.id !== chat.id) {
-            return previous;
-          }
+          const isActiveChat = previous.activeChat?.id === chat.id;
           const existingIds = new Set(previous.messages.map((message) => message.id));
-          const appended = result.messages.filter((message) => !existingIds.has(message.id));
+          const appended = isActiveChat
+            ? result.messages.filter((message) => !existingIds.has(message.id))
+            : [];
+          const chats = sortChats([
+            result.chat,
+            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
+          ]);
           return {
             ...previous,
-            activeChat: result.chat,
-            chats: sortChats([
-              result.chat,
-              ...previous.chats.filter((existing) => existing.id !== result.chat.id),
-            ]),
+            activeChat: isActiveChat ? result.chat : previous.activeChat,
+            chats,
             messages: [...previous.messages, ...appended],
           };
         });
@@ -1533,7 +1532,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         setError(errorMessage(caught));
       }
     },
-    [buildMemoryRequest, state.activeChat, state.activeProject],
+    [buildMemoryRequest, state.activeChat, state.activeProject, state.models, state.selectedModel],
   );
 
   const runRealtimeGroundedTool = useCallback(

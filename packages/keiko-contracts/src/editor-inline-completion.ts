@@ -149,8 +149,7 @@ export interface EditorInlineCompletionParseFail {
   readonly errors: readonly string[];
 }
 export type EditorInlineCompletionParse =
-  | EditorInlineCompletionParseOk
-  | EditorInlineCompletionParseFail;
+  EditorInlineCompletionParseOk | EditorInlineCompletionParseFail;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -286,8 +285,7 @@ export interface EditorInlineCompletionTelemetryParseFail {
   readonly errors: readonly string[];
 }
 export type EditorInlineCompletionTelemetryParse =
-  | EditorInlineCompletionTelemetryParseOk
-  | EditorInlineCompletionTelemetryParseFail;
+  EditorInlineCompletionTelemetryParseOk | EditorInlineCompletionTelemetryParseFail;
 
 const TELEMETRY_COUNT_FIELDS = [
   "offered",
@@ -333,7 +331,9 @@ function telemetryMetric(value: Record<string, unknown>, field: string): number 
   return isNonNegativeInteger(metric) ? metric : 0;
 }
 
-function buildTelemetryReport(value: Record<string, unknown>): EditorInlineCompletionTelemetryReport {
+function buildTelemetryReport(
+  value: Record<string, unknown>,
+): EditorInlineCompletionTelemetryReport {
   return {
     schemaVersion: EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
     root: value.root as string,

@@ -17,11 +17,42 @@ mkdirSync(HERE, { recursive: true });
 
 const CAPTURES = [
   { file: "01-context-dark.png", theme: null, hc: null, forcedColors: "none", state: "context" },
-  { file: "02-context-light.png", theme: "light", hc: null, forcedColors: "none", state: "context" },
-  { file: "03-sibling-active.png", theme: "light", hc: null, forcedColors: "none", state: "siblings" },
-  { file: "04-back-disabled.png", theme: "light", hc: null, forcedColors: "none", state: "disabled" },
-  { file: "05-chat-highlight.png", theme: "light", hc: null, forcedColors: "none", state: "highlight" },
-  { file: "06-responsive.png", theme: "light", hc: null, forcedColors: "none", state: "context", viewport: { width: 430, height: 900 } },
+  {
+    file: "02-context-light.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "context",
+  },
+  {
+    file: "03-sibling-active.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "siblings",
+  },
+  {
+    file: "04-back-disabled.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "disabled",
+  },
+  {
+    file: "05-chat-highlight.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "highlight",
+  },
+  {
+    file: "06-responsive.png",
+    theme: "light",
+    hc: null,
+    forcedColors: "none",
+    state: "context",
+    viewport: { width: 430, height: 900 },
+  },
   { file: "07-forced-colors.png", theme: null, hc: null, forcedColors: "active", state: "context" },
 ];
 
@@ -56,7 +87,9 @@ function contextPanel({ activeMarker = "[2]", disabledBack = false } = {}) {
   const disabledText = disabledBack
     ? `<span id="back-disabled-reason" class="pdfv-back-to-chat-hint">The originating answer is no longer available.</span>`
     : "";
-  const ariaDisabled = disabledBack ? ` aria-disabled="true" aria-describedby="back-disabled-reason"` : "";
+  const ariaDisabled = disabledBack
+    ? ` aria-disabled="true" aria-describedby="back-disabled-reason"`
+    : "";
   const tip = disabledBack
     ? "The originating answer is no longer available."
     : "Restore the originating chat and highlight this citation";

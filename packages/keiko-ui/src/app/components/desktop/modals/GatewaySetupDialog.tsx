@@ -229,8 +229,7 @@ export function GatewaySetupDialog({
         apiKeyHeaderName.trim() !== "" ||
         parsedDeploymentNames.length > 0 ||
         parsedImageInputModelIds.length > 0;
-      const submittedGatewaySettings =
-        submittedGatewayCredentials || parsedTimeoutMs !== undefined;
+      const submittedGatewaySettings = submittedGatewayCredentials || parsedTimeoutMs !== undefined;
       const submittedFigmaCredential = figmaAccessToken.trim() !== "";
       const result = await setupGateway({
         baseUrl: baseUrl.trim() === "" ? undefined : baseUrl.trim(),
@@ -250,7 +249,9 @@ export function GatewaySetupDialog({
                 voiceApiKeyHeaderName.trim() === "" ? undefined : voiceApiKeyHeaderName.trim(),
               voiceModelId: voiceModelId.trim() === "" ? undefined : voiceModelId.trim(),
               voiceProviderLocality,
-              ...(parsedVoiceTimeoutMs === undefined ? {} : { voiceTimeoutMs: parsedVoiceTimeoutMs }),
+              ...(parsedVoiceTimeoutMs === undefined
+                ? {}
+                : { voiceTimeoutMs: parsedVoiceTimeoutMs }),
             }
           : {}),
         ...(figmaAccessToken.trim() === "" ? {} : { figmaAccessToken: figmaAccessToken.trim() }),
@@ -459,7 +460,9 @@ export function GatewaySetupDialog({
           className="gw-input mono"
           value={voiceProviderLocality}
           disabled={busy || success !== undefined}
-          onChange={(event) => setVoiceProviderLocality(event.target.value as VoiceProviderLocality)}
+          onChange={(event) =>
+            setVoiceProviderLocality(event.target.value as VoiceProviderLocality)
+          }
         >
           <option value="azure-foundry">Azure Foundry</option>
           <option value="customer-hosted">Customer-hosted</option>

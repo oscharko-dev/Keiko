@@ -22,9 +22,7 @@ function citationPreviewController(
 ): CitationPreviewController {
   const openCitation = vi.fn<() => Promise<string | null>>().mockResolvedValue("pdf-window-1");
   return {
-    forCitation: vi.fn(() =>
-      state === undefined ? undefined : { citation: PDF_CITATION, state },
-    ),
+    forCitation: vi.fn(() => (state === undefined ? undefined : { citation: PDF_CITATION, state })),
     forMarker: vi.fn((marker) =>
       marker === "[1]" && state !== undefined ? { citation: PDF_CITATION, state } : undefined,
     ),
@@ -496,7 +494,9 @@ describe("SafeMarkdown — PDF citation markers", () => {
 
   it("keeps rendered citation-looking text plain when structured metadata is absent", () => {
     const citationPreview = citationPreviewController(undefined);
-    render(<SafeMarkdown source="A markdown answer mentions [1]." citationPreview={citationPreview} />);
+    render(
+      <SafeMarkdown source="A markdown answer mentions [1]." citationPreview={citationPreview} />,
+    );
 
     expect(screen.queryByRole("button", { name: /PDF preview/ })).toBeNull();
     expect(document.body.textContent).toContain("[1]");

@@ -580,9 +580,7 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     });
 
     expect(window.localStorage.getItem("keiko.workspace.camera.smoothness")).toBe("72");
-    expect(listener).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: 72 }),
-    );
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ detail: 72 }));
     expect(screen.getByRole("slider", { name: "Workspace camera smoothness" })).toHaveValue("72");
 
     window.removeEventListener("keiko:workspace-camera-smoothness", listener);

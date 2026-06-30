@@ -138,12 +138,7 @@ export function scoreSourceIsolation(
 // passes vacuously):
 
 type CitationRequirementKey =
-  | "page"
-  | "section"
-  | "json-path"
-  | "csv-row"
-  | "html-block"
-  | "unsupported-media";
+  "page" | "section" | "json-path" | "csv-row" | "html-block" | "unsupported-media";
 
 interface CitationCheckInput {
   readonly reference: RetrievalReference;

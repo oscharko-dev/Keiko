@@ -37,6 +37,7 @@ interface TestSession {
   idempotencyKey: string;
   profile: "full-realtime";
   providerLocality: "azure-foundry" | undefined;
+  realtimeToolCalling: boolean | undefined;
   persona: VoicePersona | undefined;
   chatContext: VoiceSessionChatContext | undefined;
   hostSeq: number;
@@ -51,6 +52,7 @@ function makeSession(overrides: Partial<TestSession> = {}): TestSession {
     idempotencyKey: "idem-1",
     profile: "full-realtime",
     providerLocality: "azure-foundry",
+    realtimeToolCalling: true,
     persona: undefined,
     chatContext: undefined,
     hostSeq: 0,
@@ -126,7 +128,12 @@ describe("VoiceControlConnection.start", () => {
     const offer = socket.sent[1] as unknown as Record<string, unknown>;
     expect(offer).toMatchObject({
       kind: "capability.offer",
-      capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+      capabilities: {
+        speechToText: true,
+        speechOutput: true,
+        realtimeVoice: true,
+        realtimeToolCalling: true,
+      },
     });
   });
 
@@ -301,8 +308,7 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     expect(socket.sent).toHaveLength(0);
     // ...but recorded (sanitised) into the reconnect replay buffer.
     const recorded = session.replay.find((m) => m.kind === "transcript.committed") as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     expect(recorded).toBeDefined();
     expect(recorded?.text).toBe("oktext done");
   });

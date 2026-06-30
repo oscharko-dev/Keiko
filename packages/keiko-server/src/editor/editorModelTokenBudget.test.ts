@@ -90,9 +90,7 @@ describe("createEditorModelTokenBudget", () => {
   });
 
   it("estimates prompt and output tokens without storing prompt text", () => {
-    expect(
-      estimateEditorModelReservationTokens({ system: "abcd", user: "abcdefgh" }, 10),
-    ).toBe(13);
+    expect(estimateEditorModelReservationTokens({ system: "abcd", user: "abcdefgh" }, 10)).toBe(13);
   });
 
   it("ships a finite, generous default ceiling and window", () => {

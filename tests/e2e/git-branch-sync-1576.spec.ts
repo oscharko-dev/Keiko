@@ -284,7 +284,11 @@ function historyBody(fixture: GitFixture): unknown {
   };
 }
 
-function syncPreviewBody(operation: "fetch" | "pull", fixture: GitFixture, mode: SummaryMode): unknown {
+function syncPreviewBody(
+  operation: "fetch" | "pull",
+  fixture: GitFixture,
+  mode: SummaryMode,
+): unknown {
   const summary = summaryBody(fixture, mode) as {
     readonly branch?: string;
     readonly detached: boolean;
@@ -549,7 +553,10 @@ async function expectEvidenceSurfaceIsPathFree(
   await expect(gitWindow).not.toContainText(fixture.remoteRoot);
 }
 
-async function openGitWindow(page: Page, mode: SummaryMode): Promise<{
+async function openGitWindow(
+  page: Page,
+  mode: SummaryMode,
+): Promise<{
   readonly fixture: GitFixture;
   readonly gitWindow: Locator;
   readonly modeRef: { value: SummaryMode };
@@ -573,10 +580,11 @@ async function openGitWindow(page: Page, mode: SummaryMode): Promise<{
   return { fixture, gitWindow, modeRef, calls };
 }
 
-test("Issue #1576 - branch selector, new branch, history, and pull evidence", async ({ page }) => {
-  ensureEvidenceDir();
-  const { fixture, gitWindow, calls } = await openGitWindow(page, "behind");
-
+async function switchToFeatureBranch(
+  gitWindow: Locator,
+  fixture: GitFixture,
+  calls: RouteCalls,
+): Promise<void> {
   await gitWindow.getByRole("combobox", { name: "Branch: main" }).click();
   await gitWindow.getByRole("searchbox", { name: "Search branches" }).fill("feature");
   await expect(gitWindow.getByRole("option", { name: /feature\/local/u })).toBeVisible();
@@ -585,7 +593,14 @@ test("Issue #1576 - branch selector, new branch, history, and pull evidence", as
   await expect
     .poll(() => calls.branchSwitches.length, { message: "branch switch route called" })
     .toBeGreaterThan(0);
+}
 
+async function createEvidenceBranch(
+  page: Page,
+  gitWindow: Locator,
+  fixture: GitFixture,
+  calls: RouteCalls,
+): Promise<void> {
   await gitWindow.getByRole("button", { name: "New branch" }).click();
   const dialog = page.getByRole("dialog", { name: "New branch" });
   await expect(dialog).toBeVisible();
@@ -601,10 +616,19 @@ test("Issue #1576 - branch selector, new branch, history, and pull evidence", as
     baseBranchName: "main",
     startPointRefHash: fixture.baseSha,
   });
+}
 
+async function verifyHistoryAndPullEvidence(
+  page: Page,
+  gitWindow: Locator,
+  fixture: GitFixture,
+  calls: RouteCalls,
+): Promise<void> {
   await gitWindow.getByRole("tab", { name: "History" }).click();
   await expect(gitWindow.getByRole("listbox", { name: "Commit history" })).toBeVisible();
-  await expect(gitWindow.getByRole("option", { name: /feat: local branch evidence/u })).toBeVisible();
+  await expect(
+    gitWindow.getByRole("option", { name: /feat: local branch evidence/u }),
+  ).toBeVisible();
   await expect(gitWindow.getByRole("region", { name: "Commit details" })).toContainText(
     fixture.aheadSha,
   );
@@ -626,6 +650,15 @@ test("Issue #1576 - branch selector, new branch, history, and pull evidence", as
   await page.locator("body").screenshot({ path: artifactPath("git-branch-history-sync.png") });
   writeEvidenceManifest();
   expectEvidenceManifestIsPathFree(fixture);
+}
+
+test("Issue #1576 - branch selector, new branch, history, and pull evidence", async ({ page }) => {
+  ensureEvidenceDir();
+  const { fixture, gitWindow, calls } = await openGitWindow(page, "behind");
+
+  await switchToFeatureBranch(gitWindow, fixture, calls);
+  await createEvidenceBranch(page, gitWindow, fixture, calls);
+  await verifyHistoryAndPullEvidence(page, gitWindow, fixture, calls);
 });
 
 test("Issue #1576 - ahead-only state pushes without force", async ({ page }) => {
@@ -680,7 +713,9 @@ test("Issue #1576 - diverged state fetches and shows merge guidance", async ({ p
 test("Issue #1576 - detached and conflicted states block sync safely", async ({ page }) => {
   const opened = await openGitWindow(page, "detached");
   await expect(opened.gitWindow.getByRole("alert")).toContainText("Detached HEAD");
-  await expect(opened.gitWindow.getByRole("button", { name: "Run sync: Detached HEAD" })).toBeDisabled();
+  await expect(
+    opened.gitWindow.getByRole("button", { name: "Run sync: Detached HEAD" }),
+  ).toBeDisabled();
 
   opened.modeRef.value = "conflicted";
   await page.reload();

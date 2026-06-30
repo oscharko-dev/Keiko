@@ -12,13 +12,18 @@ import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-cli
 // The hook's ICE_DISCONNECT_GRACE_MS is 5_000ms; probe just below and above it.
 const ICE_GRACE_BELOW = 4_000;
 const ICE_GRACE_ABOVE = 6_000;
+const SESSION_READY_WARMUP_MS = 300;
 
 // Fake WebRTC session with controllable callbacks.
-function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
+function makeFakeSession(
+  offerSdp = "v=0\r\nfake-offer",
+  options: { readonly exposeDataChannelState?: boolean | undefined } = {},
+): {
   session: VoiceRtcSession;
   fireConnectionState: (state: RTCPeerConnectionState) => void;
   fireRemoteTrack: (stream: MediaStream) => void;
   fireDataChannelEvent: (event: unknown) => void;
+  fireDataChannelState: (state: RTCDataChannelState) => void;
   sendDataChannelEvent: ReturnType<typeof vi.fn>;
   setInputMuted: ReturnType<typeof vi.fn>;
   applyAnswer: ReturnType<typeof vi.fn>;
@@ -27,6 +32,7 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
   let connectionStateCb: ((state: RTCPeerConnectionState) => void) | undefined;
   let remoteTrackCb: ((stream: MediaStream) => void) | undefined;
   let dataChannelEventCb: ((event: unknown) => void) | undefined;
+  let dataChannelStateCb: ((state: RTCDataChannelState) => void) | undefined;
   const applyAnswer = vi.fn(async (_sdp: string): Promise<void> => {});
   const sendDataChannelEvent = vi.fn((_event: unknown) => true);
   const setInputMuted = vi.fn();
@@ -45,6 +51,14 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
     onDataChannelEvent(cb): void {
       dataChannelEventCb = cb;
     },
+    ...(options.exposeDataChannelState === true
+      ? {
+          onDataChannelStateChange(cb: (state: RTCDataChannelState) => void): void {
+            dataChannelStateCb = cb;
+            cb("connecting");
+          },
+        }
+      : {}),
     sendDataChannelEvent,
     close,
   };
@@ -54,6 +68,7 @@ function makeFakeSession(offerSdp = "v=0\r\nfake-offer"): {
     fireConnectionState: (state) => connectionStateCb?.(state),
     fireRemoteTrack: (stream) => remoteTrackCb?.(stream),
     fireDataChannelEvent: (event) => dataChannelEventCb?.(event),
+    fireDataChannelState: (state) => dataChannelStateCb?.(state),
     sendDataChannelEvent,
     setInputMuted,
     applyAnswer,
@@ -125,6 +140,111 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
     await waitFor(() => expect(result.current.phase).toBe("connected"));
     expect(result.current.busy).toBe(true);
     expect(result.current.error).toBeUndefined();
+  });
+
+  it("gates connected on data-channel open, session.updated, and mic warm-up", async () => {
+    vi.useFakeTimers();
+    try {
+      const {
+        session,
+        fireConnectionState,
+        fireDataChannelState,
+        fireDataChannelEvent,
+        sendDataChannelEvent,
+      } = makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
+
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          groundingActive: true,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+      act(() => fireConnectionState("connected"));
+      act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
+      expect(result.current.phase).toBe("negotiating");
+
+      act(() => fireDataChannelState("open"));
+      expect(sendDataChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "session.update",
+          session: expect.objectContaining({
+            audio: expect.objectContaining({
+              input: expect.objectContaining({
+                transcription: { model: "whisper-1" },
+                turn_detection: expect.objectContaining({
+                  type: "server_vad",
+                  prefix_padding_ms: 300,
+                  silence_duration_ms: 500,
+                  interrupt_response: true,
+                }),
+              }),
+            }),
+            tools: [expect.objectContaining({ name: "search_keiko_grounding" })],
+            tool_choice: {
+              type: "function",
+              function: { name: "search_keiko_grounding" },
+            },
+          }),
+        }),
+      );
+      expect(result.current.phase).toBe("negotiating");
+
+      act(() => fireDataChannelEvent({ type: "session.updated" }));
+      await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends updated MemoriaViva context into an already-ready realtime session", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireConnectionState, sendDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+
+      const { result, rerender } = renderHook(
+        ({ memoryContextText }: { readonly memoryContextText?: string | undefined }) =>
+          useRealtimeVoice({
+            createTransport: () => transport,
+            createControl: () => client,
+            memoryContextText,
+          }),
+        { initialProps: {} },
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => fireConnectionState("connected"));
+      act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
+      await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
+
+      rerender({ memoryContextText: "Remember: the release train is green." });
+
+      expect(sendDataChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "conversation.item.create",
+          item: expect.objectContaining({
+            role: "system",
+            content: [
+              expect.objectContaining({
+                type: "input_text",
+                text: expect.stringContaining("the release train is green"),
+              }),
+            ],
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -209,22 +329,61 @@ describe("useRealtimeVoice — microphone mute", () => {
     expect(result.current.muted).toBe(false);
     expect(setInputMuted).toHaveBeenLastCalledWith(false);
   });
+
+  it("does not report listening during the short input re-arm window after unmute", async () => {
+    vi.useFakeTimers();
+    try {
+      const { session, fireConnectionState, fireDataChannelEvent } = makeFakeSession();
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({});
+
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => fireConnectionState("connected"));
+      act(() => {
+        vi.advanceTimersByTime(SESSION_READY_WARMUP_MS);
+      });
+      await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
+      act(() => {
+        fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u1" });
+      });
+      expect(result.current.listening).toBe(true);
+
+      act(() => result.current.toggleMute());
+      expect(result.current.muted).toBe(true);
+      expect(result.current.listening).toBe(false);
+
+      act(() => result.current.toggleMute());
+      expect(result.current.muted).toBe(false);
+      expect(result.current.listening).toBe(false);
+
+      act(() => vi.advanceTimersByTime(300));
+      expect(result.current.listening).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
-  it("forwards committed user and assistant transcripts through callbacks", async () => {
+  it("commits a non-grounding user + assistant voice turn as one paired callback", async () => {
     const { session, fireDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
     const { client } = makeFakeControl({});
-    const onUserTranscriptCommitted = vi.fn();
-    const onAssistantTranscriptCommitted = vi.fn();
+    const onVoiceTurnCommitted = vi.fn();
 
     const { result } = renderHook(() =>
       useRealtimeVoice({
         createTransport: () => transport,
         createControl: () => client,
-        onUserTranscriptCommitted,
-        onAssistantTranscriptCommitted,
+        onVoiceTurnCommitted,
       }),
     );
 
@@ -245,9 +404,59 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
       });
     });
 
-    expect(onUserTranscriptCommitted).toHaveBeenCalledWith("Open the deploy log.");
-    expect(onAssistantTranscriptCommitted).toHaveBeenCalledWith("The deploy log is open.");
+    expect(onVoiceTurnCommitted).toHaveBeenCalledTimes(1);
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Open the deploy log." },
+      { role: "assistant", content: "The deploy log is open." },
+    ]);
     expect(result.current.turnSnapshot.state).toBe("yielding");
+  });
+
+  it("keeps a paired callback intact when the assistant transcript arrives before the user transcript", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-late" });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-late",
+        item_id: "a-late",
+        transcript: "The deploy log is open.",
+      });
+    });
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-late",
+        transcript: "Open the deploy log.",
+      });
+      fireDataChannelEvent({
+        type: "response.done",
+        response: { id: "r-late", status: "completed" },
+      });
+    });
+
+    expect(onVoiceTurnCommitted).toHaveBeenCalledTimes(1);
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Open the deploy log." },
+      { role: "assistant", content: "The deploy log is open." },
+    ]);
   });
 
   it("deduplicates assistant transcripts mirrored by multiple provider event shapes", async () => {
@@ -335,10 +544,282 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(2, "Gerne.");
   });
 
+  it("does not suppress repeated short assistant text when provider item ids differ", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onAssistantTranscriptCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onAssistantTranscriptCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-repeat",
+        item_id: "assistant-item-1",
+        transcript: "Yes.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-repeat",
+        item_id: "assistant-item-2",
+        transcript: "Yes.",
+      });
+    });
+
+    expect(onAssistantTranscriptCommitted).toHaveBeenCalledTimes(2);
+    expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(1, "Yes.");
+    expect(onAssistantTranscriptCommitted).toHaveBeenNthCalledWith(2, "Yes.");
+  });
+
+  it("flushes a grounding fallback turn when no tool call arrives", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-grounded-fallback",
+        transcript: "Was steht im Projektplan?",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-grounded-fallback",
+        item_id: "a-grounded-fallback",
+        transcript: "Im Projektplan steht ein gestaffelter Rollout.",
+      });
+      fireDataChannelEvent({
+        type: "response.done",
+        response: { id: "r-grounded-fallback", status: "completed" },
+      });
+    });
+
+    expect(onVoiceTurnCommitted).toHaveBeenCalledTimes(1);
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Was steht im Projektplan?" },
+      { role: "assistant", content: "Im Projektplan steht ein gestaffelter Rollout." },
+    ]);
+  });
+
+  it("persists the latest interim user transcript when final transcription fails", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "u-interim",
+        delta: "Open the ",
+      });
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "u-interim",
+        delta: "deploy log",
+      });
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.failed",
+        item_id: "u-interim",
+        error: { message: "ASR failed" },
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-interim",
+        item_id: "a-interim",
+        transcript: "The deploy log is open.",
+      });
+    });
+
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Open the deploy log" },
+      { role: "assistant", content: "The deploy log is open." },
+    ]);
+  });
+
+  it("persists buffered assistant speech when a response is cancelled", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-cancel",
+        transcript: "Summarize the release.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.delta",
+        response_id: "r-cancel",
+        item_id: "a-cancel",
+        delta: "The release includes ",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.delta",
+        response_id: "r-cancel",
+        item_id: "a-cancel",
+        delta: "the voice fixes",
+      });
+      fireDataChannelEvent({ type: "response.cancelled", response_id: "r-cancel" });
+    });
+
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Summarize the release." },
+      { role: "assistant", content: "The release includes the voice fixes" },
+    ]);
+  });
+
+  it("keeps the grounding mode snapshotted for an in-flight user turn", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result, rerender } = renderHook(
+      ({ groundingActive }: { groundingActive: boolean }) =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          groundingActive,
+          onVoiceTurnCommitted,
+        }),
+      { initialProps: { groundingActive: true } },
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => {
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-snapshot" });
+    });
+
+    rerender({ groundingActive: false });
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-snapshot",
+        transcript: "Was ist verbunden?",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-snapshot",
+        item_id: "a-snapshot",
+        transcript: "Die verbundenen Quellen sind aktiv.",
+      });
+    });
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.done",
+        response: { id: "r-snapshot", status: "completed" },
+      });
+    });
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Was ist verbunden?" },
+      { role: "assistant", content: "Die verbundenen Quellen sind aktiv." },
+    ]);
+  });
+
+  it("flushes the pending grounded user transcript when the grounding tool fails", async () => {
+    const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+    const onGroundedToolCall = vi.fn(async () => {
+      throw new Error("grounding unavailable");
+    });
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        onGroundedToolCall,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "user-grounding-failure",
+        transcript: "Finde die offene Rollout-Aufgabe.",
+      });
+      fireDataChannelEvent({
+        type: "response.output_item.done",
+        response_id: "r-tool-failure",
+        item: {
+          id: "item-tool-failure",
+          type: "function_call",
+          call_id: "call-failure",
+          name: "search_keiko_grounding",
+          arguments: '{"query":"offene Rollout-Aufgabe"}',
+        },
+      });
+    });
+
+    await waitFor(() => expect(onGroundedToolCall).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onVoiceTurnCommitted).toHaveBeenCalledTimes(1));
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Finde die offene Rollout-Aufgabe." },
+    ]);
+    expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.create" });
+  });
+
   it("routes grounded realtime function calls through the BFF tool and suppresses duplicate transcript persistence", async () => {
     const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
     const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
     const onUserTranscriptCommitted = vi.fn();
     const onAssistantTranscriptCommitted = vi.fn();
     const onGroundedToolCall = vi.fn(async () => ({
@@ -353,6 +834,7 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
         createControl: () => client,
         groundingActive: true,
         onGroundedToolCall,
+        onVoiceTurnCommitted,
         onUserTranscriptCommitted,
         onAssistantTranscriptCommitted,
       }),
@@ -423,6 +905,7 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
       expect.any(AbortSignal),
     );
     expect(onUserTranscriptCommitted).not.toHaveBeenCalled();
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
 
     await waitFor(() =>
       expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.create" }),
@@ -451,6 +934,7 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
       });
     });
     expect(onAssistantTranscriptCommitted).not.toHaveBeenCalled();
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
   });
 
   it("moves from listening into thinking while a grounded retrieval tool call is pending", async () => {
@@ -503,7 +987,8 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
   });
 
   it("sends response.cancel when the user interrupts the assistant", async () => {
-    const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
+    const { session, fireConnectionState, fireDataChannelEvent, sendDataChannelEvent } =
+      makeFakeSession();
     const transport = makeFakeTransport({ session });
     const { client } = makeFakeControl({});
 
@@ -516,6 +1001,8 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
 
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => fireConnectionState("connected"));
+    await waitFor(() => expect(result.current.phase).toBe("connected"));
 
     act(() => {
       fireDataChannelEvent({ type: "response.output_audio.delta", response_id: "r1" });
@@ -549,6 +1036,7 @@ describe("useRealtimeVoice — transient ICE disconnect grace", () => {
     act(() => result.current.start());
     await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
     act(() => fireConnectionState("connected"));
+    act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
     await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
 
     // A momentary blip: stays connected, session not closed.
@@ -580,6 +1068,7 @@ describe("useRealtimeVoice — transient ICE disconnect grace", () => {
     act(() => result.current.start());
     await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
     act(() => fireConnectionState("connected"));
+    act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
     await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
 
     act(() => fireConnectionState("disconnected"));
@@ -717,11 +1206,12 @@ describe("useRealtimeVoice — stop and retry", () => {
       connectError: new VoiceRtcError("connection-failed", "err"),
     });
     const { client } = makeFakeControl({});
+    const createControl = vi.fn(() => client);
 
     const { result } = renderHook(() =>
       useRealtimeVoice({
         createTransport: () => transport,
-        createControl: () => client,
+        createControl,
       }),
     );
 
@@ -735,10 +1225,43 @@ describe("useRealtimeVoice — stop and retry", () => {
     act(() => result.current.retry());
     await waitFor(() => expect(result.current.phase).toBe("error"));
     expect(vi.mocked(transport.connect)).toHaveBeenCalledTimes(2);
+    expect(createControl).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("useRealtimeVoice — unmount safety", () => {
+  it("flushes a committed user transcript on teardown when no assistant answer arrived", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result, unmount } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-teardown",
+        transcript: "Bitte merke dir den offenen Punkt.",
+      });
+    });
+
+    unmount();
+
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Bitte merke dir den offenen Punkt." },
+    ]);
+  });
+
   it("closes resources and dispatches nothing when unmounted mid-negotiation", async () => {
     let resolveNegotiate: (value: string) => void = () => {};
     const { session, close: sessionClose } = makeFakeSession();

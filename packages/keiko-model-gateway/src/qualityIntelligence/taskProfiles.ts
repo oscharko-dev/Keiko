@@ -9,10 +9,7 @@
 // error in routing/dispatcher code, not a silent fall-through.
 
 export type QualityIntelligenceCapability =
-  | "text"
-  | "vision"
-  | "structured-output"
-  | "function-calling";
+  "text" | "vision" | "structured-output" | "function-calling";
 
 export type QualityIntelligenceTaskProfileId =
   | "qi:test-design"

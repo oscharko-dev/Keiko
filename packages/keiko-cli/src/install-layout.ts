@@ -13,12 +13,7 @@ export interface LocalPackageInstallLayout extends PreferredInstallLayout {
   readonly packageRoot: string;
 }
 
-export type KeikoBinarySource =
-  | "local-build"
-  | "local-package"
-  | "env-override"
-  | "argv"
-  | "path";
+export type KeikoBinarySource = "local-build" | "local-package" | "env-override" | "argv" | "path";
 
 export interface KeikoBinaryResolution {
   readonly binPath: string;
@@ -71,9 +66,7 @@ function localPackageLayout(cwd: string): LocalPackageInstallLayout | undefined 
   return { ...preferred, packageRoot };
 }
 
-export function resolvePreferredInstallLayout(
-  cwd: string,
-): PreferredInstallLayout | undefined {
+export function resolvePreferredInstallLayout(cwd: string): PreferredInstallLayout | undefined {
   return builtCheckoutLayout(cwd) ?? localPackageLayout(cwd);
 }
 
@@ -86,7 +79,10 @@ export function resolveKeikoBinary(
     readonly source: KeikoBinarySource;
     readonly binPath: string | undefined;
   }[] = [
-    { source: "env-override", binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH) },
+    {
+      source: "env-override",
+      binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH ?? process.env.KEIKO_CLI_BIN_PATH),
+    },
     { source: "argv", binPath: absoluteExistingPath(argv[1]) },
     { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
     { source: "local-package", binPath: localPackageLayout(cwd)?.binPath },
@@ -115,8 +111,7 @@ function resolveKeikoBinaryFromPath(
 ): string | undefined {
   if (typeof pathValue !== "string" || pathValue.length === 0) return undefined;
   const delimiter = platform === "win32" ? ";" : ":";
-  const names =
-    platform === "win32" ? ["keiko.cmd", "keiko.exe", "keiko.bat", "keiko"] : ["keiko"];
+  const names = platform === "win32" ? ["keiko.cmd", "keiko.exe", "keiko.bat", "keiko"] : ["keiko"];
   return pathValue
     .split(delimiter)
     .flatMap((directory) => names.map((name) => join(directory, name)))

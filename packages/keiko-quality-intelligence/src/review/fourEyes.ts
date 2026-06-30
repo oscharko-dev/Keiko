@@ -8,9 +8,7 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 export type QualityIntelligenceFourEyesViolationCode =
-  | "SELF_REVIEW_FORBIDDEN"
-  | "SAME_REVIEWER_LABEL"
-  | "ALREADY_PAIRED";
+  "SELF_REVIEW_FORBIDDEN" | "SAME_REVIEWER_LABEL" | "ALREADY_PAIRED";
 
 export class QualityIntelligenceFourEyesViolationError extends Error {
   public readonly code: QualityIntelligenceFourEyesViolationCode;

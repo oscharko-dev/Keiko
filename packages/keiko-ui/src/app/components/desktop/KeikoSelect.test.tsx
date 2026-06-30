@@ -288,7 +288,10 @@ describe("KeikoSelect menu geometry", () => {
       expect(tooltip).toHaveStyle({ left: "212px", top: "100px" });
     } finally {
       vi.useRealTimers();
-      Object.defineProperty(window, "innerWidth", { configurable: true, value: originalInnerWidth });
+      Object.defineProperty(window, "innerWidth", {
+        configurable: true,
+        value: originalInnerWidth,
+      });
     }
   });
 });

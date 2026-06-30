@@ -5,20 +5,10 @@
 export const RUNTIME_CAPABILITY_SCHEMA_VERSION = "1" as const;
 
 export type RuntimeCapabilityKind =
-  | "git"
-  | "node"
-  | "package-manager"
-  | "language-toolchain"
-  | "container-engine"
-  | "command-source";
+  "git" | "node" | "package-manager" | "language-toolchain" | "container-engine" | "command-source";
 
 export type RuntimeCapabilityState =
-  | "available"
-  | "missing"
-  | "unsupported"
-  | "permission-denied"
-  | "not-running"
-  | "policy-blocked";
+  "available" | "missing" | "unsupported" | "permission-denied" | "not-running" | "policy-blocked";
 
 export type RuntimeCapabilityUnavailableReason =
   | "executable-not-found"

@@ -53,10 +53,7 @@ function normalizePreviewMarkerIndex(marker: string | number): number | undefine
   const trimmed = marker.trim();
   const match = /^(?:\[(\d+)\]|【(\d+)】|［(\d+)］|(\d+))$/u.exec(trimmed);
   if (match === null) return undefined;
-  const parsed = Number.parseInt(
-    match[1] ?? match[2] ?? match[3] ?? match[4] ?? "",
-    10,
-  );
+  const parsed = Number.parseInt(match[1] ?? match[2] ?? match[3] ?? match[4] ?? "", 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
@@ -297,7 +294,12 @@ export function usePdfCitationPreviewController({
     [affordances, answer, chatId, citations, windowId, windows],
   );
 
-  if (chatId === undefined || answer === undefined || citations.length === 0 || windows === undefined) {
+  if (
+    chatId === undefined ||
+    answer === undefined ||
+    citations.length === 0 ||
+    windows === undefined
+  ) {
     return undefined;
   }
 

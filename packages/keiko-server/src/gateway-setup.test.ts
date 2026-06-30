@@ -237,7 +237,9 @@ describe("handleGatewaySetup", () => {
     const voiceProvider = config?.providers.find((provider) => provider.modelId === "keiko-stt");
     expect(voiceProvider?.apiKey).toBe("voice-secret-token");
     expect(voiceProvider?.apiKeyHeaderName).toBe("api-key");
-    const voiceCapability = config?.capabilities?.find((capability) => capability.id === "keiko-stt");
+    const voiceCapability = config?.capabilities?.find(
+      (capability) => capability.id === "keiko-stt",
+    );
     expect(voiceCapability).toMatchObject({
       kind: "voice",
       supportsSpeechInput: true,

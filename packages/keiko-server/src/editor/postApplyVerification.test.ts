@@ -115,9 +115,7 @@ describe("requiresPostApplyVerificationPreflight", () => {
     try {
       expect(requiresPostApplyVerificationPreflight(workspaceOf(root, "vitest"), [])).toBe(false);
       expect(
-        requiresPostApplyVerificationPreflight(workspaceOf(root, "unknown"), [
-          "src/new.test.ts",
-        ]),
+        requiresPostApplyVerificationPreflight(workspaceOf(root, "unknown"), ["src/new.test.ts"]),
       ).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });

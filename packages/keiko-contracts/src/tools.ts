@@ -76,12 +76,7 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
 // the redacted audit metadata so keiko-verification's HONEST `enforced` network flag derives from a
 // real run rather than a hardcoded constant. Content-free: an enum, a boolean, and the platform name.
 export type SandboxBackend =
-  | "bubblewrap"
-  | "unshare"
-  | "seatbelt"
-  | "container-docker"
-  | "container-podman"
-  | "none";
+  "bubblewrap" | "unshare" | "seatbelt" | "container-docker" | "container-podman" | "none";
 
 export const SANDBOX_BACKENDS: readonly SandboxBackend[] = Object.freeze([
   "bubblewrap",

@@ -729,7 +729,9 @@ describe("FilesWidget", () => {
     expect(fileRow).not.toHaveAttribute("data-tip");
     expect(unreadableRow).not.toHaveAttribute("title");
     expect(unreadableRow).not.toHaveAttribute("data-tip");
-    expect(unreadableRow).toHaveAccessibleDescription("This link can't be opened from this folder.");
+    expect(unreadableRow).toHaveAccessibleDescription(
+      "This link can't be opened from this folder.",
+    );
   });
 
   it("shows the Keiko tree tooltip only after delay when a filename is truncated", async () => {

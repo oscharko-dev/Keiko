@@ -127,7 +127,14 @@ export function evaluateRequiredChecks(requiredChecks, checkRuns, statuses) {
   const missing = [];
 
   for (const name of requiredChecks) {
-    recordRequiredCheck(name, { checkRunsByName, failed, missing, passed, pending, statusesByContext });
+    recordRequiredCheck(name, {
+      checkRunsByName,
+      failed,
+      missing,
+      passed,
+      pending,
+      statusesByContext,
+    });
   }
 
   return {

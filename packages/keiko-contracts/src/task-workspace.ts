@@ -287,12 +287,7 @@ export function validateTaskWorkspaceTransition(
 // ─── Health states ────────────────────────────────────────────────────────────
 
 export type TaskWorkspaceHealth =
-  | "healthy"
-  | "degraded"
-  | "drifted"
-  | "locked-out"
-  | "missing"
-  | "unknown";
+  "healthy" | "degraded" | "drifted" | "locked-out" | "missing" | "unknown";
 
 export const TASK_WORKSPACE_HEALTH_STATES: readonly TaskWorkspaceHealth[] = [
   "healthy",
@@ -378,11 +373,7 @@ export interface WorkspaceLock {
 //   policy-denied — an authority/approval gate (operator approval, eligibility); needs governance, not retry.
 //   terminal      — a non-recoverable server fault; do not retry without out-of-band intervention.
 export type WorkspaceFailureClass =
-  | "retryable"
-  | "repairable"
-  | "blocked"
-  | "policy-denied"
-  | "terminal";
+  "retryable" | "repairable" | "blocked" | "policy-denied" | "terminal";
 
 export const WORKSPACE_FAILURE_CLASSES: readonly WorkspaceFailureClass[] = [
   "retryable",
@@ -436,14 +427,7 @@ export interface WorkspaceRecoveryHint {
 // ─── Surfaces ─────────────────────────────────────────────────────────────────────
 
 export type WorkspaceSurface =
-  | "chat"
-  | "files"
-  | "terminal"
-  | "browser"
-  | "editor"
-  | "runtime"
-  | "git-delivery"
-  | "review";
+  "chat" | "files" | "terminal" | "browser" | "editor" | "runtime" | "git-delivery" | "review";
 
 export const TASK_WORKSPACE_SURFACES: readonly WorkspaceSurface[] = [
   "chat",
@@ -1394,11 +1378,7 @@ export function validateWorkspaceReconciliationEntry(input: unknown): TaskWorksp
 // and was cleared. `ambiguous` = no pointer but ≥2 instances claim `active` lifecycle, so restoration
 // refuses to choose (SC: restart recovery never silently picks among ambiguous active workspaces).
 export type WorkspaceActiveRestorationKind =
-  | "none"
-  | "restored"
-  | "recovery-required"
-  | "cleared-dangling"
-  | "ambiguous";
+  "none" | "restored" | "recovery-required" | "cleared-dangling" | "ambiguous";
 
 export const WORKSPACE_ACTIVE_RESTORATION_KINDS: readonly WorkspaceActiveRestorationKind[] = [
   "none",
@@ -1572,11 +1552,7 @@ export function isCleanupEligibleLifecycleState(value: TaskWorkspaceLifecycleSta
 // Why a cleanup was refused. Every reason is a content-free safety outcome, not an error: a refusal is
 // a successful first-class result the caller surfaces, never a thrown failure (SC4).
 export type WorkspaceCleanupRefusalReason =
-  | "ownership-unproven"
-  | "path-escape"
-  | "lock-live"
-  | "worktree-dirty"
-  | "not-eligible-state";
+  "ownership-unproven" | "path-escape" | "lock-live" | "worktree-dirty" | "not-eligible-state";
 
 export const WORKSPACE_CLEANUP_REFUSAL_REASONS: readonly WorkspaceCleanupRefusalReason[] = [
   "ownership-unproven",

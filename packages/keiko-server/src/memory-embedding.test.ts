@@ -229,18 +229,16 @@ describe("embedMemoryText (#204)", () => {
     const unhealthyModelId = "text-embedding-3-small";
     const healthyModelId = "Qwen3-Embedding-8B";
     const seenModelIds: string[] = [];
-    const adapter = vi.fn(
-      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
-        seenModelIds.push(request.modelId);
-        if (request.modelId === unhealthyModelId) {
-          return Promise.resolve({ ok: false as const, kind: "unsupported-model" as const });
-        }
-        return Promise.resolve({
-          ok: true as const,
-          value: { vector: fakeVector(1536), modelId: request.modelId },
-        });
-      },
-    );
+    const adapter = vi.fn((request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+      seenModelIds.push(request.modelId);
+      if (request.modelId === unhealthyModelId) {
+        return Promise.resolve({ ok: false as const, kind: "unsupported-model" as const });
+      }
+      return Promise.resolve({
+        ok: true as const,
+        value: { vector: fakeVector(1536), modelId: request.modelId },
+      });
+    });
     const deps = makeDeps({
       config: {
         providers: [

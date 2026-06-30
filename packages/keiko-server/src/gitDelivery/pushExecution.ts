@@ -71,11 +71,9 @@ export const KEIKO_DEFAULT_PUBLISH_POLICY_PACK: GitDeliveryRepoPolicyPack = {
 
 export interface GitDeliveryPublishSeams {
   readonly publishAdapterFactory?:
-    | ((workspace: WorkspaceInfo) => GitRemotePublishAdapter)
-    | undefined;
+    ((workspace: WorkspaceInfo) => GitRemotePublishAdapter) | undefined;
   readonly snapshotReader?:
-    | ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>)
-    | undefined;
+    ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;

@@ -408,9 +408,9 @@ describe("generateEnhancedPrompt — profile shaping (AC2)", () => {
     );
 
     expect(prompt.role).toBe("You are a skilled writing editor.");
-    expect(prompt.context.some((entry) => /formal letter|contract communication/i.test(entry))).toBe(
-      false,
-    );
+    expect(
+      prompt.context.some((entry) => /formal letter|contract communication/i.test(entry)),
+    ).toBe(false);
     expect(prompt.uncertaintyHandling.some((entry) => /recipient|contract data/i.test(entry))).toBe(
       false,
     );

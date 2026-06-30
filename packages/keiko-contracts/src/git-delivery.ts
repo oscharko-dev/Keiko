@@ -48,10 +48,7 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
 // Read GIT_DELIVERY_RISK_CLASS_SEVERITY[riskClass] to compare severity numerically.
 
 export type GitDeliveryRiskClass =
-  | "local-mutation"
-  | "publish"
-  | "protected-or-merge"
-  | "recovery-or-rewrite";
+  "local-mutation" | "publish" | "protected-or-merge" | "recovery-or-rewrite";
 
 export const GIT_DELIVERY_RISK_CLASSES: readonly GitDeliveryRiskClass[] = [
   "local-mutation",
@@ -153,10 +150,7 @@ export interface GitDeliveryPrUpdateInputs {
 }
 
 export type GitDeliveryMergeStrategyHint =
-  | "squash"
-  | "rebase"
-  | "merge-commit"
-  | "provider-default";
+  "squash" | "rebase" | "merge-commit" | "provider-default";
 
 export const GIT_DELIVERY_MERGE_STRATEGY_HINTS: readonly GitDeliveryMergeStrategyHint[] = [
   "squash",
@@ -173,11 +167,7 @@ export interface GitDeliveryMergeInputs {
 }
 
 export type GitDeliveryAbortableOperation =
-  | "merge"
-  | "rebase"
-  | "cherry-pick"
-  | "revert"
-  | "bisect";
+  "merge" | "rebase" | "cherry-pick" | "revert" | "bisect";
 
 export const GIT_DELIVERY_ABORTABLE_OPERATIONS: readonly GitDeliveryAbortableOperation[] = [
   "merge",
@@ -194,10 +184,7 @@ export interface GitDeliveryAbortInputs {
 }
 
 export type GitDeliveryRecoveryStrategyHint =
-  | "soft-reset"
-  | "mixed-reset"
-  | "stash-and-reset"
-  | "restore-index";
+  "soft-reset" | "mixed-reset" | "stash-and-reset" | "restore-index";
 
 export const GIT_DELIVERY_RECOVERY_STRATEGY_HINTS: readonly GitDeliveryRecoveryStrategyHint[] = [
   "soft-reset",
@@ -246,19 +233,14 @@ export interface GitDeliveryApprovalGranted {
 }
 
 export type GitDeliveryApprovalRequirement =
-  | GitDeliveryApprovalNotRequired
-  | GitDeliveryApprovalGranted;
+  GitDeliveryApprovalNotRequired | GitDeliveryApprovalGranted;
 
 // ─── Provider capability (owned here per ADR-0019 cycle-break) ───────────────────
 // Owned by the core atom so both policy.ts (constraint) and provider.ts (descriptor) can import it
 // without a cycle.
 
 export type GitDeliveryProviderCapability =
-  | "branch-protection"
-  | "draft-pr"
-  | "required-checks"
-  | "merge-queue"
-  | "protected-branch-delete";
+  "branch-protection" | "draft-pr" | "required-checks" | "merge-queue" | "protected-branch-delete";
 
 export const GIT_DELIVERY_PROVIDER_CAPABILITIES: readonly GitDeliveryProviderCapability[] = [
   "branch-protection",

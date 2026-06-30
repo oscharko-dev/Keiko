@@ -17,7 +17,9 @@ const referenceCss = [
   "design-system/keiko-inputs.css",
   "design-system/keiko-nav.css",
   "design-system/components.css",
-].map(read).join("\n\n");
+]
+  .map(read)
+  .join("\n\n");
 
 const MODES = [
   { id: "01-dark", label: "Dark", theme: "dark", hc: false },
@@ -107,7 +109,7 @@ const productMarkup = `
 `;
 
 function frameHtml(css, markup, mode) {
-  const attrs = `${mode.theme ? ` data-theme="${mode.theme}"` : ""}${mode.hc ? " data-hc=\"true\"" : ""} data-input-modality="keyboard"`;
+  const attrs = `${mode.theme ? ` data-theme="${mode.theme}"` : ""}${mode.hc ? ' data-hc="true"' : ""} data-input-modality="keyboard"`;
   return `<!doctype html>
   <html${attrs}>
     <head>
@@ -140,7 +142,10 @@ function pageHtml() {
 function parseRgb(value) {
   const match = value.match(/rgba?\(([^)]+)\)/);
   if (!match) return null;
-  const [r, g, b, a = "1"] = match[1].split(/[,\s/]+/).filter(Boolean).map(Number);
+  const [r, g, b, a = "1"] = match[1]
+    .split(/[,\s/]+/)
+    .filter(Boolean)
+    .map(Number);
   return { r, g, b, a };
 }
 
@@ -208,12 +213,18 @@ function ratio(foreground, background, backdrop) {
 
 async function setFrames(page, mode) {
   await page.setContent(pageHtml());
-  await page.locator("#reference").evaluate((iframe, html) => {
-    iframe.srcdoc = html;
-  }, frameHtml(referenceCss, referenceMarkup, mode));
-  await page.locator("#product").evaluate((iframe, html) => {
-    iframe.srcdoc = html;
-  }, frameHtml(productCss, productMarkup, mode));
+  await page.locator("#reference").evaluate(
+    (iframe, html) => {
+      iframe.srcdoc = html;
+    },
+    frameHtml(referenceCss, referenceMarkup, mode),
+  );
+  await page.locator("#product").evaluate(
+    (iframe, html) => {
+      iframe.srcdoc = html;
+    },
+    frameHtml(productCss, productMarkup, mode),
+  );
   await page.waitForLoadState("domcontentloaded");
   await page.waitForTimeout(100);
 }
@@ -227,13 +238,23 @@ async function measureProduct(page, mode) {
     { state: "default", selector: "#prod-default" },
     { state: "hover", selector: "#prod-hover", action: "hover" },
     { state: "focus", selector: "#prod-focus", action: "focus", focusRingApplicable: true },
-    { state: "primaryFocus", selector: "#prod-primary-focus", action: "focus", focusRingApplicable: true },
+    {
+      state: "primaryFocus",
+      selector: "#prod-primary-focus",
+      action: "focus",
+      focusRingApplicable: true,
+    },
     { state: "active", selector: "#prod-active" },
     { state: "selected", selector: "#prod-selected" },
     { state: "disabled", selector: "#prod-disabled" },
     { state: "loading", selector: "#prod-loading" },
     { state: "error", selector: "#prod-error" },
-    { state: "errorDismissFocus", selector: "#prod-error-close", action: "focus", focusRingApplicable: true },
+    {
+      state: "errorDismissFocus",
+      selector: "#prod-error-close",
+      action: "focus",
+      focusRingApplicable: true,
+    },
   ];
 
   const observations = {};
@@ -252,13 +273,15 @@ async function measureProduct(page, mode) {
       return {
         selector,
         color: cs.color,
-        backgroundColor: cs.backgroundColor === "rgba(0, 0, 0, 0)" ? background : cs.backgroundColor,
+        backgroundColor:
+          cs.backgroundColor === "rgba(0, 0, 0, 0)" ? background : cs.backgroundColor,
         borderColor: cs.borderTopColor,
         outlineColor: cs.outlineColor,
         focusRing,
         focusRingApplicable: Boolean(focusRingApplicable),
         pageBackgroundColor: background,
-        textPresent: (node.textContent ?? "").trim().length > 0 || node.getAttribute("aria-label") !== null,
+        textPresent:
+          (node.textContent ?? "").trim().length > 0 || node.getAttribute("aria-label") !== null,
       };
     }, spec);
   }
@@ -266,7 +289,10 @@ async function measureProduct(page, mode) {
 }
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ deviceScaleFactor: 2, viewport: { width: 1440, height: 1220 } });
+const page = await browser.newPage({
+  deviceScaleFactor: 2,
+  viewport: { width: 1440, height: 1220 },
+});
 const evidence = {
   issue: 1294,
   generatedBy: "docs/design-system/evidence/1294/reference-comparison.mjs",
@@ -276,7 +302,10 @@ const evidence = {
 
 for (const mode of MODES) {
   await setFrames(page, mode);
-  await page.screenshot({ path: resolve(HERE, `reference-side-by-side-${mode.id}.png`), fullPage: true });
+  await page.screenshot({
+    path: resolve(HERE, `reference-side-by-side-${mode.id}.png`),
+    fullPage: true,
+  });
   const observations = await measureProduct(page, mode);
   evidence.modes[mode.id] = {
     label: mode.label,

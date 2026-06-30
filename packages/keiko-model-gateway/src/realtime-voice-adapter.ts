@@ -49,6 +49,17 @@ export const REALTIME_VOICES = [
 ] as const;
 export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
 export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
+export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
+export const DEFAULT_REALTIME_VAD_THRESHOLD = 0.5;
+export const DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS = 300;
+export const DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS = 500;
+export const DEFAULT_REALTIME_TURN_DETECTION = {
+  type: "server_vad",
+  threshold: DEFAULT_REALTIME_VAD_THRESHOLD,
+  prefix_padding_ms: DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS,
+  silence_duration_ms: DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS,
+  interrupt_response: true,
+} as const;
 
 export function isRealtimeVoice(voiceId: string | undefined): voiceId is RealtimeVoice {
   return voiceId !== undefined && (REALTIME_VOICES as readonly string[]).includes(voiceId);
@@ -103,7 +114,8 @@ export type RealtimeSessionToolChoice =
   | "auto"
   | "none"
   | "required"
-  | { readonly type: "function"; readonly name: string };
+  | { readonly type: "function"; readonly name: string }
+  | { readonly type: "function"; readonly function: { readonly name: string } };
 
 export interface RealtimeNegotiationSuccess {
   // The provider's opaque SDP answer. `secret-bearing` per the protocol (may carry private ICE
@@ -279,9 +291,9 @@ async function dispatch(
 
 // Builds the ephemeral client-secret request body. The session-config schema is the GA nested
 // `audio.{input,output}` shape (verified against the live Azure Foundry realtime endpoint: the older
-// top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions`,
-// `audio.output.voice`, and `audio.input.transcription` are only included when supplied, so an
-// unconfigured deployment still mints a valid (provider-default) session.
+// top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions` and
+// `audio.output.voice` are only included when supplied, while input transcription is fail-safe for the
+// dialogue path so a minted realtime session always emits user-utterance transcripts.
 function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
   const session: Record<string, unknown> = {
     type: "realtime",
@@ -297,12 +309,16 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
   }
   const audioInput: Record<string, unknown> = {
     // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the
-    // realtime media plane without any client polling.
-    turn_detection: { type: "server_vad" },
+    // realtime media plane without any client polling. Prefix padding captures speech that starts
+    // during browser EC/NS/AGC warm-up or immediately after the visible session start.
+    turn_detection: DEFAULT_REALTIME_TURN_DETECTION,
   };
-  if (request.transcriptionModel !== undefined && request.transcriptionModel.length > 0) {
-    audioInput.transcription = { model: request.transcriptionModel };
-  }
+  audioInput.transcription = {
+    model:
+      request.transcriptionModel !== undefined && request.transcriptionModel.length > 0
+        ? request.transcriptionModel
+        : DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  };
   const audio: Record<string, unknown> = { input: audioInput };
   if (request.voiceId !== undefined && request.voiceId.length > 0) {
     audio.output = { voice: request.voiceId };

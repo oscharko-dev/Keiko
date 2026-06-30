@@ -136,9 +136,7 @@ export function runDoctorCli(
   io.out(`  running version: ${report.runningVersion}\n`);
   io.out(`  running entry: ${report.runningEntry ?? "(unavailable)"}\n`);
   io.out(`  local built CLI: ${report.localBuildBin ?? "(not found)"}\n`);
-  io.out(
-    `  local installed package: ${report.localPackageInstall?.cliEntry ?? "(not found)"}\n`,
-  );
+  io.out(`  local installed package: ${report.localPackageInstall?.cliEntry ?? "(not found)"}\n`);
   io.out(`  local installed version: ${report.localPackageInstall?.version ?? "(not found)"}\n`);
   if (report.warning !== undefined) {
     io.out(`\nDiagnosis:\n${report.warning}\n\n`);

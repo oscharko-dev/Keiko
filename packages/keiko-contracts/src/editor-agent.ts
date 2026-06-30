@@ -36,14 +36,12 @@ export interface EditorAgentSessionSnapshot {
   // Issue #1379 AC4 (ADR-0067 D6) — content-free language-provider availability for the active file.
   // Additive and optional: old snapshots (field absent) still validate. ids/booleans/short reason
   // strings only — never buffer text. `providerId` is null when no provider serves the language.
-  readonly languageCapability?:
-    | {
-        readonly languageId: string;
-        readonly providerId: string | null;
-        readonly available: boolean;
-        readonly unavailableReason?: string | undefined;
-      }
-    | null;
+  readonly languageCapability?: {
+    readonly languageId: string;
+    readonly providerId: string | null;
+    readonly available: boolean;
+    readonly unavailableReason?: string | undefined;
+  } | null;
   readonly documentVersion?: EditorDocumentVersion | undefined;
   readonly activeFileContentHash?: string | undefined;
   readonly textMode: EditorAgentSnapshotTextMode;
@@ -81,8 +79,7 @@ export interface EditorAgentAction {
   readonly expectedDocumentVersion?: EditorDocumentVersion | undefined;
   readonly expectedContentHash?: string | undefined;
   readonly textEdits?:
-    | readonly { readonly range: LanguageRange; readonly newText: string }[]
-    | undefined;
+    readonly { readonly range: LanguageRange; readonly newText: string }[] | undefined;
   readonly patch?: string | undefined;
 }
 

@@ -29,7 +29,9 @@ const SYNTAX_VIOLATION_CHECKS = [
   },
   {
     matches: (node) =>
-      node.type === "MetaProperty" && node.meta?.name === "import" && node.property?.name === "meta",
+      node.type === "MetaProperty" &&
+      node.meta?.name === "import" &&
+      node.property?.name === "meta",
     message: "import.meta is not allowed",
   },
 ];

@@ -400,9 +400,11 @@ describe("local-knowledge preview session handlers", () => {
     );
 
     const firstSession = (first.body as { readonly session: { readonly handle: string } }).session;
-    const secondSession = (second.body as {
-      readonly session: { readonly handle: string; readonly reused: boolean };
-    }).session;
+    const secondSession = (
+      second.body as {
+        readonly session: { readonly handle: string; readonly reused: boolean };
+      }
+    ).session;
     expect(firstSession.handle).toBe(secondSession.handle);
     expect(secondSession.reused).toBe(true);
     expect(auditKinds(fixture.capsuleId)).toEqual([
@@ -423,7 +425,8 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
     const captured = captureResponse();
 
     const outcome = await handleGetPdfCitationPreviewDocument(
@@ -431,7 +434,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest(),
         res: captured.res,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );
@@ -456,7 +461,8 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
     const captured = captureResponse();
 
     const outcome = await handleGetPdfCitationPreviewDocument(
@@ -464,7 +470,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest({ range: "bytes=0-3" }),
         res: captured.res,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );
@@ -481,7 +489,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: "missing-handle" },
-        url: new URL("http://127.0.0.1/api/local-knowledge/citation-preview/sessions/missing-handle/document"),
+        url: new URL(
+          "http://127.0.0.1/api/local-knowledge/citation-preview/sessions/missing-handle/document",
+        ),
       },
       deps(),
     );
@@ -504,7 +514,8 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
 
     const closed = handleClosePdfCitationPreviewSession(
       {
@@ -520,7 +531,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );
@@ -549,7 +562,8 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
     nowMs += 60;
 
     const expired = await handleGetPdfCitationPreviewDocument(
@@ -557,7 +571,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );
@@ -580,7 +596,8 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
     writeFileSync(fixture.pdfPath, Buffer.from("%PDF-1.4 changed\n%%EOF\n", "utf8"));
 
     const changed = await handleGetPdfCitationPreviewDocument(
@@ -588,7 +605,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );
@@ -611,7 +630,8 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
     unlinkSync(fixture.pdfPath);
 
     const missing = await handleGetPdfCitationPreviewDocument(
@@ -619,7 +639,9 @@ describe("local-knowledge preview session handlers", () => {
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );
@@ -688,14 +710,17 @@ describe("local-knowledge preview session handlers", () => {
       }),
       deps(sessionManager),
     );
-    const handle = (opened.body as { readonly session: { readonly handle: string } }).session.handle;
+    const handle = (opened.body as { readonly session: { readonly handle: string } }).session
+      .handle;
 
     const invalid = await handleGetPdfCitationPreviewDocument(
       {
         req: emptyRequest({ range: "bytes=0-4,6-10" }),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
-        url: new URL(`http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`),
+        url: new URL(
+          `http://127.0.0.1/api/local-knowledge/citation-preview/sessions/${handle}/document`,
+        ),
       },
       deps(sessionManager),
     );

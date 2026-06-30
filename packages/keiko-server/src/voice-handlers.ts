@@ -251,8 +251,7 @@ function validateDurationMs(raw: unknown): "ok" | "invalid" {
 }
 
 type LanguageResult =
-  | { readonly ok: true; readonly language: string | undefined }
-  | { readonly ok: false };
+  { readonly ok: true; readonly language: string | undefined } | { readonly ok: false };
 
 function validateLanguage(raw: unknown): LanguageResult {
   if (raw === undefined) {

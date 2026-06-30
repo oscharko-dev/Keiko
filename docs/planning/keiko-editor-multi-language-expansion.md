@@ -160,14 +160,14 @@ The order is independently shippable: each stage is one (or a few) implementatio
 Each language is delivered as a **separately-registered provider behind a per-language feature flag**,
 default-off. Ownership and rollback:
 
-| Concern                 | Owner                                                                                  |
-| ----------------------- | -------------------------------------------------------------------------------------- |
-| Provider registration   | keiko-server language-service registry (one `LanguageProviderDescriptor` per language) |
+| Concern                 | Owner                                                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Provider registration   | keiko-server language-service registry (one `LanguageProviderDescriptor` per language)                                          |
 | LSP process lifecycle   | keiko-server through the ADR-0043-compatible spawn boundary: spawn, health, safe-mode config, dispose on close/workspace-switch |
-| Workspace-root + config | keiko-server (reused TS/JS discovery, §8)                                              |
-| Output sanitisation     | keiko-server orchestrator (shared, unchanged)                                          |
-| Enforced isolation      | `@oscharko-dev/keiko-sandbox` + command attestation (for any code-executing server or test run) |
-| Feature flag / rollback | keiko-server config, one flag per language                                             |
+| Workspace-root + config | keiko-server (reused TS/JS discovery, §8)                                                                                       |
+| Output sanitisation     | keiko-server orchestrator (shared, unchanged)                                                                                   |
+| Enforced isolation      | `@oscharko-dev/keiko-sandbox` + command attestation (for any code-executing server or test run)                                 |
+| Feature flag / rollback | keiko-server config, one flag per language                                                                                      |
 
 **Rollback/disable is per-language and cascade-free.** Turning a language's flag off:
 
@@ -185,11 +185,11 @@ Rollback requires no contract change and no editor-shell change.
 
 For every language, operations split three ways:
 
-| Partition                    | Operations / responsibilities                                                                                                                                                                                                                                                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **LSP-delegated**            | diagnostics, hover/quick-info, completion candidates, document symbols, formatting — computed by the out-of-process server                                                                                                                                                                                                    |
+| Partition                    | Operations / responsibilities                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LSP-delegated**            | diagnostics, hover/quick-info, completion candidates, document symbols, formatting — computed by the out-of-process server                                                                                                                                                                                                                                                                |
 | **Keiko-specific**           | workspace-root discovery & config rules (§8); provider registration; output sanitisation (bidi/zero-width strip, inert-Markdown hover fence, count caps, byte/wall-clock/`AbortSignal` bounds); deterministic-first orchestration; metadata-only evidence; BFF wiring; ADR-0043-compatible process launch; network/filesystem/environment isolation wrapping of any code-executing server |
-| **Separate security review** | spawning a server that executes untrusted project code at index time (**Java, Rust**); any new long-lived LSP process manager that cannot reuse `runCommand`; toolchain provisioning & runtime inventory; per-language test execution (reuses #1202/#1204/ADR-0043); offline artifact-provisioning model |
+| **Separate security review** | spawning a server that executes untrusted project code at index time (**Java, Rust**); any new long-lived LSP process manager that cannot reuse `runCommand`; toolchain provisioning & runtime inventory; per-language test execution (reuses #1202/#1204/ADR-0043); offline artifact-provisioning model                                                                                  |
 
 Per-language summary of what is LSP-based vs needs review:
 
@@ -367,17 +367,17 @@ pinned versions, checksums/provenance, and license review before enablement.
 
 ## 12. Risk register
 
-| #   | Risk                                                                                                                 | Category                 | Likelihood × Impact | Mitigation / owner                                                                                                                            |
-| --- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| #   | Risk                                                                                                                 | Category                 | Likelihood × Impact | Mitigation / owner                                                                                                                                                                  |
+| --- | -------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M1  | LSP server executes untrusted project code at index time (jdtls build scripts, rust-analyzer proc-macros/`build.rs`) | Untrusted execution      | High × High         | Safe-mode by default (ADR-0045 D3); execution only behind ADR-0043-compatible network + filesystem/environment isolation on the server process + security review. Java/Rust stages. |
-| M2  | Browser-side LSP client bypasses the governed server orchestrator / widens CSP                                       | Model boundary / CSP     | Low × High          | Server-side bridge only (D2); no `monaco-languageclient` in the browser; CSP unchanged.                                                       |
-| M3  | Toolchain fetches dependencies just-in-time, defeating deny-by-default egress                                        | Network boundary         | Med × High          | Offline provisioning (§7) is a precondition; `GOPROXY=off`, `mvn -o`, `cargo --offline`, provisioned venv; boundary proof required.           |
-| M3b | Long-lived LSP process launch bypasses ADR-0043's single spawn boundary                                             | Command boundary         | Med × High          | Reuse `runCommand` wrapper/attestation/env allowlist, or land an ADR-0043 amendment with equivalent long-lived process controls before shipping. |
-| M4  | Heavy toolchain (Rust 1.5–2.5 GB) inflates footprint / startup, regressing budgets                                   | Performance / footprint  | Med × Med           | Operator-provisioned (not bundled); per-provider startup/memory budgets recorded (§9); large-file degradation reused.                         |
-| M5  | A new provider regresses the TS/JS path or another language                                                          | Architecture             | Low × High          | Per-language flag + isolated registry entry; cascade-free rollback (§5); TS/JS path untouched (AC1).                                          |
-| M6  | Runtime toolchain provenance or license obligations are hidden by bundled-SBOM wording                               | Supply chain / legal     | Med × Med           | Bundled npm/workspace SBOM remains scoped to shipped packages; per-language runtime toolchain inventory records pinned versions, checksums/provenance, and license review. |
-| M7  | Retrieved/test context carries an injection payload into a future language test-gen prompt                           | Prompt injection (LLM08) | Med × High          | Reuse the existing untrusted-content handling and metadata-only evidence (#1211/#1206); deterministic LSP results are never model input.      |
-| M8  | `cargo` offline mode misses dev-dependencies, making Rust verification non-reproducible                              | Verification             | Med × Med           | `cargo vendor --versioned-dirs` + `--locked`; verify dev-deps captured; documented in the Rust stage's evidence.                              |
+| M2  | Browser-side LSP client bypasses the governed server orchestrator / widens CSP                                       | Model boundary / CSP     | Low × High          | Server-side bridge only (D2); no `monaco-languageclient` in the browser; CSP unchanged.                                                                                             |
+| M3  | Toolchain fetches dependencies just-in-time, defeating deny-by-default egress                                        | Network boundary         | Med × High          | Offline provisioning (§7) is a precondition; `GOPROXY=off`, `mvn -o`, `cargo --offline`, provisioned venv; boundary proof required.                                                 |
+| M3b | Long-lived LSP process launch bypasses ADR-0043's single spawn boundary                                              | Command boundary         | Med × High          | Reuse `runCommand` wrapper/attestation/env allowlist, or land an ADR-0043 amendment with equivalent long-lived process controls before shipping.                                    |
+| M4  | Heavy toolchain (Rust 1.5–2.5 GB) inflates footprint / startup, regressing budgets                                   | Performance / footprint  | Med × Med           | Operator-provisioned (not bundled); per-provider startup/memory budgets recorded (§9); large-file degradation reused.                                                               |
+| M5  | A new provider regresses the TS/JS path or another language                                                          | Architecture             | Low × High          | Per-language flag + isolated registry entry; cascade-free rollback (§5); TS/JS path untouched (AC1).                                                                                |
+| M6  | Runtime toolchain provenance or license obligations are hidden by bundled-SBOM wording                               | Supply chain / legal     | Med × Med           | Bundled npm/workspace SBOM remains scoped to shipped packages; per-language runtime toolchain inventory records pinned versions, checksums/provenance, and license review.          |
+| M7  | Retrieved/test context carries an injection payload into a future language test-gen prompt                           | Prompt injection (LLM08) | Med × High          | Reuse the existing untrusted-content handling and metadata-only evidence (#1211/#1206); deterministic LSP results are never model input.                                            |
+| M8  | `cargo` offline mode misses dev-dependencies, making Rust verification non-reproducible                              | Verification             | Med × Med           | `cargo vendor --versioned-dirs` + `--locked`; verify dev-deps captured; documented in the Rust stage's evidence.                                                                    |
 
 ---
 
@@ -385,15 +385,15 @@ pinned versions, checksums/provenance, and license review before enablement.
 
 What the expansion reuses, so no parallel subsystem is created:
 
-| Existing seam                                                                                 | Reused for                                                                     |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `keiko-server/src/editor/languageService.ts` + `keiko-contracts/src/language-service.ts`      | Provider registration; orchestration; sanitisation; bounds/cancellation        |
-| `keiko-server/src/editor/assuredPreFilterRunner.ts`                                           | Multi-language test pre-filter (build→pass→stability→coverage→mutation)        |
-| `keiko-verification/src/orchestrator.ts`                                                      | `networkEnforcement` modes; honest enforced-limit reporting                    |
+| Existing seam                                                                                 | Reused for                                                                                           |
+| --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `keiko-server/src/editor/languageService.ts` + `keiko-contracts/src/language-service.ts`      | Provider registration; orchestration; sanitisation; bounds/cancellation                              |
+| `keiko-server/src/editor/assuredPreFilterRunner.ts`                                           | Multi-language test pre-filter (build→pass→stability→coverage→mutation)                              |
+| `keiko-verification/src/orchestrator.ts`                                                      | `networkEnforcement` modes; honest enforced-limit reporting                                          |
 | `@oscharko-dev/keiko-sandbox`                                                                 | Enforced network and filesystem/environment boundary evidence for index-time and test-time execution |
-| `keiko-workflows/src/unit-tests/frontend.ts`                                                  | Convention-driven stack detection → `detectBackendStack` analog                |
-| `keiko-model-gateway/src/model-selection.ts`                                                  | Language-agnostic AI completion (unchanged; LSP results stay deterministic)    |
-| `keiko-server/src/editor/codingContextProviders.ts` + `keiko-contracts/src/coding-context.ts` | Server-side retrieval/context for any future test-gen (untrusted, tier-tagged) |
+| `keiko-workflows/src/unit-tests/frontend.ts`                                                  | Convention-driven stack detection → `detectBackendStack` analog                                      |
+| `keiko-model-gateway/src/model-selection.ts`                                                  | Language-agnostic AI completion (unchanged; LSP results stay deterministic)                          |
+| `keiko-server/src/editor/codingContextProviders.ts` + `keiko-contracts/src/coding-context.ts` | Server-side retrieval/context for any future test-gen (untrusted, tier-tagged)                       |
 
 No new retrieval, knowledge, memory, context-assembly, model-routing, verification, or evidence
 subsystem is introduced.
@@ -436,14 +436,14 @@ For the regulated-delivery posture, the multi-language plan preserves the existi
 
 ## 16. Acceptance-criteria traceability
 
-| AC  | Criterion                                                                                                                      | Where satisfied                              |
-| --- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------- |
-| AC1 | The first-release TS/JS scope remains unchanged.                                                                               | §1.2; ADR-0045 Status/D7                     |
-| AC2 | Candidate language support ordered by risk, user value, dependency footprint, verification feasibility.                        | §3 (matrix) + §4 (scored order); ADR-0045 D4 |
-| AC3 | Each future language has a defined owner boundary and a clear rollback/disable path.                                           | §5; ADR-0045 D5                              |
-| AC4 | Plan documents which parts are LSP-based, Keiko-specific, and which require separate security review.                          | §6; ADR-0045 D5                              |
+| AC  | Criterion                                                                                                                                                                    | Where satisfied                              |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| AC1 | The first-release TS/JS scope remains unchanged.                                                                                                                             | §1.2; ADR-0045 Status/D7                     |
+| AC2 | Candidate language support ordered by risk, user value, dependency footprint, verification feasibility.                                                                      | §3 (matrix) + §4 (scored order); ADR-0045 D4 |
+| AC3 | Each future language has a defined owner boundary and a clear rollback/disable path.                                                                                         | §5; ADR-0045 D5                              |
+| AC4 | Plan documents which parts are LSP-based, Keiko-specific, and which require separate security review.                                                                        | §6; ADR-0045 D5                              |
 | EV  | Per-future-language verification (fixtures, deterministic tests, lifecycle, dependency/license/runtime inventory, sandbox/network/filesystem/process boundary, performance). | §10; ADR-0045 D6                             |
-| SR  | Scheduling Rule: not on #1189 line; promote-to-epic or split-per-language; decoupled shell; deterministic-first.               | §14; ADR-0045 D7                             |
+| SR  | Scheduling Rule: not on #1189 line; promote-to-epic or split-per-language; decoupled shell; deterministic-first.                                                             | §14; ADR-0045 D7                             |
 
 ---
 

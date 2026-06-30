@@ -40,10 +40,7 @@ export const EDITOR_AGENT_AUDIT_SUMMARY_MAX_CHARS = 200;
 // contract. The `Record<EditorAgentActionType, …>` makes the table exhaustive at compile time, so a
 // future action type cannot be added to the union without being given a class here.
 export type EditorAgentActionEffectClass =
-  | "navigation"
-  | "layout"
-  | "content-mutation"
-  | "external-effect";
+  "navigation" | "layout" | "content-mutation" | "external-effect";
 
 export const EDITOR_AGENT_ACTION_EFFECT_CLASS: Readonly<
   Record<EditorAgentActionType, EditorAgentActionEffectClass>
@@ -86,8 +83,7 @@ export const EDITOR_AGENT_ACTION_DENY_REASONS: readonly EditorAgentActionDenyRea
 ] as const;
 
 export type EditorAgentActionReviewReason =
-  | "content-mutation-requires-review"
-  | "external-effect-requires-review";
+  "content-mutation-requires-review" | "external-effect-requires-review";
 
 export const EDITOR_AGENT_ACTION_REVIEW_REASONS: readonly EditorAgentActionReviewReason[] = [
   "content-mutation-requires-review",

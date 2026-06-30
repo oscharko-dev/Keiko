@@ -48,7 +48,11 @@ function makeFixtureRoot(): string {
 }
 
 function json(route: Route, body: unknown): Promise<void> {
-  return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  return route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
 }
 
 function statusBody(root: string): unknown {
@@ -270,7 +274,11 @@ async function interceptPrMergeRoutes(page: Page, ledger: RouteLedger): Promise<
   );
 }
 
-async function interceptRoutes(page: Page, fixtureRoot: string, ledger: RouteLedger): Promise<void> {
+async function interceptRoutes(
+  page: Page,
+  fixtureRoot: string,
+  ledger: RouteLedger,
+): Promise<void> {
   await interceptProjectRoutes(page, fixtureRoot);
   await interceptGitReadRoutes(page, fixtureRoot);
   await interceptPrMergeRoutes(page, ledger);
@@ -382,9 +390,7 @@ test("Git window embeds Pull Request and Merge repository operations", async ({ 
   await page.getByRole("button", { name: /Merge/u }).click();
   const mergePanel = page.getByRole("region", { name: "Merge", exact: true });
   await expect(mergePanel).toBeVisible();
-  await expect(mergePanel.getByLabel("Repository (owner/repo)")).toHaveValue(
-    "oscharko-dev/Keiko",
-  );
+  await expect(mergePanel.getByLabel("Repository (owner/repo)")).toHaveValue("oscharko-dev/Keiko");
   await mergePanel.getByLabel("Pull Request number").fill("1577");
   await mergePanel.getByRole("button", { name: "Preview" }).click();
   await expect(mergePanel.getByText("required-checks-pending")).toBeVisible();

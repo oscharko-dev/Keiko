@@ -3,7 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <title>Editor · Navigation &amp; Search · Keiko Design System</title>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
@@ -12,8 +21,19 @@
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="keiko-editor-views.css" />
     <style>
-      .ev-stage { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 40px; display: flex; justify-content: center; background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0); background-size: 22px 22px; }
-      .ev-stage.tl { justify-content: flex-start; }
+      .ev-stage {
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 40px;
+        display: flex;
+        justify-content: center;
+        background-image: radial-gradient(circle at 1px 1px, var(--grid-dot) 1px, transparent 0);
+        background-size: 22px 22px;
+      }
+      .ev-stage.tl {
+        justify-content: flex-start;
+      }
     </style>
   </head>
   <body class="ds">
@@ -25,12 +45,25 @@
       <header class="phero">
         <div class="ey">Guidelines · 12 · Editor</div>
         <h1>Navigation &amp; search</h1>
-        <p class="lead">Moving through a codebase is the most-repeated action in the editor, so it gets the most-refined surfaces: one omni-search, fast file and symbol jumps, find &amp; replace, completion, quick docs, and the right-click menus that tie it together. Every overlay shares one grammar — a field, a result list, a keyboard footer.</p>
+        <p class="lead">
+          Moving through a codebase is the most-repeated action in the editor, so it gets the
+          most-refined surfaces: one omni-search, fast file and symbol jumps, find &amp; replace,
+          completion, quick docs, and the right-click menus that tie it together. Every overlay
+          shares one grammar — a field, a result list, a keyboard footer.
+        </p>
       </header>
 
       <!-- 01 SEARCH EVERYWHERE -->
       <section class="sec" id="search">
-        <div class="sec-head"><div class="num">01 — SEARCH EVERYWHERE</div><h2>The omni-search</h2><p>One overlay (double-⇧) that reaches everything — files, symbols, actions, settings. Scopes are tabs; results are typed and previewable; the keyboard footer always shows the next move.</p></div>
+        <div class="sec-head">
+          <div class="num">01 — SEARCH EVERYWHERE</div>
+          <h2>The omni-search</h2>
+          <p>
+            One overlay (double-⇧) that reaches everything — files, symbols, actions, settings.
+            Scopes are tabs; results are typed and previewable; the keyboard footer always shows the
+            next move.
+          </p>
+        </div>
         <div class="ev-stage">
           <div class="ev-overlay">
             <div class="ev-otabs">
@@ -40,171 +73,542 @@
               <div class="ev-otab">Symbols</div>
               <div class="ev-otab">Actions</div>
             </div>
-            <div class="ev-ofield"><span class="ico" data-licon="search" data-size="20" style="color:var(--fg-faint)"></span><div class="q">fetchAg<span class="ph">…</span></div><span class="caret"></span></div>
-            <div class="ev-oresults">
-              <div class="ev-mlabel" style="padding:9px 18px 4px">Symbols</div>
-              <div class="ev-ores on"><span class="fi"><span class="ico" data-licon="hierarchy" data-size="16"></span></span><div><div class="nm"><em>fetchAg</em>ents</div><div class="path">src/runtime/client.ts</div></div><span class="meta">function</span></div>
-              <div class="ev-ores"><span class="fi"><span class="ico" data-licon="hierarchy" data-size="16"></span></span><div><div class="nm"><em>fetchAg</em>entById</div><div class="path">src/runtime/client.ts</div></div><span class="meta">function</span></div>
-              <div class="ev-mlabel" style="padding:9px 18px 4px">Files</div>
-              <div class="ev-ores"><span class="fi"><span class="ev-ft ts" style="width:16px;height:16px">TS</span></span><div><div class="nm">client.ts</div><div class="path">src/runtime</div></div><span class="meta">3 matches</span></div>
-              <div class="ev-mlabel" style="padding:9px 18px 4px">Actions</div>
-              <div class="ev-ores"><span class="fi"><span class="ico" data-licon="run" data-size="16"></span></span><div><div class="nm">Run 'fetch agents' test</div><div class="path">Run configuration</div></div><span class="meta">⌃⇧R</span></div>
+            <div class="ev-ofield">
+              <span
+                class="ico"
+                data-licon="search"
+                data-size="20"
+                style="color: var(--fg-faint)"
+              ></span>
+              <div class="q">fetchAg<span class="ph">…</span></div>
+              <span class="caret"></span>
             </div>
-            <div class="ev-ofoot"><span><span class="ev-kbd">↑↓</span> navigate</span><span><span class="ev-kbd">↹</span> next scope</span><span><span class="ev-kbd">↵</span> open</span><span style="margin-left:auto"><span class="ev-kbd">⌥↵</span> open in split</span></div>
+            <div class="ev-oresults">
+              <div class="ev-mlabel" style="padding: 9px 18px 4px">Symbols</div>
+              <div class="ev-ores on">
+                <span class="fi"
+                  ><span class="ico" data-licon="hierarchy" data-size="16"></span
+                ></span>
+                <div>
+                  <div class="nm"><em>fetchAg</em>ents</div>
+                  <div class="path">src/runtime/client.ts</div>
+                </div>
+                <span class="meta">function</span>
+              </div>
+              <div class="ev-ores">
+                <span class="fi"
+                  ><span class="ico" data-licon="hierarchy" data-size="16"></span
+                ></span>
+                <div>
+                  <div class="nm"><em>fetchAg</em>entById</div>
+                  <div class="path">src/runtime/client.ts</div>
+                </div>
+                <span class="meta">function</span>
+              </div>
+              <div class="ev-mlabel" style="padding: 9px 18px 4px">Files</div>
+              <div class="ev-ores">
+                <span class="fi"
+                  ><span class="ev-ft ts" style="width: 16px; height: 16px">TS</span></span
+                >
+                <div>
+                  <div class="nm">client.ts</div>
+                  <div class="path">src/runtime</div>
+                </div>
+                <span class="meta">3 matches</span>
+              </div>
+              <div class="ev-mlabel" style="padding: 9px 18px 4px">Actions</div>
+              <div class="ev-ores">
+                <span class="fi"><span class="ico" data-licon="run" data-size="16"></span></span>
+                <div>
+                  <div class="nm">Run 'fetch agents' test</div>
+                  <div class="path">Run configuration</div>
+                </div>
+                <span class="meta">⌃⇧R</span>
+              </div>
+            </div>
+            <div class="ev-ofoot">
+              <span><span class="ev-kbd">↑↓</span> navigate</span
+              ><span><span class="ev-kbd">↹</span> next scope</span
+              ><span><span class="ev-kbd">↵</span> open</span
+              ><span style="margin-left: auto"><span class="ev-kbd">⌥↵</span> open in split</span>
+            </div>
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Selected result carries the accent wash (<code>--accent-dim</code>) and the match substring is accent-coloured, never bolded into noise. Group labels are monospace micro-caps — the same label style as context menus.</p>
+        <p class="muted-cap" style="margin-top: 14px">
+          Selected result carries the accent wash (<code>--accent-dim</code>) and the match
+          substring is accent-coloured, never bolded into noise. Group labels are monospace
+          micro-caps — the same label style as context menus.
+        </p>
       </section>
 
       <!-- 02 GO TO FILE -->
       <section class="sec" id="gotofile">
-        <div class="sec-head"><div class="num">02 — GO TO FILE</div><h2>Fuzzy file jump</h2><p>A leaner sibling of omni-search, scoped to files (⌘⇧O). Fuzzy matching highlights the matched characters so you can see <em>why</em> a result ranked where it did.</p></div>
+        <div class="sec-head">
+          <div class="num">02 — GO TO FILE</div>
+          <h2>Fuzzy file jump</h2>
+          <p>
+            A leaner sibling of omni-search, scoped to files (⌘⇧O). Fuzzy matching highlights the
+            matched characters so you can see <em>why</em> a result ranked where it did.
+          </p>
+        </div>
         <div class="ev-grid2">
-          <div class="ev-stage tl" style="padding:28px">
-            <div class="ev-overlay" style="max-width:420px">
-              <div class="ev-ofield" style="padding:13px 16px"><span class="ico" data-licon="files" data-size="18" style="color:var(--fg-faint)"></span><div class="q" style="font-size:16px">clientts</div><span class="caret"></span></div>
+          <div class="ev-stage tl" style="padding: 28px">
+            <div class="ev-overlay" style="max-width: 420px">
+              <div class="ev-ofield" style="padding: 13px 16px">
+                <span
+                  class="ico"
+                  data-licon="files"
+                  data-size="18"
+                  style="color: var(--fg-faint)"
+                ></span>
+                <div class="q" style="font-size: 16px">clientts</div>
+                <span class="caret"></span>
+              </div>
               <div class="ev-oresults">
-                <div class="ev-ores on"><span class="fi"><span class="ev-ft ts" style="width:16px;height:16px">TS</span></span><div><div class="nm"><em>client</em>.<em>ts</em></div><div class="path">src/runtime</div></div></div>
-                <div class="ev-ores"><span class="fi"><span class="ev-ft ts" style="width:16px;height:16px">TS</span></span><div><div class="nm"><em>client</em>.<em>t</em>e<em>s</em>t.ts</div><div class="path">src/runtime</div></div></div>
-                <div class="ev-ores"><span class="fi"><span class="ev-ft ts" style="width:16px;height:16px">TS</span></span><div><div class="nm">api<em>Client</em>.<em>ts</em></div><div class="path">packages/keiko-bff</div></div></div>
+                <div class="ev-ores on">
+                  <span class="fi"
+                    ><span class="ev-ft ts" style="width: 16px; height: 16px">TS</span></span
+                  >
+                  <div>
+                    <div class="nm"><em>client</em>.<em>ts</em></div>
+                    <div class="path">src/runtime</div>
+                  </div>
+                </div>
+                <div class="ev-ores">
+                  <span class="fi"
+                    ><span class="ev-ft ts" style="width: 16px; height: 16px">TS</span></span
+                  >
+                  <div>
+                    <div class="nm"><em>client</em>.<em>t</em>e<em>s</em>t.ts</div>
+                    <div class="path">src/runtime</div>
+                  </div>
+                </div>
+                <div class="ev-ores">
+                  <span class="fi"
+                    ><span class="ev-ft ts" style="width: 16px; height: 16px">TS</span></span
+                  >
+                  <div>
+                    <div class="nm">api<em>Client</em>.<em>ts</em></div>
+                    <div class="path">packages/keiko-bff</div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
           <div class="stack">
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Ranking</span><div>Exact path segments rank above scattered fuzzy hits; the matched characters carry <code>--accent-text</code> so the ranking is legible, not magic.</div></div>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Consistency</span><div>Go to File, Go to Symbol and Recent Files are the same overlay with a different scope — learn it once.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Ranking</span>
+              <div>
+                Exact path segments rank above scattered fuzzy hits; the matched characters carry
+                <code>--accent-text</code> so the ranking is legible, not magic.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Consistency</span>
+              <div>
+                Go to File, Go to Symbol and Recent Files are the same overlay with a different
+                scope — learn it once.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 03 FIND & REPLACE -->
       <section class="sec" id="find">
-        <div class="sec-head"><div class="num">03 — FIND &amp; REPLACE</div><h2>In-editor find · global replace</h2><p>A find toolbar docks above the code for in-file search; the global panel lists matches as a file tree with inline previews. Match highlights reuse the editor's find tokens.</p></div>
+        <div class="sec-head">
+          <div class="num">03 — FIND &amp; REPLACE</div>
+          <h2>In-editor find · global replace</h2>
+          <p>
+            A find toolbar docks above the code for in-file search; the global panel lists matches
+            as a file tree with inline previews. Match highlights reuse the editor's find tokens.
+          </p>
+        </div>
         <div class="ev-grid2">
           <div class="ev-frame flat">
             <div class="ev-findbar">
-              <span class="ev-input focus"><span class="ico" data-licon="search" data-size="13" style="color:var(--fg-faint)"></span>agents<span class="cnt">2/5</span></span>
+              <span class="ev-input focus"
+                ><span
+                  class="ico"
+                  data-licon="search"
+                  data-size="13"
+                  style="color: var(--fg-faint)"
+                ></span
+                >agents<span class="cnt">2/5</span></span
+              >
               <span class="ev-toggle on">Aa</span>
               <span class="ev-toggle">W</span>
               <span class="ev-toggle">.*</span>
-              <span style="flex:1"></span>
-              <span style="color:var(--fg-faint)"><span class="ico" data-licon="chevronUp" data-size="15"></span></span>
-              <span style="color:var(--fg-faint)"><span class="ico" data-licon="chevron" data-size="15"></span></span>
+              <span style="flex: 1"></span>
+              <span style="color: var(--fg-faint)"
+                ><span class="ico" data-licon="chevronUp" data-size="15"></span
+              ></span>
+              <span style="color: var(--fg-faint)"
+                ><span class="ico" data-licon="chevron" data-size="15"></span
+              ></span>
             </div>
-            <div class="ev-code" style="padding:10px 0">
-              <div class="ev-gutter"><span class="ev-gln">7</span><span class="ev-gln cur">8</span><span class="ev-gln">9</span></div>
-              <div class="ev-lines"><span class="ev-line"><span class="t-key">function</span> <span class="t-fn">fetch</span><span class="ev-find">Agents</span><span class="t-pun">()</span> <span class="t-pun">{</span></span><span class="ev-line active">  <span class="t-key">const</span> <span class="ev-find cur">agents</span> <span class="t-op">=</span> <span class="t-key">await</span> <span class="t-fn">load</span><span class="t-pun">();</span><span class="ev-caret"></span></span><span class="ev-line">  <span class="t-key">return</span> <span class="ev-find">agents</span><span class="t-pun">;</span></span></div>
+            <div class="ev-code" style="padding: 10px 0">
+              <div class="ev-gutter">
+                <span class="ev-gln">7</span><span class="ev-gln cur">8</span
+                ><span class="ev-gln">9</span>
+              </div>
+              <div class="ev-lines">
+                <span class="ev-line"
+                  ><span class="t-key">function</span> <span class="t-fn">fetch</span
+                  ><span class="ev-find">Agents</span><span class="t-pun">()</span>
+                  <span class="t-pun">{</span></span
+                ><span class="ev-line active">
+                  <span class="t-key">const</span> <span class="ev-find cur">agents</span>
+                  <span class="t-op">=</span> <span class="t-key">await</span>
+                  <span class="t-fn">load</span><span class="t-pun">();</span
+                  ><span class="ev-caret"></span></span
+                ><span class="ev-line">
+                  <span class="t-key">return</span> <span class="ev-find">agents</span
+                  ><span class="t-pun">;</span></span
+                >
+              </div>
             </div>
           </div>
           <div class="ev-frame flat">
-            <div class="ev-panel-head" style="border-radius:0">Find in Files<span class="grow"></span><span style="font:500 11px var(--font-mono);color:var(--fg-faint);text-transform:none;letter-spacing:0">5 in 2 files</span></div>
-            <div class="ev-tree" style="padding:6px 0">
-              <div class="ev-row"><span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">client.ts</span><span class="tag">3</span></div>
-              <div class="ev-row" style="padding-left:32px"><span class="nm" style="color:var(--fg-muted)"><span class="t-key">function</span> fetch<span class="ev-find">Agents</span>()</span></div>
-              <div class="ev-row" style="padding-left:32px"><span class="nm" style="color:var(--fg-muted)">const <span class="ev-find">agents</span> = await</span></div>
-              <div class="ev-row" style="padding-left:32px"><span class="nm" style="color:var(--fg-muted)">return <span class="ev-find">agents</span>;</span></div>
-              <div class="ev-row"><span class="tw"><span class="ico" data-licon="chevronR" data-size="12"></span></span><span class="fi"><span class="ev-ft ts">TS</span></span><span class="nm">client.test.ts</span><span class="tag">2</span></div>
+            <div class="ev-panel-head" style="border-radius: 0">
+              Find in Files<span class="grow"></span
+              ><span
+                style="
+                  font: 500 11px var(--font-mono);
+                  color: var(--fg-faint);
+                  text-transform: none;
+                  letter-spacing: 0;
+                "
+                >5 in 2 files</span
+              >
+            </div>
+            <div class="ev-tree" style="padding: 6px 0">
+              <div class="ev-row">
+                <span class="tw"><span class="ico" data-licon="chevron" data-size="12"></span></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">client.ts</span><span class="tag">3</span>
+              </div>
+              <div class="ev-row" style="padding-left: 32px">
+                <span class="nm" style="color: var(--fg-muted)"
+                  ><span class="t-key">function</span> fetch<span class="ev-find">Agents</span
+                  >()</span
+                >
+              </div>
+              <div class="ev-row" style="padding-left: 32px">
+                <span class="nm" style="color: var(--fg-muted)"
+                  >const <span class="ev-find">agents</span> = await</span
+                >
+              </div>
+              <div class="ev-row" style="padding-left: 32px">
+                <span class="nm" style="color: var(--fg-muted)"
+                  >return <span class="ev-find">agents</span>;</span
+                >
+              </div>
+              <div class="ev-row">
+                <span class="tw"
+                  ><span class="ico" data-licon="chevronR" data-size="12"></span></span
+                ><span class="fi"><span class="ev-ft ts">TS</span></span
+                ><span class="nm">client.test.ts</span><span class="tag">2</span>
+              </div>
             </div>
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Toggles (case, whole-word, regex) light to accent when active. The current match uses <code>--ed-find-match-active</code>; other matches the softer <code>--ed-find-match</code> — same tokens the live editor paints.</p>
+        <p class="muted-cap" style="margin-top: 14px">
+          Toggles (case, whole-word, regex) light to accent when active. The current match uses
+          <code>--ed-find-match-active</code>; other matches the softer
+          <code>--ed-find-match</code> — same tokens the live editor paints.
+        </p>
       </section>
 
       <!-- 04 COMPLETION -->
       <section class="sec" id="completion">
-        <div class="sec-head"><div class="num">04 — CODE COMPLETION</div><h2>Completion popup</h2><p>Ranked suggestions with a kind badge, the matched substring, a trailing type, and an attached documentation pane. Keiko's AI completions appear inline in the same list, tagged — never a separate, competing popup.</p></div>
+        <div class="sec-head">
+          <div class="num">04 — CODE COMPLETION</div>
+          <h2>Completion popup</h2>
+          <p>
+            Ranked suggestions with a kind badge, the matched substring, a trailing type, and an
+            attached documentation pane. Keiko's AI completions appear inline in the same list,
+            tagged — never a separate, competing popup.
+          </p>
+        </div>
         <div class="ev-grid2">
-          <div class="ev-stage tl" style="padding:26px">
+          <div class="ev-stage tl" style="padding: 26px">
             <div class="ev-pop ev-complete">
               <div class="ev-cl">
-                <div class="ev-citem on"><span class="kind k-method">M</span><span class="nm"><em>fetch</em>Agents</span><span class="ty">Agent[]</span></div>
-                <div class="ev-citem"><span class="kind k-method">M</span><span class="nm"><em>fetch</em>AgentById</span><span class="ty">Agent</span></div>
-                <div class="ev-citem"><span class="kind k-field">F</span><span class="nm"><em>fetch</em>Policy</span><span class="ty">Policy</span></div>
-                <div class="ev-citem"><span class="kind k-ai">★</span><span class="nm"><em>fetch</em>Agents().filter(running)</span><span class="badge-ai">Keiko</span></div>
-                <div class="ev-citem"><span class="kind k-key">K</span><span class="nm"><em>f</em>unction</span></div>
-                <div class="ev-citem"><span class="kind k-snip">S</span><span class="nm"><em>f</em>or…of</span><span class="ty">snippet</span></div>
+                <div class="ev-citem on">
+                  <span class="kind k-method">M</span><span class="nm"><em>fetch</em>Agents</span
+                  ><span class="ty">Agent[]</span>
+                </div>
+                <div class="ev-citem">
+                  <span class="kind k-method">M</span><span class="nm"><em>fetch</em>AgentById</span
+                  ><span class="ty">Agent</span>
+                </div>
+                <div class="ev-citem">
+                  <span class="kind k-field">F</span><span class="nm"><em>fetch</em>Policy</span
+                  ><span class="ty">Policy</span>
+                </div>
+                <div class="ev-citem">
+                  <span class="kind k-ai">★</span
+                  ><span class="nm"><em>fetch</em>Agents().filter(running)</span
+                  ><span class="badge-ai">Keiko</span>
+                </div>
+                <div class="ev-citem">
+                  <span class="kind k-key">K</span><span class="nm"><em>f</em>unction</span>
+                </div>
+                <div class="ev-citem">
+                  <span class="kind k-snip">S</span><span class="nm"><em>f</em>or…of</span
+                  ><span class="ty">snippet</span>
+                </div>
               </div>
-              <div class="ev-cdoc"><b style="color:var(--fg)">fetchAgents()</b> — returns all agents from the local runtime as <code>Promise&lt;Agent[]&gt;</code>. Throws on a non-2xx response.</div>
+              <div class="ev-cdoc">
+                <b style="color: var(--fg)">fetchAgents()</b> — returns all agents from the local
+                runtime as <code>Promise&lt;Agent[]&gt;</code>. Throws on a non-2xx response.
+              </div>
             </div>
           </div>
           <div class="stack">
             <table class="ev-spec">
-              <thead><tr><th>Kind</th><th>Badge</th><th>Hue</th></tr></thead>
+              <thead>
+                <tr>
+                  <th>Kind</th>
+                  <th>Badge</th>
+                  <th>Hue</th>
+                </tr>
+              </thead>
               <tbody>
-                <tr><td class="tok">method</td><td><span class="kind k-method" style="display:inline-grid">M</span></td><td class="scope">--ed-syn-function</td></tr>
-                <tr><td class="tok">field</td><td><span class="kind k-field" style="display:inline-grid">F</span></td><td class="scope">--ed-syn-property</td></tr>
-                <tr><td class="tok">keyword</td><td><span class="kind k-key" style="display:inline-grid">K</span></td><td class="scope">--ed-syn-keyword</td></tr>
-                <tr><td class="tok">snippet</td><td><span class="kind k-snip" style="display:inline-grid">S</span></td><td class="scope">--ed-syn-type</td></tr>
-                <tr><td class="tok">Keiko AI</td><td><span class="kind k-ai" style="display:inline-grid">★</span></td><td class="scope">--accent</td></tr>
+                <tr>
+                  <td class="tok">method</td>
+                  <td><span class="kind k-method" style="display: inline-grid">M</span></td>
+                  <td class="scope">--ed-syn-function</td>
+                </tr>
+                <tr>
+                  <td class="tok">field</td>
+                  <td><span class="kind k-field" style="display: inline-grid">F</span></td>
+                  <td class="scope">--ed-syn-property</td>
+                </tr>
+                <tr>
+                  <td class="tok">keyword</td>
+                  <td><span class="kind k-key" style="display: inline-grid">K</span></td>
+                  <td class="scope">--ed-syn-keyword</td>
+                </tr>
+                <tr>
+                  <td class="tok">snippet</td>
+                  <td><span class="kind k-snip" style="display: inline-grid">S</span></td>
+                  <td class="scope">--ed-syn-type</td>
+                </tr>
+                <tr>
+                  <td class="tok">Keiko AI</td>
+                  <td><span class="kind k-ai" style="display: inline-grid">★</span></td>
+                  <td class="scope">--accent</td>
+                </tr>
               </tbody>
             </table>
-            <div class="note"><span class="tag" style="color:var(--fg-faint)">Badges</span><div>Kind badges borrow the <b>syntax</b> hues — a method badge is the same blue as a function token, so the legend is the code itself. The AI item alone wears brand green + a “Keiko” tag.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--fg-faint)">Badges</span>
+              <div>
+                Kind badges borrow the <b>syntax</b> hues — a method badge is the same blue as a
+                function token, so the legend is the code itself. The AI item alone wears brand
+                green + a “Keiko” tag.
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- 05 QUICK DOC + SIG -->
       <section class="sec" id="docs">
-        <div class="sec-head"><div class="num">05 — QUICK DOC &amp; SIGNATURE</div><h2>Hover docs &amp; parameter info</h2><p>Two lightweight popups that answer “what is this” and “what goes here” without leaving the line. Both use the popup shell; signature help highlights the active argument.</p></div>
+        <div class="sec-head">
+          <div class="num">05 — QUICK DOC &amp; SIGNATURE</div>
+          <h2>Hover docs &amp; parameter info</h2>
+          <p>
+            Two lightweight popups that answer “what is this” and “what goes here” without leaving
+            the line. Both use the popup shell; signature help highlights the active argument.
+          </p>
+        </div>
         <div class="ev-grid2">
-          <div class="ev-stage" style="padding:30px"><div class="ev-pop ev-doc">
-            <span class="sig"><span class="t-fn">fetchAgents</span><span class="t-pun">()</span><span class="t-op">:</span> <span class="t-typ">Promise</span><span class="t-op">&lt;</span><span class="t-typ">Agent</span><span class="t-pun">[]&gt;</span></span>
-            Fetches every agent from the local runtime. Resolves to the full list; rejects with <code>HttpError</code> on a non-2xx response.
-            <hr />
-            <div>@returns the agents currently registered</div>
-            <div class="src"><span class="ico" data-licon="files" data-size="12" style="vertical-align:-2px"></span> src/runtime/client.ts · since 0.2.0</div>
-          </div></div>
-          <div class="ev-stage" style="padding:30px;align-items:center"><div>
-            <div class="ev-pop ev-sig" style="margin-bottom:14px"><span class="t-fn">post</span><span class="t-pun">(</span><span class="act">path<span class="t-op">:</span> string</span><span class="t-pun">,</span> body<span class="t-op">:</span> Json<span class="t-pun">)</span></div>
-            <div class="muted-cap" style="text-align:center">Active argument (<code>path</code>) lifts on <code>--accent-dim</code>; the rest stays muted. Same shell, one line tall.</div>
-          </div></div>
+          <div class="ev-stage" style="padding: 30px">
+            <div class="ev-pop ev-doc">
+              <span class="sig"
+                ><span class="t-fn">fetchAgents</span><span class="t-pun">()</span
+                ><span class="t-op">:</span> <span class="t-typ">Promise</span
+                ><span class="t-op">&lt;</span><span class="t-typ">Agent</span
+                ><span class="t-pun">[]&gt;</span></span
+              >
+              Fetches every agent from the local runtime. Resolves to the full list; rejects with
+              <code>HttpError</code> on a non-2xx response.
+              <hr />
+              <div>@returns the agents currently registered</div>
+              <div class="src">
+                <span
+                  class="ico"
+                  data-licon="files"
+                  data-size="12"
+                  style="vertical-align: -2px"
+                ></span>
+                src/runtime/client.ts · since 0.2.0
+              </div>
+            </div>
+          </div>
+          <div class="ev-stage" style="padding: 30px; align-items: center">
+            <div>
+              <div class="ev-pop ev-sig" style="margin-bottom: 14px">
+                <span class="t-fn">post</span><span class="t-pun">(</span
+                ><span class="act">path<span class="t-op">:</span> string</span
+                ><span class="t-pun">,</span> body<span class="t-op">:</span> Json<span
+                  class="t-pun"
+                  >)</span
+                >
+              </div>
+              <div class="muted-cap" style="text-align: center">
+                Active argument (<code>path</code>) lifts on <code>--accent-dim</code>; the rest
+                stays muted. Same shell, one line tall.
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
       <!-- 06 CONTEXT MENUS -->
       <section class="sec" id="menus">
-        <div class="sec-head"><div class="num">06 — CONTEXT MENUS</div><h2>Right-click, refactor &amp; submenus</h2><p>Menus carry an optional leading glyph, the label, and a right-aligned shortcut. Nested actions open a submenu to the side. Destructive and disabled items are visually distinct; groups are split by hairlines.</p></div>
-        <div class="ev-stage" style="padding:38px;gap:30px;flex-wrap:wrap;align-items:flex-start">
-          <div class="ev-menu" style="width:248px">
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="edit" data-size="14"></span></span><span class="mt">Rename…</span><span class="key">⇧F6</span></div>
-            <div class="ev-mi on"><span class="mic"><span class="ico" data-licon="hierarchy" data-size="14"></span></span><span class="mt">Refactor</span><span class="arr"><span class="ico" data-licon="chevronR" data-size="14"></span></span></div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="search" data-size="14"></span></span><span class="mt">Find Usages</span><span class="key">⌥F7</span></div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="inspect" data-size="14"></span></span><span class="mt">Go to Definition</span><span class="key">⌘B</span></div>
+        <div class="sec-head">
+          <div class="num">06 — CONTEXT MENUS</div>
+          <h2>Right-click, refactor &amp; submenus</h2>
+          <p>
+            Menus carry an optional leading glyph, the label, and a right-aligned shortcut. Nested
+            actions open a submenu to the side. Destructive and disabled items are visually
+            distinct; groups are split by hairlines.
+          </p>
+        </div>
+        <div
+          class="ev-stage"
+          style="padding: 38px; gap: 30px; flex-wrap: wrap; align-items: flex-start"
+        >
+          <div class="ev-menu" style="width: 248px">
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="edit" data-size="14"></span></span
+              ><span class="mt">Rename…</span><span class="key">⇧F6</span>
+            </div>
+            <div class="ev-mi on">
+              <span class="mic"
+                ><span class="ico" data-licon="hierarchy" data-size="14"></span></span
+              ><span class="mt">Refactor</span
+              ><span class="arr"
+                ><span class="ico" data-licon="chevronR" data-size="14"></span
+              ></span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="search" data-size="14"></span></span
+              ><span class="mt">Find Usages</span><span class="key">⌥F7</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="inspect" data-size="14"></span></span
+              ><span class="mt">Go to Definition</span><span class="key">⌘B</span>
+            </div>
             <div class="ev-msep"></div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="run" data-size="14"></span></span><span class="mt">Run 'client'</span><span class="key">⌃⇧R</span></div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="compare" data-size="14"></span></span><span class="mt">Compare with…</span><span class="key">⌘D</span></div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="run" data-size="14"></span></span
+              ><span class="mt">Run 'client'</span><span class="key">⌃⇧R</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="compare" data-size="14"></span></span
+              ><span class="mt">Compare with…</span><span class="key">⌘D</span>
+            </div>
             <div class="ev-msep"></div>
-            <div class="ev-mi disabled"><span class="mic"><span class="ico" data-licon="copy" data-size="14"></span></span><span class="mt">Paste</span><span class="key">⌘V</span></div>
+            <div class="ev-mi disabled">
+              <span class="mic"><span class="ico" data-licon="copy" data-size="14"></span></span
+              ><span class="mt">Paste</span><span class="key">⌘V</span>
+            </div>
           </div>
-          <div class="ev-menu" style="width:236px;align-self:flex-start;margin-top:24px">
+          <div class="ev-menu" style="width: 236px; align-self: flex-start; margin-top: 24px">
             <div class="ev-mlabel">Refactor</div>
-            <div class="ev-mi"><span class="mic"></span><span class="mt">Extract Function…</span><span class="key">⌥⌘M</span></div>
-            <div class="ev-mi"><span class="mic"></span><span class="mt">Extract Variable…</span><span class="key">⌥⌘V</span></div>
-            <div class="ev-mi"><span class="mic"></span><span class="mt">Inline…</span><span class="key">⌥⌘N</span></div>
-            <div class="ev-mi on"><span class="mic"><span class="ico" data-licon="spark" data-size="14"></span></span><span class="mt">Refactor with Keiko…</span><span class="badge-ai" style="margin-left:0">AI</span></div>
+            <div class="ev-mi">
+              <span class="mic"></span><span class="mt">Extract Function…</span
+              ><span class="key">⌥⌘M</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"></span><span class="mt">Extract Variable…</span
+              ><span class="key">⌥⌘V</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"></span><span class="mt">Inline…</span><span class="key">⌥⌘N</span>
+            </div>
+            <div class="ev-mi on">
+              <span class="mic"><span class="ico" data-licon="spark" data-size="14"></span></span
+              ><span class="mt">Refactor with Keiko…</span
+              ><span class="badge-ai" style="margin-left: 0">AI</span>
+            </div>
           </div>
-          <div class="ev-menu" style="width:236px">
+          <div class="ev-menu" style="width: 236px">
             <div class="ev-mlabel">New</div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="doc" data-size="14"></span></span><span class="mt">File</span><span class="key">⌘N</span></div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="folder" data-size="14"></span></span><span class="mt">Directory</span></div>
-            <div class="ev-mi"><span class="mic"><span class="ev-ft ts" style="width:14px;height:14px">TS</span></span><span class="mt">TypeScript File</span></div>
-            <div class="ev-mi"><span class="mic"><span class="ev-ft cfg" style="width:14px;height:14px">{}</span></span><span class="mt">JSON File</span></div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="doc" data-size="14"></span></span
+              ><span class="mt">File</span><span class="key">⌘N</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="folder" data-size="14"></span></span
+              ><span class="mt">Directory</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"
+                ><span class="ev-ft ts" style="width: 14px; height: 14px">TS</span></span
+              ><span class="mt">TypeScript File</span>
+            </div>
+            <div class="ev-mi">
+              <span class="mic"
+                ><span class="ev-ft cfg" style="width: 14px; height: 14px">{}</span></span
+              ><span class="mt">JSON File</span>
+            </div>
             <div class="ev-msep"></div>
-            <div class="ev-mi"><span class="mic"><span class="ico" data-licon="agent" data-size="14"></span></span><span class="mt">Keiko Agent Spec</span></div>
+            <div class="ev-mi">
+              <span class="mic"><span class="ico" data-licon="agent" data-size="14"></span></span
+              ><span class="mt">Keiko Agent Spec</span>
+            </div>
           </div>
         </div>
-        <p class="muted-cap" style="margin-top:14px">Hovered/active item carries the accent wash and lifts its glyph to accent. Shortcuts are right-aligned monospace at <code>--fg-faint</code>. Keiko's AI entries live <em>inside</em> the normal menus, tagged — discoverable where you already are.</p>
+        <p class="muted-cap" style="margin-top: 14px">
+          Hovered/active item carries the accent wash and lifts its glyph to accent. Shortcuts are
+          right-aligned monospace at <code>--fg-faint</code>. Keiko's AI entries live
+          <em>inside</em> the normal menus, tagged — discoverable where you already are.
+        </p>
       </section>
 
       <section class="sec" id="tokens">
-        <div class="sec-head"><div class="num">07 — PRINCIPLE</div><h2>One overlay grammar</h2></div>
-        <div class="card" style="padding:8px 22px">
+        <div class="sec-head">
+          <div class="num">07 — PRINCIPLE</div>
+          <h2>One overlay grammar</h2>
+        </div>
+        <div class="card" style="padding: 8px 22px">
           <table class="tbl">
             <tbody>
-              <tr><td class="fgw">Field → list → footer</td><td>Every search surface is a query field, a typed result list with group labels, and a keyboard footer. Search Everywhere, Go to File and Find in Files are one component, three scopes.</td></tr>
-              <tr><td class="fgw">Match = accent, not bold</td><td>Matched characters take <code class="mono">--accent-text</code>. We never bold matches — bold reads as a second weight and fights the mono grid.</td></tr>
-              <tr><td class="fgw">AI lives inline</td><td>Completions, refactors and actions from Keiko appear inside the existing list/menu with a green badge — never a separate popup that competes for the same keystroke.</td></tr>
-              <tr><td class="fgw">Keys are always shown</td><td>Result footers and menu rows surface the shortcut, so the mouse path teaches the keyboard path.</td></tr>
+              <tr>
+                <td class="fgw">Field → list → footer</td>
+                <td>
+                  Every search surface is a query field, a typed result list with group labels, and
+                  a keyboard footer. Search Everywhere, Go to File and Find in Files are one
+                  component, three scopes.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Match = accent, not bold</td>
+                <td>
+                  Matched characters take <code class="mono">--accent-text</code>. We never bold
+                  matches — bold reads as a second weight and fights the mono grid.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">AI lives inline</td>
+                <td>
+                  Completions, refactors and actions from Keiko appear inside the existing list/menu
+                  with a green badge — never a separate popup that competes for the same keystroke.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Keys are always shown</td>
+                <td>
+                  Result footers and menu rows surface the shortcut, so the mouse path teaches the
+                  keyboard path.
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -212,7 +616,7 @@
     </main>
 
     <script src="lift-glyphs.js"></script>
-    
+
     <script src="theme-control.js"></script>
   </body>
 </html>

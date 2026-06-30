@@ -35,13 +35,13 @@ const MATRIX_MD = resolve(REPO, "docs/design-system/state-matrix.md");
 
 // --- 7 canonical modes (identical list used by every #1293-#1298 harness) -----
 const MODES = [
-  { id: "01-dark",              theme: null,    hc: null,   media: {} },
-  { id: "02-light",             theme: "light", hc: null,   media: {} },
-  { id: "03-dark-hc",           theme: null,    hc: "more", media: {} },
-  { id: "04-light-hc",          theme: "light", hc: "more", media: {} },
-  { id: "05-prefers-contrast",  theme: null,    hc: null,   media: { contrast: "more" } },
-  { id: "06-forced-colors",     theme: null,    hc: null,   media: { forcedColors: "active" } },
-  { id: "07-reduced-motion",    theme: null,    hc: null,   media: { reducedMotion: "reduce" } },
+  { id: "01-dark", theme: null, hc: null, media: {} },
+  { id: "02-light", theme: "light", hc: null, media: {} },
+  { id: "03-dark-hc", theme: null, hc: "more", media: {} },
+  { id: "04-light-hc", theme: "light", hc: "more", media: {} },
+  { id: "05-prefers-contrast", theme: null, hc: null, media: { contrast: "more" } },
+  { id: "06-forced-colors", theme: null, hc: null, media: { forcedColors: "active" } },
+  { id: "07-reduced-motion", theme: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
 
 const STATE_KEYS = ["d", "h", "f", "a", "s", "x", "l", "e", "m", "y", "c"];
@@ -121,18 +121,21 @@ for (const mode of MODES) {
   await page.goto(statesUrl, { waitUntil: "load" });
 
   // Apply data-theme / data-hc attributes per mode.
-  await page.evaluate(({ theme, hc }) => {
-    if (theme !== null) {
-      document.documentElement.dataset.theme = theme;
-    } else {
-      document.documentElement.dataset.theme = "dark";
-    }
-    if (hc !== null) {
-      document.documentElement.dataset.hc = hc;
-    } else {
-      delete document.documentElement.dataset.hc;
-    }
-  }, { theme: mode.theme, hc: mode.hc });
+  await page.evaluate(
+    ({ theme, hc }) => {
+      if (theme !== null) {
+        document.documentElement.dataset.theme = theme;
+      } else {
+        document.documentElement.dataset.theme = "dark";
+      }
+      if (hc !== null) {
+        document.documentElement.dataset.hc = hc;
+      } else {
+        delete document.documentElement.dataset.hc;
+      }
+    },
+    { theme: mode.theme, hc: mode.hc },
+  );
 
   // Wait for the ROWS script to have rendered the matrix tbody.
   await page.waitForSelector("#mx tbody tr");
@@ -162,18 +165,20 @@ for (const mode of MODES) {
   expectedProofElementCount = expectedProofs.size;
 
   const renderedProofs = await page.evaluate(() => {
-    return Array.from(document.querySelectorAll("#state-proof [data-family][data-state]")).map((el) => {
-      const label = el.querySelector("[data-state-label]");
-      const icon = el.querySelector("[data-state-icon]");
-      return {
-        family: el.getAttribute("data-family"),
-        state: el.getAttribute("data-state"),
-        noncolor: el.getAttribute("data-noncolor") === "true",
-        labelText: (label?.textContent ?? "").trim(),
-        iconText: (icon?.textContent ?? "").trim(),
-        text: (el.textContent ?? "").trim(),
-      };
-    });
+    return Array.from(document.querySelectorAll("#state-proof [data-family][data-state]")).map(
+      (el) => {
+        const label = el.querySelector("[data-state-label]");
+        const icon = el.querySelector("[data-state-icon]");
+        return {
+          family: el.getAttribute("data-family"),
+          state: el.getAttribute("data-state"),
+          noncolor: el.getAttribute("data-noncolor") === "true",
+          labelText: (label?.textContent ?? "").trim(),
+          iconText: (icon?.textContent ?? "").trim(),
+          text: (el.textContent ?? "").trim(),
+        };
+      },
+    );
   });
 
   proofElementCount = renderedProofs.length;
@@ -270,7 +275,8 @@ for (const mode of MODES) {
     diffs: modeDiffs.length,
     proofElements: renderedProofs.length,
     expectedProofElements: expectedProofs.size,
-    dataSyncProofElements: renderedProofs.filter((proof) => DATA_SYNC_STATES.has(proof.state)).length,
+    dataSyncProofElements: renderedProofs.filter((proof) => DATA_SYNC_STATES.has(proof.state))
+      .length,
     proofDiffs: modeProofDiffs.length,
   };
 

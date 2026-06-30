@@ -19,7 +19,10 @@ import {
 
 import type { UiHandlerDeps } from "./deps.js";
 import { openStoreForDeps } from "./local-knowledge-grounded-qa.js";
-import { normalizePreviewMarkerIndex, previewDisplay } from "./local-knowledge-preview-authority.js";
+import {
+  normalizePreviewMarkerIndex,
+  previewDisplay,
+} from "./local-knowledge-preview-authority.js";
 
 type PreviewOutcome =
   | {
@@ -230,7 +233,11 @@ function evaluateStoredCitation(
   const storedDisplay = citationDisplay(stored);
   const initialFailure = storedCitationPrecheck(stored, storedDisplay);
   if (initialFailure !== undefined) return initialFailure;
-  const lookup = lookupCitationPreviewSnapshot(store, stored.lineage.capsuleId, stored.lineage.chunkId);
+  const lookup = lookupCitationPreviewSnapshot(
+    store,
+    stored.lineage.capsuleId,
+    stored.lineage.chunkId,
+  );
   if (lookup.kind !== "ok") {
     return reject("lineage-missing", currentDisplayForLookup(stored, lookup));
   }
@@ -252,7 +259,9 @@ function emitPreviewAudit(
   if (firstCitation === undefined) return;
   const base = {
     capsuleId: firstCitation.lineage.capsuleId,
-    sourceIds: citations.map((citation) => citation.lineage.sourceId) as readonly KnowledgeSourceId[],
+    sourceIds: citations.map(
+      (citation) => citation.lineage.sourceId,
+    ) as readonly KnowledgeSourceId[],
     chunkIds: citations.map((citation) => String(citation.lineage.chunkId)) as readonly string[],
     targetQuality: citationDisplay(firstCitation).anchorQuality,
     occurredAt: Date.now(),
@@ -275,9 +284,11 @@ function loadMessageContext(
   deps: UiHandlerDeps,
   chatId: string,
   assistantMessageId: string,
-): RejectedPreviewOutcome | {
-  readonly citations: readonly StoredPdfCitationPreviewCitation[] | undefined;
-} {
+):
+  | RejectedPreviewOutcome
+  | {
+      readonly citations: readonly StoredPdfCitationPreviewCitation[] | undefined;
+    } {
   const message = deps.store.findMessageById(assistantMessageId);
   if (message?.role !== "assistant") {
     return reject("assistant-message-not-found");
@@ -317,7 +328,9 @@ function passiveCitationStatus(
     state,
     ...(result.kind === "available" ? { display: result.display } : {}),
     ...(result.kind === "rejected" && state !== "not-applicable" ? { reason: result.reason } : {}),
-    ...(result.kind === "rejected" && result.display !== undefined ? { display: result.display } : {}),
+    ...(result.kind === "rejected" && result.display !== undefined
+      ? { display: result.display }
+      : {}),
   };
 }
 
