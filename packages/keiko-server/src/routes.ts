@@ -90,6 +90,11 @@ import {
   handleVerifyUpdateRestart,
 } from "./update-session-routes.js";
 import {
+  handleGetUpdateRemediation,
+  handlePostUpdateRemediationStatus,
+  handleRunUpdateRemediationAction,
+} from "./update-remediation-routes.js";
+import {
   handleCreateTerminalExecution,
   handleDeleteTerminalExecution,
   handleTerminalDirectories,
@@ -324,6 +329,17 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleVerifyUpdateRestart,
   },
   { method: "DELETE", pattern: "/api/update/session", handler: handleCancelUpdateSession },
+  { method: "GET", pattern: "/api/update/remediation", handler: handleGetUpdateRemediation },
+  {
+    method: "POST",
+    pattern: "/api/update/remediation/status",
+    handler: handlePostUpdateRemediationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/update/remediation/actions",
+    handler: handleRunUpdateRemediationAction,
+  },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },

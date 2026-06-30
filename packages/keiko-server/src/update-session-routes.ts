@@ -4,11 +4,7 @@ import {
   parseUpdateSessionStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import {
-  errorBody,
-  type RouteContext,
-  type RouteResult,
-} from "./routes.js";
+import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { UpdateSessionError, type UpdateSessionManager } from "./update-session.js";
 
 const MAX_UPDATE_SESSION_BODY_BYTES = 16_000;
@@ -96,10 +92,7 @@ async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promi
   }
 }
 
-export function handleGetUpdateSession(
-  _ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleGetUpdateSession(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
   return { status: 200, body: guard.getStatus() };
@@ -121,10 +114,7 @@ export async function handleCreateUpdateSession(
   });
 }
 
-export function handleRetryUpdateSession(
-  _ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleRetryUpdateSession(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
   try {
@@ -136,10 +126,7 @@ export function handleRetryUpdateSession(
   }
 }
 
-export function handleCancelUpdateSession(
-  _ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleCancelUpdateSession(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
   try {
@@ -161,6 +148,10 @@ export async function handleVerifyUpdateRestart(
     if (!parsed.ok) {
       throw new UpdateSessionError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
-    return { status: 200, body: guard.verifyRestart(parsed.value.targetVersion) };
+    const session = guard.verifyRestart(parsed.value.targetVersion);
+    if (session.phase === "succeeded") {
+      deps.updateRemediation?.completeRestart(session.targetVersion);
+    }
+    return { status: 200, body: session };
   });
 }

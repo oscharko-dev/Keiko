@@ -182,6 +182,39 @@ export {
   UPDATE_STATE_STORES,
 } from "./update-local-state.js";
 
+// ─── Governed update remediation actions (Issue #1695) ────────────────────────
+export type {
+  UpdateRemediationAction,
+  UpdateRemediationActionKind,
+  UpdateRemediationActionRequest,
+  UpdateRemediationActionRequestParse,
+  UpdateRemediationActionRequestParseFail,
+  UpdateRemediationActionRequestParseOk,
+  UpdateRemediationActionStatus,
+  UpdateRemediationAffectedFeature,
+  UpdateRemediationDecision,
+  UpdateRemediationFeatureState,
+  UpdateRemediationOverallStatus,
+  UpdateRemediationScopeCounts,
+  UpdateRemediationStatusReport,
+  UpdateRemediationStatusRequest,
+  UpdateRemediationStatusRequestParse,
+  UpdateRemediationStatusRequestParseFail,
+  UpdateRemediationStatusRequestParseOk,
+} from "./update-remediation.js";
+export {
+  isUpdateRemediationStatus,
+  isUpdateStateStore,
+  parseUpdateRemediationActionRequest,
+  parseUpdateRemediationStatusRequest,
+  UPDATE_REMEDIATION_ACTION_KINDS,
+  UPDATE_REMEDIATION_ACTION_STATUSES,
+  UPDATE_REMEDIATION_DECISIONS,
+  UPDATE_REMEDIATION_FEATURE_STATES,
+  UPDATE_REMEDIATION_OVERALL_STATUSES,
+  UPDATE_REMEDIATION_SCHEMA_VERSION,
+} from "./update-remediation.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,
