@@ -84,23 +84,37 @@ function parseArgs(argv) {
     index = applyArg(argv, index, options);
   }
 
+  validateDistTag(options);
+  normalizeRegistry(options);
+
+  return options;
+}
+
+function validateDistTag(options) {
   if (typeof options.tag !== "string" || options.tag.length === 0) {
     fail("pass an npm dist-tag explicitly with --tag beta, --tag next, or --tag latest.");
   }
   if (!supportedDistTags.has(options.tag)) {
     fail(`unsupported npm dist-tag ${options.tag}. Supported tags: beta, next, latest.`);
   }
+  if (options.allowUntagged && options.tag === "latest") {
+    fail("--allow-untagged cannot be used with --tag latest.");
+  }
+}
+
+function normalizeRegistry(options) {
   if (typeof options.registry !== "string" || options.registry.length === 0) {
     fail("pass a registry URL with --registry or KEIKO_REGISTRY_URL.");
   }
 
   const registryUrl = new URL(options.registry);
+  if (registryUrl.username !== "" || registryUrl.password !== "") {
+    fail("registry URL must not include credentials.");
+  }
   registryUrl.pathname = registryUrl.pathname.endsWith("/")
     ? registryUrl.pathname
     : `${registryUrl.pathname}/`;
   options.registry = registryUrl.toString();
-
-  return options;
 }
 
 function commandResult(cmd, args, options = {}) {
@@ -611,6 +625,9 @@ for (const pkg of publishPlan) {
 
 run("npm", ["run", "check:version-consistency"], { stdio: "inherit" });
 run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
+run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
+  stdio: "inherit",
+});
 
 if (options.planOnly) {
   console.log("release-publish: PLAN-ONLY complete.");

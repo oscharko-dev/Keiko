@@ -106,6 +106,23 @@ body:
     validations:
       required: true
 
+  - type: textarea
+    id: maintainer_release_impact
+    attributes:
+      label: Maintainer release impact triage
+      description: Maintainers and agents only. Reporters may leave this blank.
+      placeholder: |
+        Release-note category:
+        Priority:
+        User-visible change:
+        Release-note bullet:
+        Supported-from versions:
+        Affected state stores:
+        User action required and remediation:
+        Internal-only rationale:
+    validations:
+      required: false
+
   - type: checkboxes
     id: safety
     attributes:
