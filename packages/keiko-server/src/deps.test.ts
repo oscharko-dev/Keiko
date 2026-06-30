@@ -28,6 +28,7 @@ import {
   searchVectorsForScope,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
+  GatewayConfig,
   ModelCapability,
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
@@ -176,6 +177,23 @@ function gatewayConfigWithCapabilities(
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
     capabilities,
   });
+}
+
+function parsedGatewayConfigWithCapabilities(
+  capabilities: readonly ReturnType<typeof chatCapability>[],
+): GatewayConfig {
+  return {
+    providers: capabilities.map((capability) => ({
+      modelId: capability.id,
+      baseUrl: `https://${capability.id}.example.invalid/openai/v1`,
+      apiKey: "fake-test-key",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    })),
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    capabilities,
+  };
 }
 
 describe("buildRedactor", () => {
@@ -431,6 +449,68 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     expect(profile128.effectiveInputBudget).toBe(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
     expect(profile200.effectiveInputBudget).toBe(181_750);
     expect(deps.contextProfile).toEqual(profile128);
+    store.close();
+  });
+
+  it("resolves model-keyed context profiles against the live runtime gateway config", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-context-profile-live-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      gatewayConfigWithCapabilities([chatCapability("chat-live", 32_000, 2_048, "high")]),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store,
+    });
+    const resolve = deps.contextProfileForModel;
+    if (resolve === undefined) throw new Error("expected contextProfileForModel");
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const updatedConfig: GatewayConfig = parsedGatewayConfigWithCapabilities([
+      chatCapability("chat-live", 200_000, 12_000),
+    ]);
+
+    expect(resolve("chat-live").effectiveInputBudget).toBe(28_952);
+
+    gatewayConfig.set(updatedConfig, true);
+
+    expect(resolve("chat-live").effectiveInputBudget).toBe(181_750);
+    store.close();
+  });
+
+  it("does not cache unknown model ids across live runtime gateway config updates", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-context-profile-unknown-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      gatewayConfigWithCapabilities([chatCapability("chat-known", 32_000, 2_048, "high")]),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store,
+    });
+    const resolve = deps.contextProfileForModel;
+    if (resolve === undefined) throw new Error("expected contextProfileForModel");
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected runtime gateway config");
+    const updatedConfig: GatewayConfig = parsedGatewayConfigWithCapabilities([
+      chatCapability("chat-later", 200_000, 12_000),
+    ]);
+
+    expect(resolve("chat-later")).toBe(DEFAULT_CONTEXT_PROFILE);
+
+    gatewayConfig.set(updatedConfig, true);
+
+    expect(resolve("chat-later").effectiveInputBudget).toBe(181_750);
     store.close();
   });
 

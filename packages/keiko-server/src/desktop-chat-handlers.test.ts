@@ -25,6 +25,7 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -385,6 +386,51 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  it("compacts long chat history from the active model profile resolver when the singleton profile is absent", async () => {
+    await restartWithDeps(
+      deps(fakeModel("compacted response"), {
+        contextProfile: undefined,
+        contextProfileForModel: () => DEFAULT_CONTEXT_PROFILE,
+      }),
+    );
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const now = Date.now();
+    const history = Array.from({ length: 30 }, (_, index) => ({
+      chatId: created.chat.id,
+      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `history turn ${String(index)}`,
+      timestamp: now + index,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    }));
+    store.createMessages(history);
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Summarize the latest state",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages[1]?.content).toContain(
+      "Automated summary of earlier conversation turns",
+    );
   });
 
   it("appends realtime voice turns without calling the chat model", async () => {

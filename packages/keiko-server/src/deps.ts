@@ -493,25 +493,37 @@ export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undef
   return deps.gatewayConfig?.current() ?? deps.config;
 }
 
-function contextProfileFromConfigModel(config: GatewayConfig, modelId: string): ContextProfile {
+function configuredChatContextProfile(
+  config: GatewayConfig,
+  modelId: string,
+): ContextProfile | undefined {
   const capability = findConfiguredCapability(config, modelId);
-  return capability?.kind !== "chat"
-    ? DEFAULT_CONTEXT_PROFILE
-    : deriveContextProfileFromCapability(capability);
+  return capability?.kind === "chat" ? deriveContextProfileFromCapability(capability) : undefined;
 }
 
-function buildContextProfileResolver(config: GatewayConfig | undefined): ContextProfileResolver {
-  if (config === undefined) {
-    return (): ContextProfile => DEFAULT_CONTEXT_PROFILE;
-  }
-  const cache = new Map<string, ContextProfile>();
+function buildContextProfileResolver(
+  currentConfig: () => GatewayConfig | undefined,
+): ContextProfileResolver {
+  const cache = new WeakMap<GatewayConfig, Map<string, ContextProfile>>();
   return (modelId: string): ContextProfile => {
-    const cached = cache.get(modelId);
+    const config = currentConfig();
+    if (config === undefined) {
+      return DEFAULT_CONTEXT_PROFILE;
+    }
+    let modelProfiles = cache.get(config);
+    if (modelProfiles === undefined) {
+      modelProfiles = new Map<string, ContextProfile>();
+      cache.set(config, modelProfiles);
+    }
+    const cached = modelProfiles.get(modelId);
     if (cached !== undefined) {
       return cached;
     }
-    const profile = contextProfileFromConfigModel(config, modelId);
-    cache.set(modelId, profile);
+    const profile = configuredChatContextProfile(config, modelId);
+    if (profile === undefined) {
+      return DEFAULT_CONTEXT_PROFILE;
+    }
+    modelProfiles.set(modelId, profile);
     return profile;
   };
 }
@@ -529,6 +541,19 @@ function defaultContextProfile(
 
 export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
+}
+
+export function currentContextProfileForModel(
+  deps: Pick<UiHandlerDeps, "contextProfile" | "contextProfileForModel">,
+  modelId: string | undefined,
+): ContextProfile | undefined {
+  if (modelId !== undefined) {
+    const profile = deps.contextProfileForModel?.(modelId);
+    if (profile !== undefined) {
+      return profile;
+    }
+  }
+  return deps.contextProfile;
 }
 
 export function currentGatewayEgressConfig(
@@ -1374,7 +1399,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
-  const contextProfileForModel = buildContextProfileResolver(config);
+  const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   // Issue #447: run a best-effort startup reconciliation only on the real bootstrap path (no injected
   // store), so test fixtures stay deterministic and trigger reconcile() explicitly when they need it.
   if (options.store === undefined) reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
@@ -1397,7 +1422,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
     localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
-    contextProfile: defaultContextProfile(config, contextProfileForModel),
+    contextProfile: defaultContextProfile(runtimeConfig.current(), contextProfileForModel),
     contextProfileForModel,
     ...buildPeripherals(options, bundle.uiStore, evidenceStore, redactString, liveRedactor),
     consolidationJobs: createConsolidationJobRegistry(),

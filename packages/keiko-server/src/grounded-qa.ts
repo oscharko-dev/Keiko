@@ -51,7 +51,12 @@ import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safet
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentGroundingLimits,
+  currentRedactionSecrets,
+} from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -671,6 +676,7 @@ function defaultRunner(
   deps: UiHandlerDeps,
   modelId: string,
   signal: AbortSignal,
+  contextProfile: UiHandlerDeps["contextProfile"],
 ): GroundedRunner | RouteResult {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
@@ -686,7 +692,7 @@ function defaultRunner(
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
-      ...(deps.contextProfile === undefined ? {} : { contextProfile: deps.contextProfile }),
+      ...(contextProfile === undefined ? {} : { contextProfile }),
     });
   };
 }
@@ -758,6 +764,7 @@ interface AskWorkerCtx {
   readonly scope: SelectedScope;
   readonly content: string;
   readonly modelId: string;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly runner: GroundedRunner;
   readonly signal: AbortSignal;
@@ -799,7 +806,7 @@ export function persistGroundedExchange(
 
 // ADR-0056 W3: regulated EvidenceManifest.contextAssembly? producer for the grounded persist
 // path. Returns the conditional-spread fragment for ConnectedContextEvidenceInput. The field is
-// emitted ONLY when a ContextProfile was threaded (deps.contextProfile) AND the observer ran on
+// emitted ONLY when a ContextProfile was threaded for the active model AND the observer ran on
 // this pack (pack.diagnostics?.contextBudget present — the same precondition the PR4 observer
 // records). When either is absent the fragment is empty, so the manifest is byte-identical to
 // today (exactOptionalPropertyTypes: omit, never set to undefined). Shared by all three grounded
@@ -855,7 +862,10 @@ function persistGroundedAuditEvidence(
       elapsedMs: output.elapsedMs,
       startedAt,
       finishedAt,
-      ...groundedContextAssemblyInput(workerCtx.deps, output.pack),
+      ...groundedContextAssemblyInput(
+        { contextProfile: workerCtx.contextProfile },
+        output.pack,
+      ),
     },
     {
       store: workerCtx.deps.evidenceStore,
@@ -894,7 +904,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     output.pack,
     citations.length,
     output.elapsedMs,
-    groundedContextSummaryInput(deps, output.pack),
+    groundedContextSummaryInput({ contextProfile: workerCtx.contextProfile }, output.pack),
   );
   const answer: GroundedAnswer = {
     groundingKind: "connected-context",
@@ -987,18 +997,27 @@ function resolveGroundedRunner(
   requestedModelId: string | undefined,
   signal: AbortSignal,
   runner: GroundedRunner | undefined,
-): { readonly modelId: string; readonly runner: GroundedRunner } | RouteResult {
+):
+  | {
+      readonly modelId: string;
+      readonly contextProfile: UiHandlerDeps["contextProfile"];
+      readonly runner: GroundedRunner;
+    }
+  | RouteResult {
   if (runner !== undefined) {
+    const modelId = requestedModelId ?? chat.selectedModel;
     return {
-      modelId: requestedModelId ?? chat.selectedModel,
+      modelId,
+      contextProfile: currentContextProfileForModel(deps, modelId),
       runner,
     };
   }
-  const modelId = resolveGroundedModelId(deps, chat, requestedModelId);
-  if (typeof modelId !== "string") return modelId;
-  const builtRunner = defaultRunner(deps, modelId, signal);
+  const resolvedModelId = resolveGroundedModelId(deps, chat, requestedModelId);
+  if (typeof resolvedModelId !== "string") return resolvedModelId;
+  const contextProfile = currentContextProfileForModel(deps, resolvedModelId);
+  const builtRunner = defaultRunner(deps, resolvedModelId, signal, contextProfile);
   if (typeof builtRunner !== "function") return builtRunner;
-  return { modelId, runner: builtRunner };
+  return { modelId: resolvedModelId, contextProfile, runner: builtRunner };
 }
 
 // ─── Multi-source seam (test injection) ───────────────────────────────────────
@@ -1050,6 +1069,7 @@ async function dispatchMultiSourceAsk(
     scopes,
     content: input.content,
     modelId,
+    contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     retriever: seam.retriever,
     answerer: seam.answerer,
@@ -1129,6 +1149,7 @@ async function dispatchFolderAsk(
     scope,
     content: input.content,
     modelId: resolved.modelId,
+    contextProfile: resolved.contextProfile,
     deps,
     runner: resolved.runner,
     signal,
@@ -1176,6 +1197,7 @@ async function dispatchHybridAsk(
     chat,
     content: input.content,
     modelId,
+    contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     signal,
     preSkippedFolders: skippedFolders.map((s) => ({
