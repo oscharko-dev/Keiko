@@ -196,10 +196,107 @@ function validateReview(entry, index, failures) {
 function validatePublishApprovalReference(review, index, failures) {
   if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
   const reference = review.approvalReference;
-  if (!/^github-pr-review:[^#/\s]+\/[^#/\s]+#\d+#\d+$/u.test(reference)) {
+  const parsed = parseGithubReviewReference(reference);
+  if (parsed === undefined) {
     failures.push(
       failure(
         `entries[${String(index)}].review.approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish.`,
+      ),
+    );
+    return;
+  }
+  validateGithubReviewApproval(parsed, index, failures);
+}
+
+function parseGithubReviewReference(reference) {
+  const match = /^github-pr-review:([^#/\s]+\/[^#/\s]+)#(\d+)#(\d+)$/u.exec(reference);
+  if (match === null) return undefined;
+  return {
+    repository: match[1],
+    pullRequest: match[2],
+    review: match[3],
+  };
+}
+
+function validateGithubReviewApproval(reference, index, failures) {
+  const repository = currentRepository();
+  if (repository === undefined || reference.repository !== repository) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference must reference the current GitHub repository.`,
+      ),
+    );
+    return;
+  }
+  const review = readGithubReview(reference);
+  if (review === undefined) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference could not be verified through GitHub.`,
+      ),
+    );
+    return;
+  }
+  validateGithubReviewState(review, index, failures);
+}
+
+function currentRepository() {
+  if (
+    typeof process.env.GITHUB_REPOSITORY === "string" &&
+    process.env.GITHUB_REPOSITORY.includes("/")
+  ) {
+    return process.env.GITHUB_REPOSITORY;
+  }
+  const result = git(repoRoot, ["remote", "get-url", "origin"]);
+  if (result.status !== 0) return undefined;
+  return githubRepositoryFromRemote(result.stdout);
+}
+
+function githubRepositoryFromRemote(remoteUrl) {
+  const trimmed = remoteUrl.trim();
+  const httpsMatch = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
+  if (httpsMatch !== null) return httpsMatch[1];
+  const sshMatch = /^git@github\.com:([^/]+\/[^/]+?)(?:\.git)?$/u.exec(trimmed);
+  return sshMatch?.[1];
+}
+
+function readGithubReview(reference) {
+  const path = `repos/${reference.repository}/pulls/${reference.pullRequest}/reviews/${reference.review}`;
+  const result = spawnSync("gh", ["api", path], { encoding: "utf8", stdio: "pipe" });
+  if (result.status !== 0) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch {
+    return undefined;
+  }
+}
+
+function allowedReleaseOwnerLogins() {
+  const value = process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS;
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function validateGithubReviewState(review, index, failures) {
+  if (review.state !== "APPROVED") {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference must point to an APPROVED review.`,
+      ),
+    );
+  }
+  const allowedLogins = allowedReleaseOwnerLogins();
+  if (allowedLogins.length === 0) {
+    failures.push(failure("KEIKO_RELEASE_OWNER_GITHUB_LOGINS must list allowed release owners."));
+    return;
+  }
+  if (!allowedLogins.includes(review.user?.login)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}].review.approvalReference reviewer must be an allowed release owner.`,
       ),
     );
   }
@@ -689,6 +786,9 @@ export function validateReleaseImpactRoot(root = repoRoot, options = {}) {
 }
 
 function runCli() {
+  if (process.argv.includes("--publish")) {
+    process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE = "1";
+  }
   const result = validateReleaseImpactRoot();
   if (!result.ok) {
     console.error("release-impact: FAIL");

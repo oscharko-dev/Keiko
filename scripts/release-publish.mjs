@@ -625,10 +625,7 @@ for (const pkg of publishPlan) {
 
 run("npm", ["run", "check:version-consistency"], { stdio: "inherit" });
 run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
-run("npm", ["run", "check:release-impact"], {
-  env: options.planOnly
-    ? process.env
-    : { ...process.env, KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE: "1" },
+run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
 });
 

@@ -84,6 +84,7 @@ The script:
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,
 - rejects credential-bearing registry URLs before logging or release-note generation,
+- requires publish-time release-impact approval evidence to resolve to an approved GitHub PR review from `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`,
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
 - publishes or reuses every publishable workspace package and the root package,

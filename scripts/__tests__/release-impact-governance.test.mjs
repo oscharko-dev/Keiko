@@ -97,6 +97,20 @@ function releasePublish(args) {
   });
 }
 
+function withEnv(name, value, callback) {
+  const previous = process.env[name];
+  process.env[name] = value;
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, name);
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
 describe("release-impact governance", () => {
   let tempRoot;
 
@@ -316,6 +330,31 @@ describe("release-impact governance", () => {
     expect(publish.status).toBe(1);
     expect(`${publish.stdout}\n${publish.stderr}`).toContain(
       "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
+    );
+  });
+
+  it("rejects publish approval references outside the current repository", () => {
+    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+      validateReleaseImpactCatalog(
+        catalog([
+          entry({
+            review: {
+              approvalReference: "github-pr-review:fake-owner/fake-repo#999999#888888",
+              humanApproved: true,
+              rationale: "Fake approval must not satisfy publish trust.",
+              reviewedAt: "2026-06-30",
+              reviewer: "release-owner",
+              status: "reviewed",
+            },
+          }),
+        ]),
+        rootManifest(),
+      ),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
+      "approvalReference must reference the current GitHub repository",
     );
   });
 

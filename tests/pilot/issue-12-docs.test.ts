@@ -63,9 +63,10 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
 // before architecture/package-surface checks so publisher-machine canvas payloads cannot leak
 // into the bundled artifact. Release hardening for 0.2.0 adds `check:publish-manifests` so
 // workspace packages cannot reach npm with private runtime packages or wildcard internal
-// dependency specs. Issue #1690 adds `check:release-impact` so published packages cannot ship
-// without reviewed update-impact metadata. The pin stays "exact" against the live `package.json`;
-// it does not lock the chain to a particular historical length.
+// dependency specs. Issue #1690 adds `check:release-impact` so packed packages carry reviewed
+// update-impact metadata, and makes `prepublishOnly` use the stricter publish-mode approval
+// variant. The pin stays "exact" against the live `package.json`; it does not lock the chain to a
+// particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
@@ -80,6 +81,10 @@ const PACKAGE_SURFACE_CHAIN = [
   "npm run check:release-impact",
   "npm run check:qi-supply-chain",
 ].join(" && ");
+const PUBLISH_SURFACE_CHAIN = PACKAGE_SURFACE_CHAIN.replace(
+  "npm run check:release-impact",
+  "npm run check:release-impact:publish",
+);
 
 describe("Issue #12 docs drift", () => {
   it("keeps the package-surface chain exact without exposing release engineering docs", () => {
@@ -87,7 +92,7 @@ describe("Issue #12 docs drift", () => {
     const readme = readText("README.md");
 
     expect(pkg.scripts.prepack).toBe(PACKAGE_SURFACE_CHAIN);
-    expect(pkg.scripts.prepublishOnly).toBe(PACKAGE_SURFACE_CHAIN);
+    expect(pkg.scripts.prepublishOnly).toBe(PUBLISH_SURFACE_CHAIN);
     expect(existsSync(resolve(process.cwd(), "docs", "npm-packaging.md"))).toBe(false);
     expect(readme).not.toContain("npm packaging");
     expect(readme).not.toContain(PACKAGE_SURFACE_CHAIN);
