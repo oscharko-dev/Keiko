@@ -14,6 +14,7 @@ import { runUiCli } from "./ui.js";
 import { runLauncherCli } from "./launcher.js";
 import { runUninstallCli } from "./uninstall.js";
 import { runRepairCli } from "./repair.js";
+import { runUpdateCli } from "./update.js";
 import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
@@ -35,6 +36,7 @@ Usage:
   keiko doctor             Diagnose stale global-vs-local launch paths.
   keiko repair [OPTIONS]   Repair a broken local install (offline remediation pass).
   keiko uninstall [OPTIONS] Remove Keiko's runtime artifacts (state, shortcuts, scripts).
+  keiko update <status|check|apply> Inspect or run governed updates (UI remains primary).
   keiko start|stop|status|restart Manage the local Keiko UI process.
   keiko models list        List registered model capabilities.
   keiko models validate    Validate gateway configuration.
@@ -78,6 +80,7 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   doctor: runDoctorCli,
   repair: runRepairCli,
   uninstall: runUninstallCli,
+  update: runUpdateCli,
   start: (rest, io, env) => runLifecycleCli("start", rest, io, env),
   stop: (rest, io, env) => runLifecycleCli("stop", rest, io, env),
   status: (rest, io, env) => runLifecycleCli("status", rest, io, env),

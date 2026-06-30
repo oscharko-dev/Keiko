@@ -39,6 +39,24 @@ export {
   type UpdateLocalStateManagerOptions,
 } from "./update-local-state.js";
 export {
+  createUpdatePreflightService,
+  runUpdatePreflight,
+  type UpdatePreflightService,
+} from "./update-preflight.js";
+export {
+  createFileUpdateSessionLock,
+  type FileUpdateSessionLockOptions,
+  type UpdateSessionLock,
+  type UpdateSessionLockRecord,
+} from "./update-session-lock.js";
+export {
+  createUpdateSessionManager,
+  UpdateSessionError,
+  type UpdateSessionManager,
+  type UpdateSessionManagerOptions,
+  type UpdateSessionStartOutcome,
+} from "./update-session.js";
+export {
   createUpdateRemediationManager,
   UpdateRemediationError,
   type UpdateRemediationManager,
