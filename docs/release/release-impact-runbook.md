@@ -57,7 +57,7 @@ For corrections:
 - Keep the original entry in the catalog for audit history.
 - Re-run `npm run check:release-impact`.
 
-The current root package version must have exactly one reviewed `latest` entry tied to `package.json` and `v<package.json version>`. The entry must include `supportedFrom: ["0.2.0"]` or a broader reviewed baseline path that explicitly includes `0.2.0`.
+The current root package version must have at least one reviewed `latest` entry tied to `package.json` and `v<package.json version>`. A release may contain multiple reviewed entries when one package version carries several user-relevant impact records. Each current entry must include `supportedFrom: ["0.2.0"]` or a broader reviewed baseline path that explicitly includes `0.2.0`.
 
 When a previous stable tag contains a bundled release-impact catalog, `npm run check:release-impact` compares published rows from that tag against the current catalog. Published rows must remain byte-for-byte equivalent after JSON normalization; corrections and superseding records are additive and must reference retained catalog entry ids.
 
@@ -70,7 +70,7 @@ Before adding a release-note bullet:
 3. Prefer the broadest accurate issue/PR as the source when several implementation slices support one outcome.
 4. Mark narrow implementation details as `internal-only` unless they create observable impact.
 
-Duplicate default patch-note bullets fail `npm run check:release-impact`.
+Duplicate default patch-note bullets fail `npm run check:release-impact`. During release-note generation, issue or PR references are stripped from default user-facing bullets and retained in the technical traceability footer, so duplicate human-facing notes are collapsed before GitHub Release metadata is written.
 
 ## Exceptions
 
@@ -93,4 +93,4 @@ Run:
 npm run check:release-impact
 ```
 
-`npm run release:plan -- --tag beta` and `npm run release:publish -- --tag <tag>` also run the release-impact gate. The gate fails when metadata is missing, invalid, contradictory, duplicated, not reviewed, not bundled, or not tied to the current package version.
+`npm run release:plan -- --tag beta` and `npm run release:publish -- --tag <tag>` also run the release-impact gate. The release plan prints the generated GitHub Release notes between `BEGIN KEIKO RELEASE NOTES` and `END KEIKO RELEASE NOTES` markers without publishing a live release. The gate fails when metadata is missing, invalid, contradictory, duplicated, not reviewed, not bundled, or not tied to the current package version.

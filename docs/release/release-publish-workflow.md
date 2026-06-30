@@ -24,7 +24,9 @@ follow-up.
 
 Release-impact metadata is governed by the [release-impact runbook](release-impact-runbook.md) and
 validated from [`release-impact.catalog.json`](../../release-impact.catalog.json). Publish metadata
-must be reviewed by a release owner before it is used for a stable package release.
+must be reviewed by a release owner before it is used for a stable package release. GitHub Release
+notes are generated from that same structured catalog, so the updater can keep consuming metadata
+without parsing prose.
 
 ## Triggering
 
@@ -59,7 +61,9 @@ The tag verification job is dependency-free after checkout and Node setup:
 3. Run `npm run release:plan -- --tag beta`.
 
 The release plan validates version consistency, publish manifests, and release-impact metadata
-without relying on `node_modules`, so the tag job can fail fast on metadata drift.
+without relying on `node_modules`, so the tag job can fail fast on metadata drift. It also prints
+the generated GitHub Release notes as a non-publishing preview so maintainers can review the
+customer-readable bullets before dispatching a live publish.
 
 The release workflow relies on the protected required checks for full build, test, SBOM, smoke,
 and supply-chain evidence. The tag verification job verifies those checks on the release SHA before
@@ -81,6 +85,7 @@ The script:
 
 - checks version and publish-manifest consistency,
 - checks release-impact metadata for the current package version,
+- generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,
 - rejects credential-bearing registry URLs before logging or release-note generation,
@@ -90,7 +95,7 @@ The script:
 - publishes or reuses every publishable workspace package and the root package,
 - verifies every npm package version and selected dist-tag,
 - runs the registry install smoke,
-- creates or updates the matching GitHub Release,
+- creates or updates the matching GitHub Release with generated release-impact notes,
 - marks stable `--tag latest` publishes as GitHub `Latest`.
 
 Prerelease package versions are blocked from publishing with the `latest` dist-tag, and the
@@ -108,6 +113,8 @@ Review remains a required PR gate, but it is not listed in `RELEASE_REQUIRED_CHE
 manual commit-status mirroring that previously made patch releases slow and error-prone.
 
 The GitHub Release entry is owned by `scripts/release-publish.mjs`; do not create it manually as
-a separate step. Re-running `npm run release:publish -- --tag latest` is idempotent for already
-published packages: it verifies npm versions/dist-tags, reruns the registry smoke, and updates the
-GitHub Release metadata.
+a separate step. Default user-facing bullets omit issue and PR numbers. Catalog ids, approval
+references, source issue/PR references, affected state stores, remediation, registry, and dist-tag
+details are retained in a collapsed technical metadata section for audit traceability. Re-running
+`npm run release:publish -- --tag latest` is idempotent for already published packages: it verifies
+npm versions/dist-tags, reruns the registry smoke, and updates the GitHub Release metadata.
