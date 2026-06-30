@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { parseRealtimeVoiceEvent } from "./voice-realtime-events";
 
 describe("parseRealtimeVoiceEvent", () => {
+  it("parses realtime session lifecycle acknowledgements", () => {
+    expect(parseRealtimeVoiceEvent({ type: "session.created" })).toEqual({
+      kind: "session-created",
+    });
+    expect(parseRealtimeVoiceEvent({ type: "session.updated" })).toEqual({
+      kind: "session-updated",
+    });
+  });
+
   it("parses user speech lifecycle events", () => {
     expect(parseRealtimeVoiceEvent({ type: "input_audio_buffer.speech_started" })).toEqual({
       kind: "user-speech-start",
@@ -24,6 +33,31 @@ describe("parseRealtimeVoiceEvent", () => {
       kind: "user-transcript-committed",
       itemId: "u1",
       text: "open the deploy log",
+    });
+  });
+
+  it("parses interim and failed user transcription events", () => {
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "u1",
+        delta: "deploy ",
+      }),
+    ).toEqual({
+      kind: "user-transcript-delta",
+      itemId: "u1",
+      delta: "deploy ",
+    });
+    expect(
+      parseRealtimeVoiceEvent({
+        type: "conversation.item.input_audio_transcription.failed",
+        item_id: "u1",
+        error: { message: "asr failed" },
+      }),
+    ).toEqual({
+      kind: "user-transcript-failed",
+      itemId: "u1",
+      message: "asr failed",
     });
   });
 
@@ -156,7 +190,7 @@ describe("parseRealtimeVoiceEvent", () => {
   });
 
   it("ignores unknown and empty transcript events", () => {
-    expect(parseRealtimeVoiceEvent({ type: "session.created" })).toBeUndefined();
+    expect(parseRealtimeVoiceEvent({ type: "session.magic" })).toBeUndefined();
     expect(
       parseRealtimeVoiceEvent({
         type: "conversation.item.input_audio_transcription.completed",

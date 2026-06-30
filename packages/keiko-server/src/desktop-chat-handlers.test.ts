@@ -483,6 +483,61 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
+  it("does not wait for model-assisted salience capture before returning a realtime voice turn", async () => {
+    const memoryDir = join(tmp, "voice-turn-async-salience-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const neverResolvingSalienceModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return new Promise<NormalizedResponse>(() => {});
+      },
+    };
+    await restartWithDeps(deps(neverResolvingSalienceModel, { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const appendRes = await Promise.race([
+      fetch(`${base()}/api/desktop/chat/voice-turn`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: created.chat.id,
+          projectPath: projectDir,
+          messages: [
+            { role: "user", content: "remember that my voice IDE is Keiko" },
+            { role: "assistant", content: "I will remember that." },
+          ],
+          memory: {
+            enabled: true,
+            budgetTokens: 900,
+            context: {},
+          },
+        }),
+      }),
+      new Promise<Response>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("voice-turn response waited for salience capture"));
+        }, 250);
+      }),
+    ]);
+    if (timeout !== undefined) clearTimeout(timeout);
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    expect(body.memory?.actions[0]?.kind).toBe("candidate");
+    expect(seenRequests).toHaveLength(1);
+    memoryVault.close();
+  });
+
   it("rejects an empty model response without persisting a fake assistant message", async () => {
     await restartWithDeps(deps(fakeModel("")));
     const createRes = await fetch(`${base()}/api/desktop/chats`, {

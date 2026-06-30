@@ -6,11 +6,23 @@
 // not represented here.
 
 export type ParsedRealtimeVoiceEvent =
+  | { readonly kind: "session-created" }
+  | { readonly kind: "session-updated" }
   | { readonly kind: "user-speech-start"; readonly itemId?: string | undefined }
   | { readonly kind: "user-speech-stop"; readonly itemId?: string | undefined }
   | {
+      readonly kind: "user-transcript-delta";
+      readonly delta: string;
+      readonly itemId?: string | undefined;
+    }
+  | {
       readonly kind: "user-transcript-committed";
       readonly text: string;
+      readonly itemId?: string | undefined;
+    }
+  | {
+      readonly kind: "user-transcript-failed";
+      readonly message: string;
       readonly itemId?: string | undefined;
     }
   | {
@@ -208,6 +220,10 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
   }
   const type = stringField(raw, "type") ?? stringField(raw, "kind");
   switch (type) {
+    case "session.created":
+      return { kind: "session-created" };
+    case "session.updated":
+      return { kind: "session-updated" };
     case "input_audio_buffer.speech_started":
       return { kind: "user-speech-start", itemId: itemId(raw) };
     case "input_audio_buffer.speech_stopped":
@@ -218,8 +234,14 @@ export function parseRealtimeVoiceEvent(raw: unknown): ParsedRealtimeVoiceEvent 
         ? undefined
         : { kind: "user-transcript-committed", text, itemId: itemId(raw) };
     }
+    case "conversation.item.input_audio_transcription.delta": {
+      const delta = stringField(raw, "delta");
+      return delta === undefined
+        ? undefined
+        : { kind: "user-transcript-delta", delta, itemId: itemId(raw) };
+    }
     case "conversation.item.input_audio_transcription.failed":
-      return { kind: "error", message: errorMessage(raw) };
+      return { kind: "user-transcript-failed", message: errorMessage(raw), itemId: itemId(raw) };
     case "response.audio_transcript.delta":
     case "response.output_audio_transcript.delta": {
       const delta = stringField(raw, "delta");

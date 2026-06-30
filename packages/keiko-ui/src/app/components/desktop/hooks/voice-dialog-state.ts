@@ -7,10 +7,9 @@
 // source of that collapse: it is pure (no React, no clock, no I/O), so the precedence is exhaustively
 // pinnable in tests and mutation-robust.
 //
-// Mute is ORTHOGONAL to the turn floor: a standing mute preference is surfaced by the mute button's
-// `aria-pressed`, NOT by this label. The derived label is 'muted' only while the assistant turn is
-// actually speaking-while-muted — i.e. there is a spoken turn the mute preference is suppressing.
-// Between turns a muted preference still reads 'idle' here, because nothing is being muted yet.
+// In realtime dialogue `muted` means the microphone is not being sent to the provider. Surface that as
+// a session state so the UI never claims the dialogue is ready/listening while Keiko cannot hear the
+// user. Non-dialogue assistant playback still owns its separate VoicePlayback mute label.
 
 import type { RealtimeVoicePhase } from "./useRealtimeVoice";
 import type { VoiceTurnState } from "./voice-turn-manager";
@@ -67,8 +66,9 @@ export interface VoiceAuraStateSnapshot {
 //   1. a transport error dominates everything (the session is not usable);
 //   2. an in-progress connection (requesting/negotiating, or a turn-manager recovery) reads 'connecting';
 //   3. a barge-in / interruption is surfaced before the steady floor states;
-//   4. an assistant speaking turn reads 'muted' when the user has muted playback, else 'speaking';
-//   5. then the remaining steady floor states (thinking, listening);
+//   4. a connected muted microphone reads 'muted' before any steady floor state;
+//   5. an assistant speaking turn reads 'speaking';
+//   6. then the remaining steady floor states (thinking, listening);
 //   6. everything else (idle, yielding, disabled, connected-but-no-floor) is 'idle'.
 export function deriveVoiceDialogState(inputs: VoiceDialogStateInputs): VoiceDialogState {
   const { realtimePhase, turnState, muted } = inputs;
@@ -85,8 +85,11 @@ export function deriveVoiceDialogState(inputs: VoiceDialogStateInputs): VoiceDia
   if (turnState === "interrupted") {
     return "interrupted";
   }
+  if (realtimePhase === "connected" && muted) {
+    return "muted";
+  }
   if (turnState === "speaking") {
-    return muted ? "muted" : "speaking";
+    return "speaking";
   }
   if (turnState === "thinking") {
     return "thinking";
@@ -113,7 +116,7 @@ const DIALOG_STATE_HEADLINE: Record<VoiceDialogState, string> = {
   listening: "Listening to you.",
   thinking: "The assistant is thinking.",
   speaking: "The assistant is speaking.",
-  muted: "The assistant is speaking. Playback is muted.",
+  muted: "Voice dialogue microphone is muted.",
   interrupted: "Voice dialogue interrupted.",
   error: "Voice dialogue could not continue. You can keep chatting in text.",
 };

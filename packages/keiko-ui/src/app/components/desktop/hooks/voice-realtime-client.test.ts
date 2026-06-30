@@ -241,6 +241,40 @@ describe("createBrowserVoiceControlClient", () => {
     ws.fireClose();
   });
 
+  it("reuses resume identifiers and increments SDP offer sequence across repeated negotiations", async () => {
+    const { factory, latest } = makeFactory();
+    const client = createBrowserVoiceControlClient(factory);
+
+    const firstSent: Record<string, unknown>[] = [];
+    const first = client.negotiate("v=0\r\nfirst-offer");
+    const firstWs = latest();
+    firstWs.send = (data: string): void => {
+      firstSent.push(JSON.parse(data) as Record<string, unknown>);
+    };
+    firstWs.fireOpen();
+    firstWs.fireMessage(serverMsg("session.created"));
+    firstWs.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nfirst-answer" }));
+    await expect(first).resolves.toBe("v=0\r\nfirst-answer");
+
+    const secondSent: Record<string, unknown>[] = [];
+    const second = client.negotiate("v=0\r\nsecond-offer");
+    const secondWs = latest();
+    secondWs.send = (data: string): void => {
+      secondSent.push(JSON.parse(data) as Record<string, unknown>);
+    };
+    secondWs.fireOpen();
+    secondWs.fireMessage(serverMsg("session.created"));
+    secondWs.fireMessage(serverMsg("signal.sdp.answer", { sdp: "v=0\r\nsecond-answer" }));
+    await expect(second).resolves.toBe("v=0\r\nsecond-answer");
+
+    expect(firstSent[0]?.kind).toBe("session.create");
+    expect(secondSent[0]?.kind).toBe("session.create");
+    expect(secondSent[0]?.sessionId).toBe(firstSent[0]?.sessionId);
+    expect(secondSent[0]?.idempotencyKey).toBe(firstSent[0]?.idempotencyKey);
+    expect(firstSent[1]).toMatchObject({ kind: "signal.sdp.offer", seq: 1 });
+    expect(secondSent[1]).toMatchObject({ kind: "signal.sdp.offer", seq: 2 });
+  });
+
   it("rejects connection-failed and closes the socket when the handshake stalls past the timeout", async () => {
     vi.useFakeTimers();
     try {

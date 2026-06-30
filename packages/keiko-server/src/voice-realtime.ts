@@ -19,6 +19,7 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
   findConfiguredCapability,
   requestRealtimeNegotiation,
   resolveRealtimeVoice,
@@ -147,6 +148,7 @@ interface SessionState {
   readonly idempotencyKey: string;
   readonly profile: VoiceProfile;
   readonly providerLocality: VoiceProviderLocality | undefined;
+  readonly realtimeToolCalling: boolean | undefined;
   // The client-selected product persona, validated at session.create. Drives the realtime voice id
   // (resolved server-side). Undefined ⇒ the configured default voice.
   readonly persona: VoicePersona | undefined;
@@ -207,9 +209,11 @@ const REALTIME_GROUNDED_VOICE_ADDENDUM =
   "checking, but do not state factual conclusions until the tool result is available. After the tool " +
   "result arrives, speak the answer faithfully and do not add unsupported facts.";
 
+const REALTIME_GROUNDING_TOOL_NAME = "search_keiko_grounding";
+
 const REALTIME_GROUNDING_TOOL: RealtimeFunctionTool = {
   type: "function",
-  name: "search_keiko_grounding",
+  name: REALTIME_GROUNDING_TOOL_NAME,
   description:
     "Search Keiko's connected repository, file, document, and knowledge sources for the current chat and return a citation-backed answer.",
   parameters: {
@@ -225,15 +229,11 @@ const REALTIME_GROUNDING_TOOL: RealtimeFunctionTool = {
   },
 };
 
-// Whisper transcription enables input-audio transcripts so the chat transcript can capture what the
-// user said by voice (the dialogue-mode grounding/evidence path).
-const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
-
 // Realtime SDP negotiation is interactive: a user is waiting with the microphone open. The generic
-// provider request timeout (commonly 30s) is far too long here — a hung provider would freeze the
-// session on "negotiating" for half a minute before surfacing an error. Clamp to a short interactive
-// bound so a stalled handshake fails fast and the composer can degrade to text.
-const REALTIME_NEGOTIATION_TIMEOUT_MS = 8_000;
+// provider request timeout (commonly 30s) is far too long here, but the ephemeral-token + SDP flow is
+// two provider round trips and can exceed the old 8s bound on proxied links. Clamp to a moderate
+// interactive bound so a stalled handshake still fails fast and the composer can degrade to text.
+const REALTIME_NEGOTIATION_TIMEOUT_MS = 12_000;
 
 function trimContextText(text: string): string {
   const safe = stripUnsafeFormatChars(text).trim();
@@ -321,9 +321,10 @@ function realtimeMemoryContext(
 function realtimeInstructions(
   deps: UiHandlerDeps,
   chatContext: VoiceSessionChatContext | undefined,
+  groundingToolEnabled: boolean,
 ): string {
   const sections = [`${CONVERSATION_SYSTEM_PROMPT}${REALTIME_SPOKEN_ADDENDUM}`];
-  if (chatContext?.grounding?.enabled === true) {
+  if (chatContext?.grounding?.enabled === true && groundingToolEnabled) {
     sections.push(REALTIME_GROUNDED_VOICE_ADDENDUM);
   }
   if (chatContext !== undefined) {
@@ -349,9 +350,12 @@ function realtimeProviderSupportsTools(
 ): boolean {
   const capability = findConfiguredCapability(config, provider.modelId);
   if (capability === undefined) {
-    return true;
+    return false;
   }
-  return capability.toolCalling || capability.supportsRealtimeVoice === true;
+  // Missing tool support is an explicit degradation, not a session blocker: the UI still records the
+  // full voice turn through /voice-turn, while grounded retrieval is only configured for providers
+  // that advertise function calling.
+  return capability.toolCalling === true;
 }
 
 // Resolves the realtime session voice from the provider's persona→voice mapping, guarded to a
@@ -397,7 +401,13 @@ function buildNegotiationRequest(
     voiceId: resolveRealtimeVoiceId(provider, persona),
     transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
     ...(groundingEnabled && toolsSupported
-      ? { tools: [REALTIME_GROUNDING_TOOL], toolChoice: "auto" as const }
+      ? {
+          tools: [REALTIME_GROUNDING_TOOL],
+          toolChoice: {
+            type: "function" as const,
+            function: { name: REALTIME_GROUNDING_TOOL_NAME },
+          },
+        }
       : {}),
     offerSdp,
     signal,
@@ -461,7 +471,12 @@ export class VoiceControlConnection {
     this.emit({
       kind: "capability.offer",
       profile: this.session.profile,
-      capabilities: { speechToText: true, speechOutput: true, realtimeVoice: true },
+      capabilities: {
+        speechToText: true,
+        speechOutput: true,
+        realtimeVoice: true,
+        ...(this.session.realtimeToolCalling === true ? { realtimeToolCalling: true } : {}),
+      },
     });
   }
 
@@ -796,6 +811,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       return;
     }
     const timer = setInterval(() => {
+      this.sweepExpired(Date.now());
       sweepControlHeartbeat(this.wss.clients as Set<AliveControlSocket>);
     }, DEFAULT_VOICE_PROTOCOL_TIMEOUTS.heartbeatIntervalMs);
     // Do not keep the Node process alive solely for the heartbeat.
@@ -862,12 +878,13 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         return { ok: false, kind: "unsupported-model" };
       }
       const negotiate = deps.voiceRealtimeNegotiationRequest ?? requestRealtimeNegotiation;
-      const instructions = realtimeInstructions(deps, chatContext);
       const groundingEnabled = realtimeGroundingEnabled(chatContext);
       const toolsSupported = realtimeProviderSupportsTools(config, provider);
-      if (groundingEnabled && !toolsSupported) {
-        return { ok: false, kind: "unsupported-model" };
-      }
+      const instructions = realtimeInstructions(
+        deps,
+        chatContext,
+        groundingEnabled && toolsSupported,
+      );
       return negotiate(
         buildNegotiationRequest(
           provider,
@@ -946,6 +963,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       idempotencyKey,
       profile: voice.profile,
       providerLocality: voice.providerLocality,
+      realtimeToolCalling: voice.capabilities.realtimeToolCalling,
       persona,
       chatContext,
       hostSeq: 0,

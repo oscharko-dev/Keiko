@@ -464,9 +464,11 @@ function makeFakeStreamingSink(engage: boolean): {
   sink: AssistantSpeechStreamingSink;
   handlers: () => AssistantSpeechStreamHandlers | undefined;
   stops: () => number;
+  disposes: () => number;
 } {
   let captured: AssistantSpeechStreamHandlers | undefined;
   let stops = 0;
+  let disposes = 0;
   return {
     sink: {
       play: (_input, _signal, handlers): Promise<boolean> => {
@@ -477,9 +479,13 @@ function makeFakeStreamingSink(engage: boolean): {
         stops += 1;
       },
       positionMs: (): number | undefined => undefined,
+      dispose: (): void => {
+        disposes += 1;
+      },
     },
     handlers: () => captured,
     stops: () => stops,
+    disposes: () => disposes,
   };
 }
 
@@ -520,5 +526,16 @@ describe("useAssistantSpeech — streamed PCM playback", () => {
     act(() => fake.handlers()?.onStart());
     act(() => result.current.stop());
     expect(fake.stops()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("disposes the streaming sink on unmount", async () => {
+    const fake = makeFakeStreamingSink(true);
+    const h = harness({ createStreamingSink: () => fake.sink });
+    const { unmount } = renderHook(() => useAssistantSpeech(h.options));
+    await flush();
+
+    unmount();
+
+    expect(fake.disposes()).toBe(1);
   });
 });
