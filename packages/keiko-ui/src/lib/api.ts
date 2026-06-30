@@ -84,6 +84,7 @@ import type {
   RunReport,
   SafeGatewayConfig,
   VoiceCapabilityResolution,
+  UpdatePreflightReport,
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
@@ -198,6 +199,18 @@ async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array
 
 export async function fetchHealth(): Promise<{ status: "ok"; version: string }> {
   return fetchJson("/api/health");
+}
+
+// ---------------------------------------------------------------------------
+// Update preflight
+// ---------------------------------------------------------------------------
+
+export async function fetchStartupUpdatePreflight(): Promise<UpdatePreflightReport> {
+  return fetchJson("/api/update/preflight", { cache: "no-store" });
+}
+
+export async function checkUpdatePreflight(): Promise<UpdatePreflightReport> {
+  return fetchJson("/api/update/preflight/check", { method: "POST", cache: "no-store" });
 }
 
 // ---------------------------------------------------------------------------
@@ -1641,9 +1654,7 @@ export async function openPdfCitationPreviewSession(
   });
 }
 
-export async function closePdfCitationPreviewSession(
-  sessionHandle: string,
-): Promise<{ ok: true }> {
+export async function closePdfCitationPreviewSession(sessionHandle: string): Promise<{ ok: true }> {
   return fetchJson(
     `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}`,
     {
@@ -1700,7 +1711,11 @@ export async function fetchGitDeliveryActionSheet(
 // block returns `{ status: "blocked", blockReason: "message-policy", messageViolations }`.
 
 export type GitDeliveryMutationStatus =
-  "succeeded" | "blocked" | "approval-required" | "failed" | "recovery-required";
+  | "succeeded"
+  | "blocked"
+  | "approval-required"
+  | "failed"
+  | "recovery-required";
 
 // Shared mutation response shape for branch + staging + commit execution. Optional fields appear only
 // for the matching outcome (block reason, preflight codes, required approvers, execution error code).

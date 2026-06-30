@@ -63,9 +63,25 @@ export type {
   VoiceUnavailableReason,
   VoiceTransportPosture,
   VoiceCapabilityResolution,
+  UpdatePreflightBlocker,
+  UpdatePreflightBlockerCode,
+  UpdatePreflightImpactEntry,
+  UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNotes,
+  UpdatePreflightRegistryStatus,
+  UpdatePreflightReleaseMetadataStatus,
+  UpdatePreflightReleaseSummary,
+  UpdatePreflightReport,
+  UpdatePreflightSeverity,
+  UpdatePreflightStatus,
 } from "@oscharko-dev/keiko-contracts";
 
-export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
+export {
+  DEFAULT_GROUNDING_LIMITS,
+  UPDATE_PREFLIGHT_BLOCKER_CODES,
+  UPDATE_PREFLIGHT_SCHEMA_VERSION,
+  UPDATE_PREFLIGHT_SEVERITIES,
+} from "@oscharko-dev/keiko-contracts";
 
 // ─── Editor completion gateway wire shapes (Issue #1199, contracts root barrel) ─────
 export type {

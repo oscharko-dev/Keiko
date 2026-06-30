@@ -97,6 +97,31 @@ export {
   RELEASE_IMPACT_SCHEMA_VERSION,
 } from "./release-impact.js";
 
+// ─── Update availability / preflight (Issue #1692) ─────────────────────────────
+export type {
+  UpdatePreflightBlocker,
+  UpdatePreflightBlockerCode,
+  UpdatePreflightImpactEntry,
+  UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNotes,
+  UpdatePreflightRegistryStatus,
+  UpdatePreflightReleaseMetadataStatus,
+  UpdatePreflightReleaseSource,
+  UpdatePreflightReleaseSummary,
+  UpdatePreflightReport,
+  UpdatePreflightSeverity,
+  UpdatePreflightStatus,
+} from "./update-preflight.js";
+export {
+  UPDATE_PREFLIGHT_BLOCKER_CODES,
+  UPDATE_PREFLIGHT_REGISTRY_STATUSES,
+  UPDATE_PREFLIGHT_RELEASE_METADATA_STATUSES,
+  UPDATE_PREFLIGHT_RELEASE_SOURCES,
+  UPDATE_PREFLIGHT_SCHEMA_VERSION,
+  UPDATE_PREFLIGHT_SEVERITIES,
+  UPDATE_PREFLIGHT_STATUSES,
+} from "./update-preflight.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,

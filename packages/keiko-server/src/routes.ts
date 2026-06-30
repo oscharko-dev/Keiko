@@ -81,6 +81,7 @@ import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
+import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCreateTerminalExecution,
   handleDeleteTerminalExecution,
@@ -301,6 +302,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
+  { method: "GET", pattern: "/api/update/preflight", handler: handleGetUpdatePreflight },
+  {
+    method: "POST",
+    pattern: "/api/update/preflight/check",
+    handler: handlePostUpdatePreflightCheck,
+  },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },
