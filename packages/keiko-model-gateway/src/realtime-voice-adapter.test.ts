@@ -285,6 +285,41 @@ describe("requestRealtimeNegotiation", () => {
     expect(parsed.session.audio.input.turn_detection).toEqual(DEFAULT_REALTIME_TURN_DETECTION);
   });
 
+  it("can disable automatic server-VAD responses while keeping transcription enabled", async () => {
+    let clientSecretBody = "{}";
+    const fetchImpl = mockFetch((url, init) => {
+      if (url.endsWith("/realtime/client_secrets")) {
+        clientSecretBody = bodyToText(init);
+        return new Response(JSON.stringify({ value: "tok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sdp(ANSWER_SDP);
+    });
+
+    await requestRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      realtimeAuthMode: "ephemeral-session",
+      modelId: "keiko-realtime",
+      offerSdp: OFFER_SDP,
+      disableAutomaticResponse: true,
+      fetchImpl,
+    });
+
+    const parsed = JSON.parse(clientSecretBody) as {
+      session: { audio: { input: Record<string, unknown> } };
+    };
+    expect(parsed.session.audio.input.transcription).toEqual({
+      model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    });
+    expect(parsed.session.audio.input.turn_detection).toEqual({
+      ...DEFAULT_REALTIME_TURN_DETECTION,
+      create_response: false,
+    });
+  });
+
   describe("resolveRealtimeVoice (guard against TTS-only voice ids)", () => {
     it("passes through realtime-valid voices", () => {
       for (const voice of REALTIME_VOICES) {

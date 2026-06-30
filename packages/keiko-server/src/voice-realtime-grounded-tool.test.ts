@@ -292,18 +292,26 @@ describe("handleRealtimeGroundedVoiceTool", () => {
     expect(runGroundedAskInputMock).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the realtime voice provider lacks tool calling", async () => {
+  it("allows full realtime voice retrieval when the provider lacks tool calling", async () => {
     const chat = createChat();
+    const answer = groundedAnswer(chat.id);
+    runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
+
     const result = await handleRealtimeGroundedVoiceTool(
       ctx(requestFor(chat)),
       deps(realtimeConfig(false)),
     );
 
-    expect(result.status).toBe(403);
+    expect(result.status).toBe(200);
+    expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
     expect(result.body).toMatchObject({
-      error: { code: "VOICE_TOOL_UNAVAILABLE" },
+      groundedAnswer: { content: answer.content },
+      toolOutput: {
+        status: "ok",
+        answer: answer.content,
+        persisted: { userMessageId: answer.userMessageId, assistantMessageId: answer.assistantMessageId },
+      },
     });
-    expect(runGroundedAskInputMock).not.toHaveBeenCalled();
   });
 
   it("rejects missing or project-mismatched chats before running retrieval", async () => {

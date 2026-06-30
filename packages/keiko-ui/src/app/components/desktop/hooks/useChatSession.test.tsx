@@ -4,6 +4,7 @@ import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from
 import {
   ApiError,
   askGrounded,
+  appendDesktopChatVoiceTurn,
   createDesktopChat,
   fetchChatMessages,
   fetchChats,
@@ -34,6 +35,7 @@ vi.mock("@/lib/api", () => ({
     }
   },
   askGrounded: vi.fn(),
+  appendDesktopChatVoiceTurn: vi.fn(),
   createDesktopChat: vi.fn(),
   createProject: vi.fn(),
   fetchChatMessages: vi.fn(),
@@ -42,6 +44,7 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
+  runRealtimeGroundedTool: vi.fn(),
   updateChat: vi.fn(),
 }));
 
@@ -386,6 +389,52 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
     // The optimistic user message must NOT have been appended.
     expect(result.current.messages).toHaveLength(0);
+  });
+});
+
+describe("useChatSession appendVoiceTurn", () => {
+  async function setupVoiceTurnSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "chat-a" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("retries one transient voice-turn append failure before surfacing an error", async () => {
+    const updated = chat({ updatedAt: 20, title: "spoken turn" });
+    const user = message({ id: "voice-user", role: "user", content: "Remember the release gate." });
+    const assistant = message({
+      id: "voice-assistant",
+      role: "assistant",
+      content: "I will remember it.",
+    });
+    vi.mocked(appendDesktopChatVoiceTurn)
+      .mockRejectedValueOnce(new ApiError("INTERNAL", "temporary", 500))
+      .mockResolvedValueOnce({
+        chat: updated,
+        messages: [user, assistant],
+      });
+    const { result } = await setupVoiceTurnSession();
+
+    await act(async () => {
+      await result.current.appendVoiceTurn?.([
+        { role: "user", content: "Remember the release gate." },
+        { role: "assistant", content: "I will remember it." },
+      ]);
+    });
+
+    expect(appendDesktopChatVoiceTurn).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.messages.map((entry) => [entry.role, entry.content])).toEqual([
+      ["user", "Remember the release gate."],
+      ["assistant", "I will remember it."],
+    ]);
   });
 });
 

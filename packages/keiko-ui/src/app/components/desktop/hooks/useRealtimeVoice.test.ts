@@ -206,6 +206,63 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
     }
   });
 
+  it("configures grounded sessions without realtime tools to wait for client-side retrieval", async () => {
+    vi.useFakeTimers();
+    try {
+      const {
+        session,
+        fireConnectionState,
+        fireDataChannelState,
+        sendDataChannelEvent,
+      } = makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
+
+      const { result } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          groundingActive: true,
+          groundingToolActive: false,
+        }),
+      );
+
+      act(() => result.current.start());
+      await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+      act(() => fireConnectionState("connected"));
+      act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
+      act(() => fireDataChannelState("open"));
+
+      expect(sendDataChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "session.update",
+          session: expect.objectContaining({
+            instructions: expect.stringContaining("Keiko will retrieve the grounded answer"),
+            audio: expect.objectContaining({
+              input: expect.objectContaining({
+                turn_detection: expect.objectContaining({
+                  type: "server_vad",
+                  create_response: false,
+                }),
+              }),
+            }),
+          }),
+        }),
+      );
+      const update = sendDataChannelEvent.mock.calls.find(
+        ([event]) =>
+          typeof event === "object" &&
+          event !== null &&
+          (event as { readonly type?: unknown }).type === "session.update",
+      )?.[0] as { readonly session?: { readonly tools?: unknown; readonly tool_choice?: unknown } };
+      expect(update.session?.tools).toBeUndefined();
+      expect(update.session?.tool_choice).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("sends updated MemoriaViva context as a non-system reference block", async () => {
     vi.useFakeTimers();
     try {
@@ -828,6 +885,55 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     ]);
   });
 
+  it("keeps the grounding mode snapshotted for the negotiated session", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+
+    const { result, rerender } = renderHook(
+      ({ groundingActive }: { groundingActive: boolean }) =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          groundingActive,
+          onVoiceTurnCommitted,
+        }),
+      { initialProps: { groundingActive: true } },
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    rerender({ groundingActive: false });
+    act(() => {
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-session" });
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-session",
+        transcript: "Welche Quellen sind verbunden?",
+      });
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-session",
+        item_id: "a-session",
+        transcript: "Die Quellen bleiben fuer diese Sitzung verbunden.",
+      });
+    });
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.done",
+        response: { id: "r-session", status: "completed" },
+      });
+    });
+    expect(onVoiceTurnCommitted).toHaveBeenCalledWith([
+      { role: "user", content: "Welche Quellen sind verbunden?" },
+      { role: "assistant", content: "Die Quellen bleiben fuer diese Sitzung verbunden." },
+    ]);
+  });
+
   it("flushes the pending grounded user transcript when the grounding tool fails", async () => {
     const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
@@ -999,6 +1105,87 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
   });
 
+  it("retrieves and speaks grounded answers when the realtime provider has no tool calling", async () => {
+    const { session, fireDataChannelEvent, sendDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const onVoiceTurnCommitted = vi.fn();
+    let resolveTool!: (output: unknown) => void;
+    const toolPromise = new Promise<unknown>((resolve) => {
+      resolveTool = resolve;
+    });
+    const onGroundedToolCall = vi.fn(() => toolPromise);
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        groundingToolActive: false,
+        onGroundedToolCall,
+        onVoiceTurnCommitted,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "user-no-tool-grounded",
+        transcript: "Worum geht es im Fachkonzept?",
+      });
+      fireDataChannelEvent({
+        type: "response.done",
+        response: { id: "r-speculative", status: "cancelled" },
+      });
+    });
+
+    await waitFor(() => expect(onGroundedToolCall).toHaveBeenCalledTimes(1));
+    expect(onGroundedToolCall).toHaveBeenCalledWith(
+      {
+        callId: "client-turn-1",
+        query: "Worum geht es im Fachkonzept?",
+        userTranscript: "Worum geht es im Fachkonzept?",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.cancel" });
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+
+    act(() => {
+      resolveTool({
+        status: "ok",
+        answer: "Das Fachkonzept behandelt die Kreditwürdigkeitsprüfung.",
+        instruction: "Speak this answer faithfully.",
+        persisted: { userMessageId: "u-msg", assistantMessageId: "a-msg" },
+      });
+    });
+
+    await waitFor(() =>
+      expect(sendDataChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "response.create",
+          response: expect.objectContaining({
+            instructions: expect.stringContaining(
+              "Das Fachkonzept behandelt die Kreditwürdigkeitsprüfung.",
+            ),
+          }),
+        }),
+      ),
+    );
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "r-grounded-spoken",
+        transcript: "Das Fachkonzept behandelt die Kreditwürdigkeitsprüfung.",
+      });
+    });
+    expect(onVoiceTurnCommitted).not.toHaveBeenCalled();
+  });
+
   it("moves from listening into thinking while a grounded retrieval tool call is pending", async () => {
     const { session, fireDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
@@ -1114,10 +1301,16 @@ describe("useRealtimeVoice — transient ICE disconnect grace", () => {
     expect(sessionClose).not.toHaveBeenCalled();
   });
 
-  it("tears down when 'disconnected' does not recover within the grace window", async () => {
+  it("reconnects with the same control client when 'disconnected' does not recover within the grace window", async () => {
     vi.useFakeTimers();
-    const { session, fireConnectionState, close: sessionClose } = makeFakeSession();
-    const transport = makeFakeTransport({ session });
+    const first = makeFakeSession();
+    const second = makeFakeSession();
+    const transport: VoiceRtcTransport = {
+      connect: vi
+        .fn<VoiceRtcTransport["connect"]>()
+        .mockResolvedValueOnce(first.session)
+        .mockResolvedValueOnce(second.session),
+    };
     const { client } = makeFakeControl({});
 
     const { result } = renderHook(() =>
@@ -1129,14 +1322,22 @@ describe("useRealtimeVoice — transient ICE disconnect grace", () => {
 
     act(() => result.current.start());
     await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
-    act(() => fireConnectionState("connected"));
+    act(() => first.fireConnectionState("connected"));
     act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
     await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
 
-    act(() => fireConnectionState("disconnected"));
-    act(() => vi.advanceTimersByTime(ICE_GRACE_ABOVE));
-    expect(result.current.phase).toBe("idle");
-    expect(sessionClose).toHaveBeenCalled();
+    act(() => first.fireConnectionState("disconnected"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ICE_GRACE_ABOVE);
+    });
+
+    await vi.waitFor(() => expect(transport.connect).toHaveBeenCalledTimes(2));
+    expect(first.close).toHaveBeenCalled();
+    expect(result.current.phase).toBe("negotiating");
+
+    act(() => second.fireConnectionState("connected"));
+    act(() => vi.advanceTimersByTime(SESSION_READY_WARMUP_MS));
+    await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
   });
 
   it("treats 'failed' as immediately terminal (no grace)", async () => {
