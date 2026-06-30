@@ -8,10 +8,12 @@
 
 import {
   createDefaultChatCapability,
+  findConfiguredCapability,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
   resolveOutboundHttpEgressConfig,
+  selectConfiguredModel,
   type EnvSource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -23,7 +25,11 @@ import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import { writeSideFile } from "@oscharko-dev/keiko-evidence";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
-import { DEFAULT_CONTEXT_PROFILE, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfileFromCapability,
+  type ContextProfile,
+} from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -140,6 +146,7 @@ export interface GatewayDiscoveredModels {
 }
 
 export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;
+export type ContextProfileResolver = (modelId: string) => ContextProfile;
 
 export interface UiHandlerDeps {
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -267,11 +274,17 @@ export interface UiHandlerDeps {
   // Issue #1633 (Epic #1631) — ephemeral, non-durable PDF preview session registry. Optional so tests
   // can inject a deterministic clock/TTL; production falls back to a per-BFF in-memory registry.
   readonly pdfCitationPreviewSessions?: PdfCitationPreviewSessionManager | undefined;
-  // ADR-0055 D5 (PR4-W1) — deterministic context-engineering profile. buildUiHandlerDeps
-  // provisions DEFAULT_CONTEXT_PROFILE so the grounded diagnostics observer is active by default
-  // (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam: injecting
-  // `undefined` pins the legacy no-profile code path (observer not invoked, pack byte-identical).
+  // ADR-0055 D5 (PR4-W1) / Issue #1722 — deterministic context-engineering profile. buildUiHandlerDeps
+  // provisions the selected chat model's derived profile when capability metadata is available,
+  // otherwise falls back to DEFAULT_CONTEXT_PROFILE so the grounded diagnostics observer is active
+  // by default (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam:
+  // injecting `undefined` pins the legacy no-profile code path (observer not invoked, pack
+  // byte-identical).
   readonly contextProfile?: ContextProfile | undefined;
+  // Issue #1722 — single model-keyed context-profile source. buildUiHandlerDeps resolves this from
+  // configured chat capabilities so later prompt assembly / compaction wiring can ask for the
+  // exact profile of the selected model without inventing a second budget path.
+  readonly contextProfileForModel?: ContextProfileResolver | undefined;
   // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0058 D4). Lets the BFF
   // dictation route call the provider-neutral STT adapter without touching global fetch in tests.
   // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
@@ -478,6 +491,40 @@ function createRuntimeGatewayConfig(
 
 export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
   return deps.gatewayConfig?.current() ?? deps.config;
+}
+
+function contextProfileFromConfigModel(config: GatewayConfig, modelId: string): ContextProfile {
+  const capability = findConfiguredCapability(config, modelId);
+  return capability === undefined || capability.kind !== "chat"
+    ? DEFAULT_CONTEXT_PROFILE
+    : deriveContextProfileFromCapability(capability);
+}
+
+function buildContextProfileResolver(config: GatewayConfig | undefined): ContextProfileResolver {
+  if (config === undefined) {
+    return (): ContextProfile => DEFAULT_CONTEXT_PROFILE;
+  }
+  const cache = new Map<string, ContextProfile>();
+  return (modelId: string): ContextProfile => {
+    const cached = cache.get(modelId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const profile = contextProfileFromConfigModel(config, modelId);
+    cache.set(modelId, profile);
+    return profile;
+  };
+}
+
+function defaultContextProfile(
+  config: GatewayConfig | undefined,
+  resolveProfile: ContextProfileResolver,
+): ContextProfile {
+  if (config === undefined) {
+    return DEFAULT_CONTEXT_PROFILE;
+  }
+  const modelId = selectConfiguredModel(config, { kind: "chat" });
+  return modelId === undefined ? DEFAULT_CONTEXT_PROFILE : resolveProfile(modelId);
 }
 
 export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
@@ -1327,6 +1374,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
+  const contextProfileForModel = buildContextProfileResolver(config);
   // Issue #447: run a best-effort startup reconciliation only on the real bootstrap path (no injected
   // store), so test fixtures stay deterministic and trigger reconcile() explicitly when they need it.
   if (options.store === undefined) reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
@@ -1349,7 +1397,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
     localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
-    contextProfile: DEFAULT_CONTEXT_PROFILE,
+    contextProfile: defaultContextProfile(config, contextProfileForModel),
+    contextProfileForModel,
     ...buildPeripherals(options, bundle.uiStore, evidenceStore, redactString, liveRedactor),
     consolidationJobs: createConsolidationJobRegistry(),
     ...optionalPersistenceServices(bundle),

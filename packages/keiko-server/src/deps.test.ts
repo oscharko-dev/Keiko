@@ -13,7 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  type KnowledgeCapsuleId,
+  type KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   addSourceToCapsule,
   createCapsule,
@@ -129,6 +133,48 @@ function readAllStoreBytes(dbPath: string): Buffer {
     if (existsSync(path)) chunks.push(readFileSync(path));
   }
   return Buffer.concat(chunks);
+}
+
+function chatCapability(
+  modelId: string,
+  contextWindow: number,
+  maxOutputTokens: number,
+  costClass: "low" | "medium" | "high" = "medium",
+) {
+  return {
+    id: modelId,
+    kind: "chat",
+    contextWindow,
+    maxOutputTokens,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass,
+    latencyClass: "standard",
+    throughputHint: "fixture",
+    preferredUseCases: ["Chat"],
+    knownLimitations: [],
+  };
+}
+
+function gatewayConfigWithCapabilities(
+  capabilities: readonly ReturnType<typeof chatCapability>[],
+): string {
+  return JSON.stringify({
+    providers: capabilities.map((capability) => ({
+      modelId: capability.id,
+      baseUrl: `https://${capability.id}.example.invalid/openai/v1`,
+      apiKey: "fake-test-key",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    })),
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+    capabilities,
+  });
 }
 
 describe("buildRedactor", () => {
@@ -351,6 +397,39 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     ]);
     expect(deps.config?.providers[0]?.baseUrl).toBe("https://models.example.invalid/openai/v1");
     expect(deps.config?.providers[0]?.apiKey).toBe("fake-test-key");
+    store.close();
+  });
+
+  it("derives model-keyed context profiles from configured chat capabilities", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-context-profile-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      gatewayConfigWithCapabilities([
+        chatCapability("chat-32k", 32_000, 2_048, "high"),
+        chatCapability("chat-128k", 128_000, 8_000, "low"),
+        chatCapability("chat-200k", 200_000, 12_000, "medium"),
+      ]),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store,
+    });
+    const resolve = deps.contextProfileForModel;
+    expect(resolve).toBeDefined();
+    if (resolve === undefined) throw new Error("expected contextProfileForModel");
+
+    const profile32 = resolve("chat-32k");
+    const profile128 = resolve("chat-128k");
+    const profile200 = resolve("chat-200k");
+    expect(profile32.effectiveInputBudget).toBe(28_952);
+    expect(profile128.effectiveInputBudget).toBe(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
+    expect(profile200.effectiveInputBudget).toBe(181_750);
+    expect(deps.contextProfile).toEqual(profile128);
     store.close();
   });
 

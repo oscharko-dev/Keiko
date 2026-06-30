@@ -12,7 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
-import { CONTEXT_LANE_IDS, type ContextLaneId } from "@oscharko-dev/keiko-contracts";
+import {
+  CONTEXT_LANE_IDS,
+  maxUtf8BytesForTokenBudget,
+  type ContextLaneId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
@@ -308,7 +312,9 @@ describe("buildMultiSourceGatewayMessages", () => {
       ],
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual((512 + 512) * 4);
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(
+      maxUtf8BytesForTokenBudget(512 + 512),
+    );
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
   });

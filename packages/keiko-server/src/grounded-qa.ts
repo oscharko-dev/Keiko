@@ -45,6 +45,7 @@ import {
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -431,14 +432,12 @@ export function promptSafeExcerptText(value: string): string {
   return value.split("```").join("` ` `");
 }
 
-const APPROX_BYTES_PER_TOKEN = 4;
-
 export function promptByteLength(messages: readonly GatewayChatMessage[]): number {
   return Buffer.byteLength(messages.map((message) => message.content).join("\n"), "utf8");
 }
 
 export function modelInputPromptByteLimit(modelInputTokensMax: number): number {
-  return Math.max(0, Math.floor(modelInputTokensMax) * APPROX_BYTES_PER_TOKEN);
+  return maxUtf8BytesForTokenBudget(modelInputTokensMax);
 }
 
 function clampUtf8Bytes(value: string, maxBytes: number): string {
@@ -489,9 +488,7 @@ function promptBudgetedMessages(
 ): readonly GatewayChatMessage[] {
   const limit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax);
   let messages = build(question, pack, redactor);
-  if (limit === 0 || promptByteLength(messages) <= limit) return messages;
-  const excerptCount = packExcerptCount(pack);
-  if (excerptCount === 0) return messages;
+  if (promptByteLength(messages) <= limit) return messages;
 
   const emptyPack = withPromptExcerptByteLimit(pack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
@@ -504,6 +501,8 @@ function promptBudgetedMessages(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
+  const excerptCount = packExcerptCount(pack);
+  if (excerptCount === 0) return messages;
   let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
   while (maxExcerptBytes >= 0) {
     messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
