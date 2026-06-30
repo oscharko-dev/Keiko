@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "../../vitest.setup";
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useRef, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -85,7 +85,8 @@ vi.mock("@monaco-editor/react", () => {
     onMount?: (editor: unknown, monaco: unknown) => void;
   }
   const fakeMonaco = {
-    editor: { defineTheme: vi.fn() },
+    editor: { defineTheme: vi.fn(), setModelMarkers: vi.fn() },
+    MarkerSeverity: { Hint: 1, Info: 2, Warning: 4, Error: 8 },
     KeyMod: { CtrlCmd: 2048 },
     KeyCode: { KeyS: 49 },
     languages: {
@@ -128,7 +129,22 @@ vi.mock("@monaco-editor/react", () => {
     setSelection: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
+    getModel: () => {
+      getValue: () => string;
+      getVersionId: () => number;
+      getLanguageId: () => string;
+      onDidChangeContent: (listener: () => void) => { dispose: () => void };
+      uri: { toString: () => string };
+    };
+    onDidChangeModel: (listener: () => void) => { dispose: () => void };
     getContainerDomNode: () => HTMLElement;
+  }
+  interface FakeModelShape {
+    getValue: () => string;
+    getVersionId: () => number;
+    getLanguageId: () => string;
+    onDidChangeContent: (listener: () => void) => { dispose: () => void };
+    uri: { toString: () => string };
   }
   interface MockState {
     container: { current: HTMLDivElement | null };
@@ -142,6 +158,10 @@ vi.mock("@monaco-editor/react", () => {
     setSelection: ReturnType<typeof vi.fn>;
     revealRangeInCenterIfOutsideViewport: ReturnType<typeof vi.fn>;
     deltaDecorations: ReturnType<typeof vi.fn>;
+    modelText: string;
+    modelLanguage: string;
+    modelVersion: number;
+    modelContentListener: (() => void) | null;
     mounted: boolean;
     fakeEditor: FakeEditorShape;
   }
@@ -161,6 +181,10 @@ vi.mock("@monaco-editor/react", () => {
         (_oldDecorations: readonly string[], newDecorations: readonly unknown[]) =>
           newDecorations.length > 0 ? ["reference-decoration"] : [],
       ),
+      modelText: "",
+      modelLanguage: "plaintext",
+      modelVersion: 1,
+      modelContentListener: null,
       mounted: false,
       fakeEditor: null as unknown as FakeEditorShape,
     };
@@ -204,6 +228,17 @@ vi.mock("@monaco-editor/react", () => {
       setSelection: s.setSelection,
       revealRangeInCenterIfOutsideViewport: s.revealRangeInCenterIfOutsideViewport,
       deltaDecorations: s.deltaDecorations,
+      getModel: (): FakeModelShape => ({
+        getValue: (): string => s.modelText,
+        getVersionId: (): number => s.modelVersion,
+        getLanguageId: (): string => s.modelLanguage,
+        onDidChangeContent: (listener): { dispose: () => void } => {
+          s.modelContentListener = listener;
+          return { dispose: vi.fn() };
+        },
+        uri: { toString: (): string => "inmemory://test/src/a.ts" },
+      }),
+      onDidChangeModel: (): { dispose: () => void } => ({ dispose: vi.fn() }),
       getContainerDomNode: (): HTMLElement => s.container.current ?? document.createElement("div"),
     };
     captured.editor = {
@@ -240,6 +275,38 @@ vi.mock("@monaco-editor/react", () => {
       queueMicrotask(() => onMount?.(state.fakeEditor, fakeMonaco));
     }
   }
+
+  function syncMockStateFromProps(state: MockState, props: MockProps): void {
+    captured.language = props.language ?? null;
+    captured.options = props.options ?? null;
+    captured.keepCurrentModel = props.keepCurrentModel ?? null;
+    state.modelText = props.value ?? "";
+    state.modelLanguage = props.language ?? "plaintext";
+    scheduleMountOnce(state, props.onMount);
+  }
+
+  function MockEditorDom(props: {
+    readonly state: MockState;
+    readonly editorProps: MockProps;
+  }): ReactElement {
+    return (
+      <div
+        ref={(node): void => {
+          props.state.container.current = node;
+        }}
+      >
+        <textarea
+          aria-label={props.editorProps.options?.ariaLabel ?? "Editor"}
+          readOnly={props.editorProps.options?.readOnly ?? false}
+          value={props.editorProps.value ?? ""}
+          onChange={(event): void => {
+            props.editorProps.onChange?.(event.target.value);
+          }}
+        />
+      </div>
+    );
+  }
+
   const EditorMock = (props: MockProps): ReactElement => {
     // `@monaco-editor/react` invokes `onMount` exactly once and keeps the editor (and its registered
     // save action) across re-renders; only `onChange` is re-subscribed. Persist the fake editor
@@ -247,26 +314,8 @@ vi.mock("@monaco-editor/react", () => {
     // observable when the controlled `value` prop changes after mount.
     const ref = useRef<MockState | null>(null);
     const state = (ref.current ??= createMockState());
-    captured.language = props.language ?? null;
-    captured.options = props.options ?? null;
-    captured.keepCurrentModel = props.keepCurrentModel ?? null;
-    scheduleMountOnce(state, props.onMount);
-    return (
-      <div
-        ref={(node): void => {
-          state.container.current = node;
-        }}
-      >
-        <textarea
-          aria-label={props.options?.ariaLabel ?? "Editor"}
-          readOnly={props.options?.readOnly ?? false}
-          value={props.value ?? ""}
-          onChange={(event): void => {
-            props.onChange?.(event.target.value);
-          }}
-        />
-      </div>
-    );
+    syncMockStateFromProps(state, props);
+    return <MockEditorDom state={state} editorProps={props} />;
   };
   return { Editor: EditorMock, default: EditorMock };
 });
@@ -616,6 +665,81 @@ describe("KeikoCodeEditor — read-only and error rendering", () => {
     expect(screen.queryByLabelText("Editor: src/a.ts")).not.toBeInTheDocument();
     expect(screen.getByTestId("keiko-editor-loading")).toBeInTheDocument();
     expect(captured.editor).toBeNull();
+  });
+});
+
+describe("KeikoCodeEditor — diagnostic overview markers", () => {
+  it("renders short rounded marker pills with hover content and click-to-line navigation", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoCodeEditor
+        {...baseProps({
+          buffer: buildBuffer({ text: "const x = 1;\nconst y = x;\n" }),
+          provideDiagnostics: () =>
+            Promise.resolve({
+              request: {
+                requestId: "req",
+                streamId: "stream",
+                sequence: 1,
+              },
+              diagnostics: [
+                {
+                  severity: "error",
+                  message: "Type error",
+                  source: "typescript",
+                  code: "2322",
+                  range: { start: { line: 1, column: 0 }, end: { line: 1, column: 5 } },
+                },
+              ],
+            }),
+        })}
+      />,
+    );
+    await flushMount();
+
+    const overview = await screen.findByTestId("keiko-editor-diagnostic-overview");
+    expect(overview).toHaveStyle({
+      right: "0px",
+      width: "8px",
+      pointerEvents: "none",
+      zIndex: "var(--z-tooltip)",
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /error diagnostic on line 2 .* type error/i }),
+      ).toBeInTheDocument();
+    });
+    const marker = screen.getByRole("button", {
+      name: /error diagnostic on line 2 .* type error/i,
+    });
+    expect(marker).toHaveAttribute("data-severity", "error");
+    expect(marker).not.toHaveAttribute("title");
+    expect(marker).toHaveStyle({
+      width: "100%",
+      height: "4px",
+      borderRadius: "999px",
+      background: "var(--ed-error, var(--feedback-danger, var(--danger)))",
+      pointerEvents: "auto",
+    });
+    expect(screen.getByText("Type error")).toHaveClass(
+      "keiko-editor-diagnostic-tooltip-message",
+    );
+    expect(screen.getByText("Line 2 · typescript(2322)")).toHaveClass(
+      "keiko-editor-diagnostic-tooltip-meta",
+    );
+
+    await user.click(marker);
+    const expectedRange = {
+      startLineNumber: 2,
+      startColumn: 1,
+      endLineNumber: 2,
+      endColumn: 6,
+    };
+    expect(captured.editor?.focus).toHaveBeenCalled();
+    expect(captured.editor?.setSelection).toHaveBeenCalledWith(expectedRange);
+    expect(captured.editor?.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(
+      expectedRange,
+    );
   });
 });
 

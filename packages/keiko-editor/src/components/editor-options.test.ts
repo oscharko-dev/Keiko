@@ -129,6 +129,23 @@ describe("buildEditorOptions", () => {
     expect(options.minimap).toEqual({ enabled: false });
   });
 
+  it("keeps Monaco scrollbar gutters as narrow as the visible slider", () => {
+    expect(options.scrollbar).toEqual({
+      verticalScrollbarSize: 8,
+      verticalSliderSize: 8,
+      horizontalScrollbarSize: 8,
+      horizontalSliderSize: 8,
+      useShadows: false,
+    });
+  });
+
+  it("disables Monaco's square diagnostic overview ruler for the rounded Keiko overlay", () => {
+    expect(options.overviewRulerLanes).toBe(0);
+    expect(options.overviewRulerBorder).toBe(false);
+    expect(options.hideCursorInOverviewRuler).toBe(true);
+    expect(options.renderValidationDecorations).toBe("on");
+  });
+
   it("reflects the effective read-only flag", () => {
     expect(options.readOnly).toBe(false);
     expect(buildEditorOptions({ readOnly: true, ariaPath: "x" }).readOnly).toBe(true);

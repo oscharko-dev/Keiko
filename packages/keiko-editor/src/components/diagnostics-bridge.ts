@@ -57,6 +57,18 @@ export interface MonacoMarkerData {
   readonly code?: string;
 }
 
+/** Overview marker rendered by the React shell. */
+export interface DiagnosticOverviewMarker {
+  readonly severity: number;
+  readonly message: string;
+  readonly startLineNumber: number;
+  readonly startColumn: number;
+  readonly endLineNumber: number;
+  readonly endColumn: number;
+  readonly source?: string | undefined;
+  readonly code?: string | undefined;
+}
+
 export interface MonacoDiagnosticsModel {
   getValue(): string;
   getVersionId(): number;
@@ -144,6 +156,21 @@ export function diagnosticsToMarkers(
   return diagnostics.map((diagnostic) => editorDiagnosticToMarker(diagnostic, severities));
 }
 
+export function markersToOverviewMarkers(
+  markers: readonly MonacoMarkerData[],
+): readonly DiagnosticOverviewMarker[] {
+  return markers.map((marker) => ({
+    severity: marker.severity,
+    message: marker.message,
+    startLineNumber: marker.startLineNumber,
+    startColumn: marker.startColumn,
+    endLineNumber: marker.endLineNumber,
+    endColumn: marker.endColumn,
+    ...(marker.source === undefined ? {} : { source: marker.source }),
+    ...(marker.code === undefined ? {} : { code: marker.code }),
+  }));
+}
+
 /**
  * Tally diagnostics into the content-free status-bar summary (Issue #1205). `info` and `hint` both
  * count as informational, so the status bar shows error/warning/info totals without leaking content.
@@ -193,6 +220,8 @@ export interface RegisterKeikoDiagnosticsArgs {
    * count. Never receives diagnostic text or ranges.
    */
   readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  /** Ranges and diagnostic labels for the rounded Keiko overview marker overlay. */
+  readonly onOverviewMarkers?: ((markers: readonly DiagnosticOverviewMarker[]) => void) | undefined;
 }
 
 interface DiagnosticsState {
@@ -269,12 +298,10 @@ function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): 
       if (isStale(rt, model, sequence, versionBefore)) {
         return;
       }
-      rt.args.markers.setModelMarkers(
-        model,
-        rt.args.owner,
-        diagnosticsToMarkers(response.diagnostics, rt.args.markers.MarkerSeverity),
-      );
+      const markers = diagnosticsToMarkers(response.diagnostics, rt.args.markers.MarkerSeverity);
+      rt.args.markers.setModelMarkers(model, rt.args.owner, markers);
       rt.args.onSummary?.(summarizeDiagnostics(response.diagnostics));
+      rt.args.onOverviewMarkers?.(markersToOverviewMarkers(markers));
     },
     () => {
       // A failure (network, abort, host error) leaves existing markers untouched and never throws.
@@ -297,6 +324,7 @@ function unbindModel(rt: DiagnosticsRuntime): void {
   rt.state.contentSub = null;
   if (rt.state.model !== null) {
     rt.args.markers.setModelMarkers(rt.state.model, rt.args.owner, []);
+    rt.args.onOverviewMarkers?.([]);
   }
   rt.state.model = null;
 }
@@ -309,6 +337,7 @@ function bindModel(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel | null)
   if (!isEligibleModel(rt, model)) {
     // Unsupported language: ensure no stale markers remain and register no analysis.
     rt.args.markers.setModelMarkers(model, rt.args.owner, []);
+    rt.args.onOverviewMarkers?.([]);
     return;
   }
   rt.state.contentSub = model.onDidChangeContent(() => {

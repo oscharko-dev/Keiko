@@ -241,6 +241,7 @@ function reportDescriptor(
 export interface UseEditorAgentBridgeParams {
   readonly agentSessionId: string;
   readonly controllers: EditorAgentActionControllers;
+  readonly enabled?: boolean | undefined;
   /**
    * Posts the current pane snapshot to the BFF. The host wraps this in `useCallback` with its full
    * snapshot dependency list, so its identity changes exactly when a snapshot dimension changes and
@@ -272,7 +273,14 @@ export interface UseEditorAgentBridgeResult {
 export function useEditorAgentBridge(
   params: UseEditorAgentBridgeParams,
 ): UseEditorAgentBridgeResult {
-  const { agentSessionId, controllers, registerSnapshot, onConflict, onAgentActivity } = params;
+  const {
+    agentSessionId,
+    controllers,
+    enabled = true,
+    registerSnapshot,
+    onConflict,
+    onAgentActivity,
+  } = params;
   const [agentSelectionRequest, setAgentSelectionRequest] =
     useState<EditorAgentSelectionRequest | null>(null);
 
@@ -306,6 +314,7 @@ export function useEditorAgentBridge(
 
   useEffect(() => {
     if (typeof EventSource === "undefined") return;
+    if (!enabled) return;
     // Issue #1392 — carry the session id so the BFF registers this connection as the session's live
     // browser bridge. The client-side session filter below remains as defense in depth.
     const source = new EventSource(
@@ -350,7 +359,7 @@ export function useEditorAgentBridge(
       source.removeEventListener("editor-agent:result", onResult);
       source.close();
     };
-  }, [agentSessionId]);
+  }, [agentSessionId, enabled]);
 
   return { agentSelectionRequest, consumeSelectionRequest };
 }

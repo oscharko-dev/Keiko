@@ -46,6 +46,8 @@ export interface BuildEditorOptionsArgs {
 const EDITOR_FONT_FAMILY =
   '"JetBrains Mono", "SFMono-Regular", "Menlo", "Consolas", "Liberation Mono", monospace';
 const EDITOR_FONT_SIZE = 13;
+const EDITOR_SCROLLBAR_SIZE = 8;
+type EditorConstructionOptions = monaco.editor.IStandaloneEditorConstructionOptions;
 
 const GOVERNED_COMPLETION_SUGGEST_OPTIONS = {
   showStatusBar: false,
@@ -81,13 +83,77 @@ const GOVERNED_COMPLETION_SUGGEST_OPTIONS = {
   showSnippets: true,
 } satisfies monaco.editor.ISuggestOptions;
 
+function buildPerformanceOptions(degraded: boolean): EditorConstructionOptions {
+  return {
+    // Engaged explicitly (default-on in Monaco) so the ADR-0042 D3.6 large-file contract is asserted,
+    // not merely inherited; it tokenises/highlights large models lazily.
+    largeFileOptimizations: true,
+    bracketPairColorization: { enabled: !degraded },
+    matchBrackets: degraded ? "never" : "always",
+    folding: !degraded,
+    foldingStrategy: "auto",
+    occurrencesHighlight: degraded ? "off" : "singleFile",
+    renderWhitespace: degraded ? "none" : "selection",
+  };
+}
+
+function buildAssistanceOptions(
+  inlineCompletionEnabled: boolean,
+  hoverEnabled: boolean,
+): EditorConstructionOptions {
+  return {
+    // Force below-line placement so top-of-editor diagnostics do not render under Keiko window chrome.
+    // The bridge renders quick info as inert Markdown, so hover remains the only enabled Markdown sink.
+    hover: { enabled: hoverEnabled, above: false },
+    quickSuggestions: false,
+    quickSuggestionsDelay: 0,
+    suggestOnTriggerCharacters: true,
+    parameterHints: { enabled: false },
+    suggest: { ...GOVERNED_COMPLETION_SUGGEST_OPTIONS },
+    inlineSuggest: {
+      // Enabled only when a governed inline-completion provider is wired (Issue #1200). The toolbar
+      // stays off and syntax highlighting of ghost text stays off so no Markdown sink runs.
+      enabled: inlineCompletionEnabled,
+      showToolbar: "never",
+      syntaxHighlightingEnabled: false,
+      suppressSuggestions: !inlineCompletionEnabled,
+    },
+    wordBasedSuggestions: "off",
+    links: false,
+    colorDecorators: false,
+    codeLens: false,
+    lightbulb: { enabled: "off" as monaco.editor.ShowLightbulbIconMode },
+    inlayHints: { enabled: "off" },
+  };
+}
+
+function buildChromeOptions(): EditorConstructionOptions {
+  return {
+    lineNumbers: "on",
+    find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "always" },
+    minimap: { enabled: false },
+    scrollbar: {
+      verticalScrollbarSize: EDITOR_SCROLLBAR_SIZE,
+      verticalSliderSize: EDITOR_SCROLLBAR_SIZE,
+      horizontalScrollbarSize: EDITOR_SCROLLBAR_SIZE,
+      horizontalSliderSize: EDITOR_SCROLLBAR_SIZE,
+      useShadows: false,
+    },
+    overviewRulerLanes: 0,
+    overviewRulerBorder: false,
+    hideCursorInOverviewRuler: true,
+    renderValidationDecorations: "on",
+    scrollBeyondLastLine: false,
+  };
+}
+
 /**
  * Build the Monaco options for the Keiko editor.
  *
  * Minimap policy: disabled. The editor mounts inside a dense workspace card (#1196) where a minimap
  * costs horizontal space and paints a second, redundant overview of an already-short viewport;
- * folding + the overview ruler cover navigation. `domReadOnly` is left `false` even when read-only
- * so selection and copy keep working on a read-only buffer.
+ * folding and the Keiko diagnostic overlay cover navigation. `domReadOnly` is left `false` even
+ * when read-only so selection and copy keep working on a read-only buffer.
  */
 export function buildEditorOptions(
   args: BuildEditorOptionsArgs,
@@ -102,42 +168,10 @@ export function buildEditorOptions(
     automaticLayout: true,
     fontFamily: EDITOR_FONT_FAMILY,
     fontSize: EDITOR_FONT_SIZE,
-    // Engaged explicitly (default-on in Monaco) so the ADR-0042 D3.6 large-file contract is asserted,
-    // not merely inherited; it tokenises/highlights large models lazily.
-    largeFileOptimizations: true,
-    bracketPairColorization: { enabled: !degraded },
-    matchBrackets: degraded ? "never" : "always",
-    lineNumbers: "on",
-    folding: !degraded,
-    foldingStrategy: "auto",
-    occurrencesHighlight: degraded ? "off" : "singleFile",
-    find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "always" },
-    // Force below-line placement so top-of-editor diagnostics do not render under Keiko window chrome.
-    // The bridge renders quick info as inert Markdown, so hover remains the only enabled Markdown sink.
-    hover: { enabled: hoverEnabled, above: false },
-    quickSuggestions: false,
-    quickSuggestionsDelay: 0,
-    suggestOnTriggerCharacters: true,
-    parameterHints: { enabled: false },
-    suggest: { ...GOVERNED_COMPLETION_SUGGEST_OPTIONS },
-    inlineSuggest: {
-      // Enabled only when a governed inline-completion provider is wired (Issue #1200). The toolbar
-      // stays off and syntax highlighting of ghost text stays off so no Markdown sink runs (the
-      // vendored DOMPurify is never reached); `suppressSuggestions: false` lets the #1199 completion
-      // dropdown and inline ghost text coexist without one hiding the other.
-      enabled: inlineCompletionEnabled,
-      showToolbar: "never",
-      syntaxHighlightingEnabled: false,
-      suppressSuggestions: !inlineCompletionEnabled,
-    },
-    wordBasedSuggestions: "off",
-    links: false,
-    colorDecorators: false,
-    codeLens: false,
-    lightbulb: { enabled: "off" as monaco.editor.ShowLightbulbIconMode },
-    inlayHints: { enabled: "off" },
+    ...buildPerformanceOptions(degraded),
+    ...buildAssistanceOptions(inlineCompletionEnabled, hoverEnabled),
+    ...buildChromeOptions(),
     multiCursorModifier: "alt",
-    minimap: { enabled: false },
     readOnly: args.readOnly,
     domReadOnly: false,
     ariaLabel: args.ariaLabel ?? `Editor: ${args.ariaPath}`,
@@ -150,8 +184,6 @@ export function buildEditorOptions(
     // editor chrome (tabs, status bar, command palette, find) holds WCAG 2.2 AA; the Monaco editing
     // canvas inherits Monaco's documented accessibility behaviour. See the editor UX spec.
     accessibilitySupport: "auto",
-    renderWhitespace: degraded ? "none" : "selection",
-    scrollBeyondLastLine: false,
     tabSize: 2,
     wordWrap: "off",
   };
