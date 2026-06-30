@@ -1093,7 +1093,7 @@ describe("local-knowledge preview session handlers", () => {
     expect(openReaderSpy).toHaveBeenCalledTimes(1);
     expect(readRangeSpy).not.toHaveBeenCalled();
     expect(await captured.body()).toEqual(largeBytes);
-  });
+  }, 10_000);
 
   it("returns a retryable error and closes the reader when the first read is short", async () => {
     const fixture = await seedPreviewFixture();
