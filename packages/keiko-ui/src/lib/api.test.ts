@@ -24,11 +24,18 @@ import {
   fetchPdfCitationPreviewDocument,
   fetchProjects,
   fetchStartupUpdatePreflight,
+  fetchUpdateRemediationStatus,
+  fetchUpdateSessionStatus,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
   pdfCitationPreviewDocumentUrl,
+  prepareUpdateRemediationStatus,
   runGatewayReadiness,
   checkUpdatePreflight,
+  cancelUpdateSession,
+  retryUpdateSession,
+  runUpdateRemediationAction,
+  startUpdateSession,
   requestEditorCompletion,
   requestEditorDiagnostics,
   requestEditorFormatting,
@@ -39,6 +46,7 @@ import {
   fetchWorkspaceSummary,
   transcribeDictation,
   synthesizeAssistantSpeech,
+  verifyUpdateRestart,
   ApiError,
   type StreamHandlers,
 } from "./api";
@@ -200,6 +208,197 @@ describe("update preflight helpers", () => {
           "Content-Type": "application/json",
           "X-Keiko-CSRF": "1",
         }),
+      }),
+    );
+  });
+});
+
+describe("governed update session helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const sessionStatus = {
+    schemaVersion: "1",
+    installMode: {
+      schemaVersion: "1",
+      status: "supported",
+      packageName: "@oscharko-dev/keiko",
+      packageManager: "npm",
+    },
+    policy: { enabled: true, source: "default" },
+  };
+
+  const session = {
+    schemaVersion: "1",
+    sessionId: "update-1",
+    packageName: "@oscharko-dev/keiko",
+    targetVersion: "0.2.11",
+    phase: "running",
+    failureReason: "none",
+    startedAt: "2026-06-30T12:00:00.000Z",
+    updatedAt: "2026-06-30T12:00:01.000Z",
+    cancelable: true,
+    retryable: false,
+    restartRequired: false,
+    message: "Installing update.",
+  };
+
+  it("fetchUpdateSessionStatus reads the current governed update session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(sessionStatus));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchUpdateSessionStatus();
+
+    expect(result.installMode.status).toBe("supported");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/session",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("startUpdateSession posts a target version through the CSRF gate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(session));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await startUpdateSession({ targetVersion: "0.2.11" });
+
+    expect(result.sessionId).toBe("update-1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/session",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify({ targetVersion: "0.2.11" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("exposes retry, cancel, and restart verification mutation helpers", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(session)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await retryUpdateSession();
+    await cancelUpdateSession();
+    await verifyUpdateRestart({ targetVersion: "0.2.11" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/update/session/retry",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({}),
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/update/session",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/update/session/verify-restart",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ targetVersion: "0.2.11" }),
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
+      }),
+    );
+  });
+});
+
+describe("governed update remediation helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const remediation = {
+    schemaVersion: 1,
+    checkedAt: "2026-06-30T12:00:00.000Z",
+    targetVersion: "0.2.11",
+    overallStatus: "pending",
+    updateCanComplete: false,
+    actions: [],
+    affectedFeatures: [],
+    warnings: [],
+  };
+
+  it("fetchUpdateRemediationStatus reads the persisted remediation status", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(remediation));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchUpdateRemediationStatus();
+
+    expect(result.overallStatus).toBe("pending");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/remediation",
+      expect.objectContaining({
+        cache: "no-store",
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("prepareUpdateRemediationStatus posts release impact through the CSRF gate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(remediation));
+    vi.stubGlobal("fetch", fetchMock);
+    const request = {
+      targetVersion: "0.2.11",
+      impact: {
+        affectedStateStores: ["local-knowledge"],
+        remediation: "local-knowledge-reindex-required",
+        userActionRequired: true,
+      },
+      persist: true,
+    } as const;
+
+    await prepareUpdateRemediationStatus(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/remediation/status",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify(request),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("runUpdateRemediationAction posts the selected action decision", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(remediation));
+    vi.stubGlobal("fetch", fetchMock);
+    const request = {
+      actionId: "local-knowledge:reindex",
+      targetVersion: "0.2.11",
+      decision: "run",
+    } as const;
+
+    await runUpdateRemediationAction(request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/update/remediation/actions",
+      expect.objectContaining({
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify(request),
+        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
       }),
     );
   });

@@ -85,6 +85,13 @@ import type {
   SafeGatewayConfig,
   VoiceCapabilityResolution,
   UpdatePreflightReport,
+  UpdateRemediationActionRequest,
+  UpdateRemediationStatusReport,
+  UpdateRemediationStatusRequest,
+  UpdateRestartVerificationRequest,
+  UpdateSession,
+  UpdateSessionStartRequest,
+  UpdateSessionStatus,
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
@@ -211,6 +218,64 @@ export async function fetchStartupUpdatePreflight(): Promise<UpdatePreflightRepo
 
 export async function checkUpdatePreflight(): Promise<UpdatePreflightReport> {
   return fetchJson("/api/update/preflight/check", { method: "POST", cache: "no-store" });
+}
+
+export async function fetchUpdateSessionStatus(): Promise<UpdateSessionStatus> {
+  return fetchJson("/api/update/session", { cache: "no-store" });
+}
+
+export async function startUpdateSession(input: UpdateSessionStartRequest): Promise<UpdateSession> {
+  return fetchJson("/api/update/session", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function retryUpdateSession(): Promise<UpdateSession> {
+  return fetchJson("/api/update/session/retry", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function cancelUpdateSession(): Promise<UpdateSession> {
+  return fetchJson("/api/update/session", { method: "DELETE", cache: "no-store" });
+}
+
+export async function verifyUpdateRestart(
+  input: UpdateRestartVerificationRequest = {},
+): Promise<UpdateSession> {
+  return fetchJson("/api/update/session/verify-restart", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function fetchUpdateRemediationStatus(): Promise<UpdateRemediationStatusReport> {
+  return fetchJson("/api/update/remediation", { cache: "no-store" });
+}
+
+export async function prepareUpdateRemediationStatus(
+  input: UpdateRemediationStatusRequest,
+): Promise<UpdateRemediationStatusReport> {
+  return fetchJson("/api/update/remediation/status", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function runUpdateRemediationAction(
+  input: UpdateRemediationActionRequest,
+): Promise<UpdateRemediationStatusReport> {
+  return fetchJson("/api/update/remediation/actions", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
 }
 
 // ---------------------------------------------------------------------------

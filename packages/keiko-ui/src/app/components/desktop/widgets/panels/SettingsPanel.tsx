@@ -487,9 +487,10 @@ function ModelCapabilityRow({
 
 interface GeneralPrefsProps {
   readonly voicePersonas: readonly VoicePersona[];
+  readonly openUpdatesWindow?: (() => void) | undefined;
 }
 
-function GeneralPrefs({ voicePersonas }: GeneralPrefsProps): ReactNode {
+function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): ReactNode {
   const { locale, setLocale, t } = useI18n();
   const voicePersonaOptions = useMemo(
     () => (voicePersonas.length > 0 ? voicePersonas : VOICE_PERSONAS),
@@ -672,6 +673,24 @@ function GeneralPrefs({ voicePersonas }: GeneralPrefsProps): ReactNode {
         <div id={languageHelpId} className="gpref-help">
           {t("settings.language.help")}
         </div>
+      </div>
+      <div className="set-sec-h">
+        <div>
+          <div className="set-sec-t">{t("settings.updates.title")}</div>
+          <div className="set-sec-d" id="settings-updates-help">
+            {t("settings.updates.description")}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="set-add"
+          aria-describedby="settings-updates-help"
+          disabled={openUpdatesWindow === undefined}
+          onClick={openUpdatesWindow}
+        >
+          <Icons.activity size={14} />
+          {t("settings.updates.open")}
+        </button>
       </div>
       <div className="set-sec-h">
         <div>
@@ -895,7 +914,11 @@ function describeSettingsLoadError(error: unknown, t: I18nTranslate): string {
   return message;
 }
 
-export function SettingsPanel(): ReactNode {
+export function SettingsPanel({
+  openUpdatesWindow,
+}: {
+  readonly openUpdatesWindow?: (() => void) | undefined;
+} = {}): ReactNode {
   const { t } = useI18n();
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
@@ -1133,7 +1156,9 @@ export function SettingsPanel(): ReactNode {
             ) : null}
           </>
         )}
-        {tab === "general" && <GeneralPrefs voicePersonas={voicePersonas} />}
+        {tab === "general" && (
+          <GeneralPrefs voicePersonas={voicePersonas} openUpdatesWindow={openUpdatesWindow} />
+        )}
         {tab === "security" && (
           <div className="set-placeholder">{t("settings.security.placeholder")}</div>
         )}

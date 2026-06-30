@@ -238,6 +238,23 @@ describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1
   });
 });
 
+describe("SettingsPanel Updates entry point (Issue #1696)", () => {
+  it("opens the governed Updates window from the General tab", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const openUpdatesWindow = vi.fn();
+    render(<SettingsPanel openUpdatesWindow={openUpdatesWindow} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review updates" }));
+
+    expect(openUpdatesWindow).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Review package updates, state impact, restart needs, patch notes, and remediation before installing.")).toBeInTheDocument();
+  });
+});
+
 describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 AC #3)", () => {
   it("renders no http(s):// host-name pattern in the model list markup", async () => {
     // A synthetic credential-shape string the test will look for. It is not
