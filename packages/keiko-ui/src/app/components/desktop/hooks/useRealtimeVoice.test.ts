@@ -175,6 +175,9 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
         expect.objectContaining({
           type: "session.update",
           session: expect.objectContaining({
+            instructions: expect.stringContaining(
+              "connected repository, files, documents, knowledge capsules, or project context",
+            ),
             audio: expect.objectContaining({
               input: expect.objectContaining({
                 transcription: { model: "whisper-1" },
