@@ -325,7 +325,11 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       store: createInMemoryUiStore(),
     });
     expect(existsSync(join(memoryDir, "keiko-memory.db"))).toBe(true);
-    expect(deps.memoryVault?.listMemories({ includeExpired: true })).toEqual([]);
+    expect(
+      deps.memoryVault?.listMemoriesAcrossScopes(deps.memoryVault.listMemoryScopes(), {
+        includeExpired: true,
+      }),
+    ).toEqual([]);
     deps.store.close();
     deps.memoryVault?.close();
   });

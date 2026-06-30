@@ -16,8 +16,11 @@
 // Custom stores without that optional method still work through get+put, but the built-in
 // Node and in-memory stores use the safer update path.
 //
-// Failure mode: persistence errors are caught and logged to console.error; the handler
-// never throws. An audit-persistence failure must NEVER break the user's memory mutation.
+// Failure mode: ordinary post-commit bridge errors are caught and logged to console.error so a
+// noncritical audit sink cannot break already-committed writes. Privacy-critical delete/forget uses
+// `createMemoryAuditDeleteCommitHandler` below: it writes inside the vault's pre-commit delete hook
+// and throws on persistence failure so the memory mutation rolls back instead of committing without
+// its audit evidence.
 // Corrupt audit manifests are never reset or overwritten; append attempts fail closed and
 // preserve the existing artifact for operator investigation.
 //
@@ -373,6 +376,7 @@ export interface RecordMemoryAuditOptions {
   readonly now?: () => number;
   readonly redactString?: (input: string) => string;
   readonly onPersistError?: (error: unknown) => void;
+  readonly required?: boolean;
 }
 
 export function recordMemoryAudit(
@@ -410,9 +414,59 @@ export function recordMemoryAudits(
     try {
       appendAuditEvents(options.evidenceStore, runId, bucket);
     } catch (error) {
+      if (options.required === true) {
+        throw error;
+      }
       onPersistError(error);
     }
   }
+}
+
+export function createMemoryAuditDeleteCommitHandler(
+  options: MemoryAuditHandlerOptions,
+): (events: readonly MemoryEvent[]) => void {
+  const now = options.now ?? ((): number => Date.now());
+  const newEventId = options.newEventId ?? ((): string => randomUUID());
+  return (events: readonly MemoryEvent[]): void => {
+    const auditEvents: MemoryAuditEvent[] = [];
+    for (const event of events) {
+      switch (event.kind) {
+        case "memory:deleted":
+          if (!event.tombstoned) {
+            auditEvents.push(
+              buildDeletedEvent(event.memoryId, event.scope, {
+                occurredAt: now(),
+                newEventId,
+                redactString: options.redactString,
+              }),
+            );
+          }
+          break;
+        case "memory:tombstoned":
+          auditEvents.push(
+            buildTombstonedEvent(event.tombstone, {
+              occurredAt: now(),
+              newEventId,
+              redactString: options.redactString,
+            }),
+          );
+          break;
+        default:
+          break;
+      }
+    }
+    recordMemoryAudits(
+      {
+        evidenceStore: options.evidenceStore,
+        redactString: options.redactString,
+        required: true,
+        ...(options.onPersistError === undefined
+          ? {}
+          : { onPersistError: options.onPersistError }),
+      },
+      auditEvents,
+    );
+  };
 }
 
 // ─── No-op handler ────────────────────────────────────────────────────────────

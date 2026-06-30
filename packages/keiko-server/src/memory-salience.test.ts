@@ -129,7 +129,11 @@ function context(): ConversationMemoryRuntimeContext {
 
 const USER_TEXT = "I'm building a fintech app called Atlas in Rust, my team is in Berlin";
 
-function salienceConfig(modelId: string, supportsResponseFormat: boolean): GatewayConfig {
+function salienceConfig(
+  modelId: string,
+  supportsResponseFormat: boolean,
+  supportsSeeding = false,
+): GatewayConfig {
   return {
     providers: [
       {
@@ -160,6 +164,7 @@ function salienceConfig(modelId: string, supportsResponseFormat: boolean): Gatew
         preferredUseCases: ["Tests"],
         knownLimitations: [],
         supportsResponseFormat,
+        supportsSeeding,
       },
     ],
   };
@@ -233,9 +238,11 @@ describe("captureSalientFromTurn", () => {
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
     const vault = makeVault();
     const seen: (GatewayRequest["responseFormat"] | undefined)[] = [];
+    const seenSeeds: (number | undefined)[] = [];
     const port: ModelPort = {
       call(request): Promise<NormalizedResponse> {
         seen.push(request.responseFormat);
+        seenSeeds.push(request.seed);
         return Promise.resolve({
           modelId: request.modelId,
           content: ATLAS_FACTS,
@@ -280,6 +287,52 @@ describe("captureSalientFromTurn", () => {
 
     expect(seen[0]?.type).toBe("json_schema");
     expect(seen[1]).toBeUndefined();
+    expect(seenSeeds).toEqual([undefined, undefined]);
+  });
+
+  it("uses the configured salience model alias and deterministic seed when supported", async () => {
+    const vault = makeVault();
+    const seen: GatewayRequest[] = [];
+    const port: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seen.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: ATLAS_FACTS,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "salience-test",
+            promptTokens: 7,
+            completionTokens: 3,
+            latencyMs: 11,
+            costClass: "high",
+          },
+        });
+      },
+    };
+    const deps = makeDeps({
+      memoryVault: vault,
+      env: { KEIKO_MEMORY_SALIENCE_MODEL_ID: "salience-small" },
+      config: salienceConfig("salience-small", true, true),
+      configPresent: true,
+      modelPortFactory: (modelId) => (modelId === "salience-small" ? port : undefined),
+    });
+    const ctx = context();
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "chat-heavy",
+      "ok",
+    );
+
+    expect(actions).toHaveLength(3);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.modelId).toBe("salience-small");
+    expect(seen[0]?.seed).toBe(204);
+    expect(seen[0]?.responseFormat?.type).toBe("json_schema");
   });
 
   it("forwards assistant text to the salience model as context-only", async () => {

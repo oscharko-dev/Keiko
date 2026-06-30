@@ -46,8 +46,12 @@ import {
 } from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryReviewerId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 import { createBffMemoryVault } from "./memory-handlers.js";
-import { createMemoryAuditHandler } from "./memory-audit-handler.js";
+import {
+  createMemoryAuditDeleteCommitHandler,
+  createMemoryAuditHandler,
+} from "./memory-audit-handler.js";
 import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
@@ -125,6 +129,11 @@ export type Redactor = (value: unknown) => unknown;
 export type ModelPortFactory = (modelId: string) => ModelPort | undefined;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
+export interface MemoryAuthorizationContext {
+  readonly reviewerId: MemoryReviewerId;
+  readonly authorizedScopes: () => readonly MemoryScope[];
+}
+
 export interface RuntimeGatewayConfig {
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
@@ -186,6 +195,10 @@ export interface UiHandlerDeps {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  // Server-authoritative identity and scope bounds for privacy-critical MemoriaViva mutations.
+  // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
+  // deployments must inject the authenticated principal's reviewer id and authorized scopes.
+  readonly memoryAuthorization?: MemoryAuthorizationContext | undefined;
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
@@ -761,12 +774,19 @@ function buildMemoryVault(
   evidenceStore: EvidenceStore,
   env: EnvSource,
 ): MemoryVaultStore {
+  const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
   return createBffMemoryVault(
     redactString,
     // #214 — wire every successful vault mutation into the audit ledger. The handler
     // shares the same redactString closure as the live-payload redactor so audit
     // summaries inherit the same secret-shape scrubbing as wire traffic.
-    createMemoryAuditHandler({ evidenceStore, redactString }),
+    (event) => {
+      if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
+        return;
+      }
+      postCommitAudit(event);
+    },
+    createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
     env,
   );
 }
@@ -777,6 +797,16 @@ function buildMemoryVault(
 // otherwise. The constant matches the empty-but-non-zero-length contract of `scope()` so
 // every route resolves a workspaceId instead of returning 403.
 const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
+const DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID = "local-operator" as MemoryReviewerId;
+
+function buildLoopbackMemoryAuthorization(
+  memoryVault: MemoryVaultStore,
+): MemoryAuthorizationContext {
+  return {
+    reviewerId: DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID,
+    authorizedScopes: () => memoryVault.listMemoryScopes(),
+  };
+}
 
 function resolveLoopbackWorkspaceId(env: EnvSource): string {
   const explicit = env.KEIKO_WORKSPACE_ID;
@@ -1042,6 +1072,7 @@ interface PeripheralManagers {
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
+  readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
 function buildPeripherals(
@@ -1051,6 +1082,7 @@ function buildPeripherals(
   redactString: (value: string) => string,
   liveRedactor: Redactor,
 ): PeripheralManagers {
+  const memoryVault = buildMemoryVault(redactString, evidenceStore, options.env);
   return {
     terminal: buildTerminalManager({
       store: uiStore,
@@ -1075,7 +1107,8 @@ function buildPeripherals(
       evidenceStore,
       redactor: liveRedactor,
     }),
-    memoryVault: buildMemoryVault(redactString, evidenceStore, options.env),
+    memoryVault,
+    memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
 }
 
@@ -1351,7 +1384,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
     contextProfile: DEFAULT_CONTEXT_PROFILE,
     ...buildPeripherals(options, bundle.uiStore, evidenceStore, redactString, liveRedactor),
-    consolidationJobs: createConsolidationJobRegistry(),
+    consolidationJobs: createConsolidationJobRegistry({ evidenceStore }),
     ...optionalPersistenceServices(bundle),
   };
 }

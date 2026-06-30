@@ -358,13 +358,21 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
-  it("still records an access for surfaced memories (reinforcement reflex intact)", async () => {
+  it("records access only after the assistant uses a surfaced memory", async () => {
     const memoryDir = join(tmp, "vault-access");
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
     insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
     storeEmbedding(vault, "mem-product", "The user is building a product named Keiko");
-    await restart(deps({ memoryVault: vault }, true));
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          modelPortFactory: () => fakeModel("The product is named Keiko."),
+        },
+        true,
+      ),
+    );
 
     const chatId = await createChat();
     await sendChat(chatId, "Wie heißt mein Produkt");
@@ -448,6 +456,36 @@ describe("semantic memory retrieval (#204)", () => {
     expect(signals.mmrLambda).toBe(0.61);
     expect(metadataCalls).toBe(1);
     expect(fullRecordCalls).toBe(0);
+    vault.close();
+  });
+
+  it("bounds the embedding sweep after metadata prefiltering", async () => {
+    const memoryDir = join(tmp, "vault-prefilter-candidates");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    for (let i = 0; i < 170; i += 1) {
+      insertAccepted(
+        vault,
+        `mem-prefilter-${String(i).padStart(3, "0")}`,
+        `Candidate ${String(i)}`,
+      );
+    }
+    let requestedIds: readonly MemoryId[] = [];
+    const spiedVault: MemoryVaultStore = {
+      ...vault,
+      getEmbeddings: (ids) => {
+        requestedIds = ids;
+        return vault.getEmbeddings(ids);
+      },
+    };
+    const d = deps({ memoryVault: spiedVault }, true);
+    const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
+    const query = "Which candidate matters?";
+    const gate = semanticRetrievalGateForText(d, query, {});
+
+    await buildConversationRetrievalSignals(d, spiedVault, query, [scope], Date.now(), gate);
+
+    expect(requestedIds).toHaveLength(160);
     vault.close();
   });
 

@@ -141,7 +141,11 @@ export interface MemoryVaultStore {
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
   readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];
-  readonly listMemories: (options?: ListMemoriesOptions) => readonly MemoryRecord[];
+  readonly listMemoryScopes: () => readonly MemoryScope[];
+  readonly listMemoriesAcrossScopes: (
+    scopes: readonly MemoryScope[],
+    options?: ListMemoriesOptions,
+  ) => readonly MemoryRecord[];
   readonly listMemoriesByScope: (
     scope: MemoryScope,
     options?: ListMemoriesOptions,
@@ -186,6 +190,10 @@ export interface MemoryVaultFactoryOptions {
   readonly newTombstoneId?: () => string;
   readonly redactString?: (input: string) => string;
   readonly onMemoryEvent?: (event: MemoryEvent) => void;
+  // Called inside the delete transaction after all SQL changes have been applied and before
+  // COMMIT. This is intentionally delete-only: privacy-critical forget/delete audit can throw here
+  // to roll back the memory mutation, while the public onMemoryEvent contract remains post-commit.
+  readonly onDeleteEventsBeforeCommit?: (events: readonly MemoryEvent[]) => void;
   // Test-only injection seams for encryption-at-rest (ADR-0035). Production callers pass neither:
   // createMemoryVault resolves the key internally via resolveVaultKey. `cipher` overrides the whole
   // cipher; `vaultKey` supplies a deterministic 32-byte key without touching the keychain/keyfile.

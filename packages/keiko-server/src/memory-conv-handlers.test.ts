@@ -101,6 +101,13 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
+function listAllMemories(
+  vault: MemoryVaultStore,
+  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
+}
+
 function registerChat(
   deps: UiHandlerDeps,
   label = "memory-conversation",
@@ -439,6 +446,8 @@ describe("handleMemoryRetrieveContext", () => {
 
     expect(port.listOutgoingEdges?.(source.id)).toEqual([edge]);
     expect(port.listIncomingEdges?.(target.id)).toEqual([edge]);
+    expect(port.listEdgesForMemories?.([source.id, target.id]).get(source.id)).toEqual([edge]);
+    expect(port.listEdgesForMemories?.([source.id, target.id]).get(target.id)).toEqual([edge]);
   });
 
   it("rejects oversize bodies with 413", async () => {
@@ -663,7 +672,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     );
     expect(result.status).toBe(200);
     expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "credential-shape" }]);
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
   });
 
   it("uses deployment redaction literals as customer identifier rejection matchers", async () => {
@@ -682,7 +691,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     );
     expect(result.status).toBe(200);
     expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
   });
 
   it("resolves an explicit forget intent against in-scope memories", async () => {

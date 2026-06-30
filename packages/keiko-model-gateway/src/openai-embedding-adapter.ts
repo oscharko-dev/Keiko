@@ -89,7 +89,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isNumberArray(value: unknown): value is readonly number[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "number");
+  return (
+    Array.isArray(value) &&
+    value.every((entry) => typeof entry === "number" && Number.isFinite(entry))
+  );
+}
+
+function normalizedVector(values: readonly number[]): Float32Array {
+  const vector = Float32Array.from(values);
+  let squared = 0;
+  for (const value of vector) {
+    squared += value * value;
+  }
+  if (squared <= 0) return vector;
+  const norm = Math.sqrt(squared);
+  for (let i = 0; i < vector.length; i += 1) {
+    const value = vector[i];
+    if (value !== undefined) vector[i] = value / norm;
+  }
+  return vector;
 }
 
 function extractFirstEmbedding(payload: Record<string, unknown>): readonly number[] | null {
@@ -243,7 +261,7 @@ async function decodeSuccess(
   if (shape === null) {
     return { ok: false, kind: "invalid-response" };
   }
-  const vector = Float32Array.from(shape.embedding);
+  const vector = normalizedVector(shape.embedding);
   const modelId = shape.model ?? request.modelId;
   const value: OpenAIEmbeddingSuccess =
     shape.modelRevision !== undefined
@@ -322,7 +340,7 @@ function buildBatchSuccess(
   const modelId =
     (typeof item.model === "string" ? item.model : undefined) ?? ctx.topModel ?? ctx.requestModelId;
   return {
-    vector: Float32Array.from(embedding),
+    vector: normalizedVector(embedding),
     modelId,
     ...(ctx.topRevision !== undefined ? { modelRevision: ctx.topRevision } : {}),
   };

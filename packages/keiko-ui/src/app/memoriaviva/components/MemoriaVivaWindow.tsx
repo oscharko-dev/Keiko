@@ -7,6 +7,7 @@ import { NumberControlStepper } from "@/app/components/desktop/NumberControlStep
 import { useConversationMemorySettings } from "@/app/components/desktop/hooks/memorySettings";
 import { Toggle } from "@/app/components/desktop/widgets/shared/Toggle";
 import type { fetchMemories } from "@/lib/memory-api";
+import { useI18n } from "@/lib/i18n";
 import { MemoryConsolidation } from "./MemoryConsolidation";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryListContent } from "./MemoryList";
@@ -28,12 +29,12 @@ const EMPTY_FILTERS: MemoryFilterState = {
 };
 
 function MemoriaVivaRequestSettings(): ReactNode {
+  const { t } = useI18n();
   const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens } =
     useConversationMemorySettings();
   const generatedId = useId();
   const budgetInputId = `${generatedId}-memoriaviva-budget`;
   const budgetHelpId = `${generatedId}-memoriaviva-budget-help`;
-  const budgetHelp = "Limits the MemoriaViva memory context attached to the next chat request.";
 
   const stepMemoryBudget = useCallback(
     (delta: number): void => {
@@ -59,34 +60,32 @@ function MemoriaVivaRequestSettings(): ReactNode {
   );
 
   return (
-    <section className="mv-settings" aria-label="MemoriaViva request settings">
+    <section className="mv-settings" aria-label={t("memoria.settings.region")}>
       <div className="mv-settings-main">
         <div>
-          <h2 className="mv-settings-title">Request settings</h2>
-          <p className="mv-settings-copy">
-            Controls how MemoriaViva contributes memory context to chat requests.
-          </p>
+          <h2 className="mv-settings-title">{t("memoria.settings.title")}</h2>
+          <p className="mv-settings-copy">{t("memoria.settings.description")}</p>
         </div>
         <span className="mv-settings-status" data-enabled={memoryEnabled ? "true" : "false"}>
-          {memoryEnabled ? "Enabled for chat" : "Disabled for chat"}
+          {memoryEnabled ? t("memoria.settings.enabled") : t("memoria.settings.disabled")}
         </span>
       </div>
 
       <div className="mv-settings-grid">
         <div className="mv-setting-toggle">
           <span>
-            <strong>Use in chat</strong>
-            <span>Attach relevant memories when the next request is sent.</span>
+            <strong>{t("memoria.settings.useInChat")}</strong>
+            <span>{t("memoria.settings.useInChatHelp")}</span>
           </span>
           <Toggle
             on={memoryEnabled}
             onChange={setMemoryEnabled}
-            label="Use MemoriaViva in chat requests"
+            label={t("memoria.settings.useInChatLabel")}
           />
         </div>
 
         <div className="mv-setting-budget">
-          <label htmlFor={budgetInputId}>Memory context budget</label>
+          <label htmlFor={budgetInputId}>{t("memoria.settings.budget")}</label>
           <div className="mv-budget-control">
             <span className="number-control number-control-pill">
               <input
@@ -96,21 +95,21 @@ function MemoriaVivaRequestSettings(): ReactNode {
                 min={0}
                 step={100}
                 value={memoryBudgetTokens}
-                aria-label="MemoriaViva context budget"
+                aria-label={t("memoria.settings.budget")}
                 aria-describedby={budgetHelpId}
                 onChange={handleBudgetChange}
                 onWheel={handleBudgetWheel}
               />
               <NumberControlStepper
-                label="MemoriaViva context budget"
+                label={t("memoria.settings.budget")}
                 onStepUp={() => stepMemoryBudget(100)}
                 onStepDown={() => stepMemoryBudget(-100)}
               />
             </span>
-            <span className="mv-budget-unit">tokens</span>
+            <span className="mv-budget-unit">{t("memoria.settings.budgetUnit")}</span>
           </div>
           <p id={budgetHelpId} className="mv-setting-help">
-            {budgetHelp}
+            {t("memoria.settings.budgetHelp")}
           </p>
         </div>
       </div>

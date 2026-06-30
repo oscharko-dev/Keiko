@@ -16,6 +16,7 @@ import type {
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { MemoryTombstone } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
+import { cachedPrepare } from "./statements.js";
 
 interface TombstoneRow {
   readonly id: string;
@@ -77,7 +78,7 @@ export function insertTombstoneRow(
   cipher: MemoryContentCipher,
 ): void {
   const reason = tombstone.reason === undefined ? null : cipher.sealString(tombstone.reason);
-  db.prepare(INSERT_SQL).run(
+  cachedPrepare(db, INSERT_SQL).run(
     tombstone.id,
     tombstone.memoryId,
     tombstone.scopeKind,
@@ -97,9 +98,10 @@ export function listTombstonesByScopeRows(
   scope: MemoryScope,
   cipher: MemoryContentCipher,
 ): readonly MemoryTombstone[] {
-  const rows = db
-    .prepare(LIST_BY_SCOPE_SQL)
-    .all(scopeKindOf(scope), scopeCoordinateOf(scope)) as unknown as readonly TombstoneRow[];
+  const rows = cachedPrepare(db, LIST_BY_SCOPE_SQL).all(
+    scopeKindOf(scope),
+    scopeCoordinateOf(scope),
+  ) as unknown as readonly TombstoneRow[];
   return rows.map((row) => rowToTombstone(row, cipher));
 }
 
@@ -108,8 +110,10 @@ export function deleteTombstonesByScopeBeforeRows(
   scope: MemoryScope,
   forgottenBeforeMs: number,
 ): number {
-  const info = db
-    .prepare(DELETE_BY_SCOPE_BEFORE_SQL)
-    .run(scopeKindOf(scope), scopeCoordinateOf(scope), forgottenBeforeMs);
+  const info = cachedPrepare(db, DELETE_BY_SCOPE_BEFORE_SQL).run(
+    scopeKindOf(scope),
+    scopeCoordinateOf(scope),
+    forgottenBeforeMs,
+  );
   return Number(info.changes);
 }

@@ -12,13 +12,9 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts";
 import { correctMemory, editMemory } from "@/lib/memory-api";
+import { useI18n } from "@/lib/i18n";
 import { formatError } from "./format-error";
-
-const SENSITIVITY_LABELS: Readonly<Record<MemorySensitivity, string>> = {
-  public: "Public",
-  confidential: "Confidential",
-  restricted: "Restricted",
-};
+import { sensitivityLabel } from "./MemoryFilters";
 
 const FOCUSABLE_SELECTOR =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
@@ -40,6 +36,7 @@ export function EditMemoryDialog({
   editMemoryImpl = editMemory,
   correctMemoryImpl = correctMemory,
 }: EditMemoryDialogProps): ReactNode {
+  const { t } = useI18n();
   const [body, setBody] = useState(record.body);
   const [tagsRaw, setTagsRaw] = useState(record.tags.join(", "));
   const [sensitivity, setSensitivity] = useState<MemorySensitivity>(record.provenance.sensitivity);
@@ -111,7 +108,7 @@ export function EditMemoryDialog({
   const handleSave = useCallback(async (): Promise<void> => {
     const trimmedBody = body.trim();
     if (trimmedBody.length === 0) {
-      setError("Body cannot be empty.");
+      setError(t("memoria.dialog.bodyRequired"));
       setBodyInvalid(true);
       // Return focus to the offending field instead of leaving it on Save.
       firstRef.current?.focus();
@@ -151,6 +148,7 @@ export function EditMemoryDialog({
     correctMemoryImpl,
     editMemoryImpl,
     onSave,
+    t,
   ]);
 
   return (
@@ -171,12 +169,12 @@ export function EditMemoryDialog({
         onKeyDown={handleKeyDown}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          {isCorrectMode ? "Correct memory" : "Edit memory"}
+          {isCorrectMode ? t("memoria.dialog.correctTitle") : t("memoria.dialog.editTitle")}
         </h2>
 
         <div className="mc-dialog-field">
           <label htmlFor="edit-body" className="mc-dialog-label">
-            {isCorrectMode ? "Corrected body" : "Body"}
+            {isCorrectMode ? t("memoria.dialog.correctedBody") : t("memoria.dialog.body")}
           </label>
           <textarea
             id="edit-body"
@@ -203,7 +201,8 @@ export function EditMemoryDialog({
           <>
             <div className="mc-dialog-field">
               <label htmlFor="edit-tags" className="mc-dialog-label">
-                Tags <span className="mc-dialog-hint">(comma-separated)</span>
+                {t("memoria.dialog.tags")}{" "}
+                <span className="mc-dialog-hint">{t("memoria.dialog.commaSeparated")}</span>
               </label>
               <input
                 id="edit-tags"
@@ -219,7 +218,7 @@ export function EditMemoryDialog({
 
             <div className="mc-dialog-field">
               <label htmlFor="edit-sensitivity" className="mc-dialog-label">
-                Sensitivity
+                {t("memoria.sensitivity")}
               </label>
               <select
                 id="edit-sensitivity"
@@ -232,7 +231,7 @@ export function EditMemoryDialog({
               >
                 {MEMORY_SENSITIVITIES.map((s) => (
                   <option key={s} value={s}>
-                    {SENSITIVITY_LABELS[s]}
+                    {sensitivityLabel(s, t)}
                   </option>
                 ))}
               </select>
@@ -248,7 +247,7 @@ export function EditMemoryDialog({
 
         <div className="mc-dialog-actions">
           <button type="button" className="lk-btn lk-btn-ghost" onClick={onClose} disabled={saving}>
-            Cancel
+            {t("memoria.cancel")}
           </button>
           <button
             type="button"
@@ -261,11 +260,11 @@ export function EditMemoryDialog({
           >
             {saving
               ? isCorrectMode
-                ? "Submitting…"
-                : "Saving…"
+                ? t("memoria.dialog.submitting")
+                : t("memoria.dialog.saving")
               : isCorrectMode
-                ? "Submit correction"
-                : "Save"}
+                ? t("memoria.dialog.submitCorrection")
+                : t("memoria.dialog.save")}
           </button>
         </div>
       </div>
