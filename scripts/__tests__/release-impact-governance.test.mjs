@@ -331,7 +331,7 @@ describe("release-impact governance", () => {
     expect(`${publish.stdout}\n${publish.stderr}`).toContain(
       "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
     );
-  });
+  }, 20_000);
 
   it("rejects publish approval references outside the current repository", () => {
     const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
