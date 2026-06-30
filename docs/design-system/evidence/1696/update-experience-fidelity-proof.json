@@ -2,7 +2,7 @@
   "issue": 1696,
   "epic": 1687,
   "verdict": "PASS",
-  "cssSha256": "464dc9d59cb44ba1830d2afc50416ec0abd1bf9c41afcb53de6977eeaab75c01",
+  "cssSha256": "4d382a46984b8af541a985e967ae9439debe54da5f633210e340bf12fd283820",
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
