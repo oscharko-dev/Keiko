@@ -12,6 +12,8 @@ import {
 } from "./update-preflight.js";
 import type { RouteContext } from "./routes.js";
 
+const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -63,7 +65,7 @@ function baseCatalog(): ReleaseImpactCatalog {
           reviewer: "release-owner",
           reviewedAt: "2026-06-30",
           humanApproved: true,
-          approvalReference: "issue:#1692",
+          approvalReference: APPROVED_RELEASE_REFERENCE,
           rationale: "Reviewed.",
         },
       },
@@ -107,7 +109,7 @@ function baseCatalog(): ReleaseImpactCatalog {
           reviewer: "release-owner",
           reviewedAt: "2026-06-30",
           humanApproved: true,
-          approvalReference: "issue:#1692",
+          approvalReference: APPROVED_RELEASE_REFERENCE,
           rationale: "Reviewed.",
         },
       },
@@ -144,7 +146,7 @@ function baseCatalog(): ReleaseImpactCatalog {
           reviewer: "release-owner",
           reviewedAt: "2026-06-30",
           humanApproved: true,
-          approvalReference: "issue:#1692",
+          approvalReference: APPROVED_RELEASE_REFERENCE,
           rationale: "Reviewed.",
         },
       },
@@ -374,7 +376,7 @@ describe("update preflight service", () => {
         reviewer: "release-owner",
         reviewedAt: "2026-06-30",
         humanApproved: true,
-        approvalReference: "issue:#1692",
+        approvalReference: APPROVED_RELEASE_REFERENCE,
         rationale: "Reviewed.",
       },
     } satisfies ReleaseImpactEntry;
@@ -394,11 +396,7 @@ describe("update preflight service", () => {
       tag: "v0.2.11",
       title: "Keiko 0.2.11",
       summary: "Catalog follow-up summary for 0.2.11",
-      notes: [
-        "Shared bullet",
-        "Structured update preflight metadata",
-        "Target release follow-up",
-      ],
+      notes: ["Shared bullet", "Structured update preflight metadata", "Target release follow-up"],
     });
     deps.store.close();
   });
@@ -527,7 +525,7 @@ describe("update preflight service", () => {
             reviewer: "release-owner",
             reviewedAt: "2026-06-30",
             humanApproved: true,
-            approvalReference: "issue:#1692",
+            approvalReference: APPROVED_RELEASE_REFERENCE,
             rationale: "Reviewed.",
           },
         },
@@ -573,6 +571,52 @@ describe("update preflight service", () => {
     });
 
     expect(report.updateAvailable).toBe(true);
+    expect(report.releaseMetadataStatus).toBe("live");
+    expect(report.release?.source).toBe("github-release");
+    expect(report.impact).toBeUndefined();
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.manualUpdateRequired).toBe(true);
+    expect(report.blockers).toEqual([
+      expect.objectContaining({
+        code: "release-impact-missing",
+        userActionRequired: true,
+      }),
+    ]);
+    deps.store.close();
+  });
+
+  it("blocks one-click readiness when runtime metadata only has issue-scoped approval evidence", async () => {
+    const catalog = {
+      ...baseCatalog(),
+      entries: baseCatalog().entries.map((entry) =>
+        entry.packageVersion === "0.2.11"
+          ? {
+              ...entry,
+              review: {
+                ...entry.review,
+                approvalReference: "issue:#1692",
+              },
+            }
+          : entry,
+      ),
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: "v0.2.11",
+          name: "Keiko 0.2.11",
+          body: "- Public note",
+        }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: catalog,
+    });
+
     expect(report.releaseMetadataStatus).toBe("live");
     expect(report.release?.source).toBe("github-release");
     expect(report.impact).toBeUndefined();

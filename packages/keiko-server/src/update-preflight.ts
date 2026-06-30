@@ -46,6 +46,7 @@ const REQUIRED_PUBLISH_GATES: readonly ReleaseImpactPublishGate[] = [
   "package-surface",
   "qi-supply-chain",
 ];
+const RUNTIME_APPROVAL_REFERENCE_PATTERN = /^github-pr-review:([^#/\s]+\/[^#/\s]+)#\d+#\d+$/u;
 const RELEASE_IMPACT_USER_VISIBLE_CHANGES = [
   "none",
   "observable",
@@ -141,7 +142,10 @@ function isEnumValue<T extends string>(value: unknown, allowed: readonly T[]): v
   return typeof value === "string" && allowed.includes(value as T);
 }
 
-function isEnumArray<T extends string>(value: unknown, allowed: readonly T[]): value is readonly T[] {
+function isEnumArray<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): value is readonly T[] {
   return Array.isArray(value) && value.every((item) => isEnumValue(item, allowed));
 }
 
@@ -167,9 +171,7 @@ function isReleaseImpactReview(value: unknown): value is ReleaseImpactReview {
   );
 }
 
-function isReleaseImpactBreakingException(
-  value: unknown,
-): value is ReleaseImpactBreakingException {
+function isReleaseImpactBreakingException(value: unknown): value is ReleaseImpactBreakingException {
   return (
     isRecord(value) &&
     isString(value.rationale) &&
@@ -293,7 +295,9 @@ function releaseMetadataReviewed(entry: ReleaseImpactEntry): boolean {
   return (
     entry.releaseTag === `v${entry.packageVersion}` &&
     entry.review.status === "reviewed" &&
+    entry.review.reviewer === "release-owner" &&
     entry.review.humanApproved &&
+    RUNTIME_APPROVAL_REFERENCE_PATTERN.test(entry.review.approvalReference) &&
     REQUIRED_PUBLISH_GATES.every((gate) => entry.publishGates.includes(gate))
   );
 }
@@ -318,16 +322,14 @@ function severityFromPriority(priority: ReleaseImpactPriority): UpdatePreflightS
 
 function minimumVersion(values: readonly string[]): string | undefined {
   return values.reduce<string | undefined>(
-    (min, value) =>
-      min === undefined || compareSemver(value, min) < 0 ? value : min,
+    (min, value) => (min === undefined || compareSemver(value, min) < 0 ? value : min),
     undefined,
   );
 }
 
 function highestVersion(values: readonly string[]): string | undefined {
   return values.reduce<string | undefined>(
-    (max, value) =>
-      max === undefined || compareSemver(value, max) > 0 ? value : max,
+    (max, value) => (max === undefined || compareSemver(value, max) > 0 ? value : max),
     undefined,
   );
 }
@@ -418,9 +420,11 @@ function supportedFromBlocker(
   entries: readonly ReleaseImpactEntry[],
   currentVersion: string,
 ): UpdatePreflightBlocker | undefined {
-  const floor = highestVersion(entries.map((entry) => minimumVersion(entry.supportedFrom)).filter(
-    (value): value is string => value !== undefined,
-  ));
+  const floor = highestVersion(
+    entries
+      .map((entry) => minimumVersion(entry.supportedFrom))
+      .filter((value): value is string => value !== undefined),
+  );
   if (floor === undefined) {
     return blocker(
       "one-click-ineligible",
@@ -682,7 +686,8 @@ function fallbackReleaseFromImpact(
   targetVersion: string,
   impact: UpdatePreflightImpactSummary | undefined,
 ): UpdatePreflightReleaseSummary | undefined {
-  const targetEntries = impact?.entries.filter((entry) => entry.packageVersion === targetVersion) ?? [];
+  const targetEntries =
+    impact?.entries.filter((entry) => entry.packageVersion === targetVersion) ?? [];
   const latest = targetEntries.at(-1);
   if (latest === undefined) return undefined;
   return {
@@ -978,8 +983,7 @@ async function updateAvailableReport(
   registry: RegistryOutcome,
   options: UpdatePreflightRuntimeOptions,
 ): Promise<UpdatePreflightReport> {
-  const catalog =
-    validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk();
+  const catalog = validateBundledCatalog(options.bundledCatalog) ?? readBundledCatalogFromDisk();
   const impactResolution = impactFromCatalog(catalog, currentVersion, targetVersion);
   const github = await fetchGitHubRelease(deps, targetVersion);
   const fallbackRelease = fallbackReleaseFromImpact(targetVersion, impactResolution.impact);

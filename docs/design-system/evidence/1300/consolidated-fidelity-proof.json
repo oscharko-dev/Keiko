@@ -21,9 +21,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-06-30T15:04:39.728Z",
-    "generatedAt": "2026-06-30T15:04:43.640Z",
-    "repoHeadSha": "7515af64befd4ef4d4fc110eb19b47bf4f587f4a"
+    "startedAt": "2026-06-30T20:11:18.751Z",
+    "generatedAt": "2026-06-30T20:11:22.399Z",
+    "repoHeadSha": "d9d6bf36213aac91e4b3a0df2e6fdf6fcdc005f8"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -259,7 +259,7 @@
     "focusProof": {
       "activeIsBack": true,
       "outlineStyle": "solid",
-      "outlineWidth": "2px",
+      "outlineWidth": "3px",
       "hasFocusRing": true
     },
     "nameRoleValue": {
@@ -276,7 +276,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.30000007152557373,
+    "durationMs": 0.5999999642372131,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,

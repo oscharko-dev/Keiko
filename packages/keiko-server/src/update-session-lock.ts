@@ -1,8 +1,11 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
+const LOCK_DIR_MODE = 0o700;
+const LOCK_FILE_MODE = 0o600;
+const UPDATE_SESSION_LOCK_FILE = "update-session.lock";
+const UPDATE_SESSION_LOCK_DIR = "updates";
 
 export interface UpdateSessionLockRecord {
   readonly sessionId: string;
@@ -71,8 +74,24 @@ function readLock(lockPath: string): UpdateSessionLockRecord | undefined {
   return parseRecord(readFileSync(lockPath, "utf8"));
 }
 
+function ensurePrivateParent(lockPath: string): void {
+  const parent = dirname(lockPath);
+  mkdirSync(parent, { recursive: true, mode: LOCK_DIR_MODE });
+  try {
+    chmodSync(parent, LOCK_DIR_MODE);
+  } catch {
+    // POSIX modes are best-effort on non-POSIX filesystems.
+  }
+}
+
 function writeLock(lockPath: string, record: UpdateSessionLockRecord): void {
-  writeFileSync(lockPath, `${JSON.stringify(record)}\n`, { flag: "wx", mode: 0o600 });
+  ensurePrivateParent(lockPath);
+  writeFileSync(lockPath, `${JSON.stringify(record)}\n`, { flag: "wx", mode: LOCK_FILE_MODE });
+  try {
+    chmodSync(lockPath, LOCK_FILE_MODE);
+  } catch {
+    // POSIX modes are best-effort on non-POSIX filesystems.
+  }
 }
 
 function reclaimable(
@@ -86,7 +105,7 @@ function reclaimable(
 }
 
 export function createFileUpdateSessionLock(
-  lockPath = join(tmpdir(), "keiko-update-session.lock"),
+  lockPath: string,
   inputOptions: FileUpdateSessionLockOptions = {},
 ): UpdateSessionLock {
   const options: ResolvedFileUpdateSessionLockOptions = {
@@ -120,4 +139,15 @@ export function createFileUpdateSessionLock(
       }
     },
   };
+}
+
+export function updateSessionLockPath(stateDir: string): string {
+  return join(stateDir, UPDATE_SESSION_LOCK_DIR, UPDATE_SESSION_LOCK_FILE);
+}
+
+export function createStateDirUpdateSessionLock(
+  stateDir: string,
+  inputOptions: FileUpdateSessionLockOptions = {},
+): UpdateSessionLock {
+  return createFileUpdateSessionLock(updateSessionLockPath(stateDir), inputOptions);
 }

@@ -10,8 +10,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-06-30T15:04:52.174Z",
-    "repoHeadSha": "7515af64befd4ef4d4fc110eb19b47bf4f587f4a"
+    "generatedAt": "2026-06-30T20:11:43.827Z",
+    "repoHeadSha": "d9d6bf36213aac91e4b3a0df2e6fdf6fcdc005f8"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {

@@ -4,8 +4,8 @@
   "tool": "axe-core 4.12.0",
   "postCssSha256": "03c0716a57a7422dd5a695fb208cd412cea6d10558b01acf714246ce8ebe00af",
   "run": {
-    "generatedAt": "2026-06-30T15:04:41.268Z",
-    "repoHeadSha": "7515af64befd4ef4d4fc110eb19b47bf4f587f4a"
+    "generatedAt": "2026-06-30T20:11:34.398Z",
+    "repoHeadSha": "d9d6bf36213aac91e4b3a0df2e6fdf6fcdc005f8"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

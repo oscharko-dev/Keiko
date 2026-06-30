@@ -41,7 +41,7 @@ import {
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
 import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
-import { createFileUpdateSessionLock } from "./update-session-lock.js";
+import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
 import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,
@@ -752,7 +752,7 @@ function buildUpdateSession(options: {
 }): UpdateSessionManager {
   return createUpdateSessionManager({
     processEnv: options.env,
-    lock: createFileUpdateSessionLock(),
+    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;

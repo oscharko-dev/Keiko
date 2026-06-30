@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  CommandDeniedError,
-  DEFAULT_SANDBOX_POLICY,
-  runCommand,
-} from "@oscharko-dev/keiko-tools";
+import { CommandDeniedError, DEFAULT_SANDBOX_POLICY, runCommand } from "@oscharko-dev/keiko-tools";
 import {
   UPDATE_COMMAND_RULES,
   buildUpdateCommand,
@@ -14,6 +10,8 @@ import {
 
 const ROOT = "/usr/local/lib/node_modules/@oscharko-dev/keiko";
 const YARN_ROOT = "/Users/alice/.config/yarn/global/node_modules/@oscharko-dev/keiko";
+const WINDOWS_NPM_ROOT =
+  "C:\\Users\\Alice\\AppData\\Roaming\\npm\\node_modules\\@oscharko-dev\\keiko";
 
 function fakeDetectorFs(manifestPath: string): Parameters<typeof productionUpdateFacts>[1] {
   return {
@@ -65,6 +63,18 @@ describe("detectUpdateInstallMode", () => {
     );
 
     expect(runtimeFacts.packageManagerHint).toBe("npm");
+    expect(detectUpdateInstallMode(runtimeFacts, {}).packageManager).toBe("npm");
+  });
+
+  it("infers npm from an env-free Windows global bin path", () => {
+    const runtimeFacts = productionUpdateFacts(
+      { KEIKO_CLI_BIN_PATH: `${WINDOWS_NPM_ROOT}\\dist\\cli\\index.js` },
+      fakeDetectorFs(`${WINDOWS_NPM_ROOT}\\package.json`),
+    );
+
+    expect(runtimeFacts.packageRoot).toBe(WINDOWS_NPM_ROOT);
+    expect(runtimeFacts.packageManagerHint).toBe("npm");
+    expect(runtimeFacts.installScope).toBeUndefined();
     expect(detectUpdateInstallMode(runtimeFacts, {}).packageManager).toBe("npm");
   });
 

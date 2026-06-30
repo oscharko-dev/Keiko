@@ -11,7 +11,7 @@ import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   buildRedactor,
-  createFileUpdateSessionLock,
+  createStateDirUpdateSessionLock,
   createInMemoryUiStore,
   createRunRegistry,
   createUpdateLocalStateManager,
@@ -129,7 +129,7 @@ function createRuntime(env: EnvSource, deps: UpdateCliDeps): UpdateRuntime {
       deps.session ??
       createUpdateSessionManager({
         processEnv,
-        lock: createFileUpdateSessionLock(),
+        lock: createStateDirUpdateSessionLock(stateDir),
         redactor: stringRedactor(env),
       }),
     remediation: deps.remediation ?? createUpdateRemediationManager({ localState }),

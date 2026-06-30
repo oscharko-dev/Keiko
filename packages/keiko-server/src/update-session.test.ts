@@ -12,8 +12,10 @@ import {
 import { detectUpdateInstallMode, type UpdateRuntimeFacts } from "./update-install-mode.js";
 import {
   createFileUpdateSessionLock,
+  createStateDirUpdateSessionLock,
   type UpdateSessionLock,
   type UpdateSessionLockRecord,
+  updateSessionLockPath,
 } from "./update-session-lock.js";
 
 const ROOT = "/usr/local/lib/node_modules/@oscharko-dev/keiko";
@@ -44,6 +46,15 @@ function commandResult(overrides: Partial<CommandResult> = {}): CommandResult {
     timedOut: false,
     truncated: false,
     ...overrides,
+  };
+}
+
+function lockRecord(sessionId: string): UpdateSessionLockRecord {
+  return {
+    sessionId,
+    targetVersion: "0.2.12",
+    startedAt: "2026-06-30T00:00:00.000Z",
+    pid: 1234,
   };
 }
 
@@ -256,6 +267,28 @@ describe("UpdateSessionManager", () => {
     }
   });
 
+  it("namespaces file locks under the Keiko state directory", async () => {
+    const firstStateDir = await mkdtemp(join(tmpdir(), "keiko-update-state-a-"));
+    const secondStateDir = await mkdtemp(join(tmpdir(), "keiko-update-state-b-"));
+    try {
+      const first = createStateDirUpdateSessionLock(firstStateDir);
+      const second = createStateDirUpdateSessionLock(secondStateDir);
+
+      expect(updateSessionLockPath(firstStateDir)).toBe(
+        join(firstStateDir, "updates", "update-session.lock"),
+      );
+      expect(first.acquire(lockRecord("first"))).toBe(true);
+      expect(first.isLocked()).toBe(true);
+      expect(second.acquire(lockRecord("second"))).toBe(true);
+      expect(second.isLocked()).toBe(true);
+    } finally {
+      await Promise.all([
+        rm(firstStateDir, { recursive: true, force: true }),
+        rm(secondStateDir, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   it("rejects restart verification while an update is still preparing", () => {
     const gate = deferred();
     const manager = createUpdateSessionManager({
@@ -293,7 +326,10 @@ describe("UpdateSessionManager", () => {
   });
 
   it("retries safe package-manager failures", async () => {
-    const results = [commandResult({ exitCode: 1, stderr: "registry unavailable" }), commandResult()];
+    const results = [
+      commandResult({ exitCode: 1, stderr: "registry unavailable" }),
+      commandResult(),
+    ];
     const manager = createUpdateSessionManager({
       detector: () => supportedMode(),
       runCommandImpl: () => Promise.resolve(results.shift() ?? commandResult()),

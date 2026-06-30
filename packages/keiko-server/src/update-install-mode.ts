@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import {
@@ -89,14 +89,19 @@ function findPackageRoot(
   packageName: string,
   fs: DetectorFs,
 ): string | undefined {
-  let current = dirname(resolve(startPath));
+  const pathApi = startPath.includes("\\") || /^[a-z]:[\\/]/iu.test(startPath) ? win32 : undefined;
+  let current =
+    pathApi === undefined
+      ? dirname(resolve(startPath))
+      : pathApi.dirname(pathApi.resolve(startPath));
   for (;;) {
-    const manifest = join(current, "package.json");
+    const manifest =
+      pathApi === undefined ? join(current, "package.json") : pathApi.join(current, "package.json");
     const record = fs.existsSync(manifest)
       ? parseJsonObject(fs.readFileSync(manifest, "utf8"))
       : undefined;
     if (record?.name === packageName) return current;
-    const parent = dirname(current);
+    const parent = pathApi === undefined ? dirname(current) : pathApi.dirname(current);
     if (parent === current) return undefined;
     current = parent;
   }
@@ -137,13 +142,16 @@ function isGlobalPackageRoot(root: string | undefined): boolean {
   const normalized = normalizedPath(root);
   return (
     normalized.includes("/lib/node_modules/@oscharko-dev/keiko") ||
+    normalized.includes("/npm/node_modules/@oscharko-dev/keiko") ||
     normalized.includes("/.config/yarn/global/node_modules/@oscharko-dev/keiko") ||
     normalized.includes("/.yarn/global/node_modules/@oscharko-dev/keiko") ||
     normalized.includes("/yarn/data/global/node_modules/@oscharko-dev/keiko")
   );
 }
 
-function packageManagerHintFromRoot(root: string | undefined): UpdateInstallPackageManager | undefined {
+function packageManagerHintFromRoot(
+  root: string | undefined,
+): UpdateInstallPackageManager | undefined {
   const normalized = normalizedPath(root);
   if (
     normalized.includes("/.config/yarn/global/node_modules/@oscharko-dev/keiko") ||
@@ -152,7 +160,12 @@ function packageManagerHintFromRoot(root: string | undefined): UpdateInstallPack
   ) {
     return "yarn";
   }
-  if (normalized.includes("/lib/node_modules/@oscharko-dev/keiko")) return "npm";
+  if (
+    normalized.includes("/lib/node_modules/@oscharko-dev/keiko") ||
+    normalized.includes("/npm/node_modules/@oscharko-dev/keiko")
+  ) {
+    return "npm";
+  }
   return undefined;
 }
 
@@ -225,10 +238,7 @@ function manual(reason: string): string {
   return `Automatic update is unavailable: ${reason}. Use your package manager outside Keiko, then restart Keiko.`;
 }
 
-function unsupportedMode(
-  reason: UpdateInstallMode["reason"],
-  message: string,
-): UpdateInstallMode {
+function unsupportedMode(reason: UpdateInstallMode["reason"], message: string): UpdateInstallMode {
   return {
     schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
     status: "unsupported",

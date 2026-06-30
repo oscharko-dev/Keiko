@@ -45,6 +45,8 @@ export {
 } from "./update-preflight.js";
 export {
   createFileUpdateSessionLock,
+  createStateDirUpdateSessionLock,
+  updateSessionLockPath,
   type FileUpdateSessionLockOptions,
   type UpdateSessionLock,
   type UpdateSessionLockRecord,
