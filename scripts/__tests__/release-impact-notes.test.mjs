@@ -166,6 +166,27 @@ describe("release-impact release notes", () => {
     expect(result.notes).toContain("internal-build-refactor");
   });
 
+  it("renders observable internal-only entries when default patch notes explicitly include them", () => {
+    const result = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "observable-internal-release-gate",
+          internalOnly: true,
+          observableImpact: true,
+          releaseNoteBullets: ["Improves release publish reliability for maintainers."],
+          releaseNoteCategory: "internal-only",
+          releaseNotePriority: "internal",
+          userVisibleChange: "observable",
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.notes).toContain("### Internal · Internal Only");
+    expect(result.notes).toContain("- Improves release publish reliability for maintainers.");
+  });
+
   it("fails closed when metadata does not match the package version", () => {
     const result = renderReleaseImpactNotes(
       catalog([entry({ packageVersion: "0.2.10", releaseTag: "v0.2.10" })]),

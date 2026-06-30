@@ -127,7 +127,11 @@ function compareGroupKeys(left, right) {
 
 function userFacingEntries(entries) {
   return entries
-    .filter((entry) => entry.defaultPatchNotes === true && entry.internalOnly !== true)
+    .filter(
+      (entry) =>
+        entry.defaultPatchNotes === true &&
+        (entry.internalOnly !== true || entry.observableImpact === true),
+    )
     .sort(compareEntries);
 }
 
