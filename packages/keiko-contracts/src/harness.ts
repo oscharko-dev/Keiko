@@ -342,10 +342,7 @@ export interface RunFailedEvent extends BaseEvent {
 // stream.
 
 export type BrowserSessionCloseReason =
-  | "explicit"
-  | "process-exit"
-  | "chrome-disconnected"
-  | "idle-timeout";
+  "explicit" | "process-exit" | "chrome-disconnected" | "idle-timeout";
 
 export interface BrowserSessionOpenedEvent extends BaseEvent {
   readonly type: "browser:session-opened";

@@ -10,10 +10,7 @@
 // of the field) means "retain indefinitely". This is enforced by `applyRetentionToCapsule`:
 // a missing field skips the corresponding DELETE entirely.
 
-import type {
-  KnowledgeCapsuleId,
-  KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 import type {
   PdfCitationPreviewAnchorQuality,
   PdfCitationPreviewReasonCode,

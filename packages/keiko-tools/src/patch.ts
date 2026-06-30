@@ -491,7 +491,9 @@ function hasCreateOverwrite(
   fs: WorkspaceFs,
   files: readonly PatchFileChange[],
 ): boolean {
-  return files.some((file) => file.kind === "create" && readCurrent(workspace, fs, file.path) !== undefined);
+  return files.some(
+    (file) => file.kind === "create" && readCurrent(workspace, fs, file.path) !== undefined,
+  );
 }
 
 // Builds a guarded restore proposal only when the diff needed for restoration is already content-safe.

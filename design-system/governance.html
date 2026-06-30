@@ -4,37 +4,164 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Governance &amp; Docs · Keiko Design System</title>
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="components.css" />
     <style>
-      .gov-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-      .gov-tbl th { text-align: left; font: 500 10.5px var(--font-mono); letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-faint); padding: 0 14px 12px; border-bottom: 1px solid var(--line); }
-      .gov-tbl td { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); color: var(--fg-muted); vertical-align: middle; }
-      .gov-tbl tr:last-child td { border-bottom: 0; }
-      .gov-tbl .cmp { color: var(--fg); font-weight: 600; }
-      .gov-tbl .owner { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); }
-      .stt { display: inline-flex; align-items: center; gap: 6px; font: 600 10px var(--font-mono); letter-spacing: 0.03em; text-transform: uppercase; padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
-      .stt::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-      .stt.ready { color: var(--accent-text); border: 1px solid var(--accent-line); background: var(--accent-dim); }
-      .stt.draft { color: var(--warn); border: 1px solid color-mix(in oklch, var(--warn) 42%, transparent); }
-      .stt.dep { color: var(--fg-faint); border: 1px solid var(--line); }
-      .tmpl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-      .tmpl .row { display: flex; gap: 11px; align-items: flex-start; padding: 11px 14px; border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--card); }
-      .tmpl .n { font: 600 11px var(--font-mono); color: var(--accent-text); flex: none; padding-top: 2px; min-width: 18px; }
-      .tmpl .row b { color: var(--fg); font-size: 13px; display: block; }
-      .tmpl .row span { font-size: 12px; color: var(--fg-muted); line-height: 1.45; }
-      .ver { display: flex; gap: 0; }
-      .ver .vl { flex: none; width: 92px; font-family: var(--font-mono); font-size: 12px; color: var(--accent-text); padding-top: 2px; }
-      .ver .vc { flex: 1; padding-bottom: 18px; border-left: 1px solid var(--line); padding-left: 18px; margin-left: 4px; position: relative; }
-      .ver .vc::before { content: ""; position: absolute; left: -4.5px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent-text); }
-      .ver .vc:last-child { padding-bottom: 0; }
-      .ver .vc b { color: var(--fg); font-size: 13px; }
-      .ver .vc p { margin: 4px 0 0; font-size: 12.5px; color: var(--fg-muted); line-height: 1.5; }
-      @media (max-width: 760px) { .tmpl { grid-template-columns: 1fr; } }
+      .gov-tbl {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      .gov-tbl th {
+        text-align: left;
+        font: 500 10.5px var(--font-mono);
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        padding: 0 14px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .gov-tbl td {
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--line-soft);
+        color: var(--fg-muted);
+        vertical-align: middle;
+      }
+      .gov-tbl tr:last-child td {
+        border-bottom: 0;
+      }
+      .gov-tbl .cmp {
+        color: var(--fg);
+        font-weight: 600;
+      }
+      .gov-tbl .owner {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--fg-dim);
+      }
+      .stt {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font: 600 10px var(--font-mono);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        padding: 2px 9px;
+        border-radius: 999px;
+        white-space: nowrap;
+      }
+      .stt::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .stt.ready {
+        color: var(--accent-text);
+        border: 1px solid var(--accent-line);
+        background: var(--accent-dim);
+      }
+      .stt.draft {
+        color: var(--warn);
+        border: 1px solid color-mix(in oklch, var(--warn) 42%, transparent);
+      }
+      .stt.dep {
+        color: var(--fg-faint);
+        border: 1px solid var(--line);
+      }
+      .tmpl {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+      .tmpl .row {
+        display: flex;
+        gap: 11px;
+        align-items: flex-start;
+        padding: 11px 14px;
+        border: 1px solid var(--line-soft);
+        border-radius: var(--radius-sm);
+        background: var(--card);
+      }
+      .tmpl .n {
+        font: 600 11px var(--font-mono);
+        color: var(--accent-text);
+        flex: none;
+        padding-top: 2px;
+        min-width: 18px;
+      }
+      .tmpl .row b {
+        color: var(--fg);
+        font-size: 13px;
+        display: block;
+      }
+      .tmpl .row span {
+        font-size: 12px;
+        color: var(--fg-muted);
+        line-height: 1.45;
+      }
+      .ver {
+        display: flex;
+        gap: 0;
+      }
+      .ver .vl {
+        flex: none;
+        width: 92px;
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--accent-text);
+        padding-top: 2px;
+      }
+      .ver .vc {
+        flex: 1;
+        padding-bottom: 18px;
+        border-left: 1px solid var(--line);
+        padding-left: 18px;
+        margin-left: 4px;
+        position: relative;
+      }
+      .ver .vc::before {
+        content: "";
+        position: absolute;
+        left: -4.5px;
+        top: 5px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--accent-text);
+      }
+      .ver .vc:last-child {
+        padding-bottom: 0;
+      }
+      .ver .vc b {
+        color: var(--fg);
+        font-size: 13px;
+      }
+      .ver .vc p {
+        margin: 4px 0 0;
+        font-size: 12.5px;
+        color: var(--fg-muted);
+        line-height: 1.5;
+      }
+      @media (max-width: 760px) {
+        .tmpl {
+          grid-template-columns: 1fr;
+        }
+      }
     </style>
   </head>
   <body class="ds">
@@ -46,24 +173,82 @@
       <header class="phero">
         <div class="ey">Review · Governance</div>
         <h1>Owned, versioned, <span class="dim">contributable.</span></h1>
-        <p class="lead">A system scales only if every part has a status, an owner and a rule for changing it. This is the scaffold: a component register, the documentation template each one follows, contribution &amp; deprecation rules, and the changelog.</p>
+        <p class="lead">
+          A system scales only if every part has a status, an owner and a rule for changing it. This
+          is the scaffold: a component register, the documentation template each one follows,
+          contribution &amp; deprecation rules, and the changelog.
+        </p>
       </header>
 
       <!-- REGISTER -->
       <section class="sec" id="register">
-        <div class="sec-head"><div class="num">01 — REGISTER</div><h2>Component register</h2><p>Every component carries a status and an owning area. Draft means in-progress and not yet safe to depend on; Ready ships; Deprecated has a migration path.</p></div>
-        <div class="card" style="padding:8px 24px;overflow-x:auto">
+        <div class="sec-head">
+          <div class="num">01 — REGISTER</div>
+          <h2>Component register</h2>
+          <p>
+            Every component carries a status and an owning area. Draft means in-progress and not yet
+            safe to depend on; Ready ships; Deprecated has a migration path.
+          </p>
+        </div>
+        <div class="card" style="padding: 8px 24px; overflow-x: auto">
           <table class="gov-tbl">
-            <thead><tr><th>Component</th><th>Status</th><th>Owner</th><th>Since</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Component</th>
+                <th>Status</th>
+                <th>Owner</th>
+                <th>Since</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><td class="cmp">Button · Field · Toggle · Tabs</td><td><span class="stt ready">Ready</span></td><td class="owner">@core-ui</td><td class="owner">v0.1</td></tr>
-              <tr><td class="cmp">Messages &amp; Feedback</td><td><span class="stt ready">Ready</span></td><td class="owner">@core-ui</td><td class="owner">v0.2</td></tr>
-              <tr><td class="cmp">Table &amp; Data Grid</td><td><span class="stt ready">Ready</span></td><td class="owner">@data-ui</td><td class="owner">v0.4</td></tr>
-              <tr><td class="cmp">Inputs &amp; Forms (extended)</td><td><span class="stt ready">Ready</span></td><td class="owner">@core-ui</td><td class="owner">v0.4</td></tr>
-              <tr><td class="cmp">Navigation set</td><td><span class="stt ready">Ready</span></td><td class="owner">@core-ui</td><td class="owner">v0.4</td></tr>
-              <tr><td class="cmp">AI &amp; Agent surfaces</td><td><span class="stt ready">Ready</span></td><td class="owner">@agent-ux</td><td class="owner">v0.4</td></tr>
-              <tr><td class="cmp">Data Visualisation</td><td><span class="stt ready">Ready</span></td><td class="owner">@data-ui</td><td class="owner">v0.4</td></tr>
-              <tr><td class="cmp">Legacy 2-way theme toggle</td><td><span class="stt dep">Deprecated</span></td><td class="owner">@core-ui</td><td class="owner">→ theme-control</td></tr>
+              <tr>
+                <td class="cmp">Button · Field · Toggle · Tabs</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@core-ui</td>
+                <td class="owner">v0.1</td>
+              </tr>
+              <tr>
+                <td class="cmp">Messages &amp; Feedback</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@core-ui</td>
+                <td class="owner">v0.2</td>
+              </tr>
+              <tr>
+                <td class="cmp">Table &amp; Data Grid</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@data-ui</td>
+                <td class="owner">v0.4</td>
+              </tr>
+              <tr>
+                <td class="cmp">Inputs &amp; Forms (extended)</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@core-ui</td>
+                <td class="owner">v0.4</td>
+              </tr>
+              <tr>
+                <td class="cmp">Navigation set</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@core-ui</td>
+                <td class="owner">v0.4</td>
+              </tr>
+              <tr>
+                <td class="cmp">AI &amp; Agent surfaces</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@agent-ux</td>
+                <td class="owner">v0.4</td>
+              </tr>
+              <tr>
+                <td class="cmp">Data Visualisation</td>
+                <td><span class="stt ready">Ready</span></td>
+                <td class="owner">@data-ui</td>
+                <td class="owner">v0.4</td>
+              </tr>
+              <tr>
+                <td class="cmp">Legacy 2-way theme toggle</td>
+                <td><span class="stt dep">Deprecated</span></td>
+                <td class="owner">@core-ui</td>
+                <td class="owner">→ theme-control</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -71,60 +256,159 @@
 
       <!-- DOC TEMPLATE -->
       <section class="sec" id="template">
-        <div class="sec-head"><div class="num">02 — DOC TEMPLATE</div><h2>Per-component template</h2><p>Every component page follows the same spine, so a reader always knows where to look. Apply it to the existing pages first, then to each new one.</p></div>
+        <div class="sec-head">
+          <div class="num">02 — DOC TEMPLATE</div>
+          <h2>Per-component template</h2>
+          <p>
+            Every component page follows the same spine, so a reader always knows where to look.
+            Apply it to the existing pages first, then to each new one.
+          </p>
+        </div>
         <div class="tmpl">
-          <div class="row"><span class="n">01</span><div><b>Overview</b><span>What it is, in one line.</span></div></div>
-          <div class="row"><span class="n">02</span><div><b>When (not) to use</b><span>The decision, and the nearest alternative.</span></div></div>
-          <div class="row"><span class="n">03</span><div><b>Anatomy</b><span>Named parts on a labelled example.</span></div></div>
-          <div class="row"><span class="n">04</span><div><b>Variants &amp; sizes</b><span>Every supported shape.</span></div></div>
-          <div class="row"><span class="n">05</span><div><b>States</b><span>From the eleven-state matrix, proven in 3 modes.</span></div></div>
-          <div class="row"><span class="n">06</span><div><b>Accessibility</b><span>Roles, focus order, keyboard, contrast.</span></div></div>
-          <div class="row"><span class="n">07</span><div><b>Tokens</b><span>The component tokens it consumes.</span></div></div>
-          <div class="row"><span class="n">08</span><div><b>Do / Don't</b><span>The two mistakes people actually make.</span></div></div>
-          <div class="row"><span class="n">09</span><div><b>Status &amp; owner</b><span>From the register above.</span></div></div>
-          <div class="row"><span class="n">10</span><div><b>Changelog</b><span>What changed, per version.</span></div></div>
+          <div class="row">
+            <span class="n">01</span>
+            <div><b>Overview</b><span>What it is, in one line.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">02</span>
+            <div>
+              <b>When (not) to use</b><span>The decision, and the nearest alternative.</span>
+            </div>
+          </div>
+          <div class="row">
+            <span class="n">03</span>
+            <div><b>Anatomy</b><span>Named parts on a labelled example.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">04</span>
+            <div><b>Variants &amp; sizes</b><span>Every supported shape.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">05</span>
+            <div><b>States</b><span>From the eleven-state matrix, proven in 3 modes.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">06</span>
+            <div><b>Accessibility</b><span>Roles, focus order, keyboard, contrast.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">07</span>
+            <div><b>Tokens</b><span>The component tokens it consumes.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">08</span>
+            <div><b>Do / Don't</b><span>The two mistakes people actually make.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">09</span>
+            <div><b>Status &amp; owner</b><span>From the register above.</span></div>
+          </div>
+          <div class="row">
+            <span class="n">10</span>
+            <div><b>Changelog</b><span>What changed, per version.</span></div>
+          </div>
         </div>
       </section>
 
       <!-- RULES -->
       <section class="sec" id="rules">
-        <div class="sec-head"><div class="num">03 — RULES</div><h2>Contribution &amp; deprecation</h2><p>How a change enters the system, and how one leaves it.</p></div>
-        <div class="card demo-card" style="display:grid;grid-template-columns:1fr 1fr;gap:30px">
+        <div class="sec-head">
+          <div class="num">03 — RULES</div>
+          <h2>Contribution &amp; deprecation</h2>
+          <p>How a change enters the system, and how one leaves it.</p>
+        </div>
+        <div
+          class="card demo-card"
+          style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px"
+        >
           <div class="demo-stack">
             <div class="sub-head">To contribute</div>
-            <div class="note"><span class="tag" style="color:var(--accent-text)">1</span><div>Resolve to existing tokens. A change that needs a new colour, hue or one-off value is a token proposal first.</div></div>
-            <div class="note"><span class="tag" style="color:var(--accent-text)">2</span><div>Ship the full template — states &amp; a11y included — before status can move to Ready.</div></div>
-            <div class="note"><span class="tag" style="color:var(--accent-text)">3</span><div>An area owner reviews; the changelog entry is part of the change, not an afterthought.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--accent-text)">1</span>
+              <div>
+                Resolve to existing tokens. A change that needs a new colour, hue or one-off value
+                is a token proposal first.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--accent-text)">2</span>
+              <div>
+                Ship the full template — states &amp; a11y included — before status can move to
+                Ready.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--accent-text)">3</span>
+              <div>
+                An area owner reviews; the changelog entry is part of the change, not an
+                afterthought.
+              </div>
+            </div>
           </div>
           <div class="demo-stack">
             <div class="sub-head">To deprecate</div>
-            <div class="note"><span class="tag" style="color:var(--warn)">1</span><div>Mark <b>Deprecated</b> with a named replacement and the version it lands in.</div></div>
-            <div class="note"><span class="tag" style="color:var(--warn)">2</span><div>Keep it working for one minor cycle; emit nothing breaking.</div></div>
-            <div class="note"><span class="tag" style="color:var(--warn)">3</span><div>Remove only after the migration note shows zero internal consumers.</div></div>
+            <div class="note">
+              <span class="tag" style="color: var(--warn)">1</span>
+              <div>
+                Mark <b>Deprecated</b> with a named replacement and the version it lands in.
+              </div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--warn)">2</span>
+              <div>Keep it working for one minor cycle; emit nothing breaking.</div>
+            </div>
+            <div class="note">
+              <span class="tag" style="color: var(--warn)">3</span>
+              <div>Remove only after the migration note shows zero internal consumers.</div>
+            </div>
           </div>
         </div>
       </section>
 
       <!-- CHANGELOG -->
       <section class="sec" id="changelog">
-        <div class="sec-head"><div class="num">04 — CHANGELOG</div><h2>Version history</h2><p>One source, newest first.</p></div>
+        <div class="sec-head">
+          <div class="num">04 — CHANGELOG</div>
+          <h2>Version history</h2>
+          <p>One source, newest first.</p>
+        </div>
         <div class="card demo-card">
           <div class="ver">
             <div class="vl">v0.4.0</div>
-            <div style="flex:1">
-              <div class="vc"><b>Component breadth</b><p>Table &amp; data grid, the full input family, the navigation set and the AI/agent components shipped. Data-viz foundation in draft. State matrix &amp; governance scaffold added.</p></div>
+            <div style="flex: 1">
+              <div class="vc">
+                <b>Component breadth</b>
+                <p>
+                  Table &amp; data grid, the full input family, the navigation set and the AI/agent
+                  components shipped. Data-viz foundation in draft. State matrix &amp; governance
+                  scaffold added.
+                </p>
+              </div>
             </div>
           </div>
           <div class="ver">
             <div class="vl">v0.3.1</div>
-            <div style="flex:1">
-              <div class="vc"><b>Token hardening</b><p>Components migrated to tier-2/3 tokens; dark-base shadows; oklch-only colour; distinct success status; single-source high-contrast; breakpoint &amp; density tokens.</p></div>
+            <div style="flex: 1">
+              <div class="vc">
+                <b>Token hardening</b>
+                <p>
+                  Components migrated to tier-2/3 tokens; dark-base shadows; oklch-only colour;
+                  distinct success status; single-source high-contrast; breakpoint &amp; density
+                  tokens.
+                </p>
+              </div>
             </div>
           </div>
           <div class="ver">
             <div class="vl">v0.3.0</div>
-            <div style="flex:1">
-              <div class="vc"><b>Token architecture</b><p>Semantic + component tiers introduced over the primitives. Editor theme &amp; views. Centralised nav.</p></div>
+            <div style="flex: 1">
+              <div class="vc">
+                <b>Token architecture</b>
+                <p>
+                  Semantic + component tiers introduced over the primitives. Editor theme &amp;
+                  views. Centralised nav.
+                </p>
+              </div>
             </div>
           </div>
         </div>

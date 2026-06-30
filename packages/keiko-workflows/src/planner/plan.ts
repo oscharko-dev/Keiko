@@ -29,11 +29,7 @@ import {
 // GovernorState union — keeping it out of this surface avoids a misleading "running" plan
 // state that the planner itself never produces.
 export type ExplorationPlanState =
-  | "ready"
-  | "completed"
-  | "budget-exhausted"
-  | "clarification-needed"
-  | "scope-invalid";
+  "ready" | "completed" | "budget-exhausted" | "clarification-needed" | "scope-invalid";
 
 export type RetrievalRingKind = "lexical" | "structural" | "git-history";
 

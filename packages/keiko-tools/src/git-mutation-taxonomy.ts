@@ -27,12 +27,7 @@ import type {
 // reached via `phaseReached`, so callers can locate exactly where the lifecycle halted.
 
 export type GitMutationLifecyclePhase =
-  | "resolve"
-  | "preflight"
-  | "preview"
-  | "policy"
-  | "execute"
-  | "result";
+  "resolve" | "preflight" | "preview" | "policy" | "execute" | "result";
 
 export const GIT_MUTATION_LIFECYCLE_PHASES: readonly GitMutationLifecyclePhase[] = [
   "resolve",
@@ -88,11 +83,7 @@ export const GIT_MUTATION_FAILURE_CATEGORIES: readonly GitMutationFailureCategor
 // status to its category and payload; the invariants here keep that binding total and checkable.
 
 export type GitMutationStatus =
-  | "succeeded"
-  | "approval-required"
-  | "blocked"
-  | "failed"
-  | "recovery-required";
+  "succeeded" | "approval-required" | "blocked" | "failed" | "recovery-required";
 
 export const GIT_MUTATION_STATUSES: readonly GitMutationStatus[] = [
   "succeeded",

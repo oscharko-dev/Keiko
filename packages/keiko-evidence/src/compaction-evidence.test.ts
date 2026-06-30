@@ -110,7 +110,11 @@ function fullCompactionRecord(): ContextCompactionRecord {
     },
     sourceSpans: [
       fullRef,
-      { kind: "tool-result", stableId: `tool-${SK_FAKE}`, notPersistedReason: `dropped ${SK_FAKE}` },
+      {
+        kind: "tool-result",
+        stableId: `tool-${SK_FAKE}`,
+        notPersistedReason: `dropped ${SK_FAKE}`,
+      },
     ],
     preservedFacts: [
       {

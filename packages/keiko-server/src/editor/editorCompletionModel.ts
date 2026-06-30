@@ -225,5 +225,10 @@ export async function generateModelCompletions(
   const result = await chat(prompt, signal);
   const content = chatResultContent(result);
   const parsed = parseModelCompletionItems(content, input.maxItems, input.maxInsertTextChars);
-  return { items: parsed.items, promptHash, truncated: parsed.truncated, usage: chatResultUsage(result) };
+  return {
+    items: parsed.items,
+    promptHash,
+    truncated: parsed.truncated,
+    usage: chatResultUsage(result),
+  };
 }

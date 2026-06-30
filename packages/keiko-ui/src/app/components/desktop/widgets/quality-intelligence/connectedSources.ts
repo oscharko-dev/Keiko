@@ -48,8 +48,7 @@ export interface ConnectedSourceProps {
    * run-id-only list and can carry one or more selected screen ids.
    */
   readonly connectedFigmaSnapshotSources?:
-    | readonly QualityIntelligenceFigmaSnapshotSource[]
-    | undefined;
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources from connected Figma Image windows. */
   readonly connectedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
 }

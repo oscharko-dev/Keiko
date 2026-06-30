@@ -248,12 +248,7 @@ export type MemoryAuditAction =
 // Enumeration of fields an update may touch — kept as a closed string union so an audit
 // reader can render a diff summary without a free-form key.
 export type MemoryUpdateField =
-  | "body"
-  | "payload"
-  | "tags"
-  | "validity"
-  | "sensitivity"
-  | "retentionHint";
+  "body" | "payload" | "tags" | "validity" | "sensitivity" | "retentionHint";
 
 export const MEMORY_UPDATE_FIELDS: readonly MemoryUpdateField[] = [
   "body",
@@ -270,12 +265,7 @@ export const MEMORY_UPDATE_FIELDS: readonly MemoryUpdateField[] = [
 // (encoded as the stable `memory-center` literal) from an automated consolidation pass without
 // re-deriving from the action kind.
 export type MemoryAuditInitiatorSurface =
-  | "memory-center"
-  | "conversation-center"
-  | "workflow"
-  | "consolidation"
-  | "retention"
-  | "system";
+  "memory-center" | "conversation-center" | "workflow" | "consolidation" | "retention" | "system";
 
 export const MEMORY_AUDIT_INITIATOR_SURFACES: readonly MemoryAuditInitiatorSurface[] = [
   "memory-center",

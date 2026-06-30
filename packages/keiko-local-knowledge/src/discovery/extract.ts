@@ -422,8 +422,7 @@ interface ScopePolicy {
 }
 
 type TargetResolution =
-  | ResolvedTarget
-  | { readonly error: DiscoveryError; readonly persistFailure: boolean };
+  ResolvedTarget | { readonly error: DiscoveryError; readonly persistFailure: boolean };
 
 const HIDDEN_OR_GENERATED_DIRS: ReadonlySet<string> = new Set([
   ".git",

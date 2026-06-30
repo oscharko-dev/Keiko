@@ -1352,10 +1352,7 @@ describe("pdf citation preview api helpers", () => {
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
 
-    const bytes = await fetchPdfCitationPreviewDocument(
-      "preview/session#1",
-      controller.signal,
-    );
+    const bytes = await fetchPdfCitationPreviewDocument("preview/session#1", controller.signal);
 
     expect(Array.from(bytes)).toEqual([9, 8, 7]);
     expect(fetchMock).toHaveBeenCalledWith(

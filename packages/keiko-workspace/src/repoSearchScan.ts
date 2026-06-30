@@ -452,7 +452,8 @@ export async function scanFile(
     candidates.push(buildCandidate(file.relativePath, policy.omitted));
     return;
   }
-  const binary = policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
+  const binary =
+    policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
   if (binary !== undefined) {
     candidates.push(buildCandidate(file.relativePath, binary));
     return;

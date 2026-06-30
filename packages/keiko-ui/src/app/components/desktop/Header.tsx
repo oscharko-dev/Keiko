@@ -18,7 +18,12 @@ interface HeaderProps {
   readonly contextControl?: ReactNode;
 }
 
-function HeaderImpl({ onTileAll, onSplitFront, onCascade, contextControl }: HeaderProps): ReactNode {
+function HeaderImpl({
+  onTileAll,
+  onSplitFront,
+  onCascade,
+  contextControl,
+}: HeaderProps): ReactNode {
   const { t } = useI18n();
 
   return (

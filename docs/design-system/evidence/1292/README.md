@@ -44,15 +44,15 @@ Every probed Tier-1/2/3/4 token resolved to a non-empty value in all seven modes
 `getComputedStyle(document.querySelector(".focus-sample"))` after focusing a real
 product button:
 
-| Mode                       | --focus-w | Focus outline                              | --bg                   | --line                 | --fg                   |
-| -------------------------- | --------- | ------------------------------------------ | ---------------------- | ---------------------- | ---------------------- |
-| Dark                       | 2px       | 2px solid rgb(78, 186, 135)                | oklch(0.17 0.004 160)  | oklch(0.3 0.004 160)   | oklch(0.97 0.003 160)  |
-| Light                      | 2px       | 2px solid oklch(0.48 0.13 160)             | oklch(0.955 0.004 160) | oklch(0.88 0.006 160)  | oklch(0.26 0.012 160)  |
-| Dark + `data-hc="more"`    | 3px       | 3px solid oklch(0.86 0.16 160)             | oklch(0.11 0.004 160)  | oklch(0.62 0.006 160)  | oklch(1 0 0)           |
-| Light + `data-hc="more"`   | 3px       | 3px solid oklch(0.42 0.14 160)             | oklch(1 0 0)           | oklch(0.45 0.008 160)  | oklch(0.13 0.01 160)   |
-| Dark + `prefers-contrast`  | 3px       | 3px solid oklch(0.86 0.16 160)             | oklch(0.11 0.004 160)  | oklch(0.62 0.006 160)  | oklch(1 0 0)           |
-| Forced-colors active       | 2px       | 2px solid rgba(5, 0, 73, 0.8)              | oklch(0.955 0.004 160) | oklch(0.88 0.006 160)  | oklch(0.26 0.012 160)  |
-| Reduced motion             | 2px       | 2px solid rgb(78, 186, 135)                | oklch(0.17 0.004 160)  | oklch(0.3 0.004 160)   | oklch(0.97 0.003 160)  |
+| Mode                      | --focus-w | Focus outline                  | --bg                   | --line                | --fg                  |
+| ------------------------- | --------- | ------------------------------ | ---------------------- | --------------------- | --------------------- |
+| Dark                      | 2px       | 2px solid rgb(78, 186, 135)    | oklch(0.17 0.004 160)  | oklch(0.3 0.004 160)  | oklch(0.97 0.003 160) |
+| Light                     | 2px       | 2px solid oklch(0.48 0.13 160) | oklch(0.955 0.004 160) | oklch(0.88 0.006 160) | oklch(0.26 0.012 160) |
+| Dark + `data-hc="more"`   | 3px       | 3px solid oklch(0.86 0.16 160) | oklch(0.11 0.004 160)  | oklch(0.62 0.006 160) | oklch(1 0 0)          |
+| Light + `data-hc="more"`  | 3px       | 3px solid oklch(0.42 0.14 160) | oklch(1 0 0)           | oklch(0.45 0.008 160) | oklch(0.13 0.01 160)  |
+| Dark + `prefers-contrast` | 3px       | 3px solid oklch(0.86 0.16 160) | oklch(0.11 0.004 160)  | oklch(0.62 0.006 160) | oklch(1 0 0)          |
+| Forced-colors active      | 2px       | 2px solid rgba(5, 0, 73, 0.8)  | oklch(0.955 0.004 160) | oklch(0.88 0.006 160) | oklch(0.26 0.012 160) |
+| Reduced motion            | 2px       | 2px solid rgb(78, 186, 135)    | oklch(0.17 0.004 160)  | oklch(0.3 0.004 160)  | oklch(0.97 0.003 160) |
 
 Notes:
 

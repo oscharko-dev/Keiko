@@ -100,49 +100,53 @@ describe("scripts/dev-runner.mjs readiness gate", () => {
     child = undefined;
   });
 
-  it("does not proxy transient Next warmup 500s through the public port", async () => {
-    if (defaultDevUiIsRunning()) {
-      return;
-    }
-
-    uiTsconfigBefore = readFileSync(UI_TSCONFIG, "utf8");
-    stateDir = mkdtempSync(join(tmpdir(), "keiko-dev-runner-"));
-    const publicPort = await freePort();
-    const bffPort = await freePort();
-    const nextPort = await freePort();
-    const output: string[] = [];
-
-    const spawned = spawn(process.execPath, [RUNNER], {
-      cwd: REPO_ROOT,
-      detached: true,
-      env: {
-        ...process.env,
-        KEIKO_DEV_UI_PORT: String(publicPort),
-        KEIKO_DEV_BFF_PORT: String(bffPort),
-        KEIKO_DEV_NEXT_PORT: String(nextPort),
-        KEIKO_DEV_PID_FILE: join(stateDir, "dev-ui.pid.json"),
-        KEIKO_STATE_DIR: stateDir,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    child = spawned;
-    spawned.stdout.on("data", (chunk) => output.push(String(chunk)));
-    spawned.stderr.on("data", (chunk) => output.push(String(chunk)));
-
-    const statuses: number[] = [];
-    const deadline = Date.now() + PUBLIC_READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const status = await statusOf(publicPort);
-      statuses.push(status);
-      if (status === 500) {
-        throw new Error(`public root returned 500 during warmup\n${output.join("")}`);
+  it(
+    "does not proxy transient Next warmup 500s through the public port",
+    async () => {
+      if (defaultDevUiIsRunning()) {
+        return;
       }
-      if (status === 200) break;
-      await sleep(PUBLIC_READY_POLL_MS);
-    }
 
-    expect(statuses).toContain(200);
-    expect(statuses).not.toContain(500);
-    expect(await statusOf(publicPort, "/api/health")).toBe(200);
-  }, DEV_RUNNER_TEST_TIMEOUT_MS);
+      uiTsconfigBefore = readFileSync(UI_TSCONFIG, "utf8");
+      stateDir = mkdtempSync(join(tmpdir(), "keiko-dev-runner-"));
+      const publicPort = await freePort();
+      const bffPort = await freePort();
+      const nextPort = await freePort();
+      const output: string[] = [];
+
+      const spawned = spawn(process.execPath, [RUNNER], {
+        cwd: REPO_ROOT,
+        detached: true,
+        env: {
+          ...process.env,
+          KEIKO_DEV_UI_PORT: String(publicPort),
+          KEIKO_DEV_BFF_PORT: String(bffPort),
+          KEIKO_DEV_NEXT_PORT: String(nextPort),
+          KEIKO_DEV_PID_FILE: join(stateDir, "dev-ui.pid.json"),
+          KEIKO_STATE_DIR: stateDir,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      child = spawned;
+      spawned.stdout.on("data", (chunk) => output.push(String(chunk)));
+      spawned.stderr.on("data", (chunk) => output.push(String(chunk)));
+
+      const statuses: number[] = [];
+      const deadline = Date.now() + PUBLIC_READY_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        const status = await statusOf(publicPort);
+        statuses.push(status);
+        if (status === 500) {
+          throw new Error(`public root returned 500 during warmup\n${output.join("")}`);
+        }
+        if (status === 200) break;
+        await sleep(PUBLIC_READY_POLL_MS);
+      }
+
+      expect(statuses).toContain(200);
+      expect(statuses).not.toContain(500);
+      expect(await statusOf(publicPort, "/api/health")).toBe(200);
+    },
+    DEV_RUNNER_TEST_TIMEOUT_MS,
+  );
 });

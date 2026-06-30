@@ -642,7 +642,14 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           )}
 
           {/* Action row */}
-          <div style={{ display: "flex", gap: "var(--space-4)", justifyContent: "flex-end", marginTop: 4 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: "var(--space-4)",
+              justifyContent: "flex-end",
+              marginTop: 4,
+            }}
+          >
             <button
               type="button"
               className="arun-btn"

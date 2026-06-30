@@ -331,7 +331,9 @@ const localKnowledgeSubtree: OwnedSubtree = {
   whole: false,
   ownsFile: OWNS_NO_FILE,
   childSubtree: (_name, absPath) =>
-    dirHasSqliteFamilyArtifact(absPath, CAPSULES_DB_FILENAME) ? knowledgeNamespaceSubtree : undefined,
+    dirHasSqliteFamilyArtifact(absPath, CAPSULES_DB_FILENAME)
+      ? knowledgeNamespaceSubtree
+      : undefined,
 };
 
 const launcherTmpSubtree: OwnedSubtree = {
@@ -425,7 +427,11 @@ function ownedFileCategory(scope: ScanScope, name: string): RuntimeStateCategory
   return scope.ownsFile(name) ? scope.category : undefined;
 }
 
-function ownedChildSubtree(scope: ScanScope, name: string, absPath: string): OwnedSubtree | undefined {
+function ownedChildSubtree(
+  scope: ScanScope,
+  name: string,
+  absPath: string,
+): OwnedSubtree | undefined {
   if (scope === "root") return topLevelChildSubtree(name);
   if (scope.whole) return scope; // a whole subtree owns all of its descendant directories
   return scope.childSubtree(name, absPath);
@@ -499,7 +505,13 @@ export function scanRuntimeState(stateDir: string): RuntimeStateScan {
   }
   const acc: ScanAccumulator = { files: [], directories: [], retained: [] };
   walkOwnedDir(stateDir, "", "root", acc);
-  return { root, present: true, files: acc.files, directories: acc.directories, retained: acc.retained };
+  return {
+    root,
+    present: true,
+    files: acc.files,
+    directories: acc.directories,
+    retained: acc.retained,
+  };
 }
 
 // True when `descendant` lies inside `ancestor` (used to decide whether an owned directory

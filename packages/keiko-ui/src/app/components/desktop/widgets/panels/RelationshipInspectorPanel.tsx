@@ -284,7 +284,12 @@ function ActivitySection({
             {visibleTransitions.map((t, i) => (
               <div
                 key={i}
-                style={{ fontSize: 12, color: "var(--fg-muted)", display: "flex", gap: "var(--space-4)" }}
+                style={{
+                  fontSize: 12,
+                  color: "var(--fg-muted)",
+                  display: "flex",
+                  gap: "var(--space-4)",
+                }}
               >
                 <span className="mono">
                   {t.from} → {t.to}

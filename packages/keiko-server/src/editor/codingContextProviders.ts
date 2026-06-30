@@ -83,7 +83,10 @@ function redactExcerpt(deps: UiHandlerDeps, text: string): string {
   return String(deps.redactor(stripUnsafeFormatChars(text)));
 }
 
-function sanitizeCitationRef(ctx: ProviderContext, citationRef: string | undefined): string | undefined {
+function sanitizeCitationRef(
+  ctx: ProviderContext,
+  citationRef: string | undefined,
+): string | undefined {
   if (citationRef === undefined) {
     return undefined;
   }
@@ -317,12 +320,7 @@ export async function runRepoSearchProvider(
   const focusPaths = [input.documentPath, ...(input.changedFiles ?? [])];
   const focusScope = buildScope(ctx.realRoot, focusPaths);
   const searchScope = buildScope(ctx.realRoot, []);
-  const excerpts = await readFocusExcerpts(
-    ctx,
-    focusScope,
-    input.documentPath,
-    input.changedFiles,
-  );
+  const excerpts = await readFocusExcerpts(ctx, focusScope, input.documentPath, input.changedFiles);
   if (excerpts === "denied") {
     return { excerpts: [], omission: omission("files-focus", "denied") };
   }

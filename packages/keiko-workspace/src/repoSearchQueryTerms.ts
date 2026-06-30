@@ -96,10 +96,7 @@ function camelParts(token: string): readonly string[] {
   let current = "";
   for (let index = 0; index < token.length; index += 1) {
     const char = token[index] ?? "";
-    if (
-      current.length > 0 &&
-      shouldSplitBefore(token[index - 1] ?? "", char, token[index + 1])
-    ) {
+    if (current.length > 0 && shouldSplitBefore(token[index - 1] ?? "", char, token[index + 1])) {
       if (current.length >= 2) {
         parts.push(current);
       }

@@ -56,11 +56,7 @@ export const PROMPT_QUALITY_DIMENSIONS: readonly PromptQualityDimension[] = [
 // Coverage buckets the issue scope names: the ten-plus task classes, grounding-sensitive prompts,
 // safety/adversarial prompts, output-format adherence, and token efficiency.
 export type PromptEnhancerFixtureCategory =
-  | "task-class"
-  | "grounding"
-  | "adversarial"
-  | "format"
-  | "token-efficiency";
+  "task-class" | "grounding" | "adversarial" | "format" | "token-efficiency";
 
 export const PROMPT_ENHANCER_FIXTURE_CATEGORIES: readonly PromptEnhancerFixtureCategory[] = [
   "task-class",

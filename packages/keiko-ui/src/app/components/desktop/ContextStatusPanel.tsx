@@ -74,16 +74,11 @@ export function ContextStatusPanel({
         title={ASSEMBLED_TOKEN_HINT}
       >
         <span className="grounded-evidence-summary-title">Context</span>
-        <span className="grounded-evidence-summary-meta">
-          {contextSummaryMeta(contextSummary)}
-        </span>
+        <span className="grounded-evidence-summary-meta">{contextSummaryMeta(contextSummary)}</span>
       </summary>
       <div className="ctx-status-body grounded-evidence-body">
         <dl className="ctx-status-dl grounded-context-pack-dl">
-          <MetricRow
-            label="Estimator"
-            value="keiko-conservative-utf8-v1"
-          />
+          <MetricRow label="Estimator" value="keiko-conservative-utf8-v1" />
           <MetricRow
             label="Assembled estimate"
             value={`${formatTokens(contextSummary.totalEstimatedTokens)} tok`}

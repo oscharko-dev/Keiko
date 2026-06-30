@@ -236,10 +236,7 @@ export const PROMPT_RISK_CLASSES: readonly PromptRiskClass[] = [
 // supplied/connected context, tasks needing external but stable knowledge, and tasks needing current
 // or volatile external information (AC3).
 export type GroundingNeedKind =
-  | "none"
-  | "supplied-context"
-  | "external-knowledge"
-  | "external-current";
+  "none" | "supplied-context" | "external-knowledge" | "external-current";
 
 export const GROUNDING_NEED_KINDS: readonly GroundingNeedKind[] = [
   "none",
@@ -356,10 +353,7 @@ export interface GroundingSourcePolicy {
 
 // Citation discipline, mirroring `CapsuleAnswerGroundingPolicy` semantics in provider-neutral terms.
 export type CitationDiscipline =
-  | "require-citations"
-  | "require-citations-or-state-no-evidence"
-  | "best-effort"
-  | "not-required";
+  "require-citations" | "require-citations-or-state-no-evidence" | "best-effort" | "not-required";
 
 export const CITATION_DISCIPLINES: readonly CitationDiscipline[] = [
   "require-citations",
@@ -394,9 +388,7 @@ export interface RecencyExpectation {
 // How contradictory evidence across sources is handled. Contradiction handling is post-retrieval, not
 // a retrieval mode: the model surfaces the conflict rather than silently picking a side.
 export type ContradictionPolicy =
-  | "disclose-and-defer"
-  | "prefer-higher-priority"
-  | "synthesize-with-caveats";
+  "disclose-and-defer" | "prefer-higher-priority" | "synthesize-with-caveats";
 
 export const CONTRADICTION_POLICIES: readonly ContradictionPolicy[] = [
   "disclose-and-defer",
@@ -443,11 +435,7 @@ export const GROUNDING_DIRECTIVES: readonly GroundingDirective[] = [
 // `EVALUATION_DIMENSIONS` (evaluations.ts) and the Local Knowledge retrieval-eval scores are
 // different concerns and live in different packages, so #1311 defines its own closed vocabulary here.
 export type RagEvaluationDimension =
-  | "context-precision"
-  | "context-recall"
-  | "faithfulness"
-  | "answer-relevancy"
-  | "groundedness";
+  "context-precision" | "context-recall" | "faithfulness" | "answer-relevancy" | "groundedness";
 
 export const RAG_EVALUATION_DIMENSIONS: readonly RagEvaluationDimension[] = [
   "context-precision",
@@ -486,15 +474,7 @@ export interface GroundingPlan {
 
 // ─── Output schema descriptor ────────────────────────────────────────────────────
 export type OutputFormat =
-  | "prose"
-  | "markdown"
-  | "json"
-  | "yaml"
-  | "csv"
-  | "table"
-  | "list"
-  | "code"
-  | "unspecified";
+  "prose" | "markdown" | "json" | "yaml" | "csv" | "table" | "list" | "code" | "unspecified";
 
 export const PROMPT_OUTPUT_FORMATS: readonly OutputFormat[] = [
   "prose",
@@ -594,12 +574,7 @@ export const PROMPT_SIGNAL_STRENGTHS: readonly PromptSignalStrength[] = [
 ] as const;
 
 export type PromptSignalDimension =
-  | "task-class"
-  | "domain"
-  | "grounding"
-  | "output"
-  | "risk"
-  | "missing-context";
+  "task-class" | "domain" | "grounding" | "output" | "risk" | "missing-context";
 
 export const PROMPT_SIGNAL_DIMENSIONS: readonly PromptSignalDimension[] = [
   "task-class",
@@ -619,13 +594,7 @@ export interface PromptClassificationSignal {
 
 // ─── Profiles (metadata only; execution params owned by #1310) ───────────────────
 export type PromptEnhancementProfileId =
-  | "fast"
-  | "precise"
-  | "research"
-  | "creative"
-  | "technical"
-  | "safety-critical"
-  | "agentic";
+  "fast" | "precise" | "research" | "creative" | "technical" | "safety-critical" | "agentic";
 
 export const PROMPT_ENHANCEMENT_PROFILE_IDS: readonly PromptEnhancementProfileId[] = [
   "fast",

@@ -330,9 +330,7 @@ describe("PdfCitationPreviewWindow", () => {
     expect(await axe(container)).toHaveNoViolations();
     expect(
       consoleError.mock.calls.some((call) =>
-        call.some((part) =>
-          String(part).includes("Encountered two children with the same key"),
-        ),
+        call.some((part) => String(part).includes("Encountered two children with the same key")),
       ),
     ).toBe(false);
   });

@@ -121,20 +121,21 @@ function deps(config: GatewayConfig = realtimeConfig()): UiHandlerDeps {
     redactor: (value) => value,
     registry: createRunRegistry(),
     modelPortFactory: () => ({
-      call: (request): Promise<NormalizedResponse> => Promise.resolve({
-        modelId: request.modelId,
-        content: "unused",
-        finishReason: "stop",
-        toolCalls: [],
-        structuredOutput: null,
-        usage: {
-          requestId: "voice-grounded-tool-test",
-          promptTokens: 1,
-          completionTokens: 1,
-          latencyMs: 1,
-          costClass: "medium",
-        },
-      }),
+      call: (request): Promise<NormalizedResponse> =>
+        Promise.resolve({
+          modelId: request.modelId,
+          content: "unused",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "voice-grounded-tool-test",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        }),
     }),
     store,
   };
@@ -171,11 +172,7 @@ function createChat(): Chat {
   return store.createChat(projectPath, "Voice chat", CHAT_MODEL);
 }
 
-function createMessage(
-  chatId: string,
-  role: "user" | "assistant",
-  content: string,
-): ChatMessage {
+function createMessage(chatId: string, role: "user" | "assistant", content: string): ChatMessage {
   return store.createMessage({
     chatId,
     role,
@@ -189,10 +186,7 @@ function createMessage(
   });
 }
 
-function groundedAnswer(
-  chatId: string,
-  overrides: Partial<GroundedAnswer> = {},
-): GroundedAnswer {
+function groundedAnswer(chatId: string, overrides: Partial<GroundedAnswer> = {}): GroundedAnswer {
   const user = createMessage(chatId, "user", "Worum geht es im Fachkonzept?");
   const assistant = createMessage(
     chatId,
@@ -286,7 +280,10 @@ describe("handleRealtimeGroundedVoiceTool", () => {
 
   it("fails closed when the deployment is not full realtime voice capable", async () => {
     const chat = createChat();
-    const result = await handleRealtimeGroundedVoiceTool(ctx(requestFor(chat)), deps(chatOnlyConfig()));
+    const result = await handleRealtimeGroundedVoiceTool(
+      ctx(requestFor(chat)),
+      deps(chatOnlyConfig()),
+    );
 
     expect(result.status).toBe(403);
     expect(result.body).toMatchObject({
@@ -297,7 +294,10 @@ describe("handleRealtimeGroundedVoiceTool", () => {
 
   it("fails closed when the realtime voice provider lacks tool calling", async () => {
     const chat = createChat();
-    const result = await handleRealtimeGroundedVoiceTool(ctx(requestFor(chat)), deps(realtimeConfig(false)));
+    const result = await handleRealtimeGroundedVoiceTool(
+      ctx(requestFor(chat)),
+      deps(realtimeConfig(false)),
+    );
 
     expect(result.status).toBe(403);
     expect(result.body).toMatchObject({
@@ -561,12 +561,18 @@ describe("handleRealtimeGroundedVoiceTool", () => {
 
   it("maps non-grounded core responses and missing persisted messages to internal errors", async () => {
     const chat = createChat();
-    runGroundedAskInputMock.mockResolvedValueOnce({ status: 200, body: { ok: true } } satisfies RouteResult);
+    runGroundedAskInputMock.mockResolvedValueOnce({
+      status: 200,
+      body: { ok: true },
+    } satisfies RouteResult);
     const missingAnswer = groundedAnswer(chat.id, {
       userMessageId: "missing-user",
       assistantMessageId: "missing-assistant",
     });
-    runGroundedAskInputMock.mockResolvedValueOnce({ status: 200, body: missingAnswer } satisfies RouteResult);
+    runGroundedAskInputMock.mockResolvedValueOnce({
+      status: 200,
+      body: missingAnswer,
+    } satisfies RouteResult);
 
     const nonGrounded = await handleRealtimeGroundedVoiceTool(
       ctx(requestFor(chat, { callId: "non-grounded" })),

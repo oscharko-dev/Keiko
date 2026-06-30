@@ -661,12 +661,7 @@ describe("runRepairCli — runtime state artifacts", () => {
     mkdirSync(join(stateDir, "credentials"), { recursive: true });
     const ownedTemp = [
       join(stateDir, "evidence", "run-1.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
-      join(
-        stateDir,
-        "evidence",
-        "qi",
-        "run-1.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp",
-      ),
+      join(stateDir, "evidence", "qi", "run-1.qi.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
       join(stateDir, "credentials", ".secret-vault.1234.deadbeefdeadbeef.tmp"),
     ];
     const customerTemp = [

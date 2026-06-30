@@ -70,7 +70,9 @@ interface PendingRequest {
 
 const defaultScheduler: LspRpcScheduler = {
   setTimer: (callback, delayMs) => setTimeout(callback, delayMs),
-  clearTimer: (handle) => { clearTimeout(handle as ReturnType<typeof setTimeout>); },
+  clearTimer: (handle) => {
+    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  },
 };
 
 export function createLspJsonRpcClient(deps: LspJsonRpcClientDeps): LspJsonRpcClient {
@@ -84,9 +86,9 @@ export function createLspJsonRpcClient(deps: LspJsonRpcClientDeps): LspJsonRpcCl
     deps.sendFrame(JSON.stringify(payload));
   };
 
-  void consume(deps.source, (body) =>
-    { dispatch(body, pending, (m, p) => notificationHandler?.(m, p)); },
-  );
+  void consume(deps.source, (body) => {
+    dispatch(body, pending, (m, p) => notificationHandler?.(m, p));
+  });
 
   const request = <T>(method: string, params: unknown, options: LspRequestOptions): Promise<T> => {
     if (disposed) {
@@ -135,7 +137,9 @@ function registerPending(
   options: LspRequestOptions,
   handlers: ResolveReject,
 ): void {
-  const cancel = (): void => { send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } }); };
+  const cancel = (): void => {
+    send({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } });
+  };
   const timer = scheduler.setTimer(() => {
     if (!pending.has(id)) return;
     pending.delete(id);

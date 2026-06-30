@@ -15,7 +15,11 @@
 
 import { useEffect, useRef, type ReactNode, type Ref } from "react";
 import { Icons } from "./Icons";
-import type { RealtimeVoiceController, RealtimeVoiceErrorReason, RealtimeVoicePhase } from "./hooks/useRealtimeVoice";
+import type {
+  RealtimeVoiceController,
+  RealtimeVoiceErrorReason,
+  RealtimeVoicePhase,
+} from "./hooks/useRealtimeVoice";
 
 // Stable id for the local-only privacy disclosure on the realtime button.
 export const REALTIME_PRIVACY_HINT_ID = "cmp-voice-rt-privacy-hint";
@@ -115,7 +119,8 @@ function realtimeErrorHeadline(reason: RealtimeVoiceErrorReason): string {
 
 interface VoiceRealtimeStatusProps {
   readonly phase: RealtimeVoicePhase;
-  readonly error: { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
+  readonly error:
+    { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
 }

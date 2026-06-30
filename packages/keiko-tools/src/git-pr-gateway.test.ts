@@ -142,12 +142,16 @@ describe("buildPrCreateArgv", () => {
   });
 
   it("rejects a control character in the title", () => {
-    expect(() => buildPrCreateArgv({ ...createCommand(), title: `a${String.fromCharCode(1)}b` })).toThrow(GitPrArgvError);
+    expect(() =>
+      buildPrCreateArgv({ ...createCommand(), title: `a${String.fromCharCode(1)}b` }),
+    ).toThrow(GitPrArgvError);
   });
 
   it("permits newlines in the body but rejects a NUL", () => {
     expect(() => buildPrCreateArgv({ ...createCommand(), body: "line1\nline2" })).not.toThrow();
-    expect(() => buildPrCreateArgv({ ...createCommand(), body: `a${String.fromCharCode(0)}b` })).toThrow(GitPrArgvError);
+    expect(() =>
+      buildPrCreateArgv({ ...createCommand(), body: `a${String.fromCharCode(0)}b` }),
+    ).toThrow(GitPrArgvError);
   });
 });
 

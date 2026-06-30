@@ -359,9 +359,7 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     messageHandler?.(makeMessageEvent({ type: "IGNORED" }, sandbox));
     expect(skipWaiting).not.toHaveBeenCalled();
 
-    messageHandler?.(
-      makeMessageEvent({ type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER" }, sandbox),
-    );
+    messageHandler?.(makeMessageEvent({ type: "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER" }, sandbox));
 
     expect(skipWaiting).toHaveBeenCalledOnce();
     expect(sandbox.respondWithCalls).toHaveLength(1);

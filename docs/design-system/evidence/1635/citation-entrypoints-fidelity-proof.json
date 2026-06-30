@@ -10,19 +10,8 @@
         ".citation-inline-marker--recoverable",
         ".citation-inline-marker--blocked"
       ],
-      "states": [
-        "default",
-        "hover",
-        "focus",
-        "recoverable",
-        "blocked"
-      ],
-      "tokens": [
-        "--accent-bright",
-        "--accent",
-        "--focus-ring",
-        "--text-secondary"
-      ],
+      "states": ["default", "hover", "focus", "recoverable", "blocked"],
+      "tokens": ["--accent-bright", "--accent", "--focus-ring", "--text-secondary"],
       "result": "PASS"
     },
     {
@@ -32,14 +21,7 @@
         ".grounded-citation-action--recoverable",
         ".grounded-citation-action--blocked"
       ],
-      "states": [
-        "default",
-        "hover",
-        "focus",
-        "disabled",
-        "recoverable",
-        "blocked"
-      ],
+      "states": ["default", "hover", "focus", "disabled", "recoverable", "blocked"],
       "tokens": [
         "--ai-source-surface",
         "--ai-source-border",

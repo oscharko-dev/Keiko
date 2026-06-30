@@ -39,11 +39,7 @@ export interface WorkspaceUiSelectionState {
 // ─── Command record ──────────────────────────────────────────────────────
 
 export type WorkspaceCommandAuthority =
-  | "user"
-  | "user-confirm"
-  | "agent-proposal"
-  | "tool"
-  | "model";
+  "user" | "user-confirm" | "agent-proposal" | "tool" | "model";
 
 export type WorkspaceCommandCategory =
   | "workspace"

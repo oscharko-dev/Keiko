@@ -756,8 +756,7 @@ describe("PATCH /api/chats", () => {
     const body = (await res.json()) as {
       chat: {
         connectedScope:
-          | { kind: string; relativePaths: string[]; connectedAtMs: number }
-          | undefined;
+          { kind: string; relativePaths: string[]; connectedAtMs: number } | undefined;
       };
     };
     expect(body.chat.connectedScope).toEqual({

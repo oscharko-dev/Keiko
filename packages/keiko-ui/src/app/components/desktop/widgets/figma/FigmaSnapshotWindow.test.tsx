@@ -1340,12 +1340,10 @@ describe("FigmaSnapshotWindow", () => {
   describe("revoke token (#758, fix #3)", () => {
     async function getToRevoke(user: ReturnType<typeof userEvent.setup>) {
       const trigger = resolvingTrigger();
-      const revokeFn = vi.fn(
-        async (): Promise<FigmaRevokeTokenResult> => ({
-          code: "FIGMA_TOKEN_REVOKED_OK",
-          message: "The stored Figma PAT was removed.",
-        }),
-      );
+      const revokeFn = vi.fn(async (): Promise<FigmaRevokeTokenResult> => ({
+        code: "FIGMA_TOKEN_REVOKED_OK",
+        message: "The stored Figma PAT was removed.",
+      }));
       renderWindow({ triggerImpl: trigger, revokeImpl: revokeFn as unknown as RevokeFn });
       await typeAndSubmit(user);
       await waitForDone();

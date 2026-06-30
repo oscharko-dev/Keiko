@@ -66,12 +66,7 @@ export interface FileContent {
 // ─── Context pack ───────────────────────────────────────────────────────────────
 
 export type SelectionReason =
-  | "entrypoint"
-  | "manifest"
-  | "documentation"
-  | "config"
-  | "source"
-  | "test";
+  "entrypoint" | "manifest" | "documentation" | "config" | "source" | "test";
 
 // Priority order used to rank candidates: lower index wins. Ties break on lexical path.
 export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = [

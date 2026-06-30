@@ -526,10 +526,7 @@ function hasPrev(w: AppWindow): boolean {
   return "prev" in w;
 }
 
-function hasLayoutGeometry(
-  w: AppWindow,
-  next: Pick<AppWindow, "x" | "y" | "w" | "h">,
-): boolean {
+function hasLayoutGeometry(w: AppWindow, next: Pick<AppWindow, "x" | "y" | "w" | "h">): boolean {
   return w.x === next.x && w.y === next.y && w.w === next.w && w.h === next.h;
 }
 
@@ -724,8 +721,7 @@ interface ConnectArgs {
   readonly winsByIdRef?: MutableRefObject<ReadonlyMap<string, AppWindow>> | undefined;
   readonly connsByIdRef?: MutableRefObject<ReadonlyMap<string, Connection>> | undefined;
   readonly connsByEndpointRef?:
-    | MutableRefObject<ReadonlyMap<string, readonly Connection[]>>
-    | undefined;
+    MutableRefObject<ReadonlyMap<string, readonly Connection[]>> | undefined;
   readonly connectingRef: MutableRefObject<ConnectingState | null>;
   readonly connectCleanupRef: MutableRefObject<(() => void) | null>;
   readonly focus: WorkspaceApi["focus"];
@@ -737,8 +733,7 @@ interface ConnectArgs {
   // Release 0.2.0 — the bind callback returns whether the bind was ACCEPTED; `false` (e.g. the
   // per-chat source limit is reached) vetoes the edge so no dangling ungrounded edge is drawn.
   readonly onScopeBind?:
-    | ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>)
-    | undefined;
+    ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
@@ -747,8 +742,7 @@ interface ConnectArgs {
     | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void)
-    | undefined;
+    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {

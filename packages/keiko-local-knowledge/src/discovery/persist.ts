@@ -346,14 +346,12 @@ export function readDocumentTextSpan(
   const d = String(documentId);
   if (!cipher.isEncrypted) {
     const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
-      | SpanRow
-      | undefined;
+      SpanRow | undefined;
     if (single !== undefined) {
       return single.span ?? "";
     }
     const windowed = statements(db).selectDocumentTextWindowSpan.get({ c, d, start, end, len }) as
-      | SpanRow
-      | undefined;
+      SpanRow | undefined;
     return windowed === undefined ? undefined : (windowed.span ?? "");
   }
   const single = statements(db).selectDocumentText.get({ c, d }) as DocumentTextRow | undefined;
@@ -361,8 +359,7 @@ export function readDocumentTextSpan(
     return cipher.openText(single.normalized_text).slice(start, start + len);
   }
   const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end }) as
-    | WindowFullRow
-    | undefined;
+    WindowFullRow | undefined;
   if (windowed === undefined) {
     return undefined;
   }

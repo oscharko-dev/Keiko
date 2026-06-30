@@ -71,8 +71,7 @@ export interface EditorSurfaceProps {
   readonly provideInlineCompletions?: EditorInlineCompletionResolver | undefined;
   /** Observer for content-free inline-completion acceptance/rejection telemetry counts. */
   readonly onInlineCompletionTelemetry?:
-    | ((snapshot: InlineCompletionTelemetrySnapshot) => void)
-    | undefined;
+    ((snapshot: InlineCompletionTelemetrySnapshot) => void) | undefined;
   /**
    * Host language-intelligence resolvers (Issue #1201). When present, the editor registers the
    * corresponding Monaco surface (diagnostics markers, hover widget, document-symbol outline,

@@ -125,10 +125,10 @@ POST and are not re-checked here.
 
 `GitSyncExecuteRequest`-shaped:
 
-| Field           | Type   | Required | Notes                                                                                                         |
-| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------- |
-| `schemaVersion` | `"1"`  | yes      | Must equal `GIT_SYNC_SCHEMA_VERSION`.                                                                         |
-| `projectId`     | string | yes      | The workspace root path; authorized through the project store.                                                |
+| Field           | Type   | Required | Notes                                                                                                            |
+| --------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `schemaVersion` | `"1"`  | yes      | Must equal `GIT_SYNC_SCHEMA_VERSION`.                                                                            |
+| `projectId`     | string | yes      | The workspace root path; authorized through the project store.                                                   |
 | `remote`        | string | no       | Optional remote alias; syntactically validated by `isSafeGitRef` and accepted only when present in `git remote`. |
 
 ### Error envelope
@@ -186,21 +186,21 @@ Settled network operations re-read branch/upstream/ahead/behind, build a redacte
 
 The evidence-friendly outcome union (`GIT_SYNC_OUTCOMES`, 13 members):
 
-| Outcome             | Operation | Meaning                                                       |
-| ------------------- | --------- | ------------------------------------------------------------- |
-| `succeeded`         | both      | Fetch completed / pull fast-forwarded.                        |
-| `up-to-date`        | pull      | Already up to date (stdout match).                            |
-| `no-remote`         | both      | No such remote / not a Git repository on the remote leg.      |
-| `no-upstream`       | pull      | No tracking information for the current branch.               |
-| `detached-head`     | pull      | Detached HEAD (surfaced as a preview block; pull cannot run). |
-| `dirty-worktree`    | pull      | Local changes would be overwritten.                           |
-| `not-fast-forward`  | pull      | `--ff-only` refused a non-fast-forward.                       |
-| `auth-failed`       | both      | Credentials/permission/terminal-prompt-disabled failure.      |
-| `untrusted-host-key` | both     | SSH refused an unknown or changed host key.                   |
-| `timeout`           | both      | The bounded process was truncated (timeout or byte cap).      |
-| `git-missing`       | both      | The `git` executable was unavailable (exit code 127).         |
-| `unsafe-repository` | both      | Dubious ownership / `safe.directory` refusal.                 |
-| `git-error`         | both      | A non-zero result none of the above classifies.               |
+| Outcome              | Operation | Meaning                                                       |
+| -------------------- | --------- | ------------------------------------------------------------- |
+| `succeeded`          | both      | Fetch completed / pull fast-forwarded.                        |
+| `up-to-date`         | pull      | Already up to date (stdout match).                            |
+| `no-remote`          | both      | No such remote / not a Git repository on the remote leg.      |
+| `no-upstream`        | pull      | No tracking information for the current branch.               |
+| `detached-head`      | pull      | Detached HEAD (surfaced as a preview block; pull cannot run). |
+| `dirty-worktree`     | pull      | Local changes would be overwritten.                           |
+| `not-fast-forward`   | pull      | `--ff-only` refused a non-fast-forward.                       |
+| `auth-failed`        | both      | Credentials/permission/terminal-prompt-disabled failure.      |
+| `untrusted-host-key` | both      | SSH refused an unknown or changed host key.                   |
+| `timeout`            | both      | The bounded process was truncated (timeout or byte cap).      |
+| `git-missing`        | both      | The `git` executable was unavailable (exit code 127).         |
+| `unsafe-repository`  | both      | Dubious ownership / `safe.directory` refusal.                 |
+| `git-error`          | both      | A non-zero result none of the above classifies.               |
 
 Outcome classification scans stderr case-insensitively in a fixed precedence: truncation → exit code
 127 → ownership → host-key trust → auth → remote/repository → (pull only)

@@ -37,12 +37,7 @@ export interface InlineCompletionTelemetrySnapshot {
 
 /** The content-free lifecycle events the bridge records. */
 export type InlineCompletionTelemetryEvent =
-  | "offered"
-  | "shown"
-  | "accepted"
-  | "rejected"
-  | "ignored"
-  | "partially-accepted";
+  "offered" | "shown" | "accepted" | "rejected" | "ignored" | "partially-accepted";
 
 /** A zeroed snapshot; the identity used to seed a fresh accumulator. */
 export const EMPTY_INLINE_COMPLETION_TELEMETRY: InlineCompletionTelemetrySnapshot = {

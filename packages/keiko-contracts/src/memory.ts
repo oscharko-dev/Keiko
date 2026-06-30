@@ -189,12 +189,7 @@ export const MEMORY_SOURCE_KINDS: readonly MemorySourceKind[] = [
 // (#208) emits them when merging records. "temporal-precedes" is the ordering edge that
 // lets a retrieval surface "X happened before Y" without requiring a clock at this layer.
 export type MemoryEdgeKind =
-  | "related"
-  | "derived-from"
-  | "supersedes"
-  | "corrects"
-  | "conflicts-with"
-  | "temporal-precedes";
+  "related" | "derived-from" | "supersedes" | "corrects" | "conflicts-with" | "temporal-precedes";
 
 export const MEMORY_EDGE_KINDS: readonly MemoryEdgeKind[] = [
   "related",

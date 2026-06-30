@@ -5,13 +5,7 @@
   "repoHeadSha": "d6953273b305d70c76cb55487ff69f1bc23ece99",
   "statesCaptured": 16,
   "seriousOrCriticalAxeViolations": 0,
-  "axeTags": [
-    "wcag2a",
-    "wcag2aa",
-    "wcag21a",
-    "wcag21aa",
-    "wcag22aa"
-  ],
+  "axeTags": ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"],
   "note": "Markup mirrors VoiceDialogMode.tsx / voice-dialog-state.ts and is contract-pinned by the keiko-ui unit tests. globals.css is unchanged by #1559.",
   "results": [
     {

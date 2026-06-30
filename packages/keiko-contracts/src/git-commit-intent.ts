@@ -34,11 +34,7 @@ export interface GitCommitChangeSummary {
 // ─── Quality-warning vocabulary ───────────────────────────────────────────────────────────────────
 
 export type GitCommitQualityWarningCode =
-  | "mixed-scope"
-  | "wip-marker"
-  | "large-change"
-  | "empty-body"
-  | "non-conventional-subject";
+  "mixed-scope" | "wip-marker" | "large-change" | "empty-body" | "non-conventional-subject";
 
 export const GIT_COMMIT_QUALITY_WARNING_CODES: readonly GitCommitQualityWarningCode[] = [
   "mixed-scope",

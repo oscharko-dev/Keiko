@@ -33,38 +33,40 @@ describe("assertManagedRootOwned (SC2)", () => {
   it("creates the root + ownership marker and is idempotent", () => {
     assertManagedRootOwned(managedRoot);
     expect(existsSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME))).toBe(true);
-    expect(() => { assertManagedRootOwned(managedRoot); }).not.toThrow();
+    expect(() => {
+      assertManagedRootOwned(managedRoot);
+    }).not.toThrow();
   });
 });
 
 describe("assertManagedTargetContained (AC2)", () => {
   it("accepts a target inside the managed root", () => {
     assertManagedRootOwned(managedRoot);
-    expect(() =>
-      { assertManagedTargetContained(managedRoot, join(managedRoot, "repo_x", "ws_y")); },
-    ).not.toThrow();
+    expect(() => {
+      assertManagedTargetContained(managedRoot, join(managedRoot, "repo_x", "ws_y"));
+    }).not.toThrow();
   });
 
   it("rejects an out-of-root target", () => {
     assertManagedRootOwned(managedRoot);
-    expect(() => { assertManagedTargetContained(managedRoot, join(outside, "wt")); }).toThrow(
-      TaskWorkspaceError,
-    );
+    expect(() => {
+      assertManagedTargetContained(managedRoot, join(outside, "wt"));
+    }).toThrow(TaskWorkspaceError);
   });
 
   it("rejects a traversal target", () => {
     assertManagedRootOwned(managedRoot);
-    expect(() =>
-      { assertManagedTargetContained(managedRoot, join(managedRoot, "..", "escape")); },
-    ).toThrow(TaskWorkspaceError);
+    expect(() => {
+      assertManagedTargetContained(managedRoot, join(managedRoot, "..", "escape"));
+    }).toThrow(TaskWorkspaceError);
   });
 
   it("rejects a target that escapes the root via a symlinked ancestor", () => {
     assertManagedRootOwned(managedRoot);
     symlinkSync(outside, join(managedRoot, "link"), "dir");
-    expect(() =>
-      { assertManagedTargetContained(managedRoot, join(managedRoot, "link", "wt")); },
-    ).toThrow(TaskWorkspaceError);
+    expect(() => {
+      assertManagedTargetContained(managedRoot, join(managedRoot, "link", "wt"));
+    }).toThrow(TaskWorkspaceError);
   });
 });
 

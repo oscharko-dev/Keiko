@@ -28,8 +28,7 @@ export type QualityIntelligenceBinaryExportMode = "pdf" | "zip-bundle";
  * rather than the contract `QualityIntelligenceExportAdapter`.
  */
 export type QualityIntelligenceTraceabilityExportMode =
-  | "traceability-csv"
-  | "traceability-markdown";
+  "traceability-csv" | "traceability-markdown";
 
 /** Any target an export-evidence row may record: a domain adapter, a binary bundle mode, or a traceability matrix mode. */
 export type QualityIntelligenceExportTarget =

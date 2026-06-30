@@ -207,11 +207,7 @@ export interface QualityIntelligenceUiCandidate {
    * and export semantics remain full-fidelity.
    */
   readonly truncatedFields?: readonly (
-    | "title"
-    | "preconditions"
-    | "steps"
-    | "expectedResults"
-    | "tags"
+    "title" | "preconditions" | "steps" | "expectedResults" | "tags"
   )[];
 }
 
@@ -252,13 +248,7 @@ export interface QualityIntelligenceUiRegenerateResult {
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────
 
 export type QualityIntelligenceInlineSourceKind =
-  | "requirements"
-  | "workspace"
-  | "file"
-  | "capsule"
-  | "capsule-set"
-  | "figma-snapshot"
-  | "image";
+  "requirements" | "workspace" | "file" | "capsule" | "capsule-set" | "figma-snapshot" | "image";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
@@ -368,9 +358,7 @@ export interface QualityIntelligenceResolvedModelPolicy {
 }
 
 export type QualityIntelligenceModelPolicyValidationIssueCode =
-  | "model-not-configured"
-  | "model-not-chat"
-  | "model-not-structured";
+  "model-not-configured" | "model-not-chat" | "model-not-structured";
 
 export interface QualityIntelligenceModelPolicyValidationIssue {
   readonly field: "testDesignModelId" | "judgeModelId";
@@ -384,19 +372,10 @@ export interface QualityIntelligenceModelPolicyValidation {
 }
 
 export type QualityIntelligenceModelPreflightStatus =
-  | "not-run"
-  | "passed"
-  | "failed"
-  | "unavailable";
+  "not-run" | "passed" | "failed" | "unavailable";
 
 export type QualityIntelligenceModelPreflightErrorCategory =
-  | "timeout"
-  | "auth"
-  | "rate-limit"
-  | "context"
-  | "transport"
-  | "provider-http"
-  | "unavailable";
+  "timeout" | "auth" | "rate-limit" | "context" | "transport" | "provider-http" | "unavailable";
 
 export interface QualityIntelligenceModelPreflightStageResult {
   readonly stage: "generate" | "judge";

@@ -18,10 +18,7 @@ interface ReadySentinel {
 }
 
 export type HarnessEvent =
-  | ContractsHarnessEvent
-  | WorkflowEvent
-  | BugInvestigationEvent
-  | ReadySentinel;
+  ContractsHarnessEvent | WorkflowEvent | BugInvestigationEvent | ReadySentinel;
 
 export type HarnessEventType = HarnessEvent["type"];
 

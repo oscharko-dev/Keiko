@@ -90,7 +90,9 @@ function buildStoredPreviewCitation(
   const sourceLabel = normalizeLabel(input.sourceLabel);
   return {
     stableId: createHash("sha256")
-      .update(`${input.marker}|${String(input.reference.capsuleId)}|${String(input.reference.chunkId)}`)
+      .update(
+        `${input.marker}|${String(input.reference.capsuleId)}|${String(input.reference.chunkId)}`,
+      )
       .digest("hex")
       .slice(0, 16),
     marker: input.marker,
@@ -100,8 +102,12 @@ function buildStoredPreviewCitation(
     lineage: snapshot.snapshot.lineage,
     documentMediaType: snapshot.snapshot.documentMediaType,
     documentContentHash: snapshot.snapshot.documentContentHash,
-    ...(snapshot.snapshot.pageNumber !== undefined ? { pageNumber: snapshot.snapshot.pageNumber } : {}),
-    ...(snapshot.snapshot.pageLabel !== undefined ? { pageLabel: snapshot.snapshot.pageLabel } : {}),
+    ...(snapshot.snapshot.pageNumber !== undefined
+      ? { pageNumber: snapshot.snapshot.pageNumber }
+      : {}),
+    ...(snapshot.snapshot.pageLabel !== undefined
+      ? { pageLabel: snapshot.snapshot.pageLabel }
+      : {}),
     ...(snapshot.snapshot.characterStart !== undefined
       ? { characterStart: snapshot.snapshot.characterStart }
       : {}),

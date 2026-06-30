@@ -222,7 +222,8 @@ const REALTIME_GROUNDING_TOOL: RealtimeFunctionTool = {
     properties: {
       query: {
         type: "string",
-        description: "The user's grounded question, rewritten only enough to preserve the intended meaning.",
+        description:
+          "The user's grounded question, rewritten only enough to preserve the intended meaning.",
       },
     },
     required: ["query"],
@@ -237,9 +238,7 @@ const REALTIME_NEGOTIATION_TIMEOUT_MS = 12_000;
 
 function trimContextText(text: string): string {
   const safe = stripUnsafeFormatChars(text).trim();
-  return safe.length <= MAX_REALTIME_CONTEXT_CHARS
-    ? safe
-    : safe.slice(-MAX_REALTIME_CONTEXT_CHARS);
+  return safe.length <= MAX_REALTIME_CONTEXT_CHARS ? safe : safe.slice(-MAX_REALTIME_CONTEXT_CHARS);
 }
 
 function recentChatContext(deps: UiHandlerDeps, chatId: string): string {
@@ -760,7 +759,11 @@ function readSessionCreateFrame(ws: WsSocket, raw: string): VoiceSessionCreateMe
     ws.close(1008, "invalid opening frame");
     return undefined;
   }
-  if (!validateVoiceControlMessage(parsed).ok || !isRecord(parsed) || parsed.kind !== "session.create") {
+  if (
+    !validateVoiceControlMessage(parsed).ok ||
+    !isRecord(parsed) ||
+    parsed.kind !== "session.create"
+  ) {
     ws.close(1008, "expected session.create");
     return undefined;
   }

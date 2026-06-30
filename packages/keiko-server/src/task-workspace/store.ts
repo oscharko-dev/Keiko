@@ -167,8 +167,7 @@ export function buildWorkspaceInstanceStoreOverDatabase(db: DatabaseSync): Works
       taskId: string,
     ): WorkspaceInstance | undefined => {
       const row = db.prepare(SQL_FIND_BY_REPO_TASK).get(repositoryId, taskId) as unknown as
-        | InstanceRow
-        | undefined;
+        InstanceRow | undefined;
       return row === undefined ? undefined : rowToInstance(row);
     },
     listByRepository: (repositoryId: string): readonly WorkspaceInstance[] =>

@@ -500,10 +500,7 @@ function auditKnowledgeEncryption(stateDir) {
 // ── Class 5: protected Evidence / Quality-Intelligence artifacts ──────────────────────────────
 function isPlaceholderSafe(value) {
   const trimmed = value.trim().replace(/[.,;)}]+$/g, "");
-  return (
-    trimmed === REDACTED_PLACEHOLDER ||
-    /^(?:true|false|null|[0-9]+)$/iu.test(trimmed)
-  );
+  return trimmed === REDACTED_PLACEHOLDER || /^(?:true|false|null|[0-9]+)$/iu.test(trimmed);
 }
 
 function scanForSecretFindings(text) {

@@ -371,7 +371,11 @@ function removeStateStep(opts: UninstallOptions, io: CliIo, stateDir: string): v
   finalizeStateDir(scan, stateDir, io, opts.dryRun);
 }
 
-function refuseUnsafeStateRoot(opts: UninstallOptions, io: CliIo, root: StateRootInspection): boolean {
+function refuseUnsafeStateRoot(
+  opts: UninstallOptions,
+  io: CliIo,
+  root: StateRootInspection,
+): boolean {
   if (!opts.scopes.state && !opts.scopes.launchers) return false;
   if (root.status === "symlink") {
     io.err(`keiko uninstall: refusing to use symlinked state directory: ${root.absPath}\n`);

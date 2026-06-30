@@ -135,9 +135,7 @@ describe("isCommandAllowed — deny-by-default", () => {
     expect(isCommandAllowed(rules, "npx", ["--no-install", "vitest", "run"]).allowed).toBe(true);
     expect(isCommandAllowed(rules, "npx", ["vitest", "run"]).allowed).toBe(false);
     expect(isCommandAllowed(rules, "npx", ["vitest", "--no-install", "run"]).allowed).toBe(false);
-    expect(isCommandAllowed(rules, "npx", ["--yes", "--no-install", "vitest"]).allowed).toBe(
-      false,
-    );
+    expect(isCommandAllowed(rules, "npx", ["--yes", "--no-install", "vitest"]).allowed).toBe(false);
   });
 });
 

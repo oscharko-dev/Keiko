@@ -53,12 +53,7 @@ export const EMPTY_FRONTEND_TEST_STACK: FrontendTestStack = {
 // ─── Test style & strategy ───────────────────────────────────────────────────────────────────────
 
 export type TestStyle =
-  | "unit"
-  | "component"
-  | "interaction"
-  | "accessibility-smoke"
-  | "browser-smoke"
-  | "unsupported";
+  "unit" | "component" | "interaction" | "accessibility-smoke" | "browser-smoke" | "unsupported";
 
 export const TEST_STYLES: readonly TestStyle[] = [
   "unit",

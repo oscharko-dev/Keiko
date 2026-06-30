@@ -145,13 +145,7 @@ const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
 // Engineering note: NO fake progress percentage. The status string is the
 // only progress signal — UI copy must reflect that.
 export type SendStatus =
-  | "idle"
-  | "queued"
-  | "contacting"
-  | "streaming"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  "idle" | "queued" | "contacting" | "streaming" | "completed" | "failed" | "cancelled";
 
 const TERMINAL_SEND_STATUSES: readonly SendStatus[] = ["completed", "failed", "cancelled"] as const;
 

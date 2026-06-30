@@ -9,7 +9,8 @@ import { join } from "node:path";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32203");
-const stateId = process.env.GITHUB_RUN_ID ?? `issue-1578-git-client-closeout-${String(process.pid)}`;
+const stateId =
+  process.env.GITHUB_RUN_ID ?? `issue-1578-git-client-closeout-${String(process.pid)}`;
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");

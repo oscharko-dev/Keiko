@@ -63,7 +63,13 @@ const EVIDENCE = {
       "/api/git-delivery/pull/execute",
       "/api/git-delivery/push/execute",
     ],
-    requiredStateSnippets: ["behind -> pull", "ahead -> push", "no upstream", "diverged", "detached"],
+    requiredStateSnippets: [
+      "behind -> pull",
+      "ahead -> push",
+      "no upstream",
+      "diverged",
+      "detached",
+    ],
   },
   1577: {
     manifest: "docs/git-delivery/evidence/1577/manifest.json",
@@ -209,8 +215,22 @@ function validateManifestIdentity(manifest, config) {
   if (manifest.evidencePath !== dirname(config.manifest)) {
     failures.push(`${relPath}: evidencePath must match manifest directory`);
   }
-  failures.push(...arrayIncludesAll(manifest.routesIntercepted, config.requiredRoutes, relPath, "routesIntercepted"));
-  failures.push(...arrayIncludesAll(manifest.artifacts, ["manifest.json", ...config.artifacts], relPath, "artifacts"));
+  failures.push(
+    ...arrayIncludesAll(
+      manifest.routesIntercepted,
+      config.requiredRoutes,
+      relPath,
+      "routesIntercepted",
+    ),
+  );
+  failures.push(
+    ...arrayIncludesAll(
+      manifest.artifacts,
+      ["manifest.json", ...config.artifacts],
+      relPath,
+      "artifacts",
+    ),
+  );
   return failures;
 }
 
@@ -286,7 +306,9 @@ function validateArtifacts(root, config) {
         failures.push(`${relPath}: PNG size ${png.bytes} exceeds ${MAX_PNG_BYTES}`);
       }
     } catch (error) {
-      failures.push(`${relPath}: invalid PNG (${error instanceof Error ? error.message : "unknown"})`);
+      failures.push(
+        `${relPath}: invalid PNG (${error instanceof Error ? error.message : "unknown"})`,
+      );
     }
   }
   return failures;

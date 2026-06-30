@@ -92,7 +92,11 @@ function toSession(record: MutableSessionRecord): PdfCitationPreviewSession {
   };
 }
 
-function settleRecord(state: ManagerState, record: MutableSessionRecord, next: "closed" | "expired"): void {
+function settleRecord(
+  state: ManagerState,
+  record: MutableSessionRecord,
+  next: "closed" | "expired",
+): void {
   record.state = next;
   record.settledAtMs = state.now();
   state.byDocumentKey.delete(record.documentKey);
@@ -153,7 +157,10 @@ function createSweepTimer(
   return sweepTimer;
 }
 
-function lookupSessionRecord(state: ManagerState, handle: string): MutableSessionRecord | undefined {
+function lookupSessionRecord(
+  state: ManagerState,
+  handle: string,
+): MutableSessionRecord | undefined {
   sweepRecords(state);
   return state.byHandle.get(handle);
 }

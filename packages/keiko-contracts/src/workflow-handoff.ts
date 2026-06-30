@@ -126,8 +126,7 @@ export interface ProposedPatchEntry {
 
 // ─── Validation result ────────────────────────────────────────────────────────
 export type ValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 const APPROVAL_TOKEN_RE = /^[0-9a-f]{64}$/;

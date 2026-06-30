@@ -4,23 +4,66 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Content &amp; Voice · Keiko Design System</title>
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
     <link rel="stylesheet" href="ds.css" />
     <link rel="stylesheet" href="components.css" />
     <style>
-      .vt { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-      .vt-col { padding: 20px 22px; }
-      .vt-tag { display: inline-flex; align-items: center; gap: 7px; font: 600 11px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 16px; }
-      .vt-do .vt-tag { color: var(--accent-text); }
-      .vt-dont .vt-tag { color: var(--danger); }
-      .vt-row { padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
-      .vt-row:last-child { border-bottom: 0; }
-      .vt-ex { font-size: 13.5px; color: var(--fg); }
-      .vt-why { font-size: 12px; color: var(--fg-muted); margin-top: 3px; }
-      .vt-dont .vt-ex { color: var(--fg-muted); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--danger) 60%, transparent); }
+      .vt {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .vt-col {
+        padding: 20px 22px;
+      }
+      .vt-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font: 600 11px var(--font-mono);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 16px;
+      }
+      .vt-do .vt-tag {
+        color: var(--accent-text);
+      }
+      .vt-dont .vt-tag {
+        color: var(--danger);
+      }
+      .vt-row {
+        padding: 11px 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .vt-row:last-child {
+        border-bottom: 0;
+      }
+      .vt-ex {
+        font-size: 13.5px;
+        color: var(--fg);
+      }
+      .vt-why {
+        font-size: 12px;
+        color: var(--fg-muted);
+        margin-top: 3px;
+      }
+      .vt-dont .vt-ex {
+        color: var(--fg-muted);
+        text-decoration: line-through;
+        text-decoration-color: color-mix(in oklch, var(--danger) 60%, transparent);
+      }
     </style>
   </head>
   <body class="ds">
@@ -32,100 +75,291 @@
       <header class="phero">
         <div class="ey">Guidelines · 07</div>
         <h1>Content &amp; Voice</h1>
-        <p class="lead">Keiko speaks the way it looks: precise, calm and quietly confident. It explains, never shouts; it earns trust by being clear about what it knows and what it did. <span style="color:var(--fg);font-style:italic">Ex experientia disco</span> — it learns from experience, and so does its writing.</p>
+        <p class="lead">
+          Keiko speaks the way it looks: precise, calm and quietly confident. It explains, never
+          shouts; it earns trust by being clear about what it knows and what it did.
+          <span style="color: var(--fg); font-style: italic">Ex experientia disco</span> — it learns
+          from experience, and so does its writing.
+        </p>
       </header>
 
       <section class="sec" id="voice">
-        <div class="sec-head"><div class="num">01 — VOICE</div><h2>Four traits</h2></div>
-        <div class="card" style="padding:26px 28px;display:grid;grid-template-columns:repeat(2,1fr);gap:26px 36px">
-          <div><h3 style="font-size:15px;margin:0 0 7px">Precise</h3><p class="muted-cap">Say the exact thing. Name the file, the count, the action. No vague reassurance.</p></div>
-          <div><h3 style="font-size:15px;margin:0 0 7px">Calm</h3><p class="muted-cap">Steady at all times — especially in errors. No alarm, no exclamation marks.</p></div>
-          <div><h3 style="font-size:15px;margin:0 0 7px">Governed</h3><p class="muted-cap">Transparent about scope, sources and consequences. Trust over hype.</p></div>
-          <div><h3 style="font-size:15px;margin:0 0 7px">Plain</h3><p class="muted-cap">Short words, present tense, second person. Explain jargon or drop it.</p></div>
+        <div class="sec-head">
+          <div class="num">01 — VOICE</div>
+          <h2>Four traits</h2>
+        </div>
+        <div
+          class="card"
+          style="
+            padding: 26px 28px;
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 26px 36px;
+          "
+        >
+          <div>
+            <h3 style="font-size: 15px; margin: 0 0 7px">Precise</h3>
+            <p class="muted-cap">
+              Say the exact thing. Name the file, the count, the action. No vague reassurance.
+            </p>
+          </div>
+          <div>
+            <h3 style="font-size: 15px; margin: 0 0 7px">Calm</h3>
+            <p class="muted-cap">
+              Steady at all times — especially in errors. No alarm, no exclamation marks.
+            </p>
+          </div>
+          <div>
+            <h3 style="font-size: 15px; margin: 0 0 7px">Governed</h3>
+            <p class="muted-cap">
+              Transparent about scope, sources and consequences. Trust over hype.
+            </p>
+          </div>
+          <div>
+            <h3 style="font-size: 15px; margin: 0 0 7px">Plain</h3>
+            <p class="muted-cap">
+              Short words, present tense, second person. Explain jargon or drop it.
+            </p>
+          </div>
         </div>
       </section>
 
       <section class="sec" id="microcopy">
-        <div class="sec-head"><div class="num">02 — MICROCOPY</div><h2>Write it like this</h2><p>The difference between calm and noisy is usually a few words.</p></div>
+        <div class="sec-head">
+          <div class="num">02 — MICROCOPY</div>
+          <h2>Write it like this</h2>
+          <p>The difference between calm and noisy is usually a few words.</p>
+        </div>
         <div class="vt">
           <div class="card vt-col vt-do">
             <div class="vt-tag"><span class="ico" data-licon="check" data-size="15"></span>Do</div>
-            <div class="vt-row"><div class="vt-ex">New window</div><div class="vt-why">Verb + noun. The user knows exactly what happens.</div></div>
-            <div class="vt-row"><div class="vt-ex">Per-chat source limit reached.</div><div class="vt-why">States the fact plainly, in context.</div></div>
-            <div class="vt-row"><div class="vt-ex">Open a window to start working</div><div class="vt-why">Empty state points to the next step.</div></div>
-            <div class="vt-row"><div class="vt-ex">Connected · src/</div><div class="vt-why">Shows scope; the user always knows what’s in play.</div></div>
+            <div class="vt-row">
+              <div class="vt-ex">New window</div>
+              <div class="vt-why">Verb + noun. The user knows exactly what happens.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Per-chat source limit reached.</div>
+              <div class="vt-why">States the fact plainly, in context.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Open a window to start working</div>
+              <div class="vt-why">Empty state points to the next step.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Connected · src/</div>
+              <div class="vt-why">Shows scope; the user always knows what’s in play.</div>
+            </div>
           </div>
           <div class="card vt-col vt-dont">
-            <div class="vt-tag"><span class="ico" data-licon="close" data-size="15"></span>Don’t</div>
-            <div class="vt-row"><div class="vt-ex">Create a brand-new window now!</div><div class="vt-why">Padding and an exclamation mark add noise, not meaning.</div></div>
-            <div class="vt-row"><div class="vt-ex">Oops! Something went wrong 😬</div><div class="vt-why">Cute, vague, unhelpful — and emoji aren’t the brand.</div></div>
-            <div class="vt-row"><div class="vt-ex">Nothing here yet…</div><div class="vt-why">Dead end with no next action.</div></div>
-            <div class="vt-row"><div class="vt-ex">Successfully connected!!!</div><div class="vt-why">Over-celebrates a routine event.</div></div>
+            <div class="vt-tag">
+              <span class="ico" data-licon="close" data-size="15"></span>Don’t
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Create a brand-new window now!</div>
+              <div class="vt-why">Padding and an exclamation mark add noise, not meaning.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Oops! Something went wrong 😬</div>
+              <div class="vt-why">Cute, vague, unhelpful — and emoji aren’t the brand.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Nothing here yet…</div>
+              <div class="vt-why">Dead end with no next action.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Successfully connected!!!</div>
+              <div class="vt-why">Over-celebrates a routine event.</div>
+            </div>
           </div>
         </div>
       </section>
 
       <section class="sec" id="terms">
-        <div class="sec-head"><div class="num">03 — TERMINOLOGY</div><h2>Say this, not that</h2><p>One word per concept, used consistently across UI, docs and errors.</p></div>
-        <div class="card" style="padding:8px 24px">
+        <div class="sec-head">
+          <div class="num">03 — TERMINOLOGY</div>
+          <h2>Say this, not that</h2>
+          <p>One word per concept, used consistently across UI, docs and errors.</p>
+        </div>
+        <div class="card" style="padding: 8px 24px">
           <table class="tbl">
-            <thead><tr><th>Use</th><th>Not</th><th>Note</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Use</th>
+                <th>Not</th>
+                <th>Note</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><td class="fgw">Window</td><td>tab, pane</td><td>Cards on the canvas are windows.</td></tr>
-              <tr><td class="fgw">Workspace</td><td>desktop, board</td><td>The whole canvas.</td></tr>
-              <tr><td class="fgw">Grounding</td><td>context mode</td><td>What an answer is based on.</td></tr>
-              <tr><td class="fgw">Source</td><td>attachment, doc</td><td>A connected folder, repo or file.</td></tr>
-              <tr><td class="fgw">Connect</td><td>link, attach</td><td>Joining a window to a source.</td></tr>
-              <tr><td class="fgw">Full screen</td><td>maximise, expand</td><td>The green window control.</td></tr>
-              <tr><td class="fgw">MemoriaViva</td><td>memory, history</td><td>Product name — never translated.</td></tr>
+              <tr>
+                <td class="fgw">Window</td>
+                <td>tab, pane</td>
+                <td>Cards on the canvas are windows.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Workspace</td>
+                <td>desktop, board</td>
+                <td>The whole canvas.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Grounding</td>
+                <td>context mode</td>
+                <td>What an answer is based on.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Source</td>
+                <td>attachment, doc</td>
+                <td>A connected folder, repo or file.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Connect</td>
+                <td>link, attach</td>
+                <td>Joining a window to a source.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Full screen</td>
+                <td>maximise, expand</td>
+                <td>The green window control.</td>
+              </tr>
+              <tr>
+                <td class="fgw">MemoriaViva</td>
+                <td>memory, history</td>
+                <td>Product name — never translated.</td>
+              </tr>
             </tbody>
           </table>
         </div>
       </section>
 
       <section class="sec" id="mechanics">
-        <div class="sec-head"><div class="num">04 — MECHANICS</div><h2>Mechanics</h2></div>
-        <div class="card" style="padding:8px 24px">
+        <div class="sec-head">
+          <div class="num">04 — MECHANICS</div>
+          <h2>Mechanics</h2>
+        </div>
+        <div class="card" style="padding: 8px 24px">
           <table class="tbl">
             <tbody>
-              <tr><td class="fgw">Case</td><td>Sentence case for everything — buttons, titles, menus. Reserve ALL-CAPS for tiny tracked labels.</td></tr>
-              <tr><td class="fgw">Punctuation</td><td>No exclamation marks. Periods on full sentences; none on labels, buttons or single-line hints.</td></tr>
-              <tr><td class="fgw">Person &amp; tense</td><td>Second person, present tense: “Open a window”, not “A window will be opened”.</td></tr>
-              <tr><td class="fgw">Numbers &amp; units</td><td>Numerals for counts (3 windows); thin space before units (1 200 tokens · 100%).</td></tr>
-              <tr><td class="fgw">Emoji</td><td>Not part of the brand. Use a Lift icon instead.</td></tr>
+              <tr>
+                <td class="fgw">Case</td>
+                <td>
+                  Sentence case for everything — buttons, titles, menus. Reserve ALL-CAPS for tiny
+                  tracked labels.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Punctuation</td>
+                <td>
+                  No exclamation marks. Periods on full sentences; none on labels, buttons or
+                  single-line hints.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Person &amp; tense</td>
+                <td>
+                  Second person, present tense: “Open a window”, not “A window will be opened”.
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Numbers &amp; units</td>
+                <td>
+                  Numerals for counts (3 windows); thin space before units (1 200 tokens · 100%).
+                </td>
+              </tr>
+              <tr>
+                <td class="fgw">Emoji</td>
+                <td>Not part of the brand. Use a Lift icon instead.</td>
+              </tr>
             </tbody>
           </table>
         </div>
       </section>
       <section class="sec" id="ai-copy">
-        <div class="sec-head"><div class="num">05 — AI DISCLOSURE &amp; PRIVACY</div><h2>Writing for the agent</h2><p>Agentic copy carries extra duty: say what the agent is doing, what it remembers, what it can't be sure of, and what leaves the device. Plain, present-tense, no euphemisms.</p></div>
+        <div class="sec-head">
+          <div class="num">05 — AI DISCLOSURE &amp; PRIVACY</div>
+          <h2>Writing for the agent</h2>
+          <p>
+            Agentic copy carries extra duty: say what the agent is doing, what it remembers, what it
+            can't be sure of, and what leaves the device. Plain, present-tense, no euphemisms.
+          </p>
+        </div>
 
-        <div class="vt" style="margin-bottom:18px">
+        <div class="vt" style="margin-bottom: 18px">
           <div class="card vt-col vt-do">
             <div class="vt-tag"><span class="ico" data-licon="check" data-size="15"></span>Do</div>
-            <div class="vt-row"><div class="vt-ex">Reading 3 files in src/ to answer.</div><div class="vt-why">Names the action and the scope as it happens.</div></div>
-            <div class="vt-row"><div class="vt-ex">Based on your last 5 chats in this workspace.</div><div class="vt-why">Memory disclosure — what it drew on, and the boundary.</div></div>
-            <div class="vt-row"><div class="vt-ex">I'm not certain — verify against the source.</div><div class="vt-why">Names low confidence and points to grounding.</div></div>
-            <div class="vt-row"><div class="vt-ex">This sends your selection to the model provider.</div><div class="vt-why">States plainly what leaves the device, before it does.</div></div>
+            <div class="vt-row">
+              <div class="vt-ex">Reading 3 files in src/ to answer.</div>
+              <div class="vt-why">Names the action and the scope as it happens.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Based on your last 5 chats in this workspace.</div>
+              <div class="vt-why">Memory disclosure — what it drew on, and the boundary.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">I'm not certain — verify against the source.</div>
+              <div class="vt-why">Names low confidence and points to grounding.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">This sends your selection to the model provider.</div>
+              <div class="vt-why">States plainly what leaves the device, before it does.</div>
+            </div>
           </div>
           <div class="card vt-col vt-dont">
-            <div class="vt-tag"><span class="ico" data-licon="close" data-size="15"></span>Don't</div>
-            <div class="vt-row"><div class="vt-ex">Working on it…</div><div class="vt-why">Hides what the agent is actually touching.</div></div>
-            <div class="vt-row"><div class="vt-ex">I remember everything about you.</div><div class="vt-why">Vague and faintly menacing; states no boundary.</div></div>
-            <div class="vt-row"><div class="vt-ex">Here's the answer.</div><div class="vt-why">Projects false certainty on a low-confidence result.</div></div>
-            <div class="vt-row"><div class="vt-ex">Don't worry about your data.</div><div class="vt-why">Reassurance instead of disclosure — erodes trust.</div></div>
+            <div class="vt-tag">
+              <span class="ico" data-licon="close" data-size="15"></span>Don't
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Working on it…</div>
+              <div class="vt-why">Hides what the agent is actually touching.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">I remember everything about you.</div>
+              <div class="vt-why">Vague and faintly menacing; states no boundary.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Here's the answer.</div>
+              <div class="vt-why">Projects false certainty on a low-confidence result.</div>
+            </div>
+            <div class="vt-row">
+              <div class="vt-ex">Don't worry about your data.</div>
+              <div class="vt-why">Reassurance instead of disclosure — erodes trust.</div>
+            </div>
           </div>
         </div>
 
-        <div class="card" style="padding:8px 24px">
+        <div class="card" style="padding: 8px 24px">
           <table class="tbl">
-            <thead><tr><th>Moment</th><th>Pattern</th><th>Why</th></tr></thead>
+            <thead>
+              <tr>
+                <th>Moment</th>
+                <th>Pattern</th>
+                <th>Why</th>
+              </tr>
+            </thead>
             <tbody>
-              <tr><td class="fgw">Acting</td><td>“[Verb]-ing [object] in [scope]” — present continuous, named target.</td><td>The user can always see what the agent touches.</td></tr>
-              <tr><td class="fgw">Memory</td><td>“Based on [what], in [boundary].” Offer “Forget this”.</td><td>Discloses recall and gives control.</td></tr>
-              <tr><td class="fgw">Uncertainty</td><td>“I'm not certain — [how to verify].” Pair with the confidence component.</td><td>Hallucination risk is named, not hidden.</td></tr>
-              <tr><td class="fgw">Privacy</td><td>“This sends [what] to [where].” Before the send, not after.</td><td>Consent is informed and timely.</td></tr>
-              <tr><td class="fgw">Permission</td><td>“Allow [scope]?” with the exact grants listed.</td><td>Matches the AI permission component.</td></tr>
+              <tr>
+                <td class="fgw">Acting</td>
+                <td>“[Verb]-ing [object] in [scope]” — present continuous, named target.</td>
+                <td>The user can always see what the agent touches.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Memory</td>
+                <td>“Based on [what], in [boundary].” Offer “Forget this”.</td>
+                <td>Discloses recall and gives control.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Uncertainty</td>
+                <td>“I'm not certain — [how to verify].” Pair with the confidence component.</td>
+                <td>Hallucination risk is named, not hidden.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Privacy</td>
+                <td>“This sends [what] to [where].” Before the send, not after.</td>
+                <td>Consent is informed and timely.</td>
+              </tr>
+              <tr>
+                <td class="fgw">Permission</td>
+                <td>“Allow [scope]?” with the exact grants listed.</td>
+                <td>Matches the AI permission component.</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -133,7 +367,7 @@
     </main>
 
     <script src="lift-glyphs.js"></script>
-    
-      <script src="theme-control.js"></script>
-</body>
+
+    <script src="theme-control.js"></script>
+  </body>
 </html>

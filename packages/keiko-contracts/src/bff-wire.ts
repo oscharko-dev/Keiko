@@ -504,10 +504,7 @@ export interface WorkflowsResponse {
 // ─── Agent input shapes (BFF /api/agents/* POST bodies) ───────────────────────────
 
 export type AgentWorkflowId =
-  | "verify"
-  | "explain-plan"
-  | "unit-test-generation"
-  | "bug-investigation";
+  "verify" | "explain-plan" | "unit-test-generation" | "bug-investigation";
 
 export type UnitTestTargetKind = "file" | "module" | "changedFiles";
 
@@ -818,9 +815,7 @@ export interface HybridGroundedAnswer {
 }
 
 export type GroundedAnswer =
-  | ConnectedContextGroundedAnswer
-  | LocalKnowledgeGroundedAnswer
-  | HybridGroundedAnswer;
+  ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer | HybridGroundedAnswer;
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 
@@ -983,10 +978,7 @@ export interface TerminalExecutionResult {
 }
 
 export type TerminalEventKind =
-  | "execution-started"
-  | "execution-completed"
-  | "execution-failed"
-  | "execution-cancelled";
+  "execution-started" | "execution-completed" | "execution-failed" | "execution-cancelled";
 
 export interface TerminalEventEnvelope {
   readonly kind: TerminalEventKind;
@@ -1058,13 +1050,7 @@ export interface FilesSearchResult {
 }
 
 export type FilesSearchFileRole =
-  | "source"
-  | "test"
-  | "config"
-  | "docs"
-  | "generated"
-  | "asset"
-  | "other";
+  "source" | "test" | "config" | "docs" | "generated" | "asset" | "other";
 
 export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
 

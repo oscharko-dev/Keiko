@@ -43,7 +43,13 @@ function selection(args: {
 describe("monacoSelectionToEditorRange", () => {
   it("returns null for an empty (collapsed) selection", () => {
     const result = monacoSelectionToEditorRange(
-      selection({ startLineNumber: 3, startColumn: 5, endLineNumber: 3, endColumn: 5, empty: true }),
+      selection({
+        startLineNumber: 3,
+        startColumn: 5,
+        endLineNumber: 3,
+        endColumn: 5,
+        empty: true,
+      }),
     );
     expect(result).toBeNull();
   });

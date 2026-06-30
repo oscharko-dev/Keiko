@@ -155,9 +155,7 @@
         "gutterBackground": "rgb(12, 14, 13)",
         "activeLineBackground": "rgba(0, 0, 0, 0)"
       },
-      "screenshots": [
-        "reduced-motion-focus.png"
-      ]
+      "screenshots": ["reduced-motion-focus.png"]
     }
   ],
   "notes": [

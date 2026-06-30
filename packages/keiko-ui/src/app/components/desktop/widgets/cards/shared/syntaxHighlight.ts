@@ -23,18 +23,7 @@ export type Lang =
   | "code";
 
 export type TokenKind =
-  | "com"
-  | "str"
-  | "num"
-  | "lit"
-  | "key"
-  | "type"
-  | "fn"
-  | "key2"
-  | "punct"
-  | "head"
-  | "id"
-  | "ws";
+  "com" | "str" | "num" | "lit" | "key" | "type" | "fn" | "key2" | "punct" | "head" | "id" | "ws";
 
 export type Token = readonly [TokenKind, string];
 

@@ -764,19 +764,28 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
   it("resolves modelId per item, then top-level model, then the request modelId", async () => {
     // item-level model wins
     const a = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "req-model",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1], model: "item-model" }] })),
     });
     expect(a.ok && a.value[0]?.modelId).toBe("item-model");
     // top-level model when no item model
     const b = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "req-model",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => ok({ model: "top-model", data: [{ index: 0, embedding: [1] }] })),
     });
     expect(b.ok && b.value[0]?.modelId).toBe("top-model");
     // request modelId when neither present
     const c = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "req-model",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1] }] })),
     });
     expect(c.ok && c.value[0]?.modelId).toBe("req-model");
@@ -784,8 +793,13 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
 
   it("carries model_revision when the payload provides one", async () => {
     const out = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
-      fetchImpl: mockFetch(() => ok({ model_revision: "rev-9", data: [{ index: 0, embedding: [1] }] })),
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x"],
+      fetchImpl: mockFetch(() =>
+        ok({ model_revision: "rev-9", data: [{ index: 0, embedding: [1] }] }),
+      ),
     });
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.value[0]?.modelRevision).toBe("rev-9");
@@ -794,7 +808,10 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
   it("rejects a non-record data item, a missing index, and a non-array embedding", async () => {
     for (const data of [[42], [{ embedding: [1] }], [{ index: 0, embedding: "nope" }]]) {
       const out = await requestOpenAIEmbeddingBatch({
-        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+        endpoint: "https://e/v1",
+        apiKey: "k",
+        modelId: "m",
+        inputs: ["x"],
         fetchImpl: mockFetch(() => ok({ data })),
       });
       expect(out.ok).toBe(false);
@@ -805,8 +822,14 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
   it("rejects when the payload is not an object or has no data array", async () => {
     for (const body of ["[]", JSON.stringify({ data: "x" })]) {
       const out = await requestOpenAIEmbeddingBatch({
-        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
-        fetchImpl: mockFetch(() => new Response(body, { status: 200, headers: { "content-type": "application/json" } })),
+        endpoint: "https://e/v1",
+        apiKey: "k",
+        modelId: "m",
+        inputs: ["x"],
+        fetchImpl: mockFetch(
+          () =>
+            new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
+        ),
       });
       expect(out.ok).toBe(false);
       if (!out.ok) expect(out.kind).toBe("invalid-response");
@@ -815,13 +838,21 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
 
   it("maps a transport failure and a 500 status to error kinds", async () => {
     const thrown = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
-      fetchImpl: mockFetch(() => { throw new Error("socket hang up"); }),
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x"],
+      fetchImpl: mockFetch(() => {
+        throw new Error("socket hang up");
+      }),
     });
     expect(thrown.ok).toBe(false);
     if (!thrown.ok) expect(thrown.kind).toBe("transport");
     const server = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => new Response("", { status: 500 })),
     });
     expect(server.ok).toBe(false);

@@ -78,13 +78,11 @@ function makeFakeVad(): {
 
 // A recorder whose session exposes a (fake) stream, so the VAD can attach.
 function makeStreamingRecorder(): { recorder: DictationRecorder; stop: ReturnType<typeof vi.fn> } {
-  const stop = vi.fn(
-    async (): Promise<DictationCapture> => ({
-      audioBase64: "QQ==",
-      mimeType: "audio/webm",
-      durationMs: 800,
-    }),
-  );
+  const stop = vi.fn(async (): Promise<DictationCapture> => ({
+    audioBase64: "QQ==",
+    mimeType: "audio/webm",
+    durationMs: 800,
+  }));
   const session: DictationSession = {
     stream: { getTracks: () => [] } as unknown as MediaStream,
     stop,

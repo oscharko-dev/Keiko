@@ -267,12 +267,10 @@ function buildFormatting(
   );
   const lineStarts = computeLineStarts(ctx.overlayText);
   const capped = changes.slice(0, ctx.limits.maxFormattingEdits);
-  const edits = capped.map(
-    (change): LanguageTextEdit => ({
-      range: spanToRange(ctx.overlayText, lineStarts, change.span.start, change.span.length),
-      newText: change.newText,
-    }),
-  );
+  const edits = capped.map((change): LanguageTextEdit => ({
+    range: spanToRange(ctx.overlayText, lineStarts, change.span.start, change.span.length),
+    newText: change.newText,
+  }));
   return { edits, truncated: changes.length > capped.length };
 }
 

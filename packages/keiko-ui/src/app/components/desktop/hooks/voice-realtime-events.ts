@@ -180,9 +180,7 @@ function functionCallFromItem(
   };
 }
 
-function functionCallFromOutputItem(
-  record: Record<string, unknown>,
-):
+function functionCallFromOutputItem(record: Record<string, unknown>):
   | {
       readonly callId: string;
       readonly name: string;
@@ -193,9 +191,7 @@ function functionCallFromOutputItem(
   return functionCallFromItem(record.item, record);
 }
 
-function functionCallFromResponseDone(
-  record: Record<string, unknown>,
-):
+function functionCallFromResponseDone(record: Record<string, unknown>):
   | {
       readonly callId: string;
       readonly name: string;

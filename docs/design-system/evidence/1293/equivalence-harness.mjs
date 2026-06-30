@@ -32,9 +32,13 @@ if (
   throw new Error(`refusing unsafe BASE_REF: ${BASE_REF}`);
 }
 
-const BASE_SHA = execFileSync("git", ["-C", REPO, "rev-parse", "--verify", `${BASE_REF}^{commit}`], {
-  encoding: "utf8",
-}).trim();
+const BASE_SHA = execFileSync(
+  "git",
+  ["-C", REPO, "rev-parse", "--verify", `${BASE_REF}^{commit}`],
+  {
+    encoding: "utf8",
+  },
+).trim();
 
 const PRE = execFileSync("git", ["-C", REPO, "show", `${BASE_SHA}:${CSS_PATH}`], {
   encoding: "utf8",

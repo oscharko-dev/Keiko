@@ -326,9 +326,7 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
           value: { answerSdp: ANSWER_SDP },
         }),
     });
-    const port = await boot(
-      deps,
-    );
+    const port = await boot(deps);
     const { ws: socket, next } = expectOpen(await connect(port));
     socket.send(sessionCreate(chat.id));
     await next(); // session.created

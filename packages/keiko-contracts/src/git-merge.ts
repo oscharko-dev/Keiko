@@ -65,8 +65,7 @@ export const GIT_MERGE_LIFECYCLE_BLOCKER_CODES: readonly GitMergeLifecycleBlocke
 ] as const;
 
 export type GitMergeReadinessBlockerCode =
-  | GitDeliveryMergeBlockReason
-  | GitMergeLifecycleBlockerCode;
+  GitDeliveryMergeBlockReason | GitMergeLifecycleBlockerCode;
 
 export const GIT_MERGE_READINESS_BLOCKER_CODES: readonly GitMergeReadinessBlockerCode[] = [
   ...GIT_DELIVERY_MERGE_BLOCK_REASONS,
@@ -187,10 +186,7 @@ export function deriveEligibleMergeStrategies(
 // ─── Merge recommendation (PURE) ──────────────────────────────────────────────────────────────────────
 
 export type GitMergeRecommendation =
-  | "merge-allowed"
-  | "needs-approval"
-  | "blocked"
-  | "already-merged";
+  "merge-allowed" | "needs-approval" | "blocked" | "already-merged";
 
 export const GIT_MERGE_RECOMMENDATIONS: readonly GitMergeRecommendation[] = [
   "merge-allowed",

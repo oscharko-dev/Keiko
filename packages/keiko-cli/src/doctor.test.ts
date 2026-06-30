@@ -67,7 +67,10 @@ describe("doctor", () => {
     const root = makeRoot();
     mkdirSync(join(root, "dist", "cli"), { recursive: true });
     mkdirSync(join(root, "dist", "ui", "static"), { recursive: true });
-    writeFileSync(join(root, "package.json"), '{"name":"@oscharko-dev/keiko","version":"0.2.0-beta.5"}\n');
+    writeFileSync(
+      join(root, "package.json"),
+      '{"name":"@oscharko-dev/keiko","version":"0.2.0-beta.5"}\n',
+    );
     writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n");
     writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n");
     const c = makeIo();

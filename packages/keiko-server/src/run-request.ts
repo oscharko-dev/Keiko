@@ -108,9 +108,7 @@ function parseOptionalString(
   if (value === undefined) {
     return undefined;
   }
-  return typeof value === "string"
-    ? value
-    : badRequest(`${name} must be a string when provided.`);
+  return typeof value === "string" ? value : badRequest(`${name} must be a string when provided.`);
 }
 
 function parseConfirmationDigest(value: unknown): string | undefined | RunRequestError {
@@ -461,10 +459,7 @@ function parseGovernedHandoffMetadata(
   return { governedHandoff, governedHandoffSourceGroundedRunId, governedHandoffVoiceOrigin };
 }
 
-function buildRunRequest(
-  core: RunRequestCore,
-  metadata: GovernedHandoffMetadata,
-): RunRequest {
+function buildRunRequest(core: RunRequestCore, metadata: GovernedHandoffMetadata): RunRequest {
   return {
     kind: core.kind,
     modelId: core.modelId,
@@ -475,7 +470,9 @@ function buildRunRequest(
     apply: false,
     input: core.input,
     limits: core.limits,
-    ...(metadata.governedHandoff === undefined ? {} : { governedHandoff: metadata.governedHandoff }),
+    ...(metadata.governedHandoff === undefined
+      ? {}
+      : { governedHandoff: metadata.governedHandoff }),
     ...(metadata.governedHandoffSourceGroundedRunId === undefined
       ? {}
       : { governedHandoffSourceGroundedRunId: metadata.governedHandoffSourceGroundedRunId }),

@@ -22,11 +22,7 @@ export const QUALITY_INTELLIGENCE_PRIORITIES: readonly QualityIntelligencePriori
 ] as const;
 
 export type QualityIntelligenceRiskClass =
-  | "safety"
-  | "compliance"
-  | "regression"
-  | "functional"
-  | "visual";
+  "safety" | "compliance" | "regression" | "functional" | "visual";
 
 export const QUALITY_INTELLIGENCE_RISK_CLASSES: readonly QualityIntelligenceRiskClass[] = [
   "safety",
@@ -37,10 +33,7 @@ export const QUALITY_INTELLIGENCE_RISK_CLASSES: readonly QualityIntelligenceRisk
 ] as const;
 
 export type QualityIntelligenceTestCaseStatus =
-  | "proposed"
-  | "accepted"
-  | "rejected"
-  | "needs-review";
+  "proposed" | "accepted" | "rejected" | "needs-review";
 
 export const QUALITY_INTELLIGENCE_TEST_CASE_STATUSES: readonly QualityIntelligenceTestCaseStatus[] =
   ["proposed", "accepted", "rejected", "needs-review"] as const;

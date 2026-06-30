@@ -143,8 +143,7 @@ describe("extractDocument — progressive large-document path", () => {
         "SELECT phase, coverage, source_content_hash FROM extraction_checkpoints WHERE capsule_id = :c AND document_id = :d",
       )
       .get({ c: capsuleId, d: String(documentId) }) as
-      | { phase: string; coverage: string; source_content_hash: string }
-      | undefined;
+      { phase: string; coverage: string; source_content_hash: string } | undefined;
     expect(checkpoint?.phase).toBe("extracted");
     expect(checkpoint?.coverage).toBe("complete");
     expect(checkpoint?.source_content_hash).toMatch(/^[0-9a-f]{64}$/u);
@@ -393,8 +392,7 @@ describe("extractDocument — progressive cancellation", () => {
         "SELECT phase, page_cursor, retry_count FROM extraction_checkpoints WHERE capsule_id = :c AND document_id = :d",
       )
       .get({ c: capsuleId, d: String(documentId) }) as
-      | { phase: string; page_cursor: number; retry_count: number }
-      | undefined;
+      { phase: string; page_cursor: number; retry_count: number } | undefined;
     expect(checkpoint).toMatchObject({ phase: "extracted", page_cursor: 2, retry_count: 1 });
   });
 });

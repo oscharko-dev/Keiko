@@ -72,8 +72,7 @@ function runDelete(
   // node:sqlite result-shape; the function is connection-scoped and returns the row
   // count touched by the most recent INSERT/UPDATE/DELETE on that connection.
   const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
-    | ChangesRow
-    | undefined;
+    ChangesRow | undefined;
   return row?.changes ?? 0;
 }
 

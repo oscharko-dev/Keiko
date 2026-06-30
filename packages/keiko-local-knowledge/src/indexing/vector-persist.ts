@@ -145,15 +145,13 @@ export function countVectorsForDocument(
   documentId: DocumentId,
 ): number {
   const row = db.prepare(COUNT_VECTORS_FOR_DOCUMENT_SQL).get({ c: capsuleId, d: documentId }) as
-    | CountRow
-    | undefined;
+    CountRow | undefined;
   return typeof row?.n === "number" ? row.n : 0;
 }
 
 export function countVectorsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): number {
   const row = db.prepare(COUNT_VECTORS_FOR_CAPSULE_SQL).get({ c: capsuleId }) as
-    | CountRow
-    | undefined;
+    CountRow | undefined;
   return typeof row?.n === "number" ? row.n : 0;
 }
 

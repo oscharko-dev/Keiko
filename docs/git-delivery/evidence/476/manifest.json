@@ -6,10 +6,7 @@
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/476",
   "generatedAt": "2026-06-27T11:34:45.711Z",
-  "governedRoutes": [
-    "/api/git-delivery/push/preview",
-    "/api/git-delivery/push/execute"
-  ],
+  "governedRoutes": ["/api/git-delivery/push/preview", "/api/git-delivery/push/execute"],
   "windowRegistration": {
     "kind": "governedGit",
     "seededVia": "keiko.workspace.v4",
@@ -33,8 +30,5 @@
     "Push routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/route/contract suites.",
     "The UI exposes no force-publish escape: the Push button always routes through /push/execute and renders its governed response verbatim."
   ],
-  "artifacts": [
-    "manifest.json",
-    "governed-publish-block.png"
-  ]
+  "artifacts": ["manifest.json", "governed-publish-block.png"]
 }

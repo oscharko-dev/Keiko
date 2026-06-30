@@ -133,9 +133,7 @@ export const CAPSULE_OUTPUT_MODES: readonly CapsuleOutputMode[] = [
 ] as const;
 
 export type CapsuleAnswerGroundingPolicy =
-  | "require-citations"
-  | "require-citations-or-state-no-evidence"
-  | "best-effort";
+  "require-citations" | "require-citations-or-state-no-evidence" | "best-effort";
 
 export const CAPSULE_ANSWER_GROUNDING_POLICIES: readonly CapsuleAnswerGroundingPolicy[] = [
   "require-citations",

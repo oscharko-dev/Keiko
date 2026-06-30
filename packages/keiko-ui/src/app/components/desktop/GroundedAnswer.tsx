@@ -40,7 +40,10 @@ type ConnectedGroundedAnswer = Extract<
   { readonly groundingKind: "connected-context" }
 >;
 type HybridGroundedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "hybrid" }>;
-type KnowledgeGroundedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
+type KnowledgeGroundedAnswer = Extract<
+  GroundedAnswer,
+  { readonly groundingKind: "local-knowledge" }
+>;
 
 // Display "—" for Infinity / non-finite caps (the default budget uses Number.POSITIVE_INFINITY
 // for unbounded dimensions like rerankCallsMax when the orchestrator is disabled).
@@ -373,10 +376,7 @@ function connectedEvidenceSummary(answer: ConnectedGroundedAnswer): string {
   const filesMax = formatCap(answer.contextPack.budget.filesReadMax);
   const omittedCount = answer.contextPack.omittedCount;
   const citationLabel = pluralize(citationCount, "citation");
-  const omitted =
-    omittedCount > 0
-      ? ` · ${formatCount(omittedCount)} not used`
-      : "";
+  const omitted = omittedCount > 0 ? ` · ${formatCount(omittedCount)} not used` : "";
   return `${formatCount(citationCount)} ${citationLabel} · ${formatCount(filesRead)} / ${filesMax} files read${omitted}`;
 }
 

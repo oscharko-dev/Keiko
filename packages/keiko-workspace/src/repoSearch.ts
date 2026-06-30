@@ -289,9 +289,7 @@ function hitFileListingLimit(
   signal?: AbortSignal,
 ): boolean {
   return (
-    isAborted(signal) ||
-    state.atoms.length >= maxMatches ||
-    nowMs() - startMs > limits.elapsedMsMax
+    isAborted(signal) || state.atoms.length >= maxMatches || nowMs() - startMs > limits.elapsedMsMax
   );
 }
 
@@ -313,7 +311,16 @@ function collectFileListings(
     truncated: candidateSet.truncated,
   };
   for (const file of candidateSet.files) {
-    if (hitFileListingLimit(state, inputs.maxMatches, inputs.startMs, ctx.nowMs, inputs.limits, inputs.signal)) {
+    if (
+      hitFileListingLimit(
+        state,
+        inputs.maxMatches,
+        inputs.startMs,
+        ctx.nowMs,
+        inputs.limits,
+        inputs.signal,
+      )
+    ) {
       state.truncated = true;
       break;
     }

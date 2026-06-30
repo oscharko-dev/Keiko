@@ -308,8 +308,7 @@ export interface RecordQualityIntelligenceCandidatesInput {
   readonly generatedAt: string;
   readonly candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[];
   readonly editedRevisions?:
-    | readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]
-    | undefined;
+    readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[] | undefined;
   readonly evidenceDir: string;
   /**
    * Required defence-in-depth redactor applied to every string leaf before persist. The server
@@ -365,9 +364,7 @@ type EditProvenance = QualityIntelligence.QualityIntelligenceCandidateEditProven
 type EditedRevision = QualityIntelligence.QualityIntelligenceCandidateEditedRevision;
 
 export type QualityIntelligenceCandidateEditErrorReason =
-  | "artifact-not-found"
-  | "candidate-not-found"
-  | "no-edited-fields";
+  "artifact-not-found" | "candidate-not-found" | "no-edited-fields";
 
 export type ApplyQualityIntelligenceCandidateEditResult =
   | {
