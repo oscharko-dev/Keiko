@@ -85,6 +85,9 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private readonly lock: UpdateSessionLock | undefined;
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
+  private activeAbort:
+    | { readonly sessionId: string; readonly controller: AbortController }
+    | undefined;
 
   public constructor(options: UpdateSessionManagerOptions = {}) {
     this.env = options.processEnv ?? process.env;
@@ -153,6 +156,16 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const session = this.active;
     if (session === undefined) {
       throw new UpdateSessionError("UPDATE_SESSION_NOT_FOUND", "No update session is active.", 404);
+    }
+    if (session.phase === "running") {
+      if (this.activeAbort?.sessionId === session.sessionId) {
+        this.activeAbort.controller.abort();
+      }
+      return this.replace(session, {
+        cancelable: false,
+        retryable: false,
+        message: "Cancellation requested. Waiting for the package manager to stop.",
+      });
     }
     if (session.phase !== "preparing") {
       throw new UpdateSessionError(
@@ -314,8 +327,8 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     if (prepared === undefined || prepared.phase === "cancelled") return;
     const running = this.replace(prepared, {
       phase: "running",
-      cancelable: false,
-      message: "Package-manager update is running. Cancellation is no longer safe.",
+      cancelable: true,
+      message: "Package-manager update is running.",
     });
     await this.invokeCommand(running, mode);
   }
@@ -323,6 +336,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private async invokeCommand(session: UpdateSession, mode: UpdateInstallMode): Promise<void> {
     const command = buildUpdateCommand(this.packageManagerFor(mode), session.targetVersion);
     const controller = new AbortController();
+    this.activeAbort = { sessionId: session.sessionId, controller };
     try {
       const result = await this.runCommandImpl(
         {
@@ -337,6 +351,10 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       this.settleResult(session, result);
     } catch (error) {
       this.settleFailure(session, failureFromError(error));
+    } finally {
+      if (this.activeAbort.sessionId === session.sessionId) {
+        this.activeAbort = undefined;
+      }
     }
   }
 

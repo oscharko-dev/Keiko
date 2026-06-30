@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -98,6 +99,29 @@ describe("update local state compatibility scan", () => {
       expect.arrayContaining(["Ready", "Needs action", "Not affected"]),
     );
     expect(JSON.stringify(scan)).not.toContain("sk-do-not-read");
+  });
+
+  it("retains unreadable owned subtrees instead of throwing", () => {
+    if (process.platform === "win32") return;
+    const stateDir = makeStateDir();
+    const memoryDir = join(stateDir, "memory");
+    mkdirSync(memoryDir, { recursive: true });
+    chmodSync(memoryDir, 0);
+    try {
+      const scan = manager(stateDir, ["scan-id"]).scanCompatibility({
+        affectedStateStores: ["memory-vault"],
+        userActionRequired: true,
+      });
+      const memory = scan.stores.find((store) => store.store === "memory-vault");
+
+      expect(scan.stateDirStatus).toBe("directory");
+      expect(memory).toMatchObject({
+        health: "manual-review-required",
+        retainedEntryCount: 1,
+      });
+    } finally {
+      chmodSync(memoryDir, 0o700);
+    }
   });
 });
 

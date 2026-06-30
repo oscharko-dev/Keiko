@@ -134,6 +134,12 @@ requests require the same Host/Origin validation, JSON request validation, `X-Ke
 `Cache-Control: no-store` posture as other governed local mutations. Browser code must call only the
 local BFF, never the npm registry or GitHub update metadata endpoints directly.
 
+The CLI `keiko update apply` command is a separate governed local entry point, not a browser
+mutation route. It is available only to a deliberate local shell user, so Host/Origin and CSRF
+protections do not apply. It must still use the same managed-install attestation, policy gate,
+fixed argv allowlist, release-impact checks, state-directory session lock, timeout/abort behavior,
+and evidence semantics as the BFF authority so CLI and UI update attempts cannot overlap or drift.
+
 ### Compatibility and remediation policy
 
 For supported public releases, the default path is safe forward migration or remediation. The
@@ -206,6 +212,20 @@ The evidence record for an update should stay content-free:
 
 If the updater cannot prove a single managed target, it must not emit a mutation attempt. It should
 emit a manual instruction path only.
+
+### Alternatives considered
+
+1. Rely on `npm update -g`, `npm install -g`, or equivalent standard package-manager tooling. This
+   was rejected because package managers know installability, not Keiko's release-impact contract,
+   local-state remediation requirements, managed-install attestation, or regulated evidence needs.
+2. Keep updates as release notes only: show a version badge and deep link to manual package-manager
+   instructions without in-app execution. This is safer than an ungoverned updater, but it does not
+   provide a reviewable confirmation path, local remediation status, or recovery evidence for
+   managed enterprise installs.
+3. Re-run an installer or bootstrap script. This was rejected for v1 because installer scripts have
+   a wider command and filesystem surface than the fixed package-manager argv used here, and would
+   duplicate install-mode attestation, policy, and rollback evidence outside Keiko's existing
+   governed mutation model.
 
 ### Security and threat model
 

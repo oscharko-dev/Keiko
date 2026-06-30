@@ -168,6 +168,7 @@ function upsertRuntimeAction(input: {
   readonly targetVersion?: string | undefined;
   readonly draft: ActionDraft;
   readonly status: RuntimeRemediationStatus;
+  readonly now: () => number;
   readonly warningCode?: "manual-review-required" | undefined;
 }): void {
   const current = input.localState.readRuntimeState();
@@ -183,7 +184,7 @@ function upsertRuntimeAction(input: {
         store: input.draft.store,
         remediation: input.draft.remediation,
         status: input.status,
-        updatedAt: new Date().toISOString(),
+        updatedAt: nowIso(input.now),
         ...(input.warningCode === undefined ? {} : { warningCode: input.warningCode }),
       },
     ],
@@ -194,6 +195,7 @@ function persistPending(
   localState: UpdateLocalStateManager,
   targetVersion: string | undefined,
   drafts: readonly ActionDraft[],
+  now: () => number,
 ): void {
   for (const draft of drafts) {
     if (persistedStatus(localState, draft) !== undefined || !draft.required) continue;
@@ -203,11 +205,12 @@ function persistPending(
         targetVersion,
         draft,
         status: "failed",
+        now,
         warningCode: "manual-review-required",
       });
       continue;
     }
-    upsertRuntimeAction({ localState, targetVersion, draft, status: "pending" });
+    upsertRuntimeAction({ localState, targetVersion, draft, status: "pending", now });
   }
 }
 
@@ -218,7 +221,7 @@ function statusFor(
 ): UpdateRemediationStatusReport {
   const drafts = draftsForImpact(options.localState, request.impact, options.localKnowledge);
   if (request.persist === true) {
-    persistPending(options.localState, request.targetVersion, drafts);
+    persistPending(options.localState, request.targetVersion, drafts, now);
   }
   const actions = drafts.map((draft) => materializeAction(options.localState, draft));
   return {
@@ -283,6 +286,7 @@ function recordRemediationAudit(
 
 function deferDraft(
   options: UpdateRemediationManagerOptions,
+  now: () => number,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
 ): void {
@@ -298,12 +302,14 @@ function deferDraft(
     targetVersion: request.targetVersion,
     draft,
     status: "deferred",
+    now,
   });
   recordRemediationAudit(options, request, draft, "deferred");
 }
 
 async function runDraft(
   options: UpdateRemediationManagerOptions,
+  now: () => number,
   request: UpdateRemediationActionRequest,
   draft: ActionDraft,
 ): Promise<void> {
@@ -314,11 +320,19 @@ async function runDraft(
       409,
     );
   }
+  if (persistedStatus(options.localState, draft) === "running") {
+    throw new UpdateRemediationError(
+      "UPDATE_REMEDIATION_RUNNING",
+      "This remediation action is already running.",
+      409,
+    );
+  }
   upsertRuntimeAction({
     localState: options.localState,
     targetVersion: request.targetVersion,
     draft,
     status: "running",
+    now,
   });
   let status: RuntimeRemediationStatus;
   try {
@@ -331,6 +345,7 @@ async function runDraft(
     targetVersion: request.targetVersion,
     draft,
     status,
+    now,
     ...(status === "failed" ? { warningCode: "manual-review-required" } : {}),
   });
   recordRemediationAudit(options, request, draft, status);
@@ -344,9 +359,9 @@ async function runRemediationAction(
   const drafts = draftsForImpact(options.localState, request.impact, options.localKnowledge);
   const draft = findDraftOrThrow(drafts, request.actionId);
   if (request.decision === "defer") {
-    deferDraft(options, request, draft);
+    deferDraft(options, now, request, draft);
   } else {
-    await runDraft(options, request, draft);
+    await runDraft(options, now, request, draft);
   }
   return statusFor(options, now, { ...request, persist: false });
 }
@@ -364,6 +379,7 @@ function completeRestartAction(
       targetVersion,
       draft: restartDraft(item.store),
       status: "completed",
+      now,
     });
   }
   return statusFor(options, now, { targetVersion });

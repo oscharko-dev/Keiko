@@ -1,3 +1,6 @@
+// Governed update remediation is a composition contract: it may import the release-impact
+// remediation vocabulary and local-state store vocabulary, but those leaf contracts must not import
+// remediation back. Pure leaf contracts such as update-session remain sibling-import-free.
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
 import { RELEASE_IMPACT_REMEDIATIONS } from "./release-impact.js";
 import type {
@@ -127,7 +130,8 @@ export interface UpdateRemediationStatusRequestParseFail {
 }
 
 export type UpdateRemediationStatusRequestParse =
-  UpdateRemediationStatusRequestParseOk | UpdateRemediationStatusRequestParseFail;
+  | UpdateRemediationStatusRequestParseOk
+  | UpdateRemediationStatusRequestParseFail;
 
 export interface UpdateRemediationActionRequestParseOk {
   readonly ok: true;
@@ -140,7 +144,8 @@ export interface UpdateRemediationActionRequestParseFail {
 }
 
 export type UpdateRemediationActionRequestParse =
-  UpdateRemediationActionRequestParseOk | UpdateRemediationActionRequestParseFail;
+  | UpdateRemediationActionRequestParseOk
+  | UpdateRemediationActionRequestParseFail;
 
 const TARGET_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const MAX_TARGET_VERSION_LENGTH = 64;

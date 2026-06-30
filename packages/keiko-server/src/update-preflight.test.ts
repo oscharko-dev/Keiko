@@ -439,6 +439,46 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("uses the highest reviewed supported floor across the whole upgrade chain", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.11" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: "v0.2.11",
+          name: "Keiko 0.2.11",
+          body: "- Public release note",
+        }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+    const catalog = {
+      ...baseCatalog(),
+      entries: baseCatalog().entries.map((entry) =>
+        entry.packageVersion === "0.2.10"
+          ? { ...entry, supportedFrom: ["0.2.8"] }
+          : entry.packageVersion === "0.2.11"
+            ? { ...entry, supportedFrom: ["0.2.5"] }
+            : entry,
+      ),
+    };
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.6",
+      bundledCatalog: catalog,
+    });
+
+    expect(report.impact?.entries.map((entry) => entry.packageVersion)).toEqual([
+      "0.2.10",
+      "0.2.11",
+    ]);
+    expect(report.blockers).toHaveLength(1);
+    expect(report.blockers[0]?.code).toBe("one-click-ineligible");
+    expect(report.blockers[0]?.message).toContain("starts at 0.2.8");
+    expect(report.manualUpdateRequired).toBe(true);
+    expect(report.oneClickEligible).toBe(false);
+    deps.store.close();
+  });
+
   it("deduplicates cumulative impact bullets and state impact across included versions", async () => {
     const fetchImpl = vi
       .fn()
@@ -635,6 +675,10 @@ describe("update preflight service", () => {
     expect(compareSemver("0.2.9", "0.2.10")).toBeLessThan(0);
     expect(compareSemver("0.2.10", "0.2.10")).toBe(0);
     expect(compareSemver("0.3.0", "0.2.99")).toBeGreaterThan(0);
+  });
+
+  it("rejects malformed semver comparisons instead of lexically sorting them", () => {
+    expect(() => compareSemver("1.10.0", "not-a-version")).toThrow(TypeError);
   });
 
   it("surfaces malformed registry metadata as a degraded state", async () => {

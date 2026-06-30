@@ -90,11 +90,13 @@ function remediation(
   };
 }
 
-function apiFor(args: {
-  readonly report?: UpdatePreflightReport;
-  readonly status?: UpdateSessionStatus;
-  readonly remediation?: UpdateRemediationStatusReport;
-} = {}): UpdateWindowApi {
+function apiFor(
+  args: {
+    readonly report?: UpdatePreflightReport;
+    readonly status?: UpdateSessionStatus;
+    readonly remediation?: UpdateRemediationStatusReport;
+  } = {},
+): UpdateWindowApi {
   const report = args.report ?? preflight();
   const status = args.status ?? sessionStatus();
   const rem = args.remediation ?? remediation();
@@ -146,8 +148,27 @@ describe("UpdateWindow", () => {
     render(<UpdateWindow api={api} />);
 
     expect(await screen.findByRole("heading", { name: "Keiko is up to date" })).toBeInTheDocument();
-    expect(screen.getByText("No update is available. You can check again at any time.")).toBeInTheDocument();
+    expect(
+      screen.getByText("No update is available. You can check again at any time."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+  });
+
+  it("surfaces load errors and recovers through a manual check", async () => {
+    const api = {
+      ...apiFor(),
+      fetchPreflight: vi.fn(async () => {
+        throw new Error("Gateway unavailable");
+      }),
+    };
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Gateway unavailable");
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+    expect(api.checkPreflight).toHaveBeenCalledTimes(1);
   });
 
   it("shows critical, manual, remediation, affected-feature, and non-color-only state copy", async () => {
@@ -216,9 +237,13 @@ describe("UpdateWindow", () => {
 
     render(<UpdateWindow api={api} />);
 
-    expect(await screen.findByRole("heading", { name: "Critical update available" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Critical update available" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Manual update path")).toBeInTheDocument();
-    expect(screen.getByText("Local knowledge must be reindexed after this update.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Local knowledge must be reindexed after this update."),
+    ).toBeInTheDocument();
     expect(screen.getByText("Local Knowledge")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Run action" }));
     await waitFor(() => {
@@ -263,5 +288,63 @@ describe("UpdateWindow", () => {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     });
     expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
+  it("retries a failed terminal update session", async () => {
+    const api = apiFor({
+      status: sessionStatus({
+        lastSession: session({
+          phase: "failed",
+          retryable: true,
+          message: "Update command failed.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry update" }));
+    await waitFor(() => {
+      expect(api.retrySession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("renders in-flight update progress as indeterminate", async () => {
+    const api = apiFor({
+      status: sessionStatus({
+        activeSession: session({
+          phase: "running",
+          message: "Installing update.",
+          cancelable: true,
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    const progress = await screen.findByRole("progressbar", { name: "Update progress" });
+    expect(progress).not.toHaveAttribute("value");
+    expect(progress).not.toHaveAttribute("aria-valuenow");
+  });
+
+  it("disables restart verification when no report target is available", async () => {
+    const api = apiFor({
+      report: preflight({ targetVersion: undefined }),
+      status: sessionStatus({
+        activeSession: session({
+          phase: "restart-required",
+          restartRequired: true,
+          cancelable: false,
+          message: "Restart Keiko to complete the update.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    const button = await screen.findByRole("button", { name: "I restarted Keiko" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(api.verifyRestart).not.toHaveBeenCalled();
   });
 });

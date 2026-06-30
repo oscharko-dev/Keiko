@@ -253,7 +253,13 @@ describe("update session routes", () => {
       headers: csrfHeaders(),
       body: JSON.stringify({ targetVersion: "0.2.12-beta.1" }),
     });
+    const injected = await fetch(`${baseUrl()}/api/update/session`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion: "0.2.12;rm -rf /" }),
+    });
     expect(invalid.status).toBe(400);
+    expect(injected.status).toBe(400);
 
     const valid = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",

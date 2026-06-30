@@ -154,7 +154,7 @@ export function failureFromError(error: unknown): UpdateSessionFailureReason {
 export function messageForFailure(reason: UpdateSessionFailureReason): string {
   if (reason === "command-denied") return "The update command was blocked by policy.";
   if (reason === "timed-out") return "The package manager did not finish before the timeout.";
-  if (reason === "cancelled") return "The update was cancelled before package mutation started.";
+  if (reason === "cancelled") return "The update was cancelled.";
   if (reason === "restart-version-mismatch") {
     return "Keiko is still running a different version after restart.";
   }

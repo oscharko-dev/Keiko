@@ -157,6 +157,7 @@ function PrimaryActions({
   onRetry,
   onCancel,
   onVerifyRestart,
+  canVerifyRestart,
 }: {
   readonly report: UpdatePreflightReport;
   readonly session: UpdateSessionStatus;
@@ -167,6 +168,7 @@ function PrimaryActions({
   readonly onRetry: () => void;
   readonly onCancel: () => void;
   readonly onVerifyRestart: () => void;
+  readonly canVerifyRestart: boolean;
 }): ReactNode {
   const { t } = useI18n();
   const visibleSession = sessionForDisplay(session);
@@ -174,7 +176,12 @@ function PrimaryActions({
   const manual = isManualUpdatePath(report, session);
   if (visibleSession?.phase === "restart-required") {
     return (
-      <button type="button" className="upd-primary-btn" disabled={disabled} onClick={onVerifyRestart}>
+      <button
+        type="button"
+        className="upd-primary-btn"
+        disabled={disabled || !canVerifyRestart}
+        onClick={onVerifyRestart}
+      >
         {t("updates.action.verifyRestart")}
       </button>
     );
@@ -222,14 +229,13 @@ function PrimaryActions({
 function ProgressPanel({ session }: { readonly session: ReturnType<typeof sessionForDisplay> }) {
   const { t } = useI18n();
   if (session === undefined || !isSessionInProgress(session)) return null;
-  const value = session.phase === "preparing" ? 18 : 58;
   return (
     <section className="upd-panel" role="status" aria-live="polite">
       <div className="upd-panel-head">
         <strong>{sessionPhaseLabel(session, t)}</strong>
         <span>{session.message}</span>
       </div>
-      <progress className="upd-progress" max={100} value={value} aria-label={t("updates.progress.label")} />
+      <progress className="upd-progress" aria-label={t("updates.progress.label")} />
     </section>
   );
 }
@@ -319,7 +325,11 @@ function RemediationPanel({
     <section className="upd-panel" aria-labelledby="updates-remediation-title">
       <div className="upd-panel-head">
         <strong id="updates-remediation-title">{t("updates.remediation.title")}</strong>
-        <span>{remediation.updateCanComplete ? t("updates.remediation.canComplete") : t("updates.remediation.needsAction")}</span>
+        <span>
+          {remediation.updateCanComplete
+            ? t("updates.remediation.canComplete")
+            : t("updates.remediation.needsAction")}
+        </span>
       </div>
       {remediation.affectedFeatures.length > 0 ? (
         <ul className="upd-feature-list">
@@ -410,7 +420,9 @@ function PatchNotes({ report }: { readonly report: UpdatePreflightReport }): Rea
           <li key={entry}>{entry}</li>
         ))}
       </ul>
-      {notes?.details.map((entry) => <p key={entry}>{entry}</p>)}
+      {notes?.details.map((entry) => (
+        <p key={entry}>{entry}</p>
+      ))}
     </details>
   );
 }
@@ -430,20 +442,40 @@ function TechnicalDetails({
     <details className="upd-details">
       <summary>{t("updates.details.summary")}</summary>
       <dl className="upd-tech">
-        <div><dt>{t("updates.details.registry")}</dt><dd>{report.registryStatus}</dd></div>
-        <div><dt>{t("updates.details.releaseMetadata")}</dt><dd>{report.releaseMetadataStatus}</dd></div>
-        <div><dt>{t("updates.details.installMode")}</dt><dd>{session.installMode.status}</dd></div>
-        <div><dt>{t("updates.details.remediation")}</dt><dd>{remediation.overallStatus}</dd></div>
+        <div>
+          <dt>{t("updates.details.registry")}</dt>
+          <dd>{report.registryStatus}</dd>
+        </div>
+        <div>
+          <dt>{t("updates.details.releaseMetadata")}</dt>
+          <dd>{report.releaseMetadataStatus}</dd>
+        </div>
+        <div>
+          <dt>{t("updates.details.installMode")}</dt>
+          <dd>{session.installMode.status}</dd>
+        </div>
+        <div>
+          <dt>{t("updates.details.remediation")}</dt>
+          <dd>{remediation.overallStatus}</dd>
+        </div>
       </dl>
       {session.installMode.commandPreview !== undefined ? (
         <pre className="upd-log">{session.installMode.commandPreview.label}</pre>
       ) : null}
       {visibleSession?.logs !== undefined ? (
-        <pre className="upd-log">{[visibleSession.logs.stdoutPreview, visibleSession.logs.stderrPreview].filter(Boolean).join("\n")}</pre>
+        <pre className="upd-log">
+          {[visibleSession.logs.stdoutPreview, visibleSession.logs.stderrPreview]
+            .filter(Boolean)
+            .join("\n")}
+        </pre>
       ) : null}
-      {[...report.blockers.map((b) => b.message), ...report.warnings, ...remediation.warnings].map((entry) => (
-        <p key={entry} className="upd-muted">{entry}</p>
-      ))}
+      {[...report.blockers.map((b) => b.message), ...report.warnings, ...remediation.warnings].map(
+        (entry) => (
+          <p key={entry} className="upd-muted">
+            {entry}
+          </p>
+        ),
+      )}
     </details>
   );
 }
@@ -515,7 +547,11 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   );
 
   if (state.status === "loading") {
-    return <div className="upd-loading" role="status">{t("updates.loading")}</div>;
+    return (
+      <div className="upd-loading" role="status">
+        {t("updates.loading")}
+      </div>
+    );
   }
 
   if (state.status === "error") {
@@ -524,7 +560,9 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         <h2 id="updates-window-title" ref={titleRef} tabIndex={-1} className="upd-title">
           {t("updates.error.title")}
         </h2>
-        <div className="upd-panel upd-error" role="alert">{state.message}</div>
+        <div className="upd-panel upd-error" role="alert">
+          {state.message}
+        </div>
         <button type="button" className="upd-secondary-btn" onClick={() => void refresh(true)}>
           {t("updates.action.check")}
         </button>
@@ -565,7 +603,12 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           }}
           onRetry={() => void runAndRefresh("retrying", api.retrySession)}
           onCancel={() => void runAndRefresh("cancelling", api.cancelSession)}
-          onVerifyRestart={() => void runAndRefresh("restart", () => api.verifyRestart({ targetVersion }))}
+          onVerifyRestart={() => {
+            if (targetVersion !== undefined) {
+              void runAndRefresh("restart", () => api.verifyRestart({ targetVersion }));
+            }
+          }}
+          canVerifyRestart={targetVersion !== undefined}
         />
       </div>
       <ProgressPanel session={visibleSession} />

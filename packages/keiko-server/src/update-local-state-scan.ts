@@ -34,6 +34,12 @@ export interface StateScan {
   readonly retained: readonly RetainedNode[];
 }
 
+interface WalkAcc {
+  files: ArtifactNode[];
+  directories: ArtifactNode[];
+  retained: RetainedNode[];
+}
+
 export const UPDATE_DIR = "updates";
 
 export const CATEGORY_STORE: Readonly<Record<ArtifactCategory, UpdateStateStore>> = {
@@ -104,34 +110,83 @@ function childPath(relDir: string, name: string): string {
   return relDir.length === 0 ? name : `${relDir}/${name}`;
 }
 
-function walkState(
+function isInspectableFsError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return ["EACCES", "ENOENT", "EIO", "EPERM"].includes(String(error.code));
+}
+
+function retainedNode(relPath: string, category: ArtifactCategory | undefined): RetainedNode {
+  return { relPath, owned: category !== undefined, category };
+}
+
+function retainUnreadable(
+  relPath: string,
+  category: ArtifactCategory | undefined,
+  acc: { retained: RetainedNode[] },
+): void {
+  acc.retained.push(retainedNode(relPath.length === 0 ? "." : relPath, category));
+}
+
+function directoryNames(
   absDir: string,
   relDir: string,
-  acc: { files: ArtifactNode[]; directories: ArtifactNode[]; retained: RetainedNode[] },
-): void {
-  for (const name of readdirSync(absDir)) {
+  acc: WalkAcc,
+): readonly string[] | undefined {
+  try {
+    return readdirSync(absDir);
+  } catch (error) {
+    if (!isInspectableFsError(error)) throw error;
+    retainUnreadable(relDir, topCategory(relDir), acc);
+    return undefined;
+  }
+}
+
+function inspectedStat(
+  absPath: string,
+  relPath: string,
+  category: ArtifactCategory | undefined,
+  acc: WalkAcc,
+): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(absPath);
+  } catch (error) {
+    if (!isInspectableFsError(error)) throw error;
+    retainUnreadable(relPath, category, acc);
+    return undefined;
+  }
+}
+
+function visitStateNode(absPath: string, relPath: string, acc: WalkAcc): void {
+  const category = topCategory(relPath);
+  const stat = inspectedStat(absPath, relPath, category, acc);
+  if (stat === undefined) return;
+  if (stat.isSymbolicLink()) {
+    acc.retained.push(retainedNode(relPath, category));
+    return;
+  }
+  if (stat.isDirectory()) {
+    if (category === undefined) {
+      acc.retained.push({ relPath, owned: false });
+      return;
+    }
+    acc.directories.push({ relPath, absPath, category });
+    walkState(absPath, relPath, acc);
+    return;
+  }
+  if (stat.isFile() && category !== undefined && stat.nlink <= 1) {
+    acc.files.push({ relPath, absPath, category });
+    return;
+  }
+  acc.retained.push(retainedNode(relPath, category));
+}
+
+function walkState(absDir: string, relDir: string, acc: WalkAcc): void {
+  const names = directoryNames(absDir, relDir, acc);
+  if (names === undefined) return;
+  for (const name of names) {
     const absPath = join(absDir, name);
     const relPath = childPath(relDir, name);
-    const stat = lstatSync(absPath);
-    const category = topCategory(relPath);
-    if (stat.isSymbolicLink()) {
-      acc.retained.push({ relPath, owned: category !== undefined, category });
-      continue;
-    }
-    if (stat.isDirectory()) {
-      if (category === undefined) {
-        acc.retained.push({ relPath, owned: false });
-        continue;
-      }
-      acc.directories.push({ relPath, absPath, category });
-      walkState(absPath, relPath, acc);
-      continue;
-    }
-    if (stat.isFile() && category !== undefined && stat.nlink <= 1) {
-      acc.files.push({ relPath, absPath, category });
-      continue;
-    }
-    acc.retained.push({ relPath, owned: category !== undefined, category });
+    visitStateNode(absPath, relPath, acc);
   }
 }
 

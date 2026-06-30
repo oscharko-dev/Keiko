@@ -210,11 +210,15 @@ function isStableVersion(version: string): boolean {
   return parseSemver(version)?.prerelease === undefined;
 }
 
+function isStableVersionString(value: unknown): value is string {
+  return typeof value === "string" && isStableVersion(value);
+}
+
 export function compareSemver(left: string, right: string): number {
   const a = parseSemver(left);
   const b = parseSemver(right);
   if (a === undefined || b === undefined) {
-    return left.localeCompare(right, "en");
+    throw new TypeError(`Cannot compare malformed semver values: ${left}, ${right}`);
   }
   if (a.major !== b.major) return a.major - b.major;
   if (a.minor !== b.minor) return a.minor - b.minor;
@@ -514,8 +518,7 @@ function impactFromCatalog(
   if (matching.length === 0 || !targetReviewed) {
     return missingImpactResolution(targetReviewed);
   }
-  const targetEntries = matching.filter((entry) => entry.packageVersion === targetVersion);
-  const supportBlocker = supportedFromBlocker(targetEntries, currentVersion);
+  const supportBlocker = supportedFromBlocker(matching, currentVersion);
   return {
     impact: buildImpactSummary(matching),
     targetReviewed,
@@ -724,6 +727,7 @@ function hasBundledCatalogIdentity(entry: Record<string, unknown>): boolean {
   return (
     isString(entry.id) &&
     stringFields(entry, ["packageName", "packageVersion", "releaseTag", "userVisibleSummary"]) &&
+    isStableVersionString(entry.packageVersion) &&
     booleanFields(entry, [
       "internalOnly",
       "observableImpact",
@@ -750,6 +754,7 @@ function hasBundledCatalogArrays(entry: Record<string, unknown>): boolean {
     isStringArray(entry.releaseNoteBullets) &&
     isStringArray(entry.affectedStateStores) &&
     isStringArray(entry.supportedFrom) &&
+    entry.supportedFrom.every(isStableVersionString) &&
     isEnumArray(entry.publishGates, RELEASE_IMPACT_PUBLISH_GATES) &&
     Array.isArray(entry.stateImpact) &&
     entry.stateImpact.every(isReleaseImpactStateImpact)

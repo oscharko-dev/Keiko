@@ -348,7 +348,8 @@ const EN_MESSAGES = {
   "updates.notice.aria": "Keiko update notification",
   "updates.notice.title": "Update available",
   "updates.notice.criticalTitle": "Critical update available",
-  "updates.notice.body": "Version {version} is ready to review. Keiko will not install it automatically.",
+  "updates.notice.body":
+    "Version {version} is ready to review. Keiko will not install it automatically.",
   "updates.notice.review": "Review update",
   "updates.notice.notNow": "Not now",
   "updates.versionUnknown": "unknown",
@@ -384,7 +385,8 @@ const EN_MESSAGES = {
   "updates.remediation.title": "Remediation status",
   "updates.remediation.canComplete": "Required actions are complete or can be skipped safely.",
   "updates.remediation.needsAction": "Complete or defer the required actions before finishing.",
-  "updates.remediation.userActionRequired": "This update requires a user decision before completion.",
+  "updates.remediation.userActionRequired":
+    "This update requires a user decision before completion.",
   "updates.remediation.none": "No action required",
   "updates.remediation.restart": "Restart required",
   "updates.remediation.repair": "Local state repair",
@@ -880,7 +882,7 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "updates.manual.title": "Manueller Update-Pfad",
   "updates.manual.default":
     "Nutze deinen freigegebenen Paketverwaltungsprozess, starte Keiko neu und pruefe erneut.",
-  "updates.manual.releaseLink": "Release Notes oeffnen",
+  "updates.manual.releaseLink": "Versionshinweise oeffnen",
   "updates.patchNotes.summary": "Patch Notes",
   "updates.details.summary": "Technische Details und Logs",
   "updates.details.registry": "Registry",

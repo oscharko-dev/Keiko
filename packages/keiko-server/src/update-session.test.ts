@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { CommandResult } from "@oscharko-dev/keiko-tools";
+import { CommandCancelledError, type CommandResult } from "@oscharko-dev/keiko-tools";
 import type { UpdateInstallMode } from "@oscharko-dev/keiko-contracts";
 import {
   createUpdateSessionManager,
@@ -190,22 +190,38 @@ describe("UpdateSessionManager", () => {
     expect(manager.getStatus().lastSession?.phase).toBe("cancelled");
   });
 
-  it("refuses cancellation once package mutation is running", async () => {
-    const running = deferred();
+  it("aborts cancellation requests once package mutation is running", async () => {
+    const aborted = deferred();
     const manager = createUpdateSessionManager({
       detector: () => supportedMode(),
-      runCommandImpl: async () => {
-        await running.promise;
-        return commandResult();
+      runCommandImpl: (input) => {
+        return new Promise<CommandResult>((_resolve, reject) => {
+          input.signal.addEventListener(
+            "abort",
+            () => {
+              aborted.resolve();
+              reject(new CommandCancelledError("command cancelled"));
+            },
+            { once: true },
+          );
+        });
       },
     });
 
     manager.start({ targetVersion: "0.2.12" });
     await waitForPhase(manager, "running");
 
-    expect(() => manager.cancel()).toThrow(UpdateSessionError);
-    running.resolve();
-    await waitForPhase(manager, "restart-required");
+    const requested = manager.cancel();
+
+    expect(requested.phase).toBe("running");
+    expect(requested.cancelable).toBe(false);
+    await aborted.promise;
+    await waitForPhase(manager, "cancelled");
+    expect(manager.getStatus().lastSession).toMatchObject({
+      phase: "cancelled",
+      failureReason: "cancelled",
+      retryable: false,
+    });
   });
 
   it("uses a durable lock to block overlapping package mutation across managers", async () => {

@@ -82,6 +82,41 @@ function throwingLocalKnowledge(): LocalKnowledgeRemediationPort {
   };
 }
 
+function deferredLocalKnowledge(): LocalKnowledgeRemediationPort & {
+  readonly complete: () => void;
+  readonly runs: () => number;
+} {
+  let runs = 0;
+  let complete!: () => void;
+  const scope: LocalKnowledgeRemediationScope = {
+    capsules: 2,
+    sources: 3,
+    documents: 11,
+    chunks: 41,
+    vectors: 39,
+  };
+  return {
+    inspect: () => scope,
+    reindexAll: (): Promise<LocalKnowledgeRemediationRunResult> => {
+      runs += 1;
+      return new Promise((resolve) => {
+        complete = (): void => {
+          resolve({
+            status: "completed",
+            scope,
+            failedCapsules: 0,
+            message: "done",
+          });
+        };
+      });
+    },
+    complete: (): void => {
+      complete();
+    },
+    runs: () => runs,
+  };
+}
+
 function manager(
   stateDir: string,
   localKnowledge?: LocalKnowledgeRemediationPort,
@@ -249,6 +284,57 @@ describe("update remediation manager", () => {
       featureId: "local-knowledge",
       state: "degraded",
     });
+  });
+
+  it("uses the injected clock when remediation state is persisted", () => {
+    const stateDir = makeStateDir();
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      idFactory: () => "event-1",
+    });
+    const subject = createUpdateRemediationManager({
+      localState,
+      localKnowledge: fakeLocalKnowledge(),
+      now: () => NOW,
+    });
+
+    subject.getStatus({
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+      persist: true,
+    });
+
+    expect(localState.readRuntimeState().remediations[0]?.updatedAt).toBe(
+      new Date(NOW).toISOString(),
+    );
+  });
+
+  it("rejects concurrent execution of the same remediation action", async () => {
+    const localKnowledge = deferredLocalKnowledge();
+    const subject = manager(makeStateDir(), localKnowledge);
+
+    const first = subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+    await Promise.resolve();
+
+    await expect(
+      subject.runAction({
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      }),
+    ).rejects.toMatchObject({
+      code: "UPDATE_REMEDIATION_RUNNING",
+      status: 409,
+    });
+    expect(localKnowledge.runs()).toBe(1);
+
+    localKnowledge.complete();
+    await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
   });
 
   it("resumes an interrupted running remediation as pending after restart", () => {
