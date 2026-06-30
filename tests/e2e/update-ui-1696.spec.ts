@@ -109,6 +109,22 @@ interface RouteFixtures {
   readonly remediation?: JsonObject;
 }
 
+interface UpdateRouteState {
+  currentSessionStatus: JsonObject;
+  currentRemediation: JsonObject;
+}
+
+interface A11yCapture {
+  readonly file: ArtifactName;
+  readonly violations: readonly AxeViolation[];
+}
+
+interface EvidenceState {
+  readonly captures: CaptureRecord[];
+  readonly a11yCaptures: A11yCapture[];
+  readonly ledgers: UpdateRouteLedger[];
+}
+
 function ensureEvidenceDir(): void {
   mkdirSync(EVIDENCE_DIR, { recursive: true });
   const stat = lstatSync(EVIDENCE_DIR);
@@ -138,6 +154,60 @@ function cssSha256(): string {
     .digest("hex");
 }
 
+function patchNotesFixture(): JsonObject {
+  return {
+    collapsed: true,
+    summary: "Plain-language update summary for the governed updater.",
+    bullets: [
+      "Adds update readiness, state impact, and remediation guidance.",
+      "Keeps patch notes and technical details available but secondary.",
+    ],
+    details: ["Internal package-manager output remains collapsed unless the user opens details."],
+  };
+}
+
+function releaseFixture(): JsonObject {
+  return {
+    source: "github-release",
+    tag: "v0.2.11",
+    title: "Keiko 0.2.11",
+    summary: "Governed update experience.",
+    notes: ["Review update impact before installing."],
+    url: "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.11",
+    publishedAt: "2026-06-30T12:00:00.000Z",
+  };
+}
+
+function stateImpactFixture(): JsonObject {
+  return {
+    store: "local-knowledge",
+    description: "Local Knowledge vectors need reindexing after this update.",
+    remediation: "local-knowledge-reindex-required",
+    userActionRequired: true,
+  };
+}
+
+function updateImpactFixture(): JsonObject {
+  return {
+    entries: [
+      {
+        packageVersion: "0.2.11",
+        releaseTag: "v0.2.11",
+        summary: "Local Knowledge needs a reindex after this update.",
+        releaseNoteBullets: ["Local Knowledge search quality is refreshed after reindexing."],
+        stateImpact: [stateImpactFixture()],
+        userActionRequired: true,
+        remediation: "local-knowledge-reindex-required",
+      },
+    ],
+    releaseNoteBullets: ["Local Knowledge search quality is refreshed after reindexing."],
+    affectedStateStores: ["local-knowledge"],
+    stateImpact: [stateImpactFixture()],
+    userActionRequired: true,
+    remediations: ["local-knowledge-reindex-required"],
+  };
+}
+
 function updatePreflight(overrides: JsonObject = {}): JsonObject {
   return {
     schemaVersion: 1,
@@ -155,56 +225,9 @@ function updatePreflight(overrides: JsonObject = {}): JsonObject {
     blockers: [],
     manualUpdateRequired: false,
     oneClickEligible: true,
-    patchNotes: {
-      collapsed: true,
-      summary: "Plain-language update summary for the governed updater.",
-      bullets: [
-        "Adds update readiness, state impact, and remediation guidance.",
-        "Keeps patch notes and technical details available but secondary.",
-      ],
-      details: ["Internal package-manager output remains collapsed unless the user opens details."],
-    },
-    release: {
-      source: "github-release",
-      tag: "v0.2.11",
-      title: "Keiko 0.2.11",
-      summary: "Governed update experience.",
-      notes: ["Review update impact before installing."],
-      url: "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.11",
-      publishedAt: "2026-06-30T12:00:00.000Z",
-    },
-    impact: {
-      entries: [
-        {
-          packageVersion: "0.2.11",
-          releaseTag: "v0.2.11",
-          summary: "Local Knowledge needs a reindex after this update.",
-          releaseNoteBullets: ["Local Knowledge search quality is refreshed after reindexing."],
-          stateImpact: [
-            {
-              store: "local-knowledge",
-              description: "Local Knowledge vectors need reindexing after this update.",
-              remediation: "local-knowledge-reindex-required",
-              userActionRequired: true,
-            },
-          ],
-          userActionRequired: true,
-          remediation: "local-knowledge-reindex-required",
-        },
-      ],
-      releaseNoteBullets: ["Local Knowledge search quality is refreshed after reindexing."],
-      affectedStateStores: ["local-knowledge"],
-      stateImpact: [
-        {
-          store: "local-knowledge",
-          description: "Local Knowledge vectors need reindexing after this update.",
-          remediation: "local-knowledge-reindex-required",
-          userActionRequired: true,
-        },
-      ],
-      userActionRequired: true,
-      remediations: ["local-knowledge-reindex-required"],
-    },
+    patchNotes: patchNotesFixture(),
+    release: releaseFixture(),
+    impact: updateImpactFixture(),
     warnings: [],
     ...overrides,
   };
@@ -336,95 +359,139 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 }
 
-async function installUpdateRoutes(
-  page: Page,
-  fixtures: RouteFixtures,
-): Promise<UpdateRouteLedger> {
-  const ledger: UpdateRouteLedger = {
+function updateRouteLedger(): UpdateRouteLedger {
+  return {
     preflightGets: 0,
     preflightChecks: 0,
     sessionStarts: [],
     remediationActions: [],
   };
-  let currentSessionStatus = fixtures.sessionStatus ?? sessionStatus();
-  let currentRemediation = fixtures.remediation ?? remediationStatus();
+}
 
+function updateRouteState(fixtures: RouteFixtures): UpdateRouteState {
+  return {
+    currentSessionStatus: fixtures.sessionStatus ?? sessionStatus(),
+    currentRemediation: fixtures.remediation ?? remediationStatus(),
+  };
+}
+
+async function installPreflightRoutes(
+  page: Page,
+  report: JsonObject,
+  ledger: UpdateRouteLedger,
+): Promise<void> {
   await page.route("**/api/update/preflight/check", async (route) => {
     ledger.preflightChecks += 1;
-    await fulfillJson(route, fixtures.report);
+    await fulfillJson(route, report);
   });
   await page.route("**/api/update/preflight", async (route) => {
     ledger.preflightGets += 1;
-    await fulfillJson(route, fixtures.report);
+    await fulfillJson(route, report);
   });
+}
+
+async function handleSessionRoute(
+  route: Route,
+  ledger: UpdateRouteLedger,
+  state: UpdateRouteState,
+): Promise<void> {
+  const method = route.request().method();
+  if (method === "GET") {
+    await fulfillJson(route, state.currentSessionStatus);
+    return;
+  }
+  if (method === "DELETE") {
+    const session = updateSession("cancelled", "Update cancelled.");
+    state.currentSessionStatus = sessionStatus({ lastSession: session });
+    await fulfillJson(route, session);
+    return;
+  }
+  ledger.sessionStarts.push(postedJson(route));
+  const session = updateSession("running", "Installing update.");
+  state.currentSessionStatus = sessionStatus({ activeSession: session });
+  await fulfillJson(route, session);
+}
+
+async function installSessionRoutes(
+  page: Page,
+  ledger: UpdateRouteLedger,
+  state: UpdateRouteState,
+): Promise<void> {
   await page.route("**/api/update/session/retry", async (route) => {
     const session = updateSession("preparing", "Retrying update.");
-    currentSessionStatus = sessionStatus({ activeSession: session });
+    state.currentSessionStatus = sessionStatus({ activeSession: session });
     await fulfillJson(route, session);
   });
   await page.route("**/api/update/session/verify-restart", async (route) => {
     const session = updateSession("succeeded", "Update verified.");
-    currentSessionStatus = sessionStatus({ lastSession: session });
+    state.currentSessionStatus = sessionStatus({ lastSession: session });
     await fulfillJson(route, session);
   });
   await page.route("**/api/update/session", async (route) => {
-    const method = route.request().method();
-    if (method === "GET") {
-      await fulfillJson(route, currentSessionStatus);
-      return;
-    }
-    if (method === "DELETE") {
-      const session = updateSession("cancelled", "Update cancelled.");
-      currentSessionStatus = sessionStatus({ lastSession: session });
-      await fulfillJson(route, session);
-      return;
-    }
-    ledger.sessionStarts.push(postedJson(route));
-    const session = updateSession("running", "Installing update.");
-    currentSessionStatus = sessionStatus({ activeSession: session });
-    await fulfillJson(route, session);
+    await handleSessionRoute(route, ledger, state);
   });
+}
+
+function completedRemediationStatus(): JsonObject {
+  return remediationStatus({
+    overallStatus: "completed",
+    updateCanComplete: true,
+    actions: [
+      {
+        actionId: "local-knowledge:reindex",
+        kind: "local-knowledge-reindex",
+        store: "local-knowledge",
+        remediation: "local-knowledge-reindex-required",
+        status: "completed",
+        required: true,
+        canRun: false,
+        canDefer: false,
+        userApprovalRequired: true,
+        featureIds: ["local-knowledge"],
+        scopeCounts: { stores: 1, artifacts: 2, retainedEntries: 2, capsules: 1 },
+        message: "Reindex Local Knowledge",
+        instructions: "Local Knowledge is current for this update.",
+      },
+    ],
+    affectedFeatures: [
+      {
+        featureId: "local-knowledge",
+        label: "Local Knowledge",
+        state: "ready",
+        reason: "Reindex completed.",
+        actionIds: ["local-knowledge:reindex"],
+      },
+    ],
+  });
+}
+
+async function installRemediationRoutes(
+  page: Page,
+  ledger: UpdateRouteLedger,
+  state: UpdateRouteState,
+): Promise<void> {
   await page.route("**/api/update/remediation/status", async (route) => {
-    await fulfillJson(route, currentRemediation);
+    await fulfillJson(route, state.currentRemediation);
   });
   await page.route("**/api/update/remediation/actions", async (route) => {
     ledger.remediationActions.push(postedJson(route));
-    currentRemediation = remediationStatus({
-      overallStatus: "completed",
-      updateCanComplete: true,
-      actions: [
-        {
-          actionId: "local-knowledge:reindex",
-          kind: "local-knowledge-reindex",
-          store: "local-knowledge",
-          remediation: "local-knowledge-reindex-required",
-          status: "completed",
-          required: true,
-          canRun: false,
-          canDefer: false,
-          userApprovalRequired: true,
-          featureIds: ["local-knowledge"],
-          scopeCounts: { stores: 1, artifacts: 2, retainedEntries: 2, capsules: 1 },
-          message: "Reindex Local Knowledge",
-          instructions: "Local Knowledge is current for this update.",
-        },
-      ],
-      affectedFeatures: [
-        {
-          featureId: "local-knowledge",
-          label: "Local Knowledge",
-          state: "ready",
-          reason: "Reindex completed.",
-          actionIds: ["local-knowledge:reindex"],
-        },
-      ],
-    });
-    await fulfillJson(route, currentRemediation);
+    state.currentRemediation = completedRemediationStatus();
+    await fulfillJson(route, state.currentRemediation);
   });
   await page.route("**/api/update/remediation", async (route) => {
-    await fulfillJson(route, currentRemediation);
+    await fulfillJson(route, state.currentRemediation);
   });
+}
 
+async function installUpdateRoutes(
+  page: Page,
+  fixtures: RouteFixtures,
+): Promise<UpdateRouteLedger> {
+  const ledger = updateRouteLedger();
+  const state = updateRouteState(fixtures);
+  await installPreflightRoutes(page, fixtures.report, ledger);
+  await installSessionRoutes(page, ledger, state);
+  await installRemediationRoutes(page, ledger, state);
   return ledger;
 }
 
@@ -706,242 +773,265 @@ const MODE_CAPTURES: readonly ModeCaptureCase[] = [
   },
 ];
 
-test("records Issue #1696 governed update UI design-system evidence", async ({ browser }) => {
-  test.setTimeout(600_000);
-  ensureEvidenceDir();
+const MANUAL_MODE: ModeCaptureCase = {
+  file: "10-responsive-manual-path.png",
+  mode: "dark",
+  theme: "dark",
+  media: { colorScheme: "dark" },
+  viewport: { width: 680, height: 900 },
+};
 
-  const captures: CaptureRecord[] = [];
-  const a11yCaptures: { file: ArtifactName; violations: readonly AxeViolation[] }[] = [];
-  const allLedgers: UpdateRouteLedger[] = [];
+function createEvidenceState(): EvidenceState {
+  return { captures: [], a11yCaptures: [], ledgers: [] };
+}
 
-  for (const mode of MODE_CAPTURES) {
-    const { page, ledger } = await openModePage(browser, mode, {
-      report: updatePreflight(),
-      remediation: remediationStatus(),
-    });
-    allLedgers.push(ledger);
-    try {
-      const settings = await openSettingsGeneral(page);
-      await applyInAppHighContrast(page, mode.highContrast);
-      if (mode.file === "01-update-window-dark.png") {
-        await capture(settings, "09-settings-entrypoint.png");
-      }
-      const updateWindow = await openUpdateFromSettings(page, settings, /Update available/u);
-      await assertUpdateWindowCore(updateWindow);
-      await resetUpdateScroll(updateWindow);
-      await capture(updateWindow, mode.file);
-      captures.push(await captureContext(page, mode, "normal-update"));
+async function recordProgressEvidence(
+  updateWindow: Locator,
+  page: Page,
+  mode: ModeCaptureCase,
+  evidence: EvidenceState,
+): Promise<void> {
+  await assertDetailsDisclosure(updateWindow);
+  await resetUpdateScroll(updateWindow);
+  await updateWindow.getByRole("button", { name: "Install update" }).click();
+  await expect(
+    updateWindow.locator('.upd-panel[role="status"]').filter({ hasText: "Installing update" }),
+  ).toBeVisible();
+  await expect(updateWindow.getByLabel("Update progress")).toBeVisible();
+  await capture(updateWindow, "11-progress-state.png");
+  evidence.captures.push({
+    ...(await captureContext(page, mode, "progress")),
+    file: "11-progress-state.png",
+  });
+}
 
-      const violations = await runAxe(page, await updateContentSelector(updateWindow));
-      a11yCaptures.push({ file: mode.file, violations });
-
-      if (mode.file === "01-update-window-dark.png") {
-        await assertDetailsDisclosure(updateWindow);
-        await resetUpdateScroll(updateWindow);
-        await updateWindow.getByRole("button", { name: "Install update" }).click();
-        await expect(
-          updateWindow
-            .locator('.upd-panel[role="status"]')
-            .filter({ hasText: "Installing update" }),
-        ).toBeVisible();
-        await expect(updateWindow.getByLabel("Update progress")).toBeVisible();
-        await capture(updateWindow, "11-progress-state.png");
-        captures.push({
-          ...(await captureContext(page, mode, "progress")),
-          file: "11-progress-state.png",
-        });
-      }
-    } finally {
-      await closePage(page);
-    }
+async function captureModeWindow(
+  page: Page,
+  mode: ModeCaptureCase,
+  evidence: EvidenceState,
+): Promise<void> {
+  const settings = await openSettingsGeneral(page);
+  await applyInAppHighContrast(page, mode.highContrast);
+  if (mode.file === "01-update-window-dark.png") {
+    await capture(settings, "09-settings-entrypoint.png");
   }
+  const updateWindow = await openUpdateFromSettings(page, settings, /Update available/u);
+  await assertUpdateWindowCore(updateWindow);
+  await resetUpdateScroll(updateWindow);
+  await capture(updateWindow, mode.file);
+  evidence.captures.push(await captureContext(page, mode, "normal-update"));
+  evidence.a11yCaptures.push({
+    file: mode.file,
+    violations: await runAxe(page, await updateContentSelector(updateWindow)),
+  });
+  if (mode.file === "01-update-window-dark.png") {
+    await recordProgressEvidence(updateWindow, page, mode, evidence);
+  }
+}
 
-  const startupContext = await browser.newContext({
+async function recordModeEvidence(
+  browser: Browser,
+  mode: ModeCaptureCase,
+  evidence: EvidenceState,
+): Promise<void> {
+  const { page, ledger } = await openModePage(browser, mode, {
+    report: updatePreflight(),
+    remediation: remediationStatus(),
+  });
+  evidence.ledgers.push(ledger);
+  try {
+    await captureModeWindow(page, mode, evidence);
+  } finally {
+    await closePage(page);
+  }
+}
+
+async function startupCaptureRecord(page: Page): Promise<CaptureRecord> {
+  return {
+    file: "08-startup-notice-critical.png",
+    mode: "dark",
+    entrypoint: "startup",
+    viewport: page.viewportSize() ?? { width: 0, height: 0 },
+    dataTheme: await page.evaluate(() => document.documentElement.getAttribute("data-theme")),
+    dataHc: await page.evaluate(() => document.documentElement.getAttribute("data-hc")),
+    forcedColors: "none",
+    reducedMotion: "no-preference",
+    state: "critical-startup-notice",
+  };
+}
+
+async function recordStartupEvidence(browser: Browser, evidence: EvidenceState): Promise<void> {
+  const context = await browser.newContext({
     bypassCSP: true,
     viewport: { width: 1280, height: 900 },
   });
-  const startupPage = await startupContext.newPage();
+  const page = await context.newPage();
   try {
-    await installUpdateRoutes(startupPage, {
+    await installUpdateRoutes(page, {
       report: updatePreflight({ severity: "critical" }),
       remediation: remediationStatus(),
     });
-    await seedStartupOnly(startupPage, "dark");
-    await startupPage.emulateMedia({ colorScheme: "dark" });
-    await startupPage.goto(APP_ORIGIN);
-    const notice = startupPage.getByRole("alert", { name: "Keiko update notification" });
+    await seedStartupOnly(page, "dark");
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.goto(APP_ORIGIN);
+    const notice = page.getByRole("alert", { name: "Keiko update notification" });
     await expect(notice).toContainText("Critical update available");
-    await capture(startupPage.locator(".update-notice"), "08-startup-notice-critical.png");
-    a11yCaptures.push({
+    await capture(page.locator(".update-notice"), "08-startup-notice-critical.png");
+    evidence.a11yCaptures.push({
       file: "08-startup-notice-critical.png",
-      violations: await runAxe(startupPage, ".update-notice"),
+      violations: await runAxe(page, ".update-notice"),
     });
     await notice.getByRole("button", { name: "Review update" }).click();
-    await expect(
-      startupPage.getByRole("heading", { name: "Critical update available" }),
-    ).toBeVisible();
-    captures.push({
-      file: "08-startup-notice-critical.png",
-      mode: "dark",
-      entrypoint: "startup",
-      viewport: startupPage.viewportSize() ?? { width: 0, height: 0 },
-      dataTheme: await startupPage.evaluate(() =>
-        document.documentElement.getAttribute("data-theme"),
-      ),
-      dataHc: await startupPage.evaluate(() => document.documentElement.getAttribute("data-hc")),
-      forcedColors: "none",
-      reducedMotion: "no-preference",
-      state: "critical-startup-notice",
-    });
+    await expect(page.getByRole("heading", { name: "Critical update available" })).toBeVisible();
+    evidence.captures.push(await startupCaptureRecord(page));
   } finally {
-    await startupContext.close();
+    await context.close();
   }
+}
 
-  const manualMode: ModeCaptureCase = {
-    file: "10-responsive-manual-path.png",
-    mode: "dark",
-    theme: "dark",
-    media: { colorScheme: "dark" },
-    viewport: { width: 680, height: 900 },
-  };
-  const { page: manualPage } = await openModePage(browser, manualMode, {
+function manualRemediation(): JsonObject {
+  return remediationStatus({
+    overallStatus: "manual-review-required",
+    updateCanComplete: false,
+    actions: [],
+    affectedFeatures: [
+      {
+        featureId: "local-knowledge",
+        label: "Local Knowledge",
+        state: "manual-review-required",
+        reason: "Manual update review is required for this install mode.",
+        actionIds: [],
+      },
+    ],
+  });
+}
+
+async function recordManualEvidence(browser: Browser, evidence: EvidenceState): Promise<void> {
+  const { page } = await openModePage(browser, MANUAL_MODE, {
     report: manualReport(),
     sessionStatus: manualSessionStatus(),
-    remediation: remediationStatus({
-      overallStatus: "manual-review-required",
-      updateCanComplete: false,
-      actions: [],
-      affectedFeatures: [
-        {
-          featureId: "local-knowledge",
-          label: "Local Knowledge",
-          state: "manual-review-required",
-          reason: "Manual update review is required for this install mode.",
-          actionIds: [],
-        },
-      ],
-    }),
+    remediation: manualRemediation(),
   });
   try {
-    const settings = await openSettingsGeneral(manualPage);
-    await applyInAppHighContrast(manualPage, manualMode.highContrast);
-    const updateWindow = await openUpdateFromSettings(
-      manualPage,
-      settings,
-      /Critical update available/u,
-    );
+    const settings = await openSettingsGeneral(page);
+    await applyInAppHighContrast(page, MANUAL_MODE.highContrast);
+    const updateWindow = await openUpdateFromSettings(page, settings, /Critical update available/u);
     await assertManualPath(updateWindow);
     await resetUpdateScroll(updateWindow);
     await capture(updateWindow, "10-responsive-manual-path.png");
-    captures.push(await captureContext(manualPage, manualMode, "responsive-manual-path"));
-    a11yCaptures.push({
+    evidence.captures.push(await captureContext(page, MANUAL_MODE, "responsive-manual-path"));
+    evidence.a11yCaptures.push({
       file: "10-responsive-manual-path.png",
-      violations: await runAxe(manualPage, await updateContentSelector(updateWindow)),
+      violations: await runAxe(page, await updateContentSelector(updateWindow)),
     });
   } finally {
-    await closePage(manualPage);
+    await closePage(page);
   }
+}
 
-  const seriousOrCritical = a11yCaptures.flatMap((entry) =>
+function seriousA11yFindings(a11yCaptures: readonly A11yCapture[]): JsonObject[] {
+  return a11yCaptures.flatMap((entry) =>
     entry.violations
       .filter((violation) => violation.impact === "serious" || violation.impact === "critical")
       .map((violation) => ({ file: entry.file, id: violation.id, impact: violation.impact })),
   );
-  expect(seriousOrCritical).toEqual([]);
-  expect(allLedgers.some((ledger) => ledger.sessionStarts.length > 0)).toBe(true);
+}
 
+function writeJsonArtifact(name: ArtifactName, value: unknown): void {
+  writeFileSync(artifactPath(name), `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function routeLedgerSummary(ledgers: readonly UpdateRouteLedger[]): JsonObject {
+  return {
+    updatePreflightGets: ledgers.reduce((sum, ledger) => sum + ledger.preflightGets, 0),
+    updatePreflightChecks: ledgers.reduce((sum, ledger) => sum + ledger.preflightChecks, 0),
+    sessionStarts: ledgers.reduce((sum, ledger) => sum + ledger.sessionStarts.length, 0),
+    remediationActions: ledgers.reduce((sum, ledger) => sum + ledger.remediationActions.length, 0),
+  };
+}
+
+function writeFidelityProof(captures: readonly CaptureRecord[], cssHash: string): void {
+  writeJsonArtifact("update-experience-fidelity-proof.json", {
+    issue: 1696,
+    epic: 1687,
+    verdict: "PASS",
+    cssSha256: cssHash,
+    harness: "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
+    route: "/",
+    appPath: "packaged-cli-ui",
+    generatedAt: EVIDENCE_GENERATED_AT,
+    captures,
+    assertions: {
+      settingsEntryPointVisible: true,
+      startupNoticeCriticalAlertVisible: true,
+      updatesOpenedOnlyThroughSettingsOrStartup: true,
+      normalUpdateStatusBeforeDetails: true,
+      stateImpactVisible: true,
+      remediationVisible: true,
+      patchNotesCollapsedByDefault: true,
+      technicalDetailsCollapsedByDefault: true,
+      focusMovesToLoadedTitle: true,
+      progressUsesNativeProgressAndLiveStatus: true,
+      manualPathIsNotRenderedAsError: true,
+      sevenModeThemeCoverage: MODE_CAPTURES.length,
+    },
+    artifacts: ARTIFACT_NAMES,
+  });
+}
+
+function writeA11yProof(a11yCaptures: readonly A11yCapture[], cssHash: string): void {
+  writeJsonArtifact("a11y-proof.json", {
+    issue: 1696,
+    verdict: "PASS",
+    tool: "axe-core 4.12.1",
+    cssSha256: cssHash,
+    gate: "zero serious/critical axe violations across update window modes, startup notice, and responsive manual path",
+    captures: a11yCaptures,
+    deterministicChecks: {
+      titleFocus: true,
+      criticalNoticeUsesAlert: true,
+      progressHasNativeProgressElement: true,
+      collapsedDetailsUseNativeDetails: true,
+      criticalAndManualStatesAreNotColorOnly: true,
+      keyboardReachableEntrypoints: true,
+    },
+  });
+}
+
+function writeManifest(ledgers: readonly UpdateRouteLedger[]): void {
+  writeJsonArtifact("manifest.json", {
+    issue: "#1696",
+    epic: "#1687",
+    generatedAt: EVIDENCE_GENERATED_AT,
+    command: "npm run test:e2e:update-ui-1696",
+    receiptCommand: UI_RECEIPT_COMMAND,
+    artifacts: ARTIFACT_NAMES,
+    routeLedger: routeLedgerSummary(ledgers),
+    notes: [
+      "Packaged CLI UI renders the real Settings panel, startup notice, WindowsRegistry, and UpdateWindow.",
+      "Only /api/update/* routes are mocked; the shell, registry, theme, i18n, and focus behavior are real.",
+      "Update window is transient and cannot be seeded directly through keiko.workspace.v4; evidence opens it from Settings/startup.",
+    ],
+  });
+}
+
+function writeEvidenceArtifacts(evidence: EvidenceState): void {
   const cssHash = cssSha256();
-  writeFileSync(
-    artifactPath("update-experience-fidelity-proof.json"),
-    `${JSON.stringify(
-      {
-        issue: 1696,
-        epic: 1687,
-        verdict: "PASS",
-        cssSha256: cssHash,
-        harness: "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
-        route: "/",
-        appPath: "packaged-cli-ui",
-        generatedAt: EVIDENCE_GENERATED_AT,
-        captures,
-        assertions: {
-          settingsEntryPointVisible: true,
-          startupNoticeCriticalAlertVisible: true,
-          updatesOpenedOnlyThroughSettingsOrStartup: true,
-          normalUpdateStatusBeforeDetails: true,
-          stateImpactVisible: true,
-          remediationVisible: true,
-          patchNotesCollapsedByDefault: true,
-          technicalDetailsCollapsedByDefault: true,
-          focusMovesToLoadedTitle: true,
-          progressUsesNativeProgressAndLiveStatus: true,
-          manualPathIsNotRenderedAsError: true,
-          sevenModeThemeCoverage: MODE_CAPTURES.length,
-        },
-        artifacts: ARTIFACT_NAMES,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+  writeFidelityProof(evidence.captures, cssHash);
+  writeA11yProof(evidence.a11yCaptures, cssHash);
+  writeManifest(evidence.ledgers);
+}
 
-  writeFileSync(
-    artifactPath("a11y-proof.json"),
-    `${JSON.stringify(
-      {
-        issue: 1696,
-        verdict: "PASS",
-        tool: "axe-core 4.12.1",
-        cssSha256: cssHash,
-        gate: "zero serious/critical axe violations across update window modes, startup notice, and responsive manual path",
-        captures: a11yCaptures,
-        deterministicChecks: {
-          titleFocus: true,
-          criticalNoticeUsesAlert: true,
-          progressHasNativeProgressElement: true,
-          collapsedDetailsUseNativeDetails: true,
-          criticalAndManualStatesAreNotColorOnly: true,
-          keyboardReachableEntrypoints: true,
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-
-  writeFileSync(
-    artifactPath("manifest.json"),
-    `${JSON.stringify(
-      {
-        issue: "#1696",
-        epic: "#1687",
-        generatedAt: EVIDENCE_GENERATED_AT,
-        command: "npm run test:e2e:update-ui-1696",
-        receiptCommand: UI_RECEIPT_COMMAND,
-        artifacts: ARTIFACT_NAMES,
-        routeLedger: {
-          updatePreflightGets: allLedgers.reduce((sum, ledger) => sum + ledger.preflightGets, 0),
-          updatePreflightChecks: allLedgers.reduce(
-            (sum, ledger) => sum + ledger.preflightChecks,
-            0,
-          ),
-          sessionStarts: allLedgers.reduce((sum, ledger) => sum + ledger.sessionStarts.length, 0),
-          remediationActions: allLedgers.reduce(
-            (sum, ledger) => sum + ledger.remediationActions.length,
-            0,
-          ),
-        },
-        notes: [
-          "Packaged CLI UI renders the real Settings panel, startup notice, WindowsRegistry, and UpdateWindow.",
-          "Only /api/update/* routes are mocked; the shell, registry, theme, i18n, and focus behavior are real.",
-          "Update window is transient and cannot be seeded directly through keiko.workspace.v4; evidence opens it from Settings/startup.",
-        ],
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+test("records Issue #1696 governed update UI design-system evidence", async ({ browser }) => {
+  test.setTimeout(600_000);
+  ensureEvidenceDir();
+  const evidence = createEvidenceState();
+  for (const mode of MODE_CAPTURES) {
+    await recordModeEvidence(browser, mode, evidence);
+  }
+  await recordStartupEvidence(browser, evidence);
+  await recordManualEvidence(browser, evidence);
+  expect(seriousA11yFindings(evidence.a11yCaptures)).toEqual([]);
+  expect(evidence.ledgers.some((ledger) => ledger.sessionStarts.length > 0)).toBe(true);
+  writeEvidenceArtifacts(evidence);
 });
