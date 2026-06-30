@@ -328,8 +328,10 @@ describe("UpdateWindow", () => {
   });
 
   it("disables restart verification when no report target is available", async () => {
+    const { targetVersion: omittedTargetVersion, ...reportWithoutTarget } = preflight();
+    expect(omittedTargetVersion).toBe("0.2.10");
     const api = apiFor({
-      report: preflight({ targetVersion: undefined }),
+      report: reportWithoutTarget,
       status: sessionStatus({
         activeSession: session({
           phase: "restart-required",
