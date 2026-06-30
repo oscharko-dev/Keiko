@@ -6,6 +6,7 @@ import { EditorWidget } from "./EditorWidget";
 
 const probeState = vi.hoisted(() => ({
   runtimeProps: null as EditorRuntimeWidgetProps | null,
+  dragModeStarts: [] as Array<{ readonly paneId: string; readonly path: string }>,
 }));
 
 vi.mock("next/dynamic", () => ({
@@ -25,6 +26,10 @@ vi.mock("next/dynamic", () => ({
               path,
               path === props.file,
               props.dirtyFiles?.includes(path) ?? false,
+              {
+                onDragModeStart: () =>
+                  probeState.dragModeStarts.push({ paneId: props.paneId ?? "pane", path }),
+              },
             );
             return (
               <button
@@ -32,6 +37,7 @@ vi.mock("next/dynamic", () => ({
                 type="button"
                 aria-label={`Tab handle ${props.paneId ?? "pane"} ${path}`}
                 {...handleProps}
+                onClick={() => props.onSelectOpenFile?.(path)}
               >
                 {path}
               </button>
@@ -41,16 +47,25 @@ vi.mock("next/dynamic", () => ({
           <button type="button" onClick={() => props.onSelectOpenFile?.("src/b.ts")}>
             Select b
           </button>
+          <button
+            type="button"
+            onClick={() => props.onSelectOpenFile?.(props.file ?? "")}
+          >
+            Select current {props.paneId ?? "pane"}
+          </button>
           <button type="button" onClick={() => props.onSelectOpenFile?.("")}>
             Select empty
           </button>
           <button type="button" onClick={() => props.onCloseOpenFile?.("src/a.ts")}>
             Close a
           </button>
-          <button type="button" onClick={() => props.onDirtyChange?.("src/a.ts", true)}>
+          <button type="button" onClick={() => props.onCloseOpenFile?.("src/b.ts")}>
+            Close b
+          </button>
+          <button type="button" onClick={() => props.onDirtyChange?.(props.file ?? "", true)}>
             Mark dirty {props.paneId ?? "pane"}
           </button>
-          <button type="button" onClick={() => props.onDirtyChange?.("src/a.ts", false)}>
+          <button type="button" onClick={() => props.onDirtyChange?.(props.file ?? "", false)}>
             Mark clean {props.paneId ?? "pane"}
           </button>
           {externalSaveRequest !== undefined ? (
@@ -142,7 +157,7 @@ vi.mock("./editorHotExitStore", async (importOriginal) => {
 
 afterEach(() => {
   probeState.runtimeProps = null;
-  hotExitState.deletes = [];
+  probeState.dragModeStarts = [];
   vi.clearAllMocks();
 });
 
@@ -240,43 +255,305 @@ describe("EditorWidget workspace session", () => {
     );
   });
 
-  it("splits the active tab into a second resizable editor pane", () => {
+  it("does not split a single open file into a duplicate editor pane", () => {
     const onWorkspaceChange = vi.fn();
     render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
     const splitRight = screen.getByRole("button", { name: "Split src/a.ts right" });
-    expect(splitRight).toHaveAttribute("data-tip", "Split right");
+    expect(splitRight).not.toHaveAttribute("data-tip");
+    expect(splitRight).not.toHaveAttribute("title");
+    onWorkspaceChange.mockClear();
+    fireEvent.click(splitRight);
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);
+    expect(screen.queryByRole("separator", { name: "Resize editor split" })).toBeNull();
+    expect(onWorkspaceChange).not.toHaveBeenCalled();
+  });
+
+  it("splits open files into two equal side-by-side editor panes", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", ".editorconfig"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    const splitRight = screen.getByRole("button", { name: "Split src/a.ts right" });
+    expect(splitRight).not.toHaveAttribute("data-tip");
     expect(splitRight).not.toHaveAttribute("title");
     fireEvent.click(splitRight);
 
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
     expect(screen.getAllByTestId("runtime-file").map((node) => node.textContent)).toEqual([
       "src/a.ts",
+      "src/b.ts",
+    ]);
+    expect(screen.getAllByTestId("runtime-open-files").map((node) => node.textContent)).toEqual([
       "src/a.ts",
+      "src/b.ts|.editorconfig",
     ]);
     expect(screen.getByRole("separator", { name: "Resize editor split" })).toBeInTheDocument();
+    expect(container.querySelector(".editor-workspace")).toHaveAttribute("data-pane-count", "2");
     const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
     expect(lastPatch).toEqual(
       expect.objectContaining({
         root: "/repo",
         file: "src/a.ts",
-        openFiles: ["src/a.ts"],
+        openFiles: ["src/a.ts", "src/b.ts", ".editorconfig"],
       }),
     );
     expect(JSON.parse(String(lastPatch?.layoutJson))).toEqual(
       expect.objectContaining({
         schemaVersion: 2,
-        activePaneId: "pane-2",
+        activePaneId: "pane-1",
         tree: expect.objectContaining({
           type: "split",
           direction: "row",
+          ratio: 50,
         }),
         panes: expect.objectContaining({
-          "pane-1": expect.objectContaining({ id: "pane-1", activeFile: "src/a.ts" }),
-          "pane-2": expect.objectContaining({ id: "pane-2", activeFile: "src/a.ts" }),
+          "pane-1": expect.objectContaining({
+            id: "pane-1",
+            activeFile: "src/a.ts",
+            openFiles: ["src/a.ts"],
+          }),
+          "pane-2": expect.objectContaining({
+            id: "pane-2",
+            activeFile: "src/b.ts",
+            openFiles: ["src/b.ts", ".editorconfig"],
+          }),
         }),
       }),
     );
+  });
+
+  it("activates an inactive pane when selecting its current file", () => {
+    const onWorkspaceChange = vi.fn();
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "row",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/a.ts",
+          openFiles: ["src/a.ts", "src/b.ts"],
+          tabOrder: ["src/a.ts", "src/b.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "src/c.ts",
+          openFiles: ["src/c.ts", "src/d.ts"],
+          tabOrder: ["src/c.ts", "src/d.ts"],
+        },
+      },
+    });
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]}
+        layoutJson={layoutJson}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    onWorkspaceChange.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select current pane-2" }));
+
+    const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    const layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(layout.activePaneId).toBe("pane-2");
+    expect(layout.panes["pane-2"].activeFile).toBe("src/c.ts");
+  });
+
+  it("activates an inactive pane when focusing inside its editor surface", () => {
+    const onWorkspaceChange = vi.fn();
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "column",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/top.ts",
+          openFiles: ["src/top.ts"],
+          tabOrder: ["src/top.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "docs/bottom.md",
+          openFiles: ["docs/bottom.md"],
+          tabOrder: ["docs/bottom.md"],
+        },
+      },
+    });
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/top.ts"
+        openFiles={["src/top.ts", "docs/bottom.md"]}
+        layoutJson={layoutJson}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    onWorkspaceChange.mockClear();
+
+    const bottomPane = document.querySelector<HTMLElement>('[data-pane-id="pane-2"]');
+    expect(bottomPane).not.toBeNull();
+    fireEvent.pointerDown(bottomPane as HTMLElement);
+
+    let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    let layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(lastPatch).toEqual(expect.objectContaining({ file: "docs/bottom.md" }));
+    expect(layout.activePaneId).toBe("pane-2");
+
+    onWorkspaceChange.mockClear();
+    const topPane = document.querySelector<HTMLElement>('[data-pane-id="pane-1"]');
+    expect(topPane).not.toBeNull();
+    fireEvent.focus(topPane as HTMLElement);
+
+    lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(lastPatch).toEqual(expect.objectContaining({ file: "src/top.ts" }));
+    expect(layout.activePaneId).toBe("pane-1");
+  });
+
+  it("normalizes persisted duplicate split panes into distinct file ownership", () => {
+    const onWorkspaceChange = vi.fn();
+    const duplicateLayoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      tree: {
+        type: "split",
+        id: "split-old",
+        direction: "row",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/a.ts",
+          openFiles: ["src/a.ts", "src/b.ts"],
+          tabOrder: ["src/a.ts", "src/b.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "src/a.ts",
+          openFiles: ["src/a.ts", "src/b.ts"],
+          tabOrder: ["src/a.ts", "src/b.ts"],
+        },
+      },
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+    });
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        layoutJson={duplicateLayoutJson}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+
+    expect(screen.getAllByTestId("runtime-file").map((node) => node.textContent)).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+    expect(screen.getAllByTestId("runtime-open-files").map((node) => node.textContent)).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+    const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    const layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(layout.panes["pane-1"].openFiles).toEqual(["src/a.ts"]);
+    expect(layout.panes["pane-2"].openFiles).toEqual(["src/b.ts"]);
+  });
+
+  it("uses deterministic two-pane orientation presets without compounding panes", () => {
+    const onWorkspaceChange = vi.fn();
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    const expectTwoPaneLayout = (layout: unknown, direction: "row" | "column"): void => {
+      expect(layout).toEqual(
+        expect.objectContaining({
+          activePaneId: "pane-1",
+          tree: expect.objectContaining({
+            type: "split",
+            direction,
+            ratio: 50,
+          }),
+          panes: expect.objectContaining({
+            "pane-1": expect.objectContaining({
+              activeFile: "src/a.ts",
+              openFiles: ["src/a.ts"],
+            }),
+            "pane-2": expect.objectContaining({
+              activeFile: "src/b.ts",
+              openFiles: ["src/b.ts", "src/c.ts"],
+            }),
+          }),
+        }),
+      );
+      expect(Object.keys((layout as { panes: Record<string, unknown> }).panes)).toHaveLength(2);
+    };
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expectTwoPaneLayout(JSON.parse(String(lastPatch?.layoutJson)), "row");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Split src/a.ts down" })[0]!);
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expectTwoPaneLayout(JSON.parse(String(lastPatch?.layoutJson)), "column");
+
+    onWorkspaceChange.mockClear();
+    fireEvent.click(screen.getAllByRole("button", { name: "Split src/a.ts down" })[0]!);
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    expect(onWorkspaceChange).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Split src/a.ts right" })[0]!);
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expectTwoPaneLayout(JSON.parse(String(lastPatch?.layoutJson)), "row");
   });
 
   it("collapses and restores the embedded project tree", () => {
@@ -535,17 +812,15 @@ describe("EditorWidget workspace session", () => {
   });
 
   it("routes dirty split-pane close through the dirty-close dialog", async () => {
-    render(<EditorWidget root="/repo" file="src/a.ts" />);
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-2" }));
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Close split src/a.ts" })[1] as HTMLElement,
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Close split src/b.ts" }));
 
     expect(await screen.findByRole("dialog", { name: "Unsaved editor changes" })).toHaveTextContent(
-      "src/a.ts",
+      "src/b.ts",
     );
     fireEvent.click(screen.getByRole("button", { name: "Discard" }));
 
@@ -618,28 +893,28 @@ describe("EditorWidget workspace session", () => {
       <EditorWidget
         root="/repo"
         file="src/a.ts"
-        openFiles={["src/a.ts", "src/b.ts"]}
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
         onWorkspaceChange={onWorkspaceChange}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
 
-    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" }), {
-      key: "ArrowRight",
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" }), {
+      key: "ArrowLeft",
       altKey: true,
       shiftKey: true,
     });
 
-    expect(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" })).toBeInTheDocument();
     let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
-    expect(JSON.parse(String(lastPatch?.layoutJson)).panes["pane-2"].openFiles).toEqual([
+    expect(JSON.parse(String(lastPatch?.layoutJson)).panes["pane-1"].openFiles).toEqual([
       "src/a.ts",
       "src/b.ts",
     ]);
 
     onWorkspaceChange.mockClear();
-    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" }), {
-      key: "ArrowRight",
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" }), {
+      key: "ArrowLeft",
       altKey: true,
       shiftKey: true,
     });
@@ -687,6 +962,10 @@ describe("EditorWidget workspace session", () => {
     fireEvent.drop(rightDropZone as Element, { dataTransfer });
 
     expect(dataTransfer.setData).toHaveBeenCalledWith("text/plain", "src/b.ts");
+    expect(dataTransfer.setData).toHaveBeenCalledWith(
+      "application/x-keiko-editor-tab",
+      JSON.stringify({ paneId: "pane-1", file: "src/b.ts" }),
+    );
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
     expect(screen.getAllByTestId("runtime-file").map((node) => node.textContent)).toContain(
       "src/b.ts",
@@ -704,6 +983,39 @@ describe("EditorWidget workspace session", () => {
     );
   });
 
+  it("moves edge-dropped tabs into the existing pane when the editor is already split", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    const dataTransfer = { effectAllowed: "", setData: vi.fn() };
+
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    onWorkspaceChange.mockClear();
+    fireEvent.dragStart(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" }), {
+      dataTransfer,
+    });
+    const rightDropZone = container.querySelector(".ed-pane-drop-zone.right");
+    expect(rightDropZone).not.toBeNull();
+    fireEvent.drop(rightDropZone as Element, { dataTransfer });
+
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Tab handle pane-2 src/b.ts" })).toBeNull();
+    const movedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    const layout = JSON.parse(String(movedPatch?.layoutJson));
+    expect(Object.keys(layout.panes)).toHaveLength(2);
+    expect(layout.panes["pane-1"].openFiles).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(layout.panes["pane-2"].openFiles).toEqual(["src/c.ts"]);
+  });
+
   it("moves a dragged tab between pane centers and ignores stale drops", () => {
     const onWorkspaceChange = vi.fn();
     const { container } = render(
@@ -716,21 +1028,182 @@ describe("EditorWidget workspace session", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
 
-    fireEvent.dragStart(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" }), {
+    fireEvent.dragStart(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" }), {
       dataTransfer: { effectAllowed: "", setData: vi.fn() },
     });
     const centerZones = container.querySelectorAll(".ed-pane-drop-zone.center");
     expect(centerZones).toHaveLength(2);
-    fireEvent.drop(centerZones[1] as Element);
+    fireEvent.drop(centerZones[0] as Element);
 
-    expect(screen.queryByRole("button", { name: "Tab handle pane-1 src/b.ts" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Tab handle pane-2 src/b.ts" })).toBeNull();
     const movedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
-    expect(JSON.parse(String(movedPatch?.layoutJson)).activePaneId).toBe("pane-2");
+    expect(JSON.parse(String(movedPatch?.layoutJson)).activePaneId).toBe("pane-1");
 
     onWorkspaceChange.mockClear();
-    fireEvent.drop(centerZones[0] as Element);
+    fireEvent.drop(centerZones[1] as Element);
     expect(onWorkspaceChange).not.toHaveBeenCalled();
+  });
+
+  it("moves a dropped tab from the serialized drag payload when drag state has not committed yet", () => {
+    const onWorkspaceChange = vi.fn();
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    onWorkspaceChange.mockClear();
+
+    const centerZones = container.querySelectorAll(".ed-pane-drop-zone.center");
+    fireEvent.drop(centerZones[0] as Element, {
+      dataTransfer: {
+        getData: (type: string) =>
+          type === "application/x-keiko-editor-tab"
+            ? JSON.stringify({ paneId: "pane-2", file: "src/b.ts" })
+            : "",
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" })).toBeInTheDocument();
+    const movedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    const layout = JSON.parse(String(movedPatch?.layoutJson));
+    expect(layout.panes["pane-1"].openFiles).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(layout.panes["pane-2"].openFiles).toEqual(["src/c.ts"]);
+  });
+
+  it("moves a pointer-dragged tab onto the pane currently under the cursor", () => {
+    const onWorkspaceChange = vi.fn();
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "row",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/a.ts",
+          openFiles: ["src/a.ts", "src/b.ts"],
+          tabOrder: ["src/a.ts", "src/b.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "src/c.ts",
+          openFiles: ["src/c.ts"],
+          tabOrder: ["src/c.ts"],
+        },
+      },
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+    });
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        layoutJson={layoutJson}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    onWorkspaceChange.mockClear();
+    const targetPane = container.querySelector<HTMLElement>('[data-pane-id="pane-2"]');
+    expect(targetPane).not.toBeNull();
+    const previousElementFromPoint = document.elementFromPoint;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => targetPane),
+    });
+    try {
+      const sourceTab = screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" });
+      sourceTab.getBoundingClientRect = vi.fn(
+        () =>
+          ({
+            x: 5,
+            y: 6,
+            left: 5,
+            top: 6,
+            right: 185,
+            bottom: 34,
+            width: 180,
+            height: 28,
+            toJSON: () => ({}),
+          }) as DOMRect,
+      );
+
+      fireEvent.pointerDown(sourceTab, {
+        button: 0,
+        clientX: 10,
+        clientY: 10,
+        pointerType: "mouse",
+      });
+      expect(sourceTab).toHaveAttribute("data-tab-held", "true");
+      expect(document.querySelector(".ed-tab-drag-ghost")).toBeNull();
+      expect(probeState.dragModeStarts).toEqual([]);
+      fireEvent.pointerMove(window, { clientX: 40, clientY: 10, pointerType: "mouse" });
+      expect(probeState.dragModeStarts).toEqual([{ paneId: "pane-1", path: "src/a.ts" }]);
+      expect(document.body.style.cursor).toBe("grabbing");
+      expect(sourceTab).toHaveAttribute("data-tab-held", "true");
+      expect(targetPane).toHaveAttribute("data-tab-drop-target", "true");
+      const dragGhost = document.querySelector<HTMLElement>(".ed-tab-drag-ghost");
+      expect(dragGhost).toHaveTextContent("src/a.ts");
+      expect(dragGhost?.style.getPropertyValue("--ed-tab-drag-x")).toBe("35px");
+      expect(dragGhost?.style.getPropertyValue("--ed-tab-drag-y")).toBe("6px");
+      expect(dragGhost?.style.getPropertyValue("--ed-tab-drag-width")).toBe("180px");
+      const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
+      fireEvent.pointerMove(sidebarResizer, {
+        pointerId: 1,
+        buttons: 1,
+        clientX: 320,
+        clientY: 80,
+      });
+      expect(onWorkspaceChange).not.toHaveBeenCalled();
+      const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
+      fireEvent.pointerMove(splitResizer, {
+        pointerId: 1,
+        buttons: 1,
+        clientX: 900,
+        clientY: 20,
+      });
+      expect(onWorkspaceChange).not.toHaveBeenCalled();
+      fireEvent.pointerUp(window, { clientX: 500, clientY: 20, pointerType: "mouse" });
+
+      expect(
+        screen.getByRole("button", { name: "Tab handle pane-2 src/a.ts" }),
+      ).toBeInTheDocument();
+      expect(document.body.style.cursor).toBe(previousBodyCursor);
+      expect(document.body.style.userSelect).toBe(previousBodyUserSelect);
+      expect(container.querySelector('[data-tab-held="true"]')).toBeNull();
+      expect(document.querySelector(".ed-tab-drag-ghost")).toBeNull();
+      expect(targetPane).toHaveAttribute("data-tab-drop-target", "false");
+      const movedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+      const layout = JSON.parse(String(movedPatch?.layoutJson));
+      expect(Object.keys(layout.panes)).toHaveLength(2);
+      expect(layout.panes["pane-1"].openFiles).toEqual(["src/b.ts"]);
+      expect(layout.panes["pane-2"].openFiles).toEqual(["src/c.ts", "src/a.ts"]);
+    } finally {
+      if (previousElementFromPoint === undefined) {
+        Reflect.deleteProperty(document, "elementFromPoint");
+      } else {
+        Object.defineProperty(document, "elementFromPoint", {
+          configurable: true,
+          value: previousElementFromPoint,
+        });
+      }
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    }
   });
 
   it("clears pane drag state when a tab drag ends without a drop", () => {
@@ -749,10 +1222,179 @@ describe("EditorWidget workspace session", () => {
     expect(container.querySelector(".ed-pane")).toHaveAttribute("data-dragging", "false");
   });
 
+  it("reorders tabs by pointer drag within the same tab rail", () => {
+    const onWorkspaceChange = vi.fn();
+    const previousElementFromPoint = document.elementFromPoint;
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    const sourceTab = screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" });
+    const targetTab = screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" });
+    sourceTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 20,
+          y: 8,
+          left: 20,
+          top: 8,
+          right: 140,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    targetTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 160,
+          y: 8,
+          left: 160,
+          top: 8,
+          right: 280,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => targetTab),
+    });
+
+    try {
+      fireEvent.pointerDown(sourceTab, {
+        button: 0,
+        clientX: 24,
+        clientY: 12,
+        pointerType: "mouse",
+      });
+      fireEvent.pointerMove(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+
+      expect(probeState.runtimeProps?.tabInsertTarget).toEqual({
+        file: "src/b.ts",
+        edge: "after",
+      });
+
+      fireEvent.pointerUp(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+
+      expect(container.querySelector('[data-tab-held="true"]')).toBeNull();
+      expect(document.querySelector(".ed-tab-drag-ghost")).toBeNull();
+      const movedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+      const layout = JSON.parse(String(movedPatch?.layoutJson));
+      expect(layout.panes["pane-1"].tabOrder).toEqual(["src/b.ts", "src/a.ts", "src/c.ts"]);
+      expect(layout.panes["pane-1"].activeFile).toBe("src/a.ts");
+    } finally {
+      if (previousElementFromPoint === undefined) {
+        Reflect.deleteProperty(document, "elementFromPoint");
+      } else {
+        Object.defineProperty(document, "elementFromPoint", {
+          configurable: true,
+          value: previousElementFromPoint,
+        });
+      }
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    }
+  });
+
+  it("keeps the next real tab click active after inserting a pointer-dragged tab", () => {
+    const onWorkspaceChange = vi.fn();
+    const previousElementFromPoint = document.elementFromPoint;
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    const sourceTab = screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" });
+    const targetTab = screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" });
+    const nextTab = screen.getByRole("button", { name: "Tab handle pane-1 src/c.ts" });
+    sourceTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 20,
+          y: 8,
+          left: 20,
+          top: 8,
+          right: 140,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    targetTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 160,
+          y: 8,
+          left: 160,
+          top: 8,
+          right: 280,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => targetTab),
+    });
+
+    try {
+      fireEvent.pointerDown(sourceTab, {
+        button: 0,
+        clientX: 24,
+        clientY: 12,
+        pointerType: "mouse",
+      });
+      fireEvent.pointerMove(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+      fireEvent.pointerUp(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+
+      onWorkspaceChange.mockClear();
+      fireEvent.click(nextTab);
+
+      const selectedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+      const layout = JSON.parse(String(selectedPatch?.layoutJson));
+      expect(layout.panes["pane-1"].activeFile).toBe("src/c.ts");
+      expect(container.querySelector('[data-tab-held="true"]')).toBeNull();
+    } finally {
+      if (previousElementFromPoint === undefined) {
+        Reflect.deleteProperty(document, "elementFromPoint");
+      } else {
+        Object.defineProperty(document, "elementFromPoint", {
+          configurable: true,
+          value: previousElementFromPoint,
+        });
+      }
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    }
+  });
+
   it("resizes the sidebar and split panes through pointer and mouse controls", () => {
     const onWorkspaceChange = vi.fn();
     const { container } = render(
-      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
     );
     const workspace = container.querySelector(".editor-workspace") as HTMLElement;
     workspace.getBoundingClientRect = vi.fn(
@@ -770,7 +1412,8 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
     const sidebarResizer = screen.getByRole("button", { name: "Resize project tree" });
-    expect(sidebarResizer).toHaveAttribute("data-tip", "Resize project tree");
+    expect(sidebarResizer).not.toHaveClass("ui-tip");
+    expect(sidebarResizer).not.toHaveAttribute("data-tip");
     expect(sidebarResizer).not.toHaveAttribute("title");
     sidebarResizer.setPointerCapture = vi.fn();
     sidebarResizer.hasPointerCapture = vi.fn(() => true);
@@ -802,7 +1445,8 @@ describe("EditorWidget workspace session", () => {
         }) as DOMRect,
     );
     const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
-    expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
+    expect(splitResizer).not.toHaveClass("ui-tip");
+    expect(splitResizer).not.toHaveAttribute("data-tip");
     expect(splitResizer).not.toHaveAttribute("title");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => true);
@@ -825,11 +1469,16 @@ describe("EditorWidget workspace session", () => {
   it("resizes column splits vertically and ignores pointer movement without an active drag", () => {
     const onWorkspaceChange = vi.fn();
     const { container } = render(
-      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
     );
 
     const splitDown = screen.getByRole("button", { name: "Split src/a.ts down" });
-    expect(splitDown).toHaveAttribute("data-tip", "Split down");
+    expect(splitDown).not.toHaveAttribute("data-tip");
     expect(splitDown).not.toHaveAttribute("title");
     fireEvent.click(splitDown);
     const splitRoot = container.querySelector(".ed-panes.column") as HTMLElement;
@@ -847,8 +1496,10 @@ describe("EditorWidget workspace session", () => {
           toJSON: () => ({}),
         }) as DOMRect,
     );
-    const splitResizer = screen.getByRole("separator", { name: "Resize editor split" });
-    expect(splitResizer).toHaveAttribute("data-tip", "Resize editor split");
+    const splitResizer = splitRoot.querySelector(".ed-pane-resizer") as HTMLButtonElement;
+    expect(splitResizer).not.toHaveClass("ui-tip");
+    expect(splitResizer).not.toHaveAttribute("data-tip");
+    expect(splitResizer).not.toHaveAttribute("title");
     splitResizer.setPointerCapture = vi.fn();
     splitResizer.hasPointerCapture = vi.fn(() => false);
     splitResizer.releasePointerCapture = vi.fn();
@@ -870,7 +1521,12 @@ describe("EditorWidget workspace session", () => {
   it("resizes the sidebar and editor split from keyboard arrows", () => {
     const onWorkspaceChange = vi.fn();
     const { container } = render(
-      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
     );
     const workspace = container.querySelector(".editor-workspace") as HTMLElement;
     workspace.getBoundingClientRect = vi.fn(
@@ -1008,21 +1664,26 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
   });
 
   it("does not raise a false unsaved-changes prompt on the pane a dirty tab left (AC3)", () => {
-    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+      />,
+    );
 
-    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-1" }));
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
-    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
-      key: "ArrowRight",
+    fireEvent.click(screen.getByRole("button", { name: "Mark dirty pane-2" }));
+    fireEvent.keyDown(screen.getByRole("button", { name: "Tab handle pane-2 src/b.ts" }), {
+      key: "ArrowLeft",
       altKey: true,
       shiftKey: true,
     });
 
-    // a.ts is dirty and now lives only in pane-2. Closing from the pane it LEFT (pane-1) must not
-    // consult an orphaned dirty flag and pop the unsaved-changes dialog. The first "Close a" button
-    // belongs to pane-1, which the layout renders before pane-2.
-    const closeFromPaneOne = screen.getAllByRole("button", { name: "Close a" })[0] as HTMLElement;
-    fireEvent.click(closeFromPaneOne);
+    // b.ts is dirty and now lives only in pane-1. Closing the stale b.ts command from the pane it
+    // LEFT (pane-2) must not consult an orphaned dirty flag and pop the unsaved-changes dialog.
+    const closeFromPaneTwo = screen.getAllByRole("button", { name: "Close b" })[1] as HTMLElement;
+    fireEvent.click(closeFromPaneTwo);
 
     expect(screen.queryByRole("dialog", { name: "Unsaved editor changes" })).toBeNull();
   });
@@ -1033,9 +1694,9 @@ describe("EditorWidget — Issue #1375 layout regression hardening", () => {
     fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
     expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
 
-    // pane-2 holds only a.ts; closing it leaves the pane empty and must collapse the split.
+    // pane-1 holds only a.ts; closing it leaves the pane empty and must collapse the split.
     const closeButtons = screen.getAllByRole("button", { name: "Close a" });
-    fireEvent.click(closeButtons[closeButtons.length - 1] as HTMLElement);
+    fireEvent.click(closeButtons[0] as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getAllByTestId("runtime-probe")).toHaveLength(1);

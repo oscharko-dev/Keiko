@@ -149,6 +149,7 @@ describe("@oscharko-dev/keiko-editor public API", () => {
       "severityToMarker",
       "editorDiagnosticToMarker",
       "diagnosticsToMarkers",
+      "markersToOverviewMarkers",
       "defaultDiagnosticsScheduler",
       "DIAGNOSTICS_ELIGIBLE_LANGUAGES",
       "DEFAULT_DIAGNOSTICS_DEBOUNCE_MS",

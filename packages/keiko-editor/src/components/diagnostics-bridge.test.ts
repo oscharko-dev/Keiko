@@ -6,6 +6,7 @@ import {
   DIAGNOSTICS_ELIGIBLE_LANGUAGES,
   diagnosticsToMarkers,
   editorDiagnosticToMarker,
+  markersToOverviewMarkers,
   registerKeikoDiagnostics,
   severityToMarker,
   summarizeDiagnostics,
@@ -272,6 +273,21 @@ describe("pure mappers", () => {
     ).toHaveLength(2);
   });
 
+  it("maps Monaco markers into overview markers for the rounded Keiko marker rail", () => {
+    expect(markersToOverviewMarkers([editorDiagnosticToMarker(diagnostic(), SEVERITIES)])).toEqual([
+      {
+        severity: 8,
+        message: "Type error",
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: 1,
+        endColumn: 6,
+        source: "typescript",
+        code: "2322",
+      },
+    ]);
+  });
+
   it("tallies diagnostics by severity for the status bar, counting hints as info (#1205)", () => {
     expect(summarizeDiagnostics([])).toEqual({ errors: 0, warnings: 0, infos: 0 });
     expect(
@@ -316,6 +332,43 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     expect(onSummary).toHaveBeenCalledWith({ errors: 1, warnings: 1, infos: 1 });
   });
 
+  it("reports overview markers for the rounded Keiko marker rail", async () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const onOverviewMarkers = vi.fn();
+    const { resolver } = register(editor, { onOverviewMarkers });
+    resolver.calls[0]?.settle([
+      diagnostic(),
+      diagnostic({
+        severity: "warning",
+        range: { start: { line: 2, column: 0 }, end: { line: 4, column: 1 } },
+      }),
+    ]);
+    await tick();
+    expect(onOverviewMarkers).toHaveBeenCalledWith([
+      {
+        severity: 8,
+        message: "Type error",
+        startLineNumber: 1,
+        startColumn: 1,
+        endLineNumber: 1,
+        endColumn: 6,
+        source: "typescript",
+        code: "2322",
+      },
+      {
+        severity: 4,
+        message: "Type error",
+        startLineNumber: 3,
+        startColumn: 1,
+        endLineNumber: 5,
+        endColumn: 2,
+        source: "typescript",
+        code: "2322",
+      },
+    ]);
+  });
+
   it("does not report a summary for a stale (superseded) response (#1205)", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
@@ -331,7 +384,8 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
   it("rewrites markers to empty when diagnostics clear (a fixed error removes its squiggle)", async () => {
     const model = buildModel();
     const editor = buildEditor(model.model);
-    const { markers, resolver, scheduler } = register(editor);
+    const onOverviewMarkers = vi.fn();
+    const { markers, resolver, scheduler } = register(editor, { onOverviewMarkers });
     resolver.calls[0]?.settle([diagnostic()]);
     await tick();
     model.edit("const x: number = 1;\n");
@@ -339,6 +393,7 @@ describe("registerKeikoDiagnostics — marker lifecycle", () => {
     resolver.calls[1]?.settle([]);
     await tick();
     expect(markers.calls[1]?.markers).toEqual([]);
+    expect(onOverviewMarkers).toHaveBeenLastCalledWith([]);
   });
 
   it("debounces rapid content changes into a single re-analysis", () => {
