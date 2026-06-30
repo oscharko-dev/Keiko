@@ -24,6 +24,18 @@ export {
   type OpenKnowledgeStoreOptions,
 } from "./store.js";
 export {
+  MAX_PDF_DOCUMENT_BLOB_BYTES,
+  PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+  persistPdfDocumentBlobInTransaction,
+  readPdfDocumentBlob,
+  writePdfDocumentBlob,
+  type PdfDocumentBlobInput,
+  type PdfDocumentBlobMetadata,
+  type PdfDocumentBlobReadResult,
+  type PdfDocumentBlobRecord,
+  type PdfDocumentBlobWriteResult,
+} from "./document-blob-store.js";
+export {
   createCapsule,
   deleteCapsule,
   getCapsule,
@@ -126,6 +138,7 @@ export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 export {
   lookupCitationPreviewSnapshot,
+  lookupCitationPreviewSnapshotForStoredCitation,
   type CitationPreviewSnapshotLookup,
 } from "./citation-preview-snapshot.js";
 export * from "./privacy/index.js";

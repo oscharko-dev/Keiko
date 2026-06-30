@@ -266,6 +266,7 @@ describe("capsule storage references", () => {
 const ALL_DEPENDENT_TABLES = [
   "capsule_sources",
   "documents",
+  "document_blobs",
   "document_texts",
   "pages",
   "sections",
@@ -281,6 +282,7 @@ interface CountMap {
   readonly knowledge_sources: number;
   readonly capsule_sources: number;
   readonly documents: number;
+  readonly document_blobs: number;
   readonly document_texts: number;
   readonly pages: number;
   readonly sections: number;
@@ -299,6 +301,7 @@ function countAll(s: KnowledgeStore): CountMap {
     knowledge_sources: c("knowledge_sources"),
     capsule_sources: c("capsule_sources"),
     documents: c("documents"),
+    document_blobs: c("document_blobs"),
     document_texts: c("document_texts"),
     pages: c("pages"),
     sections: c("sections"),
@@ -331,6 +334,14 @@ function seedFullLineage(s: KnowledgeStore, capsuleId: string, suffix: string): 
   db.prepare(
     "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES (:id, :c, :s, '/a.md', 1, 'text/markdown', 'h', 'p', '1', 1, 'ready', 'a.md')",
   ).run({ id: documentId, c: capsuleId, s: sourceId });
+
+  db.prepare(
+    "INSERT INTO document_blobs (capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version, blob_bytes, created_at, created_source_id, created_document_id) VALUES (:c, 'h', 1, 'application/pdf', 'plaintext', NULL, :b, 1, :s, :d)",
+  ).run({ c: capsuleId, b: new Uint8Array([0x25]), s: sourceId, d: documentId });
+  db.prepare("UPDATE documents SET blob_ref = 'h' WHERE capsule_id = :c AND id = :d").run({
+    c: capsuleId,
+    d: documentId,
+  });
 
   db.prepare(
     "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, 'body')",

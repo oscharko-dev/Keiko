@@ -244,6 +244,25 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("uses caller-provided page context for OCR adapter input and page provenance", async () => {
+    const seenPageNumbers: number[] = [];
+    const parser = createOcrPipelineParser({
+      kind: "ocr",
+      ocrPage: (input) => {
+        seenPageNumbers.push(input.pageNumber);
+        return Promise.resolve({ ok: true, text: "page three", confidence: 0.91 });
+      },
+    });
+
+    const result = await parser.parseAsync(
+      selectionFromBytes(PNG_MAGIC, { extension: "png", pageNumber: 3 }),
+      baseOptions(),
+    );
+
+    expect(seenPageNumbers).toEqual([3]);
+    expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 3 });
+  });
+
   it("emits a page unit with characterEnd=0 for blank page text", async () => {
     const parser = createOcrPipelineParser(scriptedAdapter({ ok: true, text: "", confidence: 0 }));
     const result = await parser.parseAsync(

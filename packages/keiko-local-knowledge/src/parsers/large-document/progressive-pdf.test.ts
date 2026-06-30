@@ -14,7 +14,10 @@ import type {
 
 const DOC = "pdf-1" as DocumentId;
 
-function fakePdf(pageTexts: readonly string[]): PdfDocumentLike {
+function fakePdf(
+  pageTexts: readonly string[],
+  labels?: readonly (string | null)[],
+): PdfDocumentLike {
   return {
     numPages: pageTexts.length,
     getPage: (pageNumber: number) =>
@@ -30,6 +33,7 @@ function fakePdf(pageTexts: readonly string[]): PdfDocumentLike {
             },
           }),
       }),
+    ...(labels === undefined ? {} : { getPageLabels: () => Promise.resolve(labels) }),
   };
 }
 
@@ -129,11 +133,24 @@ describe("createProgressivePdfExtractor", () => {
     const sink = collectingSink();
     const summary = await runProgressiveExtraction(extractor, SOURCE, options(3), sink);
 
-    // The job still completes; the empty page is skipped with a quality warning, not a failure.
-    expect(summary.pageCount).toBe(2);
+    // The job still completes; the empty page is kept as provenance with a quality warning.
+    expect(summary.pageCount).toBe(3);
     expect(summary.coverage).toBe("partial");
     expect(summary.diagnostics.some((d) => d.code === "OCR_CAPABILITY_UNAVAILABLE")).toBe(true);
     expect(summary.diagnostics.every((d) => d.severity !== "error")).toBe(true);
+    const emptyPage = sink.windows.flatMap((w) => w.pages).find((p) => p.pageNumber === 2);
+    expect(emptyPage).toMatchObject({ characterStart: 10, characterEnd: 10 });
+  });
+
+  it("preserves PDF page labels across windows", async () => {
+    const extractor = createProgressivePdfExtractor({
+      loadDocument: () => Promise.resolve(fakePdf(["front", "body"], ["i", "1"])),
+    });
+    const sink = collectingSink();
+
+    await runProgressiveExtraction(extractor, SOURCE, options(1), sink);
+
+    expect(sink.windows.flatMap((w) => w.pages).map((page) => page.pageLabel)).toEqual(["i", "1"]);
   });
 
   it("resumes extraction from a page cursor", async () => {

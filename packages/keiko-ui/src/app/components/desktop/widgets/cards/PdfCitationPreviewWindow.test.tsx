@@ -1,12 +1,17 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { pdfCitationPreviewDocumentUrl } from "@/lib/api";
+import {
+  ApiError,
+  fetchPdfCitationPreviewDocument,
+  openPdfCitationPreviewSession,
+} from "@/lib/api";
 import { getDocument } from "pdfjs-dist";
 import {
-  getPdfCitationPreviewBackToChatAvailability,
   clearPdfCitationPreviewWindowRegistryForTests,
+  getPdfCitationPreviewBackToChatAvailability,
+  getPdfCitationPreviewSession,
   openPdfCitationPreviewWindow,
   registerPdfCitationPreviewMessageTarget,
   syncPdfCitationPreviewWindowRegistry,
@@ -49,6 +54,8 @@ vi.mock("@/lib/api", () => ({
     }
   },
   closePdfCitationPreviewSession: vi.fn().mockResolvedValue({ ok: true }),
+  fetchPdfCitationPreviewDocument: vi.fn(async () => new Uint8Array([37, 80, 68, 70])),
+  openPdfCitationPreviewSession: vi.fn(),
   pdfCitationPreviewDocumentUrl: vi.fn(
     (sessionHandle: string) =>
       `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}/document`,
@@ -87,6 +94,14 @@ describe("PdfCitationPreviewWindow", () => {
     }));
     page.render.mockReturnValue(renderTask);
     pdfDocument.getPage.mockResolvedValue(page);
+    vi.mocked(fetchPdfCitationPreviewDocument).mockResolvedValue(new Uint8Array([37, 80, 68, 70]));
+    vi.mocked(openPdfCitationPreviewSession).mockResolvedValue({
+      ...PREVIEW,
+      session: {
+        ...PREVIEW.session,
+        handle: "preview-session-2",
+      },
+    });
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
       {} as CanvasRenderingContext2D,
     );
@@ -112,10 +127,60 @@ describe("PdfCitationPreviewWindow", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       /restored without an active verified preview session/i,
     );
-    expect(pdfCitationPreviewDocumentUrl).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /reopen preview/i })).not.toBeInTheDocument();
+    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
   });
 
-  it("restores a safe shell without rendering bytes and allows only scalar intent controls", async () => {
+  it("reopens a restored viewer from persisted citation context", async () => {
+    vi.mocked(openPdfCitationPreviewSession).mockImplementationOnce(
+      () => new Promise(() => undefined),
+    );
+    const context = {
+      activeStableId: "stable-1",
+      citations: [
+        {
+          citation: { stableId: "stable-1", marker: "[1]", label: "Policy wording.pdf" },
+          display: PREVIEW.display,
+        },
+      ],
+      origin: {
+        assistantMessageId: "msg-a",
+        chatId: "chat-1",
+        chatWindowId: "chat-window-1",
+        marker: "[1]",
+        representation: "inline-marker" as const,
+      },
+    };
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW, { context });
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+    clearPdfCitationPreviewWindowRegistryForTests();
+
+    render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/requires re-verification/i);
+    fireEvent.click(screen.getByRole("button", { name: /reopen preview/i }));
+
+    expect(openPdfCitationPreviewSession).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      assistantMessageId: "msg-a",
+      marker: "[1]",
+      stableId: "stable-1",
+      origin: "inline-marker",
+    });
+    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+  });
+
+  it("restores a safe shell without rendering bytes and exposes no PDF controls", async () => {
     const updateCfg = vi.fn();
     render(
       <PdfCitationPreviewWindow
@@ -136,25 +201,15 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/requires re-verification/i);
-    expect(pdfCitationPreviewDocumentUrl).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: /previous/i })).toBeDisabled();
-    expect(screen.getByLabelText(/current page/i)).toBeDisabled();
-
-    await userEvent.click(screen.getByRole("button", { name: /zoom in/i }));
-    expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "manual", zoomValue: 1.3 });
-
-    await userEvent.click(screen.getByRole("button", { name: /fit page/i }));
-    expect(updateCfg).toHaveBeenCalledWith({ zoomMode: "fit-page" });
-
-    await userEvent.click(screen.getByRole("button", { name: /rotate right/i }));
-    expect(updateCfg).toHaveBeenCalledWith({ rotation: 180 });
+    expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+    expect(screen.queryByRole("group", { name: /pdf preview controls/i })).not.toBeInTheDocument();
+    expect(updateCfg).not.toHaveBeenCalled();
   });
 
   it("allows retry when a live verified session document fetch fails transiently", async () => {
-    vi.mocked(getDocument).mockReturnValueOnce({
-      promise: Promise.reject(new Error("source unreadable")),
-      destroy: vi.fn(async () => {}),
-    } as never);
+    vi.mocked(fetchPdfCitationPreviewDocument).mockRejectedValueOnce(
+      new ApiError("PREVIEW_SOURCE_UNREADABLE", "temporary read failure", 503),
+    );
     const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
     const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
     const firstCall = add.mock.calls[0];
@@ -172,14 +227,259 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /could not load the verified PDF preview/i,
+      /could not read the verified PDF safely/i,
     );
     await userEvent.click(screen.getByRole("button", { name: /retry preview/i }));
 
     await waitFor(() => {
-      expect(getDocument).toHaveBeenCalledTimes(2);
+      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(2);
+    });
+    expect(getDocument).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
+  });
+
+  it.each([
+    [404, /preview session ended/i, /reopen preview/i],
+    [410, /preview session ended/i, /reopen preview/i],
+    [409, /preview changed/i, null],
+    [413, /preview too large/i, null],
+    [416, /preview range failed/i, /reopen preview/i],
+    [503, /preview temporarily unavailable/i, /retry preview/i],
+  ] as const)(
+    "maps pdf.js ResponseException status %i to a concrete failure",
+    async (status, title, action) => {
+      vi.mocked(getDocument).mockReturnValueOnce({
+        promise: Promise.reject({ name: "ResponseException", status }),
+        destroy: vi.fn(async () => {}),
+      } as never);
+      const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+      const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+      const firstCall = add.mock.calls[0];
+      if (firstCall === undefined) throw new Error("expected preview window to open");
+
+      render(
+        <PdfCitationPreviewWindow
+          cfg={firstCall[1] as Record<string, unknown>}
+          focusWindow={vi.fn()}
+          restoreWindow={vi.fn()}
+          updateCfg={vi.fn()}
+          windowId={windowId ?? "missing"}
+        />,
+      );
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(title);
+      if (action === null) {
+        expect(screen.queryByRole("button")).not.toBeInTheDocument();
+      } else {
+        expect(screen.getByRole("button", { name: action })).toBeInTheDocument();
+      }
+      expect(
+        screen.queryByRole("group", { name: /pdf preview controls/i }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("attempts one automatic re-open when document fetch reports a lost session", async () => {
+    vi.mocked(fetchPdfCitationPreviewDocument)
+      .mockRejectedValueOnce(new ApiError("PREVIEW_SESSION_NOT_FOUND", "missing", 404))
+      .mockRejectedValueOnce(new ApiError("PREVIEW_SESSION_NOT_FOUND", "missing again", 404));
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW, {
+      context: {
+        activeStableId: "stable-1",
+        citations: [
+          {
+            citation: { stableId: "stable-1", marker: "[1]", label: "Policy wording.pdf" },
+            display: PREVIEW.display,
+          },
+        ],
+        origin: {
+          assistantMessageId: "msg-a",
+          chatId: "chat-1",
+          chatWindowId: "chat-window-1",
+          marker: "[1]",
+          representation: "inline-marker",
+        },
+      },
+    });
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+
+    render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(openPdfCitationPreviewSession).toHaveBeenCalledTimes(1);
+    });
+    expect(openPdfCitationPreviewSession).toHaveBeenCalledWith({
+      chatId: "chat-1",
+      assistantMessageId: "msg-a",
+      marker: "[1]",
+      stableId: "stable-1",
+      origin: "inline-marker",
+    });
+    await waitFor(() => {
+      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(2);
+    });
+    expect(openPdfCitationPreviewSession).toHaveBeenCalledTimes(1);
+    expect(getPdfCitationPreviewSession(windowId ?? "missing")?.session.handle).toBe(
+      "preview-session-2",
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(/preview session ended/i);
+  });
+
+  it("destroys a hanging pdf.js load and exposes a retryable timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const pendingDestroy = vi.fn(async () => {});
+      vi.mocked(getDocument).mockReturnValueOnce({
+        promise: new Promise(() => undefined),
+        destroy: pendingDestroy,
+      } as never);
+      const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+      const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+      const firstCall = add.mock.calls[0];
+      if (firstCall === undefined) throw new Error("expected preview window to open");
+
+      render(
+        <PdfCitationPreviewWindow
+          cfg={firstCall[1] as Record<string, unknown>}
+          focusWindow={vi.fn()}
+          restoreWindow={vi.fn()}
+          updateCfg={vi.fn()}
+          windowId={windowId ?? "missing"}
+        />,
+      );
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+
+      expect(getDocument).toHaveBeenCalledTimes(1);
+      expect(pendingDestroy).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("alert")).toHaveTextContent(/preview timed out/i);
+      expect(screen.getByRole("button", { name: /retry preview/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the range URL path for very large preview sessions", async () => {
+    const largePreview = {
+      ...PREVIEW,
+      session: {
+        ...PREVIEW.session,
+        byteLength: 64 * 1024 * 1024,
+      },
+    };
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, largePreview);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+
+    render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+      expect(getDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          disableRange: false,
+          disableStream: false,
+          rangeChunkSize: 1024 * 1024,
+          url: "/api/local-knowledge/citation-preview/sessions/preview-session-1/document",
+        }),
+      );
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
+  });
+
+  it("uses the range URL path above the server no-range cap", async () => {
+    const aboveNoRangeCapPreview = {
+      ...PREVIEW,
+      session: {
+        ...PREVIEW.session,
+        byteLength: 4 * 1024 * 1024 + 1,
+      },
+    };
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, aboveNoRangeCapPreview);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+
+    render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchPdfCitationPreviewDocument).not.toHaveBeenCalled();
+      expect(getDocument).toHaveBeenCalledWith(
+        expect.objectContaining({
+          disableRange: false,
+          disableStream: false,
+          url: "/api/local-knowledge/citation-preview/sessions/preview-session-1/document",
+        }),
+      );
+    });
+  });
+
+  it("shows canvas render failures inline without discarding the loaded document", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+    const cfg = firstCall[1] as Record<string, unknown>;
+    const updateCfg = vi.fn();
+
+    const rendered = render(
+      <PdfCitationPreviewWindow
+        cfg={cfg}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={updateCfg}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
+    page.render.mockReturnValueOnce({
+      promise: Promise.reject(new Error("canvas render failed")),
+      cancel: vi.fn(),
+    });
+    rendered.rerender(
+      <PdfCitationPreviewWindow
+        cfg={{ ...cfg, rotation: 90 }}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={updateCfg}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    expect(await screen.findByText("Preview failed")).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: /pdf preview controls/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry page/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry preview/i })).not.toBeInTheDocument();
   });
 
   it("loads the verified PDF bytes, renders controls, supports page and zoom actions, and stays axe-clean", async () => {
@@ -278,14 +578,13 @@ describe("PdfCitationPreviewWindow", () => {
     );
 
     await waitFor(() => {
-      expect(getDocument).toHaveBeenCalledWith(
-        expect.objectContaining({
-          disableRange: false,
-          disableStream: true,
-          rangeChunkSize: 1024 * 1024,
-          url: "/api/local-knowledge/citation-preview/sessions/preview-session-1/document",
-        }),
+      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledWith(
+        "preview-session-1",
+        expect.any(AbortSignal),
       );
+      expect(getDocument).toHaveBeenCalledWith({
+        data: new Uint8Array([37, 80, 68, 70]),
+      });
     });
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
     expect(screen.getByText("Active citation")).toBeInTheDocument();

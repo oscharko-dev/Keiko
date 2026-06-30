@@ -8,6 +8,8 @@
 // the runner is a no-op and returns `skippedExisting: true`. With `force: true`, prior
 // chunks are deleted at the start of the transaction.
 
+import { createHash } from "node:crypto";
+
 import type {
   ChunkId,
   DocumentId,
@@ -28,7 +30,12 @@ import {
 } from "./chunker-persist.js";
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
-import type { ChunkDocumentParams, ChunkDocumentResult, ChunkingOptions } from "./types.js";
+import type {
+  ChunkDocumentParams,
+  ChunkDocumentResult,
+  ChunkingOptions,
+  ChunkingResult,
+} from "./types.js";
 import { ChunkingError } from "./types.js";
 
 // ─── Row → ParsedUnit reconstitution ──────────────────────────────────────────
@@ -165,16 +172,51 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 // ─── ID composition ──────────────────────────────────────────────────────────
-// Chunk IDs are deterministic on (documentId, parsedUnitRowId, orderIndex). Using a
-// composite scheme — rather than UUIDs — keeps the chunks table re-runnable: a
-// re-chunk with force=true reproduces byte-identical row IDs, which makes the audit /
-// evidence-manifest layer's row-equality assertions hold across runs.
+// Chunk IDs are deterministic on the document, semantic parsed-unit anchor, chunk span,
+// and safe excerpt hash. They deliberately do not include parsed_units.id or orderIndex:
+// those are write-order artefacts and can drift when a parser emits an extra unit before
+// an otherwise unchanged citation target.
+function stableUnitAnchor(unit: ParsedUnit): Record<string, unknown> {
+  switch (unit.kind) {
+    case "page":
+      return {
+        kind: unit.kind,
+        pageNumber: unit.pageNumber,
+        ...(unit.pageLabel !== undefined ? { pageLabel: unit.pageLabel } : {}),
+      };
+    case "section":
+      return { kind: unit.kind, sectionPath: unit.sectionPath };
+    case "json-path":
+      return { kind: unit.kind, jsonPointer: unit.jsonPointer };
+    case "csv-row":
+      return { kind: unit.kind, tableName: unit.tableName, rowIndex: unit.rowIndex };
+    case "html-block":
+      return {
+        kind: unit.kind,
+        ...(unit.headingPath !== undefined ? { headingPath: unit.headingPath } : {}),
+      };
+    case "unsupported-media":
+      return { kind: unit.kind, reason: unit.reason };
+  }
+}
+
+function chunkIdDigest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex").slice(0, 32);
+}
+
 export function composeChunkId(
   documentId: DocumentId,
-  parsedUnitRowId: string,
-  orderIndex: number,
+  unit: ParsedUnit,
+  chunk: ChunkingResult,
 ): ChunkId {
-  return `${String(documentId)}#${parsedUnitRowId}#c${String(orderIndex)}` as ChunkId;
+  return `${String(documentId)}#ch_${chunkIdDigest({
+    version: 2,
+    documentId: String(documentId),
+    unit: stableUnitAnchor(unit),
+    characterStart: chunk.characterStart,
+    characterEnd: chunk.characterEnd,
+    safeExcerptHash: chunk.safeExcerptHash,
+  })}` as ChunkId;
 }
 
 // ─── Top-level entrypoint ────────────────────────────────────────────────────
@@ -221,7 +263,7 @@ function persistAllChunks(
       optionsWithRemainingChunkBudget(options, remaining),
     );
     for (const chunk of chunks) {
-      const id = composeChunkId(ctx.documentId, row.id, orderIndex);
+      const id = composeChunkId(ctx.documentId, unit, chunk);
       insertChunkRow(db, {
         id,
         capsuleId: ctx.capsuleId,

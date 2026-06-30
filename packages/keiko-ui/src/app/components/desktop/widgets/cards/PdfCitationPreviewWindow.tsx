@@ -1,6 +1,11 @@
 "use client";
 
 import {
+  type PdfCitationPreviewOpenResponse,
+  type PdfCitationPreviewReasonCode,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -10,7 +15,12 @@ import {
   type ReactNode,
 } from "react";
 import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist";
-import { ApiError, pdfCitationPreviewDocumentUrl } from "@/lib/api";
+import {
+  ApiError,
+  fetchPdfCitationPreviewDocument,
+  openPdfCitationPreviewSession,
+  pdfCitationPreviewDocumentUrl,
+} from "@/lib/api";
 import { Icons } from "../../Icons";
 import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
 import type { AppWindow } from "../../windows/types";
@@ -19,7 +29,11 @@ import {
   activatePdfCitationPreviewContext,
   getPdfCitationPreviewBackToChatAvailability,
   getPdfCitationPreviewSession,
+  pdfCitationPreviewFailureCopy,
+  replacePdfCitationPreviewWindowFailure,
+  replacePdfCitationPreviewWindowSession,
   subscribePdfCitationPreviewRegistry,
+  type PdfCitationPreviewAnswerContext,
   type PdfCitationPreviewContextCitation,
   type PdfCitationPreviewSafeWindowCfg,
   type PdfCitationPreviewZoomMode,
@@ -31,6 +45,8 @@ const PAGE_FRAME_PX = 32;
 const RENDER_RADIUS = 1;
 const SLOW_LOAD_MS = 900;
 const ZOOM_STEP = 0.1;
+const PDF_LOAD_DEADLINE_MS = 30_000;
+const PDF_FULL_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
 const PDF_RANGE_CHUNK_SIZE = 1024 * 1024;
 
 interface PageSize {
@@ -38,7 +54,10 @@ interface PageSize {
   readonly width: number;
 }
 
+type PreviewFailureAction = "reopen" | "retry";
+
 interface PreviewFailure {
+  readonly action?: PreviewFailureAction | undefined;
   readonly message: string;
   readonly retryable: boolean;
   readonly title: string;
@@ -95,6 +114,100 @@ function readZoomMode(value: unknown): PdfCitationPreviewZoomMode {
   return value === "fit-page" || value === "manual" ? value : "fit-width";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readPersistedContextCitation(value: unknown): PdfCitationPreviewContextCitation | null {
+  if (!isRecord(value) || !isRecord(value.citation) || !isRecord(value.display)) return null;
+  const stableId = readOptionalString(value.citation.stableId);
+  const marker = readOptionalString(value.citation.marker);
+  const label = readOptionalString(value.citation.label);
+  const documentLabel = readOptionalString(value.display.documentLabel);
+  const anchorQuality = value.display.anchorQuality;
+  if (
+    stableId === undefined ||
+    marker === undefined ||
+    label === undefined ||
+    documentLabel === undefined ||
+    (anchorQuality !== "approximate" &&
+      anchorQuality !== "page-only" &&
+      anchorQuality !== "unavailable")
+  ) {
+    return null;
+  }
+  const source = readOptionalString(value.citation.source);
+  const sourceLabel = readOptionalString(value.display.sourceLabel);
+  const pageLabel = readOptionalString(value.display.pageLabel);
+  return {
+    citation: {
+      stableId,
+      marker,
+      label,
+      ...(source === undefined ? {} : { source }),
+    },
+    display: {
+      documentLabel,
+      anchorQuality,
+      ...(sourceLabel === undefined ? {} : { sourceLabel }),
+      ...(typeof value.display.pageNumber === "number"
+        ? { pageNumber: value.display.pageNumber }
+        : {}),
+      ...(pageLabel === undefined ? {} : { pageLabel }),
+    },
+  };
+}
+
+function readPersistedCitationContext(raw: unknown): PdfCitationPreviewAnswerContext | undefined {
+  const encoded = readOptionalString(raw);
+  if (encoded === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(encoded);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.citations)) return undefined;
+  const activeStableId = readOptionalString(parsed.activeStableId);
+  if (activeStableId === undefined) return undefined;
+  const citations = parsed.citations
+    .map((citation) => readPersistedContextCitation(citation))
+    .filter((citation): citation is PdfCitationPreviewContextCitation => citation !== null);
+  if (citations.length === 0) return undefined;
+  const origin = isRecord(parsed.origin) ? parsed.origin : undefined;
+  const originContext =
+    origin === undefined
+      ? undefined
+      : {
+          assistantMessageId: readOptionalString(origin.assistantMessageId),
+          chatId: readOptionalString(origin.chatId),
+          chatWindowId: readOptionalString(origin.chatWindowId),
+          marker: readOptionalString(origin.marker),
+          representation: origin.representation,
+        };
+  return {
+    activeStableId,
+    citations,
+    ...(originContext?.assistantMessageId === undefined ||
+    originContext.chatId === undefined ||
+    originContext.marker === undefined ||
+    (originContext.representation !== "inline-marker" &&
+      originContext.representation !== "citation-chip")
+      ? {}
+      : {
+          origin: {
+            assistantMessageId: originContext.assistantMessageId,
+            chatId: originContext.chatId,
+            marker: originContext.marker,
+            representation: originContext.representation,
+            ...(originContext.chatWindowId === undefined
+              ? {}
+              : { chatWindowId: originContext.chatWindowId }),
+          },
+        }),
+  };
+}
+
 function rotatedSize(size: PageSize, rotation: number): PageSize {
   return rotation % 180 === 0
     ? size
@@ -146,42 +259,125 @@ function uniqueContextCitations(
   });
 }
 
+function failureFromOpenReason(reason: PdfCitationPreviewReasonCode): PreviewFailure {
+  const copy = pdfCitationPreviewFailureCopy(reason);
+  return {
+    title: copy.title,
+    message: copy.message,
+    retryable: copy.retryable,
+    ...(copy.retryable ? { action: "retry" as const } : {}),
+  };
+}
+
+function sessionLostFailure(): PreviewFailure {
+  return {
+    title: "Preview session ended",
+    message:
+      "This verified preview session is no longer active. Reopen the citation to create a fresh preview.",
+    retryable: false,
+    action: "reopen",
+  };
+}
+
+function rangeFailure(): PreviewFailure {
+  return {
+    title: "Preview range failed",
+    message:
+      "The PDF byte range could not be loaded. Reopen the citation to create a fresh preview.",
+    retryable: false,
+    action: "reopen",
+  };
+}
+
+function timeoutFailure(): PreviewFailure {
+  return {
+    title: "Preview timed out",
+    message: "The verified PDF preview did not load in time. Retry to request the document again.",
+    retryable: true,
+    action: "retry",
+  };
+}
+
+function responseExceptionStatus(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const maybe = error as { readonly name?: unknown; readonly status?: unknown };
+  if (maybe.name !== "ResponseException" || typeof maybe.status !== "number") return undefined;
+  return Number.isInteger(maybe.status) ? maybe.status : undefined;
+}
+
+function previewFailureFromStatus(status: number): PreviewFailure | undefined {
+  switch (status) {
+    case 404:
+      return sessionLostFailure();
+    case 410:
+      return sessionLostFailure();
+    case 409:
+      return {
+        title: "Preview changed",
+        message:
+          "The verified PDF source is no longer in the expected preview state. Reopen the answer or re-index the document before previewing it again.",
+        retryable: false,
+      };
+    case 413:
+      return {
+        title: "Preview too large",
+        message: "The verified PDF exceeds the passive preview size limit for this viewer.",
+        retryable: false,
+      };
+    case 416:
+      return rangeFailure();
+    case 503:
+      return {
+        title: "Preview temporarily unavailable",
+        message:
+          "Keiko could not read the verified PDF safely. Retry to request the preview again.",
+        retryable: true,
+        action: "retry",
+      };
+    default:
+      return undefined;
+  }
+}
+
 function previewFailure(error: unknown): PreviewFailure {
   if (error instanceof ApiError) {
     switch (error.code) {
       case "PREVIEW_SESSION_NOT_FOUND":
       case "PREVIEW_SESSION_CLOSED":
       case "PREVIEW_SESSION_EXPIRED":
-        return {
-          title: "Preview unavailable",
-          message:
-            "This verified preview session is no longer available. Reopen the citation to create a new preview.",
-          retryable: false,
-        };
+        return sessionLostFailure();
       case "PREVIEW_SOURCE_NOT_READY":
         return {
           title: "Preview not ready",
           message:
             "Keiko is still verifying the PDF source for passive preview. Retry in a moment.",
           retryable: true,
+          action: "retry",
         };
       case "PREVIEW_SOURCE_UNREADABLE":
+      case "PREVIEW_SOURCE_DEHYDRATED":
         return {
           title: "Preview temporarily unavailable",
           message:
             "Keiko could not read the verified PDF safely. Retry to request the preview again.",
           retryable: true,
+          action: "retry",
         };
       case "PREVIEW_SOURCE_CHANGED":
         return {
           title: "Preview changed",
-          message: "The verified PDF bytes no longer match the citation that opened this preview.",
+          message:
+            "The verified PDF bytes no longer match the citation that opened this preview. Re-index the document, then ask again.",
           retryable: false,
         };
+      case "PREVIEW_RANGE_NOT_SATISFIABLE":
+        return rangeFailure();
+      case "PREVIEW_SOURCE_REBIND_REQUIRED":
       case "PREVIEW_SOURCE_MISSING":
         return {
           title: "Preview source unavailable",
-          message: "The verified PDF source is no longer available for passive preview.",
+          message:
+            "The verified PDF source is no longer available for passive preview. Locate the file or rebind the source root.",
           retryable: false,
         };
       case "PREVIEW_SOURCE_NOT_PDF":
@@ -202,26 +398,30 @@ function previewFailure(error: unknown): PreviewFailure {
     }
   }
 
+  const statusFailure = previewFailureFromStatus(responseExceptionStatus(error) ?? 0);
+  if (statusFailure !== undefined) return statusFailure;
+
   return {
     title: "Preview failed",
     message: "Keiko could not load the verified PDF preview. Retry to request the document again.",
     retryable: true,
+    action: "retry",
   };
 }
 
-function restoredShellFailure(failureOverride: PreviewFailure | null): PreviewFailure {
+function restoredShellFailure(
+  failureOverride: PreviewFailure | null,
+  canReopen: boolean,
+): PreviewFailure {
   if (failureOverride !== null) {
-    return {
-      title: failureOverride.title,
-      message: `${failureOverride.message} Reopen the citation from the answer to re-verify before Keiko renders PDF bytes.`,
-      retryable: false,
-    };
+    return failureOverride;
   }
   return {
+    ...(canReopen ? { action: "reopen" as const } : {}),
     title: "Preview requires re-verification",
     message:
       "This viewer was restored without an active verified preview session. Reopen the citation from the answer to re-verify the source before Keiko renders PDF bytes.",
-    retryable: false,
+    retryable: canReopen,
   };
 }
 
@@ -239,7 +439,7 @@ function PdfCanvasPage({
   scale,
 }: {
   readonly active: boolean;
-  readonly onError: (error: unknown) => void;
+  readonly onError: (page: number, error: unknown) => void;
   readonly onMeasured: (page: number, size: PageSize) => void;
   readonly pageNumber: number;
   readonly pdf: PdfDocumentProxy;
@@ -287,7 +487,7 @@ function PdfCanvasPage({
       })
       .catch((error) => {
         if (disposed || isRenderingCancelled(error)) return;
-        onError(error);
+        onError(pageNumber, error);
       });
 
     return () => {
@@ -334,15 +534,23 @@ export function PdfCitationPreviewWindow({
   const [failure, setFailure] = useState<PreviewFailure | null>(null);
   const [measuredSizes, setMeasuredSizes] = useState<Record<number, PageSize>>({});
   const [numPages, setNumPages] = useState(0);
+  const [pageRenderFailures, setPageRenderFailures] = useState<Record<number, PreviewFailure>>({});
   const [pageInput, setPageInput] = useState("1");
+  const [reopening, setReopening] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
   const [showSlowLoad, setShowSlowLoad] = useState(false);
+  const autoReopenAttemptedKeyRef = useRef<string | null>(null);
   const currentPageRef = useRef(1);
   const didInitialScrollRef = useRef(false);
   const backToChatDescriptionId = useId();
+  const failureDescriptionId = useId();
   const pageRefs = useRef(new Map<number, HTMLElement>());
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const citationContext = sessionEntry?.context;
+  const persistedCitationContext = useMemo(
+    () => readPersistedCitationContext(cfg.previewContextJson),
+    [cfg.previewContextJson],
+  );
+  const citationContext = sessionEntry?.context ?? persistedCitationContext;
   const citationContextCitations = useMemo(
     () => uniqueContextCitations(citationContext?.citations),
     [citationContext?.citations],
@@ -352,9 +560,16 @@ export function PdfCitationPreviewWindow({
       ? { enabled: true as const }
       : { enabled: false as const, reason: backToChatReason };
   const activeCitation =
-    citationContextCitations.find(
-      (citation) => citation.citation.stableId === citationContext?.activeStableId,
-    ) ?? citationContextCitations[0];
+    sessionEntry === undefined
+      ? undefined
+      : (citationContextCitations.find(
+          (citation) => citation.citation.stableId === citationContext?.activeStableId,
+        ) ?? citationContextCitations[0]);
+  const reopenAttemptKey = useMemo((): string | undefined => {
+    const origin = citationContext?.origin;
+    if (origin === undefined || citationContext === undefined) return undefined;
+    return `${origin.chatId}:${origin.assistantMessageId}:${origin.marker}:${citationContext.activeStableId}`;
+  }, [citationContext]);
 
   const display = useMemo((): Pick<
     PdfCitationPreviewSafeWindowCfg,
@@ -401,8 +616,7 @@ export function PdfCitationPreviewWindow({
       retryable: readOptionalBoolean(cfg.failureRetryable) ?? false,
     };
   }, [cfg.failureMessage, cfg.failureRetryable, cfg.failureTitle]);
-  const restoredSafeShell = sessionEntry === undefined;
-  const scalarIntentControlsEnabled = doc !== null || restoredSafeShell;
+  const scalarIntentControlsEnabled = doc !== null;
   const currentPageSize = measuredSizes[currentPage] ?? defaultPageSize;
   const effectiveScale = useMemo((): number => {
     if (currentPageSize === null) return zoomValue;
@@ -418,6 +632,51 @@ export function PdfCitationPreviewWindow({
     }
     return zoomValue;
   }, [containerSize.height, containerSize.width, currentPageSize, rotation, zoomMode, zoomValue]);
+
+  const reopenPreview = useCallback(
+    async (fallbackFailure?: PreviewFailure): Promise<boolean> => {
+      const context = citationContext;
+      const origin = context?.origin;
+      if (origin === undefined || context === undefined) {
+        if (fallbackFailure !== undefined) {
+          setFailure(fallbackFailure);
+        }
+        return false;
+      }
+
+      setReopening(true);
+      setShowSlowLoad(false);
+      try {
+        const response: PdfCitationPreviewOpenResponse = await openPdfCitationPreviewSession({
+          chatId: origin.chatId,
+          assistantMessageId: origin.assistantMessageId,
+          marker: origin.marker,
+          stableId: context.activeStableId,
+          origin: origin.representation,
+        });
+        if (response.outcome === "authorized") {
+          const nextCfg = replacePdfCitationPreviewWindowSession(windowId, response, {
+            context,
+            currentPage: currentPageRef.current,
+          });
+          updateCfg(nextCfg);
+          setFailure(null);
+          return true;
+        }
+        const nextCfg = replacePdfCitationPreviewWindowFailure(windowId, response);
+        updateCfg(nextCfg);
+        setFailure(failureFromOpenReason(response.reason));
+        return false;
+      } catch (error) {
+        const failure = previewFailure(error);
+        setFailure(failure.action === "reopen" ? (fallbackFailure ?? failure) : failure);
+        return false;
+      } finally {
+        setReopening(false);
+      }
+    },
+    [citationContext, updateCfg, windowId],
+  );
 
   useEffect(() => {
     currentPageRef.current = currentPage;
@@ -447,38 +706,62 @@ export function PdfCitationPreviewWindow({
 
   useEffect(() => {
     const sessionHandle = sessionEntry?.session.handle;
+    const sessionByteLength = sessionEntry?.session.byteLength;
     if (sessionHandle === undefined) {
-      setFailure(restoredShellFailure(failureOverride));
+      setFailure(restoredShellFailure(failureOverride, reopenAttemptKey !== undefined));
       setDefaultPageSize(null);
       setDoc(null);
       setNumPages(0);
+      setPageRenderFailures({});
       return;
     }
 
     let disposed = false;
+    let deadlineElapsed = false;
     let loadingTask: PdfDocumentLoadingTask | null = null;
+    const controller = new AbortController();
 
     setFailure(null);
     setShowSlowLoad(false);
     setMeasuredSizes({});
+    setPageRenderFailures({});
     setDefaultPageSize(null);
     setDoc(null);
     setNumPages(0);
     didInitialScrollRef.current = false;
 
     const slowTimer = window.setTimeout(() => setShowSlowLoad(true), SLOW_LOAD_MS);
+    const deadlineTimer = window.setTimeout(() => {
+      if (disposed) return;
+      deadlineElapsed = true;
+      controller.abort();
+      void loadingTask?.destroy();
+      setFailure(timeoutFailure());
+      setShowSlowLoad(false);
+    }, PDF_LOAD_DEADLINE_MS);
 
     void loadPdfJs()
-      .then((pdfjs) => {
+      .then(async (pdfjs) => {
         if (disposed) return null;
-        loadingTask = pdfjs.getDocument({
-          disableRange: false,
-          disableStream: true,
-          httpHeaders: { Accept: "application/pdf" },
-          rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
-          url: pdfCitationPreviewDocumentUrl(sessionHandle),
-          withCredentials: false,
-        }) as PdfDocumentLoadingTask;
+        if (
+          typeof sessionByteLength === "number" &&
+          sessionByteLength > PDF_FULL_BUFFER_MAX_BYTES
+        ) {
+          loadingTask = pdfjs.getDocument({
+            disableRange: false,
+            disableStream: false,
+            httpHeaders: { Accept: "application/pdf" },
+            rangeChunkSize: PDF_RANGE_CHUNK_SIZE,
+            url: pdfCitationPreviewDocumentUrl(sessionHandle),
+            withCredentials: false,
+          }) as PdfDocumentLoadingTask;
+        } else {
+          const bytes = await fetchPdfCitationPreviewDocument(sessionHandle, controller.signal);
+          if (disposed) return null;
+          loadingTask = pdfjs.getDocument({
+            data: bytes,
+          }) as PdfDocumentLoadingTask;
+        }
         return loadingTask.promise;
       })
       .then(async (pdf) => {
@@ -495,20 +778,39 @@ export function PdfCitationPreviewWindow({
         setShowSlowLoad(false);
       })
       .catch((error) => {
-        if (disposed || (error instanceof DOMException && error.name === "AbortError")) return;
-        setFailure(previewFailure(error));
+        if (
+          disposed ||
+          deadlineElapsed ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
+          return;
+        }
+        const failure = previewFailure(error);
+        if (
+          failure.action === "reopen" &&
+          reopenAttemptKey !== undefined &&
+          autoReopenAttemptedKeyRef.current !== reopenAttemptKey
+        ) {
+          autoReopenAttemptedKeyRef.current = reopenAttemptKey;
+          void reopenPreview(failure);
+          return;
+        }
+        setFailure(failure);
         setShowSlowLoad(false);
       })
       .finally(() => {
         window.clearTimeout(slowTimer);
+        window.clearTimeout(deadlineTimer);
       });
 
     return () => {
       disposed = true;
+      controller.abort();
       void loadingTask?.destroy();
       window.clearTimeout(slowTimer);
+      window.clearTimeout(deadlineTimer);
     };
-  }, [failureOverride, retryToken, sessionEntry]);
+  }, [failureOverride, reopenAttemptKey, reopenPreview, retryToken, sessionEntry]);
 
   useEffect(() => {
     return () => {
@@ -574,6 +876,13 @@ export function PdfCitationPreviewWindow({
     () => Array.from({ length: numPages }, (_, index) => index + 1),
     [numPages],
   );
+  const showToolbar = doc !== null && failure === null;
+  const failureActionLabel =
+    failure?.action === "reopen"
+      ? "Reopen preview"
+      : failure?.action === "retry"
+        ? "Retry preview"
+        : "";
 
   const goToPage = (page: number): void => {
     const next = clampPage(page, numPages);
@@ -721,143 +1030,154 @@ export function PdfCitationPreviewWindow({
         </section>
       ) : null}
 
-      <div className="pdfv-toolbar" role="group" aria-label="PDF preview controls">
-        <div className="pdfv-group">
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={doc === null || currentPage <= 1}
-            onClick={() => goToPage(currentPage - 1)}
-          >
-            <Icons.back size={14} />
-            <span>Previous</span>
-          </button>
-          <label className="pdfv-page-field">
-            <span className="sr-only">Current page</span>
-            <input
-              className="pdfv-page-input"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              value={pageInput}
-              disabled={doc === null}
-              onChange={(event) => setPageInput(event.target.value)}
-              onBlur={() => {
-                const parsed = Number.parseInt(pageInput, 10);
-                if (Number.isInteger(parsed)) {
-                  goToPage(parsed);
-                  return;
-                }
-                setPageInput(String(currentPage));
-              }}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                event.preventDefault();
-                const parsed = Number.parseInt(pageInput, 10);
-                if (Number.isInteger(parsed)) {
-                  goToPage(parsed);
-                  return;
-                }
-                setPageInput(String(currentPage));
-              }}
-            />
-          </label>
-          <span className="pdfv-page-count mono">/ {numPages > 0 ? String(numPages) : "--"}</span>
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={doc === null || currentPage >= numPages}
-            onClick={() => goToPage(currentPage + 1)}
-          >
-            <span>Next</span>
-            <Icons.fwd size={14} />
-          </button>
-        </div>
+      {showToolbar ? (
+        <div className="pdfv-toolbar" role="group" aria-label="PDF preview controls">
+          <div className="pdfv-group">
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={currentPage <= 1}
+              onClick={() => goToPage(currentPage - 1)}
+            >
+              <Icons.back size={14} />
+              <span>Previous</span>
+            </button>
+            <label className="pdfv-page-field">
+              <span className="sr-only">Current page</span>
+              <input
+                className="pdfv-page-input"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={pageInput}
+                onChange={(event) => setPageInput(event.target.value)}
+                onBlur={() => {
+                  const parsed = Number.parseInt(pageInput, 10);
+                  if (Number.isInteger(parsed)) {
+                    goToPage(parsed);
+                    return;
+                  }
+                  setPageInput(String(currentPage));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  event.preventDefault();
+                  const parsed = Number.parseInt(pageInput, 10);
+                  if (Number.isInteger(parsed)) {
+                    goToPage(parsed);
+                    return;
+                  }
+                  setPageInput(String(currentPage));
+                }}
+              />
+            </label>
+            <span className="pdfv-page-count mono">/ {numPages > 0 ? String(numPages) : "--"}</span>
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={currentPage >= numPages}
+              onClick={() => goToPage(currentPage + 1)}
+            >
+              <span>Next</span>
+              <Icons.fwd size={14} />
+            </button>
+          </div>
 
-        <div className="pdfv-group">
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={
-              !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue <= MIN_SCALE)
-            }
-            onClick={() =>
-              updateCfg({
-                zoomMode: "manual",
-                zoomValue: clampScale(effectiveScale - ZOOM_STEP),
-              })
-            }
-          >
-            <Icons.zoomOut size={14} />
-            <span>Zoom out</span>
-          </button>
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={
-              !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue >= MAX_SCALE)
-            }
-            onClick={() =>
-              updateCfg({
-                zoomMode: "manual",
-                zoomValue: clampScale(effectiveScale + ZOOM_STEP),
-              })
-            }
-          >
-            <Icons.zoomIn size={14} />
-            <span>Zoom in</span>
-          </button>
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={!scalarIntentControlsEnabled}
-            data-selected={zoomMode === "fit-width" ? "true" : "false"}
-            onClick={() => updateCfg({ zoomMode: "fit-width" })}
-          >
-            <span>Fit width</span>
-          </button>
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={!scalarIntentControlsEnabled}
-            data-selected={zoomMode === "fit-page" ? "true" : "false"}
-            onClick={() => updateCfg({ zoomMode: "fit-page" })}
-          >
-            <span>Fit page</span>
-          </button>
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={!scalarIntentControlsEnabled}
-            onClick={() => updateCfg({ rotation: normalizeRotation(rotation - 90) })}
-          >
-            <span>Rotate left</span>
-          </button>
-          <button
-            type="button"
-            className="pdfv-btn tm-action"
-            disabled={!scalarIntentControlsEnabled}
-            onClick={() => updateCfg({ rotation: normalizeRotation(rotation + 90) })}
-          >
-            <span>Rotate right</span>
-          </button>
-          <span className="pdfv-zoom mono">{String(Math.round(effectiveScale * 100))}%</span>
+          <div className="pdfv-group">
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={
+                !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue <= MIN_SCALE)
+              }
+              onClick={() =>
+                updateCfg({
+                  zoomMode: "manual",
+                  zoomValue: clampScale(effectiveScale - ZOOM_STEP),
+                })
+              }
+            >
+              <Icons.zoomOut size={14} />
+              <span>Zoom out</span>
+            </button>
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={
+                !scalarIntentControlsEnabled || (zoomMode === "manual" && zoomValue >= MAX_SCALE)
+              }
+              onClick={() =>
+                updateCfg({
+                  zoomMode: "manual",
+                  zoomValue: clampScale(effectiveScale + ZOOM_STEP),
+                })
+              }
+            >
+              <Icons.zoomIn size={14} />
+              <span>Zoom in</span>
+            </button>
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={!scalarIntentControlsEnabled}
+              data-selected={zoomMode === "fit-width" ? "true" : "false"}
+              onClick={() => updateCfg({ zoomMode: "fit-width" })}
+            >
+              <span>Fit width</span>
+            </button>
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={!scalarIntentControlsEnabled}
+              data-selected={zoomMode === "fit-page" ? "true" : "false"}
+              onClick={() => updateCfg({ zoomMode: "fit-page" })}
+            >
+              <span>Fit page</span>
+            </button>
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={!scalarIntentControlsEnabled}
+              onClick={() => updateCfg({ rotation: normalizeRotation(rotation - 90) })}
+            >
+              <span>Rotate left</span>
+            </button>
+            <button
+              type="button"
+              className="pdfv-btn tm-action"
+              disabled={!scalarIntentControlsEnabled}
+              onClick={() => updateCfg({ rotation: normalizeRotation(rotation + 90) })}
+            >
+              <span>Rotate right</span>
+            </button>
+            <span className="pdfv-zoom mono">{String(Math.round(effectiveScale * 100))}%</span>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {failure !== null ? (
-        <div className="lk-empty pdfv-status" role="alert">
+        <div className="lk-empty pdfv-status" role="alert" aria-describedby={failureDescriptionId}>
           <div className="lk-empty-icon">
             <Icons.info size={20} />
           </div>
           <p className="lk-empty-title">{failure.title}</p>
-          <p className="lk-empty-body">{failure.message}</p>
-          {failure.retryable ? (
+          <p id={failureDescriptionId} className="lk-empty-body">
+            {failure.message}
+          </p>
+          {failure.action !== undefined ? (
             <button
               type="button"
               className="tm-action pdfv-retry"
-              onClick={() => setRetryToken((value) => value + 1)}
+              aria-describedby={failureDescriptionId}
+              disabled={reopening}
+              onClick={() => {
+                if (failure.action === "reopen") {
+                  void reopenPreview(failure);
+                  return;
+                }
+                setRetryToken((value) => value + 1);
+              }}
             >
-              Retry preview
+              {reopening ? "Opening preview..." : failureActionLabel}
             </button>
           ) : null}
         </div>
@@ -879,6 +1199,9 @@ export function PdfCitationPreviewWindow({
             );
             const minHeight = Math.max(220, Math.round(pageSize.height * effectiveScale));
             const shouldRender = Math.abs(pageNumber - currentPage) <= RENDER_RADIUS;
+            const pageFailure = pageRenderFailures[pageNumber];
+            const pageFailureActionLabel =
+              pageFailure?.action === "reopen" ? "Reopen preview" : "Retry page";
 
             return (
               <section
@@ -895,10 +1218,41 @@ export function PdfCitationPreviewWindow({
               >
                 <div className="pdfv-page-frame">
                   <div className="pdfv-page-meta mono">Page {String(pageNumber)}</div>
-                  {shouldRender ? (
+                  {pageFailure !== undefined ? (
+                    <div className="lk-empty pdfv-page-error" role="alert">
+                      <div className="lk-empty-icon">
+                        <Icons.info size={18} />
+                      </div>
+                      <p className="lk-empty-title">{pageFailure.title}</p>
+                      <p className="lk-empty-body">{pageFailure.message}</p>
+                      <button
+                        type="button"
+                        className="tm-action pdfv-retry"
+                        disabled={reopening}
+                        onClick={() => {
+                          if (pageFailure.action === "reopen") {
+                            void reopenPreview(pageFailure);
+                            return;
+                          }
+                          setPageRenderFailures((previous) => {
+                            const next = { ...previous };
+                            delete next[pageNumber];
+                            return next;
+                          });
+                        }}
+                      >
+                        {reopening ? "Opening preview..." : pageFailureActionLabel}
+                      </button>
+                    </div>
+                  ) : shouldRender ? (
                     <PdfCanvasPage
                       active
-                      onError={(error) => setFailure(previewFailure(error))}
+                      onError={(page, error) =>
+                        setPageRenderFailures((previous) => ({
+                          ...previous,
+                          [page]: previewFailure(error),
+                        }))
+                      }
                       onMeasured={(page, size) => {
                         setMeasuredSizes((previous) =>
                           previous[page]?.width === size.width &&

@@ -1194,7 +1194,10 @@ async function* handlePersistedDocument(
 ): AsyncGenerator<IndexingEvent> {
   const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
   if (documentId === null) return;
-  if (result.outcome.document.status === "unsupported") {
+  if (
+    result.outcome.document.status === "unsupported" ||
+    result.outcome.document.status === "extracted-image"
+  ) {
     yield* handleUnsupportedDocument(state, result, documentId);
     return;
   }

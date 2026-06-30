@@ -125,7 +125,8 @@ function chunkOneUnit(
   const end = row.character_end ?? start;
   const unitText =
     readDocumentTextSpan(db, cipher, params.capsuleId, params.documentId, start, end) ?? "";
-  const rebased = rebaseUnit(rowToParsedUnit(row, params.documentId, cipher), unitText.length);
+  const unit = rowToParsedUnit(row, params.documentId, cipher);
+  const rebased = rebaseUnit(unit, unitText.length);
   const chunks = chunkParsedUnit(
     rebased,
     unitText,
@@ -133,8 +134,13 @@ function chunkOneUnit(
   );
   let next = orderIndex;
   for (const chunk of chunks) {
+    const documentChunk = {
+      ...chunk,
+      characterStart: start + chunk.characterStart,
+      characterEnd: start + chunk.characterEnd,
+    };
     insertChunkRow(db, {
-      id: composeChunkId(params.documentId, row.id, next),
+      id: composeChunkId(params.documentId, unit, documentChunk),
       capsuleId: params.capsuleId,
       sourceId: params.sourceId,
       documentId: params.documentId,
@@ -143,8 +149,8 @@ function chunkOneUnit(
       tokenCount: chunk.tokenCount,
       safeExcerptHash: chunk.safeExcerptHash,
       chunkingStrategyVersion: ctx.strategyKey,
-      characterStart: start + chunk.characterStart,
-      characterEnd: start + chunk.characterEnd,
+      characterStart: documentChunk.characterStart,
+      characterEnd: documentChunk.characterEnd,
     });
     next += 1;
   }

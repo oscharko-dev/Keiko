@@ -115,6 +115,30 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     "extracted",
     "intro.md",
   );
+  if (listSqliteMaster(db, "table").includes("document_blobs")) {
+    db.prepare(
+      `INSERT INTO document_blobs (
+         capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version,
+         blob_bytes, created_at, created_source_id, created_document_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      "deadbeef",
+      4,
+      "application/pdf",
+      "plaintext",
+      null,
+      new Uint8Array([1, 2, 3, 4]),
+      1000,
+      sourceId,
+      documentId,
+    );
+    db.prepare("UPDATE documents SET blob_ref = ? WHERE capsule_id = ? AND id = ?").run(
+      "deadbeef",
+      capsuleId,
+      documentId,
+    );
+  }
   db.prepare(
     `INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (?, ?, ?)`,
   ).run(capsuleId, documentId, "normalized body");
@@ -191,8 +215,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 14 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(14);
+  it("is the integer 15 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(15);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -304,6 +328,35 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(byName.get("character_start")?.notnull).toBe(0);
       expect(byName.get("character_end")?.type).toBe("INTEGER");
       expect(byName.get("character_end")?.notnull).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists content-addressed document blobs and nullable document blob references", () => {
+    const db = openSchemaDb();
+    try {
+      const documentColumns = db.prepare("PRAGMA table_info('documents')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const documentByName = new Map(documentColumns.map((column) => [column.name ?? "", column]));
+      expect(documentByName.get("blob_ref")?.type).toBe("TEXT");
+      expect(documentByName.get("blob_ref")?.notnull).toBe(0);
+
+      const blobColumns = db.prepare("PRAGMA table_info('document_blobs')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const blobByName = new Map(blobColumns.map((column) => [column.name ?? "", column]));
+      expect(blobByName.get("capsule_id")?.notnull).toBe(1);
+      expect(blobByName.get("content_hash")?.notnull).toBe(1);
+      expect(blobByName.get("blob_bytes")?.type).toBe("BLOB");
+      expect(blobByName.get("storage_kind")?.type).toBe("TEXT");
+      const indexes = listSqliteMaster(db, "index");
+      expect(indexes).toContain("idx_document_blobs_created_document");
     } finally {
       db.close();
     }
@@ -433,6 +486,7 @@ describe("lineage enforcement", () => {
       const dependents = [
         "capsule_sources",
         "documents",
+        "document_blobs",
         "document_texts",
         "pages",
         "sections",
@@ -599,6 +653,67 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       expect(countRows(db, "capsule_audit_events")).toBe(1);
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: "cap-1" });
       expect(countRows(db, "capsule_membership_changes")).toBe(1);
+      expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v15 on top of a v14 database and enables PDF blob metadata plus byte-access audit", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v15 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 15);
+      if (v15 === undefined) {
+        throw new Error("expected v15 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 15) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+
+      for (const stmt of v15.up) db.exec(stmt);
+
+      const documentColumns = db.prepare("PRAGMA table_info('documents')").all() as {
+        readonly name?: string;
+      }[];
+      expect(documentColumns.map((column) => column.name)).toContain("blob_ref");
+      expect(listSqliteMaster(db, "table")).toContain("document_blobs");
+      db.prepare(
+        `INSERT INTO document_blobs (
+           capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version,
+           blob_bytes, created_at, created_source_id, created_document_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        handles.capsuleId,
+        "deadbeef",
+        4,
+        "application/pdf",
+        "plaintext",
+        null,
+        new Uint8Array([1, 2, 3, 4]),
+        1000,
+        handles.sourceId,
+        handles.documentId,
+      );
+      db.prepare("UPDATE documents SET blob_ref = ? WHERE capsule_id = ? AND id = ?").run(
+        "deadbeef",
+        handles.capsuleId,
+        handles.documentId,
+      );
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, details_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(
+        "audit-byte-1",
+        handles.capsuleId,
+        "citation-preview-document-accessed",
+        handles.sourceId,
+        '{"sourceKind":"blob","outcome":"success"}',
+        2000,
+      );
+      expect(countRows(db, "document_blobs")).toBe(1);
+      db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
+      expect(countRows(db, "document_blobs")).toBe(0);
       expect(countRows(db, "capsule_audit_events")).toBe(1);
     } finally {
       db.close();
