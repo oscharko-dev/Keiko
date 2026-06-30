@@ -610,7 +610,7 @@ async function runAxe(page: Page, selector: string): Promise<readonly AxeViolati
     });
     return result.violations.map((violation) => ({
       id: violation.id,
-      impact: violation.impact,
+      impact: violation.impact ?? null,
       nodes: violation.nodes.map((node) => ({ target: node.target })),
     }));
   }, selector);
