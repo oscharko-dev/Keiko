@@ -611,6 +611,7 @@ for (const pkg of publishPlan) {
 
 run("npm", ["run", "check:version-consistency"], { stdio: "inherit" });
 run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
+run("npm", ["run", "check:release-impact"], { stdio: "inherit" });
 
 if (options.planOnly) {
   console.log("release-publish: PLAN-ONLY complete.");

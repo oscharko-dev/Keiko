@@ -38,6 +38,17 @@ Explain the product belief this epic validates and the trust or capability it sh
 2. Outcome 2.
 3. Outcome 3.
 
+## Planned Update Impact
+
+Summarize expected release-impact metadata for the epic. Child issues and PRs own the final normalized fields.
+
+- Release-note categories expected: `critical-security | update-notes | state-or-compatibility-changes | new-additions | improvements | fixes | ui-polish | internal-only`.
+- User-visible change summary:
+- State or compatibility areas expected:
+- Supported-from baseline:
+- Release-note aggregation rule:
+- Internal-only items that must stay out of default patch notes:
+
 ## Child Issues
 
 - [ ] Child issues are created from the current `Feature / Task` template, not as free-form issues.

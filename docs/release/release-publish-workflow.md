@@ -22,6 +22,10 @@ stable `latest` publishes as GitHub's `Latest` release. If the GitHub Release is
 after `release:publish` exits successfully, treat that as a script defect, not a manual
 follow-up.
 
+Release-impact metadata is governed by the [release-impact runbook](release-impact-runbook.md) and
+validated from [`release-impact.catalog.json`](../../release-impact.catalog.json). Publish metadata
+must be reviewed by a release owner before it is used for a stable package release.
+
 ## Triggering
 
 - Tag pushes matching `v*` run the full release verification job.
@@ -48,27 +52,14 @@ The release stabilization flow uses a dedicated branch for release-only hardenin
 
 ## Gates
 
-The verification job runs the current release gates in a conservative order:
+The tag verification job is dependency-free after checkout and Node setup:
 
-1. `npm ci`
-2. `npm run typecheck`
-3. `npm run check:version-consistency`
-4. `npm run lint`
-5. `npm run arch:check`
-6. `npm run arch:check:negative`
-7. `npm run check:qi-supply-chain`
-8. `npm test`
-9. `npm run build`
-10. `npm run prepare:bin`
-11. `npm run build:ui`
-12. `npm run prune:package-native-optionals`
-13. `npm run check:package-surface`
-14. `npm run smoke:install`
-15. `npm run smoke:install:memory`
-16. `npm audit --audit-level=high`
-17. `npm sbom --sbom-format cyclonedx --omit dev`
-18. `npm run check:workspace-supply-chain`
-19. `npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui`
+1. Validate that the tag name matches `package.json`.
+2. Verify required GitHub checks for the tagged SHA.
+3. Run `npm run release:plan -- --tag beta`.
+
+The release plan validates version consistency, publish manifests, and release-impact metadata
+without relying on `node_modules`, so the tag job can fail fast on metadata drift.
 
 The workflow uploads the root and UI CycloneDX SBOMs as artifacts so release evidence stays attached to the run.
 
@@ -87,6 +78,7 @@ that the tag-push release verification already completed successfully for the sa
 The script:
 
 - checks version and publish-manifest consistency,
+- checks release-impact metadata for the current package version,
 - requires `HEAD` to match `v<package.json version>` unless `--allow-untagged` is used,
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
@@ -98,6 +90,10 @@ The script:
 
 Prerelease package versions are blocked from publishing with the `latest` dist-tag, and the
 selected tag must exactly match `v<package.json version>`.
+
+The `prepack` and `prepublishOnly` gates also run `npm run check:release-impact`, so a publish
+cannot bypass missing, duplicated, contradictory, unreviewed, unbundled, or version-mismatched
+release-impact metadata.
 
 ## GitHub Release and required checks
 

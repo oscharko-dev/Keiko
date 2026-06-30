@@ -76,6 +76,27 @@ export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from 
 // ─── Workflow descriptor ────────────────────────────────────────────────────────
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./workflow-descriptor.js";
 
+// ─── Governed release impact (Issue #1690) ─────────────────────────────────────
+export type {
+  ReleaseImpactBreakingException,
+  ReleaseImpactCatalog,
+  ReleaseImpactCategory,
+  ReleaseImpactEntry,
+  ReleaseImpactPriority,
+  ReleaseImpactPublishGate,
+  ReleaseImpactRemediation,
+  ReleaseImpactReview,
+  ReleaseImpactStateImpact,
+  ReleaseImpactUserVisibleChange,
+} from "./release-impact.js";
+export {
+  RELEASE_IMPACT_CATEGORIES,
+  RELEASE_IMPACT_PRIORITIES,
+  RELEASE_IMPACT_PUBLISH_GATES,
+  RELEASE_IMPACT_REMEDIATIONS,
+  RELEASE_IMPACT_SCHEMA_VERSION,
+} from "./release-impact.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,

@@ -26,7 +26,8 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "TRADEMARKS.md"
+    "TRADEMARKS.md",
+    "release-impact.catalog.json"
   ],
   "sideEffects": false,
   "scripts": {
@@ -84,6 +85,7 @@
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
+    "check:release-impact": "node scripts/check-release-impact.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
     "smoke:install:memory": "node scripts/installable-memory-smoke.mjs",
     "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
@@ -100,8 +102,8 @@
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages && node scripts/check-import-policy.mjs",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
-    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:qi-supply-chain",
-    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:qi-supply-chain",
+    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:release-impact && npm run check:qi-supply-chain",
+    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:release-impact && npm run check:qi-supply-chain",
     "clean": "node scripts/clean.mjs",
     "test:mutation:security": "npx --yes @stryker-mutator/core@9 @stryker-mutator/vitest-runner@9 stryker run stryker.security.conf.json",
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
