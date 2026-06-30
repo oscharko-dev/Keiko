@@ -2347,7 +2347,7 @@ describe("Issue #1292 — design-system token drift gate", () => {
   function declarationMap(source: string, selector: string): Record<string, string> {
     const rule = cssRuleFrom(source, selector).replace(/\/\*[\s\S]*?\*\//g, "");
     const entries: Array<[string, string]> = [];
-    for (const match of rule.matchAll(/^\s*(--[a-z0-9-]+|color-scheme)\s*:\s*([^;]+);/gm)) {
+    for (const match of rule.matchAll(/(--[a-z0-9-]+|color-scheme)\s*:\s*([^;]+);/g)) {
       const name = match[1];
       const value = match[2];
       if (name !== undefined && value !== undefined) entries.push([name, value.trim()]);
@@ -3865,27 +3865,29 @@ describe("Issue #1298 — input + navigation components (Design System 0.4.0)", 
   });
 
   it("pins the reference input demo name/role/value repairs", () => {
+    const compactInputsHtml = designSystemInputsHtml.replace(/\s+/g, " ");
     expect(designSystemInputsHtml).toContain('aria-labelledby="temperature-label"');
     expect(designSystemInputsHtml).toContain('aria-labelledby="max-tokens-label"');
     expect(designSystemInputsHtml).toContain('aria-labelledby="parallel-runs-label"');
     expect(designSystemInputsHtml).toContain('aria-labelledby="reviewers-label"');
     expect(designSystemInputsHtml).toContain('aria-label="Remove @maya"');
     expect(designSystemInputsHtml).toContain('"Remove " + v');
-    expect(designSystemInputsHtml).toContain(
+    expect(compactInputsHtml).toContain(
       'role="spinbutton" aria-label="Day" aria-valuemin="1" aria-valuemax="31" aria-valuenow="21"',
     );
-    expect(designSystemInputsHtml).toContain(
+    expect(compactInputsHtml).toContain(
       'role="spinbutton" aria-label="Month" aria-valuemin="1" aria-valuemax="12" aria-valuenow="6"',
     );
-    expect(designSystemInputsHtml).toContain(
+    expect(compactInputsHtml).toContain(
       'role="spinbutton" aria-label="Year" aria-valuemin="2026" aria-valuemax="2030" aria-valuenow="2026"',
     );
   });
 
   it("pins context-menu keyboard entry in the navigation reference demo", () => {
-    expect(designSystemNavHtml).toContain('role="menu" aria-label="Row actions"');
+    const compactNavHtml = designSystemNavHtml.replace(/\s+/g, " ");
+    expect(compactNavHtml).toContain('role="menu" aria-label="Row actions"');
     expect(designSystemNavHtml).toContain('aria-orientation="vertical"');
-    expect(designSystemNavHtml).toContain('role="menuitem" tabindex="0"');
+    expect(compactNavHtml).toContain('role="menuitem" tabindex="0"');
   });
 
   it("makes the #1298 evidence harness prove focus and responsive viewport coverage", () => {
