@@ -12,16 +12,34 @@ import {
 
 type Listener = (event: unknown) => void;
 
+let nextDataChannelReadyState: RTCDataChannelState = "open";
+let lastDataChannel: FakeDataChannel | undefined;
+
 class FakeDataChannel {
-  public readyState: RTCDataChannelState = "open";
+  public readyState: RTCDataChannelState;
   public readonly close = vi.fn(() => {
     this.readyState = "closed";
   });
   public readonly send = vi.fn();
   private readonly listeners: Record<string, Listener[]> = {};
 
+  constructor() {
+    this.readyState = nextDataChannelReadyState;
+  }
+
   addEventListener(type: string, cb: Listener): void {
     (this.listeners[type] ??= []).push(cb);
+  }
+
+  fire(type: string): void {
+    for (const cb of this.listeners[type] ?? []) {
+      cb({});
+    }
+  }
+
+  open(): void {
+    this.readyState = "open";
+    this.fire("open");
   }
 
   fireMessage(data: unknown): void {
@@ -55,6 +73,7 @@ class FakePeerConnection {
 
   createDataChannel(_label: string): RTCDataChannel {
     const ch = new FakeDataChannel();
+    lastDataChannel = ch;
     this.channels.push(ch);
     return ch as unknown as RTCDataChannel;
   }
@@ -113,12 +132,15 @@ function stubMedia(
 function fakeStream(track: { stop: () => void }): MediaStream {
   return {
     getTracks: () => [track],
+    getAudioTracks: () => [track],
   } as unknown as MediaStream;
 }
 
 afterEach(() => {
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator as unknown as Record<string, unknown>, "mediaDevices");
+  nextDataChannelReadyState = "open";
+  lastDataChannel = undefined;
 });
 
 describe("realtimeVoiceTransportSupported", () => {
@@ -277,7 +299,7 @@ describe("createBrowserVoiceRtcTransport", () => {
     expect(track.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("setInputMuted disables and re-enables the local microphone track", async () => {
+  it("falls back to disabling the local microphone track when WebAudio is unavailable", async () => {
     const track = { enabled: true, stop: vi.fn() };
     stubMedia(async () => fakeStream(track), track);
     const transport = createBrowserVoiceRtcTransport();
@@ -288,5 +310,70 @@ describe("createBrowserVoiceRtcTransport", () => {
 
     session.setInputMuted?.(false);
     expect(track.enabled).toBe(true);
+  });
+
+  it("mutes through a WebAudio gain ramp without disabling the microphone track", async () => {
+    const micTrack = { enabled: true, stop: vi.fn() };
+    const senderTrack = { enabled: true, stop: vi.fn() };
+    const source = { connect: vi.fn(), disconnect: vi.fn() };
+    const gainParam = {
+      value: 1,
+      cancelScheduledValues: vi.fn(),
+      setValueAtTime: vi.fn((value: number) => {
+        gainParam.value = value;
+      }),
+      linearRampToValueAtTime: vi.fn((value: number) => {
+        gainParam.value = value;
+      }),
+    };
+    const gain = { gain: gainParam, connect: vi.fn(), disconnect: vi.fn() };
+    const destination = { stream: fakeStream(senderTrack) };
+    class FakeAudioContext {
+      currentTime = 10;
+      state: AudioContextState = "running";
+      readonly createMediaStreamSource = vi.fn(() => source);
+      readonly createGain = vi.fn(() => gain);
+      readonly createMediaStreamDestination = vi.fn(() => destination);
+      readonly close = vi.fn(async () => {});
+      readonly resume = vi.fn(async () => {});
+    }
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    stubMedia(async () => fakeStream(micTrack), micTrack);
+    const transport = createBrowserVoiceRtcTransport();
+    const session = await transport.connect();
+
+    session.setInputMuted?.(true);
+    expect(micTrack.enabled).toBe(true);
+    expect(gainParam.linearRampToValueAtTime).toHaveBeenLastCalledWith(0, 10.035);
+
+    session.setInputMuted?.(false);
+    expect(micTrack.enabled).toBe(true);
+    expect(gainParam.linearRampToValueAtTime).toHaveBeenLastCalledWith(1, 10.035);
+  });
+
+  it("queues data-channel events before open and flushes them on open", async () => {
+    nextDataChannelReadyState = "connecting";
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const transport = createBrowserVoiceRtcTransport();
+    const session = await transport.connect();
+    const channel = lastDataChannel;
+    expect(channel).toBeDefined();
+
+    expect(session.sendDataChannelEvent?.({ type: "session.update" })).toBe(true);
+    expect(channel?.send).not.toHaveBeenCalled();
+
+    channel?.open();
+    expect(channel?.send).toHaveBeenCalledWith(JSON.stringify({ type: "session.update" }));
+  });
+
+  it("reports the current data-channel state immediately on subscription", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const transport = createBrowserVoiceRtcTransport();
+    const session = await transport.connect();
+    const states: RTCDataChannelState[] = [];
+
+    session.onDataChannelStateChange?.((state) => states.push(state));
+
+    expect(states).toEqual(["open"]);
   });
 });

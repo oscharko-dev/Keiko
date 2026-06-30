@@ -15,14 +15,22 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
-import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import {
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  type GatewayConfig,
+  type RealtimeNegotiationRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 
 const ANSWER_SDP =
   "v=0\r\no=- 2 2 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
 
-function voiceConfig(realtime: boolean): GatewayConfig {
+function voiceConfig(
+  realtime: boolean,
+  providerOverrides: Partial<GatewayConfig["providers"][number]> = {},
+  capabilityOverrides: Partial<NonNullable<GatewayConfig["capabilities"]>[number]> = {},
+): GatewayConfig {
   return {
     providers: [
       {
@@ -32,6 +40,7 @@ function voiceConfig(realtime: boolean): GatewayConfig {
         timeoutMs: 1000,
         maxRetries: 2,
         retryBaseDelayMs: 10,
+        ...providerOverrides,
       },
     ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 },
@@ -55,6 +64,7 @@ function voiceConfig(realtime: boolean): GatewayConfig {
         throughputHint: "azure foundry realtime",
         preferredUseCases: ["Conversation"],
         knownLimitations: [],
+        ...capabilityOverrides,
       },
     ],
   };
@@ -336,6 +346,162 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     await next(); // media.track.state negotiating
     const answer = await next();
     expect(answer).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
+    socket.close();
+  });
+
+  it("passes fail-safe transcription and a client-consistent timeout to realtime negotiation", async () => {
+    let seenRequest: RealtimeNegotiationRequest | undefined;
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true, {
+        realtimeAuthMode: "ephemeral-session",
+        timeoutMs: 30_000,
+      }),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (request) => {
+        seenRequest = request;
+        return Promise.resolve({
+          ok: true,
+          value: { answerSdp: ANSWER_SDP },
+        });
+      },
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(await connect(port));
+    socket.send(sessionCreate(chat.id));
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    await next(); // signal.sdp.answer
+
+    expect(seenRequest).toMatchObject({
+      endpoint: "https://realtime.example.com",
+      modelId: "keiko-realtime",
+      realtimeAuthMode: "ephemeral-session",
+      offerSdp: OFFER_SDP,
+      transcriptionModel: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+      timeoutMs: 12_000,
+    });
+    socket.close();
+  });
+
+  it("forces the realtime grounding tool when grounding sources are active", async () => {
+    let seenRequest: RealtimeNegotiationRequest | undefined;
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(
+        true,
+        {
+          realtimeAuthMode: "ephemeral-session",
+        },
+        {
+          toolCalling: true,
+        },
+      ),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (request) => {
+        seenRequest = request;
+        return Promise.resolve({
+          ok: true,
+          value: { answerSdp: ANSWER_SDP },
+        });
+      },
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(await connect(port));
+    socket.send(
+      sessionCreate(chat.id, {
+        chatContext: {
+          chatId: chat.id,
+          memory: { enabled: true, budgetTokens: 1200 },
+          grounding: { enabled: true, kind: "files", sourceCount: 1 },
+        },
+      }),
+    );
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+    await next(); // media.track.state negotiating
+    await next(); // signal.sdp.answer
+
+    expect(seenRequest?.tools).toEqual([
+      expect.objectContaining({ type: "function", name: "search_keiko_grounding" }),
+    ]);
+    expect(seenRequest?.toolChoice).toEqual({
+      type: "function",
+      function: { name: "search_keiko_grounding" },
+    });
+    socket.close();
+  });
+
+  it("degrades active grounding to a recorded voice session when the realtime provider does not advertise tool calling", async () => {
+    let seenRequest: RealtimeNegotiationRequest | undefined;
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true, {
+        realtimeAuthMode: "ephemeral-session",
+      }),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: (request) => {
+        seenRequest = request;
+        return Promise.resolve({
+          ok: true,
+          value: { answerSdp: ANSWER_SDP },
+        });
+      },
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(await connect(port));
+    socket.send(
+      sessionCreate(chat.id, {
+        chatContext: {
+          chatId: chat.id,
+          grounding: { enabled: true, kind: "files", sourceCount: 1 },
+        },
+      }),
+    );
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-int-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+
+    expect(await next()).toMatchObject({
+      kind: "media.track.state",
+      track: "audio-in",
+      state: "negotiating",
+    });
+    expect(await next()).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
+    expect(await next()).toMatchObject({
+      kind: "media.track.state",
+      track: "audio-in",
+      state: "live",
+    });
+    expect(seenRequest?.tools).toBeUndefined();
+    expect(seenRequest?.toolChoice).toBeUndefined();
     socket.close();
   });
 

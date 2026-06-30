@@ -34,7 +34,84 @@ import {
 // drops a live conversation over a momentary hiccup. We keep the session alive for this grace window
 // and only treat the connection as lost if it has not recovered by the time it elapses.
 const ICE_DISCONNECT_GRACE_MS = 5_000;
+// After re-enabling a disabled microphone track, browsers may need a short re-arm window before
+// capture/VAD is reliably live again. Keep the UI from presenting a stale listening state during it.
+const INPUT_UNMUTE_REARM_MS = 300;
+const SESSION_READY_WARMUP_MS = 300;
 const GROUNDING_TOOL_NAME = "search_keiko_grounding";
+const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
+const DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS = 300;
+const DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS = 500;
+const DEFAULT_REALTIME_VAD_THRESHOLD = 0.5;
+const MAX_REALTIME_MEMORY_CONTEXT_CHARS = 6_000;
+
+function realtimeGroundingToolDefinition(): Record<string, unknown> {
+  return {
+    type: "function",
+    name: GROUNDING_TOOL_NAME,
+    description:
+      "Search Keiko's connected repository, file, document, and knowledge sources for the current chat and return a citation-backed answer.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: "string",
+          description: "The user's grounded question, rewritten only enough to preserve the intended meaning.",
+        },
+      },
+      required: ["query"],
+    },
+  };
+}
+
+function buildRealtimeSessionUpdate(groundingActive: boolean): Record<string, unknown> {
+  const session: Record<string, unknown> = {
+    output_modalities: ["audio"],
+    audio: {
+      input: {
+        turn_detection: {
+          type: "server_vad",
+          threshold: DEFAULT_REALTIME_VAD_THRESHOLD,
+          prefix_padding_ms: DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS,
+          silence_duration_ms: DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS,
+          interrupt_response: true,
+        },
+        transcription: { model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL },
+      },
+    },
+  };
+  if (groundingActive) {
+    session.tools = [realtimeGroundingToolDefinition()];
+    session.tool_choice = { type: "function", function: { name: GROUNDING_TOOL_NAME } };
+  }
+  return { type: "session.update", session };
+}
+
+function buildRealtimeMemoryContextItem(text: string): Record<string, unknown> | undefined {
+  const safe = text.replace(/\s+\n/gu, "\n").trim();
+  if (safe.length === 0) {
+    return undefined;
+  }
+  const bounded =
+    safe.length <= MAX_REALTIME_MEMORY_CONTEXT_CHARS
+      ? safe
+      : safe.slice(-MAX_REALTIME_MEMORY_CONTEXT_CHARS);
+  return {
+    type: "conversation.item.create",
+    item: {
+      type: "message",
+      role: "system",
+      status: "completed",
+      content: [
+        {
+          type: "input_text",
+          text: `Updated MemoriaViva context for the next voice turn:\n${bounded}`,
+        },
+      ],
+    },
+  };
+}
 
 // The audio sink for the assistant's remote media stream. Without it the negotiated remote track is
 // never attached to any output and the realtime assistant is completely silent — the single most
@@ -142,10 +219,14 @@ export interface UseRealtimeVoiceOptions {
   // transcripts are buffered until Realtime calls Keiko's grounding tool; the canonical BFF grounded
   // answer is persisted, and the spoken provider transcript is not appended as a duplicate answer.
   readonly groundingActive?: boolean | undefined;
+  readonly memoryContextText?: string | undefined;
   // Test seams: inject fake factories. Production uses the browser transport and the BFF client.
   readonly createTransport?: (() => VoiceRtcTransport) | undefined;
   readonly createControl?: (() => VoiceControlClient) | undefined;
   readonly createAudioSink?: (() => RealtimeAudioSink) | undefined;
+  readonly onVoiceTurnCommitted?:
+    | ((messages: readonly RealtimeVoiceTurnMessage[]) => void | Promise<void>)
+    | undefined;
   readonly onUserTranscriptCommitted?: ((text: string) => void | Promise<void>) | undefined;
   readonly onAssistantTranscriptCommitted?: ((text: string) => void | Promise<void>) | undefined;
   readonly onGroundedToolCall?:
@@ -166,9 +247,22 @@ export interface RealtimeGroundedVoiceToolCall {
 
 export type RealtimeGroundedVoiceToolOutput = unknown;
 
-interface PendingGroundedTranscript {
-  readonly text: string;
-  readonly itemId?: string | undefined;
+export interface RealtimeVoiceTurnMessage {
+  readonly role: "user" | "assistant";
+  readonly content: string;
+}
+
+interface VoiceTurnDraft {
+  seq: number;
+  groundingActive: boolean;
+  userText: string | undefined;
+  userItemId: string | undefined;
+  assistantText: string | undefined;
+  assistantResponseId: string | undefined;
+  assistantItemId: string | undefined;
+  userPersisted: boolean;
+  assistantPersisted: boolean;
+  groundedToolPersisted: boolean;
 }
 
 interface FunctionCallBuffer {
@@ -176,6 +270,24 @@ interface FunctionCallBuffer {
   readonly responseId?: string | undefined;
   readonly itemId?: string | undefined;
   argumentsText: string;
+}
+
+interface SessionReadiness {
+  rtcConnected: boolean;
+  dataChannelOpen: boolean;
+  sessionUpdated: boolean;
+  warmupComplete: boolean;
+  requiresDataChannelAck: boolean;
+}
+
+function freshSessionReadiness(): SessionReadiness {
+  return {
+    rtcConnected: false,
+    dataChannelOpen: false,
+    sessionUpdated: false,
+    warmupComplete: false,
+    requiresDataChannelAck: true,
+  };
 }
 
 export interface RealtimeVoiceController {
@@ -217,11 +329,8 @@ function eventIdentity(event: {
   return event.itemId ?? event.responseId;
 }
 
-function transcriptTextIdentity(event: {
-  readonly text: string;
-  readonly responseId?: string | undefined;
-}): string {
-  return `${event.responseId ?? "unknown-response"}:${event.text.replace(/\s+/gu, " ").trim()}`;
+function normalizedTranscriptText(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
 }
 
 function normalizeToolQuery(text: string): string {
@@ -258,6 +367,18 @@ function safeToolOutputJson(output: RealtimeGroundedVoiceToolOutput): string {
   }
 }
 
+function groundedToolOutputPersisted(output: RealtimeGroundedVoiceToolOutput): boolean {
+  if (!isRecord(output) || !isRecord(output.persisted)) {
+    return false;
+  }
+  return (
+    typeof output.persisted.userMessageId === "string" &&
+    output.persisted.userMessageId.length > 0 &&
+    typeof output.persisted.assistantMessageId === "string" &&
+    output.persisted.assistantMessageId.length > 0
+  );
+}
+
 export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoiceController {
   const [state, dispatch] = useReducer(realtimeVoiceReducer, INITIAL_STATE);
   const turnManagerRef = useRef<VoiceTurnManagerEngine>(
@@ -267,6 +388,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     turnManagerRef.current.snapshot(),
   );
   const [muted, setMuted] = useState(false);
+  const [inputRearming, setInputRearming] = useState(false);
 
   const transportFactory = options.createTransport ?? createBrowserVoiceRtcTransport;
   // Read the latest persona at start() time without churning the control factory identity (which is a
@@ -283,29 +405,45 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     [options.createControl],
   );
   const audioSinkFactory = options.createAudioSink ?? createBrowserRealtimeAudioSink;
+  const onVoiceTurnCommittedRef = useRef(options.onVoiceTurnCommitted);
   const onUserTranscriptCommittedRef = useRef(options.onUserTranscriptCommitted);
   const onAssistantTranscriptCommittedRef = useRef(options.onAssistantTranscriptCommitted);
   const onGroundedToolCallRef = useRef(options.onGroundedToolCall);
   const groundingActiveRef = useRef(options.groundingActive === true);
+  const memoryContextTextRef = useRef(options.memoryContextText);
+  onVoiceTurnCommittedRef.current = options.onVoiceTurnCommitted;
   onUserTranscriptCommittedRef.current = options.onUserTranscriptCommitted;
   onAssistantTranscriptCommittedRef.current = options.onAssistantTranscriptCommitted;
   onGroundedToolCallRef.current = options.onGroundedToolCall;
   groundingActiveRef.current = options.groundingActive === true;
+  memoryContextTextRef.current = options.memoryContextText;
 
   const sessionRef = useRef<VoiceRtcSession | undefined>(undefined);
   const controlRef = useRef<VoiceControlClient | undefined>(undefined);
   const audioSinkRef = useRef<RealtimeAudioSink | undefined>(undefined);
+  const startupAbortRef = useRef<AbortController | undefined>(undefined);
+  const sessionReadyWarmupTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const sessionReadinessRef = useRef<SessionReadiness>(freshSessionReadiness());
+  const sessionUpdateSentRef = useRef(false);
+  const lastMemoryContextSentRef = useRef<string | undefined>(undefined);
+  const readyDispatchedRef = useRef(false);
   const userTranscriptItemsRef = useRef<Set<string>>(new Set());
+  const userTranscriptDeltaItemsRef = useRef<Map<string, string>>(new Map());
+  const latestUserTranscriptDeltaKeyRef = useRef<string | undefined>(undefined);
   const assistantTranscriptItemsRef = useRef<Set<string>>(new Set());
   const assistantTranscriptTextItemsRef = useRef<Set<string>>(new Set());
+  const assistantResponseTextItemsRef = useRef<Set<string>>(new Set());
   const assistantTranscriptBufferRef = useRef("");
   const assistantTranscriptResponseRef = useRef<string | undefined>(undefined);
-  const pendingGroundedTranscriptRef = useRef<PendingGroundedTranscript | undefined>(undefined);
+  const assistantTranscriptItemRef = useRef<string | undefined>(undefined);
+  const currentVoiceTurnRef = useRef<VoiceTurnDraft | undefined>(undefined);
+  const voiceTurnSeqRef = useRef(0);
   const functionCallBuffersRef = useRef<Map<string, FunctionCallBuffer>>(new Map());
   const executedFunctionCallsRef = useRef<Set<string>>(new Set());
   const groundedToolAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
   // Pending teardown timer for a transient `disconnected` state (see ICE_DISCONNECT_GRACE_MS).
   const graceTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const unmuteRearmTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Guards every state update that runs after an `await`, so a composer that unmounts mid-flow
   // (e.g. while permission is pending or negotiation is in flight) never dispatches onto an
   // unmounted component and never leaves the microphone open.
@@ -325,15 +463,72 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     [],
   );
 
+  const sendMemoryContextUpdate = useCallback((text: string | undefined): void => {
+    const normalized = text?.trim();
+    if (
+      normalized === undefined ||
+      normalized.length === 0 ||
+      normalized === lastMemoryContextSentRef.current
+    ) {
+      return;
+    }
+    const event = buildRealtimeMemoryContextItem(normalized);
+    if (event === undefined) {
+      return;
+    }
+    const accepted = sessionRef.current?.sendDataChannelEvent?.(event);
+    if (accepted !== false) {
+      lastMemoryContextSentRef.current = normalized;
+    }
+  }, []);
+
+  const maybeDispatchConnected = useCallback((): void => {
+    const readiness = sessionReadinessRef.current;
+    if (
+      readyDispatchedRef.current ||
+      !mountedRef.current ||
+      !readiness.rtcConnected ||
+      !readiness.dataChannelOpen ||
+      !readiness.warmupComplete ||
+      (readiness.requiresDataChannelAck && !readiness.sessionUpdated)
+    ) {
+      return;
+    }
+    readyDispatchedRef.current = true;
+    applyTurnSignal({ kind: "recovered" });
+    dispatch({ type: "connected" });
+    sendMemoryContextUpdate(memoryContextTextRef.current);
+  }, [applyTurnSignal, sendMemoryContextUpdate]);
+
+  const sendSessionUpdate = useCallback((): void => {
+    if (sessionUpdateSentRef.current) {
+      return;
+    }
+    sessionUpdateSentRef.current = true;
+    const accepted = sessionRef.current?.sendDataChannelEvent?.(
+      buildRealtimeSessionUpdate(groundingActiveRef.current),
+    );
+    if (accepted === false) {
+      sessionReadinessRef.current = {
+        ...sessionReadinessRef.current,
+        sessionUpdated: false,
+      };
+    }
+  }, []);
+
   const resetTurnState = useCallback((): void => {
     turnManagerRef.current.reset();
     setTurnSnapshot(turnManagerRef.current.snapshot());
     userTranscriptItemsRef.current.clear();
+    userTranscriptDeltaItemsRef.current.clear();
+    latestUserTranscriptDeltaKeyRef.current = undefined;
     assistantTranscriptItemsRef.current.clear();
     assistantTranscriptTextItemsRef.current.clear();
+    assistantResponseTextItemsRef.current.clear();
     assistantTranscriptBufferRef.current = "";
     assistantTranscriptResponseRef.current = undefined;
-    pendingGroundedTranscriptRef.current = undefined;
+    assistantTranscriptItemRef.current = undefined;
+    currentVoiceTurnRef.current = undefined;
     functionCallBuffersRef.current.clear();
     executedFunctionCallsRef.current.clear();
     for (const controller of groundedToolAbortControllersRef.current.values()) {
@@ -341,6 +536,119 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     }
     groundedToolAbortControllersRef.current.clear();
   }, []);
+
+  const resetSessionReadiness = useCallback((): void => {
+    if (sessionReadyWarmupTimerRef.current !== undefined) {
+      clearTimeout(sessionReadyWarmupTimerRef.current);
+      sessionReadyWarmupTimerRef.current = undefined;
+    }
+    sessionReadinessRef.current = freshSessionReadiness();
+    sessionUpdateSentRef.current = false;
+    lastMemoryContextSentRef.current = undefined;
+    readyDispatchedRef.current = false;
+  }, []);
+
+  const armSessionReadyWarmup = useCallback((): void => {
+    if (sessionReadyWarmupTimerRef.current !== undefined) {
+      clearTimeout(sessionReadyWarmupTimerRef.current);
+    }
+    sessionReadinessRef.current = {
+      ...sessionReadinessRef.current,
+      warmupComplete: false,
+    };
+    sessionReadyWarmupTimerRef.current = setTimeout(() => {
+      sessionReadyWarmupTimerRef.current = undefined;
+      if (!mountedRef.current) return;
+      sessionReadinessRef.current = {
+        ...sessionReadinessRef.current,
+        warmupComplete: true,
+      };
+      maybeDispatchConnected();
+    }, SESSION_READY_WARMUP_MS);
+  }, [maybeDispatchConnected]);
+
+  const commitVoiceMessages = useCallback((messages: readonly RealtimeVoiceTurnMessage[]): void => {
+    const safe = messages
+      .map((message) => ({ ...message, content: message.content.trim() }))
+      .filter((message) => message.content.length > 0);
+    if (safe.length === 0) {
+      return;
+    }
+    const paired = onVoiceTurnCommittedRef.current;
+    if (paired !== undefined) {
+      void paired(safe);
+      return;
+    }
+    for (const message of safe) {
+      if (message.role === "user") {
+        void onUserTranscriptCommittedRef.current?.(message.content);
+      } else {
+        void onAssistantTranscriptCommittedRef.current?.(message.content);
+      }
+    }
+  }, []);
+
+  const flushVoiceTurn = useCallback(
+    (options: { readonly allowAssistantFallback: boolean }): void => {
+      const turn = currentVoiceTurnRef.current;
+      if (turn === undefined || turn.groundedToolPersisted) {
+        currentVoiceTurnRef.current = undefined;
+        return;
+      }
+      const messages: RealtimeVoiceTurnMessage[] = [];
+      if (!turn.userPersisted && turn.userText !== undefined && turn.userText.trim().length > 0) {
+        messages.push({ role: "user", content: turn.userText });
+      }
+      if (
+        options.allowAssistantFallback &&
+        !turn.assistantPersisted &&
+        turn.assistantText !== undefined &&
+        turn.assistantText.trim().length > 0
+      ) {
+        messages.push({ role: "assistant", content: turn.assistantText });
+      }
+      if (messages.length > 0) {
+        commitVoiceMessages(messages);
+        if (messages.some((message) => message.role === "user")) {
+          turn.userPersisted = true;
+        }
+        if (messages.some((message) => message.role === "assistant")) {
+          turn.assistantPersisted = true;
+        }
+      }
+      if (
+        (turn.userText === undefined || turn.userPersisted) &&
+        (turn.assistantText === undefined || turn.assistantPersisted)
+      ) {
+        currentVoiceTurnRef.current = undefined;
+      }
+    },
+    [commitVoiceMessages],
+  );
+
+  const beginVoiceTurn = useCallback((): VoiceTurnDraft => {
+    flushVoiceTurn({ allowAssistantFallback: true });
+    voiceTurnSeqRef.current += 1;
+    const turn: VoiceTurnDraft = {
+      seq: voiceTurnSeqRef.current,
+      groundingActive: groundingActiveRef.current,
+      userText: undefined,
+      userItemId: undefined,
+      assistantText: undefined,
+      assistantResponseId: undefined,
+      assistantItemId: undefined,
+      userPersisted: false,
+      assistantPersisted: false,
+      groundedToolPersisted: false,
+    };
+    currentVoiceTurnRef.current = turn;
+    assistantTranscriptTextItemsRef.current.clear();
+    return turn;
+  }, [flushVoiceTurn]);
+
+  const ensureVoiceTurn = useCallback((): VoiceTurnDraft => {
+    return currentVoiceTurnRef.current ?? beginVoiceTurn();
+  }, [beginVoiceTurn]);
 
   const commitUserTranscript = useCallback(
     (event: Extract<ParsedRealtimeVoiceEvent, { kind: "user-transcript-committed" }>): void => {
@@ -350,24 +658,57 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           return;
         }
         userTranscriptItemsRef.current.add(id);
+        userTranscriptDeltaItemsRef.current.delete(id);
+        if (latestUserTranscriptDeltaKeyRef.current === id) {
+          latestUserTranscriptDeltaKeyRef.current = undefined;
+        }
       }
+      const turn = ensureVoiceTurn();
+      turn.userText = event.text;
+      turn.userItemId = event.itemId;
       assistantTranscriptTextItemsRef.current.clear();
-      if (groundingActiveRef.current) {
-        pendingGroundedTranscriptRef.current =
-          id === undefined ? { text: event.text } : { text: event.text, itemId: id };
-        return;
-      }
-      void onUserTranscriptCommittedRef.current?.(event.text);
     },
-    [],
+    [ensureVoiceTurn],
   );
 
-  const flushPendingGroundedUserTranscript = useCallback((): void => {
-    const pending = pendingGroundedTranscriptRef.current;
-    if (pending === undefined) return;
-    pendingGroundedTranscriptRef.current = undefined;
-    void onUserTranscriptCommittedRef.current?.(pending.text);
-  }, []);
+  const appendUserTranscriptDelta = useCallback(
+    (event: Extract<ParsedRealtimeVoiceEvent, { kind: "user-transcript-delta" }>): void => {
+      const key = event.itemId ?? "__current";
+      latestUserTranscriptDeltaKeyRef.current = key;
+      userTranscriptDeltaItemsRef.current.set(
+        key,
+        `${userTranscriptDeltaItemsRef.current.get(key) ?? ""}${event.delta}`,
+      );
+      const text = normalizedTranscriptText(userTranscriptDeltaItemsRef.current.get(key) ?? "");
+      if (text.length > 0) {
+        ensureVoiceTurn().userText = text;
+      }
+    },
+    [ensureVoiceTurn],
+  );
+
+  const promoteUserTranscriptFallback = useCallback(
+    (itemId?: string | undefined): void => {
+      const key = itemId ?? latestUserTranscriptDeltaKeyRef.current;
+      if (key === undefined) {
+        return;
+      }
+      const text = normalizedTranscriptText(userTranscriptDeltaItemsRef.current.get(key) ?? "");
+      if (text.length === 0) {
+        return;
+      }
+      const turn = ensureVoiceTurn();
+      if (turn.userText === undefined || turn.userText.trim().length === 0) {
+        turn.userText = text;
+        turn.userItemId = key === "__current" ? undefined : key;
+      }
+      userTranscriptDeltaItemsRef.current.delete(key);
+      if (latestUserTranscriptDeltaKeyRef.current === key) {
+        latestUserTranscriptDeltaKeyRef.current = undefined;
+      }
+    },
+    [ensureVoiceTurn],
+  );
 
   const appendFunctionCallArguments = useCallback(
     (
@@ -424,23 +765,25 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       }
       executedFunctionCallsRef.current.add(executionKey);
       functionCallBuffersRef.current.delete(event.callId);
+      promoteUserTranscriptFallback();
       applyTurnSignal({ kind: "user-end-of-turn" });
       const tool = onGroundedToolCallRef.current;
-      if (!groundingActiveRef.current || tool === undefined) {
+      const turn = ensureVoiceTurn();
+      if (!turn.groundingActive || tool === undefined) {
+        flushVoiceTurn({ allowAssistantFallback: true });
         sendFunctionCallOutput(event.callId, {
           status: "error",
           message: "Grounded retrieval is not available for this chat.",
         });
         return;
       }
-      const pending = pendingGroundedTranscriptRef.current;
       const controller = new AbortController();
       groundedToolAbortControllersRef.current.set(executionKey, controller);
       void tool(
         {
           callId: event.callId,
           query,
-          ...(pending?.text === undefined ? {} : { userTranscript: pending.text }),
+          ...(turn.userText === undefined ? {} : { userTranscript: turn.userText }),
           ...(event.responseId ?? buffered?.responseId
             ? { responseId: event.responseId ?? buffered?.responseId }
             : {}),
@@ -450,12 +793,16 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       )
         .then((output) => {
           if (controller.signal.aborted) return;
-          pendingGroundedTranscriptRef.current = undefined;
+          if (groundedToolOutputPersisted(output)) {
+            turn.groundedToolPersisted = true;
+            turn.userPersisted = true;
+            turn.assistantPersisted = true;
+          }
           sendFunctionCallOutput(event.callId, output);
         })
         .catch((caught: unknown) => {
           if (controller.signal.aborted) return;
-          flushPendingGroundedUserTranscript();
+          flushVoiceTurn({ allowAssistantFallback: true });
           applyTurnSignal({ kind: "provider-failure", recoverable: true });
           sendFunctionCallOutput(event.callId, {
             status: "error",
@@ -469,38 +816,63 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           groundedToolAbortControllersRef.current.delete(executionKey);
         });
     },
-    [applyTurnSignal, flushPendingGroundedUserTranscript, sendFunctionCallOutput],
+    [
+      applyTurnSignal,
+      ensureVoiceTurn,
+      flushVoiceTurn,
+      promoteUserTranscriptFallback,
+      sendFunctionCallOutput,
+    ],
   );
 
   const commitAssistantTranscript = useCallback(
     (
       event: Extract<ParsedRealtimeVoiceEvent, { kind: "assistant-transcript-committed" }>,
     ): void => {
-      if (groundingActiveRef.current) {
-        assistantTranscriptBufferRef.current = "";
-        assistantTranscriptResponseRef.current = undefined;
-        applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
+      const normalizedText = normalizedTranscriptText(event.text);
+      if (normalizedText.length === 0) {
         return;
       }
-      const id = eventIdentity(event);
-      if (id !== undefined) {
-        if (assistantTranscriptItemsRef.current.has(id)) {
+      if (event.itemId !== undefined) {
+        if (assistantTranscriptItemsRef.current.has(event.itemId)) {
           return;
         }
-        assistantTranscriptItemsRef.current.add(id);
+        assistantTranscriptItemsRef.current.add(event.itemId);
+      } else if (event.responseId !== undefined) {
+        const responseTextKey = `${event.responseId}:${normalizedText}`;
+        if (assistantResponseTextItemsRef.current.has(responseTextKey)) {
+          return;
+        }
+        assistantResponseTextItemsRef.current.add(responseTextKey);
+      } else {
+        const turn = ensureVoiceTurn();
+        const textKey = `${String(turn.seq)}:${normalizedText}`;
+        if (assistantTranscriptTextItemsRef.current.has(textKey)) {
+          return;
+        }
+        assistantTranscriptTextItemsRef.current.add(textKey);
       }
-      const textKey = transcriptTextIdentity(event);
-      if (assistantTranscriptTextItemsRef.current.has(textKey)) {
-        return;
+      if (event.responseId !== undefined) {
+        assistantResponseTextItemsRef.current.add(`${event.responseId}:${normalizedText}`);
       }
-      assistantTranscriptTextItemsRef.current.add(textKey);
+      const turn = ensureVoiceTurn();
+      turn.assistantText = normalizedText;
+      turn.assistantResponseId = event.responseId;
+      turn.assistantItemId = event.itemId;
       assistantTranscriptBufferRef.current = "";
       assistantTranscriptResponseRef.current = undefined;
+      assistantTranscriptItemRef.current = undefined;
       applyTurnSignal({ kind: "assistant-speech-start" });
-      void onAssistantTranscriptCommittedRef.current?.(event.text);
+      if (
+        !turn.groundingActive &&
+        !turn.groundedToolPersisted &&
+        (turn.userText !== undefined || onVoiceTurnCommittedRef.current === undefined)
+      ) {
+        flushVoiceTurn({ allowAssistantFallback: true });
+      }
       applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
     },
-    [applyTurnSignal],
+    [applyTurnSignal, ensureVoiceTurn, flushVoiceTurn],
   );
 
   const commitBufferedAssistantTranscript = useCallback(
@@ -513,6 +885,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         kind: "assistant-transcript-committed",
         text,
         responseId: responseId ?? assistantTranscriptResponseRef.current,
+        itemId: assistantTranscriptItemRef.current,
       });
     },
     [commitAssistantTranscript],
@@ -525,7 +898,19 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         return;
       }
       switch (event.kind) {
+        case "session-created":
+          return;
+        case "session-updated":
+          sessionReadinessRef.current = {
+            ...sessionReadinessRef.current,
+            sessionUpdated: true,
+          };
+          maybeDispatchConnected();
+          return;
         case "user-speech-start":
+          commitBufferedAssistantTranscript(undefined);
+          flushVoiceTurn({ allowAssistantFallback: true });
+          beginVoiceTurn();
           applyTurnSignal({ kind: "user-speech-start" });
           return;
         case "user-speech-stop":
@@ -533,6 +918,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           return;
         case "user-transcript-committed":
           commitUserTranscript(event);
+          return;
+        case "user-transcript-delta":
+          appendUserTranscriptDelta(event);
+          return;
+        case "user-transcript-failed":
+          promoteUserTranscriptFallback(event.itemId);
           return;
         case "assistant-output-start":
           applyTurnSignal({ kind: "assistant-speech-start" });
@@ -543,6 +934,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         case "assistant-transcript-delta":
           assistantTranscriptBufferRef.current += event.delta;
           assistantTranscriptResponseRef.current = event.responseId;
+          assistantTranscriptItemRef.current = event.itemId;
           applyTurnSignal({ kind: "assistant-speech-start" });
           return;
         case "assistant-transcript-committed":
@@ -555,24 +947,32 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           executeGroundedFunctionCall(event);
           return;
         case "response-done":
+          promoteUserTranscriptFallback();
           if (event.status === "cancelled") {
+            commitBufferedAssistantTranscript(event.responseId);
+            flushVoiceTurn({ allowAssistantFallback: true });
             applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
             return;
           }
           if (event.status === "failed" || event.status === "incomplete") {
+            commitBufferedAssistantTranscript(event.responseId);
+            flushVoiceTurn({ allowAssistantFallback: true });
             applyTurnSignal({ kind: "provider-failure", recoverable: true });
             return;
           }
-          if (groundingActiveRef.current) {
-            flushPendingGroundedUserTranscript();
-          }
           commitBufferedAssistantTranscript(event.responseId);
+          flushVoiceTurn({ allowAssistantFallback: true });
           applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
           return;
         case "response-cancelled":
+          promoteUserTranscriptFallback();
+          commitBufferedAssistantTranscript(event.responseId);
+          flushVoiceTurn({ allowAssistantFallback: true });
           applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
           return;
         case "error":
+          promoteUserTranscriptFallback();
+          flushVoiceTurn({ allowAssistantFallback: true });
           applyTurnSignal({ kind: "provider-failure", recoverable: true });
           dispatch({ type: "error", reason: "connection-failed", message: event.message });
           return;
@@ -580,32 +980,76 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     },
     [
       appendFunctionCallArguments,
+      appendUserTranscriptDelta,
       applyTurnSignal,
+      beginVoiceTurn,
       commitAssistantTranscript,
       commitBufferedAssistantTranscript,
       commitUserTranscript,
       executeGroundedFunctionCall,
-      flushPendingGroundedUserTranscript,
+      flushVoiceTurn,
+      maybeDispatchConnected,
+      promoteUserTranscriptFallback,
     ],
   );
 
-  const cleanupRefs = useCallback((): void => {
+  const clearInputRearmTimer = useCallback((): void => {
+    if (unmuteRearmTimerRef.current !== undefined) {
+      clearTimeout(unmuteRearmTimerRef.current);
+      unmuteRearmTimerRef.current = undefined;
+    }
+  }, []);
+
+  const armInputRearmGuard = useCallback((): void => {
+    clearInputRearmTimer();
+    setInputRearming(true);
+    unmuteRearmTimerRef.current = setTimeout(() => {
+      unmuteRearmTimerRef.current = undefined;
+      if (!mountedRef.current) return;
+      setInputRearming(false);
+    }, INPUT_UNMUTE_REARM_MS);
+  }, [clearInputRearmTimer]);
+
+  const cleanupRefs = useCallback((options: { readonly discardControl?: boolean } = {}): void => {
+    const discardControl = options.discardControl ?? true;
+    startupAbortRef.current?.abort();
+    startupAbortRef.current = undefined;
     if (graceTimerRef.current !== undefined) {
       clearTimeout(graceTimerRef.current);
       graceTimerRef.current = undefined;
     }
+    promoteUserTranscriptFallback();
+    flushVoiceTurn({ allowAssistantFallback: true });
+    clearInputRearmTimer();
+    setInputRearming(false);
     audioSinkRef.current?.release();
     audioSinkRef.current = undefined;
     sessionRef.current?.close();
     sessionRef.current = undefined;
     controlRef.current?.close();
-    controlRef.current = undefined;
+    if (discardControl) {
+      controlRef.current = undefined;
+    }
     resetTurnState();
-  }, [resetTurnState]);
+    resetSessionReadiness();
+  }, [
+    clearInputRearmTimer,
+    flushVoiceTurn,
+    promoteUserTranscriptFallback,
+    resetSessionReadiness,
+    resetTurnState,
+  ]);
 
   useEffect(() => {
     sessionRef.current?.setInputMuted?.(muted);
   }, [muted]);
+
+  useEffect(() => {
+    if (!readyDispatchedRef.current) {
+      return;
+    }
+    sendMemoryContextUpdate(options.memoryContextText);
+  }, [options.memoryContextText, sendMemoryContextUpdate]);
 
   const stop = useCallback((): void => {
     sessionRef.current?.sendDataChannelEvent?.({ type: "response.cancel" });
@@ -618,12 +1062,15 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       return;
     }
     dispatch({ type: "requesting" });
+    resetSessionReadiness();
+    const startup = new AbortController();
+    startupAbortRef.current = startup;
     const transport = transportFactory();
-    const control = controlFactory();
+    const control = controlRef.current ?? controlFactory();
     controlRef.current = control;
 
     void transport
-      .connect()
+      .connect({ signal: startup.signal })
       .then(async (session) => {
         if (!mountedRef.current) {
           session.close();
@@ -643,10 +1090,52 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           if (!mountedRef.current) return;
           audioSink.attach(stream);
         });
+        session.onLocalVoiceActivity?.((activity) => {
+          if (!mountedRef.current) return;
+          if (activity === "speech-onset") {
+            commitBufferedAssistantTranscript(undefined);
+            flushVoiceTurn({ allowAssistantFallback: true });
+            beginVoiceTurn();
+            applyTurnSignal({ kind: "user-speech-start" });
+            return;
+          }
+          applyTurnSignal({ kind: "user-end-of-turn" });
+        });
         session.onDataChannelEvent?.((event) => {
           if (!mountedRef.current) return;
           handleRealtimeEvent(event);
         });
+        if (session.onDataChannelStateChange !== undefined) {
+          sessionReadinessRef.current = {
+            ...sessionReadinessRef.current,
+            requiresDataChannelAck: true,
+          };
+          session.onDataChannelStateChange((dataChannelState) => {
+            if (!mountedRef.current) return;
+            if (dataChannelState === "open") {
+              sessionReadinessRef.current = {
+                ...sessionReadinessRef.current,
+                dataChannelOpen: true,
+              };
+              sendSessionUpdate();
+              maybeDispatchConnected();
+              return;
+            }
+            if (dataChannelState === "closed") {
+              applyTurnSignal({ kind: "provider-failure", recoverable: true });
+            }
+          });
+        } else {
+          // Test/legacy seam: older injected sessions cannot surface DataChannel state or provider
+          // `session.updated`. Keep them usable without weakening the production readiness gate.
+          sessionReadinessRef.current = {
+            ...sessionReadinessRef.current,
+            dataChannelOpen: true,
+            sessionUpdated: true,
+            requiresDataChannelAck: false,
+          };
+        }
+        armSessionReadyWarmup();
 
         // Wire connection-state changes before applying the answer so early "failed" events are
         // caught. A transient `disconnected` is given a bounded grace window to recover instead of
@@ -658,16 +1147,22 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
               clearTimeout(graceTimerRef.current);
               graceTimerRef.current = undefined;
             }
-            dispatch({ type: "connected" });
+            sessionReadinessRef.current = {
+              ...sessionReadinessRef.current,
+              rtcConnected: true,
+            };
+            applyTurnSignal({ kind: "recovered" });
+            maybeDispatchConnected();
           } else if (rtcState === "failed" || rtcState === "closed") {
-            cleanupRefs();
+            cleanupRefs({ discardControl: false });
             dispatch({ type: "reset" });
           } else if (rtcState === "disconnected") {
+            applyTurnSignal({ kind: "provider-failure", recoverable: true });
             if (graceTimerRef.current === undefined) {
               graceTimerRef.current = setTimeout(() => {
                 graceTimerRef.current = undefined;
                 if (!mountedRef.current) return;
-                cleanupRefs();
+                cleanupRefs({ discardControl: false });
                 dispatch({ type: "reset" });
               }, ICE_DISCONNECT_GRACE_MS);
             }
@@ -688,30 +1183,54 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       })
       .catch((error: unknown) => {
         if (!mountedRef.current) return;
-        cleanupRefs();
+        cleanupRefs({ discardControl: false });
         const { reason, message } = classifyError(error);
         dispatch({ type: "error", reason, message });
       });
-  }, [transportFactory, controlFactory, audioSinkFactory, muted, handleRealtimeEvent, cleanupRefs]);
+  }, [
+    transportFactory,
+    controlFactory,
+    audioSinkFactory,
+    muted,
+    handleRealtimeEvent,
+    cleanupRefs,
+    resetSessionReadiness,
+    armSessionReadyWarmup,
+    sendSessionUpdate,
+    maybeDispatchConnected,
+    applyTurnSignal,
+    beginVoiceTurn,
+    commitBufferedAssistantTranscript,
+    flushVoiceTurn,
+  ]);
 
   const retry = useCallback((): void => {
-    cleanupRefs();
+    cleanupRefs({ discardControl: false });
     dispatch({ type: "reset" });
     start();
   }, [cleanupRefs, start]);
 
   const interrupt = useCallback((): void => {
+    commitBufferedAssistantTranscript(undefined);
+    flushVoiceTurn({ allowAssistantFallback: true });
     sessionRef.current?.sendDataChannelEvent?.({ type: "response.cancel" });
     for (const controller of groundedToolAbortControllersRef.current.values()) {
       controller.abort();
     }
     groundedToolAbortControllersRef.current.clear();
     applyTurnSignal({ kind: "user-interrupt" });
-  }, [applyTurnSignal]);
+  }, [applyTurnSignal, commitBufferedAssistantTranscript, flushVoiceTurn]);
 
   const toggleMute = useCallback((): void => {
-    setMuted((current) => !current);
-  }, []);
+    const next = !muted;
+    if (next) {
+      clearInputRearmTimer();
+      setInputRearming(false);
+    } else {
+      armInputRearmGuard();
+    }
+    setMuted(next);
+  }, [armInputRearmGuard, clearInputRearmTimer, muted]);
 
   // Release the microphone and WS when the composer unmounts mid-flow. Clearing both refs ensures
   // a late-firing async operation finds no live session and dispatches nothing.
@@ -732,9 +1251,10 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         ? { reason: state.errorReason, message: state.errorMessage }
         : undefined,
     turnSnapshot,
-    listening: turnSnapshot.state === "listening",
-    speaking: turnSnapshot.state === "speaking",
-    canInterrupt: turnSnapshot.floorHolder === "assistant",
+    listening:
+      state.phase === "connected" && !muted && !inputRearming && turnSnapshot.state === "listening",
+    speaking: state.phase === "connected" && turnSnapshot.state === "speaking",
+    canInterrupt: state.phase === "connected" && turnSnapshot.floorHolder === "assistant",
     muted,
     start,
     stop,

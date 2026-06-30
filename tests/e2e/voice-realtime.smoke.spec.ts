@@ -65,7 +65,15 @@ const TRANSPORT_FAKES_SCRIPT = `
       this.sent = [];
     }
     addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
-    send(data) { this.sent.push(data); }
+    send(data) {
+      this.sent.push(data);
+      let msg; try { msg = JSON.parse(data); } catch { return; }
+      if (msg.type === "session.update") {
+        for (const cb of this._l["message"] || []) {
+          cb({ data: JSON.stringify({ type: "session.updated", session: msg.session || {} }) });
+        }
+      }
+    }
     close() { this.readyState = "closed"; for (const cb of this._l["close"] || []) cb({}); }
   }
   class FakeRTCPeerConnection {

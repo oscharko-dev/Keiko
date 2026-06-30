@@ -79,9 +79,9 @@ export function supportsRealtimeVoice(resolution: VoiceCapabilityResolution | un
   );
 }
 
-// Advisory hint for deployments that explicitly advertise Realtime function calling. Absence of this
-// optional flag is not a hard UI negative: grounded Voice Dialogue is gated by Full-Realtime/WebRTC,
-// and the BFF configures or rejects the actual grounded Realtime tool bridge server-side.
+// True only when deployments explicitly advertise Realtime function calling. Grounded Voice uses this
+// as the UI-side branch guard: without it the session still opens and every spoken turn is recorded,
+// but the provider is not asked to call Keiko's grounded retrieval tool.
 export function supportsRealtimeToolCalling(
   resolution: VoiceCapabilityResolution | undefined,
 ): boolean {

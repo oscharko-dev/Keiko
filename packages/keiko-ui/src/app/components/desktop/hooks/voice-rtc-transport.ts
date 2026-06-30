@@ -7,6 +7,12 @@
 // gathering to complete (non-trickle), then sends the complete SDP to the BFF. The BFF returns an
 // answer which the browser applies via setRemoteDescription.
 
+import {
+  createBrowserVoiceActivityDetector,
+  type VoiceActivityEvent,
+  type VoiceActivityMonitor,
+} from "./voice-activity-detector";
+
 // Why a realtime connection could not start. Each maps to a specific non-blocking error in the
 // composer; the realtime transport stays clean and fully text-capable in every case (AC4).
 //   - "permission-denied"    — the user or deployment policy denied microphone access.
@@ -41,6 +47,7 @@ export interface VoiceRtcSession {
   setInputMuted?(muted: boolean): void;
   onRemoteTrack(cb: (stream: MediaStream) => void): void;
   onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void;
+  onLocalVoiceActivity?(cb: (event: VoiceActivityEvent) => void): void;
   onDataChannelEvent?(cb: (event: unknown) => void): void;
   onDataChannelStateChange?(cb: (state: RTCDataChannelState) => void): void;
   sendDataChannelEvent?(event: unknown): boolean;
@@ -51,7 +58,7 @@ export interface VoiceRtcSession {
 // SDP offer (waiting for ICE gathering to complete), and resolves with the session. Rejects with a
 // `VoiceRtcError` on denial / missing device / unsupported browser.
 export interface VoiceRtcTransport {
-  connect(): Promise<VoiceRtcSession>;
+  connect(options?: { readonly signal?: AbortSignal | undefined }): Promise<VoiceRtcSession>;
 }
 
 // True when the running browser exposes the required real-time media APIs.
@@ -100,12 +107,61 @@ const FULL_DUPLEX_AUDIO_CONSTRAINTS: MediaTrackConstraints = {
 // Acquire the microphone with the full-duplex constraints, falling back to the unconstrained mic only
 // when a device/driver cannot satisfy them (OverconstrainedError) — so a constrained-but-capable
 // device gets echo cancellation while an inflexible one still connects rather than failing the session.
-async function acquireMicrophone(): Promise<MediaStream> {
+function abortError(): DOMException {
+  return new DOMException("Realtime voice startup was cancelled.", "AbortError");
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw abortError();
+  }
+}
+
+async function abortableMediaStream(
+  input: Promise<MediaStream>,
+  signal: AbortSignal | undefined,
+): Promise<MediaStream> {
+  if (signal === undefined) {
+    return input;
+  }
+  throwIfAborted(signal);
+  return new Promise<MediaStream>((resolve, reject) => {
+    let settled = false;
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      reject(abortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    input
+      .then((stream) => {
+        signal.removeEventListener("abort", onAbort);
+        if (settled || signal.aborted) {
+          stopTracks(stream);
+          reject(abortError());
+          return;
+        }
+        settled = true;
+        resolve(stream);
+      })
+      .catch((error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        if (settled) return;
+        settled = true;
+        reject(error);
+      });
+  });
+}
+
+async function acquireMicrophone(signal?: AbortSignal | undefined): Promise<MediaStream> {
   try {
-    return await navigator.mediaDevices.getUserMedia({ audio: FULL_DUPLEX_AUDIO_CONSTRAINTS });
+    return await abortableMediaStream(
+      navigator.mediaDevices.getUserMedia({ audio: FULL_DUPLEX_AUDIO_CONSTRAINTS }),
+      signal,
+    );
   } catch (error) {
     if (error instanceof Error && error.name === "OverconstrainedError") {
-      return navigator.mediaDevices.getUserMedia({ audio: true });
+      return abortableMediaStream(navigator.mediaDevices.getUserMedia({ audio: true }), signal);
     }
     throw error;
   }
@@ -115,6 +171,107 @@ async function acquireMicrophone(): Promise<MediaStream> {
 // the local description. A bounded fallback timeout (~2 s) avoids hanging forever if the browser
 // never fires the event (e.g. in a headless test environment with no network interfaces).
 const ICE_GATHER_TIMEOUT_MS = 2_000;
+const MAX_QUEUED_DATA_CHANNEL_EVENTS = 50;
+const INPUT_MUTE_RAMP_SECONDS = 0.035;
+
+type BrowserAudioContextConstructor = new (
+  contextOptions?: AudioContextOptions,
+) => AudioContext;
+
+interface VoiceInputPipeline {
+  readonly senderStream: MediaStream;
+  readonly monitorStream: MediaStream;
+  setMuted(muted: boolean): void;
+  close(): void;
+}
+
+function audioTracks(stream: MediaStream): MediaStreamTrack[] {
+  return typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : stream.getTracks();
+}
+
+function browserAudioContextConstructor(): BrowserAudioContextConstructor | undefined {
+  const scope = globalThis as typeof globalThis & {
+    readonly AudioContext?: BrowserAudioContextConstructor | undefined;
+    readonly webkitAudioContext?: BrowserAudioContextConstructor | undefined;
+  };
+  return scope.AudioContext ?? scope.webkitAudioContext;
+}
+
+function createFallbackInputPipeline(stream: MediaStream): VoiceInputPipeline {
+  return {
+    senderStream: stream,
+    monitorStream: stream,
+    setMuted(muted: boolean): void {
+      for (const track of audioTracks(stream)) {
+        track.enabled = !muted;
+      }
+    },
+    close(): void {},
+  };
+}
+
+function createGainInputPipeline(stream: MediaStream): VoiceInputPipeline | undefined {
+  const Context = browserAudioContextConstructor();
+  if (Context === undefined) {
+    return undefined;
+  }
+  let context: AudioContext | undefined;
+  let source: MediaStreamAudioSourceNode | undefined;
+  let gain: GainNode | undefined;
+  let destination: MediaStreamAudioDestinationNode | undefined;
+  try {
+    context = new Context();
+    source = context.createMediaStreamSource(stream);
+    gain = context.createGain();
+    destination = context.createMediaStreamDestination();
+    gain.gain.value = 1;
+    source.connect(gain);
+    gain.connect(destination);
+  } catch {
+    try {
+      source?.disconnect();
+      gain?.disconnect();
+    } catch {
+      // Best-effort cleanup before falling back to track.enabled muting.
+    }
+    void context?.close().catch(() => {
+      // A failed setup must not retain a partially-created AudioContext.
+    });
+    return undefined;
+  }
+  return {
+    senderStream: destination.stream,
+    monitorStream: destination.stream,
+    setMuted(muted: boolean): void {
+      const target = muted ? 0 : 1;
+      const now = context.currentTime;
+      if (context.state === "suspended") {
+        void context.resume().catch(() => {
+          // Muting should remain best-effort; the sender track stays live either way.
+        });
+      }
+      gain.gain.cancelScheduledValues(now);
+      gain.gain.setValueAtTime(gain.gain.value, now);
+      gain.gain.linearRampToValueAtTime(target, now + INPUT_MUTE_RAMP_SECONDS);
+    },
+    close(): void {
+      try {
+        source.disconnect();
+        gain.disconnect();
+      } catch {
+        // Already disconnected.
+      }
+      stopTracks(destination.stream);
+      void context.close().catch(() => {
+        // The original microphone tracks are stopped by the owning session cleanup.
+      });
+    },
+  };
+}
+
+function createInputPipeline(stream: MediaStream): VoiceInputPipeline {
+  return createGainInputPipeline(stream) ?? createFallbackInputPipeline(stream);
+}
 
 function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
   return new Promise<void>((resolve) => {
@@ -146,6 +303,7 @@ function waitForIceGathering(pc: RTCPeerConnection): Promise<void> {
 function buildSession(
   pc: RTCPeerConnection,
   stream: MediaStream,
+  inputPipeline: VoiceInputPipeline,
   dataChannel: RTCDataChannel,
 ): VoiceRtcSession {
   const localDescription = pc.localDescription;
@@ -156,8 +314,10 @@ function buildSession(
 
   let remoteTrackCb: ((stream: MediaStream) => void) | undefined;
   let connectionStateCb: ((state: RTCPeerConnectionState) => void) | undefined;
+  let localVoiceActivityMonitor: VoiceActivityMonitor | undefined;
   let dataChannelEventCb: ((event: unknown) => void) | undefined;
   let dataChannelStateCb: ((state: RTCDataChannelState) => void) | undefined;
+  const queuedDataChannelEvents: string[] = [];
 
   pc.ontrack = (event) => {
     const firstStream = event.streams[0];
@@ -172,7 +332,22 @@ function buildSession(
     }
   };
 
+  const flushQueuedDataChannelEvents = (): void => {
+    if (dataChannel.readyState !== "open") {
+      return;
+    }
+    while (queuedDataChannelEvents.length > 0) {
+      const queued = queuedDataChannelEvents.shift();
+      if (queued !== undefined) {
+        dataChannel.send(queued);
+      }
+    }
+  };
+
   const emitDataChannelState = (): void => {
+    if (dataChannel.readyState === "open") {
+      flushQueuedDataChannelEvents();
+    }
     if (dataChannelStateCb !== undefined) {
       dataChannelStateCb(dataChannel.readyState);
     }
@@ -199,11 +374,7 @@ function buildSession(
       await pc.setRemoteDescription({ type: "answer", sdp });
     },
     setInputMuted(muted: boolean): void {
-      const tracks =
-        typeof stream.getAudioTracks === "function" ? stream.getAudioTracks() : stream.getTracks();
-      for (const track of tracks) {
-        track.enabled = !muted;
-      }
+      inputPipeline.setMuted(muted);
     },
     onRemoteTrack(cb: (stream: MediaStream) => void): void {
       remoteTrackCb = cb;
@@ -211,21 +382,45 @@ function buildSession(
     onConnectionStateChange(cb: (state: RTCPeerConnectionState) => void): void {
       connectionStateCb = cb;
     },
+    onLocalVoiceActivity(cb: (event: VoiceActivityEvent) => void): void {
+      localVoiceActivityMonitor?.stop();
+      localVoiceActivityMonitor = createBrowserVoiceActivityDetector().start(
+        inputPipeline.monitorStream,
+        cb,
+      );
+    },
     onDataChannelEvent(cb: (event: unknown) => void): void {
       dataChannelEventCb = cb;
     },
     onDataChannelStateChange(cb: (state: RTCDataChannelState) => void): void {
       dataChannelStateCb = cb;
+      cb(dataChannel.readyState);
     },
     sendDataChannelEvent(event: unknown): boolean {
-      if (dataChannel.readyState !== "open") {
+      let serialized: string;
+      try {
+        serialized = JSON.stringify(event);
+      } catch {
         return false;
       }
-      dataChannel.send(JSON.stringify(event));
-      return true;
+      if (dataChannel.readyState === "open") {
+        dataChannel.send(serialized);
+        return true;
+      }
+      if (dataChannel.readyState === "connecting") {
+        if (queuedDataChannelEvents.length >= MAX_QUEUED_DATA_CHANNEL_EVENTS) {
+          return false;
+        }
+        queuedDataChannelEvents.push(serialized);
+        return true;
+      }
+      return false;
     },
     close(): void {
       // Stop all sender tracks so the OS-level "recording" indicator clears immediately.
+      localVoiceActivityMonitor?.stop();
+      localVoiceActivityMonitor = undefined;
+      inputPipeline.close();
       stopTracks(stream);
       try {
         dataChannel.close();
@@ -241,14 +436,15 @@ function buildSession(
 // so a no-voice / unsupported environment never touches the media APIs.
 export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
   return {
-    async connect(): Promise<VoiceRtcSession> {
+    async connect(options?: { readonly signal?: AbortSignal | undefined }): Promise<VoiceRtcSession> {
+      const signal = options?.signal;
       if (!realtimeVoiceTransportSupported()) {
         throw new VoiceRtcError("unsupported", "This browser does not support real-time voice.");
       }
 
       let stream: MediaStream;
       try {
-        stream = await acquireMicrophone();
+        stream = await acquireMicrophone(signal);
       } catch (error) {
         throw new VoiceRtcError(
           classifyGetUserMediaError(error),
@@ -258,19 +454,26 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
 
       let pc: RTCPeerConnection;
       let dataChannel: RTCDataChannel;
+      let inputPipeline: VoiceInputPipeline | undefined;
       try {
+        throwIfAborted(signal);
+        inputPipeline = createInputPipeline(stream);
         pc = new RTCPeerConnection();
-        for (const track of stream.getTracks()) {
-          pc.addTrack(track, stream);
+        for (const track of inputPipeline.senderStream.getTracks()) {
+          pc.addTrack(track, inputPipeline.senderStream);
         }
         // OpenAI-compatible Realtime sideband channel. Provider lifecycle and transcript events arrive
         // here; raw audio remains exclusively on the WebRTC media tracks.
         dataChannel = pc.createDataChannel("oai-events");
         const offer = await pc.createOffer();
+        throwIfAborted(signal);
         await pc.setLocalDescription(offer);
+        throwIfAborted(signal);
         await waitForIceGathering(pc);
-        return buildSession(pc, stream, dataChannel);
+        throwIfAborted(signal);
+        return buildSession(pc, stream, inputPipeline, dataChannel);
       } catch (error) {
+        inputPipeline?.close();
         stopTracks(stream);
         if (error instanceof VoiceRtcError) {
           throw error;

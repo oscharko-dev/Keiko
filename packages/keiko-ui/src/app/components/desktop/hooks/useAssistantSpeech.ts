@@ -327,6 +327,14 @@ export function useAssistantSpeech(options: UseAssistantSpeechOptions): VoicePla
     };
   }, [enabled, available, text, messageId, replayNonce, teardown]);
 
+  useEffect(
+    () => () => {
+      streamingSinkRef.current?.dispose();
+      streamingSinkRef.current = undefined;
+    },
+    [],
+  );
+
   const setMuted = useCallback(
     (muted: boolean) => {
       playbackRef.current.setMuted(muted);

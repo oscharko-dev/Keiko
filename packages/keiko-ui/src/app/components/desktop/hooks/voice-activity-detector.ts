@@ -111,10 +111,19 @@ export function createBrowserVoiceActivityDetector(
       } catch {
         return { stop: (): void => {} };
       }
-      const source = context.createMediaStreamSource(stream);
-      const analyser = context.createAnalyser();
-      analyser.fftSize = ANALYSER_FFT_SIZE;
-      source.connect(analyser);
+      let source: MediaStreamAudioSourceNode;
+      let analyser: AnalyserNode;
+      try {
+        source = context.createMediaStreamSource(stream);
+        analyser = context.createAnalyser();
+        analyser.fftSize = ANALYSER_FFT_SIZE;
+        source.connect(analyser);
+      } catch {
+        void context.close().catch(() => {
+          // A detector setup failure must not fail the realtime session.
+        });
+        return { stop: (): void => {} };
+      }
       const buffer = new Float32Array(analyser.fftSize);
       const state = new VoiceActivityState(thresholds);
 

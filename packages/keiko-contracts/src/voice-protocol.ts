@@ -340,6 +340,7 @@ export interface VoiceCapabilityOfferMessage extends VoiceControlEnvelope<"capab
     readonly speechToText: boolean;
     readonly speechOutput: boolean;
     readonly realtimeVoice: boolean;
+    readonly realtimeToolCalling?: boolean | undefined;
   };
 }
 
