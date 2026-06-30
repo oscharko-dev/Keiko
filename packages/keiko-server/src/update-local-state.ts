@@ -26,6 +26,10 @@ import {
   type StateScan,
 } from "./update-local-state-scan.js";
 import {
+  repairStateStores,
+  type UpdateLocalStateRepairResult,
+} from "./update-local-state-repair.js";
+import {
   createSnapshotManifest,
   failedSnapshot,
   pruneOlderSnapshots,
@@ -65,6 +69,7 @@ export interface UpdateLocalStateManager {
   readonly scanCompatibility: (impact?: UpdateReleaseImpactInput) => UpdateCompatibilityScan;
   readonly createRecoverySnapshot: (input: CreateUpdateSnapshotInput) => UpdateRecoverySnapshot;
   readonly validateRecoverySnapshot: (snapshotId: string) => boolean;
+  readonly repairStores: (stores: readonly UpdateStateStore[]) => UpdateLocalStateRepairResult;
   readonly readRuntimeState: () => UpdateRuntimeState;
   readonly writeRuntimeState: (state: UpdateRuntimeState) => UpdateRuntimeState;
   readonly recordAuditEvent: (
@@ -78,6 +83,8 @@ export interface UpdateLocalStateManagerOptions {
   readonly now?: (() => number) | undefined;
   readonly idFactory?: (() => string) | undefined;
 }
+
+export type { UpdateLocalStateRepairResult } from "./update-local-state-repair.js";
 
 const RUNTIME_STATE_FILE = "runtime-state.json";
 const AUDIT_LOG_FILE = "update-audit.jsonl";
@@ -346,6 +353,13 @@ function recordAuditEvent(
   }
 }
 
+function repairStores(
+  context: ManagerContext,
+  stores: readonly UpdateStateStore[],
+): UpdateLocalStateRepairResult {
+  return repairStateStores(scanStateDir(context.stateDir), stores);
+}
+
 export function createUpdateLocalStateManager(
   options: UpdateLocalStateManagerOptions,
 ): UpdateLocalStateManager {
@@ -360,6 +374,7 @@ export function createUpdateLocalStateManager(
       createRecoverySnapshot(context, input),
     validateRecoverySnapshot: (snapshotId): boolean =>
       validateSnapshot(context.stateDir, snapshotId),
+    repairStores: (stores): UpdateLocalStateRepairResult => repairStores(context, stores),
     readRuntimeState: (): UpdateRuntimeState => readRuntimeState(context),
     writeRuntimeState: (state): UpdateRuntimeState => writeRuntimeState(context, state),
     recordAuditEvent: (type, input): AuditEventRecord => recordAuditEvent(context, type, input),

@@ -6,6 +6,8 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   UPDATE_SESSION_SCHEMA_VERSION,
+  type UpdateRemediationActionRequest,
+  type UpdateRemediationStatusReport,
   type UpdateInstallMode,
   type UpdateSession,
   type UpdateSessionStartRequest,
@@ -20,6 +22,7 @@ import {
   type UpdateSessionManager,
   type UpdateSessionStartOutcome,
 } from "./update-session.js";
+import type { UpdateRemediationManager } from "./update-remediation.js";
 
 const installMode: UpdateInstallMode = {
   schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
@@ -34,7 +37,10 @@ const installMode: UpdateInstallMode = {
   },
 };
 
-function session(targetVersion = "0.2.12", phase: UpdateSession["phase"] = "preparing"): UpdateSession {
+function session(
+  targetVersion = "0.2.12",
+  phase: UpdateSession["phase"] = "preparing",
+): UpdateSession {
   return {
     schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
     sessionId: "session-1",
@@ -88,9 +94,47 @@ class FakeUpdateSessionManager implements UpdateSessionManager {
     return session("0.2.12", "cancelled");
   };
 
-  public readonly verifyRestart = (): UpdateSession => {
+  public readonly verifyRestart = (
+    targetVersion?: string,
+    canCompleteUpdate?: (session: UpdateSession) => boolean,
+  ): UpdateSession => {
     if (this.verifyError !== undefined) throw this.verifyError;
-    return session("0.2.12", "succeeded");
+    const verified = session(targetVersion ?? "0.2.12", "restart-required");
+    return canCompleteUpdate?.(verified) === false
+      ? { ...verified, restartRequired: false }
+      : session(verified.targetVersion, "succeeded");
+  };
+}
+
+class FakeUpdateRemediationManager implements UpdateRemediationManager {
+  public readonly completedRestarts: string[] = [];
+
+  public constructor(private readonly canComplete: boolean) {}
+
+  public readonly getStatus = (): UpdateRemediationStatusReport =>
+    remediationReport(this.canComplete);
+
+  public readonly runAction = (
+    _request: UpdateRemediationActionRequest,
+  ): Promise<UpdateRemediationStatusReport> => Promise.resolve(remediationReport(this.canComplete));
+
+  public readonly completeRestart = (targetVersion?: string): UpdateRemediationStatusReport => {
+    this.completedRestarts.push(targetVersion ?? "");
+    return remediationReport(this.canComplete);
+  };
+
+  public readonly updateCanComplete = (): boolean => this.canComplete;
+}
+
+function remediationReport(updateCanComplete: boolean): UpdateRemediationStatusReport {
+  return {
+    schemaVersion: 1,
+    checkedAt: "2026-06-30T00:00:00.000Z",
+    overallStatus: updateCanComplete ? "completed" : "pending",
+    updateCanComplete,
+    actions: [],
+    affectedFeatures: [],
+    warnings: [],
   };
 }
 
@@ -135,7 +179,12 @@ async function buildServer(handlerDeps: UiHandlerDeps): Promise<{ server: Server
   const probe = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0, handlerDeps });
   const chosenPort = await listen(probe);
   await closeServer(probe);
-  const next = createUiServer({ staticRoot, csp: buildCspHeader([]), port: chosenPort, handlerDeps });
+  const next = createUiServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    port: chosenPort,
+    handlerDeps,
+  });
   await new Promise<void>((resolve) => next.listen(chosenPort, UI_HOST, resolve));
   return { server: next, port: chosenPort };
 }
@@ -253,6 +302,37 @@ describe("update session routes", () => {
     expect(retry.status).toBe(202);
     expect(cancel.status).toBe(200);
     expect(verify.status).toBe(200);
+  });
+
+  it("completes restart remediation before reporting restart verification success", async () => {
+    const updateRemediation = new FakeUpdateRemediationManager(true);
+    await rebuild({ updateRemediation });
+
+    const res = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion: "0.2.12" }),
+    });
+    const body = (await res.json()) as UpdateSession;
+
+    expect(res.status).toBe(200);
+    expect(body.phase).toBe("succeeded");
+    expect(updateRemediation.completedRestarts).toEqual(["0.2.12"]);
+  });
+
+  it("keeps restart verification non-terminal while follow-up remediation remains", async () => {
+    await rebuild({ updateRemediation: new FakeUpdateRemediationManager(false) });
+
+    const res = await fetch(`${baseUrl()}/api/update/session/verify-restart`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion: "0.2.12" }),
+    });
+    const body = (await res.json()) as UpdateSession;
+
+    expect(res.status).toBe(200);
+    expect(body.phase).toBe("restart-required");
+    expect(body.restartRequired).toBe(false);
   });
 
   it("maps retry, cancel, and restart verification manager errors", async () => {
