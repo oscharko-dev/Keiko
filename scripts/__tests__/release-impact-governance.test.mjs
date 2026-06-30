@@ -118,6 +118,20 @@ describe("release-impact governance", () => {
     expect(messages(result)).toContain("duplicates patch note");
   });
 
+  it("allows explicit correction records without editing the original entry", () => {
+    const correction = entry({
+      correctionOf: "2026-06-30-keiko-0.2.11-governed-release-impact-baseline",
+      correctionRationale: "Clarifies the release-note bullet without mutating the original entry.",
+      defaultPatchNotes: false,
+      id: "2026-06-30-keiko-0.2.11-governed-release-impact-baseline-correction-1",
+      releaseNoteBullets: ["Correction: release-impact metadata is source-controlled."],
+    });
+
+    const result = validateReleaseImpactCatalog(catalog([entry(), correction]), rootManifest());
+
+    expect(result).toEqual({ failures: [], ok: true });
+  });
+
   it("requires baseline supported-from coverage", () => {
     const result = validateReleaseImpactCatalog(
       catalog([entry({ supportedFrom: ["0.2.5"] })]),

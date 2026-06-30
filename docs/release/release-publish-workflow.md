@@ -61,7 +61,9 @@ The tag verification job is dependency-free after checkout and Node setup:
 The release plan validates version consistency, publish manifests, and release-impact metadata
 without relying on `node_modules`, so the tag job can fail fast on metadata drift.
 
-The workflow uploads the root and UI CycloneDX SBOMs as artifacts so release evidence stays attached to the run.
+The release workflow relies on the protected required checks for full build, test, SBOM, smoke,
+and supply-chain evidence. The tag verification job verifies those checks on the release SHA before
+planning or publishing.
 
 ## Publish control
 

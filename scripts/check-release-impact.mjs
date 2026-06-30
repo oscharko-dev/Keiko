@@ -402,13 +402,14 @@ function recordDefaultPatchNotes(entry, index, defaultNotes, failures) {
 function validateCurrentPackage(catalog, rootManifest, failures) {
   if (!objectRecord(rootManifest)) return;
   const current = catalog.entries.filter((entry) => currentPackageEntry(entry, rootManifest));
-  if (current.length === 0) {
+  const primary = current.filter((entry) => !correctionEntry(entry));
+  if (primary.length === 0) {
     failures.push(
       failure(`${rootManifest.name}@${rootManifest.version} has no latest catalog entry.`),
     );
     return;
   }
-  if (current.length > 1) {
+  if (primary.length > 1) {
     failures.push(
       failure(`${rootManifest.name}@${rootManifest.version} has multiple latest entries.`),
     );
@@ -424,6 +425,12 @@ function currentPackageEntry(entry, rootManifest) {
     entry.packageName === rootManifest.name &&
     entry.packageVersion === rootManifest.version &&
     entry.distTag === "latest"
+  );
+}
+
+function correctionEntry(entry) {
+  return (
+    objectRecord(entry) && (entry.correctionOf !== undefined || entry.supersedes !== undefined)
   );
 }
 
