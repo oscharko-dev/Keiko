@@ -101,10 +101,24 @@ function buildAffordanceMap(
   statuses: readonly PdfCitationPreviewCitationStatus[],
 ): Record<string, CitationPreviewAffordance> {
   const byStableId = new Map(citations.map((citation) => [citation.stableId, citation]));
+  const markerCitationKeys = new Map<number, Set<string>>();
+  for (const citation of citations) {
+    const markerIndex = normalizePreviewMarkerIndex(citation.marker);
+    if (markerIndex === undefined) continue;
+    const keys = markerCitationKeys.get(markerIndex) ?? new Set<string>();
+    keys.add(citation.stableId);
+    markerCitationKeys.set(markerIndex, keys);
+  }
+  const uniqueByMarkerIndex = new Map<number, LocalKnowledgeEvidenceCitation>();
+  for (const citation of citations) {
+    const markerIndex = normalizePreviewMarkerIndex(citation.marker);
+    if (markerIndex === undefined || markerCitationKeys.get(markerIndex)?.size !== 1) continue;
+    uniqueByMarkerIndex.set(markerIndex, citation);
+  }
   const affordances: Record<string, CitationPreviewAffordance> = {};
   for (const status of statuses) {
     if (status.state === "not-applicable") continue;
-    const citation = byStableId.get(status.stableId);
+    const citation = byStableId.get(status.stableId) ?? uniqueByMarkerIndex.get(status.markerIndex);
     if (citation === undefined) continue;
     affordances[citation.stableId] = {
       citation,
@@ -137,8 +151,12 @@ function answerLocalPreviewContext(
   citations: readonly LocalKnowledgeEvidenceCitation[],
   affordances: Record<string, CitationPreviewAffordance>,
 ): readonly PdfCitationPreviewContextCitation[] {
+  const seenStableIds = new Set<string>();
   return citations.flatMap((citation) => {
     if (citation.lineage.documentId !== activeCitation.lineage.documentId) {
+      return [];
+    }
+    if (seenStableIds.has(citation.stableId)) {
       return [];
     }
     const affordance = affordances[citation.stableId];
@@ -146,6 +164,9 @@ function answerLocalPreviewContext(
       return [];
     }
     const contextItem = citationContextItem(citation, affordance);
+    if (contextItem !== undefined) {
+      seenStableIds.add(citation.stableId);
+    }
     return contextItem === undefined ? [] : [contextItem];
   });
 }

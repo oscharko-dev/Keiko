@@ -159,6 +159,19 @@ const SAFE_QI_ERROR_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 const QI_ERROR_CODE_PATTERN = /^QI_[A-Z0-9_]+$/;
+const GATEWAY_REASON_RULES: readonly {
+  readonly reason: string;
+  readonly patterns: readonly string[];
+}[] = [
+  { reason: "qi-gateway-timeout", patterns: ["timeout", "timed out", "etimedout"] },
+  { reason: "qi-gateway-auth", patterns: ["unauthorized", "forbidden", "auth", "401", "403"] },
+  { reason: "qi-gateway-rate-limit", patterns: ["rate", "429"] },
+  { reason: "qi-gateway-context", patterns: ["context", "token", "too large"] },
+  {
+    reason: "qi-gateway-transport",
+    patterns: ["econn", "enotfound", "eai_again", "network", "fetch", "tls"],
+  },
+];
 
 // Derive a redaction-safe, statically-bounded failure summary for a run/stage event (#279 AC3).
 //
@@ -169,7 +182,22 @@ const QI_ERROR_CODE_PATTERN = /^QI_[A-Z0-9_]+$/;
 // or any persisted field. Only three shapes produce a non-generic summary:
 //   1. a QI safe-error exception          -> its `qi/*` code (already secret-free by construction);
 //   2. an allow-listed in-repo QI error   -> its `QI_*` code when present, else its error name;
-//   3. everything else (gateway/provider/unexpected) -> a fixed generic code, no message.
+//   3. recognizable gateway/provider classes -> a fixed category, no message;
+//   4. everything else -> a fixed generic code, no message.
+function safeGatewayReason(error: Error): string | undefined {
+  const code = (error as { readonly code?: unknown }).code;
+  const text =
+    `${error.name} ${typeof code === "string" ? code : ""} ${error.message}`.toLowerCase();
+  const match = GATEWAY_REASON_RULES.find((rule) =>
+    rule.patterns.some((pattern) => text.includes(pattern)),
+  );
+  if (match !== undefined) return match.reason;
+  if (text.includes("http") || /\b5\d\d\b/u.test(text) || /\b4\d\d\b/u.test(text)) {
+    return "qi-gateway-provider-http";
+  }
+  return undefined;
+}
+
 export function safeReasonSummary(error: unknown): string {
   if (error instanceof QualityIntelligenceSafeErrorException) {
     return `qi-safe-error: ${error.safe.code}`;
@@ -180,6 +208,9 @@ export function safeReasonSummary(error: unknown): string {
       return `qi-error: ${code}`;
     }
     return `qi-error: ${error.name}`;
+  }
+  if (error instanceof Error) {
+    return safeGatewayReason(error) ?? "qi-run-error";
   }
   return "qi-run-error";
 }
@@ -313,6 +344,8 @@ export interface PersistArgs {
   readonly modelId?: string;
   /** Redaction-safe request parameter scalars (Epic #761). */
   readonly modelParameters?: Record<string, unknown>;
+  /** Explicit QI model policy/routing provenance. */
+  readonly modelRouting?: QualityIntelligenceRecordInput["modelRouting"];
   /** Seed used for deterministic sampling (Epic #761). */
   readonly seedUsed?: number | null;
 }
@@ -361,6 +394,7 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     ...(args.atomFingerprints !== undefined ? { atomFingerprints: args.atomFingerprints } : {}),
     ...(args.modelId !== undefined ? { modelId: args.modelId } : {}),
     ...(args.modelParameters !== undefined ? { modelParameters: args.modelParameters } : {}),
+    ...(args.modelRouting !== undefined ? { modelRouting: args.modelRouting } : {}),
     ...(args.seedUsed !== undefined ? { seedUsed: args.seedUsed } : {}),
   };
   return recordQualityIntelligenceRun(input, {

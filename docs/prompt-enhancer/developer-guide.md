@@ -14,9 +14,11 @@ The Prompt Enhancer turns a raw user draft into a structured, provider-neutral *
 role, goal, ordered task decomposition, constraints, grounding rules, an output schema, quality
 criteria, uncertainty handling, and safety rules. The transformation is **deterministic-first**: the
 analyzer, planner, generator, critic, grounding planner, and safety assessor are all pure functions —
-no model call, clock, or randomness — so identical input always yields an identical artefact and the
-suite gives reproducible CI coverage. A model-assisted candidate/critic stage is an explicit later
-option (ADR-0044 §3/§6); the MVP is fully deterministic.
+no clock or randomness — so identical deterministic-only input yields an identical artefact and the
+suite gives reproducible CI coverage. When the caller supplies an enhancement `modelId`, the workflow
+can route the deterministic winner through a bounded model-assisted refinement stage. That stage must
+return validated JSON, preserve the deterministic safety and grounding guardrails, and falls back to
+the deterministic artefact when the model is unavailable, unsafe, or malformed.
 
 The Enhanced Prompt is **data, never a capability grant** (ADR-0044 §4): it isolates the untrusted
 user draft into a single `input` section, never self-authorizes tools, file writes, network egress, or
@@ -31,6 +33,7 @@ PromptEnhancementRequest
             └─ generateEnhancedPrompt({…})        → EnhancedPrompt            (keiko-model-gateway)
                  ├─ scorePromptCandidate({…})     → PromptCandidateScorecard  (keiko-model-gateway)
                  └─ assessPromptSafety({…})       → PromptSafetyAssessment    (keiko-model-gateway + keiko-security)
+                      └─ optional model refine     → EnhancedPrompt | deterministic fallback (keiko-workflows + ModelPort)
 ```
 
 `generateEnhancedPrompt` internally calls `planGrounding` (keiko-contracts) so every Enhanced Prompt

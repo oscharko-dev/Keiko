@@ -11,15 +11,26 @@
 import {
   QualityIntelligence as MgQI,
   findConfiguredCapability,
+  listConfiguredCapabilities,
   selectConfiguredModel,
   QualityIntelligenceSafeErrorException,
   type ModelSelectionQuery,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  QualityIntelligenceModelPolicy,
+  QualityIntelligenceModelPolicyValidation,
+  QualityIntelligenceResolvedModelPolicy,
+  QualityIntelligenceStartRunRequest,
+} from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import { QiGenerationError } from "./generationPort.js";
 
 type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
+const QI_MODEL_POLICY_VERSION = 1 as const;
+
+const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
+const LATENCY_RANK = { fast: 0, standard: 1, slow: 2 } as const;
 
 function buildSelectionQuery(profileId: QiProfileId): ModelSelectionQuery {
   const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
@@ -56,6 +67,15 @@ function configuredChatCapability(
   return capability?.kind === "chat" ? capability : undefined;
 }
 
+function configuredCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
+  if (deps.config === undefined) return undefined;
+  return findConfiguredCapability(deps.config, modelId);
+}
+
+function configuredCapabilities(deps: UiHandlerDeps): readonly ModelCapability[] {
+  return deps.config === undefined ? [] : listConfiguredCapabilities(deps.config);
+}
+
 function selectCapabilityByGatewayQuery(
   deps: UiHandlerDeps,
   query: ModelSelectionQuery,
@@ -75,6 +95,59 @@ export type QiTestDesignSelection =
       readonly modelId: string;
       readonly capability: ModelCapability;
     };
+
+interface IndexedCapability {
+  readonly capability: ModelCapability;
+  readonly index: number;
+}
+
+function chatCapabilities(deps: UiHandlerDeps): readonly IndexedCapability[] {
+  return configuredCapabilities(deps)
+    .map((capability, index) => ({ capability, index }))
+    .filter((entry) => entry.capability.kind === "chat");
+}
+
+function compareBooleanDesc(a: boolean | undefined, b: boolean | undefined): number {
+  return Number(b === true) - Number(a === true);
+}
+
+function compareNumberDesc(a: number | undefined, b: number | undefined): number {
+  return (b ?? 0) - (a ?? 0);
+}
+
+function compareGenerationDefault(a: IndexedCapability, b: IndexedCapability): number {
+  return (
+    compareBooleanDesc(a.capability.structuredOutput, b.capability.structuredOutput) ||
+    compareBooleanDesc(a.capability.supportsResponseFormat, b.capability.supportsResponseFormat) ||
+    compareNumberDesc(a.capability.contextWindow, b.capability.contextWindow) ||
+    compareNumberDesc(a.capability.maxOutputTokens, b.capability.maxOutputTokens) ||
+    LATENCY_RANK[a.capability.latencyClass] - LATENCY_RANK[b.capability.latencyClass] ||
+    COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] ||
+    a.index - b.index
+  );
+}
+
+function compareJudgeDefault(a: IndexedCapability, b: IndexedCapability): number {
+  return (
+    compareBooleanDesc(a.capability.supportsResponseFormat, b.capability.supportsResponseFormat) ||
+    compareNumberDesc(a.capability.contextWindow, b.capability.contextWindow) ||
+    compareNumberDesc(a.capability.maxOutputTokens, b.capability.maxOutputTokens) ||
+    LATENCY_RANK[a.capability.latencyClass] - LATENCY_RANK[b.capability.latencyClass] ||
+    COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] ||
+    a.index - b.index
+  );
+}
+
+function defaultGenerationCapability(deps: UiHandlerDeps): ModelCapability | undefined {
+  return chatCapabilities(deps).slice().sort(compareGenerationDefault)[0]?.capability;
+}
+
+function defaultJudgeCapability(deps: UiHandlerDeps): ModelCapability | undefined {
+  return chatCapabilities(deps)
+    .filter((entry) => entry.capability.structuredOutput)
+    .slice()
+    .sort(compareJudgeDefault)[0]?.capability;
+}
 
 /**
  * Resolve the test-design generation strategy.
@@ -97,24 +170,182 @@ export function resolveQiTestDesignSelection(
     }
   }
 
-  if (deps.config === undefined) {
-    return { kind: "baseline" };
-  }
-
-  const structured = selectCapabilityByGatewayQuery(deps, {
-    kind: "chat",
-    structuredOutput: true,
-  });
-  if (structured !== undefined) {
-    return { kind: "model", ...structured };
-  }
-
-  const anyChat = selectCapabilityByGatewayQuery(deps, { kind: "chat" });
-  if (anyChat !== undefined) {
-    return { kind: "model", ...anyChat };
+  const recommended = defaultGenerationCapability(deps);
+  if (recommended !== undefined) {
+    return { kind: "model", modelId: recommended.id, capability: recommended };
   }
 
   return { kind: "baseline" };
+}
+
+function cleanModelId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed.length === 0 ? undefined : trimmed;
+}
+
+export function normaliseQiModelPolicy(
+  raw: QualityIntelligenceModelPolicy | undefined,
+): QualityIntelligenceModelPolicy {
+  const testDesignModelId = cleanModelId(raw?.testDesignModelId);
+  const judgeModelId = cleanModelId(raw?.judgeModelId);
+  return {
+    policyVersion: QI_MODEL_POLICY_VERSION,
+    ...(testDesignModelId !== undefined ? { testDesignModelId } : {}),
+    ...(judgeModelId !== undefined ? { judgeModelId } : {}),
+    ...(raw?.updatedAt !== undefined ? { updatedAt: raw.updatedAt } : {}),
+  };
+}
+
+export function recommendQiModelPolicy(deps: UiHandlerDeps): QualityIntelligenceModelPolicy {
+  const generation = defaultGenerationCapability(deps);
+  const judge = defaultJudgeCapability(deps);
+  return {
+    policyVersion: QI_MODEL_POLICY_VERSION,
+    ...(generation !== undefined ? { testDesignModelId: generation.id } : {}),
+    ...(judge !== undefined ? { judgeModelId: judge.id } : {}),
+  };
+}
+
+export function validateQiModelPolicy(
+  deps: UiHandlerDeps,
+  policy: QualityIntelligenceModelPolicy,
+): QualityIntelligenceModelPolicyValidation {
+  const issues: QualityIntelligenceModelPolicyValidation["issues"][number][] = [];
+  const testDesignModelId = cleanModelId(policy.testDesignModelId);
+  if (testDesignModelId !== undefined) {
+    const capability = configuredCapability(deps, testDesignModelId);
+    if (capability === undefined) {
+      issues.push({
+        field: "testDesignModelId",
+        code: "model-not-configured",
+        message: "The selected generation model is not configured.",
+      });
+    } else if (capability.kind !== "chat") {
+      issues.push({
+        field: "testDesignModelId",
+        code: "model-not-chat",
+        message: "The selected generation model is not a chat model.",
+      });
+    }
+  }
+  const judgeModelId = cleanModelId(policy.judgeModelId);
+  if (judgeModelId !== undefined) {
+    const capability = configuredCapability(deps, judgeModelId);
+    if (capability === undefined) {
+      issues.push({
+        field: "judgeModelId",
+        code: "model-not-configured",
+        message: "The selected judge model is not configured.",
+      });
+    } else if (capability.kind !== "chat") {
+      issues.push({
+        field: "judgeModelId",
+        code: "model-not-chat",
+        message: "The selected judge model is not a chat model.",
+      });
+    } else if (!capability.structuredOutput) {
+      issues.push({
+        field: "judgeModelId",
+        code: "model-not-structured",
+        message: "The selected judge model does not advertise structured output.",
+      });
+    }
+  }
+  return { ok: issues.length === 0, issues };
+}
+
+export function repairQiModelPolicy(
+  deps: UiHandlerDeps,
+  policy: QualityIntelligenceModelPolicy,
+): { readonly policy: QualityIntelligenceModelPolicy; readonly repaired: boolean } {
+  const normalized = normaliseQiModelPolicy(policy);
+  const validation = validateQiModelPolicy(deps, normalized);
+  if (validation.ok) return { policy: normalized, repaired: false };
+  return { policy: recommendQiModelPolicy(deps), repaired: true };
+}
+
+interface QiModelPolicyResolution {
+  readonly requested: QualityIntelligenceModelPolicy;
+  readonly recommended: QualityIntelligenceModelPolicy;
+  readonly resolved: QualityIntelligenceResolvedModelPolicy;
+  readonly validation: QualityIntelligenceModelPolicyValidation;
+}
+
+function requestedPolicyFromRequest(
+  request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
+): QualityIntelligenceModelPolicy {
+  const legacyModelId = cleanModelId(request.modelId);
+  if (request.modelPolicy !== undefined) return normaliseQiModelPolicy(request.modelPolicy);
+  return normaliseQiModelPolicy({
+    policyVersion: QI_MODEL_POLICY_VERSION,
+    ...(legacyModelId !== undefined ? { testDesignModelId: legacyModelId } : {}),
+  });
+}
+
+function resolvedFromRecommended(
+  recommended: QualityIntelligenceModelPolicy,
+): QualityIntelligenceResolvedModelPolicy {
+  return {
+    ...(recommended.testDesignModelId !== undefined
+      ? { testDesignModelId: recommended.testDesignModelId }
+      : {}),
+    ...(recommended.judgeModelId !== undefined
+      ? { judgeModelId: recommended.judgeModelId }
+      : { judgeUnavailableReason: "no-compatible-model" as const }),
+  };
+}
+
+function legacyJudgeModelId(
+  deps: UiHandlerDeps,
+  request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
+): string | undefined {
+  const legacyModelId = cleanModelId(request.modelId);
+  return request.modelPolicy === undefined &&
+    legacyModelId !== undefined &&
+    validateQiModelPolicy(deps, {
+      policyVersion: QI_MODEL_POLICY_VERSION,
+      judgeModelId: legacyModelId,
+    }).ok
+    ? legacyModelId
+    : undefined;
+}
+
+function resolvedFromPolicy(args: {
+  readonly requested: QualityIntelligenceModelPolicy;
+  readonly recommended: QualityIntelligenceModelPolicy;
+  readonly legacyJudge: string | undefined;
+}): QualityIntelligenceResolvedModelPolicy {
+  const { requested, recommended, legacyJudge } = args;
+  const testDesignModelId = requested.testDesignModelId ?? recommended.testDesignModelId;
+  const judgeModelId = requested.judgeModelId ?? legacyJudge ?? recommended.judgeModelId;
+  return {
+    ...(testDesignModelId !== undefined ? { testDesignModelId } : {}),
+    ...(judgeModelId !== undefined
+      ? { judgeModelId }
+      : { judgeUnavailableReason: "no-compatible-model" as const }),
+  };
+}
+
+export function resolveQiModelPolicy(
+  deps: UiHandlerDeps,
+  request: Pick<QualityIntelligenceStartRunRequest, "modelId" | "modelPolicy">,
+): QiModelPolicyResolution {
+  const recommended = recommendQiModelPolicy(deps);
+  const requested = requestedPolicyFromRequest(request);
+  const validation = validateQiModelPolicy(deps, requested);
+  const resolved = validation.ok
+    ? resolvedFromPolicy({
+        requested,
+        recommended,
+        legacyJudge: legacyJudgeModelId(deps, request),
+      })
+    : resolvedFromRecommended(recommended);
+  return {
+    requested,
+    recommended,
+    resolved,
+    validation,
+  };
 }
 
 export type QiMultimodalSelection =

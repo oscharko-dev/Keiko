@@ -42,6 +42,7 @@ type QualityIntelligenceValidationFindingKind =
   QualityIntelligence.QualityIntelligenceValidationFindingKind;
 type QualityIntelligenceSeverity = QualityIntelligence.QualityIntelligenceSeverity;
 type QualityIntelligenceAuditSummaryId = QualityIntelligence.QualityIntelligenceAuditSummaryId;
+type QualityIntelligenceModelRouting = QualityIntelligence.QualityIntelligenceModelRouting;
 
 export const QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION = 1 as const;
 
@@ -190,6 +191,8 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly modelId?: string;
   /** Optional: redaction-safe request parameter scalars (e.g. responseFormat, seed) (Epic #761). */
   readonly modelParameters?: Record<string, unknown>;
+  /** Optional: explicit QI model policy/routing provenance. */
+  readonly modelRouting?: QualityIntelligenceModelRouting;
   /** Optional: seed used for deterministic sampling; null when model does not support seeding. */
   readonly seedUsed?: number | null;
 }
@@ -221,6 +224,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "atomFingerprints",
   "modelId",
   "modelParameters",
+  "modelRouting",
   "seedUsed",
 ]);
 

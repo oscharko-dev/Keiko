@@ -4,8 +4,8 @@
 //      enhancement, and review every governed section (sections, grounding plan, safety, candidate
 //      scorecards) plus the model-routing status. The result is reviewed, never executed (AC5).
 //
-// Tagged @smoke so the Studio browser quality gate exercises it. No model is dispatched: enhancement
-// is deterministic and provider-neutral; the panel's default routing is "not-requested".
+// Tagged @smoke so the Studio browser quality gate exercises it. The default path is
+// deterministic-only; model-assisted refinement is covered by package-level tests.
 
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 

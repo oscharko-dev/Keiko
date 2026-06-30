@@ -2,12 +2,12 @@
 // /api/prompt-enhancer/* routes"). These shapes travel over the HTTP wire between the keiko-server
 // BFF and the React UI / CLI surfaces, exactly like the entity wire types in `bff-wire.ts`.
 //
-// Scope discipline. #1314 is a SURFACE issue: it exposes the deterministic enhancer core (#1309 –
-// #1313) through a governed API, CLI, and UI. This module therefore adds ONLY the request/response
-// envelope and a pure request validator. It introduces no new domain behaviour and no model-execution
-// parameters. The response composes the already content-light, provider-neutral artefacts produced by
-// the existing pipeline (`PromptTaskAnalysis`, `EnhancedPrompt`, `PromptCandidateScorecard`,
-// `PromptSafetyAssessment`) and adds a Model-Gateway readiness/routing descriptor (AC3).
+// Scope discipline. #1314 exposes the Prompt Enhancer core (#1309 – #1313) through a governed API,
+// CLI, and UI. This module therefore adds ONLY the request/response envelope and a pure request
+// validator. The response composes content-light, provider-neutral artefacts produced by the pipeline
+// (`PromptTaskAnalysis`, `EnhancedPrompt`, `PromptCandidateScorecard`, `PromptSafetyAssessment`) and
+// adds a Model-Gateway routing descriptor (AC3). The optional model id is now an enhancement-model
+// request: deterministic-only remains supported by omitting it.
 //
 // Trust boundary (ADR-0044 §5). Like every prompt-enhancer contract, these shapes carry no provider
 // credential, hidden system prompt, or tool/secret/egress/patch authority grant. The wire request is
@@ -66,9 +66,9 @@ export interface PromptEnhancementWireRequest {
   readonly attachmentCount?: number;
   // Informational BCP-47-ish locale tag, validated as bounded safe text when present.
   readonly locale?: string;
-  // Optional model the caller intends to dispatch the enhanced prompt to downstream. The server
-  // resolves its availability through the Model Gateway (AC3); enhancement itself stays deterministic
-  // and provider-neutral and is never blocked by an unavailable model.
+  // Optional chat model the caller wants Keiko to use for model-assisted prompt refinement. When
+  // omitted, enhancement is deterministic-only. The server resolves this through the Model Gateway
+  // (AC3) and falls back to deterministic output when the model cannot be used safely.
   readonly modelId?: string;
   // Optional number of distinct candidate variants to generate and score. Clamped to
   // [1, PROMPT_ENHANCEMENT_MAX_CANDIDATE_COUNT] and to the gateway bound server-side.
@@ -76,13 +76,10 @@ export interface PromptEnhancementWireRequest {
 }
 
 // ─── Model-Gateway routing descriptor (AC3) ─────────────────────────────────────────
-// The enhancer is deterministic and provider-neutral, so enhancement never depends on a live model.
-// This descriptor records the readiness decision the server obtained from the Model Gateway for the
-// caller's optional downstream-dispatch `modelId`: "not-requested" when the caller named no model,
-// "available" when the gateway resolved a configured, capable model, and "unavailable" when no model
-// is configured or the named model is not available — in which case enhancement still succeeds and the
-// surface communicates the degraded state (graceful handling, AC3). `reason` is a fixed, content-free
-// label safe to display.
+// This descriptor records both capability resolution and whether the selected model actually refined
+// the prompt. "not-requested" means deterministic-only; "available" means the gateway resolved a
+// configured chat model; "unavailable" means no model could be used and enhancement completed via the
+// deterministic fallback. `reason` and `fallbackReason` are fixed, content-free labels safe to display.
 export type PromptEnhancementModelAvailability = "available" | "unavailable" | "not-requested";
 
 export const PROMPT_ENHANCEMENT_MODEL_AVAILABILITIES: readonly PromptEnhancementModelAvailability[] =
@@ -93,7 +90,19 @@ export type PromptEnhancementModelRoutingReason =
   | "model-available"
   | "no-gateway-config"
   | "model-not-configured"
-  | "model-not-chat-capable";
+  | "model-not-chat-capable"
+  | "model-port-unavailable";
+
+export type PromptEnhancementExecutionStatus = "deterministic" | "model-applied" | "model-fallback";
+
+export type PromptEnhancementModelFallbackReason =
+  | "model-port-unavailable"
+  | "model-call-failed"
+  | "model-empty-response"
+  | "model-invalid-json"
+  | "model-invalid-prompt"
+  | "model-no-change"
+  | "model-unsafe-prompt";
 
 export interface PromptEnhancementModelRouting {
   readonly availability: PromptEnhancementModelAvailability;
@@ -104,6 +113,11 @@ export interface PromptEnhancementModelRouting {
   readonly resolvedModelId?: string;
   // The resolved model's provider-neutral cost class, present only when available.
   readonly costClass?: CostClass;
+  // Whether the returned prompt was deterministic-only, model-refined, or deterministic fallback after
+  // a selected model failed validation/execution. Present on new responses; older manifests may omit it.
+  readonly executionStatus?: PromptEnhancementExecutionStatus;
+  // Content-free fallback reason when `executionStatus` is "model-fallback".
+  readonly fallbackReason?: PromptEnhancementModelFallbackReason;
 }
 
 // ─── Candidate comparison ────────────────────────────────────────────────────────────
@@ -181,7 +195,7 @@ export interface PromptEnhancementWireResponse {
   // The deterministic safety assessment: decision, human-review flag, verification status, findings,
   // and least-privilege constraints the surface must display (AC2 "safety rules", AC5 reviewability).
   readonly safety: PromptSafetyAssessment;
-  // The Model-Gateway readiness/routing descriptor for the optional downstream-dispatch model (AC3).
+  // The Model-Gateway routing descriptor for optional model-assisted enhancement (AC3).
   readonly modelRouting: PromptEnhancementModelRouting;
   // Content-free readiness state for required grounding against connected-context metadata.
   readonly groundingReadiness: PromptEnhancementGroundingReadiness;

@@ -23,7 +23,7 @@ export const KEIKO_CONTRACTS_VERSION = "0.12.0" as const;
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.10" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.11" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -1605,6 +1605,20 @@ export type {
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
+  QualityIntelligenceModelPolicy,
+  QualityIntelligenceResolvedModelPolicy,
+  QualityIntelligenceModelPolicyValidationIssueCode,
+  QualityIntelligenceModelPolicyValidationIssue,
+  QualityIntelligenceModelPolicyValidation,
+  QualityIntelligenceModelPreflightStatus,
+  QualityIntelligenceModelPreflightErrorCategory,
+  QualityIntelligenceModelPreflightStageResult,
+  QualityIntelligenceModelPreflightSummary,
+  QualityIntelligenceModelStageFailure,
+  QualityIntelligenceModelRouting,
+  QualityIntelligenceModelPolicyResponse,
+  QualityIntelligenceModelPolicyPreflightRequest,
+  QualityIntelligenceModelPolicyPreflightResponse,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceRunStreamAccepted,
@@ -1897,6 +1911,8 @@ export type {
   PromptEnhancementWireRequest,
   PromptEnhancementModelAvailability,
   PromptEnhancementModelRoutingReason,
+  PromptEnhancementExecutionStatus,
+  PromptEnhancementModelFallbackReason,
   PromptEnhancementModelRouting,
   PromptEnhancementCandidateComparison,
   PromptEnhancementGroundingReadiness,

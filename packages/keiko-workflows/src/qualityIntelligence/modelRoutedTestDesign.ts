@@ -159,6 +159,7 @@ export interface QualityIntelligenceModelRoutedTestDesignDeps {
   readonly signal?: AbortSignal | undefined;
   readonly limits?: QualityIntelligenceWorkflowLimits | undefined;
   readonly redaction?: QualityIntelligenceRecordOptions["redaction"] | undefined;
+  readonly modelRouting?: QI.QualityIntelligenceModelRouting | undefined;
 }
 
 class EmptyEvidenceError extends Error {
@@ -396,6 +397,21 @@ function modelGenerationOutput(
   };
 }
 
+function baselineGenerationOutput(
+  ctx: RunContext,
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+  result: QualityIntelligenceGenerationPortResult,
+): GenerationOutput {
+  const candidates = deterministicBaselineCandidates(ctx, input);
+  return {
+    candidates,
+    reviewCandidates: candidates,
+    skipJudge: true,
+    ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
+    modelParameters: result.modelParameters,
+  };
+}
+
 function baselineFallbackGenerationOutput(
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
@@ -408,6 +424,21 @@ function baselineFallbackGenerationOutput(
     skipJudge: true,
     fallbackReason: reasonSummary,
     modelParameters: { generationFallbackReason: reasonSummary },
+  };
+}
+
+function modelRoutingForPersist(
+  modelRouting: QI.QualityIntelligenceModelRouting | undefined,
+  degradedReason: string | undefined,
+): QI.QualityIntelligenceModelRouting | undefined {
+  if (modelRouting === undefined) return undefined;
+  if (degradedReason === undefined) return modelRouting;
+  return {
+    ...modelRouting,
+    stageFailures: [
+      ...(modelRouting.stageFailures ?? []),
+      { stage: "generate" as const, reasonSummary: degradedReason },
+    ],
   };
 }
 
@@ -460,13 +491,7 @@ async function generateCandidates(
     ctx.modelGatewayCallCount += result.modelCallCount;
     countedGatewayDispatch = result.modelCallCount > 0;
     if (result.modelId === undefined && result.modelCallCount === 0) {
-      const candidates = deterministicBaselineCandidates(ctx, input);
-      return {
-        candidates,
-        reviewCandidates: candidates,
-        ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
-        modelParameters: result.modelParameters,
-      };
+      return baselineGenerationOutput(ctx, input, result);
     }
     return modelGenerationOutput(result, ctx, input, runCandidateLimit, modelDeltaLimit);
   } catch (error) {
@@ -941,6 +966,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         integrityHashSha256Hex: e.provenance.integrityHashSha256Hex,
       }));
       const atomFingerprints = atomFingerprintsFor(input.ingestedAtoms);
+      const modelRouting = modelRoutingForPersist(deps.modelRouting, degradedReason);
       const result = persistRun({
         ctx,
         status: "succeeded",
@@ -960,6 +986,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         ...(generation.modelParameters !== undefined
           ? { modelParameters: generation.modelParameters }
           : {}),
+        ...(modelRouting !== undefined ? { modelRouting } : {}),
       });
       deps.candidatesSink.record(
         candidatesWithQualityVerdicts(candidates, judgeResult.candidateQualityVerdicts),

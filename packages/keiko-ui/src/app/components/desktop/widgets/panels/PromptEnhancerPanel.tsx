@@ -2,13 +2,12 @@
 
 // Prompt Enhancer panel — the governed UI workflow surface (Epic #1307, Issue #1314; ADR-0044 §1
 // "Governed UI surface (PromptEnhancerPanel sibling of GroundedAnswerPanel)"). The first screen IS the
-// workflow: a dense form (raw draft → profile + missing-info strategy → optional readiness model) plus
+// workflow: a dense form (raw draft → profile + missing-info strategy → optional enhancement model) plus
 // a structured, reviewable result (every Enhanced Prompt section, the grounding plan, safety rules and
 // warnings, the output schema, quality criteria, and the candidate scorecards). The generated prompt is
-// data for review and copy/export — it is never executed from here (AC5). Enhancement is deterministic
-// and provider-neutral; the optional model only resolves dispatch readiness through the Model Gateway
-// (AC3). No secret, raw private log, or hidden system prompt is shown (the server redacts on the wire,
-// AC4).
+// data for review and copy/export — it is never executed as a downstream task from here (AC5). The
+// optional model runs only as a bounded enhancement/refinement step through the Model Gateway (AC3). No
+// secret, raw private log, or hidden system prompt is shown (the server redacts on the wire, AC4).
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -100,7 +99,9 @@ function summarizeConnectedContext({
   }
   const labels = sources.map((source) => source.label);
   const label =
-    labels.length === 1 ? labels[0] ?? "Connected source" : `${labels.length.toString()} connected sources`;
+    labels.length === 1
+      ? (labels[0] ?? "Connected source")
+      : `${labels.length.toString()} connected sources`;
   return {
     hasConnectedContext: true,
     attachmentCount: sources.length,
@@ -110,8 +111,7 @@ function summarizeConnectedContext({
 }
 
 async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText =
-    typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
+  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
   if (writeText !== undefined && navigator.clipboard !== undefined) {
     try {
       await writeText.call(navigator.clipboard, text);
@@ -211,17 +211,19 @@ function ModelRoutingBanner({
   readonly routing: PromptEnhancementWireResponse["modelRouting"];
 }): ReactNode {
   const tone =
-    routing.availability === "available"
+    routing.executionStatus === "model-applied"
       ? "ok"
-      : routing.availability === "unavailable"
+      : routing.availability === "unavailable" || routing.executionStatus === "model-fallback"
         ? "warn"
         : "muted";
-  const label =
-    routing.availability === "available"
-      ? `Model ready: ${routing.resolvedModelId ?? ""}`
-      : routing.availability === "unavailable"
-        ? "Selected model unavailable - enhancement still completed deterministically"
-        : "No downstream model selected - enhancement is provider-neutral";
+  let label = "Deterministic enhancement";
+  if (routing.executionStatus === "model-applied") {
+    label = `Model enhanced: ${routing.resolvedModelId ?? routing.requestedModelId ?? ""}`;
+  } else if (routing.executionStatus === "model-fallback") {
+    label = `Model fallback: deterministic output (${routing.fallbackReason ?? routing.reason})`;
+  } else if (routing.availability === "unavailable") {
+    label = "Selected model unavailable - deterministic output";
+  }
   return (
     <div
       className={`pe-routing pe-routing-${tone}`}
@@ -511,7 +513,7 @@ export function PromptEnhancerPanel({
         if (!cancelled) setModels(response.models.filter((model) => model.kind === "chat"));
       })
       .catch(() => {
-        // Readiness model selection is optional; a config-less workspace simply offers no models.
+        // Enhancement model selection is optional; a config-less workspace simply offers no models.
       });
     return (): void => {
       cancelled = true;
@@ -644,7 +646,7 @@ export function PromptEnhancerPanel({
           <p className="pe-eyebrow">Governed prompt workspace</p>
           <h3 className="pe-title">Prompt Enhancer</h3>
         </div>
-        <span className="pe-header-chip">No execution</span>
+        <span className="pe-header-chip">Review before use</span>
       </div>
 
       <form
@@ -707,11 +709,11 @@ export function PromptEnhancerPanel({
             </div>
             <div className="pe-control">
               <span className="pe-label" aria-hidden="true">
-                Readiness model
+                Enhancement model
               </span>
               <KeikoSelect
                 value={modelId}
-                ariaLabel="Readiness model"
+                ariaLabel="Enhancement model"
                 onValueChange={setModelId}
                 sections={modelSections}
                 triggerClassName="pe-select"
