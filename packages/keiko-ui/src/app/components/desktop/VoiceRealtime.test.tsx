@@ -142,6 +142,21 @@ describe("VoiceRealtimeStatus", () => {
     expect(status).toHaveTextContent("Realtime voice connected.");
   });
 
+  it("shows redaction-safe memory activity when realtime memory context is present", () => {
+    render(
+      <VoiceRealtimeStatus
+        phase="connected"
+        error={undefined}
+        memoryContextText={"Included memory context:\n- Use pnpm"}
+        onRetry={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("MemoriaViva context active.");
+    expect(status).not.toHaveTextContent("Use pnpm");
+  });
+
   it("renders an alert with retry/dismiss on error and focuses retry", () => {
     const onRetry = vi.fn();
     const onDismiss = vi.fn();

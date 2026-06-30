@@ -15,8 +15,14 @@ import type {
   MemoryUserId,
   MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
+import type {
+  GatewayConfig,
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
+  handleEditMemory,
   handleListMemories,
   handleMemoryReviewQueue,
   handleAcceptMemoryProposal,
@@ -128,6 +134,30 @@ function makeMemory(id: string, body: string, overrides: Partial<MemoryRecord> =
   };
 }
 
+const EMBEDDING_MODEL = "text-embedding-3-large";
+
+function embeddingConfig(baseUrl = "https://gateway.example.test/v1"): GatewayConfig {
+  return {
+    providers: [
+      {
+        modelId: EMBEDDING_MODEL,
+        baseUrl,
+        apiKey: "test-key",
+        timeoutMs: 30_000,
+        maxRetries: 1,
+        retryBaseDelayMs: 100,
+      },
+    ],
+    circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+  };
+}
+
+function vectorForText(text: string): Float32Array {
+  const first = text.length === 0 ? 0 : text.charCodeAt(0);
+  const last = text.length === 0 ? 0 : text.charCodeAt(text.length - 1);
+  return Float32Array.from([text.length, first, last]);
+}
+
 function asJson(result: RouteResult): Record<string, unknown> {
   return result.body as Record<string, unknown>;
 }
@@ -187,6 +217,26 @@ describe("memory handlers", () => {
     const memories = body.memories as readonly MemoryRecord[];
     expect(memories).toHaveLength(1);
     expect(memories[0]?.id).toBe("user-1");
+  });
+
+  it("filters listed memories by free-text query across body and tags", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("atlas-body", "Atlas runs on Rust", { tags: ["backend"] }));
+    vault.insertMemory(makeMemory("tag-hit", "Deployment notes", { tags: ["atlas"] }));
+    vault.insertMemory(makeMemory("miss", "Unrelated preference", { tags: ["frontend"] }));
+
+    const result = handleListMemories(
+      makeCtx("/api/memory?q=atlas", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    expect(body.total).toBe(2);
+    expect((body.memories as readonly MemoryRecord[]).map((memory) => memory.id).sort()).toEqual([
+      "atlas-body",
+      "tag-hit",
+    ]);
   });
 
   it("includes non-global conflicts in the review queue", () => {
@@ -287,6 +337,72 @@ describe("memory handlers", () => {
     expect(errorField.message).toContain("idempotent-noop");
     expect(errorField.message).not.toContain("GovernanceError(");
     expect(errorField.message).not.toContain(idValue);
+  });
+
+  it("re-embeds a memory when editing its body", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("memory-edit-1", "Old body"));
+    vault.upsertEmbedding(memoryId("memory-edit-1"), {
+      provider: "old-provider",
+      modelId: "old-model",
+      metric: "cosine",
+      vector: Float32Array.from([1, 1, 1]),
+    });
+    const embeddingRequest = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({
+          ok: true,
+          value: { modelId: request.modelId, vector: vectorForText(request.input) },
+        }),
+    );
+
+    const result = await handleEditMemory(
+      makeCtx("/api/memory/memory-edit-1", { body: "New body for embedding" }, { id: "memory-edit-1" }),
+      makeDeps({
+        memoryVault: vault,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: embeddingRequest,
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(memoryId("memory-edit-1"))?.body).toBe("New body for embedding");
+    expect(embeddingRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ input: "New body for embedding", modelId: EMBEDDING_MODEL }),
+    );
+    expect(Array.from(vault.getEmbedding(memoryId("memory-edit-1"))?.vector ?? [])).toEqual(
+      Array.from(vectorForText("New body for embedding")),
+    );
+  });
+
+  it("invalidates a stale embedding when body edit re-embedding fails", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("memory-edit-2", "Old body"));
+    vault.upsertEmbedding(memoryId("memory-edit-2"), {
+      provider: "old-provider",
+      modelId: "old-model",
+      metric: "cosine",
+      vector: Float32Array.from([1, 1, 1]),
+    });
+    const embeddingRequest = vi.fn(
+      (): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({ ok: false, kind: "transport" }),
+    );
+
+    const result = await handleEditMemory(
+      makeCtx("/api/memory/memory-edit-2", { body: "Body whose embed fails" }, { id: "memory-edit-2" }),
+      makeDeps({
+        memoryVault: vault,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: embeddingRequest,
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(memoryId("memory-edit-2"))?.body).toBe("Body whose embed fails");
+    expect(vault.getEmbedding(memoryId("memory-edit-2"))).toBeUndefined();
   });
 
   it("creates a correction proposal with a provenance-preserving supersession edge", async () => {
@@ -437,6 +553,37 @@ describe("memory handlers", () => {
 
     expect(result.status).toBe(400);
     expect(vault.getMemory(memoryId("memory-forget-guard"))).toBeDefined();
+    expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+  });
+
+  it("refuses destructive forgets when audit evidence cannot be written", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("memory-forget-audit-down", "must remain until audited"));
+    const failingEvidenceStore: EvidenceStore = {
+      put: () => {
+        throw new Error("audit store unavailable");
+      },
+      list: () => [],
+      get: () => undefined,
+      delete: () => undefined,
+    };
+
+    const result = await handleForgetMemory(
+      makeCtx(
+        "/api/memory/memory-forget-audit-down/forget",
+        { acknowledged: true, reason: "user requested forget while audit down" },
+        { id: "memory-forget-audit-down" },
+      ),
+      makeDeps({ memoryVault: vault, evidenceStore: failingEvidenceStore }),
+    );
+
+    expect(result.status).toBe(500);
+    expect(asJson(result).error).toEqual(
+      expect.objectContaining({
+        code: "MEMORY_AUDIT_UNAVAILABLE",
+      }),
+    );
+    expect(vault.getMemory(memoryId("memory-forget-audit-down"))).toBeDefined();
     expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
   });
 

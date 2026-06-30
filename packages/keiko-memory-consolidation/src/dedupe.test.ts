@@ -59,6 +59,48 @@ describe("findDuplicateClusters - grouping by Jaccard similarity over bigrams", 
   });
 });
 
+describe("findDuplicateClusters - semantic embedding signal", () => {
+  it("groups semantic paraphrases when lexical similarity is below the Jaccard floor", () => {
+    const a = makeRecord({ id: "m-1", body: "deployment target is the Berlin workspace" });
+    const b = makeRecord({
+      id: "m-2",
+      body: "ship releases to the German operations environment",
+      createdAt: a.createdAt + 1,
+    });
+    expect(findDuplicateClusters([a, b], 0.99)).toEqual([]);
+    const embeddings = new Map([
+      ["m-1", { vector: [1, 0], modelId: "mem-embed", provider: "test", metric: "cosine" as const }],
+      [
+        "m-2",
+        { vector: [0.96, 0.28], modelId: "mem-embed", provider: "test", metric: "cosine" as const },
+      ],
+    ]);
+    const clusters = findDuplicateClusters([a, b], 0.99, {
+      semanticSimilarityThreshold: 0.9,
+      embeddingFor: (id) => embeddings.get(id),
+    });
+    expect(clusters).toHaveLength(1);
+    expect(must(clusters[0]).evidence?.map((item) => item.kind)).toContain("semantic-similarity");
+  });
+
+  it("forms transitive clusters by comparing against every member, not only the canonical", () => {
+    const a = makeRecord({ id: "m-a", body: "alpha production notebook", createdAt: 100 });
+    const b = makeRecord({ id: "m-b", body: "beta production runner", createdAt: 200 });
+    const c = makeRecord({ id: "m-c", body: "gamma release checklist", createdAt: 300 });
+    const embeddings = new Map([
+      ["m-a", { vector: [1, 0], modelId: "mem-embed", provider: "test" }],
+      ["m-b", { vector: [0.95, 0.31], modelId: "mem-embed", provider: "test" }],
+      ["m-c", { vector: [0.8, 0.6], modelId: "mem-embed", provider: "test" }],
+    ]);
+    const clusters = findDuplicateClusters([a, b, c], 1, {
+      semanticSimilarityThreshold: 0.9,
+      embeddingFor: (id) => embeddings.get(id),
+    });
+    expect(clusters).toHaveLength(1);
+    expect(must(clusters[0]).members.map((member) => member.id)).toEqual(["m-a", "m-b", "m-c"]);
+  });
+});
+
 describe("findDuplicateClusters - scope and type partitioning", () => {
   it("does NOT merge across different scope kinds", () => {
     const a = makeRecord({ id: "m-1", body: "same body", scope: userScope("u-1") });

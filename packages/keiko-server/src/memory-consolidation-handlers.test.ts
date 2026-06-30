@@ -92,6 +92,19 @@ function insertAcceptedMemory(
   vault: MemoryVaultStore,
   options: { id: string; body: string; userId?: string; confidence?: number },
 ): MemoryRecord {
+  return insertMemory(vault, { ...options, status: "accepted" });
+}
+
+function insertMemory(
+  vault: MemoryVaultStore,
+  options: {
+    id: string;
+    body: string;
+    userId?: string;
+    confidence?: number;
+    status: MemoryRecord["status"];
+  },
+): MemoryRecord {
   const now = Date.now();
   const record: MemoryRecord = {
     id: brandedMemoryId(options.id),
@@ -106,7 +119,7 @@ function insertAcceptedMemory(
       sensitivity: "public",
     },
     validity: { validFrom: now },
-    status: "accepted",
+    status: options.status,
     pinned: false,
     tags: [],
     createdAt: now,
@@ -200,6 +213,88 @@ describe("memory consolidation job handlers", () => {
     expect(fetched.result?.recordsInspected).toBe(2);
     expect(fetched.result?.truncated).toBe(false);
     expect(fetched.result?.elapsedMs ?? -1).toBeGreaterThanOrEqual(0);
+  });
+
+  it("wires stored embeddings into consolidation semantic duplicate detection", async () => {
+    const vault = makeVault();
+    const a = insertAcceptedMemory(vault, {
+      id: "m-1",
+      body: "deployment target is the Berlin workspace",
+    });
+    const b = insertAcceptedMemory(vault, {
+      id: "m-2",
+      body: "ship releases to the German operations environment",
+    });
+    vault.upsertEmbedding(a.id, {
+      provider: "test",
+      modelId: "mem-embed",
+      metric: "cosine",
+      vector: new Float32Array([1, 0]),
+    });
+    vault.upsertEmbedding(b.id, {
+      provider: "test",
+      modelId: "mem-embed",
+      metric: "cosine",
+      vector: new Float32Array([0.96, 0.28]),
+    });
+    const deps = makeDeps({ memoryVault: vault });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+        settings: { jaccardThreshold: 0.99 },
+      }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    const createdJob = asJson(createResult).job as { id: string };
+    await flushImmediate();
+    const getResult = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
+      deps,
+    );
+    const fetched = asJson(getResult).job as {
+      state: string;
+      result?: { edgesProposed: readonly unknown[]; recordsInspected: number };
+    };
+    expect(fetched.state).toBe("completed");
+    expect(fetched.result?.recordsInspected).toBe(2);
+    expect(fetched.result?.edgesProposed).toHaveLength(3);
+  });
+
+  it("loads proposed memories by default and routes duplicate output to review", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
+    insertMemory(vault, {
+      id: "m-2",
+      body: "user prefers tabs in editor",
+      status: "proposed",
+    });
+    const deps = makeDeps({ memoryVault: vault });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+      }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    const createdJob = asJson(createResult).job as { id: string };
+    await flushImmediate();
+    const getResult = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
+      deps,
+    );
+    const fetched = asJson(getResult).job as {
+      state: string;
+      memoryCount: number;
+      result?: {
+        edgesProposed: readonly unknown[];
+        reviewItems: readonly { reason: string }[];
+      };
+    };
+    expect(fetched.state).toBe("completed");
+    expect(fetched.memoryCount).toBe(2);
+    expect(fetched.result?.edgesProposed).toEqual([]);
+    expect(fetched.result?.reviewItems.map((item) => item.reason)).toEqual(["duplicate-review"]);
   });
 
   it("caps loaded records and marks the result truncated when a selection exceeds maxRecordsPerRun", async () => {

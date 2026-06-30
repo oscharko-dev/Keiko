@@ -27,6 +27,7 @@ import {
   deleteMemoryRow,
   getMemoryRow,
   insertMemoryRow,
+  listMemoryMetadataByScopeRows,
   listMemoriesRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
@@ -34,10 +35,16 @@ import {
 import {
   deleteEdgeRow,
   insertEdgeRow,
+  listEdgeRowsForMemoryIds,
   listIncomingEdgeRows,
   listOutgoingEdgeRows,
 } from "./edges.js";
-import { getEmbeddingRow, getEmbeddingRows, upsertEmbeddingRow } from "./embeddings.js";
+import {
+  deleteEmbeddingRow,
+  getEmbeddingRow,
+  getEmbeddingRows,
+  upsertEmbeddingRow,
+} from "./embeddings.js";
 import {
   getAccessStatsRows,
   recordAccessRows,
@@ -58,6 +65,7 @@ import {
 } from "./validate.js";
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
 import { MemoryStorageError } from "./errors.js";
+import { memoryBodySuppressionHash } from "./body-fingerprint.js";
 import type {
   MemoryBatchDelete,
   DeleteMemoryOptions,
@@ -171,6 +179,7 @@ function buildTombstone(
     type: record.type,
     forgottenAt: options.nowMs,
     forgetterSurface: options.forgetterSurface,
+    bodyHash: memoryBodySuppressionHash(record.body),
     originalStatus: record.status,
   };
   return {
@@ -190,6 +199,7 @@ type MemoryMutators = Pick<
   | "getMemory"
   | "listMemories"
   | "listMemoriesByScope"
+  | "listMemoryMetadataByScope"
 >;
 
 function prepareDelete(
@@ -317,7 +327,17 @@ function deleteMemoryWithEvents(
   emitDeletedRecords([result], opts);
 }
 
-function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
+type MemoryWriteOps = Pick<
+  MemoryMutators,
+  "insertMemory" | "updateMemory" | "updateMemories" | "deleteMemory" | "deleteMemories"
+>;
+
+type MemoryReadOps = Pick<
+  MemoryMutators,
+  "getMemory" | "listMemories" | "listMemoriesByScope" | "listMemoryMetadataByScope"
+>;
+
+function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
   return {
     insertMemory: (record: MemoryRecord): MemoryRecord => {
       const ready = preparedForWrite(record, opts);
@@ -343,6 +363,11 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       emitDeletedRecords(ready, opts);
       return ready;
     },
+  };
+}
+
+function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
+  return {
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemories: (options?: ListMemoriesOptions): readonly MemoryRecord[] => {
       const effective = options ?? {};
@@ -358,6 +383,22 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoriesByScopeRows(db, scope, effective, nowMs, opts.cipher);
     },
+    listMemoryMetadataByScope: (
+      scope: MemoryScope,
+      options?: ListMemoriesOptions,
+    ): ReturnType<MemoryVaultStore["listMemoryMetadataByScope"]> => {
+      gateMemoryScope(scope);
+      const effective = options ?? {};
+      const nowMs = effective.nowMs ?? opts.now();
+      return listMemoryMetadataByScopeRows(db, scope, effective, nowMs);
+    },
+  };
+}
+
+function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
+  return {
+    ...buildMemoryWriteOps(db, opts),
+    ...buildMemoryReadOps(db, opts),
   };
 }
 
@@ -366,8 +407,10 @@ type EdgeAndEmbeddingOps = Pick<
   | "insertEdge"
   | "listOutgoingEdges"
   | "listIncomingEdges"
+  | "listEdgesForMemories"
   | "deleteEdge"
   | "upsertEmbedding"
+  | "deleteEmbedding"
   | "getEmbedding"
   | "getEmbeddings"
 >;
@@ -393,6 +436,10 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
       listOutgoingEdgeRows(db, memoryId, opts.cipher),
     listIncomingEdges: (memoryId: MemoryId): readonly MemoryEdge[] =>
       listIncomingEdgeRows(db, memoryId, opts.cipher),
+    listEdgesForMemories: (
+      memoryIds: readonly MemoryId[],
+    ): ReturnType<MemoryVaultStore["listEdgesForMemories"]> =>
+      listEdgeRowsForMemoryIds(db, memoryIds, opts.cipher),
     deleteEdge: (edgeId: MemoryEdgeId): void => {
       const removed = deleteEdgeRow(db, edgeId);
       if (!removed) {
@@ -412,6 +459,14 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
         provider: embedding.provider,
         modelId: embedding.modelId,
       });
+    },
+    deleteEmbedding: (memoryId: MemoryId): void => {
+      if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+        throw new MemoryStorageError("not-found", "Memory not found.");
+      }
+      if (deleteEmbeddingRow(db, memoryId)) {
+        opts.emit({ kind: "embedding:deleted", memoryId });
+      }
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
       getEmbeddingRow(db, memoryId, opts.cipher),

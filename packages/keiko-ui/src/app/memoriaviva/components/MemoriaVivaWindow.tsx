@@ -20,6 +20,7 @@ type MemoriaVivaWindowView =
   | { readonly kind: "reviewQueue" };
 
 const EMPTY_FILTERS: MemoryFilterState = {
+  query: "",
   scope: [],
   type: [],
   status: [],

@@ -4,9 +4,10 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ReviewQueue } from "./ReviewQueue";
 import type { MemoryReviewQueueResponse } from "@/lib/memory-api";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 
 type MockLinkProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
@@ -82,6 +83,10 @@ const archiveOk = () => vi.fn().mockResolvedValue({ memory: makeProposed(makeId(
 // Tests
 // ---------------------------------------------------------------------------
 
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
+
 describe("ReviewQueue — empty state", () => {
   it("shows clear queue message when empty", async () => {
     render(<ReviewQueue fetchQueueImpl={emptyQueue()} />);
@@ -106,6 +111,57 @@ describe("ReviewQueue — populated state", () => {
     });
     expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+  });
+
+  it("renders governance metadata needed for review decisions", async () => {
+    const record = makeProposed(makeId(2), "Review this captured contact preference");
+    const enriched = {
+      ...record,
+      provenance: {
+        ...record.provenance,
+        sourceKind: "system-default" as const,
+        confidence: 0.83,
+        sensitivity: "confidential" as const,
+        captureRationale: "User stated this during a voice turn.",
+      },
+    };
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([enriched])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Review this captured contact preference")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Confidence: 83%")).toBeInTheDocument();
+    expect(screen.getByText("Sensitivity: Confidential")).toBeInTheDocument();
+    expect(screen.getByText("Source kind: system-default")).toBeInTheDocument();
+    expect(screen.getByText("Rationale: User stated this during a voice turn.")).toBeInTheDocument();
+  });
+
+  it("renders review queue labels in German when the locale is German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const record = makeProposed(makeId(23), "Deutscher Review-Vorschlag");
+    render(
+      <I18nProvider>
+        <ReviewQueue
+          fetchQueueImpl={queueWith([record])}
+          acceptImpl={acceptOk()}
+          rejectImpl={rejectOk()}
+        />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Deutscher Review-Vorschlag")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("heading", { name: "Review-Warteschlange" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Akzeptieren" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Ablehnen" })).toBeInTheDocument();
+    expect(screen.getByText("Sensitivitaet: Oeffentlich")).toBeInTheDocument();
   });
 
   it("renders conflicted memory with Reject conflict button (no Approve)", async () => {

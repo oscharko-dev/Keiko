@@ -97,22 +97,25 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
       const content = system.includes("You extract durable memories from a chat turn")
         ? JSON.stringify([
             {
+              source: "user",
               body: "The user's name is Oliver.",
-              type: "semantic-fact",
+              type: "identity",
               confidence: 0.96,
               scope: "user",
               tags: ["identity", "name"],
             },
             {
+              source: "user",
               body: "The user is 35 years old.",
-              type: "semantic-fact",
+              type: "fact",
               confidence: 0.9,
               scope: "user",
               tags: ["identity", "age"],
             },
             {
+              source: "user",
               body: "The user is a software developer.",
-              type: "semantic-fact",
+              type: "fact",
               confidence: 0.9,
               scope: "user",
               tags: ["identity", "profession"],
@@ -483,6 +486,49 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
+  it("does not capture assistant-only realtime voice turns as user memories", async () => {
+    const memoryDir = join(tmp, "voice-turn-assistant-only-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(
+      deps(fakeModel("unused"), {
+        memoryVault,
+        modelPortFactory: () => undefined,
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [{ role: "assistant", content: "remember that my preferred shell is fish" }],
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    expect(body.memory?.actions).toEqual([]);
+    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(seenRequests).toHaveLength(0);
+    memoryVault.close();
+  });
+
   it("does not wait for model-assisted salience capture before returning a realtime voice turn", async () => {
     const memoryDir = join(tmp, "voice-turn-async-salience-vault");
     mkdirSync(memoryDir);
@@ -664,7 +710,7 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("blocks confidential chat-intent candidates before durable persistence", async () => {
+  it("persists confidential chat-intent candidates as masked review proposals", async () => {
     const memoryDir = join(tmp, "memory-vault-confidential");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -691,12 +737,27 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     const body = (await sendRes.json()) as {
-      memory?: { actions: { kind: string; reason?: string }[] };
+      memory?: {
+        actions: {
+          kind: string;
+          body?: string;
+          proposalId?: string;
+          requiresApproval?: boolean;
+        }[];
+      };
     };
-    expect(body.memory?.actions).toEqual([
-      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
-    ]);
-    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(body.memory?.actions[0]).toMatchObject({
+      kind: "candidate",
+      body: "Sensitive memory pending review.",
+      requiresApproval: true,
+    });
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    expect(proposalId).toBeDefined();
+    if (proposalId !== undefined) {
+      const record = memoryVault.getMemory(proposalId as MemoryId);
+      expect(record?.status).toBe("proposed");
+      expect(record?.provenance.sensitivity).toBe("confidential");
+    }
     memoryVault.close();
   });
 

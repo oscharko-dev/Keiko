@@ -9,12 +9,9 @@
 //      PRECEDENCE over negation detection: a 3-member cluster with one negation is still
 //      surfaced as multi-way, because the operator needs to disambiguate the polarity too.
 //
-//   2. potential-conflict (exactly 2 members AND opposite negation polarity): one ReviewItem
-//      proposing a `supersede` with the newer record replacing the older one. v1 negation
-//      detection is a substring check: a "negation marker" is " not " (with surrounding
-//      spaces, so it does not match "another" or "annotation") or "n't " (English
-//      contraction). The pair is in conflict when exactly ONE side carries a negation
-//      marker — XOR. Same-polarity pairs (both negate or both affirm) are NOT conflicts.
+//   2. potential-conflict (exactly 2 members AND a conflict signal): one ReviewItem proposing a
+//      `supersede` with the newer record replacing the older one. Signals are opposite negation
+//      polarity over similar text, or a structured value replacement such as region A -> region B.
 //
 // Two-member non-conflicting clusters produce NO review item from this layer — the
 // orchestrator emits a `derived-from` edge instead.
@@ -24,7 +21,7 @@ import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import { compareRecordsByAge, compareReviewItems, scopeCoordinateKey } from "./_ordering.js";
 import type { DuplicateCluster } from "./dedupe.js";
 import { jaccardSimilarityPrepared, normalizeBody, prepareBody } from "./similarity.js";
-import type { ProposedAction, ReviewItem } from "./types.js";
+import type { ConsolidationEvidence, ProposedAction, ReviewItem } from "./types.js";
 
 // Conflict-detection overlap threshold. Lower than the dedup Jaccard default (0.85) because a
 // polarity-flip pair like "we use tabs" vs "we do not use tabs" shares fewer bigrams than two
@@ -39,20 +36,126 @@ export interface ConflictsOptions {
   readonly cancellationSignal?: () => boolean;
 }
 
-// Negation markers checked AFTER normalizeBody (lowercased, punctuation removed). The
-// surrounding spaces make the check whole-word: " not " inside the normalized body avoids
-// "another"/"annotation"/"notation". "nt " (post-strip form of "n't") catches contractions
-// like don't, won't, isn't, can't, didn't, etc.
-const NEGATION_MARKERS: readonly string[] = [" not ", "nt "];
+const NEGATION_TOKENS = new Set([
+  "not",
+  "no",
+  "never",
+  "none",
+  "without",
+  "cannot",
+  "dont",
+  "doesnt",
+  "didnt",
+  "cant",
+  "wont",
+  "isnt",
+  "arent",
+  "wasnt",
+  "werent",
+  "havent",
+  "hasnt",
+  "hadnt",
+  "shouldnt",
+  "wouldnt",
+  "couldnt",
+  "mustnt",
+  "neednt",
+  "nicht",
+  "kein",
+  "keine",
+  "keinen",
+  "keinem",
+  "keiner",
+  "keines",
+  "nie",
+  "niemals",
+  "ohne",
+]);
 
-function hasNegation(body: string): boolean {
-  // Pad both sides with a space so a marker that would normally be position-anchored (e.g.
-  // body starts with "not ") is still detected by the same indexOf check.
-  const padded = ` ${normalizeBody(body)} `;
-  for (const marker of NEGATION_MARKERS) {
-    if (padded.includes(marker)) return true;
+export function hasNegation(body: string): boolean {
+  const tokens = normalizeBody(body).split(" ").filter((token) => token.length > 0);
+  return tokens.some((token) => NEGATION_TOKENS.has(token));
+}
+
+interface ValueFact {
+  readonly key: string;
+  readonly value: string;
+  readonly rawValue: string;
+}
+
+const REGION_PATTERN =
+  /\b(?:deployment\s+region|server\s+region|aws\s+region|cloud\s+region|region)\b\s*(?:is|ist|=|:|to|auf)?\s*([a-z]{2}-[a-z]+-\d)\b/giu;
+
+const KEY_VALUE_PATTERN =
+  /\b(formatter|database|db|test\s+runner|runner|tool|model)\b\s*(?:is|ist|=|:|to|auf|should\s+be|soll(?:te)?)?\s*([a-z][a-z0-9+#._-]{1,40})\b/giu;
+
+const VALUE_KEY_PATTERN =
+  /\b(?:uses|use|nutzt|verwenden|verwende)\s+([a-z][a-z0-9+#._-]{1,40})\s+(?:as\s+)?(formatter|database|db|test\s+runner|runner|tool|model)\b/giu;
+
+const VALUE_SYNONYMS = new Map<string, string>([
+  ["postgresql", "postgres"],
+  ["postgres", "postgres"],
+  ["nodejs", "node"],
+  ["node.js", "node"],
+  ["js", "javascript"],
+  ["ts", "typescript"],
+]);
+
+function normalizeFactKey(raw: string): string {
+  const key = normalizeBody(raw);
+  if (key === "db") return "database";
+  if (key === "runner") return "test runner";
+  return key;
+}
+
+function normalizeFactValue(raw: string): string {
+  const compact = raw.trim().toLowerCase().replace(/[^a-z0-9+#._-]/gu, "");
+  return VALUE_SYNONYMS.get(compact) ?? compact;
+}
+
+function addFact(facts: ValueFact[], key: string, rawValue: string): void {
+  const normalized = normalizeFactValue(rawValue);
+  if (normalized.length === 0) return;
+  facts.push({ key: normalizeFactKey(key), value: normalized, rawValue });
+}
+
+function extractValueFacts(body: string): readonly ValueFact[] {
+  const facts: ValueFact[] = [];
+  for (const match of body.matchAll(REGION_PATTERN)) {
+    const rawValue = match[1];
+    if (rawValue !== undefined) addFact(facts, "region", rawValue);
   }
-  return false;
+  for (const match of body.matchAll(KEY_VALUE_PATTERN)) {
+    const key = match[1];
+    const rawValue = match[2];
+    if (key !== undefined && rawValue !== undefined) addFact(facts, key, rawValue);
+  }
+  for (const match of body.matchAll(VALUE_KEY_PATTERN)) {
+    const rawValue = match[1];
+    const key = match[2];
+    if (key !== undefined && rawValue !== undefined) addFact(facts, key, rawValue);
+  }
+  return facts;
+}
+
+function findValueReplacementEvidence(
+  older: MemoryRecord,
+  newer: MemoryRecord,
+): ConsolidationEvidence | null {
+  const olderFacts = extractValueFacts(older.body);
+  const newerFacts = extractValueFacts(newer.body);
+  for (const oldFact of olderFacts) {
+    for (const newFact of newerFacts) {
+      if (oldFact.key !== newFact.key) continue;
+      if (oldFact.value === newFact.value) continue;
+      return {
+        kind: "value-replacement",
+        memoryIds: [older.id, newer.id],
+        detail: `${oldFact.key}: ${oldFact.rawValue} -> ${newFact.rawValue}`,
+      };
+    }
+  }
+  return null;
 }
 
 function buildMultiWayItem(cluster: DuplicateCluster, options: ConflictsOptions): ReviewItem {
@@ -72,13 +175,58 @@ function buildMultiWayItem(cluster: DuplicateCluster, options: ConflictsOptions)
     id: options.newReviewItemId(),
     reason: "multi-way-duplicate",
     relatedMemoryIds: sorted.map((m) => m.id),
+    sourceMemoryIds: sorted.map((m) => m.id),
     proposedAction: action,
+    ...(cluster.evidence !== undefined && cluster.evidence.length > 0
+      ? { evidence: cluster.evidence }
+      : {}),
     detectedAt: options.nowMs,
   };
 }
 
 function isPolarityConflict(older: { body: string }, newer: { body: string }): boolean {
   return hasNegation(older.body) !== hasNegation(newer.body);
+}
+
+function polarityEvidence(older: MemoryRecord, newer: MemoryRecord): ConsolidationEvidence {
+  return {
+    kind: "negation-polarity",
+    memoryIds: [older.id, newer.id],
+    detail: "opposite-negation-polarity",
+  };
+}
+
+function conflictEvidenceForPair(
+  older: MemoryRecord,
+  newer: MemoryRecord,
+): readonly ConsolidationEvidence[] {
+  const evidence: ConsolidationEvidence[] = [];
+  if (isPolarityConflict(older, newer)) evidence.push(polarityEvidence(older, newer));
+  const valueEvidence = findValueReplacementEvidence(older, newer);
+  if (valueEvidence !== null) evidence.push(valueEvidence);
+  return evidence;
+}
+
+function hasValueReplacement(evidence: readonly ConsolidationEvidence[]): boolean {
+  return evidence.some((item) => item.kind === "value-replacement");
+}
+
+function buildPairConflictItem(
+  older: MemoryRecord,
+  newer: MemoryRecord,
+  options: ConflictsOptions,
+  evidence: readonly ConsolidationEvidence[],
+): ReviewItem {
+  const action: ProposedAction = { kind: "supersede", newer: newer.id, older: older.id };
+  return {
+    id: options.newReviewItemId(),
+    reason: "potential-conflict",
+    relatedMemoryIds: [older.id, newer.id],
+    sourceMemoryIds: [older.id, newer.id],
+    proposedAction: action,
+    evidence,
+    detectedAt: options.nowMs,
+  };
 }
 
 function tryBuildPairConflict(
@@ -90,15 +238,9 @@ function tryBuildPairConflict(
   const older = sorted[0];
   const newer = sorted[1];
   if (older === undefined || newer === undefined) return null;
-  if (!isPolarityConflict(older, newer)) return null;
-  const action: ProposedAction = { kind: "supersede", newer: newer.id, older: older.id };
-  return {
-    id: options.newReviewItemId(),
-    reason: "potential-conflict",
-    relatedMemoryIds: [older.id, newer.id],
-    proposedAction: action,
-    detectedAt: options.nowMs,
-  };
+  const evidence = conflictEvidenceForPair(older, newer);
+  if (evidence.length === 0) return null;
+  return buildPairConflictItem(older, newer, options, evidence);
 }
 
 // Public entry. Returns review items sorted by (reason, related-ids, id) for byte-stable
@@ -163,32 +305,18 @@ function buildExcludeSet(clusters: readonly DuplicateCluster[]): Set<string> {
   return excluded;
 }
 
-function buildConflictPairItem(
-  older: MemoryRecord,
-  newer: MemoryRecord,
-  options: ConflictsOptions,
-): ReviewItem {
-  const action: ProposedAction = { kind: "supersede", newer: newer.id, older: older.id };
-  return {
-    id: options.newReviewItemId(),
-    reason: "potential-conflict",
-    relatedMemoryIds: [older.id, newer.id],
-    proposedAction: action,
-    detectedAt: options.nowMs,
-  };
-}
-
 function shouldSkipPair(
   older: MemoryRecord | undefined,
   newer: MemoryRecord | undefined,
   olderPrepared: ReturnType<typeof prepareBody> | undefined,
   newerPrepared: ReturnType<typeof prepareBody> | undefined,
   excluded: ReadonlySet<string>,
-): boolean {
-  if (older === undefined || newer === undefined) return true;
-  if (olderPrepared === undefined || newerPrepared === undefined) return true;
-  if (excluded.has(pairKey(older.id, newer.id))) return true;
-  return !isPolarityConflict(older, newer);
+): readonly ConsolidationEvidence[] | null {
+  if (older === undefined || newer === undefined) return null;
+  if (olderPrepared === undefined || newerPrepared === undefined) return null;
+  if (excluded.has(pairKey(older.id, newer.id))) return null;
+  const evidence = conflictEvidenceForPair(older, newer);
+  return evidence.length === 0 ? null : evidence;
 }
 
 function resolveComparablePair(
@@ -225,13 +353,17 @@ function scanPartitionPairs(
       const newer = sorted[j];
       const olderPrepared = prepared[i];
       const newerPrepared = prepared[j];
-      if (shouldSkipPair(older, newer, olderPrepared, newerPrepared, excluded)) continue;
+      const evidence = shouldSkipPair(older, newer, olderPrepared, newerPrepared, excluded);
+      if (evidence === null) continue;
       const pair = resolveComparablePair(older, newer, olderPrepared, newerPrepared);
       if (pair === null) continue;
-      if (jaccardSimilarityPrepared(pair.olderPrepared, pair.newerPrepared) < overlapThreshold) {
+      if (
+        !hasValueReplacement(evidence) &&
+        jaccardSimilarityPrepared(pair.olderPrepared, pair.newerPrepared) < overlapThreshold
+      ) {
         continue;
       }
-      items.push(buildConflictPairItem(pair.older, pair.newer, options));
+      items.push(buildPairConflictItem(pair.older, pair.newer, options, evidence));
     }
   }
   return { items, canceled: false };

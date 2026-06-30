@@ -11,6 +11,7 @@ import { openTestDb, TEST_CIPHER } from "./_support.js";
 import {
   deleteEdgeRow,
   insertEdgeRow,
+  listEdgeRowsForMemoryIds,
   listIncomingEdgeRows,
   listOutgoingEdgeRows,
 } from "./edges.js";
@@ -93,6 +94,23 @@ describe("edges insert + list", () => {
     };
     insertEdgeRow(db, edge, TEST_CIPHER);
     expect(listOutgoingEdgeRows(db, "a" as MemoryId, TEST_CIPHER)).toEqual([edge]);
+    db.close();
+  });
+
+  it("lists incident edges for a candidate set in one grouped result", () => {
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("c"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("outside"), TEST_CIPHER);
+    insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes", 1), TEST_CIPHER);
+    insertEdgeRow(db, makeEdge("e2", "c", "b", "related", 2), TEST_CIPHER);
+    insertEdgeRow(db, makeEdge("e3", "outside", "a", "related", 3), TEST_CIPHER);
+
+    const grouped = listEdgeRowsForMemoryIds(db, ["a", "b"] as MemoryId[], TEST_CIPHER);
+    expect(grouped.get("a" as MemoryId)?.map((edge) => edge.id)).toEqual(["e1", "e3"]);
+    expect(grouped.get("b" as MemoryId)?.map((edge) => edge.id)).toEqual(["e1", "e2"]);
+    expect(grouped.has("c" as MemoryId)).toBe(false);
     db.close();
   });
 });

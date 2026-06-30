@@ -28,6 +28,7 @@ INSERT INTO memory_edges (
 const LIST_OUT_SQL = "SELECT * FROM memory_edges WHERE from_memory_id = ? ORDER BY created_at ASC";
 const LIST_IN_SQL = "SELECT * FROM memory_edges WHERE to_memory_id = ? ORDER BY created_at ASC";
 const DELETE_SQL = "DELETE FROM memory_edges WHERE id = ?";
+const BULK_EDGE_CHUNK_SIZE = 500;
 
 // provenance_summary is the only free-text edge column, so it is the only sealed one (ADR-0035).
 function rowToEdge(row: EdgeRow, cipher: MemoryContentCipher): MemoryEdge {
@@ -83,6 +84,39 @@ export function listIncomingEdgeRows(
 ): readonly MemoryEdge[] {
   const rows = db.prepare(LIST_IN_SQL).all(memoryId) as unknown as readonly EdgeRow[];
   return rows.map((row) => rowToEdge(row, cipher));
+}
+
+export function listEdgeRowsForMemoryIds(
+  db: DatabaseSync,
+  memoryIds: readonly MemoryId[],
+  cipher: MemoryContentCipher,
+): ReadonlyMap<MemoryId, readonly MemoryEdge[]> {
+  const out = new Map<MemoryId, MemoryEdge[]>();
+  const uniqueIds = [...new Set(memoryIds)];
+  if (uniqueIds.length === 0) return out;
+  const idSet = new Set<string>(uniqueIds);
+  for (const id of uniqueIds) out.set(id, []);
+  for (let i = 0; i < uniqueIds.length; i += BULK_EDGE_CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + BULK_EDGE_CHUNK_SIZE);
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT * FROM memory_edges
+         WHERE from_memory_id IN (${placeholders}) OR to_memory_id IN (${placeholders})
+         ORDER BY created_at ASC`,
+      )
+      .all(...chunk, ...chunk) as unknown as readonly EdgeRow[];
+    for (const row of rows) {
+      const edge = rowToEdge(row, cipher);
+      if (idSet.has(edge.fromMemoryId)) {
+        out.get(edge.fromMemoryId)?.push(edge);
+      }
+      if (edge.toMemoryId !== edge.fromMemoryId && idSet.has(edge.toMemoryId)) {
+        out.get(edge.toMemoryId)?.push(edge);
+      }
+    }
+  }
+  return out;
 }
 
 export function deleteEdgeRow(db: DatabaseSync, edgeId: MemoryEdgeId): boolean {

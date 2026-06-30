@@ -123,6 +123,19 @@ export interface SalienceInput {
   readonly policy?: CapturePolicyOptions;
 }
 
+export type SalienceDiagnostic =
+  | { readonly kind: "parse-or-empty-output"; readonly rawItemCount: 0 }
+  | {
+      readonly kind: "dropped-model-items";
+      readonly reason: "non-user-source" | "unknown-type" | "unknown-scope";
+      readonly count: number;
+    }
+  | {
+      readonly kind: "zero-candidates-after-filter";
+      readonly rawItemCount: number;
+      readonly acceptedCount: 0;
+    };
+
 // Dependencies for `extractSalientMemories`. `callModel(system, user)` is the only IO boundary.
 // The clock/id factories are deps-authoritative: they overlay the caller's CaptureContext so the
 // resulting envelopes are deterministic under test (decision 3).
@@ -131,4 +144,5 @@ export interface SalienceDeps {
   readonly now: () => number;
   readonly newMemoryId: () => MemoryId;
   readonly newProposalId: () => MemoryProposalId;
+  readonly onDiagnostic?: (diagnostic: SalienceDiagnostic) => void;
 }

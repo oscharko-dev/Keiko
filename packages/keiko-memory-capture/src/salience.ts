@@ -9,8 +9,9 @@
 // []), then the same deterministic envelope/secret/scope/policy pipeline the regex path uses.
 //
 // Product intent: the capture bar is LOW (over-capture is acceptable; a later decay/consolidation
-// pass prunes). We still apply the full secret-rejection net and clamp confidence into a band
-// that stays retrievable (>0.3 stale floor) but below the 1.0 reserved for explicit user intent.
+// pass prunes). We still apply the full secret-rejection net and clamp confidence below the 1.0
+// reserved for explicit user intent. Low model confidence stays low; retrieval suppression can then
+// keep weak candidates out until a governed acceptance/edit strengthens them.
 
 import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildProposal } from "./_envelopes.js";
@@ -27,12 +28,15 @@ import type {
 } from "./types.js";
 import type { MemoryType } from "@oscharko-dev/keiko-contracts/memory";
 
-// Confidence band: floor 0.4 keeps salience candidates above the 0.3 stale-suppression floor so
-// they remain retrievable; ceiling 0.9 keeps them below the 1.0 reserved for explicit user intent.
-const CONFIDENCE_MIN = 0.4;
+// Confidence band: ceiling 0.9 keeps salience below the 1.0 reserved for explicit user intent.
+// Floor 0.2 intentionally stays below the retrieval stale floor (0.3), so uncertain inferred facts
+// do not become retrievable just because the model returned a tiny confidence.
+const CONFIDENCE_MIN = 0.2;
 const CONFIDENCE_MAX = 0.9;
 // Hard cap on accepted candidates per turn — over-capture is bounded.
 const MAX_CANDIDATES = 6;
+const MAX_TAGS = 8;
+const MAX_TAG_CHARS = 32;
 // Jaccard char-bigram similarity at/above which a candidate is treated as a near-duplicate.
 const DEDUP_THRESHOLD = 0.8;
 // Provenance string surfaced in the MemoriaViva detail view (decision 2). Salience reuses the
@@ -47,22 +51,35 @@ interface RawSalienceItem {
   readonly type: string;
   readonly confidence: number;
   readonly scope: string;
+  readonly source: string;
   readonly tags: readonly string[];
+}
+
+type ModelDropReason = "non-user-source" | "unknown-type" | "unknown-scope";
+
+interface CandidateMetadata {
+  readonly type: MemoryType;
+  readonly scopeKind: MemoryScopeKindHint;
 }
 
 // ─── Verbatim extraction prompt ──────────────────────────────────────────────
 export const SALIENCE_SYSTEM_PROMPT = `You extract durable memories from a chat turn so an assistant can remember the user across future conversations.
 
 Return ONLY a JSON array (no prose, no markdown fences). Each element:
-{ "body": string, "type": string, "confidence": number, "scope": string, "tags": string[] }
+{ "body": string, "type": string, "confidence": number, "scope": string, "source": "user", "tags": string[] }
 
-Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement (e.g. "The user is building a fintech app called Atlas in Rust with PostgreSQL"). Identity statements should be canonicalised the same way every time, for example "My name is Paul." / "Hallo Keiko, ich bin Paul." -> "The user's name is Paul.".
+Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement in the same language as the user's fact or the conversation. Do not translate German or multilingual facts into English.
+
+Examples:
+- "My name is Paul." -> "The user's name is Paul."
+- "Hallo Keiko, ich bin Paul." -> "Der Nutzer heißt Paul."
+- "Wir bauen Atlas in Rust mit PostgreSQL." -> "Der Nutzer baut Atlas in Rust mit PostgreSQL."
 
 Capture LIBERALLY — the bar is low; when in doubt, include it.
 
 EXCLUDE: questions; one-off ephemeral task requests; anything the ASSISTANT said or suggested (the assistant message is context only, never a source of user facts); general world knowledge; and anything secret or credential-like (passwords, API keys, tokens, private keys).
 
-"type" is one of: identity, preference, fact, decision, constraint, goal, lesson, procedural. "scope" is one of: user (personal facts/preferences), project (project-specific facts), workspace. "confidence" is 0..1. "tags" is a short list of lowercase keywords.
+"type" is one of: identity, preference, fact, decision, constraint, goal, lesson, procedural. "scope" is one of: user (personal facts/preferences), project (project-specific facts), workspace. "source" MUST be "user"; never emit assistant-sourced facts. "confidence" is 0..1. "tags" is a short list of lowercase keywords.
 
 If there is nothing durable to capture, return [].`;
 
@@ -129,6 +146,7 @@ function isRawSalienceItem(value: unknown): value is RawSalienceItem {
     typeof item.type === "string" &&
     typeof item.confidence === "number" &&
     typeof item.scope === "string" &&
+    typeof item.source === "string" &&
     Array.isArray(item.tags) &&
     item.tags.every((tag) => typeof tag === "string")
   );
@@ -168,16 +186,19 @@ const TYPE_MAP: Readonly<Record<string, MemoryType>> = {
   workflow: "procedural",
 };
 
-function mapType(loose: string): MemoryType {
-  return TYPE_MAP[loose.trim().toLowerCase()] ?? "semantic-fact";
+function mapType(loose: string): MemoryType | null {
+  return TYPE_MAP[loose.trim().toLowerCase()] ?? null;
 }
 
-function mapScopeKind(loose: string): MemoryScopeKindHint {
+function mapScopeKind(loose: string): MemoryScopeKindHint | null {
   const normalized = loose.trim().toLowerCase();
   if (normalized === "project" || normalized === "workspace") {
     return normalized;
   }
-  return "user";
+  if (normalized === "user") {
+    return "user";
+  }
+  return null;
 }
 
 function clampConfidence(value: number): number {
@@ -187,11 +208,35 @@ function clampConfidence(value: number): number {
   return Math.min(CONFIDENCE_MAX, Math.max(CONFIDENCE_MIN, value));
 }
 
+function normalizeTag(tag: string): string | null {
+  const normalized = tag
+    .normalize("NFKC")
+    .toLocaleLowerCase("und")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/gu, "");
+  const bounded = normalized.slice(0, MAX_TAG_CHARS).replace(/^-+|-+$/gu, "");
+  return bounded.length === 0 ? null : bounded;
+}
+
+function normalizeTags(tags: readonly string[]): readonly string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const tag of tags) {
+    const normalized = normalizeTag(tag);
+    if (normalized === null || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
+}
+
 // ─── Dedup (pure, char-bigram Jaccard) ───────────────────────────────────────
-function normalizeForDedup(body: string): string {
+export function normalizeForDedup(body: string): string {
   return body
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
+    .normalize("NFKC")
+    .toLocaleLowerCase("und")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }
 
@@ -241,25 +286,58 @@ function effectiveContext(input: SalienceInput, deps: SalienceDeps): CaptureCont
   };
 }
 
+function candidateMetadata(
+  item: RawSalienceItem,
+  onDrop: (reason: ModelDropReason) => void,
+): CandidateMetadata | null {
+  if (item.source.trim().toLowerCase() !== "user") {
+    onDrop("non-user-source");
+    return null;
+  }
+  const type = mapType(item.type);
+  if (type === null) {
+    onDrop("unknown-type");
+    return null;
+  }
+  const scopeKind = mapScopeKind(item.scope);
+  if (scopeKind === null) {
+    onDrop("unknown-scope");
+    return null;
+  }
+  return { type, scopeKind };
+}
+
+function candidateBody(item: RawSalienceItem, policy: CapturePolicyOptions): string | null {
+  const body = item.body.trim();
+  const max = policy.maxBodyChars ?? MEMORY_BODY_MAX_CHARS_DEFAULT;
+  if (body.length === 0 || body.length > max) return null;
+  return scanForSecrets(body, policy.customerIdentifierMatchers ?? []) === null ? body : null;
+}
+
+function candidateScope(
+  scopeKind: MemoryScopeKindHint,
+  context: CaptureContext,
+  policy: CapturePolicyOptions,
+): ReturnType<typeof inferScopeFromContext> {
+  return inferScopeFromContext(context, {
+    scopeKind,
+    ...(policy.allowGlobalScope !== undefined && { allowGlobalScope: policy.allowGlobalScope }),
+  });
+}
+
 // Turns one validated raw item into a candidate outcome, or null when it must be dropped (secret,
 // empty/oversize body, or unresolvable scope). Pure given the effective context.
 function buildCandidate(
   item: RawSalienceItem,
   context: CaptureContext,
   policy: CapturePolicyOptions,
+  onDrop: (reason: ModelDropReason) => void,
 ): CaptureOutcome | null {
-  const body = item.body.trim();
-  const max = policy.maxBodyChars ?? MEMORY_BODY_MAX_CHARS_DEFAULT;
-  if (body.length === 0 || body.length > max) {
-    return null;
-  }
-  if (scanForSecrets(body, policy.customerIdentifierMatchers ?? []) !== null) {
-    return null;
-  }
-  const scope = inferScopeFromContext(context, {
-    scopeKind: mapScopeKind(item.scope),
-    ...(policy.allowGlobalScope !== undefined && { allowGlobalScope: policy.allowGlobalScope }),
-  });
+  const metadata = candidateMetadata(item, onDrop);
+  if (metadata === null) return null;
+  const body = candidateBody(item, policy);
+  if (body === null) return null;
+  const scope = candidateScope(metadata.scopeKind, context, policy);
   if (scope === null) {
     return null;
   }
@@ -273,7 +351,7 @@ function buildCandidate(
       context,
       scope,
       body,
-      type: mapType(item.type),
+      type: metadata.type,
       sensitivity: decision.sensitivity,
       sourceKind: "system-default",
       captureRationale: SALIENCE_RATIONALE,
@@ -282,9 +360,50 @@ function buildCandidate(
   );
   return {
     kind: "candidate",
-    proposal: { ...proposal, tags: [...item.tags] },
+    proposal: { ...proposal, tags: normalizeTags(item.tags) },
     requiresApproval: decision.requiresApproval,
   };
+}
+
+function collectAcceptedCandidates(
+  items: readonly RawSalienceItem[],
+  context: CaptureContext,
+  policy: CapturePolicyOptions,
+  seen: ReadonlySet<string>[],
+  onDrop: (reason: ModelDropReason) => void,
+): CaptureOutcome[] {
+  const accepted: CaptureOutcome[] = [];
+  for (const item of items) {
+    if (accepted.length >= MAX_CANDIDATES) break;
+    const candidate = buildCandidate(item, context, policy, onDrop);
+    if (candidate === null) continue;
+    const bigrams = charBigrams(normalizeForDedup(item.body));
+    if (isNearDuplicate(bigrams, seen)) continue;
+    seen.push(bigrams);
+    accepted.push(candidate);
+  }
+  return accepted;
+}
+
+function emitExtractionDiagnostics(
+  deps: SalienceDeps,
+  items: readonly RawSalienceItem[],
+  acceptedCount: number,
+  droppedByReason: ReadonlyMap<ModelDropReason, number>,
+): void {
+  if (items.length === 0) {
+    deps.onDiagnostic?.({ kind: "parse-or-empty-output", rawItemCount: 0 });
+  }
+  for (const [reason, count] of droppedByReason) {
+    deps.onDiagnostic?.({ kind: "dropped-model-items", reason, count });
+  }
+  if (items.length > 0 && acceptedCount === 0) {
+    deps.onDiagnostic?.({
+      kind: "zero-candidates-after-filter",
+      rawItemCount: items.length,
+      acceptedCount: 0,
+    });
+  }
 }
 
 // ─── Public entry point ──────────────────────────────────────────────────────
@@ -305,21 +424,11 @@ export async function extractSalientMemories(
   const seen: ReadonlySet<string>[] = input.existingBodies.map((body) =>
     charBigrams(normalizeForDedup(body)),
   );
-  const accepted: CaptureOutcome[] = [];
-  for (const item of items) {
-    if (accepted.length >= MAX_CANDIDATES) {
-      break;
-    }
-    const candidate = buildCandidate(item, context, policy);
-    if (candidate === null) {
-      continue;
-    }
-    const bigrams = charBigrams(normalizeForDedup(item.body));
-    if (isNearDuplicate(bigrams, seen)) {
-      continue;
-    }
-    seen.push(bigrams);
-    accepted.push(candidate);
-  }
+  const droppedByReason = new Map<ModelDropReason, number>();
+  const recordDrop = (reason: ModelDropReason): void => {
+    droppedByReason.set(reason, (droppedByReason.get(reason) ?? 0) + 1);
+  };
+  const accepted = collectAcceptedCandidates(items, context, policy, seen, recordDrop);
+  emitExtractionDiagnostics(deps, items, accepted.length, droppedByReason);
   return accepted;
 }

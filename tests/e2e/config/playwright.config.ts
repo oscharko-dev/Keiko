@@ -8,6 +8,13 @@ const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32184");
 const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32185");
 const stateId = process.env.GITHUB_RUN_ID ?? String(process.pid);
 const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
+const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
+const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
+const prepareRuntimeConfig = [
+  "const fs = require('node:fs');",
+  `fs.mkdirSync(${JSON.stringify(stateDir)}, { recursive: true });`,
+  `fs.copyFileSync(${JSON.stringify(fixtureConfigPath)}, ${JSON.stringify(runtimeConfigPath)});`,
+].join(" ");
 
 export default defineConfig({
   testDir: join(root, "tests", "e2e"),
@@ -30,7 +37,9 @@ export default defineConfig({
   ],
   webServer: {
     cwd: root,
-    command: "npm run build:packages && node scripts/dev-runner.mjs",
+    command:
+      `node -e ${JSON.stringify(prepareRuntimeConfig)} && ` +
+      "npm run build:packages && node scripts/dev-runner.mjs",
     url: `http://127.0.0.1:${String(publicPort)}`,
     reuseExistingServer: false,
     timeout: 120_000,
@@ -43,7 +52,7 @@ export default defineConfig({
       KEIKO_STATE_DIR: stateDir,
       KEIKO_UI_DATA_DIR: join(stateDir, "ui"),
       KEIKO_MEMORY_DIR: join(stateDir, "memory"),
-      KEIKO_CONFIG_FILE: join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json"),
+      KEIKO_CONFIG_FILE: runtimeConfigPath,
     },
   },
 });

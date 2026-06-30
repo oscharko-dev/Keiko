@@ -129,7 +129,7 @@ describe("MemoriaViva browser-tier flows", () => {
       expect(screen.getByText("Formatter is Prettier.")).toBeInTheDocument();
       expect(screen.getByText("Use retired release checklist.")).toBeInTheDocument();
     });
-    expect(screen.getByText("conflicted")).toBeInTheDocument();
+    expect(screen.getByText("Conflicted")).toBeInTheDocument();
     expect(screen.getByText("Stale: source workflow was revoked")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Approve" }));
@@ -231,7 +231,7 @@ describe("MemoriaViva browser-tier flows", () => {
 
     await user.click(screen.getByRole("button", { name: /delete this memory record/i }));
     expect(deleteImpl).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+    await user.click(screen.getByRole("button", { name: "Delete record" }));
 
     await waitFor(() => {
       expect(deleteImpl).toHaveBeenCalledWith(

@@ -32,7 +32,7 @@ import {
 import { buildBinding } from "./binding.js";
 import { assertSafeFieldValue, containsUnsafeFieldChars } from "./field-safety.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
-import { provisionKey, workspaceKey } from "./mutex.js";
+import { provisionKey, repositoryKey, workspaceKey } from "./mutex.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
@@ -556,9 +556,10 @@ async function runWorktreeMutation(
 
 // The gated provisioning critical section. Runs under the `prov:<repositoryId>:<taskId>` mutex key
 // (#449, ADR-0093 D1) so two concurrent provisions of the SAME (repo, task) serialize instead of both
-// passing the check-then-write gates and racing `git worktree add`. The advisory cross-actor
-// LOCK_CONTENTION check (assertProvisionable → assertNotLocked) stays INSIDE this section, preserving the
-// across-actor rejection while the mutex only serializes same-process callers.
+// passing the check-then-write gates and racing `git worktree add`. It also runs under `repo:` because
+// `git worktree add` mutates shared repository metadata even for distinct task branches. The advisory
+// cross-actor LOCK_CONTENTION check (assertProvisionable → assertNotLocked) stays INSIDE this section,
+// preserving the across-actor rejection while the mutex only serializes same-process callers.
 async function provisionLocked(
   ctx: ProvisioningCtx,
   request: WorkspaceProvisionRequest,
@@ -594,8 +595,9 @@ async function provisionImpl(
   // Resolve the repository identity (read-only git-root resolution) BEFORE acquiring the key — the key
   // is derived from (repositoryId, taskId) and serialization must cover only the mutating gated section.
   const repo = await resolveRepositoryContext(ctx, request);
-  return ctx.deps.mutex.runExclusive([provisionKey(repo.repositoryId, request.taskId)], () =>
-    provisionLocked(ctx, request, repo),
+  return ctx.deps.mutex.runExclusive(
+    [repositoryKey(repo.repositoryId), provisionKey(repo.repositoryId, request.taskId)],
+    () => provisionLocked(ctx, request, repo),
   );
 }
 

@@ -3,9 +3,10 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDetail } from "./MemoryDetail";
 import type { MemoryDetailResponse } from "@/lib/memory-api";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import type {
   MemoryRecord,
   MemoryId,
@@ -112,13 +113,17 @@ function rejectsWith(message: string) {
 // Tests
 // ---------------------------------------------------------------------------
 
+afterEach(() => {
+  window.localStorage.removeItem(I18N_STORAGE_KEY);
+});
+
 describe("MemoryDetail — loading state", () => {
-  it("renders role=status with 'Loading memory…' while fetchImpl is pending", () => {
+  it("renders role=status with 'Loading memory...' while fetchImpl is pending", () => {
     render(<MemoryDetail id="mem-001" fetchMemoryImpl={() => neverResolves()} />);
 
     const status = screen.getByRole("status");
     expect(status).toBeInTheDocument();
-    expect(status).toHaveTextContent("Loading memory…");
+    expect(status).toHaveTextContent("Loading memory...");
   });
 
   it("does NOT render role=alert or MemoryActions while still loading", () => {
@@ -233,10 +238,10 @@ describe("MemoryDetail — success state with full record", () => {
     render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} />);
 
     await waitFor(() => {
-      expect(screen.getByText("accepted")).toBeInTheDocument();
+      expect(screen.getByText("Accepted")).toBeInTheDocument();
     });
     // Static metadata badges must not be role="status" live regions (uiux-fix F005).
-    expect(screen.getByText("accepted").className).toContain("mc-badge-accepted");
+    expect(screen.getByText("Accepted").className).toContain("mc-badge-accepted");
   });
 
   it("renders the sensitivity from provenance", async () => {
@@ -251,8 +256,28 @@ describe("MemoryDetail — success state with full record", () => {
     render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} />);
 
     await waitFor(() => {
-      expect(screen.getByText("confidential")).toBeInTheDocument();
+      expect(screen.getByText("Confidential")).toBeInTheDocument();
     });
+  });
+
+  it("renders MemoriaViva governance labels in German when the locale is German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    const record = makeRecord({ type: "preference", tags: [] });
+    render(
+      <I18nProvider>
+        <MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} onBack={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+        "Praeferenz-Erinnerung",
+      );
+    });
+    expect(screen.getByRole("button", { name: "Zurueck" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Herkunft" })).toBeInTheDocument();
+    expect(screen.getByText("Inhalt")).toBeInTheDocument();
+    expect(screen.getByText("Keine Schlagwoerter")).toBeInTheDocument();
   });
 
   it("renders confidence as a rounded percentage", async () => {

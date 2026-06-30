@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { memoryTextEgressRejectionReason } from "./capture-safety.js";
+import {
+  memoryTextEgressRejectionReason,
+  memoryTextSecretEgressRejectionReason,
+} from "./capture-safety.js";
 
 describe("memoryTextEgressRejectionReason", () => {
   it("returns null for public memory-safe text", () => {
@@ -23,6 +26,14 @@ describe("memoryTextEgressRejectionReason", () => {
   it("blocks non-public sensitivity before secondary model egress", () => {
     expect(memoryTextEgressRejectionReason("my private support email is dev@example.com")).toBe(
       "sensitive-memory-requires-approval",
+    );
+  });
+
+  it("exposes a secret-only guard that leaves reviewable PII to candidate policy", () => {
+    expect(memoryTextSecretEgressRejectionReason("my private support email is dev@example.com")).toBeNull();
+    const apiKey = ["sk-", "abcdefghijklmnopqrstuvwxyz12345"].join("");
+    expect(memoryTextSecretEgressRejectionReason(`remember api_key=${apiKey}`)).toBe(
+      "credential-shape",
     );
   });
 });

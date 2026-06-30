@@ -16,13 +16,16 @@
 
 import type { MemoryRecord, MemoryStatus } from "@oscharko-dev/keiko-contracts/memory";
 
+import { STALE_ACCESS_REINFORCEMENT_COUNT_DEFAULT } from "./_constants.js";
 import { compareStaleFlags } from "./_ordering.js";
-import type { StaleFlag, StaleReason } from "./types.js";
+import type { ConsolidationAccessStat, StaleFlag, StaleReason } from "./types.js";
 
 export interface StaleOptions {
   readonly nowMs: number;
   readonly staleConfidenceThreshold: number;
   readonly maxAgeMs: number;
+  readonly accessStatsFor?: (memoryId: MemoryRecord["id"]) => ConsolidationAccessStat | undefined;
+  readonly staleAccessReinforcementCount?: number;
 }
 
 // Records in these statuses are skipped entirely: they have no consolidation work to do.
@@ -43,11 +46,25 @@ function isAgedOut(record: MemoryRecord, nowMs: number, maxAgeMs: number): boole
   return record.updatedAt + maxAgeMs <= nowMs;
 }
 
+function isReinforcedAgainstAge(record: MemoryRecord, options: StaleOptions): boolean {
+  const stats = options.accessStatsFor?.(record.id);
+  if (stats === undefined) return false;
+  const minCount =
+    options.staleAccessReinforcementCount ?? STALE_ACCESS_REINFORCEMENT_COUNT_DEFAULT;
+  if (stats.accessCount >= minCount) return true;
+  return stats.lastAccessedAt !== undefined && stats.lastAccessedAt + options.maxAgeMs > options.nowMs;
+}
+
 function collectReasonsFor(record: MemoryRecord, options: StaleOptions): readonly StaleReason[] {
   const reasons: StaleReason[] = [];
   if (isExpired(record, options.nowMs)) reasons.push("expired");
   if (isLowConfidence(record, options.staleConfidenceThreshold)) reasons.push("low-confidence");
-  if (isAgedOut(record, options.nowMs, options.maxAgeMs)) reasons.push("aged-out");
+  if (
+    isAgedOut(record, options.nowMs, options.maxAgeMs) &&
+    !isReinforcedAgainstAge(record, options)
+  ) {
+    reasons.push("aged-out");
+  }
   return reasons;
 }
 

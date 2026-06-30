@@ -82,12 +82,25 @@ describe("runMigrations", () => {
       .prepare("PRAGMA table_info(memory_tombstones)")
       .all() as unknown as readonly { name: string }[];
     expect(tombstoneColumns.map((column) => column.name)).toEqual(
-      expect.arrayContaining(["reviewer_id", "original_status"]),
+      expect.arrayContaining(["reviewer_id", "original_status", "body_hash"]),
     );
     const retrievalIndex = db
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name = ?")
       .get("idx_memories_scope_created") as { name?: string } | undefined;
     expect(retrievalIndex?.name).toBe("idx_memories_scope_created");
+    const embeddingIdentityIndex = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name = ?")
+      .get("idx_embeddings_identity") as { name?: string } | undefined;
+    expect(embeddingIdentityIndex?.name).toBe("idx_embeddings_identity");
+    db.close();
+  });
+
+  it("refuses to open a schema newer than this binary supports", () => {
+    const db = openMemDb();
+    db.exec(`PRAGMA user_version = ${String(MEMORY_VAULT_SCHEMA_VERSION + 1)}`);
+    expect(() => {
+      runMigrations(db, TEST_CIPHER);
+    }).toThrow(/newer than this binary supports/i);
     db.close();
   });
 
@@ -120,6 +133,7 @@ describe("runMigrations", () => {
       "idx_edges_from_created",
       "idx_edges_to",
       "idx_edges_to_created",
+      "idx_embeddings_identity",
       "idx_memories_pinned",
       "idx_memories_scope",
       "idx_memories_scope_created",
@@ -130,6 +144,7 @@ describe("runMigrations", () => {
       "idx_memory_access_last",
       "idx_tombstones_memory_id",
       "idx_tombstones_scope",
+      "idx_tombstones_scope_body_hash",
     ]);
     db.close();
   });
