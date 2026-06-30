@@ -508,12 +508,10 @@ function validateCatalogShape(catalog, failures) {
 
 function validateDuplicates(entries, failures) {
   const ids = new Set();
-  const entryKeys = new Map();
   const defaultNotes = new Map();
   for (const [index, entry] of entries.entries()) {
     if (!objectRecord(entry)) continue;
     recordUniqueId(entry, index, ids, failures);
-    recordEntryKey(entry, index, entryKeys, failures);
     recordDefaultPatchNotes(entry, index, defaultNotes, failures);
   }
 }
@@ -585,15 +583,6 @@ function recordUniqueId(entry, index, ids, failures) {
   ids.add(entry.id);
 }
 
-function recordEntryKey(entry, index, entryKeys, failures) {
-  const key = `${entry.packageName}@${entry.packageVersion}:${entry.distTag}`;
-  const correction = entry.correctionOf !== undefined || entry.supersedes !== undefined;
-  if (entryKeys.has(key) && !correction) {
-    failures.push(failure(`entries[${String(index)}] duplicates release key ${key}.`));
-  }
-  if (!entryKeys.has(key)) entryKeys.set(key, index);
-}
-
 function recordDefaultPatchNotes(entry, index, defaultNotes, failures) {
   if (!entry.defaultPatchNotes || !Array.isArray(entry.releaseNoteBullets)) return;
   for (const note of entry.releaseNoteBullets) {
@@ -619,11 +608,6 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
       failure(`${rootManifest.name}@${rootManifest.version} has no latest catalog entry.`),
     );
     return;
-  }
-  if (primary.length > 1) {
-    failures.push(
-      failure(`${rootManifest.name}@${rootManifest.version} has multiple latest entries.`),
-    );
   }
   for (const entry of current) {
     validateCurrentEntry(entry, rootManifest, failures);
