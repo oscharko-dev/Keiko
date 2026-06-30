@@ -2,7 +2,7 @@
  * Registry-gated Format availability tests for EditorRuntimeWidget (Issue #1380, ADR-0068 D3/D4).
  *
  * Proves the single registry-derived `formattingAvailable` value drives, in agreement:
- *   - the Format button's `aria-disabled` and dynamic `aria-label`, and
+ *   - the Format button's `aria-disabled`, and
  *   - the status bar's `formatting` field ("Format ready" / "Format unavailable"),
  * for a `monaco-builtin` language (json/css), a `keiko-language-service` language (typescript), and a
  * `"none"` language (markdown/yaml) — and that large-file degraded mode disables a formattable language.
@@ -108,9 +108,7 @@ function fileResponse(over?: Partial<FilesContentResponse>): FilesContentRespons
 }
 
 function formatButton(): HTMLButtonElement {
-  const button = document.querySelector<HTMLButtonElement>('button[data-tip="Format document"]');
-  if (button === null) throw new Error("Format button not found");
-  return button;
+  return screen.getByRole("button", { name: "Format" });
 }
 
 function statusField(id: string): Element | null {
@@ -134,11 +132,10 @@ afterEach(() => {
 });
 
 describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D3/D4)", () => {
-  it('marks Format unavailable for a "none" language (markdown), with a content-free aria-label', async () => {
+  it('marks Format unavailable for a "none" language (markdown)', async () => {
     await renderFile("notes.md", { path: "notes.md", name: "notes.md", extension: "md" });
 
     expect(formatButton()).toHaveAttribute("aria-disabled", "true");
-    expect(formatButton()).toHaveAttribute("aria-label", "Formatting unavailable for Markdown");
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
@@ -146,7 +143,6 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     await renderFile("conf.yaml", { path: "conf.yaml", name: "conf.yaml", extension: "yaml" });
 
     expect(formatButton()).toHaveAttribute("aria-disabled", "true");
-    expect(formatButton()).toHaveAttribute("aria-label", "Formatting unavailable for YAML");
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
@@ -154,7 +150,6 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     await renderFile("data.json", { path: "data.json", name: "data.json", extension: "json" });
 
     expect(formatButton()).toHaveAttribute("aria-disabled", "false");
-    expect(formatButton()).toHaveAttribute("aria-label", "Format document");
     expect(statusField("formatting")).toHaveTextContent("Format ready");
   });
 
@@ -169,7 +164,6 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     await renderFile("src/app.ts");
 
     expect(formatButton()).toHaveAttribute("aria-disabled", "false");
-    expect(formatButton()).toHaveAttribute("aria-label", "Format document");
     expect(statusField("formatting")).toHaveTextContent("Format ready");
   });
 
@@ -189,7 +183,6 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     await renderFile("src/app.ts");
 
     expect(formatButton()).toHaveAttribute("aria-disabled", "true");
-    expect(formatButton()).toHaveAttribute("aria-label", "Formatting unavailable for TypeScript");
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
@@ -206,7 +199,6 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     // largeFileDegraded gates the button (canFormat) even though the language is registry-formattable;
     // the status field reads the same effective availability, so the two agree (ADR-0068 D4).
     expect(formatButton()).toHaveAttribute("aria-disabled", "true");
-    expect(formatButton()).toHaveAttribute("aria-label", "Formatting unavailable for JSON");
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 });

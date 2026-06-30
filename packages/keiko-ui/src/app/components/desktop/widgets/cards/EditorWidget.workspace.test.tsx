@@ -257,9 +257,7 @@ describe("EditorWidget workspace session", () => {
 
   it("does not split a single open file into a duplicate editor pane", () => {
     const onWorkspaceChange = vi.fn();
-    const { container } = render(
-      <EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />,
-    );
+    render(<EditorWidget root="/repo" file="src/a.ts" onWorkspaceChange={onWorkspaceChange} />);
 
     const splitRight = screen.getByRole("button", { name: "Split src/a.ts right" });
     expect(splitRight).not.toHaveAttribute("data-tip");

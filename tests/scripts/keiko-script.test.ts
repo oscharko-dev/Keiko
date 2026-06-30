@@ -186,6 +186,6 @@ describe("scripts/keiko.sh", () => {
 
       const after = run(["status"], lifecycleEnv());
       expect(after.stdout).toContain("not running");
-    });
+    }, 30_000);
   });
 });

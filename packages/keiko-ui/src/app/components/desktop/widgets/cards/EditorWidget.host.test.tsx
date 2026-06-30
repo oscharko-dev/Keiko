@@ -66,7 +66,7 @@ describe("EditorWidget host — split resize gesture", () => {
       <EditorWidget
         root="/repo"
         file="src/a.ts"
-        openFiles={["src/a.ts"]}
+        openFiles={["src/a.ts", "src/b.ts"]}
         onWorkspaceChange={onWorkspaceChange}
       />,
     );
@@ -110,7 +110,7 @@ describe("EditorWidget host — split resize gesture", () => {
   });
 
   it("renders one editor host per pane after a split", async () => {
-    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts"]} />);
+    render(<EditorWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />);
     expect(screen.getAllByTestId("pane-runtime")).toHaveLength(1);
     await userEvent.click(await screen.findByRole("button", { name: /Split .* down/ }));
     await waitFor(() => expect(screen.getAllByTestId("pane-runtime")).toHaveLength(2));
