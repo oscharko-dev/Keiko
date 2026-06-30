@@ -320,7 +320,12 @@ async function runDraft(
     draft,
     status: "running",
   });
-  const status = await executeDraft(options, draft);
+  let status: RuntimeRemediationStatus;
+  try {
+    status = await executeDraft(options, draft);
+  } catch {
+    status = "failed";
+  }
   upsertRuntimeAction({
     localState: options.localState,
     targetVersion: request.targetVersion,

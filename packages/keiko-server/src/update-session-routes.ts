@@ -148,10 +148,10 @@ export async function handleVerifyUpdateRestart(
     if (!parsed.ok) {
       throw new UpdateSessionError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
-    const session = guard.verifyRestart(parsed.value.targetVersion);
-    if (session.phase === "succeeded") {
-      deps.updateRemediation?.completeRestart(session.targetVersion);
-    }
+    const session = guard.verifyRestart(parsed.value.targetVersion, (verified) => {
+      const remediation = deps.updateRemediation?.completeRestart(verified.targetVersion);
+      return remediation?.updateCanComplete ?? true;
+    });
     return { status: 200, body: session };
   });
 }

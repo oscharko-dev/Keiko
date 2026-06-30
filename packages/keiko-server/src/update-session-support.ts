@@ -12,12 +12,18 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
+  UpdateInstallMode,
   UpdateSession,
   UpdateSessionFailureReason,
   UpdateSessionLogPreview,
   UpdateSessionPhase,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  detectUpdateInstallMode,
+  productionUpdateFacts,
+  type UpdateRuntimeFacts,
+} from "./update-install-mode.js";
 
 const LOG_PREVIEW_BYTES = 4_096;
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
@@ -26,6 +32,35 @@ export type UpdateRunCommandImpl = (
   input: Parameters<typeof runCommand>[0],
   deps: RunCommandDeps,
 ) => Promise<CommandResult>;
+
+export type UpdateRestartCompletionGate = (session: UpdateSession) => boolean;
+export type UpdateRestartVerifier = (
+  targetVersion?: string,
+  canCompleteUpdate?: UpdateRestartCompletionGate,
+) => UpdateSession;
+
+export class UpdateSessionError extends Error {
+  public constructor(
+    public readonly code: string,
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = "UpdateSessionError";
+  }
+}
+
+export function defaultDetectorFor(
+  options: {
+    readonly detector?: (() => UpdateInstallMode) | undefined;
+    readonly facts?: (() => UpdateRuntimeFacts) | undefined;
+  },
+  env: NodeJS.ProcessEnv,
+): () => UpdateInstallMode {
+  if (options.detector !== undefined) return options.detector;
+  return (): UpdateInstallMode =>
+    detectUpdateInstallMode(options.facts?.() ?? productionUpdateFacts(env), env);
+}
 
 export interface UpdateSessionRuntimeOptions {
   readonly redactor?: ((input: string) => string) | undefined;
@@ -101,9 +136,7 @@ export function logPreview(
     stdoutBytes: Buffer.byteLength(stdout, "utf8"),
     stderrBytes: Buffer.byteLength(stderr, "utf8"),
     truncated:
-      result.truncated ||
-      stdout.length > LOG_PREVIEW_BYTES ||
-      stderr.length > LOG_PREVIEW_BYTES,
+      result.truncated || stdout.length > LOG_PREVIEW_BYTES || stderr.length > LOG_PREVIEW_BYTES,
   };
 }
 
@@ -152,5 +185,33 @@ export function createRestartVerificationSession(input: {
     retryable: false,
     restartRequired: true,
     message: "Verifying the version running after restart.",
+  };
+}
+
+export function restartVerificationPatch(
+  session: UpdateSession,
+  currentVersion: string,
+  canCompleteUpdate: UpdateRestartCompletionGate | undefined,
+): Partial<UpdateSession> {
+  if (currentVersion !== session.targetVersion) {
+    return {
+      phase: "failed",
+      failureReason: "restart-version-mismatch",
+      restartRequired: true,
+      retryable: false,
+      message: messageForFailure("restart-version-mismatch"),
+    };
+  }
+  if (canCompleteUpdate?.(session) === false) {
+    return {
+      restartRequired: false,
+      message: `Keiko is now running ${session.targetVersion}. Complete remaining remediation before the update is marked successful.`,
+    };
+  }
+  return {
+    phase: "succeeded",
+    failureReason: "none",
+    restartRequired: false,
+    message: `Keiko is now running ${session.targetVersion}.`,
   };
 }

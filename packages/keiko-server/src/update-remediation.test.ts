@@ -67,6 +67,21 @@ function fakeLocalKnowledge(
   };
 }
 
+function throwingLocalKnowledge(): LocalKnowledgeRemediationPort {
+  const scope: LocalKnowledgeRemediationScope = {
+    capsules: 1,
+    sources: 1,
+    documents: 1,
+    chunks: 1,
+    vectors: 0,
+  };
+  return {
+    inspect: () => scope,
+    reindexAll: (): Promise<LocalKnowledgeRemediationRunResult> =>
+      Promise.reject(new Error("denied source")),
+  };
+}
+
 function manager(
   stateDir: string,
   localKnowledge?: LocalKnowledgeRemediationPort,
@@ -277,6 +292,25 @@ describe("update remediation manager", () => {
     expect(failed.overallStatus).toBe("failed");
     expect(failed.updateCanComplete).toBe(false);
     expect(failed.actions[0]?.status).toBe("failed");
+  });
+
+  it("records thrown remediation failures instead of resuming stale running state", async () => {
+    const subject = manager(makeStateDir(), throwingLocalKnowledge());
+
+    const failed = await subject.runAction({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      targetVersion: TARGET,
+      impact: localKnowledgeImpact,
+    });
+
+    expect(failed.overallStatus).toBe("failed");
+    expect(failed.actions[0]).toMatchObject({
+      status: "failed",
+      failure: "manual-review-required",
+    });
+    expect(
+      subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact }).actions[0]?.status,
+    ).toBe("failed");
   });
 
   it("treats unsupported owned runtime entries as manual review", () => {

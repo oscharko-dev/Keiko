@@ -18,13 +18,12 @@ import {
   PACKAGE_NAME,
   UPDATE_COMMAND_RULES,
   buildUpdateCommand,
-  detectUpdateInstallMode,
-  productionUpdateFacts,
   resolveUpdateMutationPolicy,
   type UpdateRuntimeFacts,
 } from "./update-install-mode.js";
 import {
   createRestartVerificationSession,
+  defaultDetectorFor,
   failureFromError,
   isTerminal,
   logPreview,
@@ -32,10 +31,15 @@ import {
   nowIso,
   resolveManagerRuntime,
   retryableFailure,
+  restartVerificationPatch,
   workspaceFor,
+  type UpdateRestartVerifier,
   type UpdateRunCommandImpl,
+  UpdateSessionError,
 } from "./update-session-support.js";
 import type { UpdateSessionLock } from "./update-session-lock.js";
+
+export { UpdateSessionError } from "./update-session-support.js";
 
 export interface UpdateSessionStartOutcome {
   readonly session: UpdateSession;
@@ -47,7 +51,7 @@ export interface UpdateSessionManager {
   readonly start: (input: UpdateSessionStartRequest) => UpdateSessionStartOutcome;
   readonly retry: () => UpdateSessionStartOutcome;
   readonly cancel: () => UpdateSession;
-  readonly verifyRestart: (targetVersion?: string) => UpdateSession;
+  readonly verifyRestart: UpdateRestartVerifier;
 }
 
 export interface UpdateSessionManagerOptions {
@@ -64,26 +68,6 @@ export interface UpdateSessionManagerOptions {
   readonly policy?: SandboxPolicy | undefined;
   readonly timeoutMs?: number | undefined;
   readonly lock?: UpdateSessionLock | undefined;
-}
-
-export class UpdateSessionError extends Error {
-  public constructor(
-    public readonly code: string,
-    message: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = "UpdateSessionError";
-  }
-}
-
-function defaultDetectorFor(
-  options: UpdateSessionManagerOptions,
-  env: NodeJS.ProcessEnv,
-): () => UpdateInstallMode {
-  if (options.detector !== undefined) return options.detector;
-  return (): UpdateInstallMode =>
-    detectUpdateInstallMode(options.facts?.() ?? productionUpdateFacts(env), env);
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {
@@ -129,8 +113,13 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   public readonly start = (input: UpdateSessionStartRequest): UpdateSessionStartOutcome => {
     const existing = this.active;
     if (existing !== undefined && !isTerminal(existing.phase)) {
-      if (existing.targetVersion === input.targetVersion) return { session: existing, reused: true };
-      throw new UpdateSessionError("UPDATE_SESSION_ACTIVE", "Another update session is active.", 409);
+      if (existing.targetVersion === input.targetVersion)
+        return { session: existing, reused: true };
+      throw new UpdateSessionError(
+        "UPDATE_SESSION_ACTIVE",
+        "Another update session is active.",
+        409,
+      );
     }
     const mode = this.detector();
     this.assertStartAllowed(mode);
@@ -143,11 +132,19 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
 
   public readonly retry = (): UpdateSessionStartOutcome => {
     if (this.active !== undefined && !isTerminal(this.active.phase)) {
-      throw new UpdateSessionError("UPDATE_SESSION_ACTIVE", "Another update session is active.", 409);
+      throw new UpdateSessionError(
+        "UPDATE_SESSION_ACTIVE",
+        "Another update session is active.",
+        409,
+      );
     }
     const last = this.last;
     if (!last?.retryable) {
-      throw new UpdateSessionError("UPDATE_RETRY_UNAVAILABLE", "No retryable update session exists.", 409);
+      throw new UpdateSessionError(
+        "UPDATE_RETRY_UNAVAILABLE",
+        "No retryable update session exists.",
+        409,
+      );
     }
     return this.start({ targetVersion: last.targetVersion });
   };
@@ -158,7 +155,11 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       throw new UpdateSessionError("UPDATE_SESSION_NOT_FOUND", "No update session is active.", 404);
     }
     if (session.phase !== "preparing") {
-      throw new UpdateSessionError("UPDATE_NOT_CANCELABLE", "Package mutation has already started.", 409);
+      throw new UpdateSessionError(
+        "UPDATE_NOT_CANCELABLE",
+        "Package mutation has already started.",
+        409,
+      );
     }
     return this.finish(
       this.replace(session, {
@@ -171,33 +172,24 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     );
   };
 
-  public readonly verifyRestart = (targetVersion?: string): UpdateSession => {
+  public readonly verifyRestart: UpdateRestartVerifier = (targetVersion, canCompleteUpdate) => {
     const session = this.sessionForRestart(targetVersion);
-    if (this.currentVersion() === session.targetVersion) {
-      return this.finish(
-        this.replace(session, {
-          phase: "succeeded",
-          failureReason: "none",
-          restartRequired: false,
-          message: `Keiko is now running ${session.targetVersion}.`,
-        }),
-      );
-    }
     return this.finish(
-      this.replace(session, {
-        phase: "failed",
-        failureReason: "restart-version-mismatch",
-        restartRequired: true,
-        retryable: false,
-        message: messageForFailure("restart-version-mismatch"),
-      }),
+      this.replace(
+        session,
+        restartVerificationPatch(session, this.currentVersion(), canCompleteUpdate),
+      ),
     );
   };
 
   private assertStartAllowed(mode: UpdateInstallMode): void {
     const policy = resolveUpdateMutationPolicy(this.env);
     if (!policy.enabled) {
-      throw new UpdateSessionError("UPDATE_POLICY_DISABLED", policy.reason ?? "Updates are disabled.", 403);
+      throw new UpdateSessionError(
+        "UPDATE_POLICY_DISABLED",
+        policy.reason ?? "Updates are disabled.",
+        403,
+      );
     }
     if (mode.status !== "supported") {
       throw new UpdateSessionError(
@@ -234,7 +226,11 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const active = this.active;
     if (active !== undefined) {
       if (active.phase !== "restart-required") {
-        throw new UpdateSessionError("UPDATE_RESTART_NOT_PENDING", "Package mutation is still active.", 409);
+        throw new UpdateSessionError(
+          "UPDATE_RESTART_NOT_PENDING",
+          "Package mutation is still active.",
+          409,
+        );
       }
       if (targetVersion !== undefined && active.targetVersion !== targetVersion) {
         throw new UpdateSessionError(
@@ -279,7 +275,11 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       pid: process.pid,
     });
     if (!acquired) {
-      throw new UpdateSessionError("UPDATE_SESSION_ACTIVE", "Another update session lock is active.", 409);
+      throw new UpdateSessionError(
+        "UPDATE_SESSION_ACTIVE",
+        "Another update session lock is active.",
+        409,
+      );
     }
   }
 

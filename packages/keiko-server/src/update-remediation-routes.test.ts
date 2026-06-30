@@ -165,6 +165,16 @@ describe("update remediation routes", () => {
     expect(res.status).toBe(403);
   });
 
+  it("requires CSRF for remediation action execution", async () => {
+    const res = await fetch(`${baseUrl()}/api/update/remediation/actions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actionId: "local-knowledge-reindex:local-knowledge" }),
+    });
+
+    expect(res.status).toBe(403);
+  });
+
   it("prepares status with release impact and runs actions", async () => {
     const prepared = await fetch(`${baseUrl()}/api/update/remediation/status`, {
       method: "POST",
