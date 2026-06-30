@@ -122,6 +122,40 @@ export {
   UPDATE_PREFLIGHT_STATUSES,
 } from "./update-preflight.js";
 
+// ─── Governed update session runner (Issue #1693) ─────────────────────────────
+export type {
+  UpdateCommandPreview,
+  UpdateInstallMode,
+  UpdateInstallModeStatus,
+  UpdateInstallPackageManager,
+  UpdateMutationPolicy,
+  UpdatePolicySource,
+  UpdateRestartVerificationRequest,
+  UpdateRestartVerificationRequestParse,
+  UpdateRestartVerificationRequestParseFail,
+  UpdateRestartVerificationRequestParseOk,
+  UpdateSession,
+  UpdateSessionFailureReason,
+  UpdateSessionLogPreview,
+  UpdateSessionPhase,
+  UpdateSessionStartRequest,
+  UpdateSessionStartRequestParse,
+  UpdateSessionStartRequestParseFail,
+  UpdateSessionStartRequestParseOk,
+  UpdateSessionStatus,
+  UpdateUnsupportedReason,
+} from "./update-session.js";
+export {
+  parseUpdateRestartVerificationRequest,
+  parseUpdateSessionStartRequest,
+  UPDATE_INSTALL_MODE_STATUSES,
+  UPDATE_INSTALL_PACKAGE_MANAGERS,
+  UPDATE_SESSION_FAILURE_REASONS,
+  UPDATE_SESSION_PHASES,
+  UPDATE_SESSION_SCHEMA_VERSION,
+  UPDATE_UNSUPPORTED_REASONS,
+} from "./update-session.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,

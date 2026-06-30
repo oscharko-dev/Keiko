@@ -83,6 +83,13 @@ import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
+  handleCancelUpdateSession,
+  handleCreateUpdateSession,
+  handleGetUpdateSession,
+  handleRetryUpdateSession,
+  handleVerifyUpdateRestart,
+} from "./update-session-routes.js";
+import {
   handleCreateTerminalExecution,
   handleDeleteTerminalExecution,
   handleTerminalDirectories,
@@ -308,6 +315,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/update/preflight/check",
     handler: handlePostUpdatePreflightCheck,
   },
+  { method: "GET", pattern: "/api/update/session", handler: handleGetUpdateSession },
+  { method: "POST", pattern: "/api/update/session", handler: handleCreateUpdateSession },
+  { method: "POST", pattern: "/api/update/session/retry", handler: handleRetryUpdateSession },
+  {
+    method: "POST",
+    pattern: "/api/update/session/verify-restart",
+    handler: handleVerifyUpdateRestart,
+  },
+  { method: "DELETE", pattern: "/api/update/session", handler: handleCancelUpdateSession },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },

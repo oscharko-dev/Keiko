@@ -40,6 +40,8 @@ import {
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
+import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
+import { createFileUpdateSessionLock } from "./update-session-lock.js";
 import {
   createContainerRunnerManager,
   type ContainerRunnerManager,
@@ -176,6 +178,9 @@ export interface UiHandlerDeps {
   // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
+  // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
+  // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
+  readonly updateSession?: UpdateSessionManager | undefined;
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. Optional so
   // existing tests that do not exercise /api/containers/* keep their fixtures unchanged; production
   // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
@@ -725,6 +730,20 @@ function buildCommandRunner(options: {
   });
 }
 
+function buildUpdateSession(options: {
+  readonly env: EnvSource;
+  readonly liveRedactor: Redactor;
+}): UpdateSessionManager {
+  return createUpdateSessionManager({
+    processEnv: options.env,
+    lock: createFileUpdateSessionLock(),
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
 // Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
 // command runner so its content-free run audit inherits the identical secret-shape scrubbing. The
 // active engine probe and the frozen-argv container run both compose the single runCommand boundary.
@@ -1047,6 +1066,7 @@ function seedInitialProject(
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
+  readonly updateSession: UpdateSessionManager;
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
@@ -1069,6 +1089,10 @@ function buildPeripherals(
     commandRunner: buildCommandRunner({
       store: uiStore,
       evidenceStore,
+      env: options.env,
+      liveRedactor,
+    }),
+    updateSession: buildUpdateSession({
       env: options.env,
       liveRedactor,
     }),
