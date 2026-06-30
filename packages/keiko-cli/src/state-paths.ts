@@ -99,6 +99,9 @@ export function classifyPid(
 //     evidence/figma/*.vault, *.key         keiko-server  figmaTokenStore.ts (sealed Figma PAT + keyfile)
 //     evidence/qi/<runId>.qi.json|…         keiko-evidence qualityIntelligence/*
 //     evidence/qi/figma-snapshots/<runId>/… keiko-evidence figmaSnapshot side files
+//     updates/runtime-state.json            keiko-server  update-local-state.ts
+//     updates/update-audit.jsonl            keiko-server  update-local-state.ts
+//     updates/snapshots/<id>/manifest.json  keiko-server  update-local-state.ts
 //
 // The sealed `*.vault` ciphertext and its `*.key` keyfile (the env/keychain-tier fallback,
 // ADR-0046) are the most confidentiality-critical artifacts here, so they are first-class
@@ -124,6 +127,7 @@ const CREDENTIALS_SUBDIR = "credentials"; // keiko-server/src/credentialVault.ts
 const MEMORY_SUBDIR = "memory"; // keiko-memory-vault/src/paths.ts (MEMORY_DIR_NAME)
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge"; // keiko-local-knowledge store-paths.ts (SUBSYSTEM_DIR)
 const EVIDENCE_SUBDIR = "evidence"; // keiko-evidence/src/store.ts (DEFAULT_EVIDENCE_DIR)
+const UPDATE_SUBDIR = "updates"; // keiko-server/src/update-local-state.ts (UPDATE_DIR)
 const FIGMA_VAULT_SUBDIR = "figma"; // keiko-server figmaTokenStore.ts (Figma PAT vault dir, under evidence)
 const QI_SUBDIR = "qi"; // keiko-evidence/src/qualityIntelligence/store.ts (QI_SUBDIR)
 const FIGMA_SNAPSHOTS_SUBDIR = "figma-snapshots"; // keiko-evidence figmaSnapshot/store.ts (SIDE_FILE_SUBDIR)
@@ -158,7 +162,8 @@ export type RuntimeStateCategory =
   | "memory-vault"
   | "local-knowledge"
   | "evidence"
-  | "quality-intelligence";
+  | "quality-intelligence"
+  | "update-recovery";
 
 // A SQLite store file plus its exact WAL/SHM sidecars and `.corrupt.<ts>` quarantine copies
 // — and ONLY those. Matching is exact-name or a known dotted suffix, never a bare `${base}-`
@@ -331,11 +336,20 @@ const localKnowledgeSubtree: OwnedSubtree = {
   whole: false,
   ownsFile: OWNS_NO_FILE,
   childSubtree: (_name, absPath) =>
-    dirHasSqliteFamilyArtifact(absPath, CAPSULES_DB_FILENAME) ? knowledgeNamespaceSubtree : undefined,
+    dirHasSqliteFamilyArtifact(absPath, CAPSULES_DB_FILENAME)
+      ? knowledgeNamespaceSubtree
+      : undefined,
 };
 
 const launcherTmpSubtree: OwnedSubtree = {
   category: "launcher",
+  whole: true,
+  ownsFile: OWNS_NO_FILE,
+  childSubtree: NO_CHILD,
+};
+
+const updateSubtree: OwnedSubtree = {
+  category: "update-recovery",
   whole: true,
   ownsFile: OWNS_NO_FILE,
   childSubtree: NO_CHILD,
@@ -354,6 +368,7 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === MEMORY_SUBDIR) return memorySubtree;
   if (name === LOCAL_KNOWLEDGE_SUBDIR) return localKnowledgeSubtree;
   if (name === EVIDENCE_SUBDIR) return evidenceSubtree;
+  if (name === UPDATE_SUBDIR) return updateSubtree;
   if (name.startsWith(LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
   return undefined;
 }
@@ -425,7 +440,11 @@ function ownedFileCategory(scope: ScanScope, name: string): RuntimeStateCategory
   return scope.ownsFile(name) ? scope.category : undefined;
 }
 
-function ownedChildSubtree(scope: ScanScope, name: string, absPath: string): OwnedSubtree | undefined {
+function ownedChildSubtree(
+  scope: ScanScope,
+  name: string,
+  absPath: string,
+): OwnedSubtree | undefined {
   if (scope === "root") return topLevelChildSubtree(name);
   if (scope.whole) return scope; // a whole subtree owns all of its descendant directories
   return scope.childSubtree(name, absPath);
@@ -499,7 +518,13 @@ export function scanRuntimeState(stateDir: string): RuntimeStateScan {
   }
   const acc: ScanAccumulator = { files: [], directories: [], retained: [] };
   walkOwnedDir(stateDir, "", "root", acc);
-  return { root, present: true, files: acc.files, directories: acc.directories, retained: acc.retained };
+  return {
+    root,
+    present: true,
+    files: acc.files,
+    directories: acc.directories,
+    retained: acc.retained,
+  };
 }
 
 // True when `descendant` lies inside `ancestor` (used to decide whether an owned directory

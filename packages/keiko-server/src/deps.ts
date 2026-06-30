@@ -27,7 +27,7 @@ import { DEFAULT_CONTEXT_PROFILE, type ContextProfile } from "@oscharko-dev/keik
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import {
@@ -42,6 +42,10 @@ import { createTerminalExecutionManager, type TerminalExecutionManager } from ".
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
 import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
 import { createFileUpdateSessionLock } from "./update-session-lock.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
 import {
   createContainerRunnerManager,
   type ContainerRunnerManager,
@@ -181,6 +185,9 @@ export interface UiHandlerDeps {
   // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
   // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
   readonly updateSession?: UpdateSessionManager | undefined;
+  // Issue #1694 — content-free update compatibility, recovery snapshot, and audit state. Optional so
+  // tests can inject a deterministic store; production wiring resolves KEIKO_STATE_DIR.
+  readonly updateLocalState?: UpdateLocalStateManager | undefined;
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. Optional so
   // existing tests that do not exercise /api/containers/* keep their fixtures unchanged; production
   // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
@@ -327,6 +334,9 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional injected governed update local-state manager (tests); production resolves it from
+  // KEIKO_STATE_DIR or <cwd>/.keiko without importing the CLI package.
+  readonly updateLocalState?: UpdateLocalStateManager | undefined;
   // Optional injected task-workspace provisioning service (tests); production composes one over the
   // sqlite WorkspaceInstanceStore + node worktree adapter when a node store is built.
   readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
@@ -744,6 +754,15 @@ function buildUpdateSession(options: {
   });
 }
 
+function resolveUpdateStateDir(env: EnvSource): string {
+  const value = env.KEIKO_STATE_DIR ?? ".keiko";
+  return isAbsolute(value) ? value : resolve(process.cwd(), value);
+}
+
+function buildUpdateLocalState(env: EnvSource): UpdateLocalStateManager {
+  return createUpdateLocalStateManager({ stateDir: resolveUpdateStateDir(env) });
+}
+
 // Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
 // command runner so its content-free run audit inherits the identical secret-shape scrubbing. The
 // active engine probe and the frozen-argv container run both compose the single runCommand boundary.
@@ -1067,6 +1086,7 @@ interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
   readonly updateSession: UpdateSessionManager;
+  readonly updateLocalState: UpdateLocalStateManager;
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
@@ -1096,6 +1116,7 @@ function buildPeripherals(
       env: options.env,
       liveRedactor,
     }),
+    updateLocalState: options.updateLocalState ?? buildUpdateLocalState(options.env),
     containerRunner: buildContainerRunner({
       store: uiStore,
       evidenceStore,

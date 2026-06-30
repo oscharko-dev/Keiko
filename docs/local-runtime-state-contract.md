@@ -30,6 +30,7 @@ or compatibility playbook.
 | Evidence directory        | `--evidence-dir` or `KEIKO_EVIDENCE_DIR` or `./.keiko/evidence/`                                                                                                       | `@oscharko-dev/keiko-evidence`                                 | Redacted JSON manifests and related local evidence files.                                                                                       |
 | Consumer package scripts  | `keiko:start`, `keiko:stop` in the consumer `package.json`                                                                                                             | `@oscharko-dev/keiko-cli`                                      | Written by `keiko init`.                                                                                                                        |
 | Lifecycle files           | `KEIKO_STATE_DIR/ui.pid` and `KEIKO_STATE_DIR/ui.log` or default `.keiko/`                                                                                             | `@oscharko-dev/keiko-cli`                                      | Runtime-only process state.                                                                                                                     |
+| Update recovery state     | `KEIKO_STATE_DIR/updates/` or default `.keiko/updates/`                                                                                                                | `@oscharko-dev/keiko-server`                                   | Content-free update runtime state, audit events, and previous-version recovery manifests for failed or partial governed updates.                |
 | Local `.env` discovery    | Current working directory `.env` for the closed allowlist `FIGMA_ACCESS_TOKEN` only                                                                                    | `@oscharko-dev/keiko-cli`                                      | Read-only connector convenience surface; `KEIKO_*` runtime configuration must come from explicit flags or the process environment.              |
 | Memory vault              | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/keiko-memory.db` → `~/.keiko/memory/keiko-memory.db`                                                        | `@oscharko-dev/keiko-memory-vault` and related memory packages | Local SQLite STRICT/WAL store; workspace-local paths are rejected.                                                                              |
 
@@ -72,19 +73,20 @@ of the local-at-rest posture; the deterministic auditor in
 [Local-state verification audit](#local-state-verification-audit) checks these expectations against a
 real `.keiko` tree.
 
-| Surface (file)                                                   | File permissions | Redaction          | Encryption at rest               | Retention     | Tamper evidence               | Governing decision                                                                                      |
-| ---------------------------------------------------------------- | ---------------- | ------------------ | -------------------------------- | ------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Gateway config (`keiko.config.json`)                             | yes              | n/a                | n/a (secret refs only)           | n/a           | n/a                           | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
-| Provider credential vault (`*.vault` + `*.key`)                  | yes              | n/a                | yes (AES-256-GCM)                | n/a           | yes (GCM auth)                | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
-| Figma PAT vault (`figma-token.vault` + key)                      | yes              | n/a                | yes (AES-256-GCM)                | n/a           | yes (GCM auth)                | [ADR-0037](adr/ADR-0037-figma-snapshot-boundary.md), [ADR-0046](adr/ADR-0046-local-credential-vault.md) |
-| Memory vault (`keiko-memory.db`)                                 | yes              | yes (audit events) | yes (content columns)            | n/a           | yes (GCM auth)                | [ADR-0035](adr/ADR-0035-memory-vault-encryption-at-rest.md)                                             |
-| Local Knowledge (`capsules.db`)                                  | yes              | n/a                | yes (content columns)            | n/a           | yes (GCM auth + sealed probe) | [ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)                                          |
-| UI database (`keiko-ui.db`)                                      | yes              | n/a                | n/a (UI state, no model content) | n/a           | n/a                           | this contract                                                                                           |
-| Evidence run manifests (`<runId>.json`)                          | yes              | yes                | deferred                         | n/a           | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| QI manifests (`<runId>.qi.json`)                                 | yes              | yes                | deferred                         | yes           | yes (SHA-256)                 | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| QI candidates (`<runId>.candidates.json`)                        | yes              | yes                | deferred                         | yes           | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| Figma snapshots (JSON / PNG side-files)                          | yes              | yes                | deferred                         | yes (cap 500) | PNG side-file SHA-256         | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
-| Lifecycle / launcher (`ui.pid`, `ui.log`, `launcher-state.json`) | yes              | n/a                | n/a (content-free)               | n/a           | yes (launcher content hash)   | this contract                                                                                           |
+| Surface (file)                                                   | File permissions | Redaction          | Encryption at rest               | Retention      | Tamper evidence               | Governing decision                                                                                      |
+| ---------------------------------------------------------------- | ---------------- | ------------------ | -------------------------------- | -------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Gateway config (`keiko.config.json`)                             | yes              | n/a                | n/a (secret refs only)           | n/a            | n/a                           | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
+| Provider credential vault (`*.vault` + `*.key`)                  | yes              | n/a                | yes (AES-256-GCM)                | n/a            | yes (GCM auth)                | [ADR-0046](adr/ADR-0046-local-credential-vault.md)                                                      |
+| Figma PAT vault (`figma-token.vault` + key)                      | yes              | n/a                | yes (AES-256-GCM)                | n/a            | yes (GCM auth)                | [ADR-0037](adr/ADR-0037-figma-snapshot-boundary.md), [ADR-0046](adr/ADR-0046-local-credential-vault.md) |
+| Memory vault (`keiko-memory.db`)                                 | yes              | yes (audit events) | yes (content columns)            | n/a            | yes (GCM auth)                | [ADR-0035](adr/ADR-0035-memory-vault-encryption-at-rest.md)                                             |
+| Local Knowledge (`capsules.db`)                                  | yes              | n/a                | yes (content columns)            | n/a            | yes (GCM auth + sealed probe) | [ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)                                          |
+| UI database (`keiko-ui.db`)                                      | yes              | n/a                | n/a (UI state, no model content) | n/a            | n/a                           | this contract                                                                                           |
+| Evidence run manifests (`<runId>.json`)                          | yes              | yes                | deferred                         | n/a            | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| QI manifests (`<runId>.qi.json`)                                 | yes              | yes                | deferred                         | yes            | yes (SHA-256)                 | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| QI candidates (`<runId>.candidates.json`)                        | yes              | yes                | deferred                         | yes            | n/a                           | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Figma snapshots (JSON / PNG side-files)                          | yes              | yes                | deferred                         | yes (cap 500)  | PNG side-file SHA-256         | [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md)                                           |
+| Lifecycle / launcher (`ui.pid`, `ui.log`, `launcher-state.json`) | yes              | n/a                | n/a (content-free)               | n/a            | yes (launcher content hash)   | this contract                                                                                           |
+| Update recovery manifests (`updates/*`)                          | yes              | n/a                | n/a (content-free)               | yes (one prev) | manifest validation           | [ADR-0099](adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)                         |
 
 `deferred` is a documented, bounded decision — not an oversight. Customer-reconstructive evidence
 artifacts are not encrypted at rest in `0.2.0`; the compensating controls are owner-only permissions,
@@ -98,7 +100,7 @@ redaction-before-persist, and deterministic bounded retention. See
 Keiko-owned artifacts above, resolved relative to the configured state directory
 (`packages/keiko-cli/src/state-paths.ts`). The manifest covers lifecycle and launcher files,
 the UI / Memory / Local-Knowledge databases and their `-wal`/`-shm` sidecars, Evidence and
-Quality-Intelligence records, the gateway config, and the sealed credential vaults
+Quality-Intelligence records, update recovery manifests/audit logs, the gateway config, and the sealed credential vaults
 (`credentials/*.vault` + keyfile, `evidence/figma/*.vault` + keyfile).
 
 - **Repair** normalizes POSIX permissions to `0o700` for Keiko-owned directories and `0o600`
@@ -180,6 +182,11 @@ plus a sealed key-verification probe, and any populated content columns); and pr
 artifacts (owner-only modes, redaction checks on text-bearing artifacts, recomputed QI/Prompt
 Enhancement manifest hashes, Figma snapshot side-file hash checks, and symlink refusal before
 artifact reads).
+
+Update recovery snapshots are not package archives or general downgrade backups. They retain one
+previous-version, local-only, content-free manifest with version pointers, affected store health,
+remediation status, and aggregate artifact counts. They do not copy customer repository files,
+credential vaults, raw logs, prompts, model outputs, package-manager output, or private paths.
 
 ## Limitations (honest threat model)
 

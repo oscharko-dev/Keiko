@@ -145,6 +145,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
+  mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
   touch(join(stateDir, "launcher-state.json"));
@@ -180,6 +181,9 @@ function seedRuntimeState(root: string): string {
     ),
   );
   touch(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1", "screen.png"));
+  touch(join(stateDir, "updates", "runtime-state.json"));
+  touch(join(stateDir, "updates", "update-audit.jsonl"));
+  touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
@@ -266,6 +270,10 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "evidence/qi/figma-snapshots/run-1/screen.png")).toBe(
       "quality-intelligence",
     );
+    expect(categoryOf(scan, "updates")).toBe("update-recovery");
+    expect(categoryOf(scan, "updates/runtime-state.json")).toBe("update-recovery");
+    expect(categoryOf(scan, "updates/update-audit.jsonl")).toBe("update-recovery");
+    expect(categoryOf(scan, "updates/snapshots/snap-1/manifest.json")).toBe("update-recovery");
   });
 
   it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {
@@ -348,7 +356,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
   it("retains customer lookalikes in known evidence, QI, and vault directories", () => {
     const stateDir = seedRuntimeState(makeRoot());
     touch(join(stateDir, "evidence", "manual export.json"));
-    touch(join(stateDir, "evidence", "manual export.json.123e4567-e89b-12d3-a456-426614174000.tmp"));
+    touch(
+      join(stateDir, "evidence", "manual export.json.123e4567-e89b-12d3-a456-426614174000.tmp"),
+    );
     touch(join(stateDir, "evidence", "manual export.lock"));
     touch(join(stateDir, "evidence", "qi", "debug dump.json"));
     touch(

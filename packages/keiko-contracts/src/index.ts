@@ -156,6 +156,32 @@ export {
   UPDATE_UNSUPPORTED_REASONS,
 } from "./update-session.js";
 
+// ─── Governed update local state and recovery (Issue #1694) ─────────────────────
+export type {
+  UpdateCompatibilityScan,
+  UpdateHealthState,
+  UpdateRecoverySnapshot,
+  UpdateRecoverySnapshotEntry,
+  UpdateReleaseImpactInput,
+  UpdateRemediationActionState,
+  UpdateRemediationStatus,
+  UpdateRuntimeAuditEvent,
+  UpdateRuntimeEventType,
+  UpdateRuntimeWarningCode,
+  UpdateRuntimeState,
+  UpdateStateStore,
+  UpdateStoreHealth,
+} from "./update-local-state.js";
+export {
+  UPDATE_HEALTH_LABELS,
+  UPDATE_HEALTH_STATES,
+  UPDATE_LOCAL_STATE_SCHEMA_VERSION,
+  UPDATE_REMEDIATION_STATUSES,
+  UPDATE_RUNTIME_EVENT_TYPES,
+  UPDATE_RUNTIME_WARNING_CODES,
+  UPDATE_STATE_STORES,
+} from "./update-local-state.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,
