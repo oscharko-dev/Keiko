@@ -11,6 +11,34 @@ import {
 
 const PDF_TEXT_LAYER_PARSE_TIMEOUT_MS = 15_000;
 
+function textPage(text: string, onCancel?: () => void): ReturnType<PdfDocumentLike["getPage"]> {
+  return Promise.resolve({
+    streamTextContent: () =>
+      new ReadableStream<PdfTextContentChunk>({
+        start: (controller): void => {
+          if (text.length > 0) {
+            controller.enqueue({
+              items: text.split(" ").map((str) => ({ str })),
+            });
+          }
+          controller.close();
+        },
+        ...(onCancel !== undefined ? { cancel: onCancel } : {}),
+      }),
+  });
+}
+
+function fakePdf(
+  pageTexts: readonly string[],
+  labels?: readonly (string | null)[],
+): PdfDocumentLike {
+  return {
+    numPages: pageTexts.length,
+    getPage: (pageNumber) => textPage(pageTexts[pageNumber - 1] ?? ""),
+    ...(labels === undefined ? {} : { getPageLabels: () => Promise.resolve(labels) }),
+  };
+}
+
 describe("pdfParser", () => {
   it("matches PDF extension and magic bytes", () => {
     expect(pdfParser.capability.matches(selectionFromBytes(PDF_MAGIC, { extension: "pdf" }))).toBe(
@@ -52,6 +80,53 @@ describe("pdfParser", () => {
     );
   });
 
+  it("emits provenance for empty pages and preserves PDF page labels", async () => {
+    const input = selectionFromBytes(PDF_MAGIC, {
+      extension: "pdf",
+      mediaType: "application/pdf",
+    });
+    const result = await extractPages(
+      fakePdf(["front", "", "body", "tail"], ["i", "ii", "1", "2"]),
+      input,
+      buildParserOptions({ now: () => 0 }),
+      0,
+    );
+
+    expect(result.pages.map((page) => [page.pageNumber, page.pageLabel])).toEqual([
+      [1, "i"],
+      [2, "ii"],
+      [3, "1"],
+      [4, "2"],
+    ]);
+    expect(result.pages[1]).toMatchObject({ characterStart: 5, characterEnd: 5 });
+    expect(result.normalizedText).toBe("front\n\nbody\n\ntail");
+  });
+
+  it("keeps page provenance when an individual page fails to load", async () => {
+    const input = selectionFromBytes(PDF_MAGIC, {
+      extension: "pdf",
+      mediaType: "application/pdf",
+    });
+    const doc: PdfDocumentLike = {
+      numPages: 3,
+      getPage: (pageNumber) =>
+        pageNumber === 2
+          ? Promise.reject(new Error("bad page"))
+          : textPage(`page ${String(pageNumber)}`),
+    };
+
+    const result = await extractPages(doc, input, buildParserOptions({ now: () => 0 }), 0);
+
+    expect(result.pages.map((page) => page.pageNumber)).toEqual([1, 2, 3]);
+    expect(result.pages[1]).toMatchObject({ characterStart: 6, characterEnd: 6 });
+    expect(result.normalizedText).toBe("page 1\n\npage 3");
+    expect(result.diagnostics[0]).toMatchObject({
+      code: "PAGE_PARSE_FAILED",
+      pageNumber: 2,
+      severity: "warning",
+    });
+  });
+
   it("stops streamed text extraction at maxObjectsPerDocument without cancelling pdfjs streams", async () => {
     const input = selectionFromBytes(PDF_MAGIC, {
       extension: "pdf",
@@ -81,8 +156,9 @@ describe("pdfParser", () => {
       0,
     );
 
-    expect(result.pages).toEqual([]);
-    expect(result.units).toEqual([]);
+    expect(result.pages).toHaveLength(1);
+    expect(result.units).toHaveLength(1);
+    expect(result.normalizedText).toBe("one");
     expect(result.diagnostics[0]).toMatchObject({
       code: "OBJECT_LIMIT_REACHED",
       severity: "error",

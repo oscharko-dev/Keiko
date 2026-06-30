@@ -7,7 +7,7 @@
 //   2. Reads bytes via WorkspaceFs.readFileBytes (the boundary-checked byte-read path).
 //   3. Computes the content hash (SHA-256 hex) over the raw bytes.
 //   4. Detects the incremental fast-path: if a documents row with the same id already has
-//      this content_hash AND status="extracted"/"unsupported", we skip the parse entirely
+//      this content_hash AND status="extracted"/"extracted-image"/"unsupported", we skip the parse entirely
 //      and leave last_extracted_at untouched.
 //   5. Resolves a parser through the registry; rejects an oversized file BEFORE we hand it
 //      to the parser (the OVERSIZED_FILE diagnostic is the same code parsers emit).
@@ -54,6 +54,11 @@ import {
   type ProgressiveExtractionSource,
 } from "../parsers/index.js";
 import { DEFAULT_CHUNKING_STRATEGY_KEY } from "../chunking/types.js";
+import {
+  MAX_PDF_DOCUMENT_BLOB_BYTES,
+  PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+  persistPdfDocumentBlobInTransaction,
+} from "../document-blob-store.js";
 import {
   extractDocumentProgressive,
   selectProgressiveExtractor,
@@ -380,6 +385,7 @@ function persistDocumentAndDependents(
   document: DocumentRecord,
   parserResult: InternalParserResult,
   now: () => number,
+  pdfBlobBytes?: Uint8Array,
 ): void {
   const db = deps.store._internal.db;
   db.exec("BEGIN");
@@ -398,6 +404,17 @@ function persistDocumentAndDependents(
       status: document.status,
       safeDisplayName: document.safeDisplayName,
     });
+    if (pdfBlobBytes !== undefined) {
+      persistPdfDocumentBlobInTransaction(deps.store, {
+        capsuleId: params.capsuleId,
+        sourceId: String(params.source.id),
+        documentId,
+        contentHash: document.contentHash,
+        byteLength: document.sizeBytes,
+        mediaType: document.mediaType,
+        bytes: pdfBlobBytes,
+      });
+    }
     persistDependentRows(deps, params.capsuleId, documentId, parserResult, now);
     db.exec("COMMIT");
   } catch (cause) {
@@ -693,7 +710,12 @@ function readUnchangedFastPath(
   if (existing.content_hash !== contentHash) return undefined;
   // Skip only terminal-good states. A `pending` row is an interrupted progressive extraction
   // (Issue #1286) and `failed` should be retried; both must re-extract rather than be skipped.
-  if (existing.status !== "extracted" && existing.status !== "unsupported") return undefined;
+  if (
+    existing.status !== "extracted" &&
+    existing.status !== "extracted-image" &&
+    existing.status !== "unsupported"
+  )
+    return undefined;
   const document: DocumentRecord = {
     id: documentId,
     capsuleId: params.capsuleId,
@@ -871,9 +893,18 @@ function firstParserFailureDiagnostic(result: ParserResult): ParserDiagnostic | 
   );
 }
 
-function statusForResult(result: ParserResult): DocumentRecord["status"] {
+function hasExtractedText(result: InternalParserResult): boolean {
+  return result.normalizedText !== undefined && result.normalizedText.length > 0;
+}
+
+function isImageOnlyPdfResult(result: InternalParserResult): boolean {
+  return result.parser.parserId === "pdf" && result.pages.length > 0 && !hasExtractedText(result);
+}
+
+function statusForResult(result: InternalParserResult): DocumentRecord["status"] {
   if (isUnsupportedResult(result)) return "unsupported";
   if (firstParserFailureDiagnostic(result) !== undefined) return "failed";
+  if (isImageOnlyPdfResult(result)) return "extracted-image";
   return "extracted";
 }
 
@@ -969,6 +1000,7 @@ function persistExtractedDocument(
   documentId: DocumentId,
   document: DocumentRecord,
   parserResult: InternalParserResult,
+  pdfBlobBytes?: Uint8Array,
 ): void {
   persistDocumentAndDependents(
     deps,
@@ -977,7 +1009,24 @@ function persistExtractedDocument(
     document,
     parserResult,
     deps.store._internal.now,
+    pdfBlobBytes,
   );
+}
+
+function pdfBlobBytesForPersistence(
+  document: DocumentRecord,
+  status: DocumentRecord["status"],
+  bytes: Uint8Array | undefined,
+): Uint8Array | undefined {
+  if (status !== "extracted" && status !== "extracted-image") return undefined;
+  if (document.mediaType !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) return undefined;
+  return bytes;
+}
+
+function pdfBlobCandidateBytes(mediaType: string, bytes: Uint8Array): Uint8Array | undefined {
+  if (mediaType !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) return undefined;
+  if (bytes.byteLength > MAX_PDF_DOCUMENT_BLOB_BYTES) return undefined;
+  return bytes.slice();
 }
 
 async function readBoundedDocumentBytes(
@@ -1060,6 +1109,8 @@ async function parseAndPersistDocument(
   contentHash: string,
   options: ParserOptions,
 ): Promise<ExtractionResult> {
+  const mediaType = mediaTypeFor(extensionOf(params.file.relativePath));
+  const pdfBlobCandidate = pdfBlobCandidateBytes(mediaType, bytes);
   let parserResult: InternalParserResult;
   try {
     parserResult = await runParserForPersistence(deps, documentId, params, bytes, options);
@@ -1075,12 +1126,19 @@ async function parseAndPersistDocument(
   const document = buildDocumentRecord({
     documentId,
     params,
-    mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
+    mediaType,
     contentHash,
     parserResult: redactedParserResult,
     status,
   });
-  persistExtractedDocument(deps, params, documentId, document, redactedParserResult);
+  persistExtractedDocument(
+    deps,
+    params,
+    documentId,
+    document,
+    redactedParserResult,
+    pdfBlobBytesForPersistence(document, status, pdfBlobCandidate),
+  );
   return parserExtractionResult(params, document, redactedParserResult, status);
 }
 

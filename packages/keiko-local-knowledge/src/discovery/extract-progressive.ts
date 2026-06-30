@@ -182,7 +182,8 @@ function persistDiagnostics(deps: SinkDeps, diagnostics: readonly ParserDiagnost
 
 function documentStatusFor(summary: ProgressiveExtractionSummary): DocumentRecord["status"] {
   if (summary.stopReason === "cancelled") return "pending";
-  return summary.pageCount > 0 ? "extracted" : "unsupported";
+  if (summary.pageCount === 0) return "unsupported";
+  return summary.extractedTextBytes > 0 ? "extracted" : "extracted-image";
 }
 
 function finalizePhaseFor(summary: ProgressiveExtractionSummary): ExtractionPhase {

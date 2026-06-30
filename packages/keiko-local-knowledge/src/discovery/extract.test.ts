@@ -10,6 +10,7 @@ import { addSourceToCapsule } from "../source-lifecycle.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
+import { readPdfDocumentBlob } from "../document-blob-store.js";
 import {
   createDefaultParserRegistry,
   buildParserOptions,
@@ -218,6 +219,7 @@ describe("extractDocument — parser failure", () => {
 
 describe("extractDocument — normalized binary text", () => {
   it("persists extracted text for binary parsers that emit normalized content", async () => {
+    const expectedPdfBytes = Buffer.from(PDF_TEXT_LAYER);
     const fs = memoryFs(ROOT, [{ relativePath: "policy.pdf", content: PDF_TEXT_LAYER }]);
     const registry = createDefaultParserRegistry();
     const result = await extractDocument(
@@ -237,6 +239,10 @@ describe("extractDocument — normalized binary text", () => {
       .get({ c: capsuleId, d: result.outcome.document.id }) as
       { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toContain("Hello PDF");
+    const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
+    expect(blob.kind).toBe("ok");
+    if (blob.kind !== "ok") return;
+    expect(Buffer.from(blob.blob.bytes).equals(expectedPdfBytes)).toBe(true);
   });
 
   it("persists XLSX workbook text and row lineage", async () => {
@@ -284,7 +290,7 @@ describe("extractDocument — normalized binary text", () => {
 });
 
 describe("extractDocument — unsupported OCR and scanned inputs", () => {
-  it("marks a scanned PDF without a text layer as unsupported", async () => {
+  it("marks a scanned PDF without a text layer as extracted-image with preview bytes", async () => {
     const fs = memoryFs(ROOT, [{ relativePath: "scan.pdf", content: PDF_NO_TEXT_LAYER }]);
     const registry = createDefaultParserRegistry();
     const result = await extractDocument(
@@ -297,11 +303,12 @@ describe("extractDocument — unsupported OCR and scanned inputs", () => {
     );
     expect(result.outcome.kind).toBe("persisted");
     if (result.outcome.kind !== "persisted") return;
-    expect(result.outcome.document.status).toBe("unsupported");
+    expect(result.outcome.document.status).toBe("extracted-image");
     expect(result.outcome.document.parser.parserId).toBe("pdf");
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "UNSUPPORTED_FORMAT", severity: "info" }),
-    );
+    expect(count("pages")).toBe(1);
+    expect(count("document_texts")).toBe(0);
+    const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
+    expect(blob.kind).toBe("ok");
   });
 
   it("marks OCR-pipeline fallback results as unsupported instead of extracted", async () => {

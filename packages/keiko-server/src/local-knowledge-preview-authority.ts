@@ -4,7 +4,10 @@ import type {
   PdfCitationPreviewDisplay,
   StoredPdfCitationPreviewCitation,
 } from "@oscharko-dev/keiko-contracts";
-import { pdfCitationPreviewAnchorQuality } from "@oscharko-dev/keiko-contracts";
+import {
+  normalizePdfCitationPreviewMarkerIndex,
+  pdfCitationPreviewAnchorQuality,
+} from "@oscharko-dev/keiko-contracts";
 import {
   lookupCitationPreviewSnapshot,
   type KnowledgeStore,
@@ -27,14 +30,7 @@ function normalizeLabel(value: string | undefined): string | undefined {
 }
 
 export function normalizePreviewMarkerIndex(value: string | number): number | undefined {
-  if (typeof value === "number") {
-    return Number.isInteger(value) && value > 0 ? value : undefined;
-  }
-  const trimmed = value.trim();
-  const match = /^[[［【]?(\d+)[\]］】]?$/u.exec(trimmed);
-  if (match?.[1] === undefined) return undefined;
-  const parsed = Number.parseInt(match[1], 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return normalizePdfCitationPreviewMarkerIndex(value);
 }
 
 export function previewDisplay(
@@ -88,10 +84,11 @@ function buildStoredPreviewCitation(
   if (snapshot.kind !== "ok") return undefined;
   const documentLabel = normalizeLabel(snapshot.snapshot.documentLabel) ?? "document";
   const sourceLabel = normalizeLabel(input.sourceLabel);
+  const canonicalMarker = `[${String(markerIndex)}]`;
   return {
     stableId: createHash("sha256")
       .update(
-        `${input.marker}|${String(input.reference.capsuleId)}|${String(input.reference.chunkId)}`,
+        `${canonicalMarker}|${String(input.reference.capsuleId)}|${String(input.reference.chunkId)}`,
       )
       .digest("hex")
       .slice(0, 16),

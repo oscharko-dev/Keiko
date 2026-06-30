@@ -22,6 +22,11 @@ export interface WorkspaceDirEntry {
   readonly isSymbolicLink: boolean;
 }
 
+export interface WorkspaceFileReader {
+  readonly close: () => Promise<void>;
+  readonly readRange: (startByte: number, length: number) => Promise<Uint8Array>;
+}
+
 export interface WorkspaceFs {
   readonly readFileUtf8: (absolutePath: string) => string;
   readonly stat: (absolutePath: string) => WorkspaceStat;
@@ -39,6 +44,9 @@ export interface WorkspaceFs {
     startByte: number,
     length: number,
   ) => Promise<Uint8Array>;
+  // Optional reusable raw-byte reader. Streaming callers use this when a single response should
+  // hold one file descriptor instead of re-opening the file for every bounded range read.
+  readonly openFileReader?: (absolutePath: string) => Promise<WorkspaceFileReader>;
 }
 
 function isSymlink(absolutePath: string): boolean {
@@ -105,5 +113,26 @@ export const nodeWorkspaceFs: WorkspaceFs = {
     } finally {
       await handle.close();
     }
+  },
+  openFileReader: async (absolutePath: string): Promise<WorkspaceFileReader> => {
+    const handle = await open(absolutePath, "r");
+    let closed = false;
+    return {
+      readRange: async (startByte: number, length: number): Promise<Uint8Array> => {
+        const offset = Math.max(0, Math.floor(startByte));
+        const cap = Math.max(0, Math.floor(length));
+        const buffer = new Uint8Array(cap);
+        if (cap === 0) {
+          return buffer;
+        }
+        const { bytesRead } = await handle.read(buffer, 0, cap, offset);
+        return buffer.subarray(0, bytesRead);
+      },
+      close: async (): Promise<void> => {
+        if (closed) return;
+        closed = true;
+        await handle.close();
+      },
+    };
   },
 };

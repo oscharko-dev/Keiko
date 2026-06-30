@@ -15,11 +15,13 @@ import type {
 } from "./local-knowledge.js";
 
 // ─── Document, page, section, parsed unit ─────────────────────────────────────
-export type DocumentStatus = "pending" | "extracted" | "skipped" | "failed" | "unsupported";
+export type DocumentStatus =
+  "pending" | "extracted" | "extracted-image" | "skipped" | "failed" | "unsupported";
 
 export const DOCUMENT_STATUSES: readonly DocumentStatus[] = [
   "pending",
   "extracted",
+  "extracted-image",
   "skipped",
   "failed",
   "unsupported",

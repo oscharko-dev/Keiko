@@ -1342,6 +1342,24 @@ describe("pdf citation preview api helpers", () => {
     );
   });
 
+  it("passes an expected preview session version when closing a session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await closePdfCitationPreviewSession(
+      "preview/session#1",
+      "2026-06-28T12:00:00.000Z",
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231",
+      expect.objectContaining({
+        method: "DELETE",
+        body: JSON.stringify({ expectedExpiresAt: "2026-06-28T12:00:00.000Z" }),
+      }),
+    );
+  });
+
   it("fetches preview PDF bytes without JSON headers and forwards an abort signal", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(new Uint8Array([9, 8, 7]), {

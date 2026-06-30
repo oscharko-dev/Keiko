@@ -10062,6 +10062,15 @@ select.dlg-input {
     color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
   );
 }
+.pdfv-page-error {
+  width: min(100%, 680px);
+  min-height: 220px;
+  margin: 0;
+  padding: 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-primary);
+}
 @media (max-width: 720px) {
   .pdfv-header,
   .pdfv-context,

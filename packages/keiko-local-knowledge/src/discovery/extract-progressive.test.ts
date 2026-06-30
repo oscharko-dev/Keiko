@@ -179,6 +179,66 @@ describe("extractDocument — progressive large-document path", () => {
     ).toBe(content.slice(20, 28));
   });
 
+  it("marks progressive documents with pages but no text as extracted-image", async () => {
+    const content = "x".repeat(32);
+    const fs = memoryFs(ROOT, [{ relativePath: "scan.synthetic", content }]);
+    const imageOnlyExtractor: ProgressiveExtractor = {
+      strategyId: "progressive-pdf",
+      parserVersion: "image-only-test@1",
+      matches: (input) => input.extension === "synthetic",
+      extractWindows: async function* (
+        _source,
+        options: ProgressiveExtractionOptions,
+      ): AsyncIterable<ProgressiveExtractionWindow> {
+        await Promise.resolve();
+        yield {
+          windowIndex: 0,
+          pages: [
+            {
+              documentId: options.documentId,
+              pageNumber: 1,
+              pageLabel: "1",
+              characterStart: 0,
+              characterEnd: 0,
+            },
+          ],
+          units: [
+            {
+              kind: "page",
+              documentId: options.documentId,
+              pageNumber: 1,
+              pageLabel: "1",
+              characterStart: 0,
+              characterEnd: 0,
+            },
+          ],
+          text: "",
+          characterStart: 0,
+          objectCursor: 1,
+          lastPageNumber: 1,
+          diagnostics: [],
+        };
+      },
+    };
+
+    const result = await extractDocument(
+      {
+        fs,
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: policy(),
+        progressiveExtractors: [imageOnlyExtractor],
+      },
+      { capsuleId, source, file: { relativePath: "scan.synthetic", sizeBytes: content.length } },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted-image");
+    expect(count(store, "pages", result.outcome.document.id)).toBe(1);
+    expect(count(store, "document_texts", result.outcome.document.id)).toBe(0);
+  });
+
   it("re-running an extracted large document hits the unchanged fast-path", async () => {
     const content = syntheticDoc(4, 8);
     const fs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);

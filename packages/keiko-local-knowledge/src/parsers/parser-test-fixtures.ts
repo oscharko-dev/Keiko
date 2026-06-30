@@ -24,9 +24,11 @@ export function selectionFromText(
     extension: overrides.extension ?? "txt",
     mediaType: overrides.mediaType ?? "text/plain",
   };
-  return overrides.languageHint !== undefined
-    ? { ...base, languageHint: overrides.languageHint }
-    : base;
+  return {
+    ...base,
+    ...(overrides.languageHint !== undefined ? { languageHint: overrides.languageHint } : {}),
+    ...(overrides.pageNumber !== undefined ? { pageNumber: overrides.pageNumber } : {}),
+  };
 }
 
 export function selectionFromBytes(
@@ -39,9 +41,11 @@ export function selectionFromBytes(
     extension: overrides.extension ?? "",
     mediaType: overrides.mediaType ?? "",
   };
-  return overrides.languageHint !== undefined
-    ? { ...base, languageHint: overrides.languageHint }
-    : base;
+  return {
+    ...base,
+    ...(overrides.languageHint !== undefined ? { languageHint: overrides.languageHint } : {}),
+    ...(overrides.pageNumber !== undefined ? { pageNumber: overrides.pageNumber } : {}),
+  };
 }
 
 // ─── Format fixtures ─────────────────────────────────────────────────────────
