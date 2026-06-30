@@ -28,6 +28,7 @@ import {
   searchVectorsForScope,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
+  ModelCapability,
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
@@ -140,7 +141,7 @@ function chatCapability(
   contextWindow: number,
   maxOutputTokens: number,
   costClass: "low" | "medium" | "high" = "medium",
-) {
+): ModelCapability {
   return {
     id: modelId,
     kind: "chat",

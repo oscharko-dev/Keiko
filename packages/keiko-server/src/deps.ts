@@ -495,7 +495,7 @@ export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undef
 
 function contextProfileFromConfigModel(config: GatewayConfig, modelId: string): ContextProfile {
   const capability = findConfiguredCapability(config, modelId);
-  return capability === undefined || capability.kind !== "chat"
+  return capability?.kind !== "chat"
     ? DEFAULT_CONTEXT_PROFILE
     : deriveContextProfileFromCapability(capability);
 }
