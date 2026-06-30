@@ -230,7 +230,7 @@ describe("embedMemoryText (#204)", () => {
     expect(await embedMemoryText(deps, "text")).toBeNull();
   });
 
-  it("falls back to a later configured embedding provider when the first one fails", async () => {
+  it("does not fall back to a later embedding provider when the first one fails", async () => {
     const unhealthyModelId = "text-embedding-3-small";
     const healthyModelId = "Qwen3-Embedding-8B";
     const seenModelIds: string[] = [];
@@ -271,9 +271,8 @@ describe("embedMemoryText (#204)", () => {
 
     const input = await embedMemoryText(deps, "semantic memory probe");
 
-    expect(seenModelIds).toEqual([unhealthyModelId, healthyModelId]);
-    expect(input?.modelId).toBe(healthyModelId);
-    expect(input?.vector.length).toBe(1536);
+    expect(seenModelIds).toEqual([unhealthyModelId]);
+    expect(input).toBeNull();
   });
 
   it("returns null (never throws) when the adapter throws", async () => {

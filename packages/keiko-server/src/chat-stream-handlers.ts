@@ -30,6 +30,7 @@ import {
   emptyMemoryResult,
   prepareDesktopChatSend,
   recordChatCompaction,
+  recordConversationMemoryUse,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
 
@@ -96,6 +97,7 @@ async function persistStreamedTurn(
 ): Promise<Record<string, unknown>> {
   const redactedContent = deps.redactor(turn.response.content) as string;
   const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
+  recordConversationMemoryUse(deps, memory, redactedContent);
   const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
     deps,
     request,

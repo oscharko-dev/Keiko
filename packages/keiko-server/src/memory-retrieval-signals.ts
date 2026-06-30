@@ -66,6 +66,9 @@ const SECRET_EGRESS_REJECTION_REASONS = new Set<RejectionReason>([
   "customer-identifier",
 ]);
 
+const SEMANTIC_SWEEP_MAX_CANDIDATES = 160;
+const SEMANTIC_RECENCY_HALF_LIFE_MS = 45 * 24 * 60 * 60 * 1000;
+
 function normalizedEndpointHost(baseUrl: string): string | undefined {
   try {
     const parsed = new URL(baseUrl);
@@ -150,13 +153,32 @@ function isSemanticRetrievalMetadataCandidate(record: MemoryMetadata, nowMs: num
   return record.confidence > DEFAULT_STALE_CONFIDENCE_THRESHOLD;
 }
 
+function recencySignal(updatedAt: number, nowMs: number): number {
+  const ageMs = Math.max(0, nowMs - updatedAt);
+  return 1 / (1 + ageMs / SEMANTIC_RECENCY_HALF_LIFE_MS);
+}
+
+function cleartextCandidateScore(
+  record: MemoryMetadata,
+  nowMs: number,
+  strengthById: ReadonlyMap<MemoryId, number>,
+): number {
+  return (
+    record.confidence * 0.35 +
+    recencySignal(record.updatedAt, nowMs) * 0.25 +
+    (record.pinned ? 0.25 : 0) +
+    (strengthById.get(record.id) ?? 0) * 0.15
+  );
+}
+
 function gatherCandidateIds(
   vault: MemoryVaultStore,
   scopes: readonly MemoryScope[],
   nowMs: number,
+  strengthById: ReadonlyMap<MemoryId, number>,
   signal?: AbortSignal,
 ): readonly MemoryId[] {
-  const ids: MemoryId[] = [];
+  const candidates: MemoryMetadata[] = [];
   const seen = new Set<string>();
   for (const scope of scopes) {
     throwIfAborted(signal);
@@ -168,10 +190,20 @@ function gatherCandidateIds(
       if (!isSemanticRetrievalMetadataCandidate(record, nowMs)) continue;
       if (seen.has(record.id)) continue;
       seen.add(record.id);
-      ids.push(record.id);
+      candidates.push(record);
     }
   }
-  return ids;
+  return candidates
+    .sort((a, b) => {
+      const scoreDelta =
+        cleartextCandidateScore(b, nowMs, strengthById) -
+        cleartextCandidateScore(a, nowMs, strengthById);
+      if (scoreDelta !== 0) return scoreDelta;
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      return a.id.localeCompare(b.id);
+    })
+    .slice(0, SEMANTIC_SWEEP_MAX_CANDIDATES)
+    .map((record) => record.id);
 }
 
 // Per-memory semantic score map for the candidate set, or undefined when no embedding model is
@@ -357,7 +389,7 @@ export async function buildConversationRetrievalSignals(
   throwIfAborted(signal);
   const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
   throwIfAborted(signal);
-  const candidateIds = gatherCandidateIds(vault, scopes, nowMs, signal);
+  const candidateIds = gatherCandidateIds(vault, scopes, nowMs, strengthById, signal);
   throwIfAborted(signal);
   const embeddings =
     candidateIds.length > 0

@@ -23,6 +23,7 @@ import {
   createNoopMemoryAuditHandler,
   recordMemoryAudit,
   recordMemoryAudits,
+  createMemoryAuditDeleteCommitHandler,
   verifyMemoryAuditHashChain,
 } from "./memory-audit-handler.js";
 
@@ -505,6 +506,77 @@ describe("recordMemoryAudit", () => {
     const events = readEvents(store, beforeMidnight);
     expect(events).toHaveLength(1);
     expect(store.get(auditRunIdFor(afterMidnight))).toBeUndefined();
+  });
+
+  it("throws when a required direct audit append fails", () => {
+    const store: EvidenceStore = {
+      put: () => {
+        throw new Error("audit store unavailable");
+      },
+      get: () => undefined,
+      list: () => [],
+      delete: () => undefined,
+    };
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:retrieved",
+      eventId: "evt-required-1",
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: "retrieval returned 1 record",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
+      matchedMemoryIds: [brandedMemoryId("mem-test-1")],
+    };
+
+    expect(() => {
+      recordMemoryAudit({ evidenceStore: store, required: true }, event);
+    }).toThrow("audit store unavailable");
+  });
+});
+
+describe("createMemoryAuditDeleteCommitHandler", () => {
+  it("emits one required forgotten audit event for a tombstoned delete batch", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditDeleteCommitHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const tombstone: MemoryTombstone = {
+      id: "t-1",
+      memoryId: brandedMemoryId("mem-test-1"),
+      scopeKind: "user",
+      scopeCoordinate: "u-1",
+      type: "preference",
+      forgottenAt: FIXED_NOW,
+      forgetterSurface: "memory-center",
+      originalStatus: "accepted",
+    };
+
+    handler([
+      {
+        kind: "memory:deleted",
+        memoryId: brandedMemoryId("mem-test-1"),
+        scope: { kind: "user", userId: brandedMemoryUserId("u-1") },
+        tombstoned: true,
+      },
+      { kind: "memory:tombstoned", tombstone },
+    ]);
+
+    const events = readEvents(store, FIXED_NOW);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        kind: "memory:forgotten",
+        eventId: "evt-1",
+        memoryId: brandedMemoryId("mem-test-1"),
+        tombstoned: true,
+      }),
+    );
+    expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
+      ok: true,
+    });
   });
 });
 

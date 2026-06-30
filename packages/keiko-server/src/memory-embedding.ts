@@ -137,28 +137,25 @@ export function createMemoryEmbedder(
 ): MemoryEmbedder | null {
   const providers = configuredEmbeddingProviders(config);
   if (providers.length === 0) return null;
-  const candidates = providers.map((provider) => ({
-    provider,
-    adapter: buildAdapter(provider, requestImpl),
-  }));
+  const provider = providers[0];
+  if (provider === undefined) return null;
+  const adapter = buildAdapter(provider, requestImpl);
   return async (
     text: string,
     kind: MemoryEmbeddingKind = "document",
   ): Promise<MemoryEmbeddingInput | null> => {
     if (text.length === 0) return null;
-    for (const { provider, adapter } of candidates) {
-      try {
-        const outcome = await adapter.request({
-          endpoint: provider.baseUrl,
-          apiKey: provider.apiKey,
-          modelId: provider.modelId,
-          input: formatEmbeddingInput(provider.modelId, text, kind),
-          ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
-        });
-        if (outcome.ok) return toEmbeddingInput(memoryEmbeddingProviderIdentity(provider), outcome);
-      } catch {
-        // Model/transport boundary: a thrown adapter degrades to the next embedding provider.
-      }
+    try {
+      const outcome = await adapter.request({
+        endpoint: provider.baseUrl,
+        apiKey: provider.apiKey,
+        modelId: provider.modelId,
+        input: formatEmbeddingInput(provider.modelId, text, kind),
+        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+      });
+      if (outcome.ok) return toEmbeddingInput(memoryEmbeddingProviderIdentity(provider), outcome);
+    } catch {
+      // Model/transport boundary: a failed primary embedding provider disables this embedding pass.
     }
     return null;
   };

@@ -2,6 +2,7 @@ import type {
   ConsolidationJob,
   ConsolidationResult,
 } from "@oscharko-dev/keiko-memory-consolidation";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 
 export interface ConsolidationJobSettings {
   readonly jaccardThreshold: number;
@@ -38,6 +39,8 @@ export interface RegisterConsolidationJobInput {
 export interface ConsolidationJobRegistryOptions {
   readonly maxJobs?: number | undefined;
   readonly now?: (() => number) | undefined;
+  readonly evidenceStore?: EvidenceStore | undefined;
+  readonly evidenceRunId?: string | undefined;
 }
 
 export class ConsolidationJobRegistryLimitError extends Error {
@@ -48,11 +51,19 @@ export class ConsolidationJobRegistryLimitError extends Error {
 }
 
 const DEFAULT_MAX_JOBS = 32;
+const DEFAULT_EVIDENCE_RUN_ID = "memory-consolidation-jobs";
+
+interface PersistedRegistrySnapshot {
+  readonly schemaVersion: "1";
+  readonly records: readonly ConsolidationJobRecord[];
+}
 
 interface RegistryState {
   readonly records: Map<string, ConsolidationJobRecord>;
   readonly maxJobs: number;
   readonly now: () => number;
+  readonly evidenceStore?: EvidenceStore | undefined;
+  readonly evidenceRunId: string;
 }
 
 function isTerminal(job: ConsolidationJob): boolean {
@@ -88,6 +99,47 @@ function enforceCapacity(state: RegistryState): void {
   }
 }
 
+function persistedRecordsFrom(json: string | undefined): Map<string, ConsolidationJobRecord> {
+  if (json === undefined) return new Map();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return new Map();
+  }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    (parsed as PersistedRegistrySnapshot).schemaVersion !== "1" ||
+    !Array.isArray((parsed as PersistedRegistrySnapshot).records)
+  ) {
+    return new Map();
+  }
+  const records = new Map<string, ConsolidationJobRecord>();
+  for (const record of (parsed as PersistedRegistrySnapshot).records) {
+    if (record.job?.id !== undefined) {
+      records.set(record.job.id, record);
+    }
+  }
+  return records;
+}
+
+function sortedRecords(state: RegistryState): readonly ConsolidationJobRecord[] {
+  return [...state.records.values()].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+    return a.job.id.localeCompare(b.job.id);
+  });
+}
+
+function persistState(state: RegistryState): void {
+  if (state.evidenceStore === undefined) return;
+  const snapshot: PersistedRegistrySnapshot = {
+    schemaVersion: "1",
+    records: sortedRecords(state),
+  };
+  state.evidenceStore.put(state.evidenceRunId, JSON.stringify(snapshot));
+}
+
 function updateRecord(
   state: RegistryState,
   jobId: string,
@@ -97,6 +149,7 @@ function updateRecord(
   if (record === undefined) return undefined;
   const next: ConsolidationJobRecord = { ...record, ...patch };
   state.records.set(jobId, next);
+  persistState(state);
   return next;
 }
 
@@ -109,10 +162,13 @@ function withElapsedMs(
 }
 
 function createRegistryState(options: ConsolidationJobRegistryOptions): RegistryState {
+  const evidenceRunId = options.evidenceRunId ?? DEFAULT_EVIDENCE_RUN_ID;
   return {
-    records: new Map<string, ConsolidationJobRecord>(),
+    records: persistedRecordsFrom(options.evidenceStore?.get(evidenceRunId)),
     maxJobs: options.maxJobs ?? DEFAULT_MAX_JOBS,
     now: options.now ?? Date.now,
+    evidenceStore: options.evidenceStore,
+    evidenceRunId,
   };
 }
 
@@ -168,6 +224,7 @@ export function createConsolidationJobRegistry(
         cancelRequested: false,
       };
       state.records.set(input.job.id, record);
+      persistState(state);
       return record;
     },
     get: (jobId): ConsolidationJobRecord | undefined => state.records.get(jobId),

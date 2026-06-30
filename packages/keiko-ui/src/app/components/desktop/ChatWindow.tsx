@@ -56,6 +56,7 @@ import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
 import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
+import { VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import {
   usePdfCitationPreviewController,
   type PdfCitationPreviewWindowApi,
@@ -2173,6 +2174,17 @@ function ComposerCore({
           <VoiceDictationPreviewFromController
             controller={dictation}
             onAfterDiscard={() => micButtonRef.current?.focus()}
+          />
+        ) : null}
+        {voiceDialog.active ? (
+          <VoiceRealtimeStatusFromController
+            controller={realtimeVoice}
+            memoryContextText={session.latestMemory?.context.text}
+            memoryContextCount={session.latestMemory?.context.memories.length}
+            memoryActions={session.latestMemory?.actions}
+            onAcceptMemoryCandidate={session.acceptMemoryCandidate}
+            onRejectMemoryCandidate={session.rejectMemoryCandidate}
+            onAfterDismiss={voiceDialog.leave}
           />
         ) : null}
       </div>

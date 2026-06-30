@@ -20,6 +20,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_SENSITIVITIES,
 } from "@oscharko-dev/keiko-contracts";
+import { useI18n, type I18nTranslate } from "@/lib/i18n";
 
 export interface MemoryFilterState {
   readonly query: string;
@@ -46,43 +47,73 @@ interface MemoryFiltersProps {
 // Label maps
 // ---------------------------------------------------------------------------
 
-// Exported so rows/detail render the same curated labels as the filter chips
-// instead of raw enum values like "semantic-fact" (uiux-fix F005).
-export const SCOPE_LABELS: Readonly<Record<MemoryScopeKind, string>> = {
-  user: "User",
-  workspace: "Workspace",
-  project: "Project",
-  workflow: "Workflow",
-  global: "Global",
-};
+export function scopeLabel(scope: MemoryScopeKind, t: I18nTranslate): string {
+  switch (scope) {
+    case "user":
+      return t("memoria.scope.user");
+    case "workspace":
+      return t("memoria.scope.workspace");
+    case "project":
+      return t("memoria.scope.project");
+    case "workflow":
+      return t("memoria.scope.workflow");
+    case "global":
+      return t("memoria.scope.global");
+  }
+}
 
-export const TYPE_LABELS: Readonly<Record<MemoryType, string>> = {
-  episodic: "Episodic",
-  "semantic-fact": "Fact",
-  procedural: "Procedural",
-  preference: "Preference",
-  correction: "Correction",
-  decision: "Decision",
-  negative: "Negative",
-  pinned: "Pinned",
-};
+export function typeLabel(type: MemoryType, t: I18nTranslate): string {
+  switch (type) {
+    case "episodic":
+      return t("memoria.type.episodic");
+    case "semantic-fact":
+      return t("memoria.type.semanticFact");
+    case "procedural":
+      return t("memoria.type.procedural");
+    case "preference":
+      return t("memoria.type.preference");
+    case "correction":
+      return t("memoria.type.correction");
+    case "decision":
+      return t("memoria.type.decision");
+    case "negative":
+      return t("memoria.type.negative");
+    case "pinned":
+      return t("memoria.type.pinned");
+  }
+}
 
-const STATUS_LABELS: Readonly<Record<MemoryStatus, string>> = {
-  proposed: "Proposed",
-  accepted: "Accepted",
-  rejected: "Rejected",
-  superseded: "Superseded",
-  archived: "Archived",
-  forgotten: "Forgotten",
-  conflicted: "Conflicted",
-  expired: "Expired",
-};
+export function statusLabel(status: MemoryStatus, t: I18nTranslate): string {
+  switch (status) {
+    case "proposed":
+      return t("memoria.status.proposed");
+    case "accepted":
+      return t("memoria.status.accepted");
+    case "rejected":
+      return t("memoria.status.rejected");
+    case "superseded":
+      return t("memoria.status.superseded");
+    case "archived":
+      return t("memoria.status.archived");
+    case "forgotten":
+      return t("memoria.status.forgotten");
+    case "conflicted":
+      return t("memoria.status.conflicted");
+    case "expired":
+      return t("memoria.status.expired");
+  }
+}
 
-const SENSITIVITY_LABELS: Readonly<Record<MemorySensitivity, string>> = {
-  public: "Public",
-  confidential: "Confidential",
-  restricted: "Restricted",
-};
+export function sensitivityLabel(sensitivity: MemorySensitivity, t: I18nTranslate): string {
+  switch (sensitivity) {
+    case "public":
+      return t("memoria.sensitivity.public");
+    case "confidential":
+      return t("memoria.sensitivity.confidential");
+    case "restricted":
+      return t("memoria.sensitivity.restricted");
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ChipGroup
@@ -94,19 +125,21 @@ function toggle<T>(list: readonly T[], item: T): readonly T[] {
 
 function ChipGroup<T extends string>({
   label,
+  ariaLabel,
   items,
-  labels,
+  labelFor,
   active,
   onToggle,
 }: {
   readonly label: string;
+  readonly ariaLabel: string;
   readonly items: readonly T[];
-  readonly labels: Readonly<Record<T, string>>;
+  readonly labelFor: (item: T) => string;
   readonly active: readonly T[];
   readonly onToggle: (item: T) => void;
 }): ReactNode {
   return (
-    <div className="mc-filter-row" role="group" aria-label={`Filter by ${label}`}>
+    <div className="mc-filter-row" role="group" aria-label={ariaLabel}>
       <span className="mc-filter-label">{label}</span>
       <div className="mc-filter-chips">
         {items.map((item) => {
@@ -122,7 +155,7 @@ function ChipGroup<T extends string>({
                 onToggle(item);
               }}
             >
-              {labels[item]}
+              {labelFor(item)}
             </button>
           );
         })}
@@ -136,50 +169,59 @@ function ChipGroup<T extends string>({
 // ---------------------------------------------------------------------------
 
 export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactNode {
+  const { t } = useI18n();
+  const scopeText = t("memoria.scope");
+  const typeText = t("memoria.type");
+  const statusText = t("memoria.status");
+  const sensitivityText = t("memoria.sensitivity");
   return (
-    <section className="mc-filters" aria-label="Memory filters">
+    <section className="mc-filters" aria-label={t("memoria.filters")}>
       <label className="mc-filter-search">
-        <span className="mc-filter-label">Search</span>
+        <span className="mc-filter-label">{t("memoria.search")}</span>
         <input
           type="search"
           value={filters.query}
-          placeholder="Search memories"
+          placeholder={t("memoria.searchPlaceholder")}
           onChange={(event) => {
             onChange({ ...filters, query: event.currentTarget.value });
           }}
         />
       </label>
       <ChipGroup
-        label="Scope"
+        label={scopeText}
+        ariaLabel={t("memoria.filterBy", { label: scopeText })}
         items={MEMORY_SCOPE_KINDS}
-        labels={SCOPE_LABELS}
+        labelFor={(item) => scopeLabel(item, t)}
         active={filters.scope}
         onToggle={(item) => {
           onChange({ ...filters, scope: toggle(filters.scope, item) });
         }}
       />
       <ChipGroup
-        label="Type"
+        label={typeText}
+        ariaLabel={t("memoria.filterBy", { label: typeText })}
         items={MEMORY_TYPES}
-        labels={TYPE_LABELS}
+        labelFor={(item) => typeLabel(item, t)}
         active={filters.type}
         onToggle={(item) => {
           onChange({ ...filters, type: toggle(filters.type, item) });
         }}
       />
       <ChipGroup
-        label="Status"
+        label={statusText}
+        ariaLabel={t("memoria.filterBy", { label: statusText })}
         items={MEMORY_STATUSES}
-        labels={STATUS_LABELS}
+        labelFor={(item) => statusLabel(item, t)}
         active={filters.status}
         onToggle={(item) => {
           onChange({ ...filters, status: toggle(filters.status, item) });
         }}
       />
       <ChipGroup
-        label="Sensitivity"
+        label={sensitivityText}
+        ariaLabel={t("memoria.filterBy", { label: sensitivityText })}
         items={MEMORY_SENSITIVITIES}
-        labels={SENSITIVITY_LABELS}
+        labelFor={(item) => sensitivityLabel(item, t)}
         active={filters.sensitivity}
         onToggle={(item) => {
           onChange({ ...filters, sensitivity: toggle(filters.sensitivity, item) });

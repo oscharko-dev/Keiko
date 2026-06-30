@@ -146,6 +146,39 @@ describe("embeddings round-trip", () => {
     db.close();
   });
 
+  it("rejects a second active embedding model identity in the same vault", () => {
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m2"), TEST_CIPHER);
+    upsertEmbeddingRow(
+      db,
+      "m1" as MemoryId,
+      {
+        provider: "p1",
+        modelId: "m",
+        metric: "cosine",
+        vector: new Float32Array([1, 2, 3]),
+      },
+      1,
+      TEST_CIPHER,
+    );
+    expect(() => {
+      upsertEmbeddingRow(
+        db,
+        "m2" as MemoryId,
+        {
+          provider: "p2",
+          modelId: "m",
+          metric: "cosine",
+          vector: new Float32Array([4, 5, 6]),
+        },
+        2,
+        TEST_CIPHER,
+      );
+    }).toThrow(/vector space/);
+    db.close();
+  });
+
   it("returns undefined for a memory with no embedding", () => {
     const db = openTestDb();
     insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);

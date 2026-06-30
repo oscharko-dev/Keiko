@@ -454,6 +454,30 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     expect(capturedAuth).toBe(`Bearer ${apiKey}`);
   });
 
+  it("pins float encoding and normalizes returned scalar vectors", async () => {
+    let sentBody: unknown = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(makeSuccessBody([3, 4]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect((sentBody as { encoding_format: unknown }).encoding_format).toBe("float");
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.vector[0]).toBeCloseTo(0.6);
+      expect(outcome.value.vector[1]).toBeCloseTo(0.8);
+    }
+  });
+
   it("does NOT double-prefix when the apiKey already includes 'Bearer ' (Copilot)", async () => {
     const bearerKey = ["Bearer", " ", "already-prefixed"].join("");
     let capturedAuth: string | null = null;
@@ -616,6 +640,7 @@ describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
       fetchImpl,
     });
     expect((sentBody as { input: unknown }).input).toEqual(["a", "b", "c"]);
+    expect((sentBody as { encoding_format: unknown }).encoding_format).toBe("float");
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
       expect(outcome.value.map((v) => Array.from(v.vector))).toEqual([
@@ -647,7 +672,9 @@ describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
-      expect(outcome.value.map((v) => v.vector[0])).toEqual([1, 2, 3]);
+      expect(outcome.value[0]?.vector[0]).toBeCloseTo(1 / Math.sqrt(3));
+      expect(outcome.value[1]?.vector[0]).toBeCloseTo(2 / Math.sqrt(12));
+      expect(outcome.value[2]?.vector[0]).toBeCloseTo(3 / Math.sqrt(27));
     }
   });
 

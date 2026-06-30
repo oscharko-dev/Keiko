@@ -33,16 +33,16 @@ describe("MemoriaVivaWindow request settings", () => {
     expect(memorySwitch).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText("Disabled for chat")).toBeInTheDocument();
 
-    const budgetInput = screen.getByLabelText("MemoriaViva context budget");
+    const budgetInput = screen.getByLabelText("Memory context budget");
     expect(budgetInput).toHaveValue(1200);
 
     fireEvent.change(budgetInput, { target: { value: "800" } });
     expect(budgetInput).toHaveValue(800);
 
-    await user.click(screen.getByRole("button", { name: "Increase MemoriaViva context budget" }));
+    await user.click(screen.getByRole("button", { name: "Increase Memory context budget" }));
     expect(budgetInput).toHaveValue(900);
 
-    await user.click(screen.getByRole("button", { name: "Decrease MemoriaViva context budget" }));
+    await user.click(screen.getByRole("button", { name: "Decrease Memory context budget" }));
     expect(budgetInput).toHaveValue(800);
   });
 });

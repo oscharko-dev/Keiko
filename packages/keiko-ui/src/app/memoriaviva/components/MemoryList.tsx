@@ -16,8 +16,16 @@ import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
 import { Toggle } from "../../components/desktop/widgets/shared/Toggle";
+import { useI18n, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
-import { MemoryFilters, type MemoryFilterState, SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
+import {
+  MemoryFilters,
+  type MemoryFilterState,
+  scopeLabel,
+  sensitivityLabel,
+  statusLabel,
+  typeLabel,
+} from "./MemoryFilters";
 import {
   MEMORY_SCOPE_KINDS,
   MEMORY_TYPES,
@@ -74,13 +82,19 @@ const STATUS_COLORS: Readonly<Record<string, string>> = {
 
 // No role="status": these badges are static metadata labels, not live status
 // messages — N rows produced N live regions for screen readers (uiux-fix F005).
-function StatusBadge({ status }: { readonly status: string }): ReactNode {
+function StatusBadge({
+  status,
+  t,
+}: {
+  readonly status: MemoryRecord["status"];
+  readonly t: I18nTranslate;
+}): ReactNode {
   const cls = STATUS_COLORS[status] ?? "mc-badge-default";
-  return <span className={`mc-badge ${cls}`}>{status}</span>;
+  return <span className={`mc-badge ${cls}`}>{statusLabel(status, t)}</span>;
 }
 
-function formatConfidence(confidence: number): string {
-  return `${(confidence * 100).toFixed(0)}% confidence`;
+function formatConfidence(confidence: number, t: I18nTranslate): string {
+  return t("memoria.confidenceMeta", { confidence: (confidence * 100).toFixed(0) });
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +104,11 @@ function formatConfidence(confidence: number): string {
 function MemoryRow({
   record,
   onOpenDetail,
+  t,
 }: {
   readonly record: MemoryRecord;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly t: I18nTranslate;
 }): ReactNode {
   const row = (
     <>
@@ -103,22 +119,28 @@ function MemoryRow({
           {record.body}
         </span>
         <div className="mc-row-meta">
-          <span className="mc-row-type">{TYPE_LABELS[record.type]}</span>
-          <span className="mc-row-scope">{SCOPE_LABELS[record.scope.kind]}</span>
-          <span className="mc-row-source">Source {record.provenance.sourceKind}</span>
-          <span className="mc-row-confidence">
-            {formatConfidence(record.provenance.confidence)}
+          <span className="mc-row-type">{typeLabel(record.type, t)}</span>
+          <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
+          <span className="mc-row-source">
+            {t("memoria.sourceMeta", { source: record.provenance.sourceKind })}
           </span>
-          <span className="mc-row-sensitivity">Sensitivity {record.provenance.sensitivity}</span>
+          <span className="mc-row-confidence">
+            {formatConfidence(record.provenance.confidence, t)}
+          </span>
+          <span className="mc-row-sensitivity">
+            {t("memoria.sensitivityMeta", {
+              sensitivity: sensitivityLabel(record.provenance.sensitivity, t),
+            })}
+          </span>
           {record.pinned ? (
             // Same badge as the detail page — a bare accent-coloured "P" was
             // cryptic, failed light-theme contrast (2.41:1), and aria-label on
             // a generic span is prohibited ARIA (uiux-fix F035).
-            <span className="mc-badge mc-badge-pinned">Pinned</span>
+            <span className="mc-badge mc-badge-pinned">{t("memoria.pinned")}</span>
           ) : null}
         </div>
       </div>
-      <StatusBadge status={record.status} />
+      <StatusBadge status={record.status} t={t} />
     </>
   );
 
@@ -145,15 +167,19 @@ function MemoryRow({
 // EmptyState
 // ---------------------------------------------------------------------------
 
-function EmptyState({ hasFilters }: { readonly hasFilters: boolean }): ReactNode {
+function EmptyState({
+  hasFilters,
+  t,
+}: {
+  readonly hasFilters: boolean;
+  readonly t: I18nTranslate;
+}): ReactNode {
   return (
     <div data-testid="memory-empty-state" className="lk-empty">
       <div>
-        <p className="lk-empty-title">No memories found</p>
+        <p className="lk-empty-title">{t("memoria.noMemoriesFound")}</p>
         <p className="lk-empty-body">
-          {hasFilters
-            ? "Try removing some filters to see more memories."
-            : "Memories will appear here once the system captures them from your conversations and workflows."}
+          {hasFilters ? t("memoria.emptyFiltered") : t("memoria.emptyFresh")}
         </p>
       </div>
     </div>
@@ -222,6 +248,7 @@ export function MemoryListContent({
   showWorkspaceBackLink = true,
   settingsSlot,
 }: MemoryListContentProps): ReactNode {
+  const { t } = useI18n();
   const [memories, setMemories] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -265,15 +292,19 @@ export function MemoryListContent({
             <Toggle
               on={effectivePolicyEnabled}
               onChange={setEffectivePolicyEnabled}
-              label="Enable MemoriaViva policy"
+              label={t("memoria.policyLabel")}
             />
-            <span>Policy {effectivePolicyEnabled ? "on" : "off"}</span>
+            <span>
+              {t("memoria.policyState", {
+                state: effectivePolicyEnabled ? t("memoria.policyOn") : t("memoria.policyOff"),
+              })}
+            </span>
           </div>
           {/* Declared exit back to the desktop shell — the memoriaviva routes
               live outside the workspace and had no way back (uiux-fix F035). */}
           {showWorkspaceBackLink ? (
             <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
-              Back to Workspace
+              {t("memoria.backToWorkspace")}
             </Link>
           ) : null}
           {onOpenConsolidation !== undefined ? (
@@ -282,11 +313,11 @@ export function MemoryListContent({
               className="lk-btn lk-btn-ghost lk-btn-lg"
               onClick={onOpenConsolidation}
             >
-              Consolidation
+              {t("memoria.consolidation")}
             </button>
           ) : (
             <Link href="/memoriaviva/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
-              Consolidation
+              {t("memoria.consolidation")}
             </Link>
           )}
           {onOpenReviewQueue !== undefined ? (
@@ -295,14 +326,14 @@ export function MemoryListContent({
               className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
               onClick={onOpenReviewQueue}
             >
-              Review queue
+              {t("memoria.reviewQueue")}
             </button>
           ) : (
             <Link
               href="/memoriaviva/review-queue"
               className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
             >
-              Review queue
+              {t("memoria.reviewQueue")}
             </Link>
           )}
         </div>
@@ -317,18 +348,18 @@ export function MemoryListContent({
           filter change (uiux-fix F035). */}
       <p role="status" className="visually-hidden">
         {!loading && error === null
-          ? `${memories.length.toString()} ${memories.length === 1 ? "memory" : "memories"} found`
+          ? t("memoria.memoriesFound", { count: memories.length })
           : null}
       </p>
 
       <section
-        aria-label="Memory records"
+        aria-label={t("memoria.memoryRecords")}
         aria-busy={loading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
         {loading && memories.length === 0 ? (
           <p role="status" aria-live="polite" className="lk-loading">
-            Loading memories…
+            {t("memoria.loadingMemories")}
           </p>
         ) : error !== null ? (
           <div role="alert" aria-live="assertive" className="lk-alert">
@@ -340,14 +371,14 @@ export function MemoryListContent({
                 void load(filters);
               }}
             >
-              Retry
+              {t("memoria.retry")}
             </button>
           </div>
         ) : memories.length === 0 ? (
-          <EmptyState hasFilters={hasFilters} />
+          <EmptyState hasFilters={hasFilters} t={t} />
         ) : (
           <ul
-            aria-label="Memory list"
+            aria-label={t("memoria.memoryList")}
             style={{
               listStyle: "none",
               padding: 0,
@@ -363,7 +394,7 @@ export function MemoryListContent({
             }}
           >
             {memories.map((record) => (
-              <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} />
+              <MemoryRow key={record.id} record={record} onOpenDetail={onOpenDetail} t={t} />
             ))}
           </ul>
         )}
