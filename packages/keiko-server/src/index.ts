@@ -32,6 +32,12 @@ export {
   type ModelPortFactory,
 } from "./deps.js";
 export {
+  createUpdateLocalStateManager,
+  type CreateUpdateSnapshotInput,
+  type UpdateLocalStateManager,
+  type UpdateLocalStateManagerOptions,
+} from "./update-local-state.js";
+export {
   createRunRegistry,
   ActiveRunLimitError,
   type RunRegistry,

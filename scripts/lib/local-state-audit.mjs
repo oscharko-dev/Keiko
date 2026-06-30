@@ -31,6 +31,7 @@ const MEMORY_DB = "keiko-memory.db";
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge";
 const CAPSULES_DB = "capsules.db";
 const EVIDENCE_SUBDIR = "evidence";
+const UPDATE_SUBDIR = "updates";
 const QI_SUBDIR = "qi";
 const FIGMA_SUBDIR = "figma";
 const FIGMA_VAULT = "figma-token.vault";
@@ -85,6 +86,7 @@ const SENSITIVE_TOP_DIRS = new Set([
   MEMORY_SUBDIR,
   LOCAL_KNOWLEDGE_SUBDIR,
   EVIDENCE_SUBDIR,
+  UPDATE_SUBDIR,
 ]);
 
 function isSensitiveFile(relPath, name) {
@@ -500,10 +502,7 @@ function auditKnowledgeEncryption(stateDir) {
 // ── Class 5: protected Evidence / Quality-Intelligence artifacts ──────────────────────────────
 function isPlaceholderSafe(value) {
   const trimmed = value.trim().replace(/[.,;)}]+$/g, "");
-  return (
-    trimmed === REDACTED_PLACEHOLDER ||
-    /^(?:true|false|null|[0-9]+)$/iu.test(trimmed)
-  );
+  return trimmed === REDACTED_PLACEHOLDER || /^(?:true|false|null|[0-9]+)$/iu.test(trimmed);
 }
 
 function scanForSecretFindings(text) {
