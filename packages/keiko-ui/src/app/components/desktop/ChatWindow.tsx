@@ -1802,8 +1802,9 @@ function ComposerCore({
     messageId: undefined,
   });
   const voiceGrounding = voiceSessionGroundingContext(activeChat);
+  const voiceGroundingActive = voiceGrounding?.enabled === true;
   const voiceGroundingToolAvailable =
-    voiceGrounding?.enabled === true && supportsRealtimeToolCalling(voiceCapability);
+    voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability);
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
     chatContext:
@@ -1817,7 +1818,8 @@ function ComposerCore({
             },
             ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
           },
-    groundingActive: voiceGroundingToolAvailable,
+    groundingActive: voiceGroundingActive,
+    groundingToolActive: voiceGroundingToolAvailable,
     memoryContextText: session.latestMemory?.context.text,
     onGroundedToolCall: session.runRealtimeGroundedTool,
     onVoiceTurnCommitted: (messages) => session.appendVoiceTurn?.(messages),

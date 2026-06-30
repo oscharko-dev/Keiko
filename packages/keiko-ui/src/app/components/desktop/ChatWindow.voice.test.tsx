@@ -593,7 +593,8 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
         return (
-          args.groundingActive === false &&
+          args.groundingActive === true &&
+          args.groundingToolActive === false &&
           args.chatContext?.chatId === "chat-1" &&
           args.chatContext.grounding?.enabled === true &&
           args.chatContext.grounding.kind === "knowledge" &&
@@ -618,6 +619,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
         return (
           args.groundingActive === true &&
+          args.groundingToolActive === true &&
           args.chatContext?.chatId === "chat-1" &&
           args.chatContext.grounding?.enabled === true &&
           args.chatContext.grounding.kind === "knowledge" &&

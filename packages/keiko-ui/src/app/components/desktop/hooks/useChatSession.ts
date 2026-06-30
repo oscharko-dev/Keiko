@@ -132,6 +132,7 @@ const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
 const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
 const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
+const VOICE_TURN_APPEND_MAX_ATTEMPTS = 2;
 
 // Issue #152 — conversation request lifecycle states (memory keiko-issue66).
 // `idle` is the resting state; `queued` is set the moment sendMessage commits
@@ -208,6 +209,27 @@ function errorMessage(error: unknown): string {
   }
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
   return formatUserError(error, "Something went wrong. Try again.");
+}
+
+function shouldRetryVoiceTurnAppend(error: unknown): boolean {
+  return !(error instanceof ApiError) || error.status >= 500;
+}
+
+async function appendDesktopChatVoiceTurnWithRetry(
+  input: Parameters<typeof appendDesktopChatVoiceTurn>[0],
+): ReturnType<typeof appendDesktopChatVoiceTurn> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < VOICE_TURN_APPEND_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await appendDesktopChatVoiceTurn(input);
+    } catch (caught) {
+      lastError = caught;
+      if (!shouldRetryVoiceTurnAppend(caught)) {
+        break;
+      }
+    }
+  }
+  throw lastError;
 }
 
 function sortChats(chats: readonly Chat[]): Chat[] {
@@ -1497,7 +1519,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       const projectPath = state.activeProject?.path ?? chat.projectPath;
       const modelId = resolveSelectedModelId(state.selectedModel, state.models);
       try {
-        const result = await appendDesktopChatVoiceTurn({
+        const result = await appendDesktopChatVoiceTurnWithRetry({
           chatId: chat.id,
           projectPath,
           messages,

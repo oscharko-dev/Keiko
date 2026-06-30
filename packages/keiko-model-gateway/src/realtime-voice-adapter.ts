@@ -92,6 +92,10 @@ export interface RealtimeNegotiationRequest {
   readonly transcriptionModel?: string;
   readonly tools?: readonly RealtimeSessionTool[] | undefined;
   readonly toolChoice?: RealtimeSessionToolChoice | undefined;
+  // Used for grounded sessions when the provider does not support realtime function calls. Server VAD
+  // should still detect turn boundaries and emit transcription, but the provider must not auto-answer
+  // from its own context before Keiko retrieves a grounded response through the BFF.
+  readonly disableAutomaticResponse?: boolean | undefined;
   // The browser's opaque SDP offer (already validated for length by the caller). Never persisted or
   // logged by this module; forwarded verbatim to the provider's realtime SDP-exchange endpoint.
   readonly offerSdp: string;
@@ -289,6 +293,14 @@ async function dispatch(
   }
 }
 
+function realtimeTurnDetection(
+  disableAutomaticResponse: boolean | undefined,
+): Record<string, unknown> {
+  return disableAutomaticResponse === true
+    ? { ...DEFAULT_REALTIME_TURN_DETECTION, create_response: false }
+    : DEFAULT_REALTIME_TURN_DETECTION;
+}
+
 // Builds the ephemeral client-secret request body. The session-config schema is the GA nested
 // `audio.{input,output}` shape (verified against the live Azure Foundry realtime endpoint: the older
 // top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions` and
@@ -311,7 +323,7 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
     // server_vad gives provider-side end-of-turn detection and barge-in (interrupt_response) for the
     // realtime media plane without any client polling. Prefix padding captures speech that starts
     // during browser EC/NS/AGC warm-up or immediately after the visible session start.
-    turn_detection: DEFAULT_REALTIME_TURN_DETECTION,
+    turn_detection: realtimeTurnDetection(request.disableAutomaticResponse),
   };
   audioInput.transcription = {
     model:

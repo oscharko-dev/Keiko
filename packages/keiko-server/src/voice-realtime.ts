@@ -496,6 +496,7 @@ function buildNegotiationRequest(
           },
         }
       : {}),
+    ...(groundingEnabled && !toolsSupported ? { disableAutomaticResponse: true } : {}),
     offerSdp,
     signal,
     timeoutMs: Math.min(provider.timeoutMs, REALTIME_NEGOTIATION_TIMEOUT_MS),
