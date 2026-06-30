@@ -115,6 +115,9 @@ manual commit-status mirroring that previously made patch releases slow and erro
 The GitHub Release entry is owned by `scripts/release-publish.mjs`; do not create it manually as
 a separate step. Default user-facing bullets omit issue and PR numbers. Catalog ids, approval
 references, source issue/PR references, affected state stores, remediation, registry, and dist-tag
-details are retained in a collapsed technical metadata section for audit traceability. Re-running
-`npm run release:publish -- --tag latest` is idempotent for already published packages: it verifies
-npm versions/dist-tags, reruns the registry smoke, and updates the GitHub Release metadata.
+details are retained in a collapsed technical metadata section for entries that are public by
+default. Non-observable `internal-only` entries stay out of the public GitHub Release body.
+Release-note generation fails closed when public notes contain obvious local filesystem paths,
+private key material, or common secret-token patterns. Re-running `npm run release:publish -- --tag
+latest` is idempotent for already published packages: it verifies npm versions/dist-tags, reruns the
+registry smoke, and updates the GitHub Release metadata from the already-rendered notes snapshot.

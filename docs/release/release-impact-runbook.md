@@ -70,7 +70,7 @@ Before adding a release-note bullet:
 3. Prefer the broadest accurate issue/PR as the source when several implementation slices support one outcome.
 4. Mark narrow implementation details as `internal-only` unless they create observable impact.
 
-Duplicate default patch-note bullets fail `npm run check:release-impact`. During release-note generation, issue or PR references are stripped from default user-facing bullets and retained in the technical traceability footer, so duplicate human-facing notes are collapsed before GitHub Release metadata is written.
+Duplicate default patch-note bullets fail `npm run check:release-impact`. During release-note generation, issue or PR references are stripped from default user-facing bullets and retained in the technical traceability footer for entries that are public by default, so duplicate human-facing notes are collapsed before GitHub Release metadata is written. Non-observable `internal-only` entries and entries with `defaultPatchNotes: false` stay out of the public GitHub Release body, including the technical details block.
 
 ## Exceptions
 
@@ -93,4 +93,4 @@ Run:
 npm run check:release-impact
 ```
 
-`npm run release:plan -- --tag beta` and `npm run release:publish -- --tag <tag>` also run the release-impact gate. The release plan prints the generated GitHub Release notes between `BEGIN KEIKO RELEASE NOTES` and `END KEIKO RELEASE NOTES` markers without publishing a live release. The gate fails when metadata is missing, invalid, contradictory, duplicated, not reviewed, not bundled, or not tied to the current package version.
+`npm run release:plan -- --tag beta` and `npm run release:publish -- --tag <tag>` also run the release-impact gate. The release plan prints the generated GitHub Release notes between `BEGIN KEIKO RELEASE NOTES` and `END KEIKO RELEASE NOTES` markers without publishing a live release. Release-note generation fails closed when public notes contain obvious local filesystem paths, private key material, or common secret-token patterns. The gate fails when metadata is missing, invalid, contradictory, duplicated, not reviewed, not bundled, or not tied to the current package version.

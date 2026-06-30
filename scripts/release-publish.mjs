@@ -402,9 +402,26 @@ function githubRepository() {
   fail("could not determine GitHub repository; set GITHUB_REPOSITORY=owner/repo.");
 }
 
+function withPublishApprovalRequirement(enabled, callback) {
+  if (!enabled) return callback();
+  const previous = process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE;
+  process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE = "1";
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) {
+      Reflect.deleteProperty(process.env, "KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE");
+    } else {
+      process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE = previous;
+    }
+  }
+}
+
 function releaseNotes(rootManifest, options) {
   const catalog = readJson("release-impact.catalog.json");
-  const result = renderReleaseImpactNotes(catalog, rootManifest, options);
+  const result = withPublishApprovalRequirement(!options.planOnly, () =>
+    renderReleaseImpactNotes(catalog, rootManifest, options),
+  );
   if (!result.ok) {
     fail(`release-impact notes could not be generated:\n  - ${result.failures.join("\n  - ")}`);
   }
@@ -422,8 +439,7 @@ function releaseIsPrerelease(version, tag) {
   return version.includes("-") || tag !== "latest";
 }
 
-function ensureGithubRelease(rootManifest, rootPackage, options) {
-  const notes = releaseNotes(rootManifest, options);
+function ensureGithubRelease(rootPackage, options, notes) {
   if (options.skipGithubRelease || options.dryRun) {
     console.log("release-publish: GitHub release skipped.");
     printReleaseNotesPreview(notes);
@@ -635,9 +651,10 @@ run("npm", ["run", "check:publish-manifests"], { stdio: "inherit" });
 run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-impact:publish"], {
   stdio: "inherit",
 });
+const githubReleaseNotes = releaseNotes(rootManifest, options);
 
 if (options.planOnly) {
-  printReleaseNotesPreview(releaseNotes(rootManifest, options));
+  printReleaseNotesPreview(githubReleaseNotes);
   console.log("release-publish: PLAN-ONLY complete.");
   process.exit(0);
 }
@@ -661,7 +678,7 @@ try {
     }
   }
   runRegistrySmoke(rootPackage, options, npmEnv);
-  ensureGithubRelease(rootManifest, rootPackage, options);
+  ensureGithubRelease(rootPackage, options, githubReleaseNotes);
   console.log(`release-publish: PASS - ${rootPackage.spec} published as ${options.tag}.`);
 } finally {
   cleanup();

@@ -163,7 +163,7 @@ describe("release-impact release notes", () => {
     expect(result.ok).toBe(true);
     expect(result.notes.match(/Improves release-note publishing\./gu)).toHaveLength(1);
     expect(result.notes).not.toContain("- Internal build graph refactor.");
-    expect(result.notes).toContain("internal-build-refactor");
+    expect(result.notes).not.toContain("internal-build-refactor");
   });
 
   it("renders observable internal-only entries when default patch notes explicitly include them", () => {
@@ -185,6 +185,7 @@ describe("release-impact release notes", () => {
     expect(result.ok).toBe(true);
     expect(result.notes).toContain("### Internal · Internal Only");
     expect(result.notes).toContain("- Improves release publish reliability for maintainers.");
+    expect(result.notes).toContain("observable-internal-release-gate");
   });
 
   it("fails closed when metadata does not match the package version", () => {
@@ -195,6 +196,32 @@ describe("release-impact release notes", () => {
 
     expect(result.ok).toBe(false);
     expect(result.failures.join("\n")).toContain("@oscharko-dev/keiko@0.2.11 has no latest");
+  });
+
+  it("fails closed when public release notes contain local paths or secret-like values", () => {
+    const pathResult = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "path-leak",
+          releaseNoteBullets: ["Avoids reading from /Users/alice/private/project."],
+        }),
+      ]),
+      rootManifest(),
+    );
+    const secretResult = renderReleaseImpactNotes(
+      catalog([
+        entry({
+          id: "secret-leak",
+          releaseNoteBullets: ["Rotates sk-live-123456789 before release."],
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(pathResult.ok).toBe(false);
+    expect(pathResult.failures.join("\n")).toContain("absolute local filesystem path");
+    expect(secretResult.ok).toBe(false);
+    expect(secretResult.failures.join("\n")).toContain("secret-like token");
   });
 
   it("prints generated notes during plan-only release proof without publishing", () => {
