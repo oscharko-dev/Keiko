@@ -409,7 +409,48 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
       { role: "user", content: "Open the deploy log." },
       { role: "assistant", content: "The deploy log is open." },
     ]);
-    expect(result.current.turnSnapshot.state).toBe("yielding");
+    expect(result.current.turnSnapshot.state).toBe("idle");
+  });
+
+  it("keeps assistant transcript deltas out of the speaking floor until audio output starts", async () => {
+    const { session, fireConnectionState, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => fireConnectionState("connected"));
+    await waitFor(() => expect(result.current.phase).toBe("connected"));
+
+    act(() => {
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_started", item_id: "u-floor" });
+      fireDataChannelEvent({ type: "input_audio_buffer.speech_stopped", item_id: "u-floor" });
+    });
+    expect(result.current.turnSnapshot.state).toBe("thinking");
+
+    act(() => {
+      fireDataChannelEvent({
+        type: "response.output_audio_transcript.delta",
+        response_id: "r-floor",
+        item_id: "a-floor",
+        delta: "The answer begins in text first.",
+      });
+    });
+    expect(result.current.turnSnapshot.state).toBe("thinking");
+    expect(result.current.speaking).toBe(false);
+
+    act(() => {
+      fireDataChannelEvent({ type: "response.output_audio.delta", response_id: "r-floor" });
+    });
+    expect(result.current.turnSnapshot.state).toBe("speaking");
+    expect(result.current.speaking).toBe(true);
   });
 
   it("keeps a paired callback intact when the assistant transcript arrives before the user transcript", async () => {

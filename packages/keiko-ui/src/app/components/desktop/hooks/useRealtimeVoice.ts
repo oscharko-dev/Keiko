@@ -860,7 +860,8 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       assistantTranscriptBufferRef.current = "";
       assistantTranscriptResponseRef.current = undefined;
       assistantTranscriptItemRef.current = undefined;
-      applyTurnSignal({ kind: "assistant-speech-start" });
+      // Transcript completion is a persistence signal. The audible assistant floor is owned only by
+      // provider audio-output lifecycle events, so text can never announce "speaking" ahead of sound.
       if (
         !turn.groundingActive &&
         !turn.groundedToolPersisted &&
@@ -933,7 +934,6 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           assistantTranscriptBufferRef.current += event.delta;
           assistantTranscriptResponseRef.current = event.responseId;
           assistantTranscriptItemRef.current = event.itemId;
-          applyTurnSignal({ kind: "assistant-speech-start" });
           return;
         case "assistant-transcript-committed":
           commitAssistantTranscript(event);
