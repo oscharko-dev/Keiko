@@ -17,12 +17,15 @@
 import { createHash } from "node:crypto";
 
 import type {
+  CoverageQuality,
   DocumentId,
   DocumentRecord,
   ExtractionCapabilityAvailability,
+  ExtractionPhase,
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceScope,
+  LargeDocumentExtractionStrategy,
   LargeDocumentResourcePolicy,
   ParserDiagnostic,
   ParserResult,
@@ -31,8 +34,9 @@ import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeScopePath,
+  largeDocumentPolicyFingerprint,
 } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type {
@@ -67,6 +71,8 @@ import {
 import type { InternalParserResult } from "../parsers/types.js";
 import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
+import { getCapsule } from "../capsule-lifecycle.js";
+import { upsertExtractionCheckpoint } from "../indexing/checkpoint-persist.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -361,6 +367,7 @@ function buildDocumentRecord(input: {
   readonly mediaType: string;
   readonly contentHash: string;
   readonly parserResult: ParserResult;
+  readonly sizeBytes?: number;
   readonly status: DocumentRecord["status"];
 }): DocumentRecord {
   return {
@@ -368,7 +375,7 @@ function buildDocumentRecord(input: {
     capsuleId: input.params.capsuleId,
     sourceId: input.params.source.id,
     documentPath: input.params.file.relativePath,
-    sizeBytes: input.params.file.sizeBytes,
+    sizeBytes: input.sizeBytes ?? input.params.file.sizeBytes,
     mediaType: input.mediaType,
     contentHash: input.contentHash,
     parser: input.parserResult.parser,
@@ -376,6 +383,64 @@ function buildDocumentRecord(input: {
     status: input.status,
     safeDisplayName: safeDisplay(input.params.file.relativePath),
   };
+}
+
+function standardExtractionCoverage(
+  status: DocumentRecord["status"],
+  parserResult: InternalParserResult,
+): CoverageQuality {
+  if (parserResult.diagnostics.some((diagnostic) => diagnostic.code === "UNIT_LIMIT_REACHED")) {
+    return "partial";
+  }
+  if (status === "extracted") return "complete";
+  if (status === "extracted-image") return "none";
+  return "none";
+}
+
+function standardExtractionPhase(status: DocumentRecord["status"]): ExtractionPhase {
+  return status === "failed" ? "failed" : "extracted";
+}
+
+function standardExtractionStrategy(): LargeDocumentExtractionStrategy {
+  return "standard-buffer";
+}
+
+function persistStandardExtractionCheckpoint(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  document: DocumentRecord,
+  parserResult: InternalParserResult,
+): void {
+  const capsule = getCapsule(deps.store, params.capsuleId);
+  if (capsule === undefined) return;
+  const now = document.lastExtractedAt;
+  upsertExtractionCheckpoint(deps.store._internal.db, {
+    capsuleId: params.capsuleId,
+    documentId: document.id,
+    jobId: deps.largeDocumentJobId ?? "extract",
+    strategy: standardExtractionStrategy(),
+    phase: standardExtractionPhase(document.status),
+    pageCursor: parserResult.pages.length,
+    sectionCursor: parserResult.sections.length,
+    objectCursor: parserResult.units.length,
+    extractedTextBytes: Buffer.byteLength(parserResult.normalizedText ?? "", "utf8"),
+    chunkCursor: 0,
+    embeddedChunkCursor: 0,
+    retryCount: 0,
+    coverage: standardExtractionCoverage(document.status, parserResult),
+    fingerprint: {
+      sourceContentHash: document.contentHash,
+      parserVersion: `${document.parser.parserId}@${document.parser.parserVersion}`,
+      policyFingerprint: largeDocumentPolicyFingerprint(
+        deps.largeDocumentPolicy ?? DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+      ),
+      chunkingStrategyVersion: deps.chunkingStrategyVersion ?? DEFAULT_CHUNKING_STRATEGY_KEY,
+      embeddingIdentity: capsule.embeddingModelIdentity,
+    },
+    terminalDiagnostics: parserResult.diagnostics,
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 function persistDocumentAndDependents(
@@ -416,6 +481,7 @@ function persistDocumentAndDependents(
       });
     }
     persistDependentRows(deps, params.capsuleId, documentId, parserResult, now);
+    persistStandardExtractionCheckpoint(deps, params, document, parserResult);
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");
@@ -640,11 +706,11 @@ function validateRequestedTarget(
   }
 }
 
-function validateResolvedTarget(
+function statResolvedTarget(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   target: ResolvedTarget,
-): DiscoveryError | undefined {
+): WorkspaceStat | DiscoveryError {
   try {
     const realStat = deps.fs.stat(target.absolutePath);
     if (!realStat.isFile) {
@@ -654,12 +720,7 @@ function validateResolvedTarget(
         relativePath: params.file.relativePath,
       };
     }
-    if (realStat.hardLinkCount === undefined || realStat.hardLinkCount <= 1) return undefined;
-    return {
-      code: "READ_FAILED",
-      message: "selected file is not eligible for extraction",
-      relativePath: params.file.relativePath,
-    };
+    return realStat;
   } catch {
     return {
       code: "STAT_FAILED",
@@ -667,6 +728,15 @@ function validateResolvedTarget(
       relativePath: params.file.relativePath,
     };
   }
+}
+
+function validateResolvedTarget(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  target: ResolvedTarget,
+): DiscoveryError | undefined {
+  const resolvedStat = statResolvedTarget(deps, params, target);
+  return "code" in resolvedStat ? resolvedStat : undefined;
 }
 
 async function readBytes(
@@ -826,11 +896,11 @@ async function hashProgressiveSource(source: ProgressiveExtractionSource): Promi
   }
   const hash = createHash("sha256");
   for (let offset = 0; offset < source.totalBytes; offset += PROGRESSIVE_HASH_CHUNK_BYTES) {
-    const bytes = await source.readWindow(
-      offset,
-      Math.min(PROGRESSIVE_HASH_CHUNK_BYTES, source.totalBytes - offset),
-    );
-    if (bytes.byteLength === 0) break;
+    const length = Math.min(PROGRESSIVE_HASH_CHUNK_BYTES, source.totalBytes - offset);
+    const bytes = await source.readWindow(offset, length);
+    if (bytes.byteLength !== length) {
+      throw new Error("progressive source returned a short read while hashing");
+    }
     hash.update(bytes);
   }
   return hash.digest("hex");
@@ -1036,12 +1106,23 @@ async function readBoundedDocumentBytes(
   target: ResolvedTarget,
   options: ParserOptions,
 ): Promise<Uint8Array | ExtractionResult> {
+  const resolvedStat = statResolvedTarget(deps, params, target);
+  if ("code" in resolvedStat) {
+    return buildFailureResult(deps, params, documentId, resolvedStat);
+  }
   const bytes = await readBytes(deps, params, target, options.maxBytes + 1);
   if (!(bytes instanceof Uint8Array)) {
     return buildFailureResult(deps, params, documentId, bytes);
   }
   if (bytes.byteLength > options.maxBytes) {
     return buildOversizedFailure(deps, params, documentId, options, bytes.byteLength);
+  }
+  if (bytes.byteLength !== resolvedStat.size) {
+    return buildFailureResult(deps, params, documentId, {
+      code: "READ_FAILED",
+      message: "readFileBytes returned fewer bytes than the resolved file size",
+      relativePath: params.file.relativePath,
+    });
   }
   return bytes;
 }
@@ -1110,6 +1191,7 @@ async function parseAndPersistDocument(
   options: ParserOptions,
 ): Promise<ExtractionResult> {
   const mediaType = mediaTypeFor(extensionOf(params.file.relativePath));
+  const rawByteLength = bytes.byteLength;
   const pdfBlobCandidate = pdfBlobCandidateBytes(mediaType, bytes);
   let parserResult: InternalParserResult;
   try {
@@ -1129,6 +1211,7 @@ async function parseAndPersistDocument(
     mediaType,
     contentHash,
     parserResult: redactedParserResult,
+    sizeBytes: rawByteLength,
     status,
   });
   persistExtractedDocument(

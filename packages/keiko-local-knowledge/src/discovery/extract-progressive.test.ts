@@ -149,6 +149,40 @@ describe("extractDocument — progressive large-document path", () => {
     expect(checkpoint?.source_content_hash).toMatch(/^[0-9a-f]{64}$/u);
   });
 
+  it("fails progressive extraction when source hashing observes a short range read", async () => {
+    const totalPages = 3;
+    const pageChars = 8;
+    const content = syntheticDoc(totalPages, pageChars);
+    const baseFs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);
+    const shortReadFs: WorkspaceFs = {
+      ...baseFs,
+      readFileRange: async (absolutePath, startByte, length): Promise<Uint8Array> => {
+        if (baseFs.readFileRange === undefined) throw new Error("readFileRange unavailable");
+        const bytes = await baseFs.readFileRange(absolutePath, startByte, length);
+        return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
+      },
+    };
+
+    const result = await extractDocument(
+      {
+        fs: shortReadFs,
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: policy(),
+        progressiveExtractors: [
+          syntheticProgressiveExtractor({ totalPages, pageChars, pagesPerWindow: 2 }),
+        ],
+        largeDocumentJobId: "job-short-read",
+      },
+      { capsuleId, source, file: { relativePath: "big.synthetic", sizeBytes: content.length } },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("READ_FAILED");
+    expect(count(store, "pages", result.outcome.document.id)).toBe(0);
+  });
+
   it("reads a page span back through the unified windowed reader", async () => {
     const content = syntheticDoc(4, 8);
     const fs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);

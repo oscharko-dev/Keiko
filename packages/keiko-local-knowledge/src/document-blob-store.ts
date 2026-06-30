@@ -41,6 +41,16 @@ const SELECT_DOCUMENT_BLOB_SQL = [
   "WHERE d.capsule_id = :capsule_id AND d.id = :document_id",
 ].join(" ");
 
+const SELECT_DOCUMENT_BLOB_BY_HASH_SQL = [
+  "SELECT",
+  "  content_hash AS blob_content_hash, byte_length AS blob_byte_length,",
+  "  media_type AS blob_media_type, storage_kind AS storage_kind,",
+  "  seal_version AS seal_version, blob_bytes AS blob_bytes, created_at AS created_at,",
+  "  created_source_id AS created_source_id, created_document_id AS created_document_id",
+  "FROM document_blobs",
+  "WHERE capsule_id = :capsule_id AND content_hash = :content_hash",
+].join(" ");
+
 type SqlValue = string | number | null | Uint8Array;
 
 export interface PdfDocumentBlobInput {
@@ -104,6 +114,18 @@ interface CompleteDocumentBlobRow extends DocumentBlobRow {
   readonly blob_ref: string;
   readonly created_at: number;
   readonly storage_kind: "plaintext" | "sealed";
+}
+
+interface DocumentBlobByHashRow {
+  readonly blob_byte_length: number;
+  readonly blob_content_hash: string;
+  readonly blob_media_type: string;
+  readonly storage_kind: "plaintext" | "sealed";
+  readonly seal_version: string | null;
+  readonly blob_bytes: Uint8Array;
+  readonly created_at: number;
+  readonly created_source_id: string;
+  readonly created_document_id: string;
 }
 
 function sha256Hex(bytes: Uint8Array): string {
@@ -236,6 +258,25 @@ function verifiedBlobBytes(
   return bytes;
 }
 
+function verifiedBlobBytesByHash(
+  store: KnowledgeStore,
+  row: DocumentBlobByHashRow,
+): PdfDocumentBlobReadResult | Uint8Array {
+  let bytes: Uint8Array;
+  try {
+    bytes = openedBlobBytes(store, {
+      blob_bytes: row.blob_bytes,
+      storage_kind: row.storage_kind,
+    } as DocumentBlobRow);
+  } catch {
+    return { kind: "unreadable", reason: "malformed" };
+  }
+  if (bytes.byteLength !== row.blob_byte_length || sha256Hex(bytes) !== row.blob_content_hash) {
+    return { kind: "unreadable", reason: "hash-mismatch" };
+  }
+  return bytes;
+}
+
 function blobReadOk(row: CompleteDocumentBlobRow, bytes: Uint8Array): PdfDocumentBlobReadResult {
   return {
     kind: "ok",
@@ -249,6 +290,32 @@ function blobReadOk(row: CompleteDocumentBlobRow, bytes: Uint8Array): PdfDocumen
       mediaType: row.blob_media_type,
       ...(row.seal_version === null ? {} : { sealVersion: row.seal_version }),
       sourceId: row.source_id,
+      storageKind: row.storage_kind,
+    },
+  };
+}
+
+function blobByHashReadOk(
+  row: DocumentBlobByHashRow,
+  bytes: Uint8Array,
+  override?: {
+    readonly documentId?: DocumentId | string;
+    readonly fileName?: string;
+    readonly sourceId?: KnowledgeSourceId | string;
+  },
+): PdfDocumentBlobReadResult {
+  return {
+    kind: "ok",
+    blob: {
+      bytes,
+      byteLength: row.blob_byte_length,
+      contentHash: row.blob_content_hash,
+      createdAt: row.created_at,
+      documentId: override?.documentId ?? row.created_document_id,
+      fileName: override?.fileName ?? row.created_document_id,
+      mediaType: row.blob_media_type,
+      ...(row.seal_version === null ? {} : { sealVersion: row.seal_version }),
+      sourceId: override?.sourceId ?? row.created_source_id,
       storageKind: row.storage_kind,
     },
   };
@@ -271,4 +338,26 @@ export function readPdfDocumentBlob(
   }
   const bytes = verifiedBlobBytes(store, row);
   return bytes instanceof Uint8Array ? blobReadOk(row, bytes) : bytes;
+}
+
+export function readPdfDocumentBlobByContentHash(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  contentHash: string,
+  override?: {
+    readonly documentId?: DocumentId | string;
+    readonly fileName?: string;
+    readonly sourceId?: KnowledgeSourceId | string;
+  },
+): PdfDocumentBlobReadResult {
+  const row = store._internal.db.prepare(SELECT_DOCUMENT_BLOB_BY_HASH_SQL).get({
+    capsule_id: String(capsuleId),
+    content_hash: contentHash,
+  }) as DocumentBlobByHashRow | undefined;
+  if (row === undefined) return { kind: "missing" };
+  if (row.blob_media_type !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) {
+    return { kind: "unreadable", reason: "malformed" };
+  }
+  const bytes = verifiedBlobBytesByHash(store, row);
+  return bytes instanceof Uint8Array ? blobByHashReadOk(row, bytes, override) : bytes;
 }

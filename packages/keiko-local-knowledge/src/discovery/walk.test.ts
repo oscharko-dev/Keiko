@@ -217,7 +217,7 @@ describe("walkSource — path containment", () => {
     expect(files).toStrictEqual(["docs/link.txt"]);
   });
 
-  it("emits a READ_FAILED error for hard-linked aliases", () => {
+  it("yields hard-linked aliases after realpath containment", () => {
     const fs = memoryFs(ROOT, [
       {
         relativePath: "docs/allowed.txt",
@@ -228,13 +228,10 @@ describe("walkSource — path containment", () => {
     const out = [...walkSource(fs, folderScope(ROOT))];
 
     expect(out).toHaveLength(1);
-    expect(out[0]?.kind).toBe("error");
-    if (out[0]?.kind === "error") {
-      expect(out[0].error).toMatchObject({
-        code: "READ_FAILED",
-        relativePath: "docs/allowed.txt",
-      });
-    }
+    expect(out[0]).toStrictEqual({
+      kind: "file",
+      file: { relativePath: "docs/allowed.txt", sizeBytes: 6 },
+    });
   });
 
   it("emits INVALID_SCOPE when the scope root is unsafe", () => {
