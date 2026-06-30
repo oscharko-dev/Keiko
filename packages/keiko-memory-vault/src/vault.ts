@@ -93,6 +93,8 @@ interface ResolvedOptions {
 }
 
 const IDENTITY: (s: string) => string = (s) => s;
+const DEFAULT_NOW: () => number = () => Date.now();
+const DEFAULT_NEW_TOMBSTONE_ID: () => string = () => randomUUID();
 const NOOP_EMIT: (e: MemoryEvent) => void = () => undefined;
 const NOOP_BEFORE_DELETE_COMMIT: (events: readonly MemoryEvent[]) => void = () => undefined;
 
@@ -107,13 +109,16 @@ function resolveOptions(
   cipher: MemoryContentCipher,
   dbPath: string,
 ): ResolvedOptions {
+  const resolved: MemoryVaultFactoryOptions = opts ?? {};
   return {
-    now: opts?.now ?? ((): number => Date.now()),
-    newTombstoneId: opts?.newTombstoneId ?? ((): string => randomUUID()),
-    redactString: opts?.redactString ?? IDENTITY,
-    emit: opts?.onMemoryEvent ?? NOOP_EMIT,
-    beforeDeleteCommit: opts?.onDeleteEventsBeforeCommit ?? NOOP_BEFORE_DELETE_COMMIT,
-    hardenSidecars: () => hardenVaultSidecars(dbPath),
+    now: resolved.now ?? DEFAULT_NOW,
+    newTombstoneId: resolved.newTombstoneId ?? DEFAULT_NEW_TOMBSTONE_ID,
+    redactString: resolved.redactString ?? IDENTITY,
+    emit: resolved.onMemoryEvent ?? NOOP_EMIT,
+    beforeDeleteCommit: resolved.onDeleteEventsBeforeCommit ?? NOOP_BEFORE_DELETE_COMMIT,
+    hardenSidecars: (): void => {
+      hardenVaultSidecars(dbPath);
+    },
     cipher,
   };
 }
@@ -482,6 +487,16 @@ type EdgeAndEmbeddingOps = Pick<
   | "getEmbeddings"
 >;
 
+type EdgeOps = Pick<
+  MemoryVaultStore,
+  "insertEdge" | "listOutgoingEdges" | "listIncomingEdges" | "listEdgesForMemories" | "deleteEdge"
+>;
+
+type EmbeddingOps = Pick<
+  MemoryVaultStore,
+  "upsertEmbedding" | "deleteEmbedding" | "getEmbedding" | "getEmbeddings"
+>;
+
 type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
@@ -491,7 +506,7 @@ type TombstoneAndAccessOps = Pick<
   | "getAccessStats"
 >;
 
-function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
+function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {
   return {
     insertEdge: (edge: MemoryEdge): MemoryEdge => {
       return withSidecarHardening(opts, () => {
@@ -518,6 +533,11 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
         opts.emit({ kind: "edge:deleted", edgeId });
       });
     },
+  };
+}
+
+function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOps {
+  return {
     upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
       withSidecarHardening(opts, () => {
         gateEmbeddingInput(embedding);
@@ -547,6 +567,13 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
       getEmbeddingRow(db, memoryId, opts.cipher),
     getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>
       getEmbeddingRows(db, memoryIds, opts.cipher),
+  };
+}
+
+function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
+  return {
+    ...buildEdgeOps(db, opts),
+    ...buildEmbeddingOps(db, opts),
   };
 }
 

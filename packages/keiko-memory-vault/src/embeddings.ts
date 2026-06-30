@@ -93,6 +93,21 @@ function decodeVectorLE(bytes: Uint8Array, dimensions: number): Float32Array {
   return out;
 }
 
+function activeVectorSpaceMatches(
+  row: ActiveVectorSpaceRow | undefined,
+  embedding: MemoryEmbeddingInput,
+  revision: string | null,
+): boolean {
+  if (row === undefined) return false;
+  return (
+    row.provider === embedding.provider &&
+    row.model_id === embedding.modelId &&
+    row.model_revision === revision &&
+    row.vector_dimensions === embedding.vector.length &&
+    row.vector_metric === embedding.metric
+  );
+}
+
 function assertCompatibleActiveVectorSpace(
   db: DatabaseSync,
   memoryId: MemoryId,
@@ -106,15 +121,7 @@ function assertCompatibleActiveVectorSpace(
     return;
   }
   const row = rows[0];
-  if (
-    rows.length === 1 &&
-    row !== undefined &&
-    row.provider === embedding.provider &&
-    row.model_id === embedding.modelId &&
-    row.model_revision === revision &&
-    row.vector_dimensions === embedding.vector.length &&
-    row.vector_metric === embedding.metric
-  ) {
+  if (rows.length === 1 && activeVectorSpaceMatches(row, embedding, revision)) {
     return;
   }
   throw new MemoryStorageError(

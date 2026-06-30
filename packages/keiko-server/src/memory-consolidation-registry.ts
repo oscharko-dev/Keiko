@@ -58,6 +58,19 @@ interface PersistedRegistrySnapshot {
   readonly records: readonly ConsolidationJobRecord[];
 }
 
+interface PersistedRegistrySnapshotPayload {
+  readonly schemaVersion?: unknown;
+  readonly records?: unknown;
+}
+
+interface PersistedRegistryRecordPayload {
+  readonly job?: unknown;
+}
+
+interface PersistedRegistryJobPayload {
+  readonly id?: unknown;
+}
+
 interface RegistryState {
   readonly records: Map<string, ConsolidationJobRecord>;
   readonly maxJobs: number;
@@ -107,21 +120,25 @@ function persistedRecordsFrom(json: string | undefined): Map<string, Consolidati
   } catch {
     return new Map();
   }
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    (parsed as PersistedRegistrySnapshot).schemaVersion !== "1" ||
-    !Array.isArray((parsed as PersistedRegistrySnapshot).records)
-  ) {
+  if (typeof parsed !== "object" || parsed === null) {
     return new Map();
   }
+  const snapshot = parsed as PersistedRegistrySnapshotPayload;
+  if (snapshot.schemaVersion !== "1" || !Array.isArray(snapshot.records)) return new Map();
   const records = new Map<string, ConsolidationJobRecord>();
-  for (const record of (parsed as PersistedRegistrySnapshot).records) {
-    if (record.job?.id !== undefined) {
-      records.set(record.job.id, record);
-    }
+  for (const record of snapshot.records) {
+    const jobId = persistedRecordJobId(record);
+    if (jobId !== undefined) records.set(jobId, record as ConsolidationJobRecord);
   }
   return records;
+}
+
+function persistedRecordJobId(record: unknown): string | undefined {
+  if (typeof record !== "object" || record === null) return undefined;
+  const job = (record as PersistedRegistryRecordPayload).job;
+  if (typeof job !== "object" || job === null) return undefined;
+  const id = (job as PersistedRegistryJobPayload).id;
+  return typeof id === "string" ? id : undefined;
 }
 
 function sortedRecords(state: RegistryState): readonly ConsolidationJobRecord[] {
