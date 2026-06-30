@@ -3,18 +3,40 @@
 // WebSocket server — covering session lifecycle, proxied-SDP signaling, capability gating, idempotency,
 // reviewable-text sanitisation, the replay buffer, and deterministic teardown.
 
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  _realtimeInstructionsForTests,
+  _realtimeMemoryContextForTests,
   sweepControlHeartbeat,
   VoiceControlConnection,
   type VoiceControlSocket,
 } from "./voice-realtime.js";
-import type { RealtimeNegotiationOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type {
+  GatewayConfig,
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+  RealtimeNegotiationOutcome,
+} from "@oscharko-dev/keiko-model-gateway";
+import type {
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
   VoiceControlMessage,
   VoicePersona,
   VoiceSessionChatContext,
 } from "@oscharko-dev/keiko-contracts";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  createMemoryVault,
+  type MemoryEmbeddingInput,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
 
 const OFFER_SDP =
   "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
@@ -105,6 +127,159 @@ function clientMessage(kind: string, seq: number, extra: Record<string, unknown>
 
 function kinds(socket: FakeSocket): string[] {
   return socket.sent.map((message) => message.kind);
+}
+
+const CHAT_MODEL = "example-chat-model";
+const EMBEDDING_MODEL = "text-embedding-3-large";
+const VOICE_TEST_DIMENSIONS = 4;
+
+function voiceEmbeddingConfig(includeEmbeddingModel: boolean): GatewayConfig {
+  return {
+    providers: [
+      {
+        modelId: CHAT_MODEL,
+        baseUrl: "https://provider.example/v1",
+        apiKey: "test-config-secret-value-1234567890",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 500,
+      },
+      ...(includeEmbeddingModel
+        ? [
+            {
+              modelId: EMBEDDING_MODEL,
+              baseUrl: "https://provider.example/v1",
+              apiKey: "test-config-secret-value-1234567890",
+              timeoutMs: 30_000,
+              maxRetries: 0,
+              retryBaseDelayMs: 500,
+            },
+          ]
+        : []),
+    ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  };
+}
+
+function voiceVectorFor(text: string): Float32Array {
+  const vector = new Float32Array(VOICE_TEST_DIMENSIONS);
+  if (
+    text.includes("Projektdeckname") ||
+    text.includes("launch codename") ||
+    text.includes("Wolkenanker")
+  ) {
+    vector[0] = 1;
+  } else {
+    vector[1] = 1;
+  }
+  return vector;
+}
+
+function insertVoiceMemory(
+  vault: MemoryVaultStore,
+  scope: MemoryScope,
+  id: string,
+  body: string,
+): MemoryRecord {
+  const now = Date.now();
+  return vault.insertMemory({
+    id: id as MemoryId,
+    schemaVersion: "1",
+    scope,
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: now,
+      confidence: 1,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
+function storeVoiceEmbedding(vault: MemoryVaultStore, id: MemoryId, text: string): void {
+  const provider = voiceEmbeddingConfig(true).providers.find(
+    (configured) => configured.modelId === EMBEDDING_MODEL,
+  );
+  if (provider === undefined) {
+    throw new Error("test embedding provider missing");
+  }
+  const input: MemoryEmbeddingInput = {
+    provider: memoryEmbeddingProviderIdentity(provider),
+    modelId: EMBEDDING_MODEL,
+    metric: "cosine",
+    vector: voiceVectorFor(text),
+  };
+  vault.upsertEmbedding(id, input);
+}
+
+function voiceProjectScope(projectPath: string): MemoryScope {
+  return { kind: "project", projectId: projectPath } as unknown as MemoryScope;
+}
+
+interface VoiceMemoryHarness {
+  readonly tmp: string;
+  readonly projectPath: string;
+  readonly chatId: string;
+  readonly store: UiStore;
+  readonly vault: MemoryVaultStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly calls: string[];
+  readonly deps: UiHandlerDeps;
+}
+
+function makeVoiceMemoryHarness(includeEmbeddingModel: boolean): VoiceMemoryHarness {
+  const tmp = mkdtempSync(join(tmpdir(), "keiko-voice-memory-"));
+  const projectPath = join(tmp, "repo");
+  mkdirSync(projectPath);
+  const store = createInMemoryUiStore();
+  store.createProject(projectPath, "voice repo");
+  const chat = store.createChat(projectPath, "voice chat", CHAT_MODEL);
+  const memoryDir = join(tmp, "vault");
+  mkdirSync(memoryDir);
+  const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+  const evidenceStore = createInMemoryEvidenceStore();
+  const calls: string[] = [];
+  const embeddingRequest = (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+    calls.push(request.input);
+    return Promise.resolve({
+      ok: true as const,
+      value: { vector: voiceVectorFor(request.input), modelId: request.modelId },
+    });
+  };
+  return {
+    tmp,
+    projectPath,
+    chatId: chat.id,
+    store,
+    vault,
+    evidenceStore,
+    calls,
+    deps: {
+      config: voiceEmbeddingConfig(includeEmbeddingModel),
+      configPresent: true,
+      evidenceStore,
+      env: {},
+      redactor: buildRedactor({}),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store,
+      memoryVault: vault,
+      ...(includeEmbeddingModel ? { localKnowledgeEmbeddingRequest: embeddingRequest } : {}),
+    },
+  };
+}
+
+function cleanupVoiceMemoryHarness(harness: VoiceMemoryHarness): void {
+  harness.vault.close();
+  harness.store.close();
+  rmSync(harness.tmp, { recursive: true, force: true });
 }
 
 describe("VoiceControlConnection.start", () => {
@@ -337,6 +512,189 @@ describe("VoiceControlConnection transcripts, replay & teardown", () => {
     socket.sent.length = 0;
     await conn.receive(clientMessage("capability.select", 1, { profile: "full-realtime" }));
     expect(socket.sent).toHaveLength(0);
+  });
+});
+
+describe("realtime voice memory context", () => {
+  it("uses the shared semantic retrieval signals and records access plus audit", async () => {
+    const harness = makeVoiceMemoryHarness(true);
+    try {
+      harness.store.createMessage({
+        chatId: harness.chatId,
+        role: "user",
+        content: "Wie lautet der Projektdeckname?",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const memory = insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-codename",
+        "The launch codename is Wolkenanker.",
+      );
+      storeVoiceEmbedding(harness.vault, memory.id, "The launch codename is Wolkenanker.");
+
+      const context = await _realtimeMemoryContextForTests(harness.deps, {
+        chatId: harness.chatId,
+        memory: { enabled: true, budgetTokens: 900 },
+      });
+
+      expect(context).toContain("Wolkenanker");
+      expect(harness.calls).toEqual(["Wie lautet der Projektdeckname?"]);
+      expect(harness.vault.getAccessStats([memory.id]).get(memory.id)?.accessCount).toBe(1);
+      const runId = harness.evidenceStore.list()[0];
+      expect(runId).toBeDefined();
+      if (runId === undefined) throw new Error("expected memory audit run");
+      const events = JSON.parse(harness.evidenceStore.get(runId) ?? "[]") as readonly {
+        kind?: string;
+        initiatorSurface?: string;
+        matchedMemoryIds?: readonly string[];
+      }[];
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          kind: "memory:retrieved",
+          initiatorSurface: "system",
+          matchedMemoryIds: [memory.id],
+        }),
+      );
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("falls back to lexical recall when no embedding model is configured", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      harness.store.createMessage({
+        chatId: harness.chatId,
+        role: "user",
+        content: "Which package manager should I use for pnpm installs?",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-pnpm",
+        "Use pnpm for installs.",
+      );
+
+      const context = await _realtimeMemoryContextForTests(harness.deps, {
+        chatId: harness.chatId,
+        memory: { enabled: true, budgetTokens: 900 },
+      });
+
+      expect(context).toContain("Use pnpm for installs.");
+      expect(harness.calls).toEqual([]);
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("uses the shared conversation memory block header in realtime instructions", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      harness.store.createMessage({
+        chatId: harness.chatId,
+        role: "user",
+        content: "Which package manager should I use for pnpm installs?",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-header",
+        "Use pnpm for installs.",
+      );
+
+      const instructions = await _realtimeInstructionsForTests(
+        harness.deps,
+        { chatId: harness.chatId, memory: { enabled: true, budgetTokens: 900 } },
+        false,
+      );
+
+      expect(instructions).toContain("Included memory context:\n");
+      expect(instructions).toContain("Use pnpm for installs.");
+      expect(instructions).not.toContain("MemoriaViva context available for this voice session");
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("does not use the chat title as a realtime memory query", async () => {
+    const harness = makeVoiceMemoryHarness(true);
+    try {
+      const memory = insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-title",
+        "The voice chat title is a deployment codename.",
+      );
+      storeVoiceEmbedding(
+        harness.vault,
+        memory.id,
+        "The voice chat title is a deployment codename.",
+      );
+
+      const context = await _realtimeMemoryContextForTests(harness.deps, {
+        chatId: harness.chatId,
+        memory: { enabled: true, budgetTokens: 900 },
+      });
+
+      expect(context).toBe("");
+      expect(harness.calls).toEqual([]);
+      expect(harness.vault.getAccessStats([memory.id]).get(memory.id)?.accessCount ?? 0).toBe(0);
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("recomputes realtime memory context after new memories are stored mid-session", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      const chatContext = {
+        chatId: harness.chatId,
+        memory: { enabled: true, budgetTokens: 900 },
+      };
+      const before = await _realtimeMemoryContextForTests(harness.deps, chatContext);
+      expect(before).toBe("");
+
+      harness.store.createMessage({
+        chatId: harness.chatId,
+        role: "user",
+        content: "Which package manager should I use for pnpm installs?",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      insertVoiceMemory(
+        harness.vault,
+        voiceProjectScope(harness.projectPath),
+        "voice-mem-refresh",
+        "Use pnpm for installs.",
+      );
+
+      const after = await _realtimeMemoryContextForTests(harness.deps, chatContext);
+      expect(after).toContain("Use pnpm for installs.");
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
   });
 });
 

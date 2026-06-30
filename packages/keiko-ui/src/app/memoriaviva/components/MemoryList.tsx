@@ -39,6 +39,7 @@ function parseCsvParam<T extends string>(raw: string | null, allowed: readonly T
 
 function filtersFromParams(params: ReturnType<typeof useSearchParams>): MemoryFilterState {
   return {
+    query: params.get("q") ?? "",
     scope: parseCsvParam(params.get("scope"), MEMORY_SCOPE_KINDS),
     type: parseCsvParam(params.get("type"), MEMORY_TYPES),
     status: parseCsvParam(params.get("status"), MEMORY_STATUSES),
@@ -48,6 +49,7 @@ function filtersFromParams(params: ReturnType<typeof useSearchParams>): MemoryFi
 
 function filtersToParams(filters: MemoryFilterState): URLSearchParams {
   const p = new URLSearchParams();
+  if (filters.query.trim().length > 0) p.set("q", filters.query.trim());
   if (filters.scope.length > 0) p.set("scope", filters.scope.join(","));
   if (filters.type.length > 0) p.set("type", filters.type.join(","));
   if (filters.status.length > 0) p.set("status", filters.status.join(","));
@@ -228,6 +230,7 @@ export function MemoryListContent({
   const setEffectivePolicyEnabled = onPolicyEnabledChange ?? setUncontrolledPolicyEnabled;
 
   const hasFilters =
+    filters.query.trim().length > 0 ||
     filters.scope.length > 0 ||
     filters.type.length > 0 ||
     filters.status.length > 0 ||

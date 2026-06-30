@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { scanForSecrets } from "./secret-patterns.js";
+import { looksLikeEuDePii, scanForSecrets } from "./secret-patterns.js";
 
 // Literal credential shapes are assembled by string concatenation so push-protection scanners
 // never see a real-looking secret in source. Each fragment is meaningless in isolation; the
@@ -170,5 +170,27 @@ describe("scanForSecrets — benign content", () => {
 
   it("returns null for a general-purpose API docs note without a provider endpoint shape", () => {
     expect(scanForSecrets("The API docs are at https://docs.example.com/reference")).toBeNull();
+  });
+});
+
+describe("looksLikeEuDePii — review-policy markers, not hard rejections", () => {
+  it("detects German IBANs with grouped spaces", () => {
+    expect(looksLikeEuDePii("DE89 3704 0044 0532 0130 00")).toBe(true);
+  });
+
+  it("detects a labeled German Steuer-ID while avoiding unlabeled long numbers", () => {
+    expect(looksLikeEuDePii("Steuer-ID: 12 345 678 901")).toBe(true);
+    expect(looksLikeEuDePii("Benchmark 12345678901 passed")).toBe(false);
+  });
+
+  it("detects German phone formats and avoids short ticket-like values", () => {
+    expect(looksLikeEuDePii("+49 30 1234567")).toBe(true);
+    expect(looksLikeEuDePii("0049-89-12345678")).toBe(true);
+    expect(looksLikeEuDePii("030-1234567")).toBe(true);
+    expect(looksLikeEuDePii("Ticket 030-123")).toBe(false);
+  });
+
+  it("does not make PII shapes a credential hard rejection", () => {
+    expect(scanForSecrets("Meine IBAN ist DE89 3704 0044 0532 0130 00")).toBeNull();
   });
 });

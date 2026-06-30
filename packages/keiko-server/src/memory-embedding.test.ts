@@ -27,6 +27,8 @@ import {
   findRelatedNeighbors,
   findSemanticDuplicate,
   insertSalienceMemoryWithNoveltyGate,
+  memoryEmbeddingCalibrationFor,
+  memoryEmbeddingProviderIdentity,
   RELATED_LINK_COSINE_THRESHOLD,
   selectMemoryEmbeddingModelId,
 } from "./memory-embedding.js";
@@ -198,9 +200,12 @@ describe("embedMemoryText (#204)", () => {
   it("returns a vault-ready embedding input from the adapter", async () => {
     const deps = makeDeps();
     const input = await embedMemoryText(deps, "The user is building a product named Keiko");
+    const [provider] = gatewayConfig(EMBEDDING_MODEL).providers;
+    expect(provider).toBeDefined();
     expect(input).not.toBeNull();
     expect(input?.metric).toBe("cosine");
-    expect(input?.provider).toBe("openai");
+    if (provider === undefined) throw new Error("expected configured embedding provider");
+    expect(input?.provider).toBe(memoryEmbeddingProviderIdentity(provider));
     expect(input?.modelId).toBe(EMBEDDING_MODEL);
     expect(input?.vector.length).toBe(3072);
   });
@@ -364,6 +369,62 @@ function makeRecord(
   };
 }
 
+describe("memoryEmbeddingCalibrationFor", () => {
+  it("resolves thresholds from provider/model and model fallback keys", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "qwen/qwen3-embedding": {
+          semanticDedupThreshold: 0.91,
+          relatedLinkThreshold: 0.76,
+          mmrLambda: 0.62,
+        },
+        "text-embedding-3-large": {
+          semanticDedupThreshold: 0.95,
+        },
+      }),
+    };
+    expect(
+      memoryEmbeddingCalibrationFor(env, {
+        provider: "qwen",
+        modelId: "qwen3-embedding",
+      }),
+    ).toEqual({
+      semanticDedupThreshold: 0.91,
+      relatedLinkThreshold: 0.76,
+      mmrLambda: 0.62,
+    });
+    expect(
+      memoryEmbeddingCalibrationFor(env, {
+        provider: "openai",
+        modelId: "text-embedding-3-large",
+      }),
+    ).toEqual({ semanticDedupThreshold: 0.95 });
+  });
+
+  it("ignores malformed calibration config and out-of-range values", () => {
+    expect(
+      memoryEmbeddingCalibrationFor(
+        {
+          KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+            "openai/text-embedding-3-large": {
+              semanticDedupThreshold: 2,
+              relatedLinkThreshold: -1,
+              mmrLambda: "0.7",
+            },
+          }),
+        },
+        { provider: "openai", modelId: "text-embedding-3-large" },
+      ),
+    ).toEqual({});
+    expect(
+      memoryEmbeddingCalibrationFor(
+        { KEIKO_MEMORY_EMBEDDING_CALIBRATION: "not json" },
+        { provider: "openai", modelId: "text-embedding-3-large" },
+      ),
+    ).toEqual({});
+  });
+});
+
 describe("findSemanticDuplicate (#204, O-F1)", () => {
   const embRow = (id: string, vector: Float32Array): MemoryEmbeddingRow => ({
     memoryId: memoryId(id),
@@ -431,6 +492,19 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(vault.getMemory(dup.id)).toBeUndefined();
     const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
     expect(after).toBe(before + 1);
+  });
+
+  it("does not merge into superseded memories during the semantic novelty check", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const canonical = makeRecord("the user prefers postgres", "id-canonical");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
+    vault.updateMemory(canonical.id, { status: "superseded" }, Date.now());
+
+    const dup = makeRecord("the user's database is postgresql", "id-dup");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
+    expect(result.mergedInto).toBeNull();
+    expect(result.inserted?.id).toBe(dup.id);
   });
 
   it("does NOT merge across scopes even with an identical vector (isolation)", async () => {

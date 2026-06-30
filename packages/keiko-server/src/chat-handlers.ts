@@ -39,10 +39,11 @@ import {
 import {
   buildConversationRetrievalSignals,
   conversationFusionMode,
+  semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
+import { reinforcementAccessIds } from "./memory-reinforcement.js";
 import {
   extractCandidatesFromUserText,
-  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -68,6 +69,7 @@ import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import {
   isPersistableMemoryCandidate,
   memoryCapturePolicyForDeps,
+  SENSITIVE_MEMORY_ACTION_BODY,
   SENSITIVE_MEMORY_REJECTION_REASON,
 } from "./memory-capture-policy.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
@@ -765,15 +767,14 @@ async function retrieveChatMemory(
   budgetTokens: number | undefined,
   nowMs: number,
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
-  const safeForSecondaryModel =
-    memoryTextEgressRejectionReason(content, memoryCapturePolicyForDeps(deps)) === null;
+  const semanticGate = semanticRetrievalGateForText(deps, content, memoryCapturePolicyForDeps(deps));
   const signals = await buildConversationRetrievalSignals(
     deps,
     vault,
     content,
     scopes,
     nowMs,
-    safeForSecondaryModel,
+    semanticGate,
   );
   return retrieveMemoryContext(
     {
@@ -783,6 +784,7 @@ async function retrieveChatMemory(
       ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
       ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
       ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+      ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
       fusion: conversationFusionMode(deps),
       nowMs,
     },
@@ -820,7 +822,7 @@ export async function buildMemoryResult(
   // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
   // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled
   // memories strengthen over time. Guarded above (vault is defined here).
-  const includedIds = retrieval.contextBlock.memories.map((item) => item.memoryId);
+  const includedIds = reinforcementAccessIds(retrieval.included);
   if (includedIds.length > 0) {
     vault.recordAccess(includedIds, Date.now());
   }
@@ -845,30 +847,39 @@ function buildCaptureContext(input: ConversationMemoryRuntimeContext): CaptureCo
   };
 }
 
+async function candidateActionFromOutcome(
+  outcome: Extract<CaptureOutcome, { readonly kind: "candidate" }>,
+  deps: UiHandlerDeps,
+): Promise<ConversationMemoryActionWire | null> {
+  if (deps.memoryVault === undefined) return null;
+  if (!isPersistableMemoryCandidate(outcome)) {
+    return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
+  }
+  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const record = buildMemoryRecordFromProposal(proposalId, outcome);
+  if (record === null) return null;
+  const inserted = deps.memoryVault.insertMemory(record);
+  // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
+  await embedAndStoreMemory(deps, deps.memoryVault, inserted.id, inserted.body);
+  return {
+    kind: "candidate",
+    proposalId: String(inserted.id),
+    body:
+      outcome.requiresApproval || inserted.provenance.sensitivity !== "public"
+        ? SENSITIVE_MEMORY_ACTION_BODY
+        : inserted.body,
+    scopeLabel: scopeLabel(inserted.scope),
+    requiresApproval: outcome.requiresApproval,
+  };
+}
+
 async function captureActionFromOutcome(
   outcome: CaptureOutcome,
   deps: UiHandlerDeps,
 ): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
-    case "candidate": {
-      if (deps.memoryVault === undefined) return null;
-      if (!isPersistableMemoryCandidate(outcome)) {
-        return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
-      }
-      const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-      const record = buildMemoryRecordFromProposal(proposalId, outcome);
-      if (record === null) return null;
-      const inserted = deps.memoryVault.insertMemory(record);
-      // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
-      await embedAndStoreMemory(deps, deps.memoryVault, inserted.id, inserted.body);
-      return {
-        kind: "candidate",
-        proposalId: String(inserted.id),
-        body: inserted.body,
-        scopeLabel: scopeLabel(inserted.scope),
-        requiresApproval: outcome.requiresApproval,
-      };
-    }
+    case "candidate":
+      return candidateActionFromOutcome(outcome, deps);
     case "update":
       return {
         kind: "update",
@@ -1328,6 +1339,7 @@ async function collectVoiceTurnLocalMemoryActions(
   }
   const actions: ConversationMemoryActionWire[] = [];
   for (const message of request.messages) {
+    if (message.role !== "user") continue;
     const outcomes = extractCandidatesFromUserText(message.content, buildCaptureContext(context), {
       ...memoryCapturePolicyForDeps(deps, {
         resolver: createMemoryTargetResolver(deps.memoryVault),
@@ -1374,11 +1386,13 @@ function scheduleVoiceTurnSalienceCapture(
     return;
   }
   const { userText, assistantText } = voiceTurnSalienceTexts(request);
-  const content = userText.length > 0 ? userText : voiceTurnCombinedText(request.messages);
+  if (userText.length === 0) {
+    return;
+  }
   void captureSalientFromTurn(
     deps,
     {
-      content,
+      content: userText,
       memory: request.memory,
     },
     context,

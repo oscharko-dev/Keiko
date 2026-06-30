@@ -7,7 +7,12 @@ import type {
   UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
 
-import { extractSalientMemories, parseSalienceItems, SALIENCE_SYSTEM_PROMPT } from "./salience.js";
+import {
+  extractSalientMemories,
+  normalizeForDedup,
+  parseSalienceItems,
+  SALIENCE_SYSTEM_PROMPT,
+} from "./salience.js";
 import type { CaptureContext, CaptureOutcome, SalienceDeps, SalienceInput } from "./types.js";
 
 const FIXED_NOW = 1_700_000_000_000;
@@ -56,6 +61,7 @@ const ATLAS_FACTS = JSON.stringify([
     type: "fact",
     confidence: 0.7,
     scope: "project",
+    source: "user",
     tags: ["atlas", "fintech"],
   },
   {
@@ -63,6 +69,7 @@ const ATLAS_FACTS = JSON.stringify([
     type: "fact",
     confidence: 0.8,
     scope: "project",
+    source: "user",
     tags: ["rust"],
   },
   {
@@ -70,6 +77,7 @@ const ATLAS_FACTS = JSON.stringify([
     type: "fact",
     confidence: 0.8,
     scope: "project",
+    source: "user",
     tags: ["postgresql"],
   },
   {
@@ -77,6 +85,7 @@ const ATLAS_FACTS = JSON.stringify([
     type: "fact",
     confidence: 0.6,
     scope: "user",
+    source: "user",
     tags: ["team", "berlin"],
   },
 ]);
@@ -85,6 +94,12 @@ describe("SALIENCE_SYSTEM_PROMPT", () => {
   it("instructs JSON-array-only output and excludes assistant claims", () => {
     expect(SALIENCE_SYSTEM_PROMPT).toContain("JSON array");
     expect(SALIENCE_SYSTEM_PROMPT).toContain("assistant");
+    expect(SALIENCE_SYSTEM_PROMPT).toContain('"source": "user"');
+  });
+
+  it("instructs the model to preserve the user's source language", () => {
+    expect(SALIENCE_SYSTEM_PROMPT).toContain("same language");
+    expect(SALIENCE_SYSTEM_PROMPT).toContain("Der Nutzer heißt Paul.");
   });
 });
 
@@ -101,9 +116,31 @@ describe("extractSalientMemories", () => {
     for (const candidate of candidates) {
       if (candidate.kind !== "candidate") continue;
       expect(candidate.proposal.initialStatus).toBe("proposed");
-      expect(candidate.proposal.provenance.confidence).toBeGreaterThanOrEqual(0.4);
+      expect(candidate.proposal.provenance.confidence).toBeGreaterThanOrEqual(0.2);
       expect(candidate.proposal.provenance.confidence).toBeLessThanOrEqual(0.9);
       expect(candidate.proposal.provenance.sourceKind).toBe("system-default");
+    }
+  });
+
+  it("preserves German model output for German user facts", async () => {
+    const model = JSON.stringify([
+      {
+        body: "Der Nutzer baut Atlas in Rust mit PostgreSQL.",
+        type: "fact",
+        confidence: 0.8,
+        scope: "project",
+        source: "user",
+        tags: ["atlas", "rust", "postgresql"],
+      },
+    ]);
+    const result = await extractSalientMemories(
+      input({ userText: "Wir bauen Atlas in Rust mit PostgreSQL." }),
+      deps(model),
+    );
+    const candidates = candidatesOnly(result);
+    expect(candidates).toHaveLength(1);
+    if (candidates[0]?.kind === "candidate") {
+      expect(candidates[0].proposal.body).toBe("Der Nutzer baut Atlas in Rust mit PostgreSQL.");
     }
   });
 
@@ -140,13 +177,14 @@ describe("extractSalientMemories", () => {
     }
   });
 
-  it("clamps confidence into [0.4, 0.9]", async () => {
+  it("clamps confidence into [0.2, 0.9]", async () => {
     const model = JSON.stringify([
       {
         body: "The user prefers tabs over spaces.",
         type: "preference",
         confidence: 0.02,
         scope: "user",
+        source: "user",
         tags: [],
       },
       {
@@ -154,6 +192,7 @@ describe("extractSalientMemories", () => {
         type: "lesson",
         confidence: 1.5,
         scope: "user",
+        source: "user",
         tags: [],
       },
     ]);
@@ -161,7 +200,7 @@ describe("extractSalientMemories", () => {
     const confidences = candidatesOnly(result).map((c) =>
       c.kind === "candidate" ? c.proposal.provenance.confidence : -1,
     );
-    expect(confidences).toEqual([0.4, 0.9]);
+    expect(confidences).toEqual([0.2, 0.9]);
   });
 
   it("drops candidate bodies that look like secrets", async () => {
@@ -172,6 +211,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.8,
         scope: "user",
+        source: "user",
         tags: [],
       },
       {
@@ -179,6 +219,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.7,
         scope: "user",
+        source: "user",
         tags: [],
       },
     ]);
@@ -190,12 +231,116 @@ describe("extractSalientMemories", () => {
     }
   });
 
+  it("drops assistant-sourced model items with a diagnostic", async () => {
+    const diagnostics: unknown[] = [];
+    const model = JSON.stringify([
+      {
+        body: "The assistant said Atlas should use DynamoDB.",
+        type: "fact",
+        confidence: 0.8,
+        scope: "project",
+        source: "assistant",
+        tags: ["Atlas"],
+      },
+    ]);
+    const result = await extractSalientMemories(input(), {
+      ...deps(model),
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+    expect(result).toEqual([]);
+    expect(diagnostics).toEqual([
+      { kind: "dropped-model-items", reason: "non-user-source", count: 1 },
+      { kind: "zero-candidates-after-filter", rawItemCount: 1, acceptedCount: 0 },
+    ]);
+  });
+
+  it("drops unknown type and scope labels with diagnostics", async () => {
+    const diagnostics: unknown[] = [];
+    const model = JSON.stringify([
+      {
+        body: "The user uses pnpm.",
+        type: "mood",
+        confidence: 0.8,
+        scope: "user",
+        source: "user",
+        tags: [],
+      },
+      {
+        body: "The user works in Atlas.",
+        type: "fact",
+        confidence: 0.8,
+        scope: "organization",
+        source: "user",
+        tags: [],
+      },
+    ]);
+    const result = await extractSalientMemories(input(), {
+      ...deps(model),
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+    expect(result).toEqual([]);
+    expect(diagnostics).toEqual([
+      { kind: "dropped-model-items", reason: "unknown-type", count: 1 },
+      { kind: "dropped-model-items", reason: "unknown-scope", count: 1 },
+      { kind: "zero-candidates-after-filter", rawItemCount: 2, acceptedCount: 0 },
+    ]);
+  });
+
+  it("normalizes, deduplicates, and bounds salience tags", async () => {
+    const model = JSON.stringify([
+      {
+        body: "The user prefers pnpm.",
+        type: "preference",
+        confidence: 0.8,
+        scope: "user",
+        source: "user",
+        tags: [
+          " PNPM ",
+          "pnpm",
+          "Build Tools!",
+          "very-long-tag-name-that-will-be-truncated-after-the-limit",
+          "",
+          "Rust",
+          "PostgreSQL",
+          "Atlas",
+          "Fintech",
+          "Berlin",
+          "Overflow",
+        ],
+      },
+    ]);
+    const result = candidatesOnly(await extractSalientMemories(input(), deps(model)));
+    expect(result[0]?.kind).toBe("candidate");
+    if (result[0]?.kind === "candidate") {
+      expect(result[0].proposal.tags).toEqual([
+        "pnpm",
+        "build-tools",
+        "very-long-tag-name-that-will-be",
+        "rust",
+        "postgresql",
+        "atlas",
+        "fintech",
+        "berlin",
+      ]);
+    }
+  });
+
   it("returns [] on malformed (non-JSON prose) model output without throwing", async () => {
     const result = await extractSalientMemories(
       input(),
       deps("Sure! Here are some thoughts, but no JSON."),
     );
     expect(result).toEqual([]);
+  });
+
+  it("emits a diagnostic for parse failures or empty model output", async () => {
+    const diagnostics: unknown[] = [];
+    const result = await extractSalientMemories(input(), {
+      ...deps("Sure! Here are some thoughts, but no JSON."),
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+    expect(result).toEqual([]);
+    expect(diagnostics).toEqual([{ kind: "parse-or-empty-output", rawItemCount: 0 }]);
   });
 
   it("returns [] when the model returns a truncated/broken JSON array", async () => {
@@ -225,6 +370,48 @@ describe("extractSalientMemories", () => {
     }
   });
 
+  it("dedups Unicode text without stripping non-ASCII letters", async () => {
+    expect(normalizeForDedup("MÜNCHEN, Straße 東京!")).toBe("münchen straße 東京");
+    const result = await extractSalientMemories(
+      input({ existingBodies: ["Der Nutzer wohnt in München Straße."] }),
+      deps(
+        JSON.stringify([
+          {
+            body: "Der Nutzer wohnt in München, Straße!",
+            type: "fact",
+            confidence: 0.7,
+            scope: "user",
+            source: "user",
+            tags: [],
+          },
+        ]),
+      ),
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("emits a diagnostic when parsed items all drop after filtering", async () => {
+    const diagnostics: unknown[] = [];
+    const model = JSON.stringify([
+      {
+        body: "Atlas uses PostgreSQL.",
+        type: "fact",
+        confidence: 0.8,
+        scope: "project",
+        source: "user",
+        tags: [],
+      },
+    ]);
+    const result = await extractSalientMemories(input({ context: baseContext() }), {
+      ...deps(model),
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+    expect(result).toEqual([]);
+    expect(diagnostics).toEqual([
+      { kind: "zero-candidates-after-filter", rawItemCount: 1, acceptedCount: 0 },
+    ]);
+  });
+
   it("dedups near-identical candidates within one batch", async () => {
     const model = JSON.stringify([
       {
@@ -232,6 +419,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.7,
         scope: "user",
+        source: "user",
         tags: [],
       },
       {
@@ -239,6 +427,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.7,
         scope: "user",
+        source: "user",
         tags: [],
       },
     ]);
@@ -265,6 +454,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.7,
         scope: "user",
+        source: "user",
         tags: [],
       })),
     );
@@ -298,6 +488,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.7,
         scope: "user",
+        source: "user",
         tags: [],
       },
       {
@@ -305,6 +496,7 @@ describe("extractSalientMemories", () => {
         type: "fact",
         confidence: 0.7,
         scope: "user",
+        source: "user",
         tags: [],
       },
     ]);
@@ -320,7 +512,14 @@ describe("extractSalientMemories", () => {
 
   it("drops items whose scope cannot resolve (project hint, no projectId)", async () => {
     const model = JSON.stringify([
-      { body: "Atlas uses PostgreSQL.", type: "fact", confidence: 0.8, scope: "project", tags: [] },
+      {
+        body: "Atlas uses PostgreSQL.",
+        type: "fact",
+        confidence: 0.8,
+        scope: "project",
+        source: "user",
+        tags: [],
+      },
     ]);
     const result = await extractSalientMemories(input({ context: baseContext() }), deps(model));
     expect(result).toEqual([]);
@@ -330,19 +529,19 @@ describe("extractSalientMemories", () => {
 describe("parseSalienceItems", () => {
   it("locates the first balanced array embedded in prose", () => {
     const raw =
-      'Here you go: [{"body":"x","type":"fact","confidence":0.5,"scope":"user","tags":[]}] done.';
+      'Here you go: [{"body":"x","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}] done.';
     expect(parseSalienceItems(raw)).toHaveLength(1);
   });
 
   it("ignores brackets inside string values", () => {
     const raw =
-      '[{"body":"uses arr[0] syntax","type":"fact","confidence":0.5,"scope":"user","tags":[]}]';
+      '[{"body":"uses arr[0] syntax","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]}]';
     expect(parseSalienceItems(raw)).toHaveLength(1);
   });
 
   it("filters out elements with the wrong shape", () => {
     const raw =
-      '[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","tags":[]},{"body":123}]';
+      '[{"body":"ok","type":"fact","confidence":0.5,"scope":"user","source":"user","tags":[]},{"body":123}]';
     expect(parseSalienceItems(raw)).toHaveLength(1);
   });
 });

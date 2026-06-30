@@ -16,6 +16,7 @@ import {
   insertTombstoneRow,
   listTombstonesByScopeRows,
 } from "./tombstones.js";
+import { memoryBodySuppressionHash } from "./body-fingerprint.js";
 import { createMemoryVault } from "./index.js";
 import { openTestDb, TEST_CIPHER } from "./_support.js";
 
@@ -60,12 +61,14 @@ describe("tombstones", () => {
     const t = makeTombstone({
       id: "t1",
       memoryId: "m1" as MemoryId,
+      bodyHash: memoryBodySuppressionHash("Der Nutzer wohnt in München."),
       reviewerId: "reviewer-1" as MemoryReviewerId,
       originalStatus: "accepted",
       reason: "explicit user-requested deletion",
     });
     insertTombstoneRow(db, t, TEST_CIPHER);
     expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toEqual([t]);
+    expect(t.bodyHash).not.toContain("München");
     db.close();
   });
 

@@ -123,6 +123,7 @@ interface VoiceRealtimeStatusProps {
     { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
+  readonly memoryContextText?: string | undefined;
 }
 
 export function VoiceRealtimeStatus({
@@ -130,8 +131,10 @@ export function VoiceRealtimeStatus({
   error,
   onRetry,
   onDismiss,
+  memoryContextText,
 }: VoiceRealtimeStatusProps): ReactNode {
   const retryRef = useRef<HTMLButtonElement>(null);
+  const hasMemoryContext = memoryContextText !== undefined && memoryContextText.trim().length > 0;
 
   // Focus handoff (WCAG 2.4.3): when an error appears, move focus to its retry button so the alert
   // and its recovery are immediately reachable (mirrors VoiceDictationPreview focus handoff).
@@ -155,6 +158,9 @@ export function VoiceRealtimeStatus({
       <div className="cmp-voice-preview" role="status" aria-live="polite">
         <span className="cmp-voice-dot" aria-hidden="true" />
         Realtime voice connected.
+        {hasMemoryContext ? (
+          <span className="cmp-voice-memory"> MemoriaViva context active.</span>
+        ) : null}
       </div>
     );
   }
@@ -184,15 +190,18 @@ export function VoiceRealtimeStatus({
 export function VoiceRealtimeStatusFromController({
   controller,
   onAfterDismiss,
+  memoryContextText,
 }: {
   readonly controller: RealtimeVoiceController;
   readonly onAfterDismiss: () => void;
+  readonly memoryContextText?: string | undefined;
 }): ReactNode {
   return (
     <VoiceRealtimeStatus
       phase={controller.phase}
       error={controller.error}
       onRetry={controller.retry}
+      memoryContextText={memoryContextText}
       onDismiss={() => {
         controller.stop();
         onAfterDismiss();

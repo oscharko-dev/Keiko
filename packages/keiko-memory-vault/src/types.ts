@@ -10,8 +10,10 @@ import type {
   MemoryReviewerId,
   MemoryScope,
   MemoryScopeKind,
+  MemorySensitivity,
   MemoryStatus,
   MemoryType,
+  MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import type { MemoryAccessStat } from "./access.js";
@@ -47,9 +49,24 @@ export interface MemoryTombstone {
   readonly type: MemoryType;
   readonly forgottenAt: number;
   readonly forgetterSurface: string;
+  readonly bodyHash?: string;
   readonly reviewerId?: MemoryReviewerId;
   readonly originalStatus?: MemoryStatus;
   readonly reason?: string;
+}
+
+export interface MemoryMetadata {
+  readonly id: MemoryId;
+  readonly schemaVersion: "1";
+  readonly scope: MemoryScope;
+  readonly type: MemoryType;
+  readonly status: MemoryStatus;
+  readonly sensitivity: MemorySensitivity;
+  readonly pinned: boolean;
+  readonly confidence: number;
+  readonly validity: MemoryValidityInterval;
+  readonly createdAt: number;
+  readonly updatedAt: number;
 }
 
 // Mutating-call event union for the optional onMemoryEvent callback. #214 wires the audit ledger
@@ -71,7 +88,8 @@ export type MemoryEvent =
       readonly memoryId: MemoryId;
       readonly provider: string;
       readonly modelId: string;
-    };
+    }
+  | { readonly kind: "embedding:deleted"; readonly memoryId: MemoryId };
 
 export type MemoryUpdatePatch = Partial<
   Omit<MemoryRecord, "id" | "schemaVersion" | "scope" | "createdAt">
@@ -128,11 +146,19 @@ export interface MemoryVaultStore {
     scope: MemoryScope,
     options?: ListMemoriesOptions,
   ) => readonly MemoryRecord[];
+  readonly listMemoryMetadataByScope: (
+    scope: MemoryScope,
+    options?: ListMemoriesOptions,
+  ) => readonly MemoryMetadata[];
   readonly insertEdge: (edge: MemoryEdge) => MemoryEdge;
   readonly listOutgoingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
   readonly listIncomingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
+  readonly listEdgesForMemories: (
+    memoryIds: readonly MemoryId[],
+  ) => ReadonlyMap<MemoryId, readonly MemoryEdge[]>;
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
+  readonly deleteEmbedding: (memoryId: MemoryId) => void;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly getEmbeddings: (
     memoryIds: readonly MemoryId[],

@@ -54,9 +54,11 @@ describe("ForgetConfirmDialog — rendering", () => {
         deleteMemoryImpl={vi.fn()}
       />,
     );
-    expect(screen.getByRole("heading", { name: /delete this memory/i })).toBeInTheDocument();
-    expect(screen.getByText(/tombstone audit record will be created/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /delete permanently/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /delete this memory record/i })).toBeInTheDocument();
+    expect(screen.getByText(/writes an audit tombstone/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /delete record/i })).toBeInTheDocument();
+    expect(screen.queryByText(/permanent/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cannot undo/i)).not.toBeInTheDocument();
   });
 });
 
@@ -107,7 +109,7 @@ describe("ForgetConfirmDialog — interaction", () => {
     );
 
     const cancel = screen.getByRole("button", { name: /cancel/i });
-    const confirm = screen.getByRole("button", { name: /forget permanently/i });
+    const confirm = screen.getByRole("button", { name: /forget memory/i });
 
     await waitFor(() => {
       expect(cancel).toHaveFocus();
@@ -134,7 +136,7 @@ describe("ForgetConfirmDialog — interaction", () => {
         forgetMemoryImpl={forgetImpl}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /forget permanently/i }));
+    await user.click(screen.getByRole("button", { name: /forget memory/i }));
     await waitFor(() => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
@@ -156,7 +158,7 @@ describe("ForgetConfirmDialog — interaction", () => {
         deleteMemoryImpl={deleteImpl}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /delete permanently/i }));
+    await user.click(screen.getByRole("button", { name: /delete record/i }));
     await waitFor(() => {
       expect(onComplete).toHaveBeenCalledOnce();
     });
@@ -174,7 +176,7 @@ describe("ForgetConfirmDialog — interaction", () => {
         forgetMemoryImpl={forgetImpl}
       />,
     );
-    await user.click(screen.getByRole("button", { name: /forget permanently/i }));
+    await user.click(screen.getByRole("button", { name: /forget memory/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/forget failed/i)).toBeInTheDocument();

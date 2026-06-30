@@ -6,6 +6,10 @@
 // so 0.85 is a high-precision / low-recall floor. Operators tune via ConsolidationOptions.
 export const JACCARD_DEFAULT = 0.85;
 
+// Cosine floor for caller-supplied embeddings. The engine treats embeddings as a second signal
+// alongside lexical Jaccard; missing or incompatible vectors simply mean "no semantic signal".
+export const SEMANTIC_SIMILARITY_DEFAULT = 0.88;
+
 // Confidence at or below this threshold flags a memory as low-confidence stale. Provenance
 // confidence is calibrated [0, 1] (validator-enforced in keiko-contracts). 0.3 mirrors the
 // "below one in three" intuition.
@@ -25,3 +29,8 @@ export const MAX_CLUSTERS_PER_RUN_DEFAULT = 100;
 export const MAX_RECORDS_PER_RUN_DEFAULT = 1_000;
 export const MAX_RECORDS_PER_RUN_HARD_LIMIT = 1_000;
 export const MAX_CLUSTERS_PER_RUN_HARD_LIMIT = 1_000;
+
+// Old memories with repeated successful recall are reinforced enough to avoid an aged-out flag.
+// Expiry and low-confidence still surface independently; this only aligns the age signal with the
+// governance maintenance strength model's "used recently/often" intuition.
+export const STALE_ACCESS_REINFORCEMENT_COUNT_DEFAULT = 3;

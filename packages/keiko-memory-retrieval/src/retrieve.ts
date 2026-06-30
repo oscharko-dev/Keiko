@@ -39,6 +39,7 @@ import {
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
   DEFAULT_MAX_INCLUDED,
   DEFAULT_RANKING_WEIGHTS,
+  DEFAULT_SEMANTIC_MIN_SCORE,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
   type IncludedMemory,
   type MemoryQueryPort,
@@ -52,6 +53,7 @@ interface ResolvedRequest {
   readonly budgetTokens: number;
   readonly maxIncluded: number;
   readonly weights: RankingWeights;
+  readonly semanticMinScore: number;
   readonly staleConfidenceThreshold: number;
 }
 
@@ -111,17 +113,13 @@ function assertNonNegativeBudget(budgetTokens: number, maxIncluded: number): voi
   }
 }
 
-function assertValidThreshold(staleConfidenceThreshold: number): void {
-  if (
-    Number.isFinite(staleConfidenceThreshold) &&
-    staleConfidenceThreshold >= 0 &&
-    staleConfidenceThreshold <= 1
-  ) {
+function assertUnitThreshold(name: string, value: number): void {
+  if (Number.isFinite(value) && value >= 0 && value <= 1) {
     return;
   }
   throw new RetrievalError(
     "invalid-threshold",
-    `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(staleConfidenceThreshold)})`,
+    `${name} must be a finite number in [0, 1] (got ${String(value)})`,
   );
 }
 
@@ -136,11 +134,14 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   assertNonNegativeWeights(weights);
   const staleConfidenceThreshold =
     request.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD;
-  assertValidThreshold(staleConfidenceThreshold);
+  assertUnitThreshold("staleConfidenceThreshold", staleConfidenceThreshold);
+  const semanticMinScore = request.semanticMinScore ?? DEFAULT_SEMANTIC_MIN_SCORE;
+  assertUnitThreshold("semanticMinScore", semanticMinScore);
   return {
     budgetTokens,
     maxIncluded,
     weights,
+    semanticMinScore,
     staleConfidenceThreshold,
   };
 }
@@ -225,20 +226,55 @@ function buildEdgesIndex(
   port: MemoryQueryPort,
   candidates: readonly MemoryRecord[],
 ): ReadonlyMap<MemoryId, readonly MemoryEdge[]> | undefined {
+  if (port.listEdgesForMemories !== undefined) {
+    return buildBatchedEdgesIndex(port, candidates);
+  }
   if (port.listOutgoingEdges === undefined && port.listIncomingEdges === undefined)
     return undefined;
+  return buildPerCandidateEdgesIndex(port, candidates);
+}
+
+function buildBatchedEdgesIndex(
+  port: MemoryQueryPort,
+  candidates: readonly MemoryRecord[],
+): ReadonlyMap<MemoryId, readonly MemoryEdge[]> {
+  try {
+    const ids = candidates.map((candidate) => candidate.id);
+    const batched = port.listEdgesForMemories?.(ids) ?? new Map<MemoryId, readonly MemoryEdge[]>();
+    return nonEmptyEdgesForCandidates(candidates, batched);
+  } catch (cause) {
+    throw new RetrievalError("port-failure", "listEdgesForMemories threw", { cause });
+  }
+}
+
+function nonEmptyEdgesForCandidates(
+  candidates: readonly MemoryRecord[],
+  batched: ReadonlyMap<MemoryId, readonly MemoryEdge[]>,
+): ReadonlyMap<MemoryId, readonly MemoryEdge[]> {
   const map = new Map<MemoryId, readonly MemoryEdge[]>();
-  for (const c of candidates) {
+  for (const candidate of candidates) {
+    const edges = dedupeEdges(batched.get(candidate.id) ?? []);
+    if (edges.length > 0) map.set(candidate.id, edges);
+  }
+  return map;
+}
+
+function buildPerCandidateEdgesIndex(
+  port: MemoryQueryPort,
+  candidates: readonly MemoryRecord[],
+): ReadonlyMap<MemoryId, readonly MemoryEdge[]> {
+  const map = new Map<MemoryId, readonly MemoryEdge[]>();
+  for (const candidate of candidates) {
     try {
       // Call through the port object directly so `this` binds correctly on a class-based
       // port implementation (avoids the @typescript-eslint/unbound-method trap).
       const edges = dedupeEdges([
-        ...(port.listOutgoingEdges?.(c.id) ?? []),
-        ...(port.listIncomingEdges?.(c.id) ?? []),
+        ...(port.listOutgoingEdges?.(candidate.id) ?? []),
+        ...(port.listIncomingEdges?.(candidate.id) ?? []),
       ]);
-      if (edges.length > 0) map.set(c.id, edges);
+      if (edges.length > 0) map.set(candidate.id, edges);
     } catch (cause) {
-      throw new RetrievalError("port-failure", `listEdges threw for ${c.id}`, { cause });
+      throw new RetrievalError("port-failure", `listEdges threw for ${candidate.id}`, { cause });
     }
   }
   return map;
@@ -261,6 +297,18 @@ function hasPositiveSemanticSignal(semanticById: MemoryRetrievalRequest["semanti
     if (score > 0) return true;
   }
   return false;
+}
+
+function semanticScoresAboveFloor(
+  semanticById: MemoryRetrievalRequest["semanticById"],
+  minScore: number,
+): ReadonlyMap<MemoryId, number> | undefined {
+  if (semanticById === undefined) return undefined;
+  const filtered = new Map<MemoryId, number>();
+  for (const [id, score] of semanticById) {
+    if (score >= minScore) filtered.set(id, score);
+  }
+  return filtered;
 }
 
 function hasQuerySignal(request: MemoryRetrievalRequest): boolean {
@@ -296,6 +344,37 @@ function applyRelevanceFloor(
   return { ranked: kept, omitted };
 }
 
+function requestWithSemanticFloor(
+  request: MemoryRetrievalRequest,
+  semanticById: ReadonlyMap<MemoryId, number> | undefined,
+  semanticMinScore: number,
+): MemoryRetrievalRequest {
+  return semanticById === undefined ? request : { ...request, semanticById, semanticMinScore };
+}
+
+function buildRankQuery(
+  request: MemoryRetrievalRequest,
+  resolved: ResolvedRequest,
+  semanticById: ReadonlyMap<MemoryId, number> | undefined,
+): RankMemoriesQuery {
+  return {
+    nowMs: request.nowMs,
+    weights: resolved.weights,
+    ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
+    ...(semanticById === undefined ? {} : { semanticById }),
+    ...(request.strengthById === undefined ? {} : { strengthById: request.strengthById }),
+    ...(request.fusion === undefined ? {} : { fusion: request.fusion }),
+  };
+}
+
+function reorderSelection(
+  ranked: readonly IncludedMemory[],
+  request: MemoryRetrievalRequest,
+): readonly IncludedMemory[] {
+  if (request.embeddingById === undefined) return ranked;
+  return reorderByMmr(ranked, request.embeddingById, request.mmrLambda ?? DEFAULT_MMR_LAMBDA);
+}
+
 export function retrieveMemoryContext(
   request: MemoryRetrievalRequest,
   port: MemoryQueryPort,
@@ -308,30 +387,18 @@ export function retrieveMemoryContext(
   const deduped = dedupeById(fetched);
   const filtered = applyFilters(deduped, request, resolved);
   const edgesByMemory = buildEdgesIndex(port, filtered.candidates);
-  const rankQuery: RankMemoriesQuery = {
-    nowMs: request.nowMs,
-    weights: resolved.weights,
-    ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
-    ...(request.semanticById === undefined ? {} : { semanticById: request.semanticById }),
-    ...(request.strengthById === undefined ? {} : { strengthById: request.strengthById }),
-    ...(request.fusion === undefined ? {} : { fusion: request.fusion }),
-  };
+  const semanticById = semanticScoresAboveFloor(request.semanticById, resolved.semanticMinScore);
+  const relevanceRequest = requestWithSemanticFloor(request, semanticById, resolved.semanticMinScore);
+  const rankQuery = buildRankQuery(request, resolved, semanticById);
   const ranked = rankMemories(
     filtered.candidates,
     rankQuery,
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
-  const thresholded = applyRelevanceFloor(ranked, request);
+  const thresholded = applyRelevanceFloor(ranked, relevanceRequest);
   // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
   // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
-  const selectionOrder =
-    request.embeddingById === undefined
-      ? thresholded.ranked
-      : reorderByMmr(
-          thresholded.ranked,
-          request.embeddingById,
-          request.mmrLambda ?? DEFAULT_MMR_LAMBDA,
-        );
+  const selectionOrder = reorderSelection(thresholded.ranked, request);
   const assembled = assembleContextBlock(selectionOrder, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,
     maxIncluded: resolved.maxIncluded,

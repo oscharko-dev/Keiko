@@ -25,8 +25,8 @@ export interface WorkspaceMutexRegistry {
 }
 
 // ─── key scheme ────────────────────────────────────────────────────────────────────────────────────
-// Three contended resources, three key prefixes. The canonical acquisition order is the tier order
-// below (active → ws → prov), then lexicographic, so a multi-key flow never deadlocks against another.
+// Four contended resources, four key prefixes. The canonical acquisition order is the tier order
+// below (active → ws → repo → prov), then lexicographic, so a multi-key flow never deadlocks.
 
 export function activePointerKey(repositoryId: string): string {
   return `active:${repositoryId}`;
@@ -36,6 +36,10 @@ export function workspaceKey(workspaceId: string): string {
   return `ws:${workspaceId}`;
 }
 
+export function repositoryKey(repositoryId: string): string {
+  return `repo:${repositoryId}`;
+}
+
 export function provisionKey(repositoryId: string, taskId: string): string {
   return `prov:${repositoryId}:${taskId}`;
 }
@@ -43,8 +47,9 @@ export function provisionKey(repositoryId: string, taskId: string): string {
 function keyTier(key: string): number {
   if (key.startsWith("active:")) return 0;
   if (key.startsWith("ws:")) return 1;
-  if (key.startsWith("prov:")) return 2;
-  return 3;
+  if (key.startsWith("repo:")) return 2;
+  if (key.startsWith("prov:")) return 3;
+  return 4;
 }
 
 function compareKeys(a: string, b: string): number {

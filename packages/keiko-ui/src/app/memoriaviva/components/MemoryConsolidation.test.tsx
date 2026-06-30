@@ -73,6 +73,12 @@ function completedJob(): MemoryConsolidationJobResponse {
           state: "completed",
           edgesProposed: [edge()],
           updatesProposed: [],
+          summaryStatus: {
+            kind: "not-configured",
+            updatesProposed: 0,
+            skippedMergeClusters: 0,
+            fallbacksUsed: 0,
+          },
           staleFlags: [
             {
               memoryId: memoryId("mem-stale"),
@@ -181,6 +187,7 @@ describe("MemoryConsolidation", () => {
       expect(screen.getByText(/potential conflict/i)).toBeInTheDocument();
       expect(screen.getByText(/mem-stale/i)).toBeInTheDocument();
       expect(screen.getByText(/derived-from/i)).toBeInTheDocument();
+      expect(screen.getByText(/summaries were not configured/i)).toBeInTheDocument();
     });
     expect(screen.getByLabelText("Consolidation job status")).not.toHaveAttribute("aria-live");
     expect(screen.getByRole("status")).toHaveTextContent("completed");

@@ -22,6 +22,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 export interface MemoryFilterState {
+  readonly query: string;
   readonly scope: readonly MemoryScopeKind[];
   readonly type: readonly MemoryType[];
   readonly status: readonly MemoryStatus[];
@@ -29,6 +30,7 @@ export interface MemoryFilterState {
 }
 
 export const EMPTY_FILTERS: MemoryFilterState = {
+  query: "",
   scope: [],
   type: [],
   status: [],
@@ -136,6 +138,17 @@ function ChipGroup<T extends string>({
 export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactNode {
   return (
     <section className="mc-filters" aria-label="Memory filters">
+      <label className="mc-filter-search">
+        <span className="mc-filter-label">Search</span>
+        <input
+          type="search"
+          value={filters.query}
+          placeholder="Search memories"
+          onChange={(event) => {
+            onChange({ ...filters, query: event.currentTarget.value });
+          }}
+        />
+      </label>
       <ChipGroup
         label="Scope"
         items={MEMORY_SCOPE_KINDS}

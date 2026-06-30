@@ -76,6 +76,33 @@ describe("findStaleMemories - aged-out", () => {
     const flags = findStaleMemories([r], options());
     expect(flags.filter((f) => f.reason === "aged-out")).toEqual([]);
   });
+
+  it("does NOT flag aged-out when access stats show repeated reinforcement", () => {
+    const r = makeRecord({
+      id: "m-1",
+      updatedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
+    });
+    const flags = findStaleMemories([
+      r,
+    ], options({
+      accessStatsFor: () => ({
+        accessCount: 3,
+        lastAccessedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
+        outcomeCount: 0,
+        utilitySum: 0,
+      }),
+    }));
+    expect(flags.filter((f) => f.reason === "aged-out")).toEqual([]);
+  });
+
+  it("still flags aged-out when no access reinforcement is available", () => {
+    const r = makeRecord({
+      id: "m-1",
+      updatedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
+    });
+    const flags = findStaleMemories([r], options({ accessStatsFor: () => undefined }));
+    expect(flags.map((f) => f.reason)).toContain("aged-out");
+  });
 });
 
 describe("findStaleMemories - pinned exemption (AC: pinned memories never go stale)", () => {

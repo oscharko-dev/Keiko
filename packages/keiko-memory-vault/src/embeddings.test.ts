@@ -3,13 +3,14 @@ import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contrac
 import { insertMemoryRow } from "./memories.js";
 import { openTestDb, TEST_CIPHER } from "./_support.js";
 import {
+  deleteEmbeddingRow,
   getEmbeddingRow,
   getEmbeddingRows,
   MAX_EMBEDDING_DIMENSIONS,
   upsertEmbeddingRow,
 } from "./embeddings.js";
 import { gateEmbeddingInput } from "./validate.js";
-import { MemoryStorageValidationError } from "./errors.js";
+import { MemoryStorageError, MemoryStorageValidationError } from "./errors.js";
 import type { MemoryEmbeddingMetric } from "./types.js";
 
 function makeMemory(id: string): MemoryRecord {
@@ -122,6 +123,29 @@ describe("embeddings round-trip", () => {
     expect(back?.createdAt).toBe(2);
   });
 
+  it("rejects mixed dimensions for the same embedding identity", () => {
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m2"), TEST_CIPHER);
+    upsertEmbeddingRow(
+      db,
+      "m1" as MemoryId,
+      { provider: "p", modelId: "m", metric: "cosine", vector: new Float32Array([1, 2, 3]) },
+      1,
+      TEST_CIPHER,
+    );
+    expect(() => {
+      upsertEmbeddingRow(
+        db,
+        "m2" as MemoryId,
+        { provider: "p", modelId: "m", metric: "cosine", vector: new Float32Array([1, 2]) },
+        2,
+        TEST_CIPHER,
+      );
+    }).toThrow(MemoryStorageError);
+    db.close();
+  });
+
   it("returns undefined for a memory with no embedding", () => {
     const db = openTestDb();
     insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
@@ -160,6 +184,22 @@ describe("embeddings round-trip", () => {
     );
     db.prepare("DELETE FROM memories WHERE id = ?").run("m1");
     expect(getEmbeddingRow(db, "m1" as MemoryId, TEST_CIPHER)).toBeUndefined();
+  });
+
+  it("deletes an embedding row without deleting the memory", () => {
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    upsertEmbeddingRow(
+      db,
+      "m1" as MemoryId,
+      { provider: "p", modelId: "m", metric: "cosine", vector: new Float32Array([1]) },
+      1,
+      TEST_CIPHER,
+    );
+    expect(deleteEmbeddingRow(db, "m1" as MemoryId)).toBe(true);
+    expect(getEmbeddingRow(db, "m1" as MemoryId, TEST_CIPHER)).toBeUndefined();
+    expect(deleteEmbeddingRow(db, "m1" as MemoryId)).toBe(false);
+    expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("m1")).toBeDefined();
   });
 });
 

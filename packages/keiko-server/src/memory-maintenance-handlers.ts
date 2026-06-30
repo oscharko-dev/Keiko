@@ -31,7 +31,7 @@ import type {
   MemoryId,
   MemoryRecord,
 } from "@oscharko-dev/keiko-contracts";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -224,12 +224,18 @@ function applyForgets(
   for (const forget of forgets) {
     const record = byId.get(forget.id);
     if (record === undefined) continue;
-    vault.deleteMemory(forget.id, {
-      tombstone: true,
-      forgetterSurface: "memory-maintenance",
-      reason: forget.reason,
-      nowMs,
-    });
+    if (record.status === "accepted" || record.status === "archived") continue;
+    try {
+      vault.deleteMemory(forget.id, {
+        tombstone: true,
+        forgetterSurface: "memory-maintenance",
+        reason: forget.reason,
+        nowMs,
+      });
+    } catch (err) {
+      if (err instanceof MemoryStorageError && err.code === "not-found") continue;
+      throw err;
+    }
     counts.forgotten += 1;
     emitAudit(
       evidenceStore,

@@ -260,29 +260,24 @@ describe("planMemoryMaintenance — archive", () => {
 });
 
 describe("planMemoryMaintenance — forget", () => {
-  it("forgets an old, faint archived memory", () => {
+  it("retains an old, faint archived memory because archive is not delete consent", () => {
     const r = makeRecord({
       id: "m",
       status: "archived",
       confidence: 0.3,
       createdAt: NOW - 40 * DAY,
     });
-    // strength = 0.3 * 0.5^(40/45) ≈ 0.162 < 0.2 (faint) AND age > 30d => pruned.
     const plan = planFor([r], emptyStats());
-    expect(plan.forget.map((f) => f.id)).toEqual(["m"]);
-    expect(plan.forget[0]?.reason).toContain("archived");
+    expect(plan.forget).toEqual([]);
   });
 
-  it("retains a strong archived memory even when aged out (O-V5 prune guard)", () => {
-    // The archive route accepts any memory regardless of strength, so a user can archive a
-    // high-confidence record to de-prioritise it. Age alone must not delete it — only disuse.
+  it("retains a strong archived memory even when aged out", () => {
     const r = makeRecord({
       id: "m",
       status: "archived",
       confidence: 0.9,
       createdAt: NOW - 40 * DAY,
     });
-    // strength = 0.9 * 0.5^(40/45) ≈ 0.485 ≥ 0.2 => not faint => not pruned.
     expect(planFor([r], emptyStats()).forget).toEqual([]);
   });
 
@@ -297,10 +292,21 @@ describe("planMemoryMaintenance — forget", () => {
     expect(planFor([r], emptyStats()).forget.map((f) => f.id)).toEqual(["m"]);
   });
 
-  it("forgets a validity-expired memory", () => {
+  it("does not hard-delete an accepted validity-expired memory", () => {
     const r = makeRecord({
       id: "m",
       status: "accepted",
+      confidence: 0.9,
+      createdAt: NOW - DAY,
+      validUntil: NOW - 1,
+    });
+    expect(planFor([r], emptyStats()).forget).toEqual([]);
+  });
+
+  it("forgets a non-accepted validity-expired memory", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "proposed",
       confidence: 0.9,
       createdAt: NOW - DAY,
       validUntil: NOW - 1,
@@ -314,15 +320,15 @@ describe("planMemoryMaintenance — forget", () => {
       records.push(
         makeRecord({
           id: `a${String(i).padStart(2, "0")}`,
-          status: "archived",
-          confidence: 0.01 * (i + 1),
-          createdAt: NOW - 40 * DAY,
+          status: "proposed",
+          confidence: 0.01,
+          createdAt: NOW - 20 * DAY,
         }),
       );
     }
     const plan = planFor(records, emptyStats());
     expect(plan.forget.length).toBe(25);
-    // ascending strength => lowest-confidence ids first
+    // equal strength => id tie-break
     expect(plan.forget[0]?.id).toBe("a00");
     expect(plan.forget[24]?.id).toBe("a24");
   });
@@ -345,9 +351,9 @@ describe("planMemoryMaintenance — pinned protection & determinism", () => {
   it("assigns at most one decision per record", () => {
     const r = makeRecord({
       id: "m",
-      status: "archived",
+      status: "proposed",
       confidence: 0.01,
-      createdAt: NOW - 40 * DAY,
+      createdAt: NOW - 20 * DAY,
     });
     const plan = planFor([r], emptyStats());
     const appearances =

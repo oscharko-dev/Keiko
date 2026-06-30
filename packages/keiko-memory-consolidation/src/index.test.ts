@@ -12,8 +12,16 @@ import * as Barrel from "./index.js";
 import type {
   ConsolidationJob,
   ConsolidationJobState,
+  ConsolidationAccessStat,
+  ConsolidationEmbedding,
+  ConsolidationEvidence,
+  ConsolidationEvidenceKind,
   ConsolidationOptions,
   ConsolidationResult,
+  ConsolidationSummaryGenerator,
+  ConsolidationSummaryInput,
+  ConsolidationSummaryOutput,
+  ConsolidationSummaryStatus,
   ProposedAction,
   ReviewItem,
   ReviewReason,
@@ -74,8 +82,16 @@ describe("public barrel", () => {
   it("pins the public type surface (compile-time only)", () => {
     pin<ConsolidationJob>();
     pin<ConsolidationJobState>();
+    pin<ConsolidationAccessStat>();
+    pin<ConsolidationEmbedding>();
+    pin<ConsolidationEvidence>();
+    pin<ConsolidationEvidenceKind>();
     pin<ConsolidationOptions>();
     pin<ConsolidationResult>();
+    pin<ConsolidationSummaryGenerator>();
+    pin<ConsolidationSummaryInput>();
+    pin<ConsolidationSummaryOutput>();
+    pin<ConsolidationSummaryStatus>();
     pin<ProposedAction>();
     pin<ReviewItem>();
     pin<ReviewReason>();
