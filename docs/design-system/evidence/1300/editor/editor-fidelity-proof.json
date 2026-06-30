@@ -2,12 +2,8 @@
   "issue": 1300,
   "epic": 1290,
   "surface": "editor",
-  "postCssSha256": "ee377fee5f9b5376ebb7fd9e709ff3cf1cf3591b487d85dcf772b5bced34aa46",
-  "referenceFiles": [
-    "keiko-tokens.css",
-    "keiko-semantic-tokens.css",
-    "keiko-editor-tokens.css"
-  ],
+  "postCssSha256": "03c0716a57a7422dd5a695fb208cd412cea6d10558b01acf714246ce8ebe00af",
+  "referenceFiles": ["keiko-tokens.css", "keiko-semantic-tokens.css", "keiko-editor-tokens.css"],
   "referenceFileSha256": {
     "keiko-tokens.css": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
     "keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
@@ -57,12 +53,7 @@
   },
   "accentDerived": {
     "description": "Recorded, not gated. Accent-derived editor tokens resolve through --accent (product hex #4eba87 vs reference oklch(0.72 0.124 160), ~1.5% pre-existing primitive delta). Identical chain.",
-    "tokens": [
-      "--ed-statusbar-accent",
-      "--ed-selection",
-      "--ed-agent-line",
-      "--ed-focus"
-    ],
+    "tokens": ["--ed-statusbar-accent", "--ed-selection", "--ed-agent-line", "--ed-focus"],
     "diffs": [
       "[01-dark] --ed-statusbar-accent { ref=\"82,188,138,255\" product=\"78,186,135,255\" }",
       "[01-dark] --ed-selection { ref=\"81,189,139,66\" product=\"77,185,135,66\" }",
@@ -78,15 +69,8 @@
   },
   "referenceOnly": {
     "description": "Recorded carried-forward variance: 0.4.0 editor reference tokens NOT yet declared by the product. These cover inlay hints, git blame and fold placeholders — editor surfaces owned by the editor epics #1373 / #1390, outside the DS epic #1290 token migration. Tracked for adoption there; not a #1300 regression. Product falls back to --ed-fg until adopted.",
-    "ownerEpics": [
-      "#1373",
-      "#1390"
-    ],
-    "tokens": [
-      "--ed-inlay-fg",
-      "--ed-blame-fg",
-      "--ed-fold-placeholder"
-    ]
+    "ownerEpics": ["#1373", "#1390"],
+    "tokens": ["--ed-inlay-fg", "--ed-blame-fg", "--ed-fold-placeholder"]
   },
   "tokenRecord": {
     "01-dark": {
@@ -646,10 +630,7 @@
   ],
   "runningEditorEvidence": {
     "note": "Real Monaco / tabs / diagnostics / find / ghost-text / agent-prompt captures are produced by the executable e2e suites and committed under the #1295/#1296 evidence dirs.",
-    "suites": [
-      "npm run test:e2e:editor-fidelity-1295",
-      "npm run test:e2e:editor-fidelity-1296"
-    ],
+    "suites": ["npm run test:e2e:editor-fidelity-1295", "npm run test:e2e:editor-fidelity-1296"],
     "captures": [
       "docs/design-system/evidence/1295/editor/",
       "docs/design-system/evidence/1296/editor/"
