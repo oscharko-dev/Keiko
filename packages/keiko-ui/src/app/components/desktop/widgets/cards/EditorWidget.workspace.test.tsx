@@ -37,6 +37,7 @@ vi.mock("next/dynamic", () => ({
                 type="button"
                 aria-label={`Tab handle ${props.paneId ?? "pane"} ${path}`}
                 {...handleProps}
+                onClick={() => props.onSelectOpenFile?.(path)}
               >
                 {path}
               </button>
@@ -45,6 +46,12 @@ vi.mock("next/dynamic", () => ({
           {props.toolbarExtras}
           <button type="button" onClick={() => props.onSelectOpenFile?.("src/b.ts")}>
             Select b
+          </button>
+          <button
+            type="button"
+            onClick={() => props.onSelectOpenFile?.(props.file ?? "")}
+          >
+            Select current {props.paneId ?? "pane"}
           </button>
           <button type="button" onClick={() => props.onSelectOpenFile?.("")}>
             Select empty
@@ -323,6 +330,118 @@ describe("EditorWidget workspace session", () => {
         }),
       }),
     );
+  });
+
+  it("activates an inactive pane when selecting its current file", () => {
+    const onWorkspaceChange = vi.fn();
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "row",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/a.ts",
+          openFiles: ["src/a.ts", "src/b.ts"],
+          tabOrder: ["src/a.ts", "src/b.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "src/c.ts",
+          openFiles: ["src/c.ts", "src/d.ts"],
+          tabOrder: ["src/c.ts", "src/d.ts"],
+        },
+      },
+    });
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]}
+        layoutJson={layoutJson}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    onWorkspaceChange.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select current pane-2" }));
+
+    const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    const layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(layout.activePaneId).toBe("pane-2");
+    expect(layout.panes["pane-2"].activeFile).toBe("src/c.ts");
+  });
+
+  it("activates an inactive pane when focusing inside its editor surface", () => {
+    const onWorkspaceChange = vi.fn();
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: "/repo",
+      activePaneId: "pane-1",
+      sidebarWidth: 260,
+      sidebarCollapsed: false,
+      tree: {
+        type: "split",
+        id: "split-1",
+        direction: "column",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-1" },
+        second: { type: "pane", paneId: "pane-2" },
+      },
+      panes: {
+        "pane-1": {
+          id: "pane-1",
+          activeFile: "src/top.ts",
+          openFiles: ["src/top.ts"],
+          tabOrder: ["src/top.ts"],
+        },
+        "pane-2": {
+          id: "pane-2",
+          activeFile: "docs/bottom.md",
+          openFiles: ["docs/bottom.md"],
+          tabOrder: ["docs/bottom.md"],
+        },
+      },
+    });
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/top.ts"
+        openFiles={["src/top.ts", "docs/bottom.md"]}
+        layoutJson={layoutJson}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    onWorkspaceChange.mockClear();
+
+    const bottomPane = document.querySelector<HTMLElement>('[data-pane-id="pane-2"]');
+    expect(bottomPane).not.toBeNull();
+    fireEvent.pointerDown(bottomPane as HTMLElement);
+
+    let lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    let layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(lastPatch).toEqual(expect.objectContaining({ file: "docs/bottom.md" }));
+    expect(layout.activePaneId).toBe("pane-2");
+
+    onWorkspaceChange.mockClear();
+    const topPane = document.querySelector<HTMLElement>('[data-pane-id="pane-1"]');
+    expect(topPane).not.toBeNull();
+    fireEvent.focus(topPane as HTMLElement);
+
+    lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    layout = JSON.parse(String(lastPatch?.layoutJson));
+    expect(lastPatch).toEqual(expect.objectContaining({ file: "src/top.ts" }));
+    expect(layout.activePaneId).toBe("pane-1");
   });
 
   it("normalizes persisted duplicate split panes into distinct file ownership", () => {
@@ -1103,6 +1222,170 @@ describe("EditorWidget workspace session", () => {
     fireEvent.dragEnd(tab);
 
     expect(container.querySelector(".ed-pane")).toHaveAttribute("data-dragging", "false");
+  });
+
+  it("reorders tabs by pointer drag within the same tab rail", () => {
+    const onWorkspaceChange = vi.fn();
+    const previousElementFromPoint = document.elementFromPoint;
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    const sourceTab = screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" });
+    const targetTab = screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" });
+    sourceTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 20,
+          y: 8,
+          left: 20,
+          top: 8,
+          right: 140,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    targetTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 160,
+          y: 8,
+          left: 160,
+          top: 8,
+          right: 280,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => targetTab),
+    });
+
+    try {
+      fireEvent.pointerDown(sourceTab, {
+        button: 0,
+        clientX: 24,
+        clientY: 12,
+        pointerType: "mouse",
+      });
+      fireEvent.pointerMove(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+
+      expect(probeState.runtimeProps?.tabInsertTarget).toEqual({
+        file: "src/b.ts",
+        edge: "after",
+      });
+
+      fireEvent.pointerUp(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+
+      expect(container.querySelector('[data-tab-held="true"]')).toBeNull();
+      expect(document.querySelector(".ed-tab-drag-ghost")).toBeNull();
+      const movedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+      const layout = JSON.parse(String(movedPatch?.layoutJson));
+      expect(layout.panes["pane-1"].tabOrder).toEqual(["src/b.ts", "src/a.ts", "src/c.ts"]);
+      expect(layout.panes["pane-1"].activeFile).toBe("src/a.ts");
+    } finally {
+      if (previousElementFromPoint === undefined) {
+        Reflect.deleteProperty(document, "elementFromPoint");
+      } else {
+        Object.defineProperty(document, "elementFromPoint", {
+          configurable: true,
+          value: previousElementFromPoint,
+        });
+      }
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    }
+  });
+
+  it("keeps the next real tab click active after inserting a pointer-dragged tab", () => {
+    const onWorkspaceChange = vi.fn();
+    const previousElementFromPoint = document.elementFromPoint;
+    const previousBodyCursor = document.body.style.cursor;
+    const previousBodyUserSelect = document.body.style.userSelect;
+    const { container } = render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", "src/c.ts"]}
+        onWorkspaceChange={onWorkspaceChange}
+      />,
+    );
+    const sourceTab = screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" });
+    const targetTab = screen.getByRole("button", { name: "Tab handle pane-1 src/b.ts" });
+    const nextTab = screen.getByRole("button", { name: "Tab handle pane-1 src/c.ts" });
+    sourceTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 20,
+          y: 8,
+          left: 20,
+          top: 8,
+          right: 140,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    targetTab.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          x: 160,
+          y: 8,
+          left: 160,
+          top: 8,
+          right: 280,
+          bottom: 36,
+          width: 120,
+          height: 28,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: vi.fn(() => targetTab),
+    });
+
+    try {
+      fireEvent.pointerDown(sourceTab, {
+        button: 0,
+        clientX: 24,
+        clientY: 12,
+        pointerType: "mouse",
+      });
+      fireEvent.pointerMove(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+      fireEvent.pointerUp(window, { clientX: 260, clientY: 16, pointerType: "mouse" });
+
+      onWorkspaceChange.mockClear();
+      fireEvent.click(nextTab);
+
+      const selectedPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+      const layout = JSON.parse(String(selectedPatch?.layoutJson));
+      expect(layout.panes["pane-1"].activeFile).toBe("src/c.ts");
+      expect(container.querySelector('[data-tab-held="true"]')).toBeNull();
+    } finally {
+      if (previousElementFromPoint === undefined) {
+        Reflect.deleteProperty(document, "elementFromPoint");
+      } else {
+        Object.defineProperty(document, "elementFromPoint", {
+          configurable: true,
+          value: previousElementFromPoint,
+        });
+      }
+      document.body.style.cursor = previousBodyCursor;
+      document.body.style.userSelect = previousBodyUserSelect;
+    }
   });
 
   it("resizes the sidebar and split panes through pointer and mouse controls", () => {

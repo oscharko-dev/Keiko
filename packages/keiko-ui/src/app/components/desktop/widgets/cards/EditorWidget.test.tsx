@@ -369,7 +369,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     funnel: NOT_RUN_FUNNEL,
   };
 
-  it("offers a Generate Tests action for a TS file and surfaces the switched-off status", async () => {
+  it("offers a Tests action for a TS file and surfaces the switched-off status", async () => {
     await renderLoaded();
     // Issue #1205: the unified status bar carries the single polite live region; the governed
     // test-generation run status feeds its "run" field, which is absent until a run starts.
@@ -377,7 +377,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveAttribute("aria-atomic", "true");
     expect(status).not.toHaveTextContent(/disabled in this build/i);
-    const button = screen.getByRole("button", { name: "Generate Tests" });
+    const button = screen.getByRole("button", { name: "Tests" });
     expect(button).toBeInTheDocument();
     expect(button).not.toHaveAttribute("data-tip");
     expect(button).not.toHaveAttribute("title");
@@ -410,7 +410,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
       });
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
 
     expect(requestEditorTestGeneration).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -434,7 +434,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
       return new Promise<EditorTestGenerationWireResponse>(() => {});
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
@@ -450,7 +450,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
       return new Promise<EditorTestGenerationWireResponse>(() => {});
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
 
     act(() => {
@@ -486,7 +486,7 @@ describe("EditorWidget — test generation (Issue #1202)", () => {
       provenance: { modelId: "m", gatewayPolicyVersion: "v", promptHash: "h", producedAt: 1 },
     });
 
-    await userEvent.click(screen.getByRole("button", { name: "Generate Tests" }));
+    await userEvent.click(screen.getByRole("button", { name: "Tests" }));
 
     expect(await screen.findByTestId("editor-diff-surface")).toBeInTheDocument();
     const tab = screen.getByRole("tab", { name: /app\.ts/ });
@@ -1448,6 +1448,27 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     expect(onClose).toHaveBeenCalledWith("package.json");
   });
 
+  it("emits selection when clicking the active tab of an inactive split pane", async () => {
+    const onSelect = vi.fn();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ path: "right-a.md" }));
+
+    render(
+      <EditorRuntimeWidget
+        windowId="editor-inactive-pane-tab"
+        root="/repo"
+        file="right-a.md"
+        openFiles={["right-a.md", "right-b.md"]}
+        paneId="pane-2"
+        activePaneId="pane-1"
+        onSelectOpenFile={onSelect}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    await userEvent.click(screen.getByRole("tab", { name: "right-a.md" }));
+    expect(onSelect).toHaveBeenCalledWith("right-a.md");
+  });
+
   it("deduplicates tab inputs and ignores empty tab entries from the host", async () => {
     vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
     render(
@@ -1682,6 +1703,200 @@ describe("EditorWidget — status bar and command surface (Issue #1205)", () => 
     } finally {
       rectSpy.mockRestore();
     }
+  });
+
+  it("groups only the tab overflow once tiles would shrink below a readable width", async () => {
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        if (this.classList.contains("ed-tablist")) {
+          return {
+            x: 0,
+            y: 0,
+            left: 0,
+            top: 0,
+            right: 760,
+            bottom: 32,
+            width: 760,
+            height: 32,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return {
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+      render(
+        <EditorRuntimeWidget
+          windowId="editor-tabs-readable"
+          root="/repo"
+          file="src/app.ts"
+          openFiles={[
+            "src/app.ts",
+            "README.md",
+            "docs/adr/ADR-001.md",
+            "docs/adr/ADR-002.md",
+            "docs/adr/ADR-003.md",
+            "docs/adr/ADR-004.md",
+            "docs/adr/ADR-005.md",
+            "docs/adr/ADR-006.md",
+          ]}
+        />,
+      );
+      await screen.findByTestId("editor-surface");
+
+      await waitFor(() => {
+        expect(screen.getAllByRole("tab")).toHaveLength(6);
+      });
+      expect(screen.getAllByRole("tab")[0]).toHaveTextContent("src/app.ts");
+      expect(screen.getByLabelText("2 more open documents")).toHaveTextContent("+2");
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("keeps the visible tab group stable while selecting already-visible tabs", async () => {
+    const files = [
+      "src/app.ts",
+      "README.md",
+      "playwright.issue-1296-editor-agent.config.ts",
+      "docs/adr/ADR-001.md",
+      "docs/adr/ADR-002.md",
+      "docs/adr/ADR-003.md",
+      "docs/adr/ADR-004.md",
+      "docs/adr/ADR-005.md",
+    ] as const;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        if (this.classList.contains("ed-tablist")) {
+          return {
+            x: 0,
+            y: 0,
+            left: 0,
+            top: 0,
+            right: 616,
+            bottom: 32,
+            width: 616,
+            height: 32,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        return {
+          x: 0,
+          y: 0,
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          width: 0,
+          height: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+      const view = render(
+        <EditorRuntimeWidget
+          windowId="editor-tabs-stable"
+          root="/repo"
+          file={files[0]}
+          openFiles={files}
+        />,
+      );
+      await screen.findByTestId("editor-surface");
+
+      const visibleTabNames = (): readonly string[] =>
+        screen.getAllByRole("tab").map((tab) => tab.textContent ?? "");
+
+      await waitFor(() => {
+        expect(visibleTabNames()).toEqual([...files.slice(0, 4)]);
+      });
+
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+        fileResponse({ path: files[2], name: "playwright.issue-1296-editor-agent.config.ts" }),
+      );
+      view.rerender(
+        <EditorRuntimeWidget
+          windowId="editor-tabs-stable"
+          root="/repo"
+          file={files[2]}
+          openFiles={files}
+        />,
+      );
+      await waitFor(() => {
+        expect(visibleTabNames()).toEqual([...files.slice(0, 4)]);
+      });
+
+      vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+        fileResponse({ path: files[6], name: "ADR-004.md", extension: "md" }),
+      );
+      view.rerender(
+        <EditorRuntimeWidget
+          windowId="editor-tabs-stable"
+          root="/repo"
+          file={files[6]}
+          openFiles={files}
+        />,
+      );
+      await waitFor(() => {
+        expect(visibleTabNames()).toEqual([...files.slice(3, 7)]);
+      });
+    } finally {
+      rectSpy.mockRestore();
+    }
+  });
+
+  it("keeps the Tests toolbar action visible but disabled for unsupported files", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        path: "README.md",
+        name: "README.md",
+        extension: "md",
+        content: "# README\n",
+      }),
+    );
+    const view = render(
+      <EditorRuntimeWidget
+        windowId="editor-generate-tests-slot"
+        root="/repo"
+        file="README.md"
+        openFiles={["README.md", "src/app.ts"]}
+      />,
+    );
+    await screen.findByTestId("editor-surface");
+    const unsupportedTestsButton = screen.getByRole("button", { name: "Tests" });
+    expect(unsupportedTestsButton).toHaveClass("ed-generate-tests");
+    expect(unsupportedTestsButton).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(unsupportedTestsButton);
+    expect(requestEditorTestGeneration).not.toHaveBeenCalled();
+
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse({ path: "src/app.ts" }));
+    view.rerender(
+      <EditorRuntimeWidget
+        windowId="editor-generate-tests-slot"
+        root="/repo"
+        file="src/app.ts"
+        openFiles={["README.md", "src/app.ts"]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Tests" })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
+    });
   });
 
   it("does not re-encode the full buffer on cursor-only status updates", async () => {

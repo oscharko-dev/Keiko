@@ -1556,9 +1556,7 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(diagnosticTooltipOpenBlock).toContain("opacity: 1");
     expect(diagnosticTooltipOpenBlock).toContain("visibility: visible");
 
-    const diagnosticTooltipMessageBlock = cssBlock(
-      ".keiko-editor-diagnostic-tooltip-message {",
-    );
+    const diagnosticTooltipMessageBlock = cssBlock(".keiko-editor-diagnostic-tooltip-message {");
     expect(diagnosticTooltipMessageBlock).toContain("font-weight: 400");
 
     const diagnosticTooltipMetaBlock = cssBlock(".keiko-editor-diagnostic-tooltip-meta {", {
@@ -1636,6 +1634,7 @@ describe("Issue #1205 — editor tab truncation", () => {
     expect(tabBlock).toContain("--ed-tab-outline-mask: var(--ed-tab-bg)");
     expect(tabBlock).toContain("border: 1px solid var(--border-default)");
     expect(tabBlock).toContain("border-bottom-color: transparent");
+    expect(tabBlock).toContain("flex: 1 1 136px");
     expect(tabBlock).toContain("box-shadow: 0 1px 0 var(--ed-tab-outline-mask)");
 
     const tabHoverBlock = cssBlock(".ed-tab:hover:not(.active)");
@@ -1683,9 +1682,7 @@ describe("Issue #1205 — editor tab truncation", () => {
     expect(paneActionsBlock).not.toContain("margin-bottom: -1px");
 
     expect(css).not.toContain(".ed-toolbar-actions > .ed-pane-actions .ed-icon-action {");
-    expect(css).not.toContain(
-      ".ed-toolbar-actions > .ed-pane-actions .ed-icon-action:hover",
-    );
+    expect(css).not.toContain(".ed-toolbar-actions > .ed-pane-actions .ed-icon-action:hover");
 
     const actionHoverBlock = cssBlock(
       '.ed-toolbar-actions > :is(.ed-save, .ed-reload):hover:not([aria-disabled="true"])',
@@ -1729,7 +1726,9 @@ describe("Issue #1205 — editor tab truncation", () => {
     expect(summaryBlock).not.toContain("background: var(--surface-inset)");
 
     const summaryHoverBlock = cssBlock(".ed-tab-summary:hover");
-    expect(summaryHoverBlock).toContain("--ed-tab-outline-mask: var(--ed-tab-bg)");
+    expect(summaryHoverBlock).toContain(
+      "--ed-tab-outline-mask: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
+    );
     expect(summaryHoverBlock).toContain(
       "background: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
     );
@@ -1761,7 +1760,9 @@ describe("Issue #1205 — editor tab truncation", () => {
     expect(itemHoverBlock).toContain("color: var(--text-primary)");
     expect(itemHoverBlock).toContain("outline: none");
 
-    const pointerFocusBlock = cssBlock(':root[data-input-modality="pointer"] .ed-tab-summary:focus');
+    const pointerFocusBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .ed-tab-summary:focus',
+    );
     expect(pointerFocusBlock).toContain("outline: 0");
   });
 
@@ -1799,11 +1800,47 @@ describe("Issue #1205 — editor tab truncation", () => {
     const heldTabBlock = cssBlock('.ed-tab[data-tab-held="true"]');
     expect(heldTabBlock).toContain("--ed-tab-outline-mask: var(--surface-secondary)");
     expect(heldTabBlock).toContain("background: var(--surface-secondary)");
-    expect(heldTabBlock).toContain(
-      "box-shadow: 0 1px 0 var(--ed-tab-outline-mask), var(--card-shadow)",
-    );
+    expect(heldTabBlock).toContain("box-shadow:");
+    expect(heldTabBlock).toContain("0 1px 0 var(--ed-tab-outline-mask)");
+    expect(heldTabBlock).toContain("var(--card-shadow)");
     expect(heldTabBlock).toContain("transform: translateY(1px)");
     expect(heldTabBlock).not.toContain("var(--accent-line)");
+
+    const dragModeTransitionBlock = cssBlock(
+      '.editor-workspace[data-tab-dragging="true"] .ed-tab[data-tab-draggable="true"],',
+    );
+    expect(dragModeTransitionBlock).toContain(
+      '.editor-workspace[data-tab-dragging="true"] .ed-tab-hit[data-tab-draggable="true"]',
+    );
+    expect(dragModeTransitionBlock).toContain("transition: none");
+
+    expect(css).not.toContain('.ed-tab[data-tab-insert-before="true"]::before');
+    expect(css).not.toContain('.ed-tab[data-tab-insert-after="true"]::after');
+
+    const insertTabBlock = cssBlock('.ed-tab[data-tab-insert-before="true"],');
+    expect(insertTabBlock).toContain('.ed-tab:has(+ .ed-tab[data-tab-insert-before="true"])');
+    expect(insertTabBlock).toContain('.ed-tab[data-tab-insert-after="true"],');
+    expect(insertTabBlock).toContain('.ed-tab[data-tab-insert-after="true"] + .ed-tab');
+    expect(insertTabBlock).toContain(
+      "--ed-tab-outline-mask: color-mix(in oklch, var(--accent) 10%, var(--surface-inset))",
+    );
+    expect(insertTabBlock).toContain(
+      "--ed-tab-insert-outline: color-mix(in oklch, var(--accent) 62%, var(--border-default))",
+    );
+    expect(insertTabBlock).toContain(
+      "--ed-tab-insert-ring: color-mix(in oklch, var(--accent) 34%, var(--border-default))",
+    );
+    expect(insertTabBlock).toContain("border-top-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain("border-right-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain("border-bottom-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain("border-left-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain(
+      "background: color-mix(in oklch, var(--accent) 9%, var(--surface-inset))",
+    );
+    expect(insertTabBlock).toContain("color: var(--text-primary)");
+    expect(insertTabBlock).toContain("0 1px 0 var(--ed-tab-outline-mask)");
+    expect(insertTabBlock).toContain("0 0 0 1px var(--ed-tab-insert-ring)");
+    expect(insertTabBlock).not.toContain("34%, transparent");
 
     const heldTabHitBlock = cssBlock(
       '.ed-tab[data-tab-held="true"] .ed-tab-hit[data-tab-draggable="true"]',

@@ -164,8 +164,8 @@ const TEST_GENERATION_FAILURE_MESSAGE =
 // Per-window session-cache cap (Issue 2.8). Open tabs + recently-visited files stay cached for instant
 // switching; the LRU evicts older clean/closed entries beyond this, never a saving/dirty/active one.
 const SESSION_CACHE_CAPACITY = 64;
-const COMPACT_TABS_ENTER_WIDTH_PX = 420;
-const COMPACT_TABS_EXIT_WIDTH_PX = 460;
+const READABLE_TAB_TILE_WIDTH_PX = 112;
+const TAB_SUMMARY_TRIGGER_WIDTH_PX = 58;
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
 // GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
 // surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
@@ -187,16 +187,44 @@ const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   ],
 };
 
+function readableTabCapacity(tablistWidth: number, tabCount: number): number {
+  if (tablistWidth <= 0 || tabCount <= 2) return tabCount;
+  if (tablistWidth >= tabCount * READABLE_TAB_TILE_WIDTH_PX) return tabCount;
+  const widthForTabs = Math.max(
+    READABLE_TAB_TILE_WIDTH_PX,
+    tablistWidth - TAB_SUMMARY_TRIGGER_WIDTH_PX,
+  );
+  return Math.max(1, Math.min(tabCount - 1, Math.floor(widthForTabs / READABLE_TAB_TILE_WIDTH_PX)));
+}
+
+function visibleTabsForCapacity(
+  documentTabs: readonly string[],
+  startIndex: number,
+  capacity: number,
+): readonly string[] {
+  if (capacity >= documentTabs.length) return documentTabs;
+  const maxStart = Math.max(0, documentTabs.length - capacity);
+  const start = Math.min(Math.max(0, startIndex), maxStart);
+  return documentTabs.slice(start, start + capacity);
+}
+
 type EditorTabHandleProps = Pick<
   ButtonHTMLAttributes<HTMLButtonElement>,
   "draggable" | "onClickCapture" | "onDragStart" | "onDragEnd" | "onKeyDown" | "onPointerDown"
 > & {
+  readonly "data-pane-id"?: string | undefined;
+  readonly "data-tab-file"?: string | undefined;
   readonly "data-tab-draggable"?: "true" | "false" | undefined;
   readonly "data-tab-held"?: "true" | "false" | undefined;
 };
 
 interface EditorTabHandleContext {
   readonly onDragModeStart?: (() => void) | undefined;
+}
+
+interface EditorTabInsertTarget {
+  readonly file: string;
+  readonly edge: "before" | "after";
 }
 
 export interface EditorRuntimeWidgetProps {
@@ -220,6 +248,7 @@ export interface EditorRuntimeWidgetProps {
   readonly onExternalSaveComplete?:
     | ((requestId: number, paneId: string, file: string, ok: boolean) => void)
     | undefined;
+  readonly tabInsertTarget?: EditorTabInsertTarget | undefined;
   readonly renderTabHandle?:
     | ((
         file: string,
@@ -456,6 +485,7 @@ function EditorRuntimeWidget({
   onDirtyChange,
   externalSaveRequest,
   onExternalSaveComplete,
+  tabInsertTarget,
   renderTabHandle,
   toolbarExtras,
   linkedRoot,
@@ -482,7 +512,7 @@ function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
-  const [tablistCompact, setTablistCompact] = useState(false);
+  const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {
     const el = tablistRef.current;
@@ -492,12 +522,7 @@ function EditorRuntimeWidget({
       frame = null;
       const width = Math.round(el.getBoundingClientRect().width);
       if (width <= 0) return;
-      setTablistCompact((current) => {
-        const next = current
-          ? width < COMPACT_TABS_EXIT_WIDTH_PX
-          : width < COMPACT_TABS_ENTER_WIDTH_PX;
-        return current === next ? current : next;
-      });
+      setTablistWidth((current) => (current === width ? current : width));
     };
     const scheduleUpdate = (): void => {
       if (frame !== null) return;
@@ -520,10 +545,33 @@ function EditorRuntimeWidget({
       ro?.disconnect();
     };
   }, [documentTabs.length]);
-  const compactTabs =
-    tablistCompact && file !== undefined && file.length > 0 && documentTabs.length > 2;
-  const summaryTabs = compactTabs ? documentTabs.filter((path) => path !== file) : [];
-  const visibleTabs = compactTabs ? documentTabs.filter((path) => path === file) : documentTabs;
+  const visibleTabCapacity = readableTabCapacity(tablistWidth, documentTabs.length);
+  const [visibleTabStart, setVisibleTabStart] = useState(0);
+  useLayoutEffect(() => {
+    setVisibleTabStart((current) => {
+      if (visibleTabCapacity >= documentTabs.length) return 0;
+      const maxStart = Math.max(0, documentTabs.length - visibleTabCapacity);
+      const clampedStart = Math.min(Math.max(0, current), maxStart);
+      const activeIndex =
+        file === undefined || file.length === 0 ? -1 : documentTabs.indexOf(file);
+      if (activeIndex < 0) return clampedStart;
+      if (
+        activeIndex >= clampedStart &&
+        activeIndex < clampedStart + visibleTabCapacity
+      ) {
+        return clampedStart;
+      }
+      if (activeIndex < clampedStart) return activeIndex;
+      return Math.min(activeIndex - visibleTabCapacity + 1, maxStart);
+    });
+  }, [documentTabs, file, visibleTabCapacity]);
+  const visibleTabs = useMemo(
+    () => visibleTabsForCapacity(documentTabs, visibleTabStart, visibleTabCapacity),
+    [documentTabs, visibleTabCapacity, visibleTabStart],
+  );
+  const visibleTabSet = useMemo(() => new Set(visibleTabs), [visibleTabs]);
+  const summaryTabs = documentTabs.filter((path) => !visibleTabSet.has(path));
+  const compactTabs = summaryTabs.length > 0;
   const summaryMenuId = `${editorDomIdPrefix}-summary-menu`;
   const summaryMenuRef = useRef<HTMLDetailsElement>(null);
   const [summaryMenuOpen, setSummaryMenuOpen] = useState(false);
@@ -1517,10 +1565,12 @@ function EditorRuntimeWidget({
   }, [dirty, dirtyFiles, file]);
   const handleSelectTab = useCallback(
     (path: string): void => {
-      if (path === file || saveStatus === "saving") return;
+      const paneAlreadyActive =
+        paneId === undefined || activePaneId === undefined || paneId === activePaneId;
+      if ((path === file && paneAlreadyActive) || saveStatus === "saving") return;
       onSelectOpenFile?.(path);
     },
-    [file, onSelectOpenFile, saveStatus],
+    [activePaneId, file, onSelectOpenFile, paneId, saveStatus],
   );
   const handleCloseTab = useCallback(
     async (path: string): Promise<void> => {
@@ -2008,12 +2058,17 @@ function EditorRuntimeWidget({
                 : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
               const tabDirty = effectiveDirtyFiles.has(path);
               const tabHandle = renderTabHandle?.(path, active, tabDirty);
+              const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
               return (
                 <span
                   className={`ed-tab${active ? " active" : ""}`}
                   data-dirty={tabDirty ? "true" : "false"}
+                  data-pane-id={paneId}
+                  data-tab-file={path}
                   data-tab-draggable={tabHandle?.["data-tab-draggable"]}
                   data-tab-held={tabHandle?.["data-tab-held"]}
+                  data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
+                  data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
                   key={path}
                 >
                   <button
@@ -2026,6 +2081,8 @@ function EditorRuntimeWidget({
                     aria-controls={tabpanelId}
                     tabIndex={active ? 0 : -1}
                     data-tip={path}
+                    data-pane-id={paneId}
+                    data-tab-file={path}
                     data-tab-draggable={tabHandle?.["data-tab-draggable"]}
                     data-tab-held={tabHandle?.["data-tab-held"]}
                     onClickCapture={tabHandle?.onClickCapture}
@@ -2138,16 +2195,16 @@ function EditorRuntimeWidget({
         </div>
         <div className="ed-toolbar-actions">
           {toolbarExtras}
-          {hasTarget && completionEnabled ? (
+          {hasTarget ? (
             <button
               type="button"
-              className="ed-save"
+              className="ed-save ed-generate-tests"
               onClick={() => {
                 if (canGenerateTests) runTestGeneration();
               }}
-              aria-disabled={!canGenerateTests}
+              aria-disabled={canGenerateTests ? "false" : "true"}
             >
-              {testGenBusy ? "Generating…" : "Generate Tests"}
+              Tests
             </button>
           ) : null}
           {testGenBusy ? (

@@ -7860,6 +7860,7 @@ select.dlg-input {
   border-radius: 8px 8px 0 0;
   border: 1px solid var(--border-default);
   border-bottom-color: transparent;
+  flex: 1 1 136px;
   min-width: 0;
   max-width: min(280px, 34vw);
   overflow: hidden;
@@ -7890,8 +7891,27 @@ select.dlg-input {
   --ed-tab-outline-mask: var(--surface-secondary);
   color: var(--text-primary);
   background: var(--surface-secondary);
-  box-shadow: 0 1px 0 var(--ed-tab-outline-mask), var(--card-shadow);
+  box-shadow:
+    0 1px 0 var(--ed-tab-outline-mask),
+    var(--card-shadow);
   transform: translateY(1px);
+}
+.ed-tab[data-tab-insert-before="true"],
+.ed-tab:has(+ .ed-tab[data-tab-insert-before="true"]),
+.ed-tab[data-tab-insert-after="true"],
+.ed-tab[data-tab-insert-after="true"] + .ed-tab {
+  --ed-tab-outline-mask: color-mix(in oklch, var(--accent) 10%, var(--surface-inset));
+  --ed-tab-insert-outline: color-mix(in oklch, var(--accent) 62%, var(--border-default));
+  --ed-tab-insert-ring: color-mix(in oklch, var(--accent) 34%, var(--border-default));
+  border-top-color: var(--ed-tab-insert-outline);
+  border-right-color: var(--ed-tab-insert-outline);
+  border-bottom-color: var(--ed-tab-insert-outline);
+  border-left-color: var(--ed-tab-insert-outline);
+  background: color-mix(in oklch, var(--accent) 9%, var(--surface-inset));
+  color: var(--text-primary);
+  box-shadow:
+    0 1px 0 var(--ed-tab-outline-mask),
+    0 0 0 1px var(--ed-tab-insert-ring);
 }
 .ed-tab-hit {
   display: flex;
@@ -7984,7 +8004,7 @@ select.dlg-input {
   box-shadow: 0 1px 0 var(--ed-tab-outline-mask);
 }
 .ed-tab-summary:hover {
-  --ed-tab-outline-mask: var(--ed-tab-bg);
+  --ed-tab-outline-mask: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent);
   color: var(--text-primary);
   background: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent);
 }
@@ -8262,6 +8282,10 @@ select.dlg-input {
   }
   .ed-tab-drag-ghost {
     animation: ed-tab-drag-lift 120ms ease-out both;
+  }
+  .editor-workspace[data-tab-dragging="true"] .ed-tab[data-tab-draggable="true"],
+  .editor-workspace[data-tab-dragging="true"] .ed-tab-hit[data-tab-draggable="true"] {
+    transition: none;
   }
 }
 /* Issue #1205: the unified, VS Code-style status bar — the single status surface for the card.
@@ -9848,12 +9872,11 @@ select.dlg-input {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
-      var(--surface-primary)
-    );
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset)),
+    var(--surface-primary)
+  );
   color: var(--text-primary);
 }
 .pdfv-header {
@@ -10082,12 +10105,11 @@ select.dlg-input {
   width: min(100%, 680px);
   min-height: 460px;
   border: 1px dashed var(--border-subtle);
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
-      color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
-    );
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--surface-primary) 82%, var(--surface-elevated)),
+    color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
+  );
 }
 @media (max-width: 720px) {
   .pdfv-header,
@@ -20283,7 +20305,8 @@ button.figma-view-preview {
 .grounded-citation-action[data-back-to-chat-highlighted="true"] {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: var(--space-1);
-  box-shadow: 0 0 0 var(--space-2) color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
+  box-shadow: 0 0 0 var(--space-2)
+    color-mix(in oklch, var(--surface-accent-subtle) 78%, transparent);
 }
 .citation-inline-marker--recoverable {
   border-bottom-style: dashed;
