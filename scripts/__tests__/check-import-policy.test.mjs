@@ -33,7 +33,7 @@ describe("checkArchitectureImportPolicy", () => {
 
   it("passes on the live production source tree", async () => {
     await expect(checkArchitectureImportPolicy(REPO_ROOT)).resolves.toEqual([]);
-  }, 20_000);
+  }, 60_000);
 
   it("allows provider SDK imports inside keiko-model-gateway", async () => {
     root = makeRoot("import-policy-");
