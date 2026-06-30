@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -44,6 +45,8 @@ const publishGates = new Set([
   "qi-supply-chain",
   "install-smoke",
 ]);
+const requiredStablePublishGates = [...publishGates];
+const releaseOwners = new Set(["release-owner"]);
 
 function failure(message) {
   return `release-impact: ${message}`;
@@ -108,6 +111,19 @@ function normalizedNote(note) {
   return note.trim().replace(/\s+/gu, " ").toLowerCase();
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function validateStateImpact(entry, index, failures) {
   if (!Array.isArray(entry.stateImpact)) {
     failures.push(failure(`entries[${String(index)}].stateImpact must be an array.`));
@@ -152,10 +168,15 @@ function validateReview(entry, index, failures) {
     failures.push(failure(`entries[${String(index)}].review must be an object.`));
     return;
   }
-  for (const field of ["reviewer", "reviewedAt", "rationale"]) {
+  for (const field of ["reviewer", "reviewedAt", "rationale", "approvalReference"]) {
     if (!nonEmptyString(review[field])) {
       failures.push(failure(`entries[${String(index)}].review.${field} must be non-empty.`));
     }
+  }
+  if (nonEmptyString(review.reviewer) && !releaseOwners.has(review.reviewer)) {
+    failures.push(
+      failure(`entries[${String(index)}].review.reviewer must be a trusted release owner.`),
+    );
   }
   if (!["pending", "reviewed"].includes(review.status)) {
     failures.push(failure(`entries[${String(index)}].review.status must be pending or reviewed.`));
@@ -282,6 +303,7 @@ function validateContradictions(entry, index, failures) {
   validateUserActionRemediation(entry, index, failures);
   validateStateImpactCategory(entry, index, failures);
   validateInternalOnlyVisibility(entry, index, failures);
+  validateExceptionRequirements(entry, index, failures);
   validateCorrectionMetadata(entry, index, failures);
 }
 
@@ -316,6 +338,20 @@ function validateInternalOnlyVisibility(entry, index, failures) {
     failures.push(
       failure(
         `entries[${String(index)}] internal-only non-observable metadata cannot be user-visible.`,
+      ),
+    );
+  }
+}
+
+function validateExceptionRequirements(entry, index, failures) {
+  const exceptionRequired =
+    entry.releaseNoteCategory === "critical-security" ||
+    entry.releaseNotePriority === "critical" ||
+    entry.remediation === "manual-review-required";
+  if (exceptionRequired && !objectRecord(entry.breakingException)) {
+    failures.push(
+      failure(
+        `entries[${String(index)}] requires breakingException metadata for critical or manual-review updates.`,
       ),
     );
   }
@@ -364,6 +400,65 @@ function validateDuplicates(entries, failures) {
     recordEntryKey(entry, index, entryKeys, failures);
     recordDefaultPatchNotes(entry, index, defaultNotes, failures);
   }
+}
+
+function validateCorrectionReferences(entries, failures) {
+  const byId = new Map();
+  for (const entry of entries) {
+    if (objectRecord(entry) && nonEmptyString(entry.id)) byId.set(entry.id, entry);
+  }
+  for (const [index, entry] of entries.entries()) {
+    if (!objectRecord(entry)) continue;
+    validateSingleCorrectionReference(entry, index, byId, failures);
+    validateSupersedingReferences(entry, index, byId, failures);
+  }
+}
+
+function validateSingleCorrectionReference(entry, index, byId, failures) {
+  if (entry.correctionOf === undefined) return;
+  validateCorrectionTarget(entry, index, "correctionOf", entry.correctionOf, byId, failures);
+}
+
+function validateSupersedingReferences(entry, index, byId, failures) {
+  if (entry.supersedes === undefined) return;
+  if (!stringArray(entry.supersedes) || entry.supersedes.length === 0) {
+    failures.push(
+      failure(`entries[${String(index)}].supersedes must be a non-empty string array.`),
+    );
+    return;
+  }
+  for (const targetId of entry.supersedes) {
+    validateCorrectionTarget(entry, index, "supersedes", targetId, byId, failures);
+  }
+}
+
+function validateCorrectionTarget(entry, index, field, targetId, byId, failures) {
+  if (!nonEmptyString(targetId)) {
+    failures.push(failure(`entries[${String(index)}].${field} must reference a catalog entry id.`));
+    return;
+  }
+  if (targetId === entry.id) {
+    failures.push(failure(`entries[${String(index)}].${field} must not reference itself.`));
+    return;
+  }
+  const target = byId.get(targetId);
+  if (target === undefined) {
+    failures.push(failure(`entries[${String(index)}].${field} references unknown id ${targetId}.`));
+    return;
+  }
+  if (!sameReleaseKey(entry, target)) {
+    failures.push(
+      failure(`entries[${String(index)}].${field} must reference the same package release.`),
+    );
+  }
+}
+
+function sameReleaseKey(left, right) {
+  return (
+    left.packageName === right.packageName &&
+    left.packageVersion === right.packageVersion &&
+    left.distTag === right.distTag
+  );
 }
 
 function recordUniqueId(entry, index, ids, failures) {
@@ -450,10 +545,13 @@ function validateCurrentEntry(entry, rootManifest, failures) {
       ),
     );
   }
-  if (!stringArray(entry.publishGates) || !entry.publishGates.includes("release-impact")) {
-    failures.push(
-      failure(`${rootManifest.name}@${rootManifest.version} must record the release-impact gate.`),
-    );
+  if (!stringArray(entry.publishGates)) return;
+  for (const gate of requiredStablePublishGates) {
+    if (!entry.publishGates.includes(gate)) {
+      failures.push(
+        failure(`${rootManifest.name}@${rootManifest.version} must record publish gate ${gate}.`),
+      );
+    }
   }
 }
 
@@ -467,26 +565,108 @@ function validateCatalogBundled(rootManifest, failures) {
   }
 }
 
-export function validateReleaseImpactCatalog(catalog, rootManifest) {
+function validateAppendOnly(catalog, previousCatalog, failures) {
+  if (previousCatalog === undefined) return;
+  if (!objectRecord(previousCatalog) || !Array.isArray(previousCatalog.entries)) {
+    failures.push(failure("previous published catalog must contain an entries array."));
+    return;
+  }
+  const currentById = new Map(
+    catalog.entries
+      .filter((entry) => objectRecord(entry) && nonEmptyString(entry.id))
+      .map((entry) => [entry.id, entry]),
+  );
+  for (const previousEntry of previousCatalog.entries) {
+    validatePublishedEntryRetained(previousEntry, currentById, failures);
+  }
+}
+
+function validatePublishedEntryRetained(previousEntry, currentById, failures) {
+  if (!objectRecord(previousEntry) || !nonEmptyString(previousEntry.id)) return;
+  const currentEntry = currentById.get(previousEntry.id);
+  if (currentEntry === undefined) {
+    failures.push(failure(`published entry ${previousEntry.id} must remain in the catalog.`));
+    return;
+  }
+  if (stableJson(currentEntry) !== stableJson(previousEntry)) {
+    failures.push(failure(`published entry ${previousEntry.id} changed in place.`));
+  }
+}
+
+function git(root, args) {
+  return spawnSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" });
+}
+
+function parseStableVersion(value) {
+  const match = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(value);
+  if (match === null) return undefined;
+  return match.slice(1).map((part) => Number.parseInt(part, 10));
+}
+
+function compareStableVersions(left, right) {
+  for (let index = 0; index < 3; index += 1) {
+    const delta = left[index] - right[index];
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+function previousReleaseTag(root, currentVersion) {
+  const current = parseStableVersion(currentVersion);
+  if (current === undefined) return undefined;
+  const result = git(root, ["tag", "--list", "v[0-9]*", "--sort=-version:refname"]);
+  if (result.status !== 0) return undefined;
+  return result.stdout
+    .split(/\r?\n/u)
+    .map((tag) => tag.trim())
+    .find((tag) => previousStableTag(tag, current));
+}
+
+function previousStableTag(tag, current) {
+  const parsed = parseStableVersion(tag);
+  return parsed !== undefined && compareStableVersions(parsed, current) < 0;
+}
+
+function readPreviousPublishedCatalog(root, currentVersion, failures) {
+  const tag = previousReleaseTag(root, currentVersion);
+  if (tag === undefined) return undefined;
+  const result = git(root, ["show", `${tag}:${releaseImpactCatalogFile}`]);
+  if (result.status !== 0) return undefined;
+  try {
+    return JSON.parse(result.stdout);
+  } catch (error) {
+    failures.push(
+      failure(`${tag}:${releaseImpactCatalogFile} is not valid JSON: ${error.message}`),
+    );
+    return undefined;
+  }
+}
+
+export function validateReleaseImpactCatalog(catalog, rootManifest, options = {}) {
   const failures = [];
   if (!validateCatalogShape(catalog, failures)) return { failures, ok: false };
   for (const [index, entry] of catalog.entries.entries()) {
     validateEntry(entry, index, failures);
   }
   validateDuplicates(catalog.entries, failures);
+  validateCorrectionReferences(catalog.entries, failures);
   validateCurrentPackage(catalog, rootManifest, failures);
   validateCatalogBundled(rootManifest, failures);
+  validateAppendOnly(catalog, options.previousCatalog, failures);
   return { failures, ok: failures.length === 0 };
 }
 
-export function validateReleaseImpactRoot(root = repoRoot) {
+export function validateReleaseImpactRoot(root = repoRoot, options = {}) {
   const failures = [];
   const rootManifest = readJson(root, "package.json", failures);
   const catalog = readJson(root, releaseImpactCatalogFile, failures);
   if (rootManifest === undefined || catalog === undefined) {
     return { failures, ok: false };
   }
-  return validateReleaseImpactCatalog(catalog, rootManifest);
+  const previousCatalog =
+    options.previousCatalog ?? readPreviousPublishedCatalog(root, rootManifest.version, failures);
+  const result = validateReleaseImpactCatalog(catalog, rootManifest, { previousCatalog });
+  return { failures: [...failures, ...result.failures], ok: failures.length === 0 && result.ok };
 }
 
 function runCli() {

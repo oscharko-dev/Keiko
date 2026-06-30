@@ -44,8 +44,10 @@ Summarize expected release-impact metadata for the epic. Child issues and PRs ow
 
 - Release-note categories expected: `critical-security | update-notes | state-or-compatibility-changes | new-additions | improvements | fixes | ui-polish | internal-only`.
 - User-visible change summary:
+- Release-note bullet:
 - State or compatibility areas expected:
 - Supported-from baseline:
+- User action required and remediation:
 - Release-note aggregation rule:
 - Internal-only items that must stay out of default patch notes:
 

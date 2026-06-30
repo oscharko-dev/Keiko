@@ -37,6 +37,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-06-30",
         "humanApproved": true,
+        "approvalReference": "issue:#1690",
         "rationale": "Initial stable baseline entry required by ADR-0099 and issue #1690; final publish use remains gated by maintainer review."
       }
     }

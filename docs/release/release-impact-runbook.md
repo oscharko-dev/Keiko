@@ -20,7 +20,7 @@ Every release-impacting issue and PR must record:
 - Supported-from versions.
 - Affected state stores.
 - User action required and remediation.
-- Release-owner review evidence.
+- Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or release approval record.
 
 User findings stay reporter-simple. Reporters provide reproduction and impact; maintainers or agents fill the normalized release-impact triage block after confirming the defect and intended fix.
 
@@ -56,6 +56,8 @@ For corrections:
 - Re-run `npm run check:release-impact`.
 
 The current root package version must have exactly one reviewed `latest` entry tied to `package.json` and `v<package.json version>`. The entry must include `supportedFrom: ["0.2.0"]` or a broader reviewed baseline path that explicitly includes `0.2.0`.
+
+When a previous stable tag contains a bundled release-impact catalog, `npm run check:release-impact` compares published rows from that tag against the current catalog. Published rows must remain byte-for-byte equivalent after JSON normalization; corrections and superseding records are additive and must reference retained catalog entry ids.
 
 ## Deduplication
 

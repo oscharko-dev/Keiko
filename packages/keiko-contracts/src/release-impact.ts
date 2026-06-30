@@ -58,6 +58,7 @@ export interface ReleaseImpactReview {
   readonly reviewer: string;
   readonly reviewedAt: string;
   readonly humanApproved: boolean;
+  readonly approvalReference: string;
   readonly rationale: string;
 }
 

@@ -81,7 +81,9 @@ The script:
 
 - checks version and publish-manifest consistency,
 - checks release-impact metadata for the current package version,
-- requires `HEAD` to match `v<package.json version>` unless `--allow-untagged` is used,
+- requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
+- rejects `--allow-untagged` when `--tag latest` is selected,
+- rejects credential-bearing registry URLs before logging or release-note generation,
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
 - publishes or reuses every publishable workspace package and the root package,
