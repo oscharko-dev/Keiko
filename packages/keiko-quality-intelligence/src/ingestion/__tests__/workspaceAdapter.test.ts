@@ -214,6 +214,19 @@ describe("buildWorkspaceSourceEnvelopes", () => {
     expect(envelope?.provenance.origin).not.toContain("/workspace");
     expect(envelope?.localRef).not.toContain("/workspace");
   });
+
+  it("truncates display labels by UTF-8 bytes, not UTF-16 code units", () => {
+    const envelopes = buildWorkspaceSourceEnvelopes({
+      workspaceLabel: "Ü".repeat(160),
+      registeredAt: TS,
+      contextPack: pack(["index.ts"]),
+      integrityHashByEntryPath: { "index.ts": HASH },
+      idPrefix: "qi-ws",
+    });
+    const bytes = new TextEncoder().encode(envelopes[0]?.displayLabel ?? "").length;
+    expect(bytes).toBeLessThanOrEqual(256);
+    expect(envelopes[0]?.displayLabel.endsWith("...")).toBe(true);
+  });
 });
 
 describe("workspaceSourceMixPolicy", () => {

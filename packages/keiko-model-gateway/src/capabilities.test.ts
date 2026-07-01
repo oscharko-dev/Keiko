@@ -70,7 +70,7 @@ describe("capability registry", () => {
       id: "example-chat-model",
       kind: "chat",
       toolCalling: true,
-      structuredOutput: true,
+      structuredOutput: false,
       costClass: "medium",
       latencyClass: "standard",
     });

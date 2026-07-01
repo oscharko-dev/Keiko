@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { ADF_PARSER_DEFAULTS, AdfParserError, parseAdfDocument } from "../adfParser.js";
+import {
+  ADF_PARSER_DEFAULTS,
+  AdfParserError,
+  parseAdfDocument,
+  renderAdfDocumentText,
+} from "../adfParser.js";
 
 describe("parseAdfDocument — happy path", () => {
   it("parses a doc with paragraph + heading + bulletList", () => {
@@ -70,6 +75,64 @@ describe("parseAdfDocument — happy path", () => {
     expect(ADF_PARSER_DEFAULTS.maxNodes).toBe(5_000);
     expect(ADF_PARSER_DEFAULTS.maxDepth).toBe(32);
     expect(ADF_PARSER_DEFAULTS.maxTextBytes).toBe(64 * 1024);
+  });
+
+  it("degrades table, panel, and status nodes into renderable text", () => {
+    const doc = parseAdfDocument({
+      type: "doc",
+      content: [
+        {
+          type: "panel",
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                { type: "text", text: "Freigabe " },
+                { type: "status", attrs: { text: "P1" } },
+              ],
+            },
+          ],
+        },
+        {
+          type: "table",
+          content: [
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableHeader",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "Feld" }] }],
+                },
+                {
+                  type: "tableHeader",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "Regel" }] }],
+                },
+              ],
+            },
+            {
+              type: "tableRow",
+              content: [
+                {
+                  type: "tableCell",
+                  content: [{ type: "paragraph", content: [{ type: "text", text: "IBAN" }] }],
+                },
+                {
+                  type: "tableCell",
+                  content: [
+                    { type: "paragraph", content: [{ type: "text", text: "Prüfziffer gültig" }] },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    expect(doc.blocks.map((block) => block.kind)).toEqual(["panel", "table"]);
+    const rendered = renderAdfDocumentText(doc);
+    expect(rendered).toContain("Freigabe P1");
+    expect(rendered).toContain("| Feld | Regel |");
+    expect(rendered).toContain("| IBAN | Prüfziffer gültig |");
   });
 });
 

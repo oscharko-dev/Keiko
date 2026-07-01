@@ -26,6 +26,7 @@ import {
 } from "./http.js";
 import { normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
+import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
   ChatMessageContentPart,
   CostClass,
@@ -79,6 +80,8 @@ interface ChatRequestBody {
   }[];
   readonly tools?: unknown;
   readonly response_format?: unknown;
+  readonly temperature?: number;
+  readonly top_p?: number;
   readonly seed?: number;
   readonly stream?: boolean;
   readonly stream_options?: { readonly include_usage: boolean };
@@ -125,6 +128,7 @@ function buildMessage(
 }
 
 function buildBody(request: GatewayRequest): ChatRequestBody {
+  assertValidGatewaySamplingParameters(request);
   const messages = request.messages.map(buildMessage);
   const base: ChatRequestBody = { model: request.modelId, messages };
   const tools =
@@ -136,12 +140,25 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
         }));
   const responseFormat =
     request.responseFormat?.type === "json_schema"
-      ? { type: "json_schema", json_schema: { schema: request.responseFormat.schema } }
+      ? {
+          type: "json_schema",
+          json_schema: {
+            schema: request.responseFormat.schema,
+            ...(request.responseFormat.name !== undefined
+              ? { name: request.responseFormat.name }
+              : {}),
+            ...(request.responseFormat.strict !== undefined
+              ? { strict: request.responseFormat.strict }
+              : {}),
+          },
+        }
       : undefined;
   return {
     ...base,
     ...(tools ? { tools } : {}),
     ...(responseFormat ? { response_format: responseFormat } : {}),
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
   };
 }

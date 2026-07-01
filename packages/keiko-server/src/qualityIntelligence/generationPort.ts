@@ -28,6 +28,9 @@ import type {
 import type { UiHandlerDeps } from "../deps.js";
 
 const BASELINE_GENERATION_OUTPUT = JSON.stringify({ testCases: [] });
+const DETERMINISTIC_GENERATION_TEMPERATURE = 0;
+const DETERMINISTIC_GENERATION_TOP_P = 1;
+const GENERATION_TASK_PROFILE = MgQI.getQualityIntelligenceTaskProfile("qi:test-design");
 
 export class QiGenerationError extends Error {
   public readonly code: string;
@@ -179,6 +182,86 @@ function resolveGenerationModel(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringArray(value: unknown): readonly string[] | null {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string") ? value : null;
+}
+
+function propertiesFor(schema: Record<string, unknown>): Record<string, Record<string, unknown>> {
+  if (!isRecord(schema.properties)) return {};
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [key, value] of Object.entries(schema.properties)) {
+    if (isRecord(value)) out[key] = value;
+  }
+  return out;
+}
+
+function validateSchemaObject(value: unknown, schema: Record<string, unknown>): boolean {
+  if (!isRecord(value)) return false;
+  const properties = propertiesFor(schema);
+  const required = stringArray(schema.required) ?? [];
+  for (const key of required) {
+    if (!(key in value)) return false;
+  }
+  if (schema.additionalProperties === false) {
+    for (const key of Object.keys(value)) {
+      if (!(key in properties)) return false;
+    }
+  }
+  return Object.entries(value).every(([key, item]) => {
+    const childSchema = properties[key];
+    return childSchema === undefined || validateSchemaValue(item, childSchema);
+  });
+}
+
+function validateSchemaArray(value: unknown, schema: Record<string, unknown>): boolean {
+  if (!Array.isArray(value)) return false;
+  if (typeof schema.minItems === "number" && value.length < schema.minItems) return false;
+  if (typeof schema.maxItems === "number" && value.length > schema.maxItems) return false;
+  const itemsSchema = schema.items;
+  return isRecord(itemsSchema)
+    ? value.every((item) => validateSchemaValue(item, itemsSchema))
+    : true;
+}
+
+function validateSchemaValue(value: unknown, schema: Record<string, unknown>): boolean {
+  switch (schema.type) {
+    case "object":
+      return validateSchemaObject(value, schema);
+    case "array":
+      return validateSchemaArray(value, schema);
+    case "string":
+      if (typeof value !== "string") return false;
+      if (typeof schema.maxLength === "number" && value.length > schema.maxLength) return false;
+      return Array.isArray(schema.enum) ? schema.enum.includes(value) : true;
+    case "integer":
+      return Number.isInteger(value);
+    default:
+      return false;
+  }
+}
+
+function assertStructuredGenerationResponse(rawText: string): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawText);
+  } catch {
+    throw new QiGenerationError(
+      "QI_MODEL_SCHEMA_VIOLATION",
+      "The generation model returned output that was not valid schema-enforced JSON.",
+    );
+  }
+  if (!validateSchemaValue(parsed, QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA)) {
+    throw new QiGenerationError(
+      "QI_MODEL_SCHEMA_VIOLATION",
+      "The generation model returned JSON that did not match the required test-design schema.",
+    );
+  }
+}
+
 function normalizeTarget(target: QiGenerationTarget): Exclude<QiGenerationTarget, string> {
   if (typeof target === "string") {
     return { kind: "model", modelId: target };
@@ -202,16 +285,22 @@ function buildGenerationRequest(
   useResponseFormat: boolean,
   useSeed: boolean,
   requestedSeed: number | undefined,
+  signal: AbortSignal,
 ): GatewayRequest {
   return {
     modelId,
     messages,
     stream: false,
+    cancellationSignal: signal,
+    temperature: DETERMINISTIC_GENERATION_TEMPERATURE,
+    topP: DETERMINISTIC_GENERATION_TOP_P,
     ...(useSeed && requestedSeed !== undefined ? { seed: requestedSeed } : {}),
     ...(useResponseFormat
       ? {
           responseFormat: {
             type: "json_schema",
+            name: "quality_intelligence_test_design",
+            strict: true,
             schema: { ...QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA },
           },
         }
@@ -225,9 +314,24 @@ function buildModelParameters(
   requestedSeed: number | undefined,
 ): Record<string, unknown> | undefined {
   const modelParameters: Record<string, unknown> = {};
+  modelParameters.temperature = DETERMINISTIC_GENERATION_TEMPERATURE;
+  modelParameters.topP = DETERMINISTIC_GENERATION_TOP_P;
+  modelParameters.responseFormatEnforced = useResponseFormat;
   if (useResponseFormat) modelParameters.responseFormat = "json_schema";
   if (useSeed && requestedSeed !== undefined) modelParameters.seed = requestedSeed;
   return Object.keys(modelParameters).length > 0 ? modelParameters : undefined;
+}
+
+function abortErrorForGeneration(reasonKind: "timeout" | "external" | "none"): Error {
+  if (reasonKind === "timeout") {
+    return new QiGenerationError(
+      "QI_MODEL_TIMEOUT",
+      `The Quality Intelligence generation model timed out after ${String(
+        GENERATION_TASK_PROFILE.timeoutMsHint,
+      )}ms.`,
+    );
+  }
+  return new DOMException("Quality Intelligence generation was cancelled.", "AbortError");
 }
 
 function createModelGenerationPort(
@@ -239,23 +343,49 @@ function createModelGenerationPort(
       args: QualityIntelligenceGenerationPortArgs,
     ): Promise<QualityIntelligenceGenerationPortResult> => {
       const messages = buildMessages(args);
-      const signal = args.signal ?? new AbortController().signal;
+      const cancellation = MgQI.composeCancellationSignal(
+        GENERATION_TASK_PROFILE.timeoutMsHint,
+        args.signal,
+      );
       const request = buildGenerationRequest(
         modelId,
         messages,
         useResponseFormat,
         useSeed,
         requestedSeed,
+        cancellation.signal,
       );
-      const response = await model.call(request, signal);
-      const modelParameters = buildModelParameters(useResponseFormat, useSeed, requestedSeed);
-      return {
-        rawText: response.content,
-        modelCallCount: 1,
-        modelId,
-        seedUsed: useSeed && requestedSeed !== undefined ? requestedSeed : null,
-        ...(modelParameters !== undefined ? { modelParameters } : {}),
+      let removeAbortListener = (): void => {
+        /* not attached yet */
       };
+      const abortPromise = new Promise<never>((_, reject) => {
+        const onAbort = (): void => {
+          reject(abortErrorForGeneration(cancellation.reasonKind()));
+        };
+        cancellation.signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => {
+          cancellation.signal.removeEventListener("abort", onAbort);
+        };
+        if (cancellation.signal.aborted) onAbort();
+      });
+      try {
+        const response = await Promise.race([
+          model.call(request, cancellation.signal),
+          abortPromise,
+        ]);
+        if (useResponseFormat) assertStructuredGenerationResponse(response.content);
+        const modelParameters = buildModelParameters(useResponseFormat, useSeed, requestedSeed);
+        return {
+          rawText: response.content,
+          modelCallCount: 1,
+          modelId,
+          seedUsed: useSeed && requestedSeed !== undefined ? requestedSeed : null,
+          ...(modelParameters !== undefined ? { modelParameters } : {}),
+        };
+      } finally {
+        removeAbortListener();
+        cancellation.dispose();
+      }
     },
   };
 }

@@ -165,6 +165,39 @@ describe("adaptToMarkdown — export sanitisation", () => {
     expect(out).toContain("\\`\\`\\`js");
   });
 
+  it("escapes reference-style links so they cannot resolve through a reference definition", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["Open [admin][evil]"],
+      expectedResults: ["[evil]: javascript:alert(1)"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\[admin\\]\\[evil\\]");
+    expect(out).toContain("\\[evil\\]: javascript:alert(1)");
+    expect(out).not.toContain("[admin][evil]");
+    expect(out).not.toContain("[evil]: javascript");
+  });
+
+  it("escapes Markdown autolinks", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["Open <http://evil.example/path>"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\<http://evil.example/path\\>");
+    expect(out).not.toContain("<http://evil.example/path>");
+  });
+
+  it("escapes raw HTML tags", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      expectedResults: ["<script>alert(1)</script>"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\<script\\>alert(1)\\</script\\>");
+    expect(out).not.toContain("<script>");
+  });
+
   it("stays deterministic with adversarial field content", () => {
     const c: QualityIntelligenceTestCaseCandidate = {
       ...candidate("tc-1", "=cmd"),

@@ -47,6 +47,19 @@ export type {
   VoicePersona,
   VoicePersonaVoice,
   VoiceProviderAvailability,
+  GatewaySamplingParameterIssue,
+  GatewaySamplingParameterName,
+  GatewaySamplingParameters,
+} from "./types.js";
+
+export {
+  GATEWAY_TEMPERATURE_RANGE,
+  GATEWAY_TOP_P_RANGE,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  isValidGatewayTemperature,
+  isValidGatewayTopP,
+  validateGatewaySamplingParameters,
 } from "./types.js";
 
 export {

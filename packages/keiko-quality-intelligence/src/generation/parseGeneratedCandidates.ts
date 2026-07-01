@@ -10,6 +10,7 @@ import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { normaliseCandidateText } from "../domain/assertions.js";
+import { assertCandidateCount, MAX_CANDIDATES_PER_RUN } from "../hardening/oversizeGuards.js";
 import type { PolicyProfile } from "../domain/policyProfile.js";
 import { regressionDefault } from "../domain/policyProfile.js";
 import {
@@ -35,6 +36,27 @@ const RISK_CLASSES: ReadonlySet<string> = new Set(
   QualityIntelligence.QUALITY_INTELLIGENCE_RISK_CLASSES,
 );
 
+export const MAX_GENERATED_CANDIDATE_OUTPUT_CHARS = 1_000_000;
+export const MAX_JSON_RECOVERY_ATTEMPTS = 32;
+export const MAX_DERIVED_ATOM_IDS_PER_CANDIDATE = 8;
+
+export const GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED = "provenance-unverified";
+export const GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID = "evidence-index-invalid";
+export const GENERATED_CANDIDATE_TAG_EVIDENCE_OVER_CITED = "evidence-over-cited";
+export const GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED = "priority-defaulted";
+export const GENERATED_CANDIDATE_TAG_RISK_DEFAULTED = "risk-defaulted";
+export const GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_AUTOFILLED = "expected-result-autofilled";
+export const GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER = "expected-result-placeholder";
+
+const ENGLISH_FALLBACK_EXPECTED_RESULT = "The behaviour matches the cited evidence.";
+const GERMAN_FALLBACK_EXPECTED_RESULT = "Das Verhalten entspricht der zitierten Evidenz.";
+
+const GERMAN_LANGUAGE_SIGNAL_PATTERN =
+  /[äöüÄÖÜß]|\b(?:anforderung|benutzer|betrag|das|dem|den|der|des|die|einzahlung|evidenz|freigabe|konto|kunde|kundin|muss|nicht|oder|pruefe|prüfe|regel|soll|ueberweisung|überweisung|und|verhalten|zahlung)\b/iu;
+
+const VAGUE_EXPECTED_RESULT_PATTERN =
+  /\b(?:all requirements are satisfied|behaviou?r matches(?: the)? cited evidence|expected result|expected outcome|matches the cited evidence|works as expected|das erwartete ergebnis tritt ein|das verhalten entspricht(?: der)? zitierten evidenz|funktioniert wie erwartet|verhalten wie erwartet)\b/iu;
+
 export interface ParseGeneratedCandidatesInput {
   readonly runId: RunId;
   /** Atom IDs in the SAME order they were numbered (1-based) in the prompt evidence block. */
@@ -49,6 +71,8 @@ export interface ParseGeneratedCandidatesResult {
   readonly recovered: boolean;
   /** Count of raw items skipped because they lacked a usable title or steps. */
   readonly skipped: number;
+  /** Count of raw items not inspected because maxCandidates had already been reached. */
+  readonly overCapSkipped: number;
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -161,7 +185,11 @@ const parseJsonSliceAt = (text: string, index: number): ParsedJsonSlice | undefi
 const parseFirstUsefulJsonValue = (text: string): unknown => {
   let firstParsed: unknown;
   let firstEmptyCandidateContainer: unknown;
+  let attempts = 0;
   for (let i = 0; i < text.length; i += 1) {
+    if (!isJsonOpen(text[i])) continue;
+    attempts += 1;
+    if (attempts > MAX_JSON_RECOVERY_ATTEMPTS) break;
     const parsedSlice = parseJsonSliceAt(text, i);
     if (parsedSlice === undefined) continue;
     const { parsed, itemCount } = parsedSlice;
@@ -232,87 +260,170 @@ const stepList = (value: unknown): readonly string[] => {
   return out;
 };
 
-const clampPriority = (value: unknown, profile: PolicyProfile): Priority =>
-  typeof value === "string" && PRIORITIES.has(value)
-    ? (value as Priority)
-    : profile.defaultPriority;
+interface ParsedEnumField<T> {
+  readonly value: T;
+  readonly defaulted: boolean;
+}
 
-const clampRiskClass = (value: unknown, profile: PolicyProfile): RiskClass =>
+const parsePriority = (value: unknown, profile: PolicyProfile): ParsedEnumField<Priority> =>
+  typeof value === "string" && PRIORITIES.has(value)
+    ? { value: value as Priority, defaulted: false }
+    : { value: profile.defaultPriority, defaulted: true };
+
+const parseRiskClass = (value: unknown, profile: PolicyProfile): ParsedEnumField<RiskClass> =>
   typeof value === "string" && RISK_CLASSES.has(value)
-    ? (value as RiskClass)
-    : profile.defaultRiskClass;
+    ? { value: value as RiskClass, defaulted: false }
+    : { value: profile.defaultRiskClass, defaulted: true };
+
+interface EvidenceIndexResolution {
+  readonly ids: readonly AtomId[];
+  readonly hasInvalidIndex: boolean;
+  readonly overCited: boolean;
+  readonly provenanceUnverified: boolean;
+}
 
 // Map the model's 1-based evidence indexes to atom IDs. Out-of-range / non-integer entries are
-// dropped. When the model supplied none, fall back to a positional atom so every candidate keeps
-// at least one provenance link (traceability invariant) without faking full coverage.
+// dropped and surfaced as diagnostics. The parser must not synthesize a positional provenance link:
+// a missing or invalid citation is explicitly unverified.
 const resolveDerivedAtomIds = (
   value: unknown,
   atomIds: readonly AtomId[],
-  positionalIndex: number,
-): readonly AtomId[] => {
+): EvidenceIndexResolution => {
   const ids: AtomId[] = [];
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const idx = typeof entry === "number" ? Math.trunc(entry) : Number.NaN;
-      const atom = Number.isInteger(idx) ? atomIds[idx - 1] : undefined;
-      if (atom !== undefined && !ids.includes(atom)) ids.push(atom);
-    }
+  let hasInvalidIndex = false;
+  let overCited = false;
+  if (!Array.isArray(value)) {
+    return {
+      ids: Object.freeze([]),
+      hasInvalidIndex: false,
+      overCited: false,
+      provenanceUnverified: true,
+    };
   }
-  if (ids.length > 0) return Object.freeze(ids);
-  if (atomIds.length === 0) return Object.freeze([]);
-  const fallback = atomIds[positionalIndex % atomIds.length];
-  return fallback === undefined ? Object.freeze([]) : Object.freeze([fallback]);
+  for (const entry of value) {
+    const idx = typeof entry === "number" && Number.isInteger(entry) ? entry : Number.NaN;
+    const atom = Number.isInteger(idx) ? atomIds[idx - 1] : undefined;
+    if (atom === undefined) {
+      hasInvalidIndex = true;
+      continue;
+    }
+    if (ids.includes(atom)) continue;
+    if (ids.length >= MAX_DERIVED_ATOM_IDS_PER_CANDIDATE) {
+      overCited = true;
+      continue;
+    }
+    ids.push(atom);
+  }
+  return {
+    ids: Object.freeze(ids),
+    hasInvalidIndex,
+    overCited,
+    provenanceUnverified: ids.length === 0,
+  };
 };
 
 const deriveCandidateId = (
-  index: number,
   title: string,
   derivedFromAtomIds: readonly AtomId[],
+  preconditions: readonly string[],
+  steps: readonly string[],
+  expectedResults: readonly string[],
 ): string => {
-  const atomRefs = derivedFromAtomIds.map(String).join("|");
-  const digest = sha256Hex(`qi-cand-v2|${String(index)}|${title}|${atomRefs}`).slice(0, 32);
+  const atomRefs = [...derivedFromAtomIds].map(String).sort().join("|");
+  const bodyDigest = sha256Hex(
+    [...preconditions, ...steps, ...expectedResults]
+      .map((part) => normaliseCandidateText(part))
+      .join("\n"),
+  ).slice(0, 32);
+  const digest = sha256Hex(
+    `qi-cand-v3|${normaliseCandidateText(title)}|${atomRefs}|${bodyDigest}`,
+  ).slice(0, 32);
   return `qi-candidate-${digest}`;
+};
+
+const isProbablyGermanCandidate = (parts: readonly string[]): boolean =>
+  GERMAN_LANGUAGE_SIGNAL_PATTERN.test(parts.join(" "));
+
+const fallbackExpectedResult = (parts: readonly string[]): string =>
+  isProbablyGermanCandidate(parts)
+    ? GERMAN_FALLBACK_EXPECTED_RESULT
+    : ENGLISH_FALLBACK_EXPECTED_RESULT;
+
+const hasVagueExpectedResult = (expectedResults: readonly string[]): boolean =>
+  expectedResults.some((text) => VAGUE_EXPECTED_RESULT_PATTERN.test(normaliseCandidateText(text)));
+
+const mergeCandidateTags = (
+  modelTags: readonly string[],
+  diagnosticTags: readonly string[],
+): readonly string[] => {
+  const out: string[] = [];
+  const add = (tag: string): void => {
+    if (out.length >= GENERATED_CANDIDATE_TAG_MAX_ITEMS) return;
+    const bounded = truncateText(tag, GENERATED_CANDIDATE_TAG_MAX_CHARS);
+    if (bounded.length > 0 && !out.includes(bounded)) out.push(bounded);
+  };
+  for (const tag of diagnosticTags) add(tag);
+  for (const tag of modelTags) add(tag);
+  return Object.freeze(out);
 };
 
 const buildCandidate = (
   raw: Record<string, unknown>,
-  index: number,
   input: ParseGeneratedCandidatesInput,
   profile: PolicyProfile,
 ): Candidate | undefined => {
   const title = toBoundedText(raw.title, GENERATED_CANDIDATE_TITLE_MAX_CHARS);
   const steps = stepList(raw.steps);
   if (title.length === 0 || steps.length === 0) return undefined;
-  const expectedResults = textList(
+  const preconditions = textList(raw.preconditions, GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS);
+  const parsedExpectedResults = textList(
     raw.expectedResults,
     GENERATED_CANDIDATE_EXPECTED_RESULT_MAX_ITEMS,
   );
-  const tags = toStringList(raw.tags, {
+  const expectedResultsAutofilled = parsedExpectedResults.length === 0;
+  const expectedResults = expectedResultsAutofilled
+    ? Object.freeze([fallbackExpectedResult([title, ...preconditions, ...steps])])
+    : parsedExpectedResults;
+  const modelTags = toStringList(raw.tags, {
     maxItems: GENERATED_CANDIDATE_TAG_MAX_ITEMS,
     maxChars: GENERATED_CANDIDATE_TAG_MAX_CHARS,
   });
-  const derivedFromAtomIds = resolveDerivedAtomIds(
-    raw.derivedFromEvidenceIndexes,
-    input.atomIds,
-    index,
-  );
+  const evidence = resolveDerivedAtomIds(raw.derivedFromEvidenceIndexes, input.atomIds);
+  const priority = parsePriority(raw.priority, profile);
+  const riskClass = parseRiskClass(raw.riskClass, profile);
+  const diagnosticTags: string[] = [];
+  if (evidence.provenanceUnverified) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
+  }
+  if (evidence.hasInvalidIndex) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID);
+  }
+  if (evidence.overCited) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EVIDENCE_OVER_CITED);
+  }
+  if (priority.defaulted) diagnosticTags.push(GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED);
+  if (riskClass.defaulted) diagnosticTags.push(GENERATED_CANDIDATE_TAG_RISK_DEFAULTED);
+  if (expectedResultsAutofilled) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_AUTOFILLED);
+  }
+  if (expectedResultsAutofilled || hasVagueExpectedResult(expectedResults)) {
+    diagnosticTags.push(GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER);
+  }
+  const tags = mergeCandidateTags(modelTags, diagnosticTags);
   return Object.freeze<Candidate>({
     id: QualityIntelligence.asQualityIntelligenceTestCaseId(
-      deriveCandidateId(index, title, derivedFromAtomIds),
+      deriveCandidateId(title, evidence.ids, preconditions, steps, expectedResults),
     ),
     runId: input.runId,
-    derivedFromAtomIds,
+    derivedFromAtomIds: evidence.ids,
     title,
-    preconditions: textList(raw.preconditions, GENERATED_CANDIDATE_PRECONDITION_MAX_ITEMS),
+    preconditions,
     steps,
-    expectedResults:
-      expectedResults.length > 0
-        ? expectedResults
-        : Object.freeze(["The behaviour matches the cited evidence."]),
-    priority: clampPriority(raw.priority, profile),
-    riskClass: clampRiskClass(raw.riskClass, profile),
+    expectedResults,
+    priority: priority.value,
+    riskClass: riskClass.value,
     tags,
-    status: "proposed",
+    status: diagnosticTags.length > 0 ? "needs-review" : "proposed",
   });
 };
 
@@ -326,23 +437,39 @@ export const parseGeneratedCandidates = (
   input: ParseGeneratedCandidatesInput,
 ): ParseGeneratedCandidatesResult => {
   const profile = input.profile ?? regressionDefault;
-  const parsed = parseJsonLoose(typeof rawText === "string" ? rawText : "");
+  const boundedRawText =
+    typeof rawText === "string" && rawText.length <= MAX_GENERATED_CANDIDATE_OUTPUT_CHARS
+      ? rawText
+      : "";
+  const parsed = parseJsonLoose(boundedRawText);
   if (parsed === undefined) {
-    return { candidates: Object.freeze([]), recovered: false, skipped: 0 };
+    return { candidates: Object.freeze([]), recovered: false, skipped: 0, overCapSkipped: 0 };
   }
   const rawItems = toRawItems(parsed);
-  const cap = Math.max(0, Math.trunc(input.maxCandidates));
+  const candidateCount = assertCandidateCount(rawItems.length);
+  const boundedRawItems = candidateCount.ok ? rawItems : rawItems.slice(0, MAX_CANDIDATES_PER_RUN);
+  const requestedCap = Number.isFinite(input.maxCandidates)
+    ? Math.max(0, Math.trunc(input.maxCandidates))
+    : 0;
+  const cap = Math.min(requestedCap, MAX_CANDIDATES_PER_RUN);
   const candidates: Candidate[] = [];
   let skipped = 0;
-  for (let i = 0; i < rawItems.length && candidates.length < cap; i += 1) {
-    const item = rawItems[i];
+  let inspected = 0;
+  for (let i = 0; i < boundedRawItems.length && candidates.length < cap; i += 1) {
+    inspected += 1;
+    const item = boundedRawItems[i];
     if (!isObject(item)) {
       skipped += 1;
       continue;
     }
-    const candidate = buildCandidate(item, i, input, profile);
+    const candidate = buildCandidate(item, input, profile);
     if (candidate === undefined) skipped += 1;
     else candidates.push(candidate);
   }
-  return { candidates: Object.freeze(candidates), recovered: true, skipped };
+  return {
+    candidates: Object.freeze(candidates),
+    recovered: true,
+    skipped,
+    overCapSkipped: Math.max(0, rawItems.length - inspected),
+  };
 };

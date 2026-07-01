@@ -32,12 +32,28 @@ const QI_MODEL_POLICY_VERSION = 1 as const;
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 const LATENCY_RANK = { fast: 0, standard: 1, slow: 2 } as const;
 
-function buildSelectionQuery(profileId: QiProfileId): ModelSelectionQuery {
+function profileRequiresResponseFormat(profileId: QiProfileId): boolean {
+  return MgQI.getQualityIntelligenceTaskProfile(profileId).requiredCapabilities.includes(
+    "structured-output",
+  );
+}
+
+function hasEnforcedStructuredOutput(capability: ModelCapability): boolean {
+  return capability.structuredOutput === true && capability.supportsResponseFormat === true;
+}
+
+function isCapabilityCompatibleWithProfile(
+  capability: ModelCapability,
+  profileId: QiProfileId,
+): boolean {
   const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
-  // Single source of truth: the gateway derives the selection query from the profile's required
-  // capabilities using the SAME mapping the capability gate enforces, so the auto-selector and the
-  // gate cannot diverge on any capability (text/structured-output/function-calling/vision) (#762).
-  return MgQI.buildSelectionQueryForCapabilities(profile.requiredCapabilities);
+  try {
+    MgQI.assertProfileCompatibleWithModel(profile, capability);
+  } catch (error) {
+    if (error instanceof QualityIntelligenceSafeErrorException) return false;
+    throw error;
+  }
+  return !profileRequiresResponseFormat(profileId) || hasEnforcedStructuredOutput(capability);
 }
 
 function isRequestedModelCompatible(
@@ -48,14 +64,7 @@ function isRequestedModelCompatible(
   if (deps.config === undefined) return false;
   const capability = findConfiguredCapability(deps.config, modelId);
   if (capability === undefined) return false;
-  const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
-  try {
-    MgQI.assertProfileCompatibleWithModel(profile, capability);
-    return true;
-  } catch (error) {
-    if (error instanceof QualityIntelligenceSafeErrorException) return false;
-    throw error;
-  }
+  return isCapabilityCompatibleWithProfile(capability, profileId);
 }
 
 function configuredChatCapability(
@@ -142,11 +151,19 @@ function defaultGenerationCapability(deps: UiHandlerDeps): ModelCapability | und
   return chatCapabilities(deps).slice().sort(compareGenerationDefault)[0]?.capability;
 }
 
-function defaultJudgeCapability(deps: UiHandlerDeps): ModelCapability | undefined {
-  return chatCapabilities(deps)
-    .filter((entry) => entry.capability.structuredOutput)
-    .slice()
-    .sort(compareJudgeDefault)[0]?.capability;
+function defaultJudgeCapability(
+  deps: UiHandlerDeps,
+  avoidModelId?: string | undefined,
+): ModelCapability | undefined {
+  const candidates = chatCapabilities(deps).filter((entry) =>
+    hasEnforcedStructuredOutput(entry.capability),
+  );
+  const differentModelCandidates =
+    avoidModelId === undefined
+      ? candidates
+      : candidates.filter((entry) => entry.capability.id !== avoidModelId);
+  const pool = differentModelCandidates.length > 0 ? differentModelCandidates : candidates;
+  return pool.slice().sort(compareJudgeDefault)[0]?.capability;
 }
 
 /**
@@ -198,7 +215,7 @@ export function normaliseQiModelPolicy(
 
 export function recommendQiModelPolicy(deps: UiHandlerDeps): QualityIntelligenceModelPolicy {
   const generation = defaultGenerationCapability(deps);
-  const judge = defaultJudgeCapability(deps);
+  const judge = defaultJudgeCapability(deps, generation?.id);
   return {
     policyVersion: QI_MODEL_POLICY_VERSION,
     ...(generation !== undefined ? { testDesignModelId: generation.id } : {}),
@@ -248,6 +265,12 @@ export function validateQiModelPolicy(
         field: "judgeModelId",
         code: "model-not-structured",
         message: "The selected judge model does not advertise structured output.",
+      });
+    } else if (capability.supportsResponseFormat !== true) {
+      issues.push({
+        field: "judgeModelId",
+        code: "model-not-response-format",
+        message: "The selected judge model cannot enforce response_format JSON schema output.",
       });
     }
   }
@@ -333,10 +356,19 @@ export function resolveQiModelPolicy(
   const recommended = recommendQiModelPolicy(deps);
   const requested = requestedPolicyFromRequest(request);
   const validation = validateQiModelPolicy(deps, requested);
+  const resolvedTestDesignModelId = requested.testDesignModelId ?? recommended.testDesignModelId;
+  const judgeRecommendation = defaultJudgeCapability(deps, resolvedTestDesignModelId);
+  const resolvedRecommendation: QualityIntelligenceModelPolicy = {
+    policyVersion: QI_MODEL_POLICY_VERSION,
+    ...(recommended.testDesignModelId !== undefined
+      ? { testDesignModelId: recommended.testDesignModelId }
+      : {}),
+    ...(judgeRecommendation !== undefined ? { judgeModelId: judgeRecommendation.id } : {}),
+  };
   const resolved = validation.ok
     ? resolvedFromPolicy({
         requested,
-        recommended,
+        recommended: resolvedRecommendation,
         legacyJudge: legacyJudgeModelId(deps, request),
       })
     : resolvedFromRecommended(recommended);
@@ -420,8 +452,16 @@ export function resolveModelForQiCapability(
   if (deps.config === undefined) {
     return unavailableCapabilitySelection(profileId);
   }
-  const query = buildSelectionQuery(profileId);
-  const selected = selectConfiguredModel(deps.config, query);
+  const candidates = configuredCapabilities(deps)
+    .map((capability, index) => ({ capability, index }))
+    .filter((entry) => isCapabilityCompatibleWithProfile(entry.capability, profileId))
+    .slice()
+    .sort(
+      (a, b) =>
+        COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] ||
+        a.index - b.index,
+    );
+  const selected = candidates[0]?.capability.id;
   if (selected === undefined) {
     return unavailableCapabilitySelection(profileId);
   }

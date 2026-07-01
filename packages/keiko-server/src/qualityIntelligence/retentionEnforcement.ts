@@ -10,12 +10,12 @@
 // would race the filesystem-backed store). It is best-effort and CRASH-AWARE: it never throws into
 // bootstrap (mirrors migrateLocalConfigCredentials), so a transient fs fault simply re-runs next start.
 //
-// NOTE (audit visibility): keiko-server has no global persistent QI audit ledger today — the
-// user-initiated DELETE route "forwards" its receipt by returning it in the HTTP response to the
-// caller. The bootstrap purge has no HTTP caller, so the default sink is a no-op: production startup
-// purge receipts are currently DROPPED pending a future audit-ledger wiring (recorded in ADR-0048).
-// The sink is injectable so tests assert forwarding and a future ledger can be wired in one place.
+// NOTE (audit visibility): keiko-server has no global persistent QI audit ledger today. Until that
+// exists, startup purge receipts are durably appended to a small JSONL receipt file under the QI
+// evidence directory. The sink is still injectable so tests and a future ledger can wire a stronger
+// target in one place.
 
+import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   enforceQualityIntelligenceRetentionPolicy,
@@ -29,17 +29,28 @@ import {
 
 export type QiRetentionAuditSink = (event: QualityIntelligenceRunDeletedEvent) => void;
 
-// Default sink: drop the event. keiko-server has no global persistent QI audit ledger today (see
-// module note); production startup purge receipts are currently DROPPED pending a future ledger.
-const noopAuditSink: QiRetentionAuditSink = (_event): void => {
-  // Intentionally no-op until a persistent QI audit ledger seam exists (ADR-0048 follow-up).
+export const QI_RETENTION_DELETION_AUDIT_LEDGER = "retention-deletion-audit.jsonl";
+
+export const qiRetentionDeletionAuditLedgerPath = (evidenceDir: string): string =>
+  join(evidenceDir, QI_SUBDIR, QI_RETENTION_DELETION_AUDIT_LEDGER);
+
+const createJsonlAuditSink = (evidenceDir: string): QiRetentionAuditSink => {
+  const qiDir = join(evidenceDir, QI_SUBDIR);
+  const ledgerPath = qiRetentionDeletionAuditLedgerPath(evidenceDir);
+  return (event): void => {
+    mkdirSync(qiDir, { recursive: true, mode: 0o700 });
+    appendFileSync(ledgerPath, `${JSON.stringify(event)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+  };
 };
 
 export interface EnforceQiRetentionOptions {
   readonly evidenceDir: string;
   // Injectable clock for deterministic tests; defaults to wall-clock inside the evidence orchestrator.
   readonly now?: (() => number) | undefined;
-  // Forwarding target for each deletion's audit event. Defaults to a no-op (see module note).
+  // Forwarding target for each deletion's audit event. Defaults to a durable local JSONL receipt log.
   readonly auditSink?: QiRetentionAuditSink | undefined;
 }
 
@@ -48,7 +59,7 @@ export interface EnforceQiRetentionOptions {
  * crashes bootstrap. Forwards each deletion receipt's audit event to `auditSink` exactly once.
  */
 export function enforceQiRetentionAtStartup(options: EnforceQiRetentionOptions): void {
-  const sink = options.auditSink ?? noopAuditSink;
+  const sink = options.auditSink ?? createJsonlAuditSink(options.evidenceDir);
   try {
     const { receipts } = enforceQualityIntelligenceRetentionPolicy({
       evidenceDir: options.evidenceDir,

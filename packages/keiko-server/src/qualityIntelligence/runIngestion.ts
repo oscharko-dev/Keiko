@@ -12,8 +12,8 @@ import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-d
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   QualityIntelligenceGeneration,
-  QualityIntelligenceHardening,
   QualityIntelligenceFigma,
+  QualityIntelligenceIngestion,
   isUnsafeFormatCodePoint,
   stripUnsafeFormatChars,
 } from "@oscharko-dev/keiko-quality-intelligence";
@@ -94,6 +94,17 @@ export interface QiSourceSummary {
   readonly label: string;
   readonly kind: QualityIntelligenceInlineSource["kind"];
   readonly atomCount: number;
+  readonly totalAtomCount?: number;
+  readonly droppedAtomCount?: number;
+  readonly maxAtomCount?: number;
+  readonly truncated?: boolean;
+  readonly originalBytes?: number;
+  readonly retainedBytes?: number;
+  readonly droppedBytes?: number;
+  readonly byteLimit?: number;
+  readonly truncatedDocumentCount?: number;
+  readonly droppedDocumentCount?: number;
+  readonly notices?: readonly string[];
 }
 
 /**
@@ -279,36 +290,68 @@ const auditSummaryIdFor = (runId: string): QI.QualityIntelligenceAuditSummaryId 
 interface OneSource {
   readonly envelope: QI.QualityIntelligenceSourceEnvelope;
   readonly atoms: readonly QualityIntelligenceIngestedAtom[];
+  readonly summary?: Omit<QiSourceSummary, "label" | "kind" | "atomCount">;
 }
+
+export interface QiDocumentTextExtractionInput {
+  readonly path: string;
+  readonly label: string;
+  readonly format: "pdf" | "docx";
+  /** UTF-8 best-effort text from the workspace reader; exposed only to test/local parser seams. */
+  readonly decodedText: string;
+  /** Maximum raw input bytes admitted for parser-backed document formats. */
+  readonly maxInputBytes: number;
+  /** Fair-share UTF-8 output byte budget for the extracted text. */
+  readonly maxExtractedBytes: number;
+  /** Caller cancellation propagated to parser-backed extraction. */
+  readonly signal?: AbortSignal | undefined;
+}
+
+export type QiDocumentTextExtractor = (input: QiDocumentTextExtractionInput) => string | undefined;
+export type QiAsyncDocumentTextExtractor = (
+  input: QiDocumentTextExtractionInput,
+) => string | undefined | Promise<string | undefined>;
 
 function ingestRequirements(
   source: Extract<QualityIntelligenceInlineSource, { kind: "requirements" }>,
   index: number,
   registeredAt: string,
+  byteBudget: number,
 ): OneSource {
-  const text = typeof source.text === "string" ? source.text : "";
-  const oversize = QualityIntelligenceHardening.assertSourceSize(text);
-  if (!oversize.ok) {
-    throw new QiIngestionError(
-      "QI_SOURCE_TOO_LARGE",
-      "A requirements source exceeds the size limit.",
-    );
-  }
   const label = sanitiseLabel(source.label);
-  const envelopeId = requirementsEnvelopeIdFor(index);
-  const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, { envelopeId });
-  if (atoms.length === 0) {
+  let text = typeof source.text === "string" ? source.text : "";
+  let adfNotice: readonly string[] = [];
+  if (source.adf !== undefined) {
+    try {
+      text = QualityIntelligenceIngestion.renderAdfDocumentText(
+        QualityIntelligenceIngestion.parseAdfDocument(source.adf),
+      );
+      adfNotice = ["adf-normalized"];
+    } catch (error) {
+      if (!(error instanceof QualityIntelligenceIngestion.AdfParserError)) throw error;
+      throw new QiIngestionError(
+        "QI_BAD_SOURCE",
+        `Source "${label}" contains invalid Atlassian Document Format content.`,
+      );
+    }
+  }
+  const bounded = truncateToUtf8BytesDetailed(text, byteBudget);
+  const split = QualityIntelligenceGeneration.splitRequirementsIntoAtomsWithStats(bounded.text, {
+    envelopeId: requirementsEnvelopeIdFor(index),
+  });
+  if (split.atoms.length === 0) {
     throw new QiIngestionError(
       "QI_SOURCE_EMPTY",
       `Source "${label}" produced no usable requirement statements.`,
     );
   }
+  const envelopeId = requirementsEnvelopeIdFor(index);
   const envelope: QI.QualityIntelligenceSourceEnvelope = {
     id: envelopeId,
     kind: "human-context",
     displayLabel: label,
     provenance: {
-      origin: "requirements",
+      origin: source.adf === undefined ? "requirements" : "requirements:adf",
       registeredAt,
       integrityHashSha256Hex: sha256Hex(text),
     },
@@ -316,13 +359,32 @@ function ingestRequirements(
   };
   return {
     envelope,
-    atoms: atoms.map((entry, ordinal) =>
+    atoms: split.atoms.map((entry, ordinal) =>
       Object.freeze({
         ...entry,
         replacementGroupId: replacementGroupIdFor(envelopeId, `requirements:${String(index)}`),
         replacementOrdinal: ordinal,
       }),
     ),
+    summary: {
+      totalAtomCount: split.uniqueStatementCount,
+      droppedAtomCount: split.droppedAtomCount,
+      maxAtomCount: split.maxAtoms,
+      ...(bounded.truncated
+        ? {
+            truncated: true,
+            originalBytes: bounded.originalBytes,
+            retainedBytes: bounded.retainedBytes,
+            droppedBytes: bounded.droppedBytes,
+            byteLimit: bounded.byteLimit,
+          }
+        : {}),
+      notices: [
+        ...adfNotice,
+        ...(bounded.truncated ? ["source-truncated-to-byte-budget"] : []),
+        ...(split.truncated ? ["source-truncated-to-atom-cap"] : []),
+      ],
+    },
   };
 }
 
@@ -372,24 +434,15 @@ const requirementAtomIdFor = (
   return QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`);
 };
 
-const stripRequirementDocumentStructure = (text: string): string =>
-  text
-    .split(/\r?\n/u)
-    .filter((line) => !/^\s{0,3}#{1,6}\s+\S/u.test(line))
-    .join("\n");
-
 function documentRequirementAtoms(
   entry: { readonly path: string; readonly excerpt: string },
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
 ): readonly QualityIntelligenceIngestedAtom[] {
   if (!REQUIREMENT_TEXT_EXTENSION.test(entry.path)) return Object.freeze([]);
-  const split = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
-    stripRequirementDocumentStructure(entry.excerpt),
-    {
-      envelopeId,
-      maxAtoms: MAX_TOTAL_ATOMS,
-    },
-  );
+  const split = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(entry.excerpt, {
+    envelopeId,
+    maxAtoms: MAX_TOTAL_ATOMS,
+  });
   if (split.length <= 1) return Object.freeze([]);
   return Object.freeze(
     split.map((requirement, ordinal) => {
@@ -483,17 +536,16 @@ function ingestWorkspace(
 // file — bounded so an oversized file fails with a user-actionable error instead of silently
 // dominating the prompt budget.
 const SINGLE_FILE_MAX_BYTES = WORKSPACE_BUDGET_BYTES;
+const DOCUMENT_FILE_MAX_BYTES = 2 * 1024 * 1024;
 
 // Text-like single-file documents share the strict NUL-byte check because they are expected to be
 // ordinary UTF-8-ish text. Code files reuse the shared CODE_EXTENSION set above.
 const DOC_TEXT_EXTENSION =
   /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|json|ya?ml|xml|html?|csv|tsv|ini|toml|cfg|conf|properties|tex|org)$/iu;
 
-// PDF and DOCX are accepted in single-file mode for parity with folder-backed QI: the read path
-// stays keiko-workspace only (best-effort UTF-8/redaction reads, no dedicated document parser). A
-// genuinely text-based PDF/DOCX decodes to usable prose and is ingested; a compressed/binary one
-// decodes to NUL bytes + control-character noise (the real text lives in DEFLATE streams) and is
-// rejected with a user-actionable error rather than silently feeding the model garbage (#713).
+// PDF and DOCX are recognised as document formats, but they must go through an explicit text
+// extractor. The workspace reader's UTF-8 best-effort text is not truthful for compressed PDF/DOCX
+// bodies and must never be treated as the document prose.
 const BEST_EFFORT_DOCUMENT_EXTENSION = /\.(?:pdf|docx)$/iu;
 
 const isSupportedFilePath = (path: string): boolean =>
@@ -504,45 +556,68 @@ const isSupportedFilePath = (path: string): boolean =>
 const requiresStrictTextGuard = (path: string): boolean =>
   CODE_EXTENSION.test(path) || DOC_TEXT_EXTENSION.test(path);
 
-// A best-effort document whose decoded text is dominated by binary noise carries none of the
-// document's actual prose. Reject above this control-character density so the model never receives
-// unusable content. Kept low (10%) but non-zero so that prose with stray control bytes still reads.
-const DOCUMENT_CONTROL_CHAR_RATIO_LIMIT = 0.1;
-
-// A control character (excluding ordinary tab/newline/CR), DEL, or the Unicode replacement char —
-// the residue of decoding compressed/binary bytes as UTF-8. Printable prose (incl. umlauts/ß) is
-// never counted.
-function isControlChar(code: number): boolean {
-  const allowedWhitespace = code === 0x09 || code === 0x0a || code === 0x0d;
-  return (code < 0x20 && !allowedWhitespace) || code === 0x7f || code === 0xfffd;
-}
-
-// Detect a best-effort PDF/DOCX read that produced binary noise instead of extractable text. A NUL
-// byte is the canonical binary marker; a high control-character ratio catches mojibake without one.
-// German prose (umlauts, ß) is fully printable, so it never trips this guard.
-function looksBinaryDocument(text: string): boolean {
-  if (text.includes("\u0000")) return true;
-  let control = 0;
-  let total = 0;
-  for (const ch of text) {
-    total += 1;
-    if (isControlChar(ch.codePointAt(0) ?? 0)) control += 1;
-  }
-  return total > 0 && control / total > DOCUMENT_CONTROL_CHAR_RATIO_LIMIT;
-}
-
 const documentFormatLabel = (path: string): string => (/\.pdf$/iu.test(path) ? "PDF" : "Word");
 
-// A best-effort PDF/DOCX whose decoded text is binary noise (compressed streams, ZIP members)
-// carries none of the document's prose. Reject with actionable guidance instead of ingesting
-// garbage the model cannot use — a text-based PDF/DOCX still ingests normally (#713).
-function assertBestEffortDocumentText(absFile: string, label: string, text: string): void {
-  if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile) || !looksBinaryDocument(text)) return;
-  throw new QiIngestionError(
+const documentFormatKind = (path: string): "pdf" | "docx" =>
+  /\.pdf$/iu.test(path) ? "pdf" : "docx";
+
+function unsupportedDocumentTextError(absFile: string, label: string): QiIngestionError {
+  return new QiIngestionError(
     "QI_SOURCE_UNSUPPORTED",
     `File "${label}" is a ${documentFormatLabel(absFile)} document whose text could not be ` +
       `extracted. Export it to Markdown or plain text and connect that instead.`,
   );
+}
+
+function extractedSingleFileText(
+  absFile: string,
+  label: string,
+  decodedText: string,
+  extractor: QiAsyncDocumentTextExtractor | undefined,
+  byteBudget: number,
+  signal: AbortSignal | undefined,
+): string {
+  if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile)) return decodedText;
+  if (extractor === undefined) throw unsupportedDocumentTextError(absFile, label);
+  const extracted = extractor({
+    path: absFile,
+    label,
+    format: documentFormatKind(absFile),
+    decodedText,
+    maxInputBytes: DOCUMENT_FILE_MAX_BYTES,
+    maxExtractedBytes: byteBudget,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (typeof extracted === "object" && extracted !== null && "then" in extracted) {
+    throw unsupportedDocumentTextError(absFile, label);
+  }
+  const safeText = redact(stripUnsafeFormatChars(typeof extracted === "string" ? extracted : ""));
+  if (safeText.trim().length === 0) throw unsupportedDocumentTextError(absFile, label);
+  return safeText;
+}
+
+async function extractedSingleFileTextAsync(
+  absFile: string,
+  label: string,
+  decodedText: string,
+  extractor: QiAsyncDocumentTextExtractor | undefined,
+  byteBudget: number,
+  signal: AbortSignal | undefined,
+): Promise<string> {
+  if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile)) return decodedText;
+  if (extractor === undefined) throw unsupportedDocumentTextError(absFile, label);
+  const extracted = await extractor({
+    path: absFile,
+    label,
+    format: documentFormatKind(absFile),
+    decodedText,
+    maxInputBytes: DOCUMENT_FILE_MAX_BYTES,
+    maxExtractedBytes: byteBudget,
+    ...(signal === undefined ? {} : { signal }),
+  });
+  const safeText = redact(stripUnsafeFormatChars(typeof extracted === "string" ? extracted : ""));
+  if (safeText.trim().length === 0) throw unsupportedDocumentTextError(absFile, label);
+  return safeText;
 }
 
 // Resolve a single file's workspace root and read it through the keiko-workspace boundary-checked
@@ -551,6 +626,7 @@ function assertBestEffortDocumentText(absFile: string, label: string, text: stri
 function readSingleFileContent(
   absFile: string,
   label: string,
+  maxBytes: number = SINGLE_FILE_MAX_BYTES,
 ): ReturnType<typeof readWorkspaceFile> {
   let workspace: ReturnType<typeof detectWorkspaceAt>;
   try {
@@ -567,7 +643,7 @@ function readSingleFileContent(
   try {
     return readWorkspaceFile(workspace, relative(workspace.root, absFile), {
       ...DEFAULT_READ_OPTIONS,
-      maxBytes: SINGLE_FILE_MAX_BYTES,
+      maxBytes,
     });
   } catch (error) {
     if (error instanceof FileTooLargeError) {
@@ -595,6 +671,8 @@ function ingestFile(
   index: number,
   registeredAt: string,
   byteBudget: number,
+  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
+  signal: AbortSignal | undefined,
 ): OneSource {
   const label = sanitiseLabel(source.label);
   if (!isAbsolute(source.path)) {
@@ -610,7 +688,11 @@ function ingestFile(
   // Reject any path whose segments name a denied credential directory or file (.ssh, .aws, .env,
   // *.pem, id_rsa, …) — lexically or after symlink resolution — regardless of the workspace root below.
   assertNotDenied(absFile, label, "File");
-  const content = readSingleFileContent(absFile, label);
+  const content = readSingleFileContent(
+    absFile,
+    label,
+    BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile) ? DOCUMENT_FILE_MAX_BYTES : SINGLE_FILE_MAX_BYTES,
+  );
   // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
   // slipped past the strict text/code gate (e.g. a mis-named ".txt") is rejected here, never
   // partially ingested. PDF/DOCX get a dedicated binary-noise check below (their own format).
@@ -620,15 +702,22 @@ function ingestFile(
       `File "${label}" appears to be binary, not text.`,
     );
   }
-  assertBestEffortDocumentText(absFile, label, content.text);
-  if (content.text.trim().length === 0) {
+  const sourceText = extractedSingleFileText(
+    absFile,
+    label,
+    content.text,
+    documentTextExtractor,
+    byteBudget,
+    signal,
+  );
+  if (sourceText.trim().length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
   }
   // Bound the single file's contributed text to this source's fair share of the global evidence byte
   // budget so a large file cannot, alongside other connected sources, blow the model prompt cap and
   // fail the whole N+1 run (Epic #729). A lone connected file keeps the full budget unchanged
   // (byteBudget === EVIDENCE_BUDGET_BYTES, so boundedText === content.text).
-  const boundedText = truncateToUtf8Bytes(content.text, byteBudget);
+  const bounded = truncateToUtf8BytesDetailed(sourceText, byteBudget);
   const envelopeId = envelopeIdFor(index, label, content.relativePath);
   const envelope: QI.QualityIntelligenceSourceEnvelope = {
     id: envelopeId,
@@ -637,15 +726,107 @@ function ingestFile(
     provenance: {
       origin: "file",
       registeredAt,
-      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${boundedText}`),
+      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${bounded.text}`),
     },
     localRef: stableLocalRef("file", absFile),
   };
   const atoms = atomsForWorkspaceEntry(
-    { path: content.relativePath, excerpt: boundedText },
+    { path: content.relativePath, excerpt: bounded.text },
     envelopeId,
   );
-  return { envelope, atoms };
+  return {
+    envelope,
+    atoms,
+    ...(bounded.truncated
+      ? {
+          summary: {
+            truncated: true,
+            originalBytes: bounded.originalBytes,
+            retainedBytes: bounded.retainedBytes,
+            droppedBytes: bounded.droppedBytes,
+            byteLimit: bounded.byteLimit,
+            notices: ["source-truncated-to-byte-budget"],
+          },
+        }
+      : {}),
+  };
+}
+
+async function ingestFileAsync(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
+  index: number,
+  registeredAt: string,
+  byteBudget: number,
+  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
+  signal: AbortSignal | undefined,
+): Promise<OneSource> {
+  const label = sanitiseLabel(source.label);
+  if (!isAbsolute(source.path)) {
+    throw new QiIngestionError("QI_BAD_SOURCE", "File source paths must be absolute local paths.");
+  }
+  const absFile = resolve(source.path);
+  if (!isSupportedFilePath(absFile)) {
+    throw new QiIngestionError(
+      "QI_SOURCE_UNSUPPORTED",
+      `File "${label}" is not a supported single-file document.`,
+    );
+  }
+  assertNotDenied(absFile, label, "File");
+  const content = readSingleFileContent(
+    absFile,
+    label,
+    BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile) ? DOCUMENT_FILE_MAX_BYTES : SINGLE_FILE_MAX_BYTES,
+  );
+  if (requiresStrictTextGuard(absFile) && content.text.includes("\u0000")) {
+    throw new QiIngestionError(
+      "QI_SOURCE_UNSUPPORTED",
+      `File "${label}" appears to be binary, not text.`,
+    );
+  }
+  const sourceText = await extractedSingleFileTextAsync(
+    absFile,
+    label,
+    content.text,
+    documentTextExtractor,
+    byteBudget,
+    signal,
+  );
+  if (sourceText.trim().length === 0) {
+    throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
+  }
+  const bounded = truncateToUtf8BytesDetailed(sourceText, byteBudget);
+  const envelopeId = envelopeIdFor(index, label, content.relativePath);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "repository-context",
+    displayLabel: label,
+    provenance: {
+      origin: "file",
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${bounded.text}`),
+    },
+    localRef: stableLocalRef("file", absFile),
+  };
+  const atoms = atomsForWorkspaceEntry(
+    { path: content.relativePath, excerpt: bounded.text },
+    envelopeId,
+  );
+  return {
+    envelope,
+    atoms,
+    ...(bounded.truncated
+      ? {
+          summary: {
+            truncated: true,
+            originalBytes: bounded.originalBytes,
+            retainedBytes: bounded.retainedBytes,
+            droppedBytes: bounded.droppedBytes,
+            byteLimit: bounded.byteLimit,
+            notices: ["source-truncated-to-byte-budget"],
+          },
+        }
+      : {}),
+  };
 }
 
 // A single capsule document may use the per-document byte budget; the whole capsule corpus is
@@ -658,18 +839,49 @@ const CAPSULE_BUDGET_BYTES = WORKSPACE_BUDGET_BYTES;
 const utf8Encoder = new TextEncoder();
 const utf8ByteLength = (text: string): number => utf8Encoder.encode(text).length;
 
+interface Utf8TruncationResult {
+  readonly text: string;
+  readonly originalBytes: number;
+  readonly retainedBytes: number;
+  readonly droppedBytes: number;
+  readonly byteLimit: number;
+  readonly truncated: boolean;
+}
+
 // Truncate to at most maxBytes UTF-8 bytes without splitting a multi-byte code point.
-function truncateToUtf8Bytes(text: string, maxBytes: number): string {
-  if (utf8ByteLength(text) <= maxBytes) return text;
+function truncateToUtf8BytesDetailed(text: string, maxBytes: number): Utf8TruncationResult {
+  const byteLimit = Math.max(0, Math.trunc(maxBytes));
+  const originalBytes = utf8ByteLength(text);
+  if (originalBytes <= byteLimit) {
+    return {
+      text,
+      originalBytes,
+      retainedBytes: originalBytes,
+      droppedBytes: 0,
+      byteLimit,
+      truncated: false,
+    };
+  }
   let out = "";
   let bytes = 0;
   for (const cp of text) {
     const cpBytes = utf8ByteLength(cp);
-    if (bytes + cpBytes > maxBytes) break;
+    if (bytes + cpBytes > byteLimit) break;
     out += cp;
     bytes += cpBytes;
   }
-  return out;
+  return {
+    text: out,
+    originalBytes,
+    retainedBytes: bytes,
+    droppedBytes: originalBytes - bytes,
+    byteLimit,
+    truncated: true,
+  };
+}
+
+function truncateToUtf8Bytes(text: string, maxBytes: number): string {
+  return truncateToUtf8BytesDetailed(text, maxBytes).text;
 }
 
 interface CorpusDoc {
@@ -678,31 +890,76 @@ interface CorpusDoc {
   readonly fingerprintText?: string | undefined;
 }
 
+interface ProcessedCorpusDocs {
+  readonly docs: readonly CorpusDoc[];
+  readonly originalBytes: number;
+  readonly retainedBytes: number;
+  readonly droppedBytes: number;
+  readonly byteLimit: number;
+  readonly truncatedDocumentCount: number;
+  readonly droppedDocumentCount: number;
+}
+
+interface NormalisedCorpusDoc {
+  readonly documentId: string;
+  readonly text: string;
+  readonly originalBytes: number;
+}
+
+const compareCorpusDocs = (a: CorpusDoc, b: CorpusDoc): number => {
+  const ka = `${a.documentId}\u0000${a.fingerprintText ?? a.text}`;
+  const kb = `${b.documentId}\u0000${b.fingerprintText ?? b.text}`;
+  return ka < kb ? -1 : ka > kb ? 1 : 0;
+};
+
 // Redact every member document and cap it. The LK corpus text is NOT redacted at index time — the
 // workspace/file paths redact at read time via keiko-workspace, so the capsule path MUST redact
 // here to honour the atom's redactionStatus:"redacted" and the epic's no-credential-leakage DoD
 // (Epic #710, Issue #717). Each document is capped to the per-document budget and ingestion stops
 // once the cumulative corpus reaches the per-run budget so an oversized capsule degrades gracefully.
-function processCapsuleDocs(docs: readonly CorpusDoc[], byteBudget: number): readonly CorpusDoc[] {
+function processCapsuleDocs(docs: readonly CorpusDoc[], byteBudget: number): ProcessedCorpusDocs {
   // The per-run corpus budget is the smaller of the capsule's own ceiling and this source's fair
   // share of the global evidence byte budget (Epic #729 N+1 split). The per-document cap is likewise
   // never larger than the per-run budget so the always-included first document cannot exceed it.
   const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
   const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
+  const normalised: NormalisedCorpusDoc[] = [...docs].sort(compareCorpusDocs).map((doc) => {
+    const text = redact(stripUnsafeFormatChars(doc.text));
+    return { documentId: doc.documentId, text, originalBytes: utf8ByteLength(text) };
+  });
   const processed: CorpusDoc[] = [];
   let totalBytes = 0;
-  for (const doc of docs) {
-    const capped = truncateToUtf8Bytes(redact(stripUnsafeFormatChars(doc.text)), perDocBudget);
-    if (capped.trim().length === 0) continue;
-    const bytes = utf8ByteLength(capped);
+  let truncatedDocumentCount = 0;
+  let droppedDocumentCount = 0;
+  for (let index = 0; index < normalised.length; index += 1) {
+    const doc = normalised[index];
+    if (doc === undefined) continue;
+    const capped = truncateToUtf8BytesDetailed(doc.text, perDocBudget);
+    if (capped.truncated) truncatedDocumentCount += 1;
+    if (capped.text.trim().length === 0) {
+      droppedDocumentCount += 1;
+      continue;
+    }
     // Always include the first usable document (capped to ≤ the per-document budget); thereafter
     // stop before a document would push the corpus past the per-run budget so the total stays
     // bounded (never the raw corpus) and the run never hard-fails on QI_PROMPT_TOO_LARGE.
-    if (processed.length > 0 && totalBytes + bytes > perRunBudget) break;
-    processed.push({ documentId: doc.documentId, text: capped });
-    totalBytes += bytes;
+    if (processed.length > 0 && totalBytes + capped.retainedBytes > perRunBudget) {
+      droppedDocumentCount += normalised.length - index;
+      break;
+    }
+    processed.push({ documentId: doc.documentId, text: capped.text });
+    totalBytes += capped.retainedBytes;
   }
-  return processed;
+  const originalBytes = normalised.reduce((sum, doc) => sum + doc.originalBytes, 0);
+  return {
+    docs: processed,
+    originalBytes,
+    retainedBytes: totalBytes,
+    droppedBytes: Math.max(0, originalBytes - totalBytes),
+    byteLimit: perRunBudget,
+    truncatedDocumentCount,
+    droppedDocumentCount,
+  };
 }
 
 // Build one evidence atom per capsule document. Reuses the workspace atom shape so the model sees
@@ -755,7 +1012,8 @@ function buildCapsuleSource(build: CapsuleSourceBuild, byteBudget: number): OneS
   if (build.rawDocs.length === 0) {
     throw new QiIngestionError("QI_CAPSULE_UNAVAILABLE", build.emptyError);
   }
-  const docs = processCapsuleDocs(build.rawDocs, byteBudget);
+  const processed = processCapsuleDocs(build.rawDocs, byteBudget);
+  const { docs } = processed;
   if (docs.length === 0) {
     throw new QiIngestionError(
       "QI_SOURCE_EMPTY",
@@ -776,7 +1034,27 @@ function buildCapsuleSource(build: CapsuleSourceBuild, byteBudget: number): OneS
     localRef: build.scopeRef,
   };
   const atoms = docs.map((d) => capsuleDocAtom(d.documentId, d.text, envelopeId));
-  return { envelope, atoms };
+  return {
+    envelope,
+    atoms,
+    summary: {
+      ...(processed.originalBytes > processed.retainedBytes
+        ? {
+            truncated: true,
+            originalBytes: processed.originalBytes,
+            retainedBytes: processed.retainedBytes,
+            droppedBytes: processed.droppedBytes,
+            byteLimit: processed.byteLimit,
+          }
+        : {}),
+      truncatedDocumentCount: processed.truncatedDocumentCount,
+      droppedDocumentCount: processed.droppedDocumentCount,
+      notices: [
+        ...(processed.truncatedDocumentCount > 0 ? ["documents-truncated-to-byte-budget"] : []),
+        ...(processed.droppedDocumentCount > 0 ? ["documents-dropped-to-byte-budget"] : []),
+      ],
+    },
+  };
 }
 
 function ingestCapsule(
@@ -1539,14 +1817,16 @@ function ingestOne(
   figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
   figmaVision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
+  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
+  signal: AbortSignal | undefined,
 ): OneSource {
   switch (source.kind) {
     case "requirements":
-      return ingestRequirements(source, index, registeredAt);
+      return ingestRequirements(source, index, registeredAt, byteBudget);
     case "workspace":
       return ingestWorkspace(source, index, registeredAt, byteBudget);
     case "file":
-      return ingestFile(source, index, registeredAt, byteBudget);
+      return ingestFile(source, index, registeredAt, byteBudget, documentTextExtractor, signal);
     case "capsule":
     case "capsule-set":
       return ingestCapsuleSource(source, index, registeredAt, capsuleResolver, byteBudget);
@@ -1571,7 +1851,19 @@ async function ingestOneAsync(
   figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
   figmaVision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
+  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<OneSource> {
+  if (source.kind === "file") {
+    return ingestFileAsync(
+      source,
+      index,
+      registeredAt,
+      byteBudget,
+      documentTextExtractor,
+      signal,
+    );
+  }
   if (source.kind !== "figma-snapshot" && source.kind !== "image") {
     return ingestOne(
       source,
@@ -1581,6 +1873,8 @@ async function ingestOneAsync(
       figmaSnapshotLoader,
       figmaVision,
       byteBudget,
+      documentTextExtractor,
+      signal,
     );
   }
   if (figmaSnapshotLoader === undefined) {
@@ -1634,6 +1928,12 @@ export interface IngestInlineSourcesInput {
    * that image source unavailable instead of pretending a text-only model saw the screenshot.
    */
   readonly figmaVision?: FigmaVisionHintProvider | undefined;
+  /**
+   * Optional local/document parser seam for PDF/DOCX single-file sources. Absent means those formats
+   * are skipped with QI_SOURCE_UNSUPPORTED instead of ingesting workspace UTF-8 mojibake.
+   */
+  readonly documentTextExtractor?: QiAsyncDocumentTextExtractor | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 /**
@@ -1655,6 +1955,40 @@ interface IngestAccumulator {
 interface PerSourceBudgets {
   readonly atomBudget: number;
   readonly byteBudget: number;
+}
+
+const cleanNotices = (notices: readonly string[] | undefined): readonly string[] | undefined => {
+  const unique = [...new Set((notices ?? []).filter((notice) => notice.length > 0))];
+  return unique.length === 0 ? undefined : unique;
+};
+
+function sourceSummaryFor(
+  source: QualityIntelligenceInlineSource,
+  envelope: QI.QualityIntelligenceSourceEnvelope,
+  ingested: OneSource,
+  takenAtomCount: number,
+  atomBudget: number,
+): QiSourceSummary {
+  const atomCapDrop = Math.max(0, ingested.atoms.length - takenAtomCount);
+  const sourceDroppedAtoms = ingested.summary?.droppedAtomCount ?? 0;
+  const droppedAtomCount = sourceDroppedAtoms + atomCapDrop;
+  const totalAtomCount =
+    ingested.summary?.totalAtomCount ?? ingested.atoms.length + sourceDroppedAtoms;
+  const notices = cleanNotices([
+    ...(ingested.summary?.notices ?? []),
+    ...(atomCapDrop > 0 ? ["source-truncated-to-fair-atom-budget"] : []),
+  ]);
+  return {
+    ...ingested.summary,
+    label: envelope.displayLabel,
+    kind: source.kind,
+    atomCount: takenAtomCount,
+    totalAtomCount,
+    droppedAtomCount,
+    maxAtomCount: atomBudget,
+    ...(droppedAtomCount > 0 ? { truncated: true } : {}),
+    ...(notices === undefined ? {} : { notices }),
+  };
 }
 
 /**
@@ -1680,6 +2014,8 @@ function ingestSourceInto(
       input.figmaSnapshotLoader,
       input.figmaVision,
       budgets.byteBudget,
+      input.documentTextExtractor,
+      input.signal,
     );
   } catch (error) {
     if (!(error instanceof QiIngestionError)) throw error;
@@ -1697,11 +2033,7 @@ function ingestSourceInto(
   const taken = take <= 0 ? [] : atoms.slice(0, take);
   acc.envelopes.push(envelope);
   acc.ingestedAtoms.push(...taken);
-  acc.sourceSummaries.push({
-    label: envelope.displayLabel,
-    kind: source.kind,
-    atomCount: taken.length,
-  });
+  acc.sourceSummaries.push(sourceSummaryFor(source, envelope, ingested, taken.length, take));
 }
 
 async function ingestSourceIntoAsync(
@@ -1721,6 +2053,8 @@ async function ingestSourceIntoAsync(
       input.figmaSnapshotLoader,
       input.figmaVision,
       budgets.byteBudget,
+      input.documentTextExtractor,
+      input.signal,
     );
   } catch (error) {
     if (!(error instanceof QiIngestionError)) throw error;
@@ -1738,11 +2072,7 @@ async function ingestSourceIntoAsync(
   const taken = take <= 0 ? [] : atoms.slice(0, take);
   acc.envelopes.push(envelope);
   acc.ingestedAtoms.push(...taken);
-  acc.sourceSummaries.push({
-    label: envelope.displayLabel,
-    kind: source.kind,
-    atomCount: taken.length,
-  });
+  acc.sourceSummaries.push(sourceSummaryFor(source, envelope, ingested, taken.length, take));
 }
 
 function emptyDriftIngestionResult(

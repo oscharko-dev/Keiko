@@ -7,17 +7,28 @@
 // is approved by default; a decision is required to flip state. The route never echoes raw content.
 
 import type { IncomingMessage } from "node:http";
-import { loadQualityIntelligenceRun } from "@oscharko-dev/keiko-evidence";
+import {
+  loadQualityIntelligenceCandidates,
+  loadQualityIntelligenceRun,
+} from "@oscharko-dev/keiko-evidence";
 import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   applyReviewDecision,
+  candidateReviewStateOf,
+  loadRunReviewState,
+  QualityIntelligenceReviewCandidateNotFound,
+  QualityIntelligenceReviewGovernanceRejected,
+  QualityIntelligenceReviewRunApprovalRejected,
   QualityIntelligenceReviewTransitionRejected,
+  QualityIntelligenceReviewWriteConflict,
   type QiReviewAction,
 } from "./reviewStore.js";
+import { resolveQualityIntelligenceReviewPrincipal } from "./reviewPrincipal.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
+const MAX_REASON_LEN = 512;
 const ACTIONS: ReadonlySet<string> = new Set<QiReviewAction>([
   "approve",
   "reject",
@@ -64,7 +75,8 @@ interface ParsedDecision {
   readonly action: QiReviewAction;
   readonly scope: "run" | "candidate";
   readonly candidateId?: string;
-  readonly reviewerLabel: string;
+  readonly reviewerLabel?: string;
+  readonly reason?: string;
 }
 
 function parseDecision(body: Record<string, unknown>): ParsedDecision | undefined {
@@ -74,11 +86,12 @@ function parseDecision(body: Record<string, unknown>): ParsedDecision | undefine
   const scope = candidateId !== undefined ? "candidate" : "run";
   const rawLabel =
     typeof body.reviewerLabel === "string" ? normaliseCandidateText(body.reviewerLabel) : "";
-  const reviewerLabel = rawLabel.length > 0 ? rawLabel.slice(0, 80) : "reviewer";
+  const rawReason = typeof body.reason === "string" ? normaliseCandidateText(body.reason) : "";
   return {
     action: action as QiReviewAction,
     scope,
-    reviewerLabel,
+    ...(rawLabel.length > 0 ? { reviewerLabel: rawLabel.slice(0, 80) } : {}),
+    ...(rawReason.length > 0 ? { reason: rawReason.slice(0, MAX_REASON_LEN) } : {}),
     ...(candidateId ? { candidateId } : {}),
   };
 }
@@ -122,6 +135,25 @@ async function readDecision(req: IncomingMessage): Promise<DecisionOutcome> {
   return { ok: true, decision };
 }
 
+const runApprovalBlockedByCandidates = (
+  runId: string,
+  candidateIds: readonly string[],
+  evidenceDir: string,
+): RouteResult | null => {
+  if (candidateIds.length === 0) return null;
+  const review = loadRunReviewState(runId, evidenceDir);
+  const hasUnapprovedCandidate = candidateIds.some(
+    (candidateId) => candidateReviewStateOf(review, candidateId) !== "approved",
+  );
+  return hasUnapprovedCandidate
+    ? errorResult(
+        409,
+        "QI_REVIEW_RUN_APPROVAL_BLOCKED",
+        "Approve every candidate before approving the Quality Intelligence run.",
+      )
+    : null;
+};
+
 export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const { id } = ctx.params;
   if (id === undefined || id.trim().length === 0) {
@@ -138,15 +170,32 @@ export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Pr
     if (loadQualityIntelligenceRun(id, { evidenceDir }) === undefined) {
       return errorResult(404, "QI_NOT_FOUND", "Quality Intelligence run not found.");
     }
+    const candidateArtifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
+    const candidateIds = candidateArtifact?.candidates.map((candidate) => candidate.id);
+    if (
+      decision.scope === "candidate" &&
+      decision.candidateId !== undefined &&
+      (candidateIds === undefined || !candidateIds.includes(decision.candidateId))
+    ) {
+      return errorResult(404, "QI_CANDIDATE_NOT_FOUND", "Candidate not found for this run.");
+    }
+    if (decision.scope === "run" && decision.action === "approve") {
+      const blocked = runApprovalBlockedByCandidates(id, candidateIds ?? [], evidenceDir);
+      if (blocked !== null) return blocked;
+    }
+    const principal = resolveQualityIntelligenceReviewPrincipal(ctx.req, deps);
     const next = applyReviewDecision({
       runId: id,
       evidenceDir,
       action: decision.action,
       scope: decision.scope,
-      reviewerLabel: decision.reviewerLabel,
+      actor: principal,
       now: new Date().toISOString(),
       redact: deps.redactor,
+      ...(candidateIds !== undefined ? { candidateIds } : {}),
       ...(decision.candidateId ? { candidateId: decision.candidateId } : {}),
+      ...(decision.reviewerLabel !== undefined ? { reviewerLabel: decision.reviewerLabel } : {}),
+      ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
     });
     return {
       status: 200,
@@ -162,6 +211,44 @@ export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Pr
         409,
         "QI_REVIEW_TRANSITION_NOT_ALLOWED",
         `Review transition not permitted: cannot ${error.action} a run/candidate in state "${error.from}".`,
+      );
+    }
+    if (error instanceof QualityIntelligenceReviewGovernanceRejected) {
+      if (error.code === "REOPEN_REASON_REQUIRED") {
+        return errorResult(
+          409,
+          "QI_REVIEW_REOPEN_REASON_REQUIRED",
+          "Reopening a review requires a non-empty reason.",
+        );
+      }
+      if (error.code === "REOPEN_ACTOR_REQUIRED") {
+        return errorResult(
+          409,
+          "QI_REVIEW_REOPEN_ACTOR_REQUIRED",
+          "Reopening a review requires a server-resolved reviewer principal.",
+        );
+      }
+      return errorResult(
+        409,
+        "QI_REVIEW_FOUR_EYES_FORBIDDEN",
+        "Review governance requires a different server principal for this approval.",
+      );
+    }
+    if (error instanceof QualityIntelligenceReviewCandidateNotFound) {
+      return errorResult(404, "QI_CANDIDATE_NOT_FOUND", "Candidate not found for this run.");
+    }
+    if (error instanceof QualityIntelligenceReviewRunApprovalRejected) {
+      return errorResult(
+        409,
+        "QI_REVIEW_RUN_APPROVAL_BLOCKED",
+        "Approve every candidate before approving the Quality Intelligence run.",
+      );
+    }
+    if (error instanceof QualityIntelligenceReviewWriteConflict) {
+      return errorResult(
+        409,
+        "QI_REVIEW_WRITE_CONFLICT",
+        "Another review update is in progress. Retry the review action.",
       );
     }
     return errorResult(500, "QI_REVIEW_FAILED", "Failed to record the review decision.");

@@ -24,14 +24,14 @@
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
-import { normaliseCandidateText } from "./assertions.js";
+import { normaliseCandidateText, normaliseGermanComparisonText } from "./assertions.js";
 
 const collapseWhitespace = (value: string): string => value.replace(/\s+/gu, " ").trim();
 
-// Use normaliseCandidateText (NFKC + bidi/zero-width strip + trim) so that two candidates
-// differing only by injected bidi or zero-width spoofing chars produce the same signature.
+// Use the shared German comparison fold so bidi/zero-width spoofing and ß/ss variants collapse
+// consistently with validation without mutating any value-bearing candidate text.
 const canonicaliseLine = (value: string): string =>
-  collapseWhitespace(normaliseCandidateText(value).toLowerCase());
+  collapseWhitespace(normaliseGermanComparisonText(normaliseCandidateText(value)));
 
 const canonicaliseSequence = (values: readonly string[]): readonly string[] => {
   const out: string[] = [];

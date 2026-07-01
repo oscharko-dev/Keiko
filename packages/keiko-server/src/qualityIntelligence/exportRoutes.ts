@@ -12,13 +12,14 @@
 
 import type { IncomingMessage } from "node:http";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   appendQualityIntelligenceExportRow,
   loadQualityIntelligenceRun,
   loadQualityIntelligenceCandidates,
   type QualityIntelligenceCandidateRow,
+  type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceExportRow,
 } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
@@ -105,18 +106,219 @@ function rowToCandidate(
   };
 }
 
+type ExportModelProvenance = QI.QualityIntelligenceExportModelProvenance;
+
+const UNKNOWN_MODEL_METADATA = "unknown";
+
+function modelStage(modelId: string | undefined): QI.QualityIntelligenceExportModelStageProvenance {
+  return {
+    modelId: modelId?.trim() ? modelId : UNKNOWN_MODEL_METADATA,
+    provider: UNKNOWN_MODEL_METADATA,
+    revision: UNKNOWN_MODEL_METADATA,
+  };
+}
+
+function buildModelProvenance(
+  manifest: QualityIntelligenceEvidenceManifest,
+): ExportModelProvenance {
+  const generationModelId =
+    manifest.modelRouting?.resolved.testDesignModelId ??
+    manifest.modelRouting?.preflight.generation?.modelId ??
+    manifest.modelId;
+  const judgeModelId =
+    manifest.modelRouting?.resolved.judgeModelId ?? manifest.modelRouting?.preflight.judge?.modelId;
+  return {
+    generation: modelStage(generationModelId),
+    judge: modelStage(judgeModelId),
+    ...(manifest.seedUsed !== undefined ? { seedUsed: manifest.seedUsed } : {}),
+    ...(manifest.modelParameters !== undefined
+      ? { modelParameters: manifest.modelParameters }
+      : {}),
+  };
+}
+
+function coverageRefFor(runId: string, atomId: string): QI.QualityIntelligenceCoverageMapId {
+  return QualityIntelligence.asQualityIntelligenceCoverageMapId(
+    `qi-coverage-${sha256Hex(`${runId}|${atomId}`).slice(0, 32)}`,
+  );
+}
+
+function findingRefFor(
+  finding: QualityIntelligenceEvidenceManifest["findings"][number],
+  diagnostics: Set<string>,
+): QI.QualityIntelligenceValidationFindingId | undefined {
+  try {
+    return QualityIntelligence.asQualityIntelligenceValidationFindingId(finding.id);
+  } catch {
+    diagnostics.add("export:finding-ref-invalid-id");
+    return undefined;
+  }
+}
+
+function addMapValue<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {
+  const values = map.get(key) ?? new Set<V>();
+  values.add(value);
+  map.set(key, values);
+}
+
+function sortedValues<T extends string>(set: ReadonlySet<T> | undefined): readonly T[] {
+  return Object.freeze([...(set ?? new Set<T>())].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
+}
+
+function buildCoverageRefsByCandidate(
+  runId: string,
+  manifest: QualityIntelligenceEvidenceManifest,
+  candidateIds: ReadonlySet<string>,
+  diagnostics: Set<string>,
+): ReadonlyMap<string, ReadonlySet<QI.QualityIntelligenceCoverageMapId>> {
+  const refs = new Map<string, Set<QI.QualityIntelligenceCoverageMapId>>();
+  if (manifest.coverageMatrix === undefined) {
+    diagnostics.add("export:coverage-map-refs-unavailable");
+    return refs;
+  }
+  if (manifest.coverageMatrix.length === 0) {
+    diagnostics.add("export:coverage-map-refs-empty");
+    return refs;
+  }
+  for (const row of manifest.coverageMatrix) {
+    const coverageRef = coverageRefFor(runId, row.atomId);
+    for (const candidateId of row.coveringCandidateIds) {
+      if (candidateIds.has(candidateId)) {
+        addMapValue(refs, candidateId, coverageRef);
+      }
+    }
+  }
+  return refs;
+}
+
+function buildFindingRefsByCandidate(
+  manifest: QualityIntelligenceEvidenceManifest,
+  candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
+  diagnostics: Set<string>,
+): ReadonlyMap<string, ReadonlySet<QI.QualityIntelligenceValidationFindingId>> {
+  const refs = new Map<string, Set<QI.QualityIntelligenceValidationFindingId>>();
+  if (manifest.findings.length === 0) {
+    return refs;
+  }
+  const candidateIds = new Set<string>(candidates.map((candidate) => candidate.id));
+  const byAtom = new Map<string, Set<string>>();
+  for (const candidate of candidates) {
+    for (const atomId of candidate.derivedFromAtomIds) {
+      addMapValue(byAtom, atomId, candidate.id);
+    }
+  }
+  for (const row of manifest.coverageMatrix ?? []) {
+    for (const candidateId of row.coveringCandidateIds) {
+      if (candidateIds.has(candidateId)) {
+        addMapValue(byAtom, row.atomId, candidateId);
+      }
+    }
+  }
+  for (const finding of manifest.findings) {
+    const targetCandidateIds = new Set<string>();
+    if (finding.candidateId !== undefined) {
+      if (candidateIds.has(finding.candidateId)) {
+        targetCandidateIds.add(finding.candidateId);
+      } else {
+        diagnostics.add("export:finding-ref-candidate-missing");
+      }
+    }
+    for (const atomId of finding.evidenceAtomIds ?? []) {
+      for (const candidateId of byAtom.get(atomId) ?? []) {
+        targetCandidateIds.add(candidateId);
+      }
+    }
+    if (targetCandidateIds.size === 0) {
+      diagnostics.add("export:finding-ref-unlinked");
+      continue;
+    }
+    const findingRef = findingRefFor(finding, diagnostics);
+    if (findingRef === undefined) {
+      continue;
+    }
+    for (const candidateId of targetCandidateIds) {
+      addMapValue(refs, candidateId, findingRef);
+    }
+  }
+  return refs;
+}
+
+function integrityPayloadForCandidate(candidate: QI.QualityIntelligenceTestCaseCandidate): unknown {
+  return {
+    id: candidate.id,
+    runId: candidate.runId,
+    derivedFromAtomIds: [...candidate.derivedFromAtomIds].sort(),
+    title: candidate.title,
+    preconditions: candidate.preconditions,
+    steps: candidate.steps,
+    expectedResults: candidate.expectedResults,
+    priority: candidate.priority,
+    riskClass: candidate.riskClass,
+    tags: [...candidate.tags].sort(),
+    status: candidate.status,
+  };
+}
+
 function buildBundle(
   runId: string,
   adapter: Adapter,
   candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
   createdAt: string,
+  manifest: QualityIntelligenceEvidenceManifest,
 ): QI.QualityIntelligenceExportBundle {
-  const contents = candidates.map((c) => ({
-    candidateId: c.id,
-    coverageMapRefs: Object.freeze([]),
-    findingRefs: Object.freeze([]),
-  }));
-  const integrity = sha256Hex(JSON.stringify(candidates.map((c) => String(c.id))));
+  const diagnostics = new Set<string>();
+  const candidateIds = new Set<string>(candidates.map((candidate) => candidate.id));
+  const coverageRefsByCandidate = buildCoverageRefsByCandidate(
+    runId,
+    manifest,
+    candidateIds,
+    diagnostics,
+  );
+  const findingRefsByCandidate = buildFindingRefsByCandidate(manifest, candidates, diagnostics);
+  const contents = candidates.map((candidate) => {
+    const coverageMapRefs = sortedValues(coverageRefsByCandidate.get(candidate.id));
+    const findingRefs = sortedValues(findingRefsByCandidate.get(candidate.id));
+    if (manifest.coverageMatrix !== undefined && manifest.coverageMatrix.length > 0) {
+      if (coverageMapRefs.length === 0) diagnostics.add("export:coverage-map-refs-missing");
+    }
+    if (manifest.findings.length > 0 && findingRefs.length === 0) {
+      diagnostics.add("export:finding-refs-missing");
+    }
+    return {
+      candidateId: candidate.id,
+      coverageMapRefs,
+      findingRefs,
+    };
+  });
+  const redactionAttested = manifest.redactionSummary.totalStringsScanned > 0;
+  if (!redactionAttested) {
+    diagnostics.add("export:redaction-attestation-missing");
+  }
+  const modelProvenance = buildModelProvenance(manifest);
+  const diagnosticsList = [...diagnostics].sort();
+  const integrity = sha256Hex(
+    canonicalise({
+      runId,
+      targetAdapter: adapter,
+      redactionAttested,
+      diagnostics: diagnosticsList,
+      modelProvenance,
+      contents: contents
+        .map((entry) => ({
+          candidateId: entry.candidateId,
+          coverageMapRefs: [...entry.coverageMapRefs].sort(),
+          findingRefs: [...entry.findingRefs].sort(),
+        }))
+        .sort((a, b) =>
+          a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0,
+        ),
+      candidates: candidates.map(integrityPayloadForCandidate).sort((a, b) => {
+        const left = (a as { id: string }).id;
+        const right = (b as { id: string }).id;
+        return left < right ? -1 : left > right ? 1 : 0;
+      }),
+    }),
+  );
   return {
     id: QualityIntelligence.asQualityIntelligenceExportBundleId(
       `qi-export-${sha256Hex(`${runId}|${adapter}`).slice(0, 24)}`,
@@ -125,8 +327,10 @@ function buildBundle(
     targetAdapter: adapter,
     createdAt,
     integrityHashSha256Hex: integrity,
-    redactionAttested: true,
+    redactionAttested,
     contents,
+    ...(diagnosticsList.length > 0 ? { diagnostics: diagnosticsList } : {}),
+    modelProvenance,
   };
 }
 
@@ -142,22 +346,44 @@ interface ExportResponse {
   readonly evidence?: QualityIntelligenceExportRow;
 }
 
+let exportEvidenceSequence = 0;
+
+function nextExportEvidenceId(
+  runId: string,
+  target: Adapter | BinaryMode,
+  dryRun: boolean,
+  createdAt: string,
+  integrityHash: string,
+): string {
+  exportEvidenceSequence += 1;
+  return `qi-export-${sha256Hex(
+    `${runId}|${target}|${dryRun ? "dry-run" : "artifact"}|${createdAt}|${integrityHash}|${String(
+      exportEvidenceSequence,
+    )}`,
+  ).slice(0, 24)}`;
+}
+
 /**
- * Build the export-evidence row for an export action (Issue #283, AC4). Records the target type, a
- * deterministic artifact id, an integrity hash over the exported candidate ids, the redaction
- * attestation (candidates were redacted at persist time), and whether the action was a dry-run.
+ * Build the export-evidence row for an export action (Issue #283, AC4). Records the target type,
+ * a concrete action/artifact id, an integrity hash over the returned artifact or preview, the
+ * redaction attestation, model provenance when known, and whether the action was a dry-run.
  */
 function buildExportEvidenceRow(
   runId: string,
   target: Adapter | BinaryMode,
-  rows: readonly QualityIntelligenceCandidateRow[],
   dryRun: boolean,
+  createdAt: string,
+  integrityHash: string,
+  redactionAttested: boolean,
+  modelProvenance: ExportModelProvenance | undefined,
 ): QualityIntelligenceExportRow {
   return {
-    id: `qi-export-${sha256Hex(`${runId}|${target}`).slice(0, 24)}`,
+    id: nextExportEvidenceId(runId, target, dryRun, createdAt, integrityHash),
     targetAdapter: target,
-    integrityHash: sha256Hex(JSON.stringify(rows.map((r) => r.id))),
-    redactionAttested: true,
+    integrityHash,
+    redactionAttested,
+    createdAt,
+    ...(modelProvenance !== undefined ? { modelProvenance } : {}),
     dryRun,
   };
 }
@@ -166,17 +392,22 @@ function buildExportEvidenceRow(
  * Best-effort append of an export-evidence row for a 200 export action (Issue #283, AC4). A failed
  * audit write must NOT withhold an already-computed local export from the user: the artifact has no
  * external side effect, the run already exists on disk, and the manifest write is atomic so this path
- * is rare. Swallow on failure rather than turning a successful export into a 500. No-op for error
- * responses and for the disabled external-TMS path (which produces no artifact).
+ * is rare. Return a warning on failure rather than turning a successful export into a 500. No-op
+ * for error responses and for the disabled external-TMS path (which produces no artifact).
  */
-function recordExportEvidence(runId: string, outcome: ExportResponse, evidenceDir: string): void {
+function recordExportEvidence(
+  runId: string,
+  outcome: ExportResponse,
+  evidenceDir: string,
+): readonly string[] {
   if (outcome.evidence === undefined || outcome.result.status !== 200) {
-    return;
+    return [];
   }
   try {
     appendQualityIntelligenceExportRow({ runId, export: outcome.evidence }, { evidenceDir });
+    return [];
   } catch {
-    // intentionally swallowed — see doc comment
+    return ["export:evidence-write-failed"];
   }
 }
 
@@ -208,6 +439,22 @@ function selectRows(
 type ExportOutcome =
   | { readonly ok: true; readonly request: ExportRequest }
   | { readonly ok: false; readonly result: RouteResult };
+
+function resultWithWarnings(result: RouteResult, warnings: readonly string[]): RouteResult {
+  if (warnings.length === 0 || !isObject(result.body)) {
+    return result;
+  }
+  const existing = Array.isArray(result.body.warnings)
+    ? result.body.warnings.filter((warning): warning is string => typeof warning === "string")
+    : [];
+  return {
+    ...result,
+    body: {
+      ...result.body,
+      warnings: [...new Set([...existing, ...warnings])].sort(),
+    },
+  };
+}
 
 async function readExportRequest(req: IncomingMessage): Promise<ExportOutcome> {
   let raw: string;
@@ -256,18 +503,19 @@ export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Pr
   const parsed = await readExportRequest(ctx.req);
   if (!parsed.ok) return parsed.result;
   try {
-    if (loadQualityIntelligenceRun(id, { evidenceDir }) === undefined) {
+    const manifest = loadQualityIntelligenceRun(id, { evidenceDir });
+    if (manifest === undefined) {
       return errorResult(404, "QI_NOT_FOUND", "Quality Intelligence run not found.");
     }
     const artifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
     if (artifact === undefined || artifact.candidates.length === 0) {
       return errorResult(409, "QI_NO_CANDIDATES", "This run has no candidates to export.");
     }
-    const outcome = serialiseExport(id, parsed.request, artifact.candidates, evidenceDir);
+    const outcome = serialiseExport(id, parsed.request, artifact.candidates, manifest, evidenceDir);
     // Emit audit evidence for every materialised export or dry-run preview (Issue #283, AC4). The
     // append is best-effort and must not turn a successful export into a 500 — see recordExportEvidence.
-    recordExportEvidence(id, outcome, evidenceDir);
-    return outcome.result;
+    const evidenceWarnings = recordExportEvidence(id, outcome, evidenceDir);
+    return resultWithWarnings(outcome.result, evidenceWarnings);
   } catch {
     return errorResult(500, "QI_EXPORT_FAILED", "Failed to build the export.");
   }
@@ -277,14 +525,17 @@ function binaryResponse(
   runId: string,
   mode: BinaryMode,
   rows: readonly QualityIntelligenceCandidateRow[],
+  manifest: QualityIntelligenceEvidenceManifest,
 ): ExportResponse {
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
   const createdAt = new Date().toISOString();
   const meta = LOCAL_META[mode] ?? { contentType: "application/octet-stream", ext: "bin" };
+  const warnings = new Set<string>();
   let bytes: Uint8Array;
   if (mode === "pdf") {
-    const bundle = buildBundle(runId, "plain-text", candidates, createdAt);
+    const bundle = buildBundle(runId, "plain-text", candidates, createdAt, manifest);
+    for (const warning of bundle.diagnostics ?? []) warnings.add(warning);
     const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
     bytes = assemblePdf(serialized.body, runId);
   } else {
@@ -295,13 +546,17 @@ function binaryResponse(
     // available as a standalone export.
     const formats: readonly Adapter[] = ["csv", "markdown", "plain-text"];
     const entries = formats.map((fmt) => {
-      const bundle = buildBundle(runId, fmt, candidates, createdAt);
+      const bundle = buildBundle(runId, fmt, candidates, createdAt, manifest);
+      for (const warning of bundle.diagnostics ?? []) warnings.add(warning);
       const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
       const ext = LOCAL_META[fmt]?.ext ?? "txt";
       return { name: `${runId}.${ext}`, bytes: enc.encode(serialized.body) };
     });
     bytes = assembleZipBundle(entries);
   }
+  const bodyBase64 = Buffer.from(bytes).toString("base64");
+  const modelProvenance = buildModelProvenance(manifest);
+  const redactionAttested = manifest.redactionSummary.totalStringsScanned > 0;
   return {
     result: {
       status: 200,
@@ -312,10 +567,19 @@ function binaryResponse(
         contentType: meta.contentType,
         byteLen: bytes.length,
         encoding: "base64" as const,
-        body: Buffer.from(bytes).toString("base64"),
+        body: bodyBase64,
+        ...(warnings.size > 0 ? { warnings: [...warnings].sort() } : {}),
       },
     },
-    evidence: buildExportEvidenceRow(runId, mode, rows, false),
+    evidence: buildExportEvidenceRow(
+      runId,
+      mode,
+      false,
+      createdAt,
+      sha256Hex(bodyBase64),
+      redactionAttested,
+      modelProvenance,
+    ),
   };
 }
 
@@ -323,15 +587,18 @@ function serialisedResponse(
   runId: string,
   request: ExportRequest,
   rows: readonly QualityIntelligenceCandidateRow[],
+  manifest: QualityIntelligenceEvidenceManifest,
 ): ExportResponse {
   const adapter = request.adapter;
   if (adapter === "pdf" || adapter === "zip-bundle") {
-    return binaryResponse(runId, adapter, rows);
+    return binaryResponse(runId, adapter, rows, manifest);
   }
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
-  const bundle = buildBundle(runId, adapter, candidates, new Date().toISOString());
+  const createdAt = new Date().toISOString();
+  const bundle = buildBundle(runId, adapter, candidates, createdAt, manifest);
   const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
+  const warnings = bundle.diagnostics ?? [];
   if (request.dryRun) {
     return {
       result: {
@@ -342,12 +609,25 @@ function serialisedResponse(
           candidateCount: rows.length,
           byteLen: serialized.byteLen,
           preview: serialized.body.slice(0, 1200),
+          ...(warnings.length > 0 ? { warnings } : {}),
         },
       },
-      evidence: buildExportEvidenceRow(runId, adapter, rows, true),
+      evidence: buildExportEvidenceRow(
+        runId,
+        adapter,
+        true,
+        createdAt,
+        sha256Hex(serialized.body),
+        bundle.redactionAttested,
+        bundle.modelProvenance,
+      ),
     };
   }
   const meta = LOCAL_META[adapter] ?? { contentType: "text/plain", ext: "txt" };
+  const body =
+    meta.contentType === "text/csv"
+      ? QualityIntelligenceExport.toExcelFriendlyCsv(serialized.body)
+      : serialized.body;
   return {
     result: {
       status: 200,
@@ -356,11 +636,20 @@ function serialisedResponse(
         adapter,
         filename: `${runId}.${meta.ext}`,
         contentType: meta.contentType,
-        byteLen: serialized.byteLen,
-        body: serialized.body,
+        byteLen: Buffer.byteLength(body, "utf8"),
+        body,
+        ...(warnings.length > 0 ? { warnings } : {}),
       },
     },
-    evidence: buildExportEvidenceRow(runId, adapter, rows, false),
+    evidence: buildExportEvidenceRow(
+      runId,
+      adapter,
+      false,
+      createdAt,
+      sha256Hex(body),
+      bundle.redactionAttested,
+      bundle.modelProvenance,
+    ),
   };
 }
 
@@ -368,6 +657,7 @@ function serialiseExport(
   runId: string,
   request: ExportRequest,
   allRows: readonly QualityIntelligenceCandidateRow[],
+  manifest: QualityIntelligenceEvidenceManifest,
   evidenceDir: string,
 ): ExportResponse {
   const adapter = request.adapter;
@@ -395,7 +685,7 @@ function serialiseExport(
       ),
     };
   }
-  return serialisedResponse(runId, request, rows);
+  return serialisedResponse(runId, request, rows, manifest);
 }
 
 export const QI_EXPORT_ROUTE_GROUP: readonly RouteDefinition[] = [

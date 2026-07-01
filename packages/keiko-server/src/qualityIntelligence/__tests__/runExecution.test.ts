@@ -137,6 +137,7 @@ function chatCapability(
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    supportsResponseFormat: true,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: true,
@@ -560,6 +561,25 @@ describe("executeQiRun — model selection", () => {
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe(MODEL_ID);
   });
 
+  it("does not claim a passed preflight when no precomputed model routing is supplied", async () => {
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    await executeQiRun(
+      makeInput(evidenceDir, { onAccepted, request: makeRequest({ modelId: MODEL_ID }) }),
+    );
+    const modelRouting = onAccepted.mock.calls[0]?.[0]?.modelRouting;
+    expect(modelRouting?.preflight.status).toBe("not-run");
+    expect(modelRouting?.preflight.generation).toMatchObject({
+      stage: "generate",
+      modelId: MODEL_ID,
+      status: "not-run",
+    });
+    expect(modelRouting?.preflight.judge).toMatchObject({
+      stage: "judge",
+      modelId: MODEL_ID,
+      status: "not-run",
+    });
+  });
+
   it("prefers a structured-output chat model when modelId is omitted", async () => {
     const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
     const input = makeInput(evidenceDir, {
@@ -589,7 +609,11 @@ describe("executeQiRun — model selection", () => {
           evidenceDir,
           modelPort: port,
           config: buildConfig([
-            chatCapability("chat-only", { structuredOutput: false, costClass: "low" }),
+            chatCapability("chat-only", {
+              structuredOutput: false,
+              supportsResponseFormat: false,
+              costClass: "low",
+            }),
           ]),
         }),
       }),
@@ -600,9 +624,16 @@ describe("executeQiRun — model selection", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.modelId).toBe("chat-only");
     expect(calls[0]?.responseFormat).toBeUndefined();
+    expect(calls[0]?.temperature).toBe(0);
+    expect(calls[0]?.topP).toBe(1);
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("chat-only");
     const manifest = loadQualityIntelligenceRun("run-chat-only-no-judge", { evidenceDir });
     expect(manifest?.qualityScore).toBeNull();
+    expect(manifest?.modelParameters).toEqual({
+      temperature: 0,
+      topP: 1,
+      responseFormatEnforced: false,
+    });
     expect(testQualityFindingsFrom(manifest)).toHaveLength(0);
   });
 
@@ -673,10 +704,18 @@ describe("executeQiRun — model selection", () => {
     expect(summary.qualityScore).toBe(50);
     expect(summary.modelGatewayCallCount).toBe(3);
     expect(calls).toHaveLength(3);
+    expect(calls[0]?.temperature).toBe(0);
+    expect(calls[0]?.topP).toBe(1);
+    expect(calls[1]?.temperature).toBe(0);
+    expect(calls[1]?.topP).toBeUndefined();
 
     const manifest = loadQualityIntelligenceRun("run-749-live-proof", { evidenceDir });
     expect(manifest?.qualityScore).toBe(50);
     expect(manifest?.modelGatewayCallCount).toBe(3);
+    expect(manifest?.modelParameters?.temperature).toBe(0);
+    expect(manifest?.modelParameters?.topP).toBe(1);
+    expect(manifest?.modelParameters?.judgeTemperature).toBe(0);
+    expect(manifest?.modelParameters?.judgeSeedUsed).toBe(false);
     const testQualityFindings = testQualityFindingsFrom(manifest);
     expect(testQualityFindings).toHaveLength(1);
     expectRedactedText(testQualityFindings[0]?.summaryRedacted, providerSecret);
@@ -685,6 +724,38 @@ describe("executeQiRun — model selection", () => {
     expect(result.status).toBe(200);
     const detail = result.body as QualityIntelligenceUiRunDetail;
     expectIssue749RunDetail(detail, providerSecret);
+  });
+
+  it("uses the run seed for a seed-capable judge and records it in modelParameters", async () => {
+    const { port, calls } = recordingSequencePort([
+      COVERING_TWO_REQUIREMENTS_JSON,
+      strongJudgeVerdictWithRationale("The candidate is deterministic."),
+      strongJudgeVerdictWithRationale("The candidate remains deterministic."),
+    ]);
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        runId: "run-seeded-judge",
+        request: makeRequest({ seed: 31 }),
+        deps: buildDeps({
+          evidenceDir,
+          config: buildConfig([chatCapability(MODEL_ID, { supportsSeeding: true })]),
+          modelPort: port,
+        }),
+      }),
+    );
+
+    expect(summary.status).toBe("succeeded");
+    expect(calls.map((call) => call.seed)).toEqual([31, 31, 31]);
+    expect(calls[1]?.temperature).toBe(0);
+    expect(calls[2]?.temperature).toBe(0);
+    const manifest = loadQualityIntelligenceRun("run-seeded-judge", { evidenceDir });
+    expect(manifest?.seedUsed).toBe(31);
+    expect(manifest?.modelParameters?.seed).toBe(31);
+    expect(manifest?.modelParameters?.temperature).toBe(0);
+    expect(manifest?.modelParameters?.topP).toBe(1);
+    expect(manifest?.modelParameters?.judgeTemperature).toBe(0);
+    expect(manifest?.modelParameters?.judgeSeedUsed).toBe(true);
+    expect(manifest?.modelParameters?.judgeSeed).toBe(31);
   });
 
   it("bounds oversized model candidates before judging and counts the bounded judge dispatch", async () => {
@@ -710,11 +781,16 @@ describe("executeQiRun — model selection", () => {
     const deps = buildDeps({
       evidenceDir,
       modelPort: port,
+      config: buildConfig([
+        chatCapability("loose-generation", { supportsResponseFormat: false }),
+        chatCapability("judge-json", { supportsResponseFormat: true }),
+      ]),
     });
 
     const summary = await executeQiRun(
       makeInput(evidenceDir, {
         runId: "run-749-oversize-guard",
+        request: makeRequest({ modelId: "loose-generation" }),
         deps,
       }),
     );
@@ -1055,11 +1131,11 @@ describe("executeQiRun — ingestion error propagation", () => {
   });
 });
 
-// ─── Unparseable model output → failed status ────────────────────────────────
+// ─── Unparseable model output → degraded baseline status ─────────────────────
 
 describe("executeQiRun — unparseable model output", () => {
   it("degrades to a succeeded baseline run with a visible reason when the model returns unparseable JSON", async () => {
-    // QI-DEG-01: unparseable model output is recovered by falling back to the deterministic
+    // QI-DEG-01: schema-invalid model output is recovered by falling back to the deterministic
     // baseline (the product contract: deliver baseline test cases rather than hard-failing), but
     // the degradation MUST stay visible — the run succeeds AND carries a bounded reasonSummary the
     // BFF surfaces on the terminal `done` frame as degraded.
@@ -1075,7 +1151,7 @@ describe("executeQiRun — unparseable model output", () => {
       onAccepted: vi.fn(),
     });
     expect(summary.status).toBe("succeeded");
-    expect(summary.reasonSummary).toBe("qi-error: UnparseableModelOutputError");
+    expect(summary.reasonSummary).toBe("qi-error: QI_MODEL_SCHEMA_VIOLATION");
   });
 });
 

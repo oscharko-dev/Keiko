@@ -38,6 +38,12 @@ interface ParsedEnvelope {
   createdAt: string;
   integrityHashSha256Hex: string;
   redactionAttested: boolean;
+  diagnostics?: string[];
+  modelProvenance?: {
+    generation: { modelId: string; provider: string; revision: string };
+    judge: { modelId: string; provider: string; revision: string };
+    seedUsed?: number | null;
+  };
   candidates: ParsedCandidate[];
 }
 
@@ -153,6 +159,27 @@ describe("adaptToJson", () => {
     expect(parsed.targetAdapter).toBe("json");
     expect(parsed.createdAt).toBe("2026-06-01T00:00:00.000Z");
     expect(parsed.integrityHashSha256Hex).toBe("0".repeat(64));
+  });
+
+  it("includes optional diagnostics and model provenance when present on the bundle", () => {
+    const c = candidate("tc-1");
+    const parsed = parseEnvelope(
+      adaptToJson(
+        bundle([c], {
+          diagnostics: ["export:coverage-map-refs-unavailable"],
+          modelProvenance: {
+            generation: { modelId: "gpt-test-design", provider: "unknown", revision: "unknown" },
+            judge: { modelId: "gpt-test-judge", provider: "unknown", revision: "unknown" },
+            seedUsed: 42,
+          },
+        }),
+        [c],
+      ),
+    );
+    expect(parsed.diagnostics).toEqual(["export:coverage-map-refs-unavailable"]);
+    expect(parsed.modelProvenance?.generation.modelId).toBe("gpt-test-design");
+    expect(parsed.modelProvenance?.judge.modelId).toBe("gpt-test-judge");
+    expect(parsed.modelProvenance?.seedUsed).toBe(42);
   });
 
   it("is deterministic: identical input yields byte-identical output", () => {

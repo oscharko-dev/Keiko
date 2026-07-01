@@ -938,7 +938,7 @@ describe("handleGatewaySetup", () => {
       id: "Mistral-Large-3",
       kind: "chat",
       toolCalling: false,
-      structuredOutput: true,
+      structuredOutput: false,
       streaming: true,
     });
     deps.store.close();

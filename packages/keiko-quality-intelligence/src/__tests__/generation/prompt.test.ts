@@ -122,6 +122,23 @@ describe("QI_TEST_DESIGN_SYSTEM_PROMPT", () => {
     expect(prompt).toContain("Prüfbarkeit");
     expect(prompt).toMatch(/beobachtbare/u);
   });
+
+  it("names ISTQB-style techniques for regulated requirement depth", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("Äquivalenzklassen");
+    expect(prompt).toContain("Grenzwertanalyse");
+    expect(prompt).toContain("Entscheidungstabellen");
+    expect(prompt).toContain("Zustandsübergänge");
+    expect(prompt).toContain("negative Tests");
+  });
+
+  it("directs numeric banking thresholds and cross-field rules toward deep tests", () => {
+    const prompt = QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT;
+    expect(prompt).toContain("9.999,99 EUR");
+    expect(prompt).toContain("10.000,00 EUR");
+    expect(prompt).toContain("10.000,01 EUR");
+    expect(prompt).toMatch(/Betrag x Rolle x Tageslimit/u);
+  });
 });
 
 // ─── QI_TEST_DESIGN_RESPONSE_SCHEMA ───────────────────────────────────────────

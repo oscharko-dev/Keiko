@@ -21,6 +21,9 @@ export const XRAY_CSV_HEADERS: readonly string[] = Object.freeze([
   "Data",
   "Result",
   "TestType",
+  "Priority",
+  "Status",
+  "Labels",
 ]);
 
 const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): string => {
@@ -29,6 +32,9 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
   }
   return candidate.preconditions.join(" ; ");
 };
+
+const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
+  [candidate.riskClass, ...candidate.tags].join(" ");
 
 export function adaptToXray(
   bundle: QualityIntelligenceExportBundle,
@@ -62,6 +68,9 @@ export function adaptToXray(
         "",
         "",
         "Manual",
+        candidate.priority,
+        candidate.status,
+        buildLabels(candidate),
       ]);
       continue;
     }
@@ -76,6 +85,9 @@ export function adaptToXray(
         "",
         result,
         "Manual",
+        candidate.priority,
+        candidate.status,
+        buildLabels(candidate),
       ]);
     }
   }

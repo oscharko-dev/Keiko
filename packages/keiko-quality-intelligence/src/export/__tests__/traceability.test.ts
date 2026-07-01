@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { QualityIntelligenceTraceabilityRow } from "../adapters/traceability.js";
 import {
+  TRACEABILITY_CSV_HEADERS,
   TRACEABILITY_HEADERS,
   TRACEABILITY_REVERSE_HEADERS,
   adaptToTraceabilityCsv,
@@ -35,34 +36,18 @@ function row(
 // ---------------------------------------------------------------------------
 
 describe("adaptToTraceabilityCsv", () => {
-  it("emits a 'Requirements to tests' section header before the TRACEABILITY_HEADERS row", () => {
+  it("emits exactly one CSV header row with a RecordType discriminator", () => {
     const out = adaptToTraceabilityCsv([row("atom-1", ["tc-1"])]);
-    expect(out).toContain("Requirements to tests");
-    const reqIdx = out.indexOf("Requirements to tests");
-    const headIdx = out.indexOf(TRACEABILITY_HEADERS[0] ?? "");
-    expect(reqIdx).toBeLessThan(headIdx);
+    const lines = out.trimEnd().split("\r\n");
+    expect(lines[0]).toBe(TRACEABILITY_CSV_HEADERS.join(","));
+    expect(lines.filter((line) => line.includes("Requirement ID"))).toHaveLength(1);
+    expect(out).not.toContain("Requirements to tests");
+    expect(out).not.toContain("Tests to requirements");
   });
 
-  it("emits a 'Tests to requirements' section header for the reverse direction", () => {
+  it("contains the TRACEABILITY_CSV_HEADERS columns", () => {
     const out = adaptToTraceabilityCsv([row("atom-1", ["tc-1"])]);
-    expect(out).toContain("Tests to requirements");
-  });
-
-  it("Requirements→Tests section appears before Tests→Requirements section", () => {
-    const out = adaptToTraceabilityCsv([row("atom-1", ["tc-1"])]);
-    expect(out.indexOf("Requirements to tests")).toBeLessThan(out.indexOf("Tests to requirements"));
-  });
-
-  it("contains the TRACEABILITY_HEADERS columns", () => {
-    const out = adaptToTraceabilityCsv([row("atom-1", ["tc-1"])]);
-    for (const header of TRACEABILITY_HEADERS) {
-      expect(out).toContain(header);
-    }
-  });
-
-  it("contains the TRACEABILITY_REVERSE_HEADERS columns", () => {
-    const out = adaptToTraceabilityCsv([row("atom-1", ["tc-1"])]);
-    for (const header of TRACEABILITY_REVERSE_HEADERS) {
+    for (const header of TRACEABILITY_CSV_HEADERS) {
       expect(out).toContain(header);
     }
   });
@@ -84,21 +69,23 @@ describe("adaptToTraceabilityCsv", () => {
     expect(out.indexOf("atom-a")).toBeLessThan(out.indexOf("atom-z"));
   });
 
-  it("inverts the matrix: candidateId appears in Tests→Requirements section", () => {
+  it("emits both requirement-to-test and test-to-requirement records", () => {
     const out = adaptToTraceabilityCsv([row("atom-1", ["tc-xyz"])]);
-    // tc-xyz should appear in the reverse section as well
-    const testsIdx = out.indexOf("Tests to requirements");
-    expect(out.indexOf("tc-xyz", testsIdx)).toBeGreaterThan(testsIdx);
+    expect(out).toContain("requirement-to-test");
+    expect(out).toContain("test-to-requirement");
+    expect(out).toMatch(/test-to-requirement,atom-1,—,covered,"0,90",tc-xyz,—/u);
   });
 
-  it("a candidate covering multiple requirements lists all of them in the reverse section", () => {
+  it("a candidate covering multiple requirements produces one reverse row per requirement", () => {
     const rows = [row("atom-1", ["tc-shared"]), row("atom-2", ["tc-shared"])];
     const out = adaptToTraceabilityCsv(rows);
-    const testsIdx = out.indexOf("Tests to requirements");
-    const reverseSection = out.slice(testsIdx);
-    // Both atom-1 and atom-2 should appear after "Tests to requirements"
-    expect(reverseSection).toContain("atom-1");
-    expect(reverseSection).toContain("atom-2");
+    const reverseRows = out
+      .trimEnd()
+      .split("\r\n")
+      .filter((line) => line.startsWith("test-to-requirement"));
+    expect(reverseRows).toHaveLength(2);
+    expect(reverseRows.join("\n")).toContain("atom-1");
+    expect(reverseRows.join("\n")).toContain("atom-2");
   });
 
   it("is deterministic: identical input yields byte-identical output", () => {
@@ -112,6 +99,12 @@ describe("adaptToTraceabilityCsv", () => {
     expect(out).toContain("'=FORMULA");
     // Raw unescaped =FORMULA must not appear at a cell boundary
     expect(out).not.toMatch(/(?:^|,)=FORMULA(?:,|\r\n)/mu);
+  });
+
+  it("formats confidence with a decimal comma for local spreadsheet readability", () => {
+    const out = adaptToTraceabilityCsv([row("atom-1", ["tc-1"], { confidence: 0.5 })]);
+    expect(out).toContain('"0,50"');
+    expect(out).not.toContain("0.50");
   });
 
   it("handles an empty rows array without throwing", () => {
@@ -284,10 +277,8 @@ describe("T1: embedded newline in title/excerpt renders as single physical line"
   it("CSV: candidateTitle with \\n is folded to a single-line cell", () => {
     const r = row("atom-1", ["tc-1"]);
     const out = adaptToTraceabilityCsv([r], { candidateTitleById: titleMap });
-    const testsIdx = out.indexOf("Tests to requirements");
-    const reverseSection = out.slice(testsIdx);
-    expect(reverseSection).not.toContain("\nLine two");
-    expect(reverseSection).toContain("Line one Line two");
+    expect(out).not.toContain("\nLine two");
+    expect(out).toContain("Line one Line two");
   });
 
   it("CSV: requirementExcerptRedacted with \\n is folded to a single-line cell", () => {

@@ -63,6 +63,8 @@ export interface QualityIntelligenceRunSummary {
    * Null only when the judge stage was skipped/unavailable or there were no candidates to judge.
    */
   readonly qualityScore?: number | null;
+  /** Count-only judge diagnostics separating judged quality from unjudged candidates. */
+  readonly qualityDiagnostics?: QualityIntelligenceRecordInput["qualityDiagnostics"];
 }
 
 // ─── Run context ─────────────────────────────────────────────────────────────
@@ -337,6 +339,7 @@ export interface PersistArgs {
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
   readonly qualityScore?: number | null;
+  readonly qualityDiagnostics?: QualityIntelligenceRecordInput["qualityDiagnostics"];
   readonly redaction?: QualityIntelligenceRecordOptions["redaction"];
   readonly sourceFingerprints?: QualityIntelligenceRecordInput["sourceFingerprints"];
   readonly atomFingerprints?: QualityIntelligenceRecordInput["atomFingerprints"];
@@ -354,15 +357,23 @@ function mapFindingsToRows(
   findings: readonly QI.QualityIntelligenceValidationFinding[],
 ): QualityIntelligenceRecordInput["findings"] {
   return Object.freeze(
-    findings.map((f) =>
-      Object.freeze({
+    findings.map((f) => {
+      const category = "category" in f && typeof f.category === "string" ? f.category : undefined;
+      const confidence =
+        "confidence" in f && typeof f.confidence === "number" ? f.confidence : undefined;
+      return Object.freeze({
         id: String(f.id),
         kind: f.kind,
         severity: f.severity,
         summaryRedacted: f.summary,
+        ...(f.evidenceAtomIds.length > 0
+          ? { evidenceAtomIds: Object.freeze(f.evidenceAtomIds.map(String)) }
+          : {}),
+        ...(category !== undefined ? { category } : {}),
+        ...(confidence !== undefined ? { confidence } : {}),
         ...(f.candidateId !== undefined ? { candidateId: String(f.candidateId) } : {}),
-      }),
-    ),
+      });
+    }),
   );
 }
 
@@ -388,6 +399,9 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     provenanceRefs: args.provenanceRefs,
     coverageMatrix: args.coverageMatrix,
     ...(args.qualityScore !== undefined ? { qualityScore: args.qualityScore } : {}),
+    ...(args.qualityDiagnostics !== undefined
+      ? { qualityDiagnostics: args.qualityDiagnostics }
+      : {}),
     ...(args.sourceFingerprints !== undefined
       ? { sourceFingerprints: args.sourceFingerprints }
       : {}),

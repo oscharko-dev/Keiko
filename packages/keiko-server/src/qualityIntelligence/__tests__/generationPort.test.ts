@@ -4,7 +4,7 @@
 // and the generate() return contract. All model calls are intercepted by a fake
 // ModelPort; no network or filesystem access.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayRequest,
   ModelCapability,
@@ -24,6 +24,10 @@ import type {
 } from "@oscharko-dev/keiko-workflows";
 
 // ─── Fake infrastructure ─────────────────────────────────────────────────────
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -571,12 +575,14 @@ describe("createQiGenerationPort.generate — return value", () => {
 // ─── generate() — abort signal wiring ────────────────────────────────────────
 
 describe("createQiGenerationPort.generate — abort signal", () => {
-  it("passes the provided signal to the model.call", async () => {
+  it("passes a composed cancellation signal to the model.call", async () => {
     const { deps, calls } = depsFor("chat-model-1");
     const port = createPort(deps, "chat-model-1");
     const controller = new AbortController();
     await port.generate(args({ signal: controller.signal }));
-    expect(calls[0]?.signal).toBe(controller.signal);
+    expect(calls[0]?.signal).toBeDefined();
+    expect(calls[0]?.signal).not.toBe(controller.signal);
+    expect(calls[0]?.request.cancellationSignal).toBe(calls[0]?.signal);
   });
 
   it("passes a default signal when none is provided in args", async () => {
@@ -585,6 +591,23 @@ describe("createQiGenerationPort.generate — abort signal", () => {
     await port.generate(args({ signal: undefined }));
     // A signal must always be supplied to model.call — never undefined.
     expect(calls[0]?.signal).toBeDefined();
+  });
+
+  it("throws QI_MODEL_TIMEOUT when the model call exceeds the QI profile timeout", async () => {
+    vi.useFakeTimers();
+    const hungPort: ModelPort = {
+      call: (): Promise<NormalizedResponse> => new Promise<NormalizedResponse>(() => {}),
+    };
+    const { deps } = depsFor("chat-model-1", "{}", {
+      portFactory: (): ModelPort => hungPort,
+    });
+    const port = createPort(deps, "chat-model-1");
+
+    const promise = port.generate(args());
+    const expectation = expect(promise).rejects.toMatchObject({ code: "QI_MODEL_TIMEOUT" });
+    await vi.advanceTimersByTimeAsync(45_000);
+
+    await expectation;
   });
 });
 
@@ -675,13 +698,30 @@ function configWithSeeding(modelId: string): ReturnType<typeof parseGatewayConfi
 
 describe("createQiGenerationPort.generate — determinism-first parameters", () => {
   it("sends a json_schema responseFormat when the model supports it", async () => {
-    const { deps, calls } = depsFor("rf-model", "{}", {
+    const { deps, calls } = depsFor("rf-model", JSON.stringify({ testCases: [] }), {
       config: configWithResponseFormat("rf-model"),
     });
     const port = createPort(deps, "rf-model");
     const result = await port.generate(args());
     expect(calls[0]?.request.responseFormat?.type).toBe("json_schema");
+    expect(calls[0]?.request.responseFormat?.name).toBe("quality_intelligence_test_design");
+    expect(calls[0]?.request.responseFormat?.strict).toBe(true);
+    expect(calls[0]?.request.temperature).toBe(0);
+    expect(calls[0]?.request.topP).toBe(1);
+    expect(result.modelParameters?.temperature).toBe(0);
+    expect(result.modelParameters?.topP).toBe(1);
     expect(result.modelParameters?.responseFormat).toBe("json_schema");
+    expect(result.modelParameters?.responseFormatEnforced).toBe(true);
+  });
+
+  it("rejects schema-violating generation output when responseFormat is enforced", async () => {
+    const { deps } = depsFor("rf-model", JSON.stringify({ tests: [] }), {
+      config: configWithResponseFormat("rf-model"),
+    });
+    const port = createPort(deps, "rf-model");
+    await expect(port.generate(args())).rejects.toMatchObject({
+      code: "QI_MODEL_SCHEMA_VIOLATION",
+    });
   });
 
   it("runs chat-only models without responseFormat and still returns a model result", async () => {
@@ -719,8 +759,15 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     const port = createPort(deps, "chat-only-model");
     const result = await port.generate(args());
     expect(calls[0]?.request.responseFormat).toBeUndefined();
+    expect(calls[0]?.request.temperature).toBe(0);
+    expect(calls[0]?.request.topP).toBe(1);
     expect(result.modelId).toBe("chat-only-model");
     expect(result.seedUsed).toBeNull();
+    expect(result.modelParameters).toEqual({
+      temperature: 0,
+      topP: 1,
+      responseFormatEnforced: false,
+    });
   });
 
   it("omits responseFormat when the model does not advertise support", async () => {
@@ -728,7 +775,13 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     const port = createPort(deps, "plain-model");
     const result = await port.generate(args());
     expect(calls[0]?.request.responseFormat).toBeUndefined();
-    expect(result.modelParameters).toBeUndefined();
+    expect(calls[0]?.request.temperature).toBe(0);
+    expect(calls[0]?.request.topP).toBe(1);
+    expect(result.modelParameters).toEqual({
+      temperature: 0,
+      topP: 1,
+      responseFormatEnforced: false,
+    });
   });
 
   it("sends an explicit seed only when the model advertises seeding support", async () => {
@@ -742,8 +795,13 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     });
     const result = await port.generate(args());
     expect(calls[0]?.request.seed).toBe(17);
+    expect(calls[0]?.request.temperature).toBe(0);
+    expect(calls[0]?.request.topP).toBe(1);
     expect(result.seedUsed).toBe(17);
     expect(result.modelParameters?.seed).toBe(17);
+    expect(result.modelParameters?.temperature).toBe(0);
+    expect(result.modelParameters?.topP).toBe(1);
+    expect(result.modelParameters?.responseFormatEnforced).toBe(false);
   });
 
   it("does not send a seed when the model does not advertise seeding support", async () => {
@@ -755,8 +813,13 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     });
     const result = await port.generate(args());
     expect(calls[0]?.request.seed).toBeUndefined();
+    expect(calls[0]?.request.temperature).toBe(0);
+    expect(calls[0]?.request.topP).toBe(1);
     expect(result.seedUsed).toBeNull();
     expect(result.modelParameters?.seed).toBeUndefined();
+    expect(result.modelParameters?.temperature).toBe(0);
+    expect(result.modelParameters?.topP).toBe(1);
+    expect(result.modelParameters?.responseFormatEnforced).toBe(false);
   });
 
   it("always reports the modelId that produced the candidates", async () => {

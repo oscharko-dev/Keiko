@@ -344,6 +344,28 @@ describe("handleQiExport — CSV adapter", () => {
     const body = result.body as { contentType: string };
     expect(body.contentType).toBe("text/csv");
   });
+
+  it("CSV download is Excel-friendly for German locales (BOM, sep=;, umlauts preserved)", async () => {
+    recordQualityIntelligenceCandidates({
+      runId: RUN_ID,
+      generatedAt: "2026-06-01T10:02:00.000Z",
+      candidates: [makeCandidate("Überweisung prüfen")],
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+    });
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as { body: string; byteLen: number };
+    expect(body.body.startsWith("\ufeffsep=;\r\n")).toBe(true);
+    expect(body.body).toContain("Überweisung prüfen");
+    expect(body.body).toContain("CandidateId;RunId;Title");
+    expect(body.byteLen).toBe(Buffer.byteLength(body.body, "utf8"));
+  });
 });
 
 // ─── Happy path: JSON adapter (local) ────────────────────────────────────────
@@ -369,6 +391,148 @@ describe("handleQiExport — JSON adapter", () => {
     );
     const body = result.body as { filename: string };
     expect(body.filename).toMatch(/\.json$/);
+  });
+});
+
+// ─── WP6: export traceability refs, diagnostics, provenance, integrity ────────
+
+describe("handleQiExport — WP6 export traceability and provenance", () => {
+  const exportJson = async (): Promise<{
+    readonly routeBody: { readonly body: string; readonly warnings?: readonly string[] };
+    readonly envelope: {
+      readonly integrityHashSha256Hex: string;
+      readonly diagnostics?: readonly string[];
+      readonly modelProvenance?: {
+        readonly generation: { readonly modelId: string; readonly provider: string };
+        readonly judge: { readonly modelId: string; readonly provider: string };
+        readonly seedUsed?: number | null;
+      };
+      readonly candidates: readonly {
+        readonly id: string;
+        readonly title: string;
+        readonly coverageMapRefs: readonly string[];
+        readonly findingRefs: readonly string[];
+      }[];
+    };
+  }> => {
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const routeBody = result.body as { body: string; warnings?: readonly string[] };
+    return { routeBody, envelope: JSON.parse(routeBody.body) as never };
+  };
+
+  const recordRunWithTraceability = (): void => {
+    recordQualityIntelligenceRun(
+      {
+        ...runRecordInput(RUN_ID),
+        totals: { candidates: 1, findings: 1, exports: 0 },
+        findings: [
+          {
+            id: "qi-finding-export-001",
+            kind: "coverage-gap",
+            severity: "medium",
+            summaryRedacted: "Requirement coverage gap.",
+            evidenceAtomIds: ["atom-1"],
+            candidateId: "cand-001",
+          },
+        ],
+        coverageMatrix: [
+          {
+            atomId: "atom-1",
+            status: "covered",
+            confidence: 0.9,
+            coveringCandidateIds: ["cand-001"],
+            requirementExcerptRedacted: "Login must succeed.",
+          },
+        ],
+        modelId: "gpt-legacy-fallback",
+        modelParameters: { responseFormat: "json_schema", temperature: 0 },
+        seedUsed: 42,
+        modelRouting: {
+          policyVersion: 1,
+          requested: {
+            policyVersion: 1,
+            testDesignModelId: "gpt-test-design",
+            judgeModelId: "gpt-test-judge",
+          },
+          resolved: {
+            testDesignModelId: "gpt-test-design",
+            judgeModelId: "gpt-test-judge",
+          },
+          preflight: {
+            status: "passed",
+            generation: { stage: "generate", status: "passed", modelId: "gpt-test-design" },
+            judge: { stage: "judge", status: "passed", modelId: "gpt-test-judge" },
+          },
+        },
+      },
+      { evidenceDir },
+    );
+  };
+
+  it("populates CoverageMapRefs and FindingRefs from the persisted manifest", async () => {
+    recordRunWithTraceability();
+    const { envelope } = await exportJson();
+    const exported = envelope.candidates[0];
+    expect(exported?.coverageMapRefs[0]).toMatch(/^qi-coverage-[0-9a-f]{32}$/u);
+    expect(exported?.findingRefs).toEqual(["qi-finding-export-001"]);
+    expect(envelope.diagnostics ?? []).not.toContain("export:coverage-map-refs-unavailable");
+    expect(envelope.diagnostics ?? []).not.toContain("export:finding-refs-missing");
+  });
+
+  it("surfaces missing coverage refs as route warnings and JSON diagnostics", async () => {
+    const { routeBody, envelope } = await exportJson();
+    expect(routeBody.warnings).toContain("export:coverage-map-refs-unavailable");
+    expect(envelope.diagnostics).toContain("export:coverage-map-refs-unavailable");
+  });
+
+  it("includes model provenance when model routing is present", async () => {
+    recordRunWithTraceability();
+    const { envelope } = await exportJson();
+    expect(envelope.modelProvenance?.generation.modelId).toBe("gpt-test-design");
+    expect(envelope.modelProvenance?.judge.modelId).toBe("gpt-test-judge");
+    expect(envelope.modelProvenance?.generation.provider).toBe("unknown");
+    expect(envelope.modelProvenance?.seedUsed).toBe(42);
+    const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
+    expect(manifest?.exports[0]?.modelProvenance?.generation.modelId).toBe("gpt-test-design");
+    expect(manifest?.exports[0]?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+  });
+
+  it("marks model provenance as unknown for legacy runs without model metadata", async () => {
+    const { envelope } = await exportJson();
+    expect(envelope.modelProvenance?.generation.modelId).toBe("unknown");
+    expect(envelope.modelProvenance?.judge.modelId).toBe("unknown");
+    expect(envelope.modelProvenance?.generation.provider).toBe("unknown");
+  });
+
+  it("changes the export integrity hash when candidate content changes", async () => {
+    const before = (await exportJson()).envelope.integrityHashSha256Hex;
+    applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "cand-001",
+      editedFields: { title: "User can log in with a revised title" },
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+      provenance: {
+        editedAt: "2026-06-01T12:00:00.000Z",
+        editedBy: "human",
+        editorLabel: "tester",
+      },
+    });
+    const after = (await exportJson()).envelope.integrityHashSha256Hex;
+    expect(after).not.toBe(before);
+  });
+
+  it("changes the export integrity hash when traceability refs become available", async () => {
+    const withoutRefs = (await exportJson()).envelope.integrityHashSha256Hex;
+    recordRunWithTraceability();
+    const withRefs = (await exportJson()).envelope.integrityHashSha256Hex;
+    expect(withRefs).not.toBe(withoutRefs);
   });
 });
 
@@ -972,10 +1136,12 @@ describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
     expect(() => loadQualityIntelligenceRun(RUN_ID, { evidenceDir })).not.toThrow();
   });
 
-  it("deduplicates a repeated identical export (csv twice → one row)", async () => {
+  it("records repeated identical exports as distinct audit actions (csv twice → two rows)", async () => {
     await exportAdapter("csv");
     await exportAdapter("csv");
-    expect(exportsOf()).toHaveLength(1);
+    const rows = exportsOf();
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((row) => row.id)).size).toBe(2);
   });
 
   it("records distinct rows for distinct adapters (csv then json → two rows)", async () => {
@@ -1079,9 +1245,12 @@ describe("handleQiExport — AC4 audit write is fail-open", () => {
       expect((result.body as { body: string }).body.length).toBeGreaterThan(0);
 
       // When the chmod actually blocked the write (i.e. not running as root) no audit row was
-      // recorded — the error was swallowed, not surfaced. Under root, chmod is a no-op and the row
+      // recorded and the route surfaces a warning. Under root, chmod is a no-op and the row
       // is written; the 200 + body assertions above (the invariant under test) still hold.
       if (process.getuid?.() !== 0) {
+        expect((result.body as { warnings?: readonly string[] }).warnings).toContain(
+          "export:evidence-write-failed",
+        );
         const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
         expect(manifest?.exports).toHaveLength(0);
       }

@@ -10,7 +10,9 @@
 import type { IncomingMessage } from "node:http";
 import {
   applyQualityIntelligenceCandidateEdit,
+  loadQualityIntelligenceCandidates,
   loadQualityIntelligenceRun,
+  recordQualityIntelligenceCandidates,
   type QualityIntelligenceCandidateRow,
 } from "@oscharko-dev/keiko-evidence";
 import {
@@ -21,6 +23,7 @@ import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { appendEditAudit, candidateReviewStateOf, loadRunReviewState } from "./reviewStore.js";
+import { resolveQualityIntelligenceReviewPrincipal } from "./reviewPrincipal.js";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_TITLE_LEN = 256;
@@ -278,7 +281,9 @@ function recordEdit(
   edit: ParsedEdit,
   evidenceDir: string,
   deps: UiHandlerDeps,
+  ctx: RouteContext,
 ): RouteResult {
+  const before = loadQualityIntelligenceCandidates(runId, { evidenceDir });
   const result = applyQualityIntelligenceCandidateEdit({
     runId,
     candidateId: edit.candidateId,
@@ -307,23 +312,40 @@ function recordEdit(
     return errorResult(404, "QI_NOT_FOUND", "Candidate not found for this run.");
   }
   if (result.changed) {
-    // Append the consolidated `.review.json` audit entry. The atomic, per-edit record is the
-    // `editedRevisions[]` provenance just written WITH the candidate change (a single candidates.json
-    // write inside applyQualityIntelligenceCandidateEdit); this is a second, separate companion write.
-    // If it throws (e.g. disk failure) the outer handler returns 500, but the edit is still recorded
-    // in editedRevisions[] provenance — an edit is never fully unaudited. The trade-off: the
-    // consolidated audit log can lag the per-artifact provenance on a partial-write failure, and a
-    // retry with identical fields is a no-op (changed === false) that won't backfill it. Cross-artifact
-    // write atomicity is a tracked follow-up; it is not introduced here to avoid touching the shared
-    // companion store used by every QI route.
-    appendEditAudit({
-      runId,
-      evidenceDir,
-      candidateId: edit.candidateId,
-      reviewerLabel: edit.editorLabel,
-      now: new Date().toISOString(),
-      redact: deps.redactor,
-    });
+    try {
+      appendEditAudit({
+        runId,
+        evidenceDir,
+        candidateId: edit.candidateId,
+        reviewerLabel: edit.editorLabel,
+        actor: resolveQualityIntelligenceReviewPrincipal(ctx.req, deps),
+        now: new Date().toISOString(),
+        redact: deps.redactor,
+      });
+    } catch (error) {
+      if (before !== undefined) {
+        try {
+          recordQualityIntelligenceCandidates({
+            runId,
+            generatedAt: before.generatedAt,
+            candidates: before.candidates.map((row) => ({
+              ...row,
+              id: QualityIntelligence.asQualityIntelligenceTestCaseId(row.id),
+              runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
+              derivedFromAtomIds: row.derivedFromAtomIds.map((atomId) =>
+                QualityIntelligence.asQualityIntelligenceEvidenceAtomId(atomId),
+              ),
+            })),
+            editedRevisions: before.editedRevisions,
+            evidenceDir,
+            redact: (value: unknown): unknown => value,
+          });
+        } catch {
+          // The handler still returns failure below; a rollback failure must not look successful.
+        }
+      }
+      throw error;
+    }
   }
   return {
     status: 200,
@@ -349,7 +371,7 @@ export async function handleQiEditCandidate(
     if (loadQualityIntelligenceRun(id, { evidenceDir }) === undefined) {
       return errorResult(404, "QI_RUN_NOT_FOUND", "Quality Intelligence run not found.");
     }
-    return recordEdit(id, parsed.edit, evidenceDir, deps);
+    return recordEdit(id, parsed.edit, evidenceDir, deps, ctx);
   } catch {
     return errorResult(500, "QI_EDIT_FAILED", "Failed to record the candidate edit.");
   }

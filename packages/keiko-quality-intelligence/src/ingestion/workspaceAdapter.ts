@@ -46,6 +46,23 @@ export class WorkspaceAdapterError extends Error {
 
 const HEX64 = /^[0-9a-f]{64}$/u;
 const ISO_8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/u;
+const utf8Encoder = new TextEncoder();
+const utf8ByteLength = (value: string): number => utf8Encoder.encode(value).length;
+
+const truncateUtf8WithSuffix = (value: string, maxBytes: number, suffix: string): string => {
+  const suffixBytes = utf8ByteLength(suffix);
+  if (utf8ByteLength(value) <= maxBytes) return value;
+  const contentLimit = Math.max(0, maxBytes - suffixBytes);
+  let out = "";
+  let bytes = 0;
+  for (const cp of value) {
+    const cpBytes = utf8ByteLength(cp);
+    if (bytes + cpBytes > contentLimit) break;
+    out += cp;
+    bytes += cpBytes;
+  }
+  return `${out}${suffix}`;
+};
 
 const assertRelativePath = (path: string): void => {
   if (path.length === 0) {
@@ -93,10 +110,9 @@ const buildLocalRef = (entry: ContextEntry): string => {
 
 const buildDisplayLabel = (rootLabel: string, entry: ContextEntry): string => {
   const base = `${rootLabel}:${entry.path}`;
-  // The envelope itself caps display labels at 256; we trim here so the consumer
-  // never has to discard an otherwise valid envelope.
-  if (base.length <= 256) return base;
-  return `${base.slice(0, 253)}...`;
+  // The envelope itself caps display labels at 256 UTF-8 bytes; trim by bytes, not UTF-16 code
+  // units, so umlauts/emoji cannot accidentally overflow the source-mix label budget.
+  return truncateUtf8WithSuffix(base, 256, "...");
 };
 
 export interface BuildWorkspaceEnvelopesInput {

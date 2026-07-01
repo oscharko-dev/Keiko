@@ -63,7 +63,11 @@ export type IngestedBlock =
   | { readonly kind: "orderedList"; readonly items: readonly IngestedBlock[] }
   | { readonly kind: "listItem"; readonly content: readonly IngestedBlock[] }
   | { readonly kind: "codeBlock"; readonly language: string | null; readonly text: string }
-  | { readonly kind: "linkRef"; readonly displayText: string; readonly hrefLabel: string };
+  | { readonly kind: "linkRef"; readonly displayText: string; readonly hrefLabel: string }
+  | { readonly kind: "panel"; readonly content: readonly IngestedBlock[] }
+  | { readonly kind: "table"; readonly rows: readonly IngestedBlock[] }
+  | { readonly kind: "tableRow"; readonly cells: readonly IngestedBlock[] }
+  | { readonly kind: "tableCell"; readonly content: readonly IngestedBlock[] };
 
 export interface IngestedDocument {
   readonly version: 1;
@@ -84,6 +88,12 @@ const KNOWN_NODE_TYPES = new Set([
   "orderedList",
   "listItem",
   "codeBlock",
+  "panel",
+  "status",
+  "table",
+  "tableRow",
+  "tableCell",
+  "tableHeader",
 ]);
 
 interface ParserState {
@@ -201,6 +211,25 @@ const parseTextNode = (
   };
 };
 
+const parseStatusNode = (
+  node: Record<string, unknown>,
+  path: string,
+  state: ParserState,
+): RunOrLink => {
+  incrementNodes(state, path);
+  const attrs = node.attrs;
+  const rawText = isPlainObject(attrs) && typeof attrs.text === "string" ? attrs.text : "";
+  const normalised = normaliseUntrustedContent(rawText, { maxBytes: state.maxTextBytes });
+  return {
+    run: {
+      text: normalised.value,
+      clamped: normalised.clamped,
+      markdownInjectionEscapes: normalised.markdownInjectionEscapes,
+    },
+    link: null,
+  };
+};
+
 const parseInlineContent = (
   rawChildren: readonly unknown[],
   pathPrefix: string,
@@ -215,10 +244,15 @@ const parseInlineContent = (
     const childNode = assertObjectNode(child, path);
     markSeen(state, childNode, path);
     const type = getNodeType(childNode, path);
-    if (type !== "text") {
+    const parsed =
+      type === "text"
+        ? parseTextNode(childNode, path, state)
+        : type === "status"
+          ? parseStatusNode(childNode, path, state)
+          : undefined;
+    if (parsed === undefined) {
       throw new AdfParserError("UNKNOWN_NODE_TYPE", path, `Expected inline text, got "${type}"`);
     }
-    const parsed = parseTextNode(childNode, path, state);
     if (parsed.run !== null) runs.push(parsed.run);
     if (parsed.link !== null) links.push(parsed.link);
   });
@@ -324,6 +358,73 @@ const parseParagraph = (
   return { kind: "paragraph", runs: inline.runs };
 };
 
+const parseContainerContent = (
+  node: Record<string, unknown>,
+  path: string,
+  depth: number,
+  state: ParserState,
+): readonly IngestedBlock[] =>
+  collectArrayContent(node).map((child, index) =>
+    parseBlock(child, `${path}.content[${String(index)}]`, depth + 1, state),
+  );
+
+const parsePanel = (
+  node: Record<string, unknown>,
+  path: string,
+  depth: number,
+  state: ParserState,
+): IngestedBlock => ({ kind: "panel", content: parseContainerContent(node, path, depth, state) });
+
+const parseTableCell = (
+  node: Record<string, unknown>,
+  path: string,
+  depth: number,
+  state: ParserState,
+): IngestedBlock => ({
+  kind: "tableCell",
+  content: parseContainerContent(node, path, depth, state),
+});
+
+const parseTableRow = (
+  node: Record<string, unknown>,
+  path: string,
+  depth: number,
+  state: ParserState,
+): IngestedBlock => {
+  const cells: IngestedBlock[] = [];
+  collectArrayContent(node).forEach((child, index) => {
+    const cp = `${path}.content[${String(index)}]`;
+    const childNode = assertObjectNode(child, cp);
+    markSeen(state, childNode, cp);
+    incrementNodes(state, cp);
+    if (childNode.type !== "tableCell" && childNode.type !== "tableHeader") {
+      throw new AdfParserError("UNKNOWN_NODE_TYPE", cp, "tableRow children must be cells");
+    }
+    cells.push(parseTableCell(childNode, cp, depth + 1, state));
+  });
+  return { kind: "tableRow", cells };
+};
+
+const parseTable = (
+  node: Record<string, unknown>,
+  path: string,
+  depth: number,
+  state: ParserState,
+): IngestedBlock => {
+  const rows: IngestedBlock[] = [];
+  collectArrayContent(node).forEach((child, index) => {
+    const cp = `${path}.content[${String(index)}]`;
+    const childNode = assertObjectNode(child, cp);
+    markSeen(state, childNode, cp);
+    incrementNodes(state, cp);
+    if (childNode.type !== "tableRow") {
+      throw new AdfParserError("UNKNOWN_NODE_TYPE", cp, "table children must be tableRow nodes");
+    }
+    rows.push(parseTableRow(childNode, cp, depth + 1, state));
+  });
+  return { kind: "table", rows };
+};
+
 function parseBlock(raw: unknown, path: string, depth: number, state: ParserState): IngestedBlock {
   const node = assertObjectNode(raw, path);
   markSeen(state, node, path);
@@ -341,8 +442,17 @@ function parseBlock(raw: unknown, path: string, depth: number, state: ParserStat
       return parseBulletOrOrderedList(node, path, depth, state, "orderedList");
     case "codeBlock":
       return parseCodeBlock(node, path, state);
+    case "panel":
+      return parsePanel(node, path, depth, state);
+    case "table":
+      return parseTable(node, path, depth, state);
     case "listItem":
       return parseListItem(node, path, depth, state);
+    case "tableRow":
+      return parseTableRow(node, path, depth, state);
+    case "tableCell":
+    case "tableHeader":
+      return parseTableCell(node, path, depth, state);
     default:
       throw new AdfParserError(
         "UNKNOWN_NODE_TYPE",
@@ -390,6 +500,68 @@ export const parseAdfDocument = (
     },
   };
 };
+
+const renderRuns = (runs: readonly IngestedTextRun[]): string =>
+  runs
+    .map((run) => run.text)
+    .join("")
+    .trim();
+
+function renderCell(block: IngestedBlock): string {
+  if (block.kind !== "tableCell") return renderBlock(block).join(" ").trim();
+  return block.content
+    .flatMap((inner) => renderBlock(inner))
+    .join(" ")
+    .trim();
+}
+
+function renderRow(block: IngestedBlock): string {
+  if (block.kind !== "tableRow") return renderBlock(block).join(" ").trim();
+  return `| ${block.cells.map(renderCell).join(" | ")} |`;
+}
+
+function renderBlock(block: IngestedBlock): readonly string[] {
+  switch (block.kind) {
+    case "paragraph": {
+      const text = renderRuns(block.runs);
+      return text.length === 0 ? [] : [text];
+    }
+    case "heading": {
+      const text = renderRuns(block.runs);
+      return text.length === 0 ? [] : [`${"#".repeat(block.level)} ${text}`];
+    }
+    case "bulletList":
+      return block.items.flatMap((item) => renderBlock(item).map((line) => `- ${line}`));
+    case "orderedList":
+      return block.items.flatMap((item, index) =>
+        renderBlock(item).map((line) => `${String(index + 1)}. ${line}`),
+      );
+    case "listItem":
+      return block.content.flatMap((inner) => renderBlock(inner));
+    case "codeBlock":
+      return block.text.trim().length === 0
+        ? []
+        : [`\`\`\`${block.language ?? ""}\n${block.text}\n\`\`\``];
+    case "linkRef":
+      return [`${block.displayText} (${block.hrefLabel})`];
+    case "panel":
+      return block.content.flatMap((inner) => renderBlock(inner));
+    case "table":
+      return block.rows.map(renderRow).filter((line) => line.length > 0);
+    case "tableRow":
+      return [renderRow(block)];
+    case "tableCell": {
+      const text = renderCell(block);
+      return text.length === 0 ? [] : [text];
+    }
+  }
+}
+
+export const renderAdfDocumentText = (document: IngestedDocument): string =>
+  document.blocks
+    .flatMap((block) => renderBlock(block))
+    .join("\n")
+    .trim();
 
 export const ADF_PARSER_DEFAULTS = {
   maxNodes: DEFAULT_MAX_NODES,

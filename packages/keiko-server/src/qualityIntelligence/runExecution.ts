@@ -27,8 +27,10 @@ import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-con
 import type { QualityIntelligenceModelRouting } from "@oscharko-dev/keiko-contracts";
 import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
+import type { QiSourceSummary } from "./runIngestion.js";
 import type { QiSkippedSource } from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
+import { extractQiDocumentText } from "./documentTextExtractor.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort, QiJudgeError } from "./judgePort.js";
@@ -62,6 +64,8 @@ export interface QiRunAccepted {
   readonly droppedSourceCount: number;
   /** Connected sources skipped because they ingested to nothing usable (Epic #729 N+1 resilience). */
   readonly skippedSources: readonly QiSkippedSource[];
+  /** Safe per-source ingestion notices; raw content never appears here. */
+  readonly sourceSummaries: readonly QiSourceSummary[];
 }
 
 export interface ExecuteQiRunInput {
@@ -156,7 +160,8 @@ function buildExecutionRouting(input: ExecuteQiRunInput): QualityIntelligenceMod
       : {
           stage: "generate" as const,
           modelId: resolution.resolved.testDesignModelId,
-          status: "passed" as const,
+          status: "not-run" as const,
+          message: "Model routing was resolved without executing a preflight.",
         };
   const judge =
     resolution.resolved.judgeModelId === undefined
@@ -169,14 +174,15 @@ function buildExecutionRouting(input: ExecuteQiRunInput): QualityIntelligenceMod
       : {
           stage: "judge" as const,
           modelId: resolution.resolved.judgeModelId,
-          status: "passed" as const,
+          status: "not-run" as const,
+          message: "Model routing was resolved without executing a preflight.",
         };
   return {
     policyVersion: 1,
     requested: resolution.requested,
     resolved: resolution.resolved,
     preflight: {
-      status: generation.status === "unavailable" ? "unavailable" : "passed",
+      status: generation.status === "unavailable" ? "unavailable" : "not-run",
       generation,
       judge,
     },
@@ -198,6 +204,7 @@ function buildAccepted(
     modelRouting,
     droppedSourceCount: ingestion.droppedSourceCount,
     skippedSources: ingestion.skippedSources,
+    sourceSummaries: ingestion.sourceSummaries,
   };
 }
 
@@ -252,9 +259,11 @@ async function runResolvedQi(
         ingestionModelGatewayCallCount += 1;
       },
     }),
+    documentTextExtractor: extractQiDocumentText,
+    signal: input.signal,
   });
   const { modelId, generate } = resolveExecutionStrategy(deps, request, modelRouting);
-  const judge = buildJudgePortForModelRun(deps, modelRouting.resolved.judgeModelId);
+  const judge = buildJudgePortForModelRun(deps, modelRouting.resolved.judgeModelId, request.seed);
   const profile = resolveProfile(request.profileId);
 
   input.onAccepted(buildAccepted(input, ingestion, modelId, modelRouting));
@@ -298,10 +307,11 @@ interface WorkflowDepsInput {
 function buildJudgePortForModelRun(
   deps: UiHandlerDeps,
   judgeModelId: string | undefined,
+  requestedSeed: number | undefined,
 ): ReturnType<typeof createQiJudgePort> | undefined {
   if (judgeModelId === undefined) return undefined;
   try {
-    return createQiJudgePort(deps, judgeModelId);
+    return createQiJudgePort(deps, judgeModelId, { requestedSeed });
   } catch (error) {
     if (error instanceof QiJudgeError) {
       throw new QiGenerationError(error.code, error.message);

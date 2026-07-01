@@ -9,7 +9,7 @@
 // content, or credentials. A client disconnect aborts the run via the registry.
 
 import { randomUUID } from "node:crypto";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { isAbsolute } from "node:path";
 import type {
   QualityIntelligenceInlineSource,
@@ -19,11 +19,13 @@ import type {
   QualityIntelligenceImageSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
+  QualityIntelligenceSourceSummary,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceModelPolicy,
   QualityIntelligenceModelRouting,
 } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
 import { SSE_HEADERS } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";
 import {
@@ -42,10 +44,14 @@ import {
 } from "./runExecution.js";
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import type { QiSkippedSource } from "./runIngestion.js";
-import { qiRunRegistry } from "./runRegistry.js";
+import { QiRunConcurrencyLimitError, qiRunRegistry } from "./runRegistry.js";
 import { buildQiModelRoutingForRun, QiModelPolicyError } from "./modelPolicyRoutes.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+export const DEFAULT_MAX_ACTIVE_QI_RUNS = 2;
+export const MAX_ACTIVE_QI_RUNS_ENV = "KEIKO_QI_MAX_ACTIVE_RUNS";
+const MAX_ACTIVE_QI_RUNS_UPPER_BOUND = 64;
+export const QI_SSE_HEARTBEAT_MS = 15_000;
 
 class BodyTooLargeError extends Error {}
 
@@ -209,6 +215,13 @@ function validateSourceEntry(raw: unknown): QualityIntelligenceInlineSource | Ro
   // A capsule (or other) field-level validation failure surfaces as a RouteResult — propagate it.
   if (isRouteResult(source)) {
     return source;
+  }
+  if (
+    (source.kind === "file" || source.kind === "workspace") &&
+    !isAbsolute(source.path) &&
+    !QualityIntelligenceHardening.isSafeRelativePath(source.path)
+  ) {
+    return errorResult(400, "QI_BAD_SOURCE", "Source paths must not contain unsafe traversal.");
   }
   if (source.kind === "file" && !isAbsolute(source.path)) {
     return errorResult(400, "QI_BAD_SOURCE", "File source paths must be absolute local paths.");
@@ -377,6 +390,32 @@ type WriteFn = (message: QualityIntelligenceRunStreamMessage) => void;
 type QiExecutionSummary = Awaited<ReturnType<typeof executeQiRun>>;
 type StreamTotals = Extract<QualityIntelligenceRunStreamMessage, { type: "done" }>["totals"];
 
+export function resolveMaxActiveQiRuns(env: UiHandlerDeps["env"]): number {
+  const raw = env[MAX_ACTIVE_QI_RUNS_ENV];
+  if (typeof raw !== "string" || raw.trim().length === 0) return DEFAULT_MAX_ACTIVE_QI_RUNS;
+  const trimmed = raw.trim();
+  if (!/^\d+$/u.test(trimmed)) return DEFAULT_MAX_ACTIVE_QI_RUNS;
+  const parsed = Number.parseInt(trimmed, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return DEFAULT_MAX_ACTIVE_QI_RUNS;
+  return Math.min(parsed, MAX_ACTIVE_QI_RUNS_UPPER_BOUND);
+}
+
+export function startQiRunSseHeartbeat(
+  res: ServerResponse,
+  controller: AbortController,
+  intervalMs = QI_SSE_HEARTBEAT_MS,
+): () => void {
+  const interval = setInterval(() => {
+    if (!controller.signal.aborted) {
+      writeOrDestroy(res, ": ping\n\n", controller);
+    }
+  }, intervalMs);
+  (interval as { unref?: () => void }).unref?.();
+  return () => {
+    clearInterval(interval);
+  };
+}
+
 // Project the internal QiSkippedSource[] (which also carries a free-text `message`) to exactly the
 // wire contract QualityIntelligenceSkippedSource[] ({label, kind, code}). Streaming `message`
 // verbatim would widen the browser-facing SSE surface — the `accepted` frame bypasses deps.redactor,
@@ -387,7 +426,47 @@ function toWireSkippedSources(
   return skipped.map((s) => ({ label: s.label, kind: s.kind, code: s.code }));
 }
 
+function hasSourceNotice(summary: QiRunAccepted["sourceSummaries"][number]): boolean {
+  return (
+    summary.truncated === true ||
+    (summary.droppedAtomCount ?? 0) > 0 ||
+    (summary.truncatedDocumentCount ?? 0) > 0 ||
+    (summary.droppedDocumentCount ?? 0) > 0 ||
+    (summary.notices?.length ?? 0) > 0
+  );
+}
+
+function toWireSourceSummaries(
+  summaries: readonly QiRunAccepted["sourceSummaries"][number][],
+): readonly QualityIntelligenceSourceSummary[] {
+  return summaries.filter(hasSourceNotice).map((summary) => ({
+    label: summary.label,
+    kind: summary.kind,
+    atomCount: summary.atomCount,
+    ...(summary.totalAtomCount !== undefined ? { totalAtomCount: summary.totalAtomCount } : {}),
+    ...(summary.droppedAtomCount !== undefined
+      ? { droppedAtomCount: summary.droppedAtomCount }
+      : {}),
+    ...(summary.maxAtomCount !== undefined ? { maxAtomCount: summary.maxAtomCount } : {}),
+    ...(summary.truncated === true ? { truncated: true } : {}),
+    ...(summary.originalBytes !== undefined ? { originalBytes: summary.originalBytes } : {}),
+    ...(summary.retainedBytes !== undefined ? { retainedBytes: summary.retainedBytes } : {}),
+    ...(summary.droppedBytes !== undefined ? { droppedBytes: summary.droppedBytes } : {}),
+    ...(summary.byteLimit !== undefined ? { byteLimit: summary.byteLimit } : {}),
+    ...(summary.truncatedDocumentCount !== undefined
+      ? { truncatedDocumentCount: summary.truncatedDocumentCount }
+      : {}),
+    ...(summary.droppedDocumentCount !== undefined
+      ? { droppedDocumentCount: summary.droppedDocumentCount }
+      : {}),
+    ...(summary.notices !== undefined && summary.notices.length > 0
+      ? { notices: summary.notices }
+      : {}),
+  }));
+}
+
 function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
+  const sourceSummaries = toWireSourceSummaries(accepted.sourceSummaries);
   write({
     type: "accepted",
     runId: accepted.runId,
@@ -406,6 +485,7 @@ function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
     ...(accepted.skippedSources.length > 0
       ? { skippedSources: toWireSkippedSources(accepted.skippedSources) }
       : {}),
+    ...(sourceSummaries.length > 0 ? { sourceSummaries } : {}),
   });
 }
 
@@ -482,10 +562,34 @@ export async function handleStartQiRun(
 ): Promise<HandlerOutcome> {
   const parsed = await parseStartBody(ctx.req);
   if (!parsed.ok) return parsed.result;
+
+  const runId = `qi-run-${randomUUID()}`;
+  const registeredAt = new Date().toISOString();
+  const maxActiveRuns = resolveMaxActiveQiRuns(deps.env);
+  let controller: AbortController;
+  try {
+    controller = qiRunRegistry.register(runId, registeredAt, { maxActiveRuns });
+  } catch (error) {
+    if (error instanceof QiRunConcurrencyLimitError) {
+      return errorResult(
+        429,
+        "QI_TOO_MANY_RUNS",
+        `Too many Quality Intelligence runs are active; try again after one of the ${String(
+          error.maxActiveRuns,
+        )} active run(s) finishes.`,
+      );
+    }
+    throw error;
+  }
+  ctx.res.on("close", () => {
+    controller.abort();
+  });
+
   let modelRouting: QualityIntelligenceModelRouting;
   try {
     modelRouting = await buildQiModelRoutingForRun(deps, parsed.request);
   } catch (error) {
+    qiRunRegistry.complete(runId, "failed");
     if (error instanceof QiModelPolicyError) {
       return errorResult(400, error.code, error.message);
     }
@@ -496,29 +600,26 @@ export async function handleStartQiRun(
     );
   }
 
-  const runId = `qi-run-${randomUUID()}`;
-  const registeredAt = new Date().toISOString();
-  // Register and wire the disconnect listener BEFORE writeHead to close the narrow race where a
-  // client disconnects after parsing succeeds but before the response is committed.
-  const controller = qiRunRegistry.register(runId, registeredAt);
-  ctx.res.on("close", () => {
-    controller.abort();
-  });
   ctx.res.writeHead(200, { ...SSE_HEADERS, "X-Accel-Buffering": "no" });
   const write: WriteFn = (message) => {
     writeOrDestroy(ctx.res, `data: ${JSON.stringify(message)}\n\n`, controller);
   };
 
-  await streamRunExecution(
-    deps,
-    parsed.request,
-    modelRouting,
-    runId,
-    registeredAt,
-    controller.signal,
-    write,
-  );
-  ctx.res.end();
+  const stopHeartbeat = startQiRunSseHeartbeat(ctx.res, controller);
+  try {
+    await streamRunExecution(
+      deps,
+      parsed.request,
+      modelRouting,
+      runId,
+      registeredAt,
+      controller.signal,
+      write,
+    );
+  } finally {
+    stopHeartbeat();
+    ctx.res.end();
+  }
   return STREAMING;
 }
 
@@ -528,9 +629,7 @@ export function handleCancelQiRun(ctx: RouteContext, _deps: UiHandlerDeps): Rout
     return errorResult(400, "QI_BAD_REQUEST", "Run id is required.");
   }
   const cancelled = qiRunRegistry.cancel(id);
-  return cancelled
-    ? { status: 200, body: { cancelled: true, runId: id } }
-    : errorResult(404, "QI_NOT_ACTIVE", "No in-flight run with that id.");
+  return { status: 200, body: { cancelled, runId: id } };
 }
 
 export const QI_RUN_EXECUTION_ROUTE_GROUP: readonly RouteDefinition[] = [

@@ -8,7 +8,12 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { envelopeIdFor, ingestInlineSources, QiIngestionError } from "../runIngestion.js";
+import {
+  envelopeIdFor,
+  ingestInlineSources,
+  ingestInlineSourcesAsync,
+  QiIngestionError,
+} from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
@@ -87,28 +92,24 @@ describe("ingestInlineSources — QI_SOURCE_EMPTY", () => {
   });
 });
 
-// ─── Error paths: oversize ────────────────────────────────────────────────────
+// ─── Bounded pasted requirements ──────────────────────────────────────────────
 
-describe("ingestInlineSources — QI_SOURCE_TOO_LARGE", () => {
-  it("throws QI_SOURCE_TOO_LARGE when the source text exceeds 5,000,000 bytes", () => {
-    // Build exactly 5_000_001 ASCII bytes (one byte over the limit).
-    const oversizeText = "x".repeat(5_000_001);
-    try {
-      ingestInlineSources(input([requirementsSource("Giant", oversizeText)]));
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(QiIngestionError);
-      expect((err as QiIngestionError).code).toBe("QI_SOURCE_TOO_LARGE");
-    }
+describe("ingestInlineSources — bounded pasted requirements", () => {
+  it("truncates a requirements source over the legacy 5 MB guard instead of hard-failing it", () => {
+    const oversizeText = `The system shall keep the first requirement usable. ${"x".repeat(5_000_001)}`;
+    const result = ingestInlineSources(input([requirementsSource("Giant", oversizeText)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.sourceSummaries[0]?.truncated).toBe(true);
+    expect(result.sourceSummaries[0]?.originalBytes).toBeGreaterThan(
+      result.sourceSummaries[0]?.retainedBytes ?? 0,
+    );
+    expect(result.sourceSummaries[0]?.notices).toContain("source-truncated-to-byte-budget");
   });
 
-  it("does NOT throw QI_SOURCE_TOO_LARGE for a source exactly at the limit (5,000,000 bytes)", () => {
-    // This should not throw the oversize error — it may succeed or fail for another reason,
-    // but the guard must be ≤ not <.  We just verify the error code is NOT QI_SOURCE_TOO_LARGE.
+  it("does not throw QI_SOURCE_TOO_LARGE for a source exactly at the legacy limit", () => {
     const atLimitText = "a".repeat(4_999_990) + " ".repeat(10); // 5,000,000 bytes
     try {
       ingestInlineSources(input([requirementsSource("AtLimit", atLimitText)]));
-      // If it succeeds that's fine too — the point is it does not throw TOO_LARGE.
     } catch (err) {
       expect((err as QiIngestionError).code).not.toBe("QI_SOURCE_TOO_LARGE");
     }
@@ -237,6 +238,25 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(result.sourceSummaries[0]?.atomCount).toBe(2);
   });
 
+  it("preserves markdown headings as part of section requirement atoms", () => {
+    const dir = makeDir();
+    const path = writeFile(
+      dir,
+      "requirements.md",
+      [
+        "## KRED-001 Kreditlimit prüfen",
+        "Der Antrag darf das Limit nicht überschreiten.",
+        "## KRED-002 Auszahlung sperren",
+        "Die Auszahlung bleibt bis zur Freigabe gesperrt.",
+      ].join("\n"),
+    );
+    const result = ingest(input([fileSource("Requirements", path)]));
+    expect(result.ingestedAtoms).toHaveLength(2);
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("## KRED-001 Kreditlimit prüfen");
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("Limit nicht überschreiten");
+    expect(result.ingestedAtoms[1]?.canonicalText).toContain("## KRED-002 Auszahlung sperren");
+  });
+
   it("ingests ONLY the connected file, not its siblings in the same folder", () => {
     const dir = makeDir();
     writeFile(dir, "other.md", "BRAVO sibling content that must not be ingested.\n");
@@ -281,20 +301,64 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     }
   });
 
-  it("ingests a supported PDF single-file source for folder-parity best-effort reads", () => {
+  it("rejects a PDF single-file source when no text extractor is configured", () => {
     const dir = makeDir();
     const path = writeFile(dir, "spec.pdf", "%PDF-1.7 fake fachkonzept");
-    const result = ingest(input([fileSource("PDF", path)]));
-    expect(result.ingestedAtoms).toHaveLength(1);
-    expect(result.ingestedAtoms[0]?.canonicalText.includes("fake fachkonzept")).toBe(true);
+    try {
+      ingest(input([fileSource("PDF", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
   });
 
-  it("ingests a supported DOCX single-file source for folder-parity best-effort reads", () => {
+  it("ingests PDF text returned by an explicit extractor fake", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");
+    const result = ingest({
+      ...input([fileSource("PDF", path)]),
+      documentTextExtractor: ({ format }) =>
+        format === "pdf" ? "Fachkonzept: Die IBAN muss geprüft werden." : undefined,
+    });
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("IBAN muss geprüft")).toBe(true);
+  });
+
+  it("awaits an async PDF extractor and passes parser budgets", async () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");
+    const controller = new AbortController();
+    const calls: unknown[] = [];
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("PDF", path)]),
+      signal: controller.signal,
+      documentTextExtractor: async (extractInput) => {
+        calls.push(extractInput);
+        return "Fachkonzept: Der TAN-Code muss nach drei Fehlversuchen gesperrt werden.";
+      },
+    });
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("TAN-Code muss")).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      path,
+      label: "PDF",
+      format: "pdf",
+      maxInputBytes: 2 * 1024 * 1024,
+      signal: controller.signal,
+    });
+    expect((calls[0] as { maxExtractedBytes?: number }).maxExtractedBytes).toBeGreaterThan(0);
+  });
+
+  it("rejects a DOCX single-file source when no text extractor is configured", () => {
     const dir = makeDir();
     const path = writeFile(dir, "spec.docx", "PK fake docx fachkonzept");
-    const result = ingest(input([fileSource("DOCX", path)]));
-    expect(result.ingestedAtoms).toHaveLength(1);
-    expect(result.ingestedAtoms[0]?.canonicalText.includes("fake docx")).toBe(true);
+    try {
+      ingest(input([fileSource("DOCX", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
   });
 
   it("throws QI_SOURCE_UNSUPPORTED for a text-extension file with binary (NUL) content", () => {
@@ -440,9 +504,7 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(result.ingestedAtoms[0]?.canonicalText.includes("audit entry")).toBe(true);
   });
 
-  it("rejects a best-effort PDF whose decoded text is binary noise (NUL byte)", () => {
-    // A real PDF's prose lives in compressed streams; decoded as UTF-8 it is binary noise carrying
-    // a NUL byte. Reject with a coded error rather than ingest garbage (#713: never partial ingest).
+  it("rejects a PDF whose decoded text is binary noise even before best-effort ingestion", () => {
     const dir = makeDir();
     const path = writeFile(dir, "scan.pdf", `%PDF-1.7${String.fromCharCode(0)} compressed stream`);
     try {
@@ -453,9 +515,7 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     }
   });
 
-  it("rejects a best-effort DOCX dominated by control characters (binary ZIP, no NUL)", () => {
-    // A DOCX is a ZIP; even without a NUL its decoded bytes are dominated by control characters.
-    // The control-character density guard catches it where the NUL check alone would not.
+  it("rejects a DOCX with control-character mojibake instead of treating it as prose", () => {
     const dir = makeDir();
     const controls = [1, 2, 3, 4, 5, 6, 7, 8].map((c) => String.fromCharCode(c)).join("");
     const path = writeFile(dir, "report.docx", `PK${controls.repeat(8)}docx`);
@@ -467,13 +527,15 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     }
   });
 
-  it("still ingests a genuinely text-based PDF (German prose is not flagged as binary)", () => {
-    // The binary guard must not over-reject real prose: a text PDF with umlauts/ß ingests normally.
+  it("does not accept a text-looking PDF without an explicit extractor", () => {
     const dir = makeDir();
     const path = writeFile(dir, "spec.pdf", "Fachkonzept: Überweisung mit Prüfziffer und Deckung.");
-    const result = ingest(input([fileSource("TextPdf", path)]));
-    expect(result.ingestedAtoms).toHaveLength(1);
-    expect(result.ingestedAtoms[0]?.canonicalText.includes("Prüfziffer")).toBe(true);
+    try {
+      ingest(input([fileSource("TextPdf", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
   });
 
   it("strips control characters from a path-shaped multi-line label so displayLabel stays single-line", () => {
@@ -559,6 +621,55 @@ describe("ingestInlineSources — happy path", () => {
     const result = ingestInlineSources(input([requirementsSource("Spec", VALID_TEXT)]));
     const summary = result.sourceSummaries[0];
     expect(summary?.atomCount).toBe(result.ingestedAtoms.length);
+  });
+
+  it("ingests ADF requirements through the existing requirements source variant", () => {
+    const result = ingestInlineSources(
+      input([
+        {
+          kind: "requirements",
+          label: "Jira ADF",
+          text: "",
+          adf: {
+            type: "doc",
+            content: [
+              {
+                type: "heading",
+                attrs: { level: 2 },
+                content: [{ type: "text", text: "KRED-001 Kreditlimit" }],
+              },
+              {
+                type: "table",
+                content: [
+                  {
+                    type: "tableRow",
+                    content: [
+                      {
+                        type: "tableCell",
+                        content: [
+                          {
+                            type: "paragraph",
+                            content: [{ type: "text", text: "IBAN muss gültig sein" }],
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    expect(result.envelopes[0]?.provenance.origin).toBe("requirements:adf");
+    expect(result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n")).toContain(
+      "KRED-001 Kreditlimit",
+    );
+    expect(result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n")).toContain(
+      "| IBAN muss gültig sein |",
+    );
+    expect(result.sourceSummaries[0]?.notices).toContain("adf-normalized");
   });
 
   it("keeps the requirements envelope id stable when the requirement text changes in-place", () => {
@@ -704,6 +815,10 @@ describe("ingestInlineSources — MAX_TOTAL_ATOMS cap (120)", () => {
     ];
     const result = ingestInlineSources({ request: reqWith(src), runId: RUN_ID, registeredAt: TS });
     expect(result.ingestedAtoms.length).toBeLessThanOrEqual(120);
+    expect(result.sourceSummaries.every((summary) => (summary.droppedAtomCount ?? 0) > 0)).toBe(
+      true,
+    );
+    expect(result.sourceSummaries[0]?.notices).toContain("source-truncated-to-fair-atom-budget");
   });
 
   it("still produces envelopes for sources that were capped to zero atoms", () => {
@@ -894,6 +1009,25 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
     expect(result.ingestedAtoms[1]?.atom.kind).toBe("document-excerpt");
   });
 
+  it("is deterministic when the resolver returns the same capsule docs in a different order", () => {
+    const docs = [
+      { documentId: "doc-b", text: "The system shall log all failures to the audit trail." },
+      { documentId: "doc-a", text: "The system shall validate input before processing." },
+    ];
+    const forward = ingest(
+      inputWithResolver([capsuleSource("Spec Capsule", "cap-spec")], () => docs),
+    );
+    const reversed = ingest(
+      inputWithResolver([capsuleSource("Spec Capsule", "cap-spec")], () => [...docs].reverse()),
+    );
+    expect(forward.ingestedAtoms.map((atom) => atom.atom.id)).toEqual(
+      reversed.ingestedAtoms.map((atom) => atom.atom.id),
+    );
+    expect(forward.envelopes[0]?.provenance.integrityHashSha256Hex).toBe(
+      reversed.envelopes[0]?.provenance.integrityHashSha256Hex,
+    );
+  });
+
   it("canonical text includes the documentId prefix", () => {
     const docs = [{ documentId: "req-doc", text: "The system shall support SSO login." }];
     const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
@@ -988,6 +1122,8 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
     // Comfortably bounded — never the full 640 KB raw corpus.
     expect(totalBytes).toBeLessThanOrEqual(196_608 + 40 * 64);
     expect(result.ingestedAtoms.length).toBeLessThan(40);
+    expect(result.sourceSummaries[0]?.droppedDocumentCount).toBeGreaterThan(0);
+    expect(result.sourceSummaries[0]?.notices).toContain("documents-dropped-to-byte-budget");
   });
 
   // ── Coded-error distinction: present-but-unusable corpus (AC2, Issue #717) ──

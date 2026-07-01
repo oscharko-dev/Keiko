@@ -10,11 +10,13 @@
 // artifact is loadable. The serializers are deterministic and formula-injection safe.
 
 import type { IncomingMessage } from "node:http";
+import { type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   appendQualityIntelligenceExportRow,
   loadQualityIntelligenceCandidates,
   loadQualityIntelligenceRun,
+  type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceExportRow,
   type QualityIntelligenceTraceabilityExportMode,
 } from "@oscharko-dev/keiko-evidence";
@@ -35,6 +37,9 @@ const errorResult = (status: number, code: string, message: string): RouteResult
   status,
   body: { error: { code, message } },
 });
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 const readBody = (req: IncomingMessage): Promise<string> =>
   new Promise<string>((resolve, reject) => {
@@ -60,26 +65,49 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     req.on("error", reject);
   });
 
-// Parse the requested format from the (optional) JSON body; defaults to CSV. An unreadable or
-// malformed body falls back to CSV rather than failing — the run id alone is a valid request.
-async function parseFormat(req: IncomingMessage): Promise<Format> {
+type FormatOutcome =
+  | { readonly ok: true; readonly format: Format }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Parse the requested format from the optional JSON body; empty/no body defaults to CSV, but
+// malformed, oversized, or unknown format payloads fail explicitly so callers can fix bad requests.
+async function parseFormat(req: IncomingMessage): Promise<FormatOutcome> {
   let raw: string;
   try {
     raw = await readBody(req);
   } catch {
-    return "csv";
+    return {
+      ok: false,
+      result: errorResult(413, "QI_BODY_TOO_LARGE", "Traceability export body is too large."),
+    };
   }
-  if (raw.trim().length === 0) return "csv";
+  if (raw.trim().length === 0) return { ok: true, format: "csv" };
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null) {
-      const fmt = (parsed as Record<string, unknown>).format;
-      if (fmt === "markdown") return "markdown";
-    }
+    parsed = JSON.parse(raw);
   } catch {
-    return "csv";
+    return {
+      ok: false,
+      result: errorResult(400, "QI_BAD_REQUEST", "Traceability export body is not valid JSON."),
+    };
   }
-  return "csv";
+  if (!isObject(parsed)) {
+    return {
+      ok: false,
+      result: errorResult(400, "QI_BAD_REQUEST", "Traceability export body must be an object."),
+    };
+  }
+  const fmt = parsed.format;
+  if (fmt === undefined) return { ok: true, format: "csv" };
+  if (fmt === "csv" || fmt === "markdown") return { ok: true, format: fmt };
+  return {
+    ok: false,
+    result: errorResult(
+      400,
+      "QI_BAD_FORMAT",
+      "Traceability export format must be csv or markdown.",
+    ),
+  };
 }
 
 type TraceabilityRows = Parameters<typeof QualityIntelligenceExport.adaptToTraceabilityCsv>[0];
@@ -115,30 +143,72 @@ function candidateTitlesFor(id: string, evidenceDir: string): ReadonlyMap<string
   return titles;
 }
 
+let traceabilityExportEvidenceSequence = 0;
+
+function buildModelProvenance(
+  manifest: QualityIntelligenceEvidenceManifest,
+): QI.QualityIntelligenceExportModelProvenance {
+  const modelStage = (
+    modelId: string | undefined,
+  ): QI.QualityIntelligenceExportModelStageProvenance => ({
+    modelId: modelId?.trim() ? modelId : "unknown",
+    provider: "unknown",
+    revision: "unknown",
+  });
+  return {
+    generation: modelStage(
+      manifest.modelRouting?.resolved.testDesignModelId ??
+        manifest.modelRouting?.preflight.generation?.modelId ??
+        manifest.modelId,
+    ),
+    judge: modelStage(
+      manifest.modelRouting?.resolved.judgeModelId ??
+        manifest.modelRouting?.preflight.judge?.modelId,
+    ),
+    ...(manifest.seedUsed !== undefined ? { seedUsed: manifest.seedUsed } : {}),
+    ...(manifest.modelParameters !== undefined
+      ? { modelParameters: manifest.modelParameters }
+      : {}),
+  };
+}
+
 /**
  * Best-effort append of an export-evidence row after a successful traceability matrix download
  * (Epic #734, Issue #740). A failed audit write must NOT withhold the already-computed body from
  * the caller: the matrix is deterministic, has no external side effect, and the manifest write is
- * atomic so failures are rare. Swallow on failure rather than turning a 200 into a 500.
+ * atomic so failures are rare. Return a warning on failure rather than turning a 200 into a 500.
  */
 function recordTraceabilityExportEvidence(
   id: string,
   target: QualityIntelligenceTraceabilityExportMode,
   body: string,
+  manifest: QualityIntelligenceEvidenceManifest,
   evidenceDir: string,
-): void {
+): readonly string[] {
+  const createdAt = new Date().toISOString();
+  const integrityHash = sha256Hex(body);
+  traceabilityExportEvidenceSequence += 1;
   const row: QualityIntelligenceExportRow = {
-    id: `qi-export-${sha256Hex(`${id}|${target}`).slice(0, 24)}`,
+    id: `qi-export-${sha256Hex(
+      `${id}|${target}|${createdAt}|${integrityHash}|${String(traceabilityExportEvidenceSequence)}`,
+    ).slice(0, 24)}`,
     targetAdapter: target,
-    integrityHash: sha256Hex(body),
-    redactionAttested: true,
+    integrityHash,
+    redactionAttested: manifest.redactionSummary.totalStringsScanned > 0,
+    createdAt,
+    modelProvenance: buildModelProvenance(manifest),
     dryRun: false,
   };
   try {
     appendQualityIntelligenceExportRow({ runId: id, export: row }, { evidenceDir });
+    return [];
   } catch {
-    // intentionally swallowed — see doc comment
+    return ["export:evidence-write-failed"];
   }
+}
+
+function resultWarnings(warnings: readonly string[]): { readonly warnings?: readonly string[] } {
+  return warnings.length > 0 ? { warnings: [...warnings].sort() } : {};
 }
 
 export async function handleQiTraceabilityExport(
@@ -153,7 +223,9 @@ export async function handleQiTraceabilityExport(
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const format = await parseFormat(ctx.req);
+  const parsed = await parseFormat(ctx.req);
+  if (!parsed.ok) return parsed.result;
+  const format = parsed.format;
   let manifest: ReturnType<typeof loadQualityIntelligenceRun>;
   try {
     manifest = loadQualityIntelligenceRun(id, { evidenceDir });
@@ -171,15 +243,17 @@ export async function handleQiTraceabilityExport(
   }
   const rows = toTraceabilityRows(matrix);
   const display = { candidateTitleById: candidateTitlesFor(id, evidenceDir) };
-  const body =
+  const adapterBody =
     format === "markdown"
       ? QualityIntelligenceExport.adaptToTraceabilityMarkdown(rows, display)
       : QualityIntelligenceExport.adaptToTraceabilityCsv(rows, display);
+  const body =
+    format === "csv" ? QualityIntelligenceExport.toExcelFriendlyCsv(adapterBody) : adapterBody;
   const target: QualityIntelligenceTraceabilityExportMode =
     format === "markdown" ? "traceability-markdown" : "traceability-csv";
   // Emit audit evidence for the materialised download (Epic #734, Issue #740). Best-effort: see
-  // recordTraceabilityExportEvidence for the swallow rationale.
-  recordTraceabilityExportEvidence(id, target, body, evidenceDir);
+  // recordTraceabilityExportEvidence for the warning-on-failure rationale.
+  const warnings = recordTraceabilityExportEvidence(id, target, body, manifest, evidenceDir);
   const meta = FORMAT_META[format];
   return {
     status: 200,
@@ -189,6 +263,7 @@ export async function handleQiTraceabilityExport(
       contentType: meta.contentType,
       byteLen: Buffer.byteLength(body, "utf8"),
       body,
+      ...resultWarnings(warnings),
     },
   };
 }

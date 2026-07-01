@@ -86,6 +86,7 @@ describe("handleQiTraceabilityExport", () => {
     const body = result.body as { format: string; body: string; contentType: string };
     expect(body.format).toBe("csv");
     expect(body.contentType).toBe("text/csv");
+    expect(body.body.startsWith("\ufeffsep=;\r\n")).toBe(true);
     expect(body.body).toContain("Requirement ID");
     expect(body.body).toContain("atom-1");
     expect(body.body).toContain("atom-2");
@@ -221,23 +222,20 @@ function makeRawReq(rawBody: string | Buffer): IncomingMessage {
 }
 
 describe("handleQiTraceabilityExport — parseFormat robustness (T-C)", () => {
-  it("falls back to csv when the request body is malformed JSON", async () => {
+  it("returns 400 when the request body is malformed JSON", async () => {
     // Arrange
     recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
     // Non-JSON payload within MAX_BODY_BYTES — exercises the JSON.parse catch branch in parseFormat
     const req = makeRawReq("{not valid json");
 
-    // Act — RED if the malformed-JSON catch branch in parseFormat is removed
+    // Act — RED if malformed JSON is silently accepted again
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, req), deps(evidenceDir));
 
-    // Assert — route must succeed and fall back to CSV, never 500
-    expect(result.status).toBe(200);
-    const body = result.body as { format: string; contentType: string };
-    expect(body.format).toBe("csv");
-    expect(body.contentType).toBe("text/csv");
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
   });
 
-  it("falls back to csv when the request body exceeds MAX_BODY_BYTES (4 KiB)", async () => {
+  it("returns 413 when the request body exceeds MAX_BODY_BYTES (4 KiB)", async () => {
     // Arrange
     recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
     // Body contains format: "markdown" so that without the cap it would select markdown.
@@ -250,19 +248,16 @@ describe("handleQiTraceabilityExport — parseFormat robustness (T-C)", () => {
     // Act — RED if the `total > MAX_BODY_BYTES` guard is removed from readBody
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, req), deps(evidenceDir));
 
-    // Assert — cap fires → readBody rejects → parseFormat catch → csv fallback
-    expect(result.status).toBe(200);
-    const body = result.body as { format: string; contentType: string };
-    expect(body.format).toBe("csv");
-    expect(body.contentType).toBe("text/csv");
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
   });
 
-  it("falls back to csv for a chunked oversized body (cap fires mid-stream)", async () => {
+  it("returns 413 for a chunked oversized body (cap fires mid-stream)", async () => {
     // Arrange — send the oversized body across two chunks so the second data event arrives
     // after the cap fires. Without the `capped` flag, `chunks` holds the first chunk's bytes
     // until GC and `resolve()` is called from the `end` handler after `reject()` (silently
     // ignored by the Promise). With `capped`: chunks are cleared immediately and `end` is a
-    // no-op. Observable assertion: parseFormat catches the rejection and falls back to csv.
+    // no-op. Observable assertion: parseFormat surfaces the rejection as 413.
     recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
     const half = "x".repeat(3 * 1024);
     const req = Readable.from([
@@ -273,14 +268,11 @@ describe("handleQiTraceabilityExport — parseFormat robustness (T-C)", () => {
     // Act — exercises the multi-chunk path through readBody
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, req), deps(evidenceDir));
 
-    // Assert — cap fires on first chunk → capped=true → second chunk + end handler are no-ops
-    expect(result.status).toBe(200);
-    const body = result.body as { format: string; contentType: string };
-    expect(body.format).toBe("csv");
-    expect(body.contentType).toBe("text/csv");
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
   });
 
-  it("falls back to csv for an unknown format value", async () => {
+  it("returns 400 for an unknown format value", async () => {
     // Arrange
     recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
 
@@ -290,11 +282,8 @@ describe("handleQiTraceabilityExport — parseFormat robustness (T-C)", () => {
       deps(evidenceDir),
     );
 
-    // Assert
-    expect(result.status).toBe(200);
-    const body = result.body as { format: string; contentType: string };
-    expect(body.format).toBe("csv");
-    expect(body.contentType).toBe("text/csv");
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_FORMAT");
   });
 });
 
@@ -345,7 +334,7 @@ describe("handleQiTraceabilityExport — readability (#790)", () => {
     expect(body).toContain("Lock the account after five failed logins.");
     expect(body).toContain("Verify lockout engages on the fifth failed login");
     // The legacy row degrades to the em-dash placeholder.
-    expect(body).toMatch(/atom-2,—,uncovered/u);
+    expect(body).toMatch(/requirement-to-test;atom-2;—;uncovered;"0,00";—;—/u);
   });
 
   it("still exports when the candidate artifact is absent (titles fall back to em-dash)", async () => {
@@ -354,6 +343,6 @@ describe("handleQiTraceabilityExport — readability (#790)", () => {
     expect(result.status).toBe(200);
     const body = (result.body as { body: string }).body;
     expect(body).toContain("Lock the account after five failed logins.");
-    expect(body).toMatch(/tc-1,—,atom-1,1/u);
+    expect(body).toMatch(/test-to-requirement;atom-1;Lock the account.*;covered;"0,90";tc-1;—/u);
   });
 });

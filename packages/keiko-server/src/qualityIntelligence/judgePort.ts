@@ -32,6 +32,22 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 
+export const QI_JUDGE_RESPONSE_FORMAT_NAME = "quality_intelligence_test_quality_judge";
+
+export function buildQiJudgeResponseFormat(): Extract<
+  GatewayRequest["responseFormat"],
+  { readonly type: "json_schema" }
+> {
+  return {
+    type: "json_schema",
+    name: QI_JUDGE_RESPONSE_FORMAT_NAME,
+    strict: true,
+    schema: { ...TEST_QUALITY_JUDGE_RESPONSE_SCHEMA },
+  };
+}
+
+export type QiJudgeStatus = "judged" | "prompt-too-large" | "parse-failed";
+
 export class QiJudgeError extends Error {
   public readonly code: string;
   constructor(code: string, message: string) {
@@ -177,6 +193,13 @@ const SAFE_PROMPT_TOO_LARGE_VERDICT: TestQualityJudgeVerdict = Object.freeze({
     "Judge-Prompt hat das Modellbudget überschritten; Bewertung fällt auf weak zurück",
 });
 
+const DETERMINISTIC_JUDGE_TEMPERATURE = 0;
+const JUDGE_TASK_PROFILE = MgQI.getQualityIntelligenceTaskProfile("qi:judge-logic");
+
+export interface QiJudgePortOptions {
+  readonly requestedSeed?: number | undefined;
+}
+
 function isRubricDimensionName(value: string): value is TestQualityDimensionName {
   return (
     value === "verifiability" ||
@@ -309,31 +332,70 @@ function parseJudgeObject(obj: Record<string, unknown>): TestQualityJudgeVerdict
   return Object.freeze({ verdict, dimensions: Object.freeze(dimensions), overallRationale });
 }
 
-export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
+export function tryParseJudgeVerdict(rawText: string): TestQualityJudgeVerdict | null {
   let parsedVerdict: TestQualityJudgeVerdict | null = null;
   for (const candidate of balancedJsonObjectCandidates(rawText)) {
     const obj = tryParseJsonObject(candidate);
     if (obj === null) continue;
     const verdict = parseJudgeObject(obj);
     if (verdict === null) continue;
-    if (parsedVerdict !== null) return SAFE_DEFAULT_VERDICT;
+    if (parsedVerdict !== null) return null;
     parsedVerdict = verdict;
   }
-  return parsedVerdict ?? SAFE_DEFAULT_VERDICT;
+  return parsedVerdict;
+}
+
+export function parseJudgeVerdict(rawText: string): TestQualityJudgeVerdict {
+  return tryParseJudgeVerdict(rawText) ?? SAFE_DEFAULT_VERDICT;
 }
 
 export interface QiJudgePort {
   readonly judge: (
     input: JudgePromptInput,
     signal?: AbortSignal,
-  ) => Promise<TestQualityJudgeVerdict & { readonly gatewayCallCount: number }>;
+  ) => Promise<
+    TestQualityJudgeVerdict & {
+      readonly gatewayCallCount: number;
+      readonly judgeStatus?: QiJudgeStatus | undefined;
+      readonly modelParameters?: Record<string, unknown> | undefined;
+    }
+  >;
+}
+
+function buildJudgeModelParameters(
+  useResponseFormat: boolean,
+  useSeed: boolean,
+  requestedSeed: number | undefined,
+): Record<string, unknown> {
+  return {
+    judgeTemperature: DETERMINISTIC_JUDGE_TEMPERATURE,
+    judgeSeedUsed: useSeed,
+    ...(useSeed && requestedSeed !== undefined ? { judgeSeed: requestedSeed } : {}),
+    ...(useResponseFormat ? { judgeResponseFormat: "json_schema" } : {}),
+  };
+}
+
+function abortErrorForJudge(reasonKind: "timeout" | "external" | "none"): Error {
+  if (reasonKind === "timeout") {
+    return new QiJudgeError(
+      "QI_JUDGE_MODEL_TIMEOUT",
+      `The Quality Intelligence judge model timed out after ${String(
+        JUDGE_TASK_PROFILE.timeoutMsHint,
+      )}ms.`,
+    );
+  }
+  return new DOMException("Quality Intelligence judge was cancelled.", "AbortError");
 }
 
 /**
  * Build a judge port bound to one model id. Applies the qi:judge-logic capability gate
  * (chat model with text capability). Gateway-only; no direct provider calls.
  */
-export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudgePort {
+export function createQiJudgePort(
+  deps: UiHandlerDeps,
+  modelId: string,
+  options: QiJudgePortOptions = {},
+): QiJudgePort {
   const capability = capabilityFor(deps, modelId);
   if (capability === undefined) {
     throw new QiJudgeError("QI_JUDGE_MODEL_NOT_CONFIGURED", "The judge model is not configured.");
@@ -354,36 +416,84 @@ export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudge
   if (model === undefined) {
     throw new QiJudgeError("QI_JUDGE_MODEL_UNAVAILABLE", "The model gateway is not available.");
   }
-  // When the model advertises structured-output support, pin the verdict to the judge JSON schema so
-  // the gateway forces well-formed JSON (more deterministic + parseable, mirroring generationPort).
-  // Models without it (the runtime-discovered default chat capability) fall back to prompt-instructed
-  // JSON + the robust extractor above — the same posture generation uses for those models.
-  const useResponseFormat = capability.supportsResponseFormat === true;
+  if (capability.supportsResponseFormat !== true) {
+    throw new QiJudgeError(
+      "QI_JUDGE_MODEL_INCOMPATIBLE",
+      "The selected judge model cannot enforce the judge JSON schema.",
+    );
+  }
+  const useResponseFormat = true;
+  const requestedSeed = options.requestedSeed;
+  const useSeed = capability.supportsSeeding === true && requestedSeed !== undefined;
+  const modelParameters = buildJudgeModelParameters(useResponseFormat, useSeed, requestedSeed);
   return {
     judge: async (
       input: JudgePromptInput,
       signal?: AbortSignal,
-    ): Promise<TestQualityJudgeVerdict & { readonly gatewayCallCount: number }> => {
+    ): Promise<
+      TestQualityJudgeVerdict & {
+        readonly gatewayCallCount: number;
+        readonly judgeStatus?: QiJudgeStatus | undefined;
+        readonly modelParameters?: Record<string, unknown> | undefined;
+      }
+    > => {
       const messages = buildJudgePrompt(input.candidateText, input.sourceContext);
       const userContent = messages[1]?.content ?? "";
       const size = QualityIntelligenceHardening.assertPromptSize(userContent);
-      if (!size.ok) return { ...SAFE_PROMPT_TOO_LARGE_VERDICT, gatewayCallCount: 0 };
-      const effectiveSignal = signal ?? new AbortController().signal;
+      if (!size.ok) {
+        return {
+          ...SAFE_PROMPT_TOO_LARGE_VERDICT,
+          gatewayCallCount: 0,
+          judgeStatus: "prompt-too-large",
+          modelParameters,
+        };
+      }
+      const cancellation = MgQI.composeCancellationSignal(JUDGE_TASK_PROFILE.timeoutMsHint, signal);
       const request: GatewayRequest = {
         modelId,
         messages,
         stream: false,
+        cancellationSignal: cancellation.signal,
+        temperature: DETERMINISTIC_JUDGE_TEMPERATURE,
+        ...(useSeed && requestedSeed !== undefined ? { seed: requestedSeed } : {}),
         ...(useResponseFormat
           ? {
-              responseFormat: {
-                type: "json_schema",
-                schema: { ...TEST_QUALITY_JUDGE_RESPONSE_SCHEMA },
-              },
+              responseFormat: buildQiJudgeResponseFormat(),
             }
           : {}),
       };
-      const response = await model.call(request, effectiveSignal);
-      return { ...parseJudgeVerdict(response.content), gatewayCallCount: 1 };
+      let removeAbortListener = (): void => {
+        /* not attached yet */
+      };
+      const abortPromise = new Promise<never>((_, reject) => {
+        const onAbort = (): void => {
+          reject(abortErrorForJudge(cancellation.reasonKind()));
+        };
+        cancellation.signal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => {
+          cancellation.signal.removeEventListener("abort", onAbort);
+        };
+        if (cancellation.signal.aborted) onAbort();
+      });
+      try {
+        const response = await Promise.race([
+          model.call(request, cancellation.signal),
+          abortPromise,
+        ]);
+        const parsed = tryParseJudgeVerdict(response.content);
+        if (parsed === null) {
+          return {
+            ...SAFE_DEFAULT_VERDICT,
+            gatewayCallCount: 1,
+            judgeStatus: "parse-failed",
+            modelParameters,
+          };
+        }
+        return { ...parsed, gatewayCallCount: 1, judgeStatus: "judged", modelParameters };
+      } finally {
+        removeAbortListener();
+        cancellation.dispose();
+      }
     },
   };
 }
