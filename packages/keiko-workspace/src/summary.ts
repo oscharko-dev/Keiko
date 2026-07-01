@@ -30,7 +30,7 @@ function toContextSummary(pack: ContextPack): ContextPackSummary {
 }
 
 function statsFor(pack: ContextPack | undefined): DiscoveryStats {
-  return { discovered: pack?.totalCandidates ?? 0, denied: 0, ignored: 0 };
+  return { discovered: pack?.totalCandidates ?? 0, denied: 0, ignored: 0, depthPruned: 0 };
 }
 
 export function buildWorkspaceSummary(

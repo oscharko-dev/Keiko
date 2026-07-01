@@ -14,6 +14,7 @@ import {
   isValidScopePath,
   type CandidateFile,
   type ConnectedContextPack,
+  type ContextCoverageDiagnostics,
   type ContextPackDiagnostics,
   type EvidenceAtom,
   type ExplorationBudget,
@@ -184,12 +185,16 @@ interface RingResult {
 
 // Maps the workspace-layer SearchDiagnostics.rankedCandidates onto the contract pack-diagnostics
 // shape. Structurally identical (path/bucket/score/ecosystem/signals) but mapped explicitly so the
-// workspace and contracts types stay decoupled. Returns undefined when no diagnostics are present.
-function toPackDiagnostics(
-  diagnostics: Awaited<ReturnType<typeof searchText>>["diagnostics"],
-): ContextPackDiagnostics | undefined {
+// workspace and contracts types stay decoupled. Coverage may still be present when ranking is absent.
+function toPackDiagnostics(result: Awaited<ReturnType<typeof searchText>>): ContextPackDiagnostics {
+  const diagnostics = result.diagnostics;
+  const coverage = (result as { readonly coverage?: ContextCoverageDiagnostics }).coverage;
+  const coverageDiagnostics = coverage === undefined ? {} : { coverage };
   if (diagnostics === undefined) {
-    return undefined;
+    return {
+      rankedCandidates: [],
+      ...coverageDiagnostics,
+    };
   }
   return {
     rankedCandidates: diagnostics.rankedCandidates.map((entry) => ({
@@ -199,6 +204,7 @@ function toPackDiagnostics(
       ecosystem: entry.ecosystem,
       signals: entry.signals.map((signal) => ({ name: signal.name, value: signal.value })),
     })),
+    ...coverageDiagnostics,
   };
 }
 
@@ -261,6 +267,31 @@ function noEvidence(nowMs: number): UncertaintyMarker {
   return {
     kind: "no-evidence",
     claim: "No repository evidence matched the connected scope for this question.",
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+function coverageIncomplete(
+  coverage: ContextCoverageDiagnostics | undefined,
+  nowMs: number,
+): UncertaintyMarker | undefined {
+  if (coverage?.incomplete !== true) {
+    return undefined;
+  }
+  return {
+    kind: "scope-incomplete",
+    claim:
+      `Incomplete repository coverage: reasons=${coverage.reasons.join(",")}; ` +
+      `filesDiscovered=${String(coverage.filesDiscovered)}, ` +
+      `filesAfterPolicy=${String(coverage.filesAfterPolicy)}, ` +
+      `filesScanned=${String(coverage.filesScanned)}, ` +
+      `filesSkipped=${String(coverage.filesSkipped)}, ` +
+      `matchesReturned=${String(coverage.matchesReturned)}, ` +
+      `depthPruned=${String(coverage.depthPrunedByDiscovery)}, ` +
+      `limits=maxFilesScanned:${String(coverage.limits.maxFilesScanned)},` +
+      `maxMatchesReturned:${String(coverage.limits.maxMatchesReturned)},` +
+      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}.`,
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -441,6 +472,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
       nowMs: inputs.nowMs,
       searchHints: { retrievalIntent: inputs.retrievalIntent },
     });
+    const coverageMarker = coverageIncomplete(result.coverage, inputs.nowMs());
     // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
     // It does NOT consume the excerpt budget. Charging result.filesScanned against filesReadMax
     // (Epic #177 retrieval defect) let a wide scan exhaust the budget the excerpt READ phase needs
@@ -450,9 +482,9 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     return {
       atoms: result.atoms,
       omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
-      uncertainty: [],
+      uncertainty: coverageMarker === undefined ? [] : [coverageMarker],
       usage: usageDelta({ elapsedMs: result.elapsedMs }),
-      diagnostics: toPackDiagnostics(result.diagnostics),
+      diagnostics: toPackDiagnostics(result),
     };
   }
   // Keep the planner's ring split authoritative: the structural ring should only run the

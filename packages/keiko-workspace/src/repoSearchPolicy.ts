@@ -67,6 +67,7 @@ export interface SearchDiagnostics {
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
   readonly deniedByDiscovery: number;
+  readonly depthPrunedByDiscovery: number;
   readonly candidateBuckets: Readonly<Record<CandidateBucket, number>>;
   // Top-ranked candidates with their ranking-signal breakdown, bounded for audit readability.
   readonly rankedCandidates: readonly RankedCandidateDiagnostic[];
@@ -510,6 +511,7 @@ export function orderCandidatesForSearch(
   policy: SearchPolicy,
   ignoredByDiscovery: number,
   deniedByDiscovery: number,
+  depthPrunedByDiscovery = 0,
 ): CandidateOrderingResult {
   const ranked = rankCandidates(files, query, policy);
   const rankedCandidates: readonly RankedCandidateDiagnostic[] = ranked
@@ -530,6 +532,7 @@ export function orderCandidatesForSearch(
       filesAfterPolicy: ranked.length,
       ignoredByDiscovery,
       deniedByDiscovery,
+      depthPrunedByDiscovery,
       candidateBuckets: bucketCounts(ranked),
       rankedCandidates,
     },

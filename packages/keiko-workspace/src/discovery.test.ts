@@ -103,6 +103,16 @@ describe("discoverFiles", () => {
     expect(found).not.toContain("a/b/c/d/deep.ts");
   });
 
+  it("counts directories skipped by the maxDepth cap", () => {
+    file("a/b/c/deep.ts");
+    file("top.ts");
+    const { stats } = discoverWithStats(detectWorkspace(dir), {
+      ...DEFAULT_DISCOVERY_OPTIONS,
+      maxDepth: 1,
+    });
+    expect(stats.depthPruned).toBeGreaterThan(0);
+  });
+
   it("skips a symlink whose realpath escapes the workspace root", () => {
     const outside = mkdtempSync(join(tmpdir(), "keiko-outside-"));
     try {
@@ -169,6 +179,7 @@ describe("discoverFiles", () => {
     const { stats } = discoverWithStats(detectWorkspace(dir), DEFAULT_DISCOVERY_OPTIONS);
     expect(stats.denied).toBeGreaterThanOrEqual(1);
     expect(stats.ignored).toBeGreaterThanOrEqual(1);
+    expect(stats.depthPruned).toBe(0);
     expect(stats.discovered).toBeGreaterThanOrEqual(1);
   });
 });

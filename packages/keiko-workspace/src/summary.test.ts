@@ -53,7 +53,7 @@ describe("buildWorkspaceSummary", () => {
   });
 
   it("uses explicit discovery stats when supplied", () => {
-    const stats: DiscoveryStats = { discovered: 5, denied: 3, ignored: 7 };
+    const stats: DiscoveryStats = { discovered: 5, denied: 3, ignored: 7, depthPruned: 0 };
     expect(buildWorkspaceSummary(workspace(), pack(), stats).counts).toEqual(stats);
   });
 

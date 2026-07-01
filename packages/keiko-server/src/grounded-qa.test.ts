@@ -490,6 +490,32 @@ describe("buildGroundedGatewayMessages", () => {
       ),
     ).toThrow(ContextOverflowError);
   });
+
+  it("includes incomplete repository coverage warnings in the model prompt", () => {
+    const pack: ConnectedContextPack = {
+      ...emptyPack(),
+      uncertainty: [
+        {
+          kind: "scope-incomplete",
+          claim:
+            "Incomplete repository coverage: reasons=file-cap; filesScanned=1, filesSkipped=3.",
+          impactedAtomIds: [],
+          emittedAtMs: NOW,
+        },
+      ],
+    };
+
+    const messages = buildGroundedGatewayMessages(
+      GROUNDED_FIXTURE_QUESTION,
+      pack,
+      buildRedactor({}, undefined),
+    );
+
+    expect(messages[1]?.content).toContain("Known uncertainty from retrieval:");
+    expect(messages[1]?.content).toContain("scope-incomplete");
+    expect(messages[1]?.content).toContain("Incomplete repository coverage");
+    expect(messages[1]?.content).toContain("reasons=file-cap");
+  });
 });
 
 describe("handleGroundedAsk", () => {
