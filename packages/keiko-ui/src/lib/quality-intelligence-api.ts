@@ -361,7 +361,7 @@ export async function exportQiRun(
       body: JSON.stringify({
         adapter,
         dryRun: options?.dryRun ?? false,
-        approvedOnly: options?.approvedOnly ?? false,
+        approvedOnly: options?.approvedOnly ?? true,
       }),
     },
   );

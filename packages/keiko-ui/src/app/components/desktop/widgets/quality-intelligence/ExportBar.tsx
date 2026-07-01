@@ -90,9 +90,9 @@ export function ExportBar({
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [downloaded, setDownloaded] = useState<string | null>(null);
-  // Issue #282 A11y-3 / AC3: "approvedOnly" defaults to false to preserve the existing export
-  // scope (all test cases). The user opts in explicitly via the checkbox below.
-  const [approvedOnly, setApprovedOnly] = useState(false);
+  // Deliverable-safe default: local downloads start with the same reviewed scope that external TMS
+  // adapters enforce server-side. Users can still opt into a local diagnostic all-candidate export.
+  const [approvedOnly, setApprovedOnly] = useState(true);
   const selected = ADAPTERS.find((a) => a.id === adapter);
   const isTms = selected?.tms ?? false;
 
@@ -105,8 +105,8 @@ export function ExportBar({
       setDownloaded(res.filename);
       return;
     }
-    // Pass the user-chosen approvedOnly value (default false = all test cases, preserving the
-    // prior behaviour). TMS adapters force approvedOnly server-side regardless of this value.
+    // Pass the user-chosen approvedOnly value. TMS adapters force approvedOnly server-side
+    // regardless of this value.
     const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly });
     if (res.dryRun) {
       // "test case(s)", not the internal term "candidates" — the suite-wide object name
@@ -153,8 +153,8 @@ export function ExportBar({
         </div>
         {/* Issue #282 A11y-3 / AC3: "Approved only" scope control. Hidden for TMS adapters (TMS
             forces approvedOnly server-side; the server owns that decision — showing a checkbox that
-            appears to control it would be misleading). Default unchecked = all test cases exported,
-            preserving the previous behaviour (no silent scope change). */}
+            appears to control it would be misleading). Default checked keeps ordinary downloads
+            aligned with the review gate. */}
         {!isTms ? (
           <label className="qi-export-approved-label">
             <input
