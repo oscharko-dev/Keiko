@@ -241,8 +241,44 @@ describe("buildGatewayAssembly", () => {
     expect(
       outcome.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence")?.excludedItems,
     ).toBeGreaterThan(0);
+    expect(
+      outcome.diagnostics.lanes.find((lane) => lane.laneId === "working-memory")?.compactionReason,
+    ).toBe("budget");
+    expect(
+      outcome.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence")?.compactionReason,
+    ).toBe("budget");
+    expect(
+      outcome.diagnostics.lanes.reduce((sum, lane) => sum + lane.estimatedTokens, 0),
+    ).toBeLessThanOrEqual(profile.effectiveInputBudget);
     expect((latestUserTurn.match(/Included memory context:/g) ?? []).length).toBe(1);
     expect(latestUserTurn).toContain("# Relevant memories");
+  });
+
+  it("keeps a simple prompt unchanged while exposing allocator lane diagnostics", () => {
+    const { store, chatId } = createStore();
+    store.createMessage(createMessage(chatId, "user", "Simple prompt", NOW + 99));
+
+    const deps = createDeps(store, DEFAULT_CONTEXT_PROFILE);
+    const memory = makeMemoryResult([]);
+    const request = makeRequest(chatId, "Simple prompt");
+
+    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+
+    expect(outcome.messages.at(-1)?.content).toBe("Simple prompt");
+    expect(outcome.diagnostics.lanes.map((lane) => lane.laneId)).toEqual([
+      "system-contract",
+      "user-task",
+      "repo-evidence",
+      "working-memory",
+      "history-summary",
+      "verification-evidence",
+    ]);
+    expect(
+      outcome.diagnostics.lanes.find((lane) => lane.laneId === "system-contract")?.includedItems,
+    ).toBe(1);
+    expect(
+      outcome.diagnostics.lanes.find((lane) => lane.laneId === "user-task")?.includedItems,
+    ).toBe(1);
   });
 
   it("drops whole document entries in order and preserves included content unchanged", () => {
