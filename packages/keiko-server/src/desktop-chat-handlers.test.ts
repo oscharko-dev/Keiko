@@ -60,6 +60,11 @@ function fakeModel(content: string): ModelPort {
   };
 }
 
+function oversizedHistoryTurn(index: number): string {
+  const oversized = "x".repeat(150_000);
+  return `history turn ${String(index)} ${oversized}`;
+}
+
 function scriptedIdentityRecallModel(): ModelPort {
   return {
     call(request): Promise<NormalizedResponse> {
@@ -402,10 +407,10 @@ describe("desktop chat routes", () => {
     });
     const created = (await createRes.json()) as { chat: { id: string } };
     const now = Date.now();
-    const history = Array.from({ length: 30 }, (_, index) => ({
+    const history = Array.from({ length: 3 }, (_, index) => ({
       chatId: created.chat.id,
       role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      content: `history turn ${String(index)}`,
+      content: oversizedHistoryTurn(index),
       timestamp: now + index,
       runId: undefined,
       workflowId: undefined,
@@ -431,6 +436,7 @@ describe("desktop chat routes", () => {
     expect(seenRequests[0]?.messages[1]?.content).toContain(
       "Automated summary of earlier conversation turns",
     );
+    expect(seenRequests[0]?.messages[1]?.content).not.toContain("history turn 2");
   });
 
   it("appends realtime voice turns without calling the chat model", async () => {
