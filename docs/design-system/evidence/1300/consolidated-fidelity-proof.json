@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "bb4d57273cf58d823d435a346feb87400145bcb0636348a22eefb17027e2585f",
+  "postCssSha256": "a6eee5342296640f4bde69e4811d47b037efe0586f662c82d0db260cdf77421b",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -21,9 +21,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-07-01T15:55:32.684Z",
-    "generatedAt": "2026-07-01T15:55:36.307Z",
-    "repoHeadSha": "cde27a3a4f1865b25ff9b5ad556bf0b70c456665"
+    "startedAt": "2026-07-01T20:01:26.505Z",
+    "generatedAt": "2026-07-01T20:01:29.117Z",
+    "repoHeadSha": "6e7190b26e1b5bb8f5887bc9efd85d8066b79561"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -276,7 +276,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.09999996423721313,
+    "durationMs": 0,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,

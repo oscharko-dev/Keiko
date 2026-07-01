@@ -9,7 +9,9 @@ import {
   addSourceToCapsule,
   listCapsuleSources,
   removeSourceFromCapsule,
+  updateSourceScopeInCapsule,
 } from "./source-lifecycle.js";
+import { createSqliteAuditSink } from "./privacy/audit-emitter.js";
 import { freshStore, sampleCapsuleInput, sampleSourceInput } from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -85,6 +87,70 @@ describe("addSourceToCapsule + listCapsuleSources", () => {
       .prepare("SELECT COUNT(*) AS n FROM knowledge_sources WHERE id = 'src-bad'")
       .get() as unknown as CountRow;
     expect(row.n).toBe(0);
+  });
+});
+
+describe("updateSourceScopeInCapsule", () => {
+  it("updates a source scope without changing the source id", () => {
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-rebind"));
+    const updated = updateSourceScopeInCapsule(
+      store,
+      capsuleId,
+      "src-rebind" as KnowledgeSourceId,
+      { kind: "folder", rootPath: "/new/root", recursive: true },
+    );
+    expect(updated.id).toBe("src-rebind");
+    expect(updated.scope).toStrictEqual({
+      kind: "folder",
+      rootPath: "/new/root",
+      recursive: true,
+    });
+    expect(listCapsuleSources(store, capsuleId)[0]?.scope).toStrictEqual(updated.scope);
+  });
+
+  it("emits metadata-only source-rebound audit without membership churn", () => {
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-audit"));
+    updateSourceScopeInCapsule(
+      store,
+      capsuleId,
+      "src-audit" as KnowledgeSourceId,
+      { kind: "folder", rootPath: "/new/root", recursive: true },
+      createSqliteAuditSink(store),
+    );
+    const audit = store._internal.db
+      .prepare(
+        "SELECT kind, source_id, details_json FROM capsule_audit_events WHERE kind = 'source-rebound'",
+      )
+      .get() as unknown as {
+      readonly kind: string;
+      readonly source_id: string;
+      readonly details_json: string;
+    };
+    const membership = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM capsule_membership_changes")
+      .get() as unknown as CountRow;
+    expect(audit.kind).toBe("source-rebound");
+    expect(audit.source_id).toBe("src-audit");
+    expect(JSON.parse(audit.details_json)).toStrictEqual({
+      currentScopeKind: "folder",
+      previousScopeKind: "folder",
+    });
+    expect(membership.n).toBe(0);
+  });
+
+  it("raises KnowledgeNotFoundError when the source does not belong to the capsule", () => {
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-other"));
+    expect(() =>
+      updateSourceScopeInCapsule(
+        store,
+        "other" as KnowledgeCapsuleId,
+        "src-other" as KnowledgeSourceId,
+        { kind: "folder", rootPath: "/new/root", recursive: true },
+      ),
+    ).toThrow(KnowledgeNotFoundError);
+    expect(listCapsuleSources(store, capsuleId)[0]?.scope).toStrictEqual(
+      sampleSourceInput("src-other").scope,
+    );
   });
 });
 

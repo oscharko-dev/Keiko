@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `18`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `19`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 18 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 19 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -479,6 +479,7 @@ CREATE TABLE capsule_audit_events (
       'capsule-deleted',
       'source-added',
       'source-removed',
+      'source-rebound',
       'indexing-job-started',
       'indexing-job-completed',
       'indexing-job-failed',
@@ -552,12 +553,27 @@ FROM capsule_audit_events;
 `.trim();
 
 const CREATE_CAPSULE_AUDIT_EVENTS_V15 = CREATE_CAPSULE_AUDIT_EVENTS.replace(
-  "capsule_audit_events",
-  "capsule_audit_events_v15",
-);
+  "      'source-rebound',\n",
+  "",
+).replace("capsule_audit_events", "capsule_audit_events_v15");
 
 const COPY_CAPSULE_AUDIT_EVENTS_TO_V15 = `
 INSERT INTO capsule_audit_events_v15 (
+  id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+)
+SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+FROM capsule_audit_events;
+`.trim();
+
+const CREATE_CAPSULE_AUDIT_EVENTS_V19 = CREATE_CAPSULE_AUDIT_EVENTS.replace(
+  "capsule_audit_events",
+  "capsule_audit_events_v19",
+);
+
+const COPY_CAPSULE_AUDIT_EVENTS_TO_V19 = `
+INSERT INTO capsule_audit_events_v19 (
   id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
   deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
 )
@@ -1018,6 +1034,18 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "ALTER TABLE vectors ADD COLUMN embedding_instruction_version TEXT;",
       "ALTER TABLE vectors ADD COLUMN embedding_space_fingerprint TEXT;",
       "ALTER TABLE vectors ADD COLUMN embedding_dimensions_param INTEGER;",
+    ],
+  },
+  {
+    version: 19,
+    reason:
+      "Persist metadata-only source rebind audit events for local-knowledge root repair.",
+    up: [
+      CREATE_CAPSULE_AUDIT_EVENTS_V19,
+      COPY_CAPSULE_AUDIT_EVENTS_TO_V19,
+      "DROP TABLE capsule_audit_events;",
+      "ALTER TABLE capsule_audit_events_v19 RENAME TO capsule_audit_events;",
+      CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
     ],
   },
 ] as const;

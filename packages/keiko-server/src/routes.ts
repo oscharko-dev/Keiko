@@ -190,6 +190,7 @@ import {
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleListLocalKnowledgeCapsuleSets,
+  handleRebindLocalKnowledgeCapsuleSource,
   handleReindexLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
   handleUpdateLocalKnowledgeCapsule,
@@ -721,6 +722,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "DELETE",
     pattern: "/api/local-knowledge/capsules/:capsuleId/connection",
     handler: handleDisconnectLocalKnowledgeCapsule,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/sources/:sourceId/root",
+    handler: handleRebindLocalKnowledgeCapsuleSource,
   },
   {
     method: "DELETE",
