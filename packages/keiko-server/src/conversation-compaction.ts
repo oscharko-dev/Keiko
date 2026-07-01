@@ -1,10 +1,11 @@
 // PR4-W2 chat history-compaction splice (ADR-0055 D3) — the ONE genuine behavioral change in the
 // context-engineering milestone. A PURE, deterministic, offline, no-clock, no-random shim that
-// wraps conversationForGateway (chat-handlers.ts).
+// wraps conversationForGateway (conversation-gateway.ts).
 //
 // ACTIVATION PREDICATE (budget-safe verbatim preservation, ADR-0055 D6):
 //   activeProfile = opts.contextProfile ?? DEFAULT_CONTEXT_PROFILE
-//   fullFilteredGatewayTokens <= activeProfile.effectiveInputBudget
+//   effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget
+//   fullFilteredGatewayTokens <= effectiveInputBudget
 // When true, this returns the system message plus the full usable filtered history — no
 // count-based slice truncation — so budget-safe conversations stay verbatim.
 //
@@ -31,10 +32,11 @@ import {
   conversationForGateway,
   usableGatewayMessages,
   type GatewayConversationMessage,
-} from "./chat-handlers.js";
+} from "./conversation-gateway.js";
 
 export interface ConversationCompactionOptions {
   readonly contextProfile?: ContextProfile | undefined;
+  readonly effectiveInputBudget?: number | undefined;
   readonly redactionSecrets?: readonly string[] | undefined;
 }
 
@@ -70,16 +72,17 @@ export function conversationForGatewayWithCompaction(
   const gatewayMessages = conversationForGateway(messages);
   const systemMessage = gatewayMessages[0];
   const activeProfile = opts.contextProfile ?? DEFAULT_CONTEXT_PROFILE;
+  const effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget;
   const fullVerbatimMessages = buildVerbatimMessages(systemMessage, filtered);
   const fullVerbatimTokens = estimateTokensForSegments(
     fullVerbatimMessages.map((message) => message.content),
   );
-  if (fullVerbatimTokens <= activeProfile.effectiveInputBudget) {
+  if (fullVerbatimTokens <= effectiveInputBudget) {
     return { messages: fullVerbatimMessages };
   }
 
   const prepared = prepareDroppedTurns(filtered, opts.redactionSecrets);
-  const selection = selectCompaction(prepared, systemMessage, activeProfile.effectiveInputBudget);
+  const selection = selectCompaction(prepared, systemMessage, effectiveInputBudget);
   if (selection === undefined) {
     throw new ContextOverflowError(
       "conversation history exceeds the effective input budget and cannot be compacted without overflow.",
