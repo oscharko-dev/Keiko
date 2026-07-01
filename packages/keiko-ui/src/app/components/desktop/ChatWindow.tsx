@@ -1314,6 +1314,9 @@ interface ComposerBarProps {
 }
 
 interface VoiceDialogComposerControlsProps {
+  readonly session: ChatSessionApi;
+  readonly selectedModelCapability: ModelCapability | undefined;
+  readonly onAttachFiles: (files: readonly File[]) => void;
   readonly voiceMuted: boolean;
   readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
@@ -1323,6 +1326,13 @@ interface VoiceDialogComposerControlsProps {
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
   readonly compact?: boolean | undefined;
+}
+
+interface ComposerContextControlsProps {
+  readonly session: ChatSessionApi;
+  readonly selectedModelCapability: ModelCapability | undefined;
+  readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly controlsNarrow?: boolean | undefined;
 }
 
 interface VoiceDialogMicMuteButtonProps {
@@ -1363,7 +1373,81 @@ function VoiceDialogMicMuteButton({
   );
 }
 
+function ComposerContextControls({
+  session,
+  selectedModelCapability,
+  onAttachFiles,
+  controlsNarrow = false,
+}: ComposerContextControlsProps): ReactNode {
+  const { t } = useI18n();
+  const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
+  const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
+  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
+  const compactModelTip = loading
+    ? t("chat.model.loading")
+    : noEligibleModels
+      ? t("chat.model.noEligible")
+      : t("chat.model.change");
+
+  return (
+    <div className="cmp-bar-model">
+      <AttachButton
+        model={selectedModelCapability}
+        onFiles={onAttachFiles}
+        anyModelSupportsAttachments={models.some(
+          (m) => m.supportsImageInput || m.supportsDocumentInput,
+        )}
+      />
+      <div
+        className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
+        data-tip={controlsNarrow ? compactModelTip : undefined}
+      >
+        <KeikoSelect
+          triggerClassName="cmp-model-select"
+          value={selectValue}
+          ariaLabel={t("chat.model.menuTitle")}
+          ariaDescribedBy={selectDescribedBy}
+          disabled={loading}
+          placeholder={
+            loading
+              ? t("chat.model.loading")
+              : noEligibleModels
+                ? t("chat.model.noEligible")
+                : t("chat.model.menuTitle")
+          }
+          leadingVisual={
+            <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
+          }
+          menuTitle={t("chat.model.menuTitle")}
+          menuClassName="cmp-model-menu"
+          menuMinWidth={controlsNarrow ? 118 : 280}
+          mono
+          sections={[
+            {
+              options: loading
+                ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
+                : noEligibleModels
+                  ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
+                  : modelList(models).map((model) => ({
+                      value: model.id,
+                      label: model.id,
+                    })),
+            },
+          ]}
+          onValueChange={(next) => {
+            if (noEligibleModels || loading) return;
+            setSelectedModel(next);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function VoiceDialogComposerControls({
+  session,
+  selectedModelCapability,
+  onAttachFiles,
   voiceMuted,
   onToggleVoiceMute,
   playbackButtonRef,
@@ -1376,6 +1460,12 @@ function VoiceDialogComposerControls({
 }: VoiceDialogComposerControlsProps): ReactNode {
   return (
     <div className="cmp-bar cmp-bar-voice-dialog">
+      <ComposerContextControls
+        session={session}
+        selectedModelCapability={selectedModelCapability}
+        onAttachFiles={onAttachFiles}
+        controlsNarrow={compact}
+      />
       <div className="cmp-bar-main cmp-bar-main-voice-dialog">
         <VoiceDialogModeSwitch
           active={voiceDialogActive}
@@ -1427,9 +1517,6 @@ function ComposerBar({
 }: ComposerBarProps): ReactNode {
   const { t } = useI18n();
   const {
-    models,
-    selectedModel,
-    setSelectedModel,
     draft,
     noEligibleModels,
     loading,
@@ -1447,7 +1534,6 @@ function ComposerBar({
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
-  const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const sendDescribedBy = noEligibleModels
     ? NO_MODEL_ALERT_ID
     : loading
@@ -1456,70 +1542,17 @@ function ComposerBar({
         ? SEND_HINT_ID
         : undefined;
 
-  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
-  const compactModelTip = loading
-    ? t("chat.model.loading")
-    : noEligibleModels
-      ? t("chat.model.noEligible")
-      : t("chat.model.change");
-
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
-      <div className="cmp-bar-model">
-        {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
-            uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
-            sr-only hint does not suggest a model switch that cannot succeed. */}
-        <AttachButton
-          model={selectedModelCapability}
-          onFiles={onAttachFiles}
-          anyModelSupportsAttachments={models.some(
-            (m) => m.supportsImageInput || m.supportsDocumentInput,
-          )}
-        />
-        {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
-        <div
-          className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
-          data-tip={controlsNarrow ? compactModelTip : undefined}
-        >
-          <KeikoSelect
-            triggerClassName="cmp-model-select"
-            value={selectValue}
-            ariaLabel={t("chat.model.menuTitle")}
-            ariaDescribedBy={selectDescribedBy}
-            disabled={loading}
-            placeholder={
-              loading
-                ? t("chat.model.loading")
-                : noEligibleModels
-                  ? t("chat.model.noEligible")
-                  : t("chat.model.menuTitle")
-            }
-            leadingVisual={
-              <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
-            }
-            menuTitle={t("chat.model.menuTitle")}
-            menuClassName="cmp-model-menu"
-            menuMinWidth={controlsNarrow ? 118 : 280}
-            mono
-            sections={[
-              {
-                options: loading
-                  ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
-                  : noEligibleModels
-                    ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
-                    : modelList(models).map((model) => ({
-                        value: model.id,
-                        label: model.id,
-                      })),
-              },
-            ]}
-            onValueChange={(next) => {
-              if (noEligibleModels || loading) return;
-              setSelectedModel(next);
-            }}
-          />
-        </div>
-      </div>
+      {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
+          uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
+          sr-only hint does not suggest a model switch that cannot succeed. */}
+      <ComposerContextControls
+        session={session}
+        selectedModelCapability={selectedModelCapability}
+        onAttachFiles={onAttachFiles}
+        controlsNarrow={controlsNarrow}
+      />
       <div className="cmp-bar-main">
         {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
             speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
@@ -2105,9 +2138,7 @@ function ComposerCore({
         className={`cmp-input-stack${voiceDialog.active ? " cmp-input-stack-voice-dialog" : ""}`}
       >
         {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-        {voiceDialog.active ? null : (
-          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-        )}
+        <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
         <textarea
           className="cmp-input"
           ref={taRef}
@@ -2123,7 +2154,7 @@ function ComposerCore({
           // pre-typed during streaming. Re-submit stays blocked by the isInFlight
           // guard in useChatSession, and the primary button is "Cancel" meanwhile.
         />
-        {!voiceDialog.active && repositoryPickerOpen ? (
+        {repositoryPickerOpen ? (
           <div className="repo-focus repo-focus-inline">
             <span className="sr-only" role="status" aria-live="polite">
               {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
@@ -2146,20 +2177,14 @@ function ComposerCore({
             />
           </div>
         ) : null}
-        {voiceDialog.active ? null : (
-          <RepositoryReferenceStrip
-            references={repositoryReferences}
-            onRemove={removeRepositoryReference}
-          />
-        )}
+        <RepositoryReferenceStrip
+          references={repositoryReferences}
+          onRemove={removeRepositoryReference}
+        />
         {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-        {voiceDialog.active ? null : (
-          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-        )}
+        <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
         {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-        {voiceDialog.active ? null : (
-          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-        )}
+        <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
         {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
             adjacent to the textarea so SR users hear the state without losing
             composer focus. Hidden when there is nothing to announce. */}
@@ -2222,6 +2247,9 @@ function ComposerCore({
         ) : null}
         {voiceDialog.active ? (
           <VoiceDialogComposerControls
+            session={session}
+            selectedModelCapability={selectedModelCapability}
+            onAttachFiles={handleFiles}
             voiceMuted={voiceMuted}
             onToggleVoiceMute={toggleVoiceMute}
             playbackButtonRef={playbackButtonRef}
@@ -2260,6 +2288,9 @@ function ComposerCore({
             inert
           >
             <VoiceDialogComposerControls
+              session={session}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
               voiceMuted={realtimeVoice.muted}
               onToggleVoiceMute={toggleVoiceMute}
               playbackButtonRef={motionPlaybackButtonRef}
