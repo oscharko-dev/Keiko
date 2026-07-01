@@ -1549,6 +1549,61 @@ function gatewayConfigFields(
   return { config, configPresent };
 }
 
+interface UiHandlerDepsAssemblyArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly resolvedUiDbPath: string;
+  readonly resolvedEvidenceDir: string;
+  readonly config: GatewayConfig | undefined;
+  readonly configPresent: boolean;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly egress: GatewayEgressConfig | undefined;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly bundle: PersistenceBundle;
+  readonly contextProfileForModel: ContextProfileResolver;
+}
+
+function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
+  return {
+    ...gatewayConfigFields(args.config, args.configPresent),
+    evidenceStore: args.evidenceStore,
+    evidenceDir: args.resolvedEvidenceDir,
+    env: args.options.env,
+    egress: args.egress,
+    redactor: args.liveRedactor,
+    registry: args.options.registry ?? createRunRegistry(),
+    modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+    redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
+    store: args.bundle.uiStore,
+    uiDbPath: args.resolvedUiDbPath,
+    preferredProjectPath: args.bundle.preferredProjectPath,
+    gatewayConfig: args.runtimeConfig,
+    gatewaySetupTester: args.options.gatewaySetupTester,
+    gatewayModelDiscovery: args.options.gatewayModelDiscovery,
+    figmaCredentialTester: args.options.figmaCredentialTester,
+    localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    contextProfile: defaultContextProfile(
+      args.runtimeConfig.current(),
+      args.contextProfileForModel,
+    ),
+    contextProfileForModel: args.contextProfileForModel,
+    ...buildPeripherals({
+      options: args.options,
+      uiStore: args.bundle.uiStore,
+      evidenceStore: args.evidenceStore,
+      redactString: args.redactString,
+      liveRedactor: args.liveRedactor,
+      runtimeConfig: args.runtimeConfig,
+      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+      runtimeStateDir: dirname(args.resolvedUiDbPath),
+    }),
+    consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
+    ...optionalPersistenceServices(args.bundle),
+  };
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env),
     runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
@@ -1567,37 +1622,19 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle);
-  return {
-    ...gatewayConfigFields(config, configPresent),
-    evidenceStore,
-    evidenceDir: resolvedEvidenceDir,
-    env: options.env,
+  return assembleUiHandlerDeps({
+    options,
+    resolvedUiDbPath,
+    resolvedEvidenceDir,
+    config,
+    configPresent,
+    runtimeConfig,
     egress,
-    redactor: liveRedactor,
-    registry: options.registry ?? createRunRegistry(),
-    modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
-    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig, egress),
-    store: bundle.uiStore,
-    uiDbPath: resolvedUiDbPath,
-    preferredProjectPath: bundle.preferredProjectPath,
-    gatewayConfig: runtimeConfig,
-    gatewaySetupTester: options.gatewaySetupTester,
-    gatewayModelDiscovery: options.gatewayModelDiscovery,
-    figmaCredentialTester: options.figmaCredentialTester,
+    evidenceStore,
+    redactString,
+    liveRedactor,
     localKnowledgeKeyProvider,
-    contextProfile: defaultContextProfile(runtimeConfig.current(), contextProfileForModel),
+    bundle,
     contextProfileForModel,
-    ...buildPeripherals({
-      options,
-      uiStore: bundle.uiStore,
-      evidenceStore,
-      redactString,
-      liveRedactor,
-      runtimeConfig,
-      localKnowledgeKeyProvider,
-      runtimeStateDir: dirname(resolvedUiDbPath),
-    }),
-    consolidationJobs: createConsolidationJobRegistry({ evidenceStore }),
-    ...optionalPersistenceServices(bundle),
-  };
+  });
 }
