@@ -238,6 +238,16 @@ function intentTextSource(
   evidenceTexts: readonly string[],
 ): IntentTextSource {
   const bodyTexts = meaningfulNormalisedTexts(evidenceTexts);
+  const labelTexts = meaningfulNormalisedTexts(envelopes.map((envelope) => envelope.displayLabel));
+  
+  if (bodyTexts.length > 0 && labelTexts.length > 0) {
+    return Object.freeze({
+      sourceTexts: Object.freeze([...labelTexts, ...bodyTexts]),
+      sourceMode: "body",
+      diagnostics: INTENT_DIAGNOSTICS.body,
+    });
+  }
+
   if (bodyTexts.length > 0) {
     return Object.freeze({
       sourceTexts: bodyTexts,
@@ -246,7 +256,6 @@ function intentTextSource(
     });
   }
 
-  const labelTexts = meaningfulNormalisedTexts(envelopes.map((envelope) => envelope.displayLabel));
   if (labelTexts.length > 0) {
     return Object.freeze({
       sourceTexts: labelTexts,

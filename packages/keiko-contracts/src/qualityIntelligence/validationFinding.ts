@@ -42,7 +42,12 @@ export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS: readonly QualityInte
 export type QualityIntelligenceSeverity = "critical" | "high" | "medium" | "low";
 
 export type QualityIntelligenceRequirementQualityCategory =
-  "ambiguity" | "non-verifiable" | "open-placeholder" | "compound-requirement" | "weak-modality";
+  | "ambiguity"
+  | "non-verifiable"
+  | "open-placeholder"
+  | "compound-requirement"
+  | "weak-modality"
+  | "cross-atom-contradiction";
 
 export const QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES: readonly QualityIntelligenceRequirementQualityCategory[] =
   [
@@ -51,6 +56,7 @@ export const QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES: readonly Quali
     "open-placeholder",
     "compound-requirement",
     "weak-modality",
+    "cross-atom-contradiction",
   ] as const;
 
 export const QUALITY_INTELLIGENCE_SEVERITIES: readonly QualityIntelligenceSeverity[] = [

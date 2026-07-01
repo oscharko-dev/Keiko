@@ -40,6 +40,8 @@ const RESPONSE_OR_AVAILABILITY_PATTERN =
 const NUMBER_WITH_MEASURABLE_UNIT_PATTERN =
   /\b\d+(?:[.,]\d+)?\s*(?:ms|millisekunden|sekunden|sek|s|minuten|min|stunden|h|%|prozent|eur|euro|€)\b/iu;
 const AVAILABILITY_TARGET_PATTERN = /\b(?:sla|rto|rpo|\d+(?:[.,]\d+)?\s*(?:%|prozent))\b/iu;
+const NEGATION_PATTERN =
+  /\b(not|never|no longer|cannot|isn't|aren't|won't|doesn't|do not|nicht|kein(?:e|en|em|er|es)?|niemals|nie|ohne)\b/iu;
 
 function collapsedText(value: string): string {
   return normaliseCandidateText(value).replace(/\s+/gu, " ").trim();
@@ -154,9 +156,30 @@ export function analyzeRequirementQuality(
   input: AnalyzeRequirementQualityInput,
 ): readonly QualityIntelligence.QualityIntelligenceRequirementQualityFinding[] {
   const findings: QualityIntelligence.QualityIntelligenceRequirementQualityFinding[] = [];
+  
+  interface NegationComparableAtom {
+    readonly atom: QualityIntelligence.QualityIntelligenceEvidenceAtom;
+    readonly text: string;
+    readonly core: string;
+    readonly negated: boolean;
+  }
+  
+  const comparables: NegationComparableAtom[] = [];
+  
   for (const entry of input.atoms) {
     const text = collapsedText(entry.canonicalText);
     if (text.length === 0) continue;
+    
+    const core = text.replace(NEGATION_PATTERN, " ").replace(/\s+/gu, " ").trim();
+    if (core.length > 0) {
+      comparables.push({
+        atom: entry.atom,
+        text,
+        core,
+        negated: NEGATION_PATTERN.test(text),
+      });
+    }
+
     const signals = signalsForText(text);
     for (let ordinal = 0; ordinal < signals.length; ordinal += 1) {
       const signal = signals[ordinal];
@@ -164,5 +187,25 @@ export function analyzeRequirementQuality(
       findings.push(toFinding(input.runId, entry.atom, text, signal, ordinal));
     }
   }
+
+  // Cross-atom contradiction check
+  const seenCores = new Map<string, NegationComparableAtom>();
+  let crossOrdinal = 0;
+  for (const comp of comparables) {
+    const existing = seenCores.get(comp.core);
+    if (existing !== undefined && existing.negated !== comp.negated) {
+      findings.push(
+        toFinding(input.runId, comp.atom, comp.text, {
+          category: "cross-atom-contradiction",
+          severity: "high",
+          confidence: 0.95,
+          reason: `widerspricht einem anderen Requirement (Atom ${existing.atom.id}) auf Basis der Negation (XOR-Kontradiktion)`,
+        }, crossOrdinal++),
+      );
+    } else {
+      seenCores.set(comp.core, comp);
+    }
+  }
+
   return Object.freeze(findings);
 }
