@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import {
   chmod,
+  lstat,
   mkdir,
   readFile,
   readdir,
@@ -10,7 +12,7 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 import {
   isValidScopePath,
   type RetrievalQuery,
@@ -79,6 +81,7 @@ export interface WorkspaceIndexDiscoverySnapshot {
 
 export interface WorkspaceIndexRecord extends WorkspaceIndexDiscoveredFile {
   readonly kind: WorkspaceIndexRecordKind;
+  readonly fingerprint?: string | undefined;
   readonly lexical?: WorkspaceIndexLexicalRecord | undefined;
 }
 
@@ -142,6 +145,8 @@ export interface WorkspaceIndexPreparationReport {
 }
 
 export interface PreparedWorkspaceIndexSnapshot {
+  readonly valid: boolean;
+  readonly dirty: boolean;
   readonly entries: readonly PreparedWorkspaceIndexEntry[];
   readonly discovery: WorkspaceIndexDiscoverySnapshot;
   readonly report: WorkspaceIndexPreparationReport;
@@ -189,9 +194,9 @@ const FILE_WORKSPACE_INDEX_PREFIX = "workspace-index-";
 const FILE_WORKSPACE_INDEX_EXTENSION = ".json";
 const FILE_WORKSPACE_INDEX_SEGMENT_RE =
   /^workspace-index-[0-9a-f]{64}\.json(?:\.[0-9a-f]{16}\.tmp)?$/u;
-const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS = 128;
-const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES = 4_096;
+const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES = 16_384;
 
 function isRetainedPreparedEntryOutcome(
   outcome: PreparedEntryOutcome,
@@ -238,11 +243,22 @@ function normalizeSizeBytes(value: unknown): number | undefined {
 }
 
 function normalizeMtimeMs(value: unknown): number | undefined {
-  return normalizeWholeNumber(value);
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return value;
 }
 
 function hashLexicalTerm(term: string): string {
   return sha256Hex(term);
+}
+
+function normalizeFingerprint(value: unknown): string | undefined {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value) ? value : undefined;
+}
+
+export function workspaceIndexContentFingerprint(content: string): string {
+  return sha256Hex(`workspace-index-content:v1\0${content}`);
 }
 
 function normalizeDirectoryPath(scopePath: string): string | undefined {
@@ -338,9 +354,20 @@ function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | u
     if (lexical === undefined) {
       return undefined;
     }
-    return { ...base, kind: "text", lexical };
+    const fingerprint = normalizeFingerprint(record.fingerprint);
+    return {
+      ...base,
+      kind: "text",
+      ...(fingerprint !== undefined ? { fingerprint } : {}),
+      lexical,
+    };
   }
-  return { ...base, kind: record.kind };
+  const fingerprint = normalizeFingerprint(record.fingerprint);
+  return {
+    ...base,
+    kind: record.kind,
+    ...(fingerprint !== undefined ? { fingerprint } : {}),
+  };
 }
 
 function sortByScopePath<T extends { readonly scopePath: string }>(values: readonly T[]): readonly T[] {
@@ -510,6 +537,19 @@ function normalizeLimit(value: number | undefined, fallback: number): number {
   return normalized === undefined || normalized === 0 ? fallback : normalized;
 }
 
+function existingRealPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    const parent = dirname(path);
+    try {
+      return resolve(realpathSync(parent), basename(path));
+    } catch {
+      return resolve(path);
+    }
+  }
+}
+
 function isRuntimeDirWithinWorkspace(runtimeDir: string, workspaceRoot: string): boolean {
   const rel = relative(workspaceRoot, runtimeDir);
   return rel.length === 0 || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -530,7 +570,8 @@ function assertValidRuntimeDir(
   if (
     workspaceRoot !== undefined &&
     !allowWorkspaceLocalRuntimeDir &&
-    isRuntimeDirWithinWorkspace(resolved, resolve(workspaceRoot))
+    (isRuntimeDirWithinWorkspace(resolved, resolve(workspaceRoot)) ||
+      isRuntimeDirWithinWorkspace(existingRealPath(resolved), existingRealPath(workspaceRoot)))
   ) {
     throw new Error("workspace index runtimeDir must not be inside the workspace root");
   }
@@ -633,11 +674,11 @@ async function safeReadSnapshotFile(
 ): Promise<string | undefined> {
   let fileStat;
   try {
-    fileStat = await stat(path);
+    fileStat = await lstat(path);
   } catch {
     return undefined;
   }
-  if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
+  if (!fileStat.isFile() || fileStat.isSymbolicLink() || fileStat.size > maxSnapshotBytes) {
     return undefined;
   }
   try {
@@ -894,21 +935,27 @@ function expandContentToken(token: string): readonly string[] {
   return out;
 }
 
-function lexicalTermsForLine(line: string): readonly string[] {
+interface WorkspaceIndexLineTerms {
+  readonly terms: readonly string[];
+  readonly truncated: boolean;
+}
+
+function lexicalTermsForLine(line: string): WorkspaceIndexLineTerms {
   const terms: string[] = [];
   const seen = new Set<string>();
   for (const match of line.matchAll(WORKSPACE_INDEX_TEXT_TOKEN_RE)) {
     for (const term of expandContentToken(match[0])) {
+      if (seen.has(term)) {
+        continue;
+      }
       if (terms.length >= MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_LINE) {
-        return terms;
+        return { terms, truncated: true };
       }
-      if (!seen.has(term)) {
-        seen.add(term);
-        terms.push(term);
-      }
+      seen.add(term);
+      terms.push(term);
     }
   }
-  return terms;
+  return { terms, truncated: false };
 }
 
 export function buildWorkspaceIndexLexicalRecord(content: string): WorkspaceIndexLexicalRecord {
@@ -918,9 +965,13 @@ export function buildWorkspaceIndexLexicalRecord(content: string): WorkspaceInde
   let truncated = false;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
-    const lineTerms = lexicalTermsForLine(line);
+    const lineLexical = lexicalTermsForLine(line);
+    const lineTerms = lineLexical.terms;
     if (lineTerms.length === 0) {
       continue;
+    }
+    if (lineLexical.truncated) {
+      truncated = true;
     }
     if (lexicalLines.length >= MAX_WORKSPACE_INDEX_LEXICAL_LINES) {
       truncated = true;
@@ -964,6 +1015,193 @@ function dirFingerprint(entries: readonly { readonly name: string; readonly isDi
         .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
     ),
   );
+}
+
+export interface WorkspaceIndexDirectoryDelta {
+  readonly scopePath: string;
+  readonly addedPaths: readonly string[];
+  readonly removedPaths: readonly string[];
+  readonly rescanDirectory: boolean;
+}
+
+export interface WorkspaceIndexDirectoryInspection {
+  readonly valid: boolean;
+  readonly deltas: readonly WorkspaceIndexDirectoryDelta[];
+}
+
+interface WorkspaceIndexDirectoryEntryShape {
+  readonly name: string;
+  readonly isDirectory: boolean;
+  readonly isFile: boolean;
+  readonly isSymbolicLink?: boolean;
+}
+
+function childScopePath(directoryScopePath: string, childName: string): string {
+  return directoryScopePath.length === 0 ? childName : `${directoryScopePath}/${childName}`;
+}
+
+function isWithinDirectory(scopePath: string, directoryScopePath: string): boolean {
+  if (directoryScopePath.length === 0) {
+    return true;
+  }
+  return scopePath === directoryScopePath || scopePath.startsWith(`${directoryScopePath}/`);
+}
+
+function immediateDirectoryChild(
+  scopePath: string,
+  directoryScopePath: string,
+): string | undefined {
+  if (!isWithinDirectory(scopePath, directoryScopePath)) {
+    return undefined;
+  }
+  const rest = directoryScopePath.length === 0
+    ? scopePath
+    : scopePath.slice(directoryScopePath.length + 1);
+  if (rest.length === 0) {
+    return undefined;
+  }
+  const slash = rest.indexOf("/");
+  return slash === -1 ? rest : rest.slice(0, slash);
+}
+
+function oldDirectoryChildren(
+  files: readonly WorkspaceIndexDiscoveredFile[],
+  directoryScopePath: string,
+): ReadonlySet<string> {
+  const children = new Set<string>();
+  for (const file of files) {
+    const child = immediateDirectoryChild(file.scopePath, directoryScopePath);
+    if (child !== undefined) {
+      children.add(child);
+    }
+  }
+  return children;
+}
+
+function removedDirectoryFiles(
+  files: readonly WorkspaceIndexDiscoveredFile[],
+  directoryScopePath: string,
+  removedChildNames: ReadonlySet<string>,
+): readonly string[] {
+  const removed: string[] = [];
+  for (const file of files) {
+    const child = immediateDirectoryChild(file.scopePath, directoryScopePath);
+    if (child !== undefined && removedChildNames.has(child)) {
+      removed.push(file.scopePath);
+    }
+  }
+  return removed.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+function addedDirectoryPaths(
+  oldChildren: ReadonlySet<string>,
+  directoryScopePath: string,
+  newChildren: ReadonlyMap<string, WorkspaceIndexDirectoryEntryShape>,
+): readonly string[] {
+  const added: string[] = [];
+  for (const [name, entry] of newChildren) {
+    if (oldChildren.has(name) || entry.isSymbolicLink === true) {
+      continue;
+    }
+    const childPath = childScopePath(directoryScopePath, name);
+    if (isSafeIndexScopePath(childPath)) {
+      added.push(childPath);
+    }
+  }
+  return added.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+function removedDirectoryNames(
+  oldChildren: ReadonlySet<string>,
+  newChildren: ReadonlyMap<string, WorkspaceIndexDirectoryEntryShape>,
+): ReadonlySet<string> {
+  const removed = new Set<string>();
+  for (const name of oldChildren) {
+    if (!newChildren.has(name)) {
+      removed.add(name);
+    }
+  }
+  return removed;
+}
+
+function directoryDelta(
+  normalized: WorkspaceIndexSnapshot,
+  directory: WorkspaceIndexDirectorySnapshot,
+  entries: readonly WorkspaceIndexDirectoryEntryShape[],
+): WorkspaceIndexDirectoryDelta | undefined {
+  const oldChildren = oldDirectoryChildren(normalized.discovery.files, directory.scopePath);
+  const newChildren = new Map(entries.map((entry) => [entry.name, entry] as const));
+  const addedPaths = addedDirectoryPaths(oldChildren, directory.scopePath, newChildren);
+  const removedNames = removedDirectoryNames(oldChildren, newChildren);
+  const removedPaths = removedDirectoryFiles(normalized.discovery.files, directory.scopePath, removedNames);
+  const rescanDirectory = addedPaths.length === 0 && removedPaths.length === 0;
+  return {
+    scopePath: directory.scopePath,
+    addedPaths,
+    removedPaths,
+    rescanDirectory,
+  };
+}
+
+function directoryChanged(
+  directory: WorkspaceIndexDirectorySnapshot,
+  absolutePath: string,
+  fs: WorkspaceFs,
+): {
+  readonly changed: boolean;
+  readonly entries?: readonly WorkspaceIndexDirectoryEntryShape[] | undefined;
+} {
+  try {
+    const current = fs.stat(absolutePath);
+    if (
+      directory.mtimeMs !== undefined &&
+      typeof current.mtimeMs === "number" &&
+      current.mtimeMs === directory.mtimeMs
+    ) {
+      return { changed: false };
+    }
+    const entries = fs.readDir(absolutePath);
+    return { changed: dirFingerprint(entries) !== directory.fingerprint, entries };
+  } catch {
+    return { changed: true, entries: [] };
+  }
+}
+
+export function inspectWorkspaceIndexDirectories(
+  snapshot: WorkspaceIndexSnapshot,
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+): WorkspaceIndexDirectoryInspection {
+  const normalized = normalizeSnapshot(snapshot);
+  if (normalized === undefined || normalized.discovery.directories.length === 0) {
+    return { valid: false, deltas: [] };
+  }
+  const deltas: WorkspaceIndexDirectoryDelta[] = [];
+  for (const directory of normalized.discovery.directories) {
+    const absolutePath = directory.scopePath.length === 0
+      ? workspace.root
+      : resolveWithinWorkspace(workspace.root, directory.scopePath);
+    const { changed, entries } = directoryChanged(directory, absolutePath, fs);
+    if (!changed) {
+      continue;
+    }
+    if (entries === undefined || entries.length === 0) {
+      deltas.push({
+        scopePath: directory.scopePath,
+        addedPaths: [],
+        removedPaths: normalized.discovery.files
+          .filter((file) => isWithinDirectory(file.scopePath, directory.scopePath))
+          .map((file) => file.scopePath),
+        rescanDirectory: false,
+      });
+      continue;
+    }
+    const delta = directoryDelta(normalized, directory, entries);
+    if (delta !== undefined) {
+      deltas.push(delta);
+    }
+  }
+  return { valid: true, deltas };
 }
 
 export function isWorkspaceIndexSnapshotFresh(
@@ -1019,6 +1257,13 @@ function sameRecordMetadata(
   return record.sizeBytes === metadata.sizeBytes && record.mtimeMs === metadata.mtimeMs;
 }
 
+export function isWorkspaceIndexRecordCurrent(
+  record: WorkspaceIndexRecord | undefined,
+  metadata: WorkspaceIndexDiscoveredFile,
+): boolean {
+  return sameRecordMetadata(record, metadata);
+}
+
 function emptyPreparationReport(): WorkspaceIndexPreparationReport {
   return {
     discoveredEntries: 0,
@@ -1034,6 +1279,8 @@ function emptyPreparationReport(): WorkspaceIndexPreparationReport {
 
 function emptyPreparedWorkspaceIndexSnapshot(): PreparedWorkspaceIndexSnapshot {
   return {
+    valid: false,
+    dirty: false,
     entries: [],
     discovery: {
       files: [],
@@ -1215,9 +1462,56 @@ export function prepareWorkspaceIndexSnapshot(
   }
   entries.sort((a, b) => (a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0));
   return {
+    valid: true,
+    dirty: report.deletedEntries > 0 || report.skippedEntries > 0 || report.staleRecords > 0,
     entries,
     discovery: preparedDiscoverySnapshot(normalized, entries),
     report: finalizePreparationReport(report, usedRecordPaths, normalized),
+  };
+}
+
+export function prepareCachedWorkspaceIndexSnapshot(
+  snapshot: WorkspaceIndexSnapshot,
+  workspace: WorkspaceInfo,
+): PreparedWorkspaceIndexSnapshot {
+  const normalized = normalizeSnapshot(snapshot);
+  if (normalized === undefined) {
+    return emptyPreparedWorkspaceIndexSnapshot();
+  }
+  const recordByPath = new Map(normalized.records.map((record) => [record.scopePath, record] as const));
+  const entries: PreparedWorkspaceIndexEntry[] = [];
+  const usedRecordPaths = new Set<string>();
+  for (const file of normalized.discovery.files) {
+    const record = recordByPath.get(file.scopePath);
+    if (record !== undefined) {
+      usedRecordPaths.add(record.scopePath);
+    }
+    entries.push({
+      scopePath: file.scopePath,
+      absolutePath: resolveWithinWorkspace(workspace.root, file.scopePath),
+      file: { relativePath: file.scopePath, sizeBytes: file.sizeBytes },
+      ...(file.mtimeMs !== undefined ? { mtimeMs: file.mtimeMs } : {}),
+      record,
+      stale: record === undefined,
+    });
+  }
+  const indexedRecords = entries.filter((entry) => entry.record !== undefined).length;
+  const report: WorkspaceIndexPreparationReport = {
+    discoveredEntries: normalized.discovery.files.length,
+    retainedEntries: entries.length,
+    indexedRecords,
+    reusedRecords: indexedRecords,
+    staleRecords: entries.length - indexedRecords,
+    skippedEntries: 0,
+    deletedEntries: 0,
+    droppedRecords: normalized.records.filter((record) => !usedRecordPaths.has(record.scopePath)).length,
+  };
+  return {
+    valid: true,
+    dirty: false,
+    entries,
+    discovery: normalized.discovery,
+    report,
   };
 }
 

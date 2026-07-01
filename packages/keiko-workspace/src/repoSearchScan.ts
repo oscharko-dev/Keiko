@@ -41,10 +41,15 @@ import {
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type {
   PreparedWorkspaceIndexEntry,
+  WorkspaceIndexDiscoveredFile,
   WorkspaceIndexLexicalRecord,
   WorkspaceIndexRecord,
 } from "./workspaceIndex.js";
-import { buildWorkspaceIndexLexicalRecord } from "./workspaceIndex.js";
+import {
+  buildWorkspaceIndexLexicalRecord,
+  isWorkspaceIndexRecordCurrent,
+  workspaceIndexContentFingerprint,
+} from "./workspaceIndex.js";
 import { createHash } from "node:crypto";
 
 const BINARY_PROBE_BYTES = 512;
@@ -307,6 +312,7 @@ export interface SearchTextRunner {
     | {
         readonly entries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>;
         readonly onRecord: (record: WorkspaceIndexRecord) => void;
+        readonly onStale: (scopePath: string) => void;
       }
     | undefined;
 }
@@ -382,13 +388,12 @@ function currentRecordMetadata(
   scopePath: string,
   absolutePath: string,
   fallbackSizeBytes: number,
-): WorkspaceIndexRecord {
+): WorkspaceIndexDiscoveredFile {
   const stat = safeStat(runner, absolutePath);
   return {
     scopePath,
     sizeBytes: stat?.size ?? fallbackSizeBytes,
-    ...(stat?.mtimeMs !== undefined ? { mtimeMs: Math.trunc(stat.mtimeMs) } : {}),
-    kind: "binary",
+    ...(stat?.mtimeMs !== undefined ? { mtimeMs: stat.mtimeMs } : {}),
   };
 }
 
@@ -458,12 +463,40 @@ function safeStat(runner: SearchTextRunner, absolutePath: string): ReturnType<Wo
   }
 }
 
+function cachedRecordMetadata(
+  runner: SearchTextRunner,
+  entry: PreparedWorkspaceIndexEntry,
+  relativePath: string,
+): WorkspaceIndexDiscoveredFile | undefined {
+  const stat = safeStat(runner, entry.absolutePath);
+  if (stat?.isFile !== true) {
+    return undefined;
+  }
+  return {
+    scopePath: relativePath,
+    sizeBytes: stat.size,
+    ...(stat.mtimeMs !== undefined ? { mtimeMs: stat.mtimeMs } : {}),
+  };
+}
+
 function cachedRecord(
   runner: SearchTextRunner,
   relativePath: string,
 ): WorkspaceIndexRecord | undefined {
   const entry = runner.workspaceIndex?.entries.get(relativePath);
-  return entry?.stale === false ? entry.record : undefined;
+  if (entry?.stale !== false || entry.record === undefined) {
+    return undefined;
+  }
+  const metadata = cachedRecordMetadata(runner, entry, relativePath);
+  if (metadata === undefined) {
+    runner.workspaceIndex?.onStale(relativePath);
+    return undefined;
+  }
+  if (!isWorkspaceIndexRecordCurrent(entry.record, metadata)) {
+    runner.workspaceIndex?.onStale(relativePath);
+    return undefined;
+  }
+  return entry.record;
 }
 
 function recordCandidateOmission(
@@ -485,6 +518,7 @@ function persistWorkspaceIndexRecord(
     runner.workspaceIndex?.onRecord({
       ...metadata,
       kind: "text",
+      fingerprint: workspaceIndexContentFingerprint(record.content),
       lexical: buildWorkspaceIndexLexicalRecord(record.content),
     });
     return;
@@ -584,15 +618,26 @@ function abortScanFile(runner: SearchTextRunner, state: RunState): boolean {
   return true;
 }
 
+function filePathPolicyOmission(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+): CandidateOmissionReason | undefined {
+  if (isImageScopePath(file.relativePath)) {
+    return "binary";
+  }
+  if (isDenied(file.relativePath)) {
+    return "ignored";
+  }
+  return policyOmissionReason(file.relativePath, runner.policy);
+}
+
 function filePolicyOmission(
   runner: SearchTextRunner,
   file: DiscoveredFile,
 ): { readonly omitted?: CandidateOmissionReason | undefined; readonly path?: string | undefined } {
-  if (isImageScopePath(file.relativePath)) {
-    return { omitted: "binary" };
-  }
-  if (isDenied(file.relativePath)) {
-    return { omitted: "ignored" };
+  const pathOmission = filePathPolicyOmission(runner, file);
+  if (pathOmission !== undefined) {
+    return { omitted: pathOmission };
   }
   const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
   const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
@@ -715,12 +760,17 @@ export async function scanFile(
   if (abortScanFile(runner, state)) {
     return;
   }
-  const policy = filePolicyOmission(runner, file);
-  if (policy.omitted !== undefined) {
-    recordCandidateOmission(candidates, file.relativePath, policy.omitted);
+  const pathOmission = filePathPolicyOmission(runner, file);
+  if (pathOmission !== undefined) {
+    recordCandidateOmission(candidates, file.relativePath, pathOmission);
     return;
   }
   if (handleCachedRecord(runner, file, state, atoms, candidates)) {
+    return;
+  }
+  const policy = filePolicyOmission(runner, file);
+  if (policy.omitted !== undefined) {
+    recordCandidateOmission(candidates, file.relativePath, policy.omitted);
     return;
   }
   await handleLiveRecord(runner, file, state, atoms, candidates, policy.path);

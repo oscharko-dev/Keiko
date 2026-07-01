@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   createFileWorkspaceIndexStore,
   createWorkspaceIndex,
@@ -24,7 +24,12 @@ function resolvedRealPath(path: string): string {
   try {
     return realpathSync(path);
   } catch {
-    return resolve(path);
+    const parent = dirname(path);
+    try {
+      return resolve(realpathSync(parent), basename(path));
+    } catch {
+      return resolve(path);
+    }
   }
 }
 

@@ -1,4 +1,13 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -123,12 +132,51 @@ function directoryEntries(files: ReadonlyMap<string, { content: string }>, dirRe
     }));
 }
 
+function parentDirectory(scopePath: string): string {
+  const slash = scopePath.lastIndexOf("/");
+  return slash === -1 ? "" : scopePath.slice(0, slash);
+}
+
+function fileAncestorDirectories(scopePath: string): readonly string[] {
+  const ancestors = [""];
+  const parts = parentDirectory(scopePath).split("/").filter((part) => part.length > 0);
+  let current = "";
+  for (const part of parts) {
+    current = current.length === 0 ? part : `${current}/${part}`;
+    ancestors.push(current);
+  }
+  return ancestors;
+}
+
 function createTrackedFs(initialFiles: Readonly<Record<string, string>>): MutableTrackedFs {
   let nextMtimeMs = 1_000;
   const files = new Map<string, { content: string; mtimeMs: number }>();
+  const directoryMtimes = new Map<string, number>();
+  const bumpDirectory = (scopePath: string): void => {
+    directoryMtimes.set(scopePath, nextMtimeMs);
+    nextMtimeMs += 1;
+  };
+  const bumpInitialDirectories = (scopePath: string): void => {
+    for (const directory of fileAncestorDirectories(scopePath)) {
+      if (!directoryMtimes.has(directory)) {
+        bumpDirectory(directory);
+      }
+    }
+  };
+  const bumpNewFileDirectories = (scopePath: string): void => {
+    for (const directory of fileAncestorDirectories(scopePath)) {
+      if (directoryMtimes.has(directory)) {
+        continue;
+      }
+      bumpDirectory(parentDirectory(directory));
+      bumpDirectory(directory);
+    }
+    bumpDirectory(parentDirectory(scopePath));
+  };
   for (const [scopePath, content] of Object.entries(initialFiles)) {
     files.set(scopePath, { content, mtimeMs: nextMtimeMs });
     nextMtimeMs += 1;
+    bumpInitialDirectories(scopePath);
   }
   const counters = {
     readDir: 0,
@@ -138,11 +186,12 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
     exists: 0,
     realPath: 0,
   };
-  const statDir = (): WorkspaceStat => ({
+  const statDir = (scopePath: string): WorkspaceStat => ({
     size: 0,
     isFile: false,
     isDirectory: true,
     isSymbolicLink: false,
+    mtimeMs: directoryMtimes.get(scopePath) ?? 0,
   });
   const fileAt = (absolutePath: string): { readonly scopePath: string; readonly content: string; readonly mtimeMs: number } | undefined => {
     const scopePath = absoluteToRelative(absolutePath);
@@ -191,7 +240,7 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
           };
         }
         if (directoryExists(absolutePath)) {
-          return statDir();
+          return statDir(absoluteToRelative(absolutePath) ?? "");
         }
         throw makeErrnoError("ENOENT", absolutePath);
       },
@@ -228,7 +277,9 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
       },
     },
     deleteFile: (scopePath: string): void => {
-      files.delete(scopePath);
+      if (files.delete(scopePath)) {
+        bumpDirectory(parentDirectory(scopePath));
+      }
     },
     resetCounters: (): void => {
       counters.readDir = 0;
@@ -239,8 +290,12 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
       counters.realPath = 0;
     },
     writeFile: (scopePath: string, content: string): void => {
+      const existed = files.has(scopePath);
       files.set(scopePath, { content, mtimeMs: nextMtimeMs });
       nextMtimeMs += 1;
+      if (!existed) {
+        bumpNewFileDirectories(scopePath);
+      }
     },
   };
 }
@@ -328,7 +383,7 @@ describe("workspaceIndex", () => {
     });
 
     expect(second.atoms.map((atom) => atom.scopePath)).toEqual(["README.md", "src/a.ts"]);
-    expect(tracked.counters.readDir).toBe(2);
+    expect(tracked.counters.readDir).toBe(0);
     expect(tracked.counters.readFileUtf8).toBe(0);
     expect(tracked.counters.readFileBytes).toBe(0);
   });
@@ -357,7 +412,7 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(tracked.counters.readDir).toBe(2);
+    expect(tracked.counters.readDir).toBe(0);
     expect(tracked.counters.readFileUtf8).toBe(1);
     expect(tracked.counters.readFileBytes).toBe(1);
   });
@@ -388,8 +443,63 @@ describe("workspaceIndex", () => {
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
     expect(snapshot?.discovery.files.map((file) => file.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
     expect(tracked.counters.readDir).toBeGreaterThan(0);
-    expect(tracked.counters.readFileUtf8).toBe(2);
-    expect(tracked.counters.readFileBytes).toBe(2);
+    expect(tracked.counters.readFileUtf8).toBe(1);
+    expect(tracked.counters.readFileBytes).toBe(1);
+  });
+
+  it("discovers files added after an empty workspace snapshot", async () => {
+    const tracked = createTrackedFs({});
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    const empty = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect(empty.atoms).toEqual([]);
+    expect((await snapshotFor(index, currentScope))?.discovery.directories.map((dir) => dir.scopePath)).toEqual([""]);
+
+    tracked.writeFile("src/app.ts", "export const app = 'needle';\n");
+    tracked.resetCounters();
+
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
+    expect(tracked.counters.readFileUtf8).toBe(1);
+    expect(tracked.counters.readFileBytes).toBe(1);
+  });
+
+  it("rebuilds same-size changed records when precise metadata changes", async () => {
+    const tracked = createTrackedFs({
+      "src/app.ts": "needle alpha\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    tracked.writeFile("src/app.ts", "magnet alpha\n");
+    tracked.resetCounters();
+
+    const result = await searchText(currentScope, nlq("magnet"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
+    expect(tracked.counters.readDir).toBe(0);
+    expect(tracked.counters.readFileUtf8).toBe(1);
+    expect(tracked.counters.readFileBytes).toBe(1);
   });
 
   it("keys snapshots by maxFilesScanned so narrow scans cannot poison broader queries", async () => {
@@ -495,6 +605,48 @@ describe("workspaceIndex", () => {
     expect(saves).toBe(1);
   });
 
+  it("continues uncached when workspace index load fails", async () => {
+    const tracked = createTrackedFs({
+      "src/app.ts": "export const app = 'needle';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex({
+      loadSnapshot: () => {
+        throw new Error("cache unavailable");
+      },
+      saveSnapshot: () => undefined,
+    });
+
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
+  });
+
+  it("returns search results when workspace index save fails", async () => {
+    const tracked = createTrackedFs({
+      "src/app.ts": "export const app = 'needle';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex({
+      loadSnapshot: () => undefined,
+      saveSnapshot: () => {
+        throw new Error("cache read-only");
+      },
+    });
+
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
+  });
+
   it("reports retained, reused, stale, deleted, skipped, and dropped counts without exposing paths", async () => {
     const tracked = createTrackedFs({
       "src/a.ts": "export const alpha = 'needle';\n",
@@ -559,8 +711,8 @@ describe("workspaceIndex", () => {
     expect(snapshot?.discovery.files.map((file) => file.scopePath)).toEqual(["src/b.ts"]);
     expect(snapshot?.records.map((record) => record.scopePath)).toEqual(["src/b.ts"]);
     expect(tracked.counters.readDir).toBeGreaterThan(0);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(0);
   });
 
   it("never persists denied runtime paths and stores only relative POSIX scope paths", async () => {
@@ -617,7 +769,36 @@ describe("workspaceIndex", () => {
     expect(persisted).not.toContain(unsupportedSecret);
     expect(persisted).not.toContain("export const");
     expect(snapshot?.records[0]?.kind).toBe("text");
+    expect(snapshot?.records[0]?.fingerprint).toMatch(/^[0-9a-f]{64}$/u);
     expect(snapshot?.records[0]).not.toHaveProperty("content");
+  });
+
+  it("falls back to live reads when cached lexical chunks are intentionally truncated", async () => {
+    const leadingTerms = Array.from({ length: 32 }, (_, index) => `term${index.toString()}`).join(" ");
+    const tracked = createTrackedFs({
+      "src/app.ts": `${leadingTerms} needle\n`,
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    const snapshot = await snapshotFor(index, currentScope);
+    expect(snapshot?.records[0]?.lexical?.truncated).toBe(true);
+
+    tracked.resetCounters();
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
+    expect(tracked.counters.readFileUtf8).toBe(1);
+    expect(tracked.counters.readFileBytes).toBe(1);
   });
 
   it("persists a file-backed snapshot across index instances and reuses warm data", async () => {
@@ -649,9 +830,55 @@ describe("workspaceIndex", () => {
       });
 
       expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["README.md", "src/a.ts"]);
-      expect(tracked.counters.readDir).toBe(2);
+      expect(tracked.counters.readDir).toBe(0);
       expect(tracked.counters.readFileUtf8).toBe(0);
       expect(tracked.counters.readFileBytes).toBe(0);
+      expect(runtimeFiles(runtimeDir)).toHaveLength(1);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("persists default-limit snapshots with many directory fingerprints", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const fileCount = DEFAULT_SEARCH_LIMITS.maxFilesScanned;
+      const files = Array.from({ length: fileCount }, (_, index) => ({
+        scopePath: `dir-${index.toString().padStart(4, "0")}/app.ts`,
+        sizeBytes: 12,
+      }));
+      const snapshot = buildWorkspaceIndexSnapshot({
+        scope: { relativePaths: [] },
+        policy: {
+          policyMode: "workspace-root-default",
+          applyGitignore: true,
+          omitLowValueWorkspaceFiles: true,
+        },
+        maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+        maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+        discovery: {
+          files,
+          directories: [
+            { scopePath: "", fingerprint: "root" },
+            ...files.map((file) => ({
+              scopePath: file.scopePath.slice(0, file.scopePath.indexOf("/")),
+              fingerprint: "empty",
+            })),
+          ],
+          filesDiscovered: files.length,
+          ignoredByDiscovery: 0,
+          deniedByDiscovery: 0,
+          depthPrunedByDiscovery: 0,
+          truncated: false,
+        },
+        records: files.map((file) => ({ ...file, kind: "binary" as const })),
+      });
+      const store = createFileWorkspaceIndexStore({ runtimeDir });
+
+      await store.saveSnapshot("default-limit-shape", snapshot);
+      const loaded = await store.loadSnapshot("default-limit-shape");
+
+      expect(loaded?.records).toHaveLength(fileCount);
       expect(runtimeFiles(runtimeDir)).toHaveLength(1);
     } finally {
       removeRuntimeDir(runtimeDir);
@@ -735,6 +962,53 @@ describe("workspaceIndex", () => {
         allowWorkspaceLocalRuntimeDir: true,
       }),
     ).not.toThrow();
+  });
+
+  it("rejects file-backed runtime directories that resolve into the workspace through symlinks", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const workspaceRoot = tempRuntimeDir();
+    const outsideRoot = tempRuntimeDir();
+    try {
+      symlinkSync(workspaceRoot, join(outsideRoot, "workspace-link"), "dir");
+
+      expect(() =>
+        createFileWorkspaceIndexStore({
+          runtimeDir: join(outsideRoot, "workspace-link", "index"),
+          workspaceRoot,
+        }),
+      ).toThrow("workspace index runtimeDir must not be inside the workspace root");
+    } finally {
+      removeRuntimeDir(outsideRoot);
+      removeRuntimeDir(workspaceRoot);
+    }
+  });
+
+  it("does not load symlinked file-backed snapshot paths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const runtimeDir = tempRuntimeDir();
+    const targetDir = tempRuntimeDir();
+    try {
+      const store = createFileWorkspaceIndexStore({ runtimeDir });
+      await store.saveSnapshot("safe-key", sampleSnapshot("needle"));
+      const [fileName] = runtimeFiles(runtimeDir);
+      if (fileName === undefined) {
+        throw new Error("expected persisted snapshot file");
+      }
+      const snapshotPath = join(runtimeDir, fileName);
+      const targetPath = join(targetDir, "snapshot.json");
+      writeFileSync(targetPath, readFileSync(snapshotPath, "utf8"), "utf8");
+      unlinkSync(snapshotPath);
+      symlinkSync(targetPath, snapshotPath);
+
+      await expect(Promise.resolve(store.loadSnapshot("safe-key"))).resolves.toBeUndefined();
+    } finally {
+      removeRuntimeDir(runtimeDir);
+      removeRuntimeDir(targetDir);
+    }
   });
 
   it("prunes orphaned temp snapshots under the configured snapshot cap", async () => {
