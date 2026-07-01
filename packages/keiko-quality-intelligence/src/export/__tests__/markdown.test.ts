@@ -10,6 +10,7 @@ import type {
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import { adaptToMarkdown } from "../adapters/markdown.js";
+import { escapeMarkdownActiveSyntax } from "../textSafety.js";
 
 const Q = QualityIntelligence;
 const RUN = Q.asQualityIntelligenceRunId("qi-run-md");
@@ -196,6 +197,14 @@ describe("adaptToMarkdown — export sanitisation", () => {
     const out = adaptToMarkdown(bundle([c]), [c]);
     expect(out).toContain("\\<script\\>alert(1)\\</script\\>");
     expect(out).not.toContain("<script>");
+  });
+
+  it("escapes existing backslashes before Markdown-active syntax", () => {
+    expect(escapeMarkdownActiveSyntax("\\")).toBe("\\\\");
+    const escaped = escapeMarkdownActiveSyntax("\\<script>alert(1)</script>");
+    expect(escaped).toContain("\\\\");
+    expect(escaped).toContain("\\<script\\>alert(1)\\</script\\>");
+    expect(escaped).not.toBe("\\<script>alert(1)</script>");
   });
 
   it("stays deterministic with adversarial field content", () => {

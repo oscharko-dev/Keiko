@@ -115,7 +115,7 @@ function invertToReverseRows(
 const mdCell = (value: string): string => {
   const oneLine = inlineField(value);
   const safe = startsWithFormulaLead(oneLine) ? `'${oneLine}` : oneLine;
-  return escapeMarkdownActiveSyntax(safe).replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|");
+  return escapeMarkdownActiveSyntax(safe).replace(/\|/gu, "\\|");
 };
 
 const mdRow = (cells: readonly string[]): string => `| ${cells.map(mdCell).join(" | ")} |`;

@@ -33,6 +33,7 @@ export function inlineFields(values: readonly string[]): string[] {
 }
 
 const FENCED_CODE = /```/gu;
+const BACKSLASH = /\\/gu;
 const IMAGE_OPEN = /!\[/gu;
 const REFERENCE_DEFINITION = /\[([^\]]+)\]:/gu;
 const REFERENCE_LINK = /(?<!!)\[([^\]]*)\]\[([^\]]*)\]/gu;
@@ -47,6 +48,7 @@ const HTML_TAG = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?>/gu;
  */
 export function escapeMarkdownActiveSyntax(value: string): string {
   return value
+    .replace(BACKSLASH, "\\\\")
     .replace(FENCED_CODE, "\\`\\`\\`")
     .replace(IMAGE_OPEN, "\\!\\[")
     .replace(REFERENCE_DEFINITION, (_match: string, label: string): string => `\\[${label}\\]:`)
