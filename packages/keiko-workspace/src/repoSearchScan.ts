@@ -404,7 +404,7 @@ function emitBestLines(
       buildAtom({
         scopeId: runner.scope.scopeId,
         scopePath: relativePath,
-        lineRange: { startLine: match.line, endLine: match.line },
+        lineRange: { startLine: match.startLine, endLine: match.endLine },
         provenanceKind: "lexical-search",
         tool: "repo.searchText",
         queryFingerprint: runner.fingerprint,

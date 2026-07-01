@@ -715,17 +715,18 @@ const SYMBOL_FILE_EXTENSIONS = [
   "vue",
 ] as const;
 const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
-const SYMBOL_FILE_SEARCH_LIMITS = {
-  maxFilesScanned: 10_000,
-  maxMatchesReturned: 32,
-  maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-  elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
-} as const;
-const SYMBOL_LINE_SCAN_BYTES_MAX = 2_097_152;
 // Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
 // on a large customer repo can never trigger an unbounded number of full-file reads even if many
 // files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
 const MAX_SYMBOL_LINE_READS = 64;
+const SYMBOL_FILE_MATCHES_MAX = 96;
+const SYMBOL_FILE_SEARCH_LIMITS = {
+  maxFilesScanned: 10_000,
+  maxMatchesReturned: SYMBOL_FILE_MATCHES_MAX,
+  maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+  elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
+} as const;
+const SYMBOL_LINE_SCAN_BYTES_MAX = 2_097_152;
 const LOCKFILE_NAMES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -1034,7 +1035,7 @@ function symbolFileQuery(input: OrchestratorInput, pattern: string): RetrievalQu
     kind: "file-pattern",
     text: pattern,
     caseSensitive: false,
-    maxResults: 32,
+    maxResults: SYMBOL_FILE_MATCHES_MAX,
     emittedAtMs: input.query.emittedAtMs,
   };
 }
@@ -1160,22 +1161,95 @@ export function isSymbolDefinitionPath(scopePath: string, term: string): boolean
   );
 }
 
-interface SymbolReadBudget {
-  remaining: number;
+interface SymbolDefinitionMatch {
+  readonly atom: EvidenceAtom;
+  readonly term: string;
+  readonly priority: number;
 }
 
-// Walk the tree ONCE for `**/term.*`, keep only `term.<code-ext>` definition files, and (within the
-// shared read budget) attach the definition/first-mention line. The single walk replaces the prior
+interface SymbolDiscoveryResult {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly uncertainty: readonly UncertaintyMarker[];
+}
+
+function symbolCoverageIncomplete(
+  term: string,
+  coverage: ContextCoverageDiagnostics | undefined,
+  nowMs: () => number,
+): UncertaintyMarker | undefined {
+  if (coverage?.incomplete !== true) {
+    return undefined;
+  }
+  return {
+    kind: "scope-incomplete",
+    claim:
+      `Symbol file discovery for "${term}" was incomplete: ` +
+      `reasons=${coverage.reasons.join(",")}; ` +
+      `filesScanned=${String(coverage.filesScanned)}, ` +
+      `filesSkipped=${String(coverage.filesSkipped)}, ` +
+      `matchesReturned=${String(coverage.matchesReturned)}, ` +
+      `limits=maxFilesScanned:${String(coverage.limits.maxFilesScanned)},` +
+      `maxMatchesReturned:${String(coverage.limits.maxMatchesReturned)},` +
+      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs(),
+  };
+}
+
+function symbolDefinitionPriority(scopePath: string, term: string): number {
+  const loweredPath = scopePath.toLowerCase();
+  const loweredTerm = term.toLowerCase();
+  return (
+    1 +
+    (loweredPath.includes(`/src/`) || loweredPath.startsWith("src/") ? 0.4 : 0) +
+    (loweredPath.endsWith(`/${loweredTerm}.ts`) || loweredPath.endsWith(`/${loweredTerm}.tsx`)
+      ? 0.2
+      : 0) -
+    (/(^|\/)(test|tests|spec|specs|__tests__)\//u.test(loweredPath) ? 0.3 : 0)
+  );
+}
+
+function compareSymbolMatches(a: SymbolDefinitionMatch, b: SymbolDefinitionMatch): number {
+  const priorityDelta = b.priority - a.priority;
+  if (priorityDelta !== 0) {
+    return priorityDelta;
+  }
+  return a.atom.scopePath.localeCompare(b.atom.scopePath);
+}
+
+function symbolLineReadOverflow(
+  overflowCount: number,
+  terms: readonly string[],
+  nowMs: () => number,
+): UncertaintyMarker | undefined {
+  if (overflowCount === 0) {
+    return undefined;
+  }
+  return {
+    kind: "scope-incomplete",
+    claim:
+      `Symbol line lookup skipped ${String(overflowCount)} definition file(s) after ` +
+      `${String(MAX_SYMBOL_LINE_READS)} prioritized line reads; ` +
+      `file-level symbol matches remain available for terms=${terms.join(",")}.`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs(),
+  };
+}
+
+// Walk the tree ONCE for `**/term.*` and keep only `term.<code-ext>` definition files. The single
+// walk replaces the prior
 // per-extension globs (up to 27 redundant full-tree walks per question, ~4.7s on a 3.5k-file repo).
-async function symbolAtomsForTerm(
+async function symbolDefinitionMatchesForTerm(
   term: string,
   input: OrchestratorInput,
   plan: ExplorationPlan,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
-  budget: SymbolReadBudget,
-): Promise<readonly EvidenceAtom[]> {
+): Promise<{
+  readonly matches: readonly SymbolDefinitionMatch[];
+  readonly uncertainty: readonly UncertaintyMarker[];
+}> {
   const result = await findFiles(
     searchScope,
     symbolFileQuery(input, `**/${term}.*`),
@@ -1186,23 +1260,71 @@ async function symbolAtomsForTerm(
       searchHints: { retrievalIntent: plan.retrievalIntent },
     },
   );
-  const atoms: EvidenceAtom[] = [];
+  const matches: SymbolDefinitionMatch[] = [];
   for (const atom of result.atoms) {
     if (!isSymbolDefinitionPath(atom.scopePath, term)) {
       continue;
     }
-    atoms.push(atom);
-    if (budget.remaining <= 0) {
-      continue;
-    }
-    budget.remaining -= 1;
-    const lineNumber = firstSymbolLine(searchScope, fs, atom.scopePath, term);
-    if (lineNumber !== undefined) {
-      const fp = atom.provenance.queryFingerprint;
-      atoms.push(symbolLineAtom(input.scope, atom.scopePath, lineNumber, fp, nowMs));
-    }
+    matches.push({
+      atom,
+      term,
+      priority: symbolDefinitionPriority(atom.scopePath, term),
+    });
   }
-  return atoms;
+  const marker = symbolCoverageIncomplete(term, result.coverage, nowMs);
+  return { matches, uncertainty: marker === undefined ? [] : [marker] };
+}
+
+async function collectSymbolDefinitionMatches(
+  terms: readonly string[],
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+): Promise<{
+  readonly matches: readonly SymbolDefinitionMatch[];
+  readonly uncertainty: readonly UncertaintyMarker[];
+}> {
+  const matches: SymbolDefinitionMatch[] = [];
+  const uncertainty: UncertaintyMarker[] = [];
+  for (const term of terms) {
+    throwIfCancelled(signal);
+    const result = await symbolDefinitionMatchesForTerm(term, input, plan, searchScope, fs, nowMs);
+    matches.push(...result.matches);
+    uncertainty.push(...result.uncertainty);
+  }
+  return { matches, uncertainty };
+}
+
+function pushUniqueAtom(atoms: EvidenceAtom[], seen: Set<string>, atom: EvidenceAtom): void {
+  if (seen.has(atom.stableId)) {
+    return;
+  }
+  seen.add(atom.stableId);
+  atoms.push(atom);
+}
+
+function pushSymbolLineAtom(
+  input: OrchestratorInput,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  match: SymbolDefinitionMatch,
+  atoms: EvidenceAtom[],
+  seen: Set<string>,
+): void {
+  const { atom, term } = match;
+  const lineNumber = firstSymbolLine(searchScope, fs, atom.scopePath, term);
+  if (lineNumber === undefined) {
+    return;
+  }
+  pushUniqueAtom(
+    atoms,
+    seen,
+    symbolLineAtom(input.scope, atom.scopePath, lineNumber, atom.provenance.queryFingerprint, nowMs),
+  );
 }
 
 async function symbolFileAtoms(
@@ -1212,32 +1334,39 @@ async function symbolFileAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
-): Promise<readonly EvidenceAtom[]> {
+): Promise<SymbolDiscoveryResult> {
   const terms = symbolFileAnchorTerms(plan);
   if (terms.length === 0) {
-    return [];
+    return { atoms: [], uncertainty: [] };
   }
+  const collected = await collectSymbolDefinitionMatches(
+    terms,
+    input,
+    plan,
+    searchScope,
+    fs,
+    nowMs,
+    signal,
+  );
   const atoms: EvidenceAtom[] = [];
+  const uncertainty: UncertaintyMarker[] = [...collected.uncertainty];
   const seen = new Set<string>();
-  const budget: SymbolReadBudget = { remaining: MAX_SYMBOL_LINE_READS };
-  for (const term of terms) {
-    throwIfCancelled(signal);
-    for (const atom of await symbolAtomsForTerm(
-      term,
-      input,
-      plan,
-      searchScope,
-      fs,
-      nowMs,
-      budget,
-    )) {
-      if (!seen.has(atom.stableId)) {
-        seen.add(atom.stableId);
-        atoms.push(atom);
-      }
+  let remainingLineReads = MAX_SYMBOL_LINE_READS;
+  let overflowCount = 0;
+  for (const match of [...collected.matches].sort(compareSymbolMatches)) {
+    pushUniqueAtom(atoms, seen, match.atom);
+    if (remainingLineReads <= 0) {
+      overflowCount += 1;
+      continue;
     }
+    remainingLineReads -= 1;
+    pushSymbolLineAtom(input, searchScope, fs, nowMs, match, atoms, seen);
   }
-  return atoms;
+  const overflowMarker = symbolLineReadOverflow(overflowCount, terms, nowMs);
+  if (overflowMarker !== undefined) {
+    uncertainty.push(overflowMarker);
+  }
+  return { atoms, uncertainty };
 }
 
 function selectedFileAtom(
@@ -1431,14 +1560,20 @@ async function withDeterministicContextAtoms(
   nowMs: () => number,
   signal: AbortSignal | undefined,
 ): Promise<RingRunSummary> {
+  const symbolDiscovery = await symbolFileAtoms(input, plan, searchScope, fs, nowMs, signal);
   const deterministicAtoms = [
-    ...(await symbolFileAtoms(input, plan, searchScope, fs, nowMs, signal)),
+    ...symbolDiscovery.atoms,
     ...projectMetadataAtoms(input, searchScope, fs, nowMs),
     ...repositoryOverviewAtoms(input, searchScope, fs, nowMs),
   ];
-  return deterministicAtoms.length === 0
-    ? rings
-    : { ...rings, atoms: [...rings.atoms, ...deterministicAtoms] };
+  if (deterministicAtoms.length === 0 && symbolDiscovery.uncertainty.length === 0) {
+    return rings;
+  }
+  return {
+    ...rings,
+    atoms: [...rings.atoms, ...deterministicAtoms],
+    uncertainty: [...rings.uncertainty, ...symbolDiscovery.uncertainty],
+  };
 }
 
 function withExplicitScopeAtoms(
@@ -1666,6 +1801,7 @@ interface ReadPathExcerptWindowsResult {
   readonly windows: readonly ExcerptWindow[];
   readonly bytesConsumed: number;
   readonly omittedWindowCount: number;
+  readonly truncatedWindowCount: number;
 }
 
 async function readPathExcerptWindows(
@@ -1675,6 +1811,7 @@ async function readPathExcerptWindows(
 ): Promise<ReadPathExcerptWindowsResult> {
   const windows: ExcerptWindow[] = [];
   let bytesConsumed = 0;
+  let truncatedWindowCount = 0;
   const selection = excerptLineWindows(inputs.atomsByPath.get(scopePath));
   for (const window of selection.windows) {
     throwIfCancelled(inputs.signal);
@@ -1689,10 +1826,54 @@ async function readPathExcerptWindows(
       { fs: inputs.fs },
     );
     throwIfCancelled(inputs.signal);
+    if (result.truncated) {
+      truncatedWindowCount += 1;
+    }
     windows.push({ ...window, content: result.content });
     bytesConsumed += utf8ByteLength(result.content);
   }
-  return { windows, bytesConsumed, omittedWindowCount: selection.omittedWindowCount };
+  return {
+    windows,
+    bytesConsumed,
+    omittedWindowCount: selection.omittedWindowCount,
+    truncatedWindowCount,
+  };
+}
+
+function excerptWindowUncertainty(
+  scopePath: string,
+  result: ReadPathExcerptWindowsResult,
+  nowMs: () => number,
+): readonly UncertaintyMarker[] {
+  const markers: UncertaintyMarker[] = [];
+  if (result.omittedWindowCount > 0) {
+    markers.push({
+      kind: "scope-incomplete",
+      claim: `excerpt window limit omitted ${String(result.omittedWindowCount)} additional matching range(s) in ${scopePath}`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs(),
+    });
+  }
+  if (result.truncatedWindowCount > 0) {
+    markers.push({
+      kind: "scope-incomplete",
+      claim:
+        `excerpt byte limit truncated ${String(result.truncatedWindowCount)} selected ` +
+        `range(s) in ${scopePath}`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs(),
+    });
+  }
+  return markers;
+}
+
+function largeFileExcerptOmitted(scopePath: string, nowMs: () => number): UncertaintyMarker {
+  return {
+    kind: "scope-incomplete",
+    claim: `large file omitted from excerpt evidence because it exceeds the bounded read cap: ${scopePath}`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs(),
+  };
 }
 
 async function readKeptExcerpts(
@@ -1718,14 +1899,7 @@ async function readKeptExcerpts(
       const { windows } = result;
       if (windows.length > 0) {
         excerpts.set(scopePath, windows);
-        if (result.omittedWindowCount > 0) {
-          uncertainty.push({
-            kind: "scope-incomplete",
-            claim: `excerpt window limit omitted ${String(result.omittedWindowCount)} additional matching range(s) in ${scopePath}`,
-            impactedAtomIds: [],
-            emittedAtMs: inputs.nowMs(),
-          });
-        }
+        uncertainty.push(...excerptWindowUncertainty(scopePath, result, inputs.nowMs));
         remainingFiles -= 1;
         remainingBytes -= result.bytesConsumed;
       }
@@ -1733,7 +1907,11 @@ async function readKeptExcerpts(
       // A single unreadable file (unsupported/binary, or larger than the excerpt read cap) must
       // degrade to a skipped excerpt, never crash the whole grounded answer. Other kept files and
       // the rest of the pipeline continue; the file simply contributes no excerpt content.
-      if (error instanceof RepoSearchUnsupportedFileError || error instanceof FileTooLargeError) {
+      if (error instanceof FileTooLargeError) {
+        uncertainty.push(largeFileExcerptOmitted(scopePath, inputs.nowMs));
+        continue;
+      }
+      if (error instanceof RepoSearchUnsupportedFileError) {
         continue;
       }
       throw error;
