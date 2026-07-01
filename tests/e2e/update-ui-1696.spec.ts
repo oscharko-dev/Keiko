@@ -635,7 +635,8 @@ async function assertManualPath(updateWindow: Locator): Promise<void> {
 }
 
 async function capture(locator: Locator, name: ArtifactName): Promise<ArtifactName> {
-  await locator.screenshot({ path: artifactPath(name) });
+  await locator.evaluate(() => document.fonts.ready.then(() => undefined));
+  await locator.screenshot({ path: artifactPath(name), animations: "disabled", caret: "hide" });
   return name;
 }
 
