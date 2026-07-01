@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,7 @@ import {
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleReindexLocalKnowledgeCapsule,
+  handleRebindLocalKnowledgeCapsuleSource,
   handleStartLocalKnowledgeCapsuleIndexing,
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
@@ -491,6 +492,162 @@ describe("local-knowledge handlers", () => {
 
     expect(auditKinds.map((row) => row.kind)).toContain("source-added");
     expect(membershipKinds.map((row) => row.change_kind)).toEqual(["add-source"]);
+  });
+
+  it("rebinds a source root without changing the source id and marks the capsule stale", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const oldRoot = join(tmp, "old-manuals");
+    const newRoot = join(tmp, "new-manuals");
+    mkdirSync(oldRoot, { recursive: true });
+    mkdirSync(newRoot, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-rebind" as KnowledgeSourceId,
+      displayName: "Manuals",
+      tags: [],
+      scope: { kind: "folder", rootPath: oldRoot, recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: newRoot }),
+        params: { capsuleId: "cap-1", sourceId: "src-rebind" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body).toMatchObject({
+      capsule: { lifecycleState: "stale" },
+      sources: [
+        {
+          sourceId: "src-rebind",
+          scope: { kind: "folder", rootPath: realpathSync(newRoot), recursive: true },
+        },
+      ],
+    });
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const auditRows = verify._internal.db
+      .prepare(
+        "SELECT kind, source_id, details_json FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly kind: string;
+      readonly source_id: string | null;
+      readonly details_json: string | null;
+    }[];
+    verify.close();
+    expect(auditRows).toEqual([
+      {
+        kind: "source-rebound",
+        source_id: "src-rebind",
+        details_json: JSON.stringify({
+          previousScopeKind: "folder",
+          currentScopeKind: "folder",
+        }),
+      },
+    ]);
+  });
+
+  it("rejects rebind when another source already uses the target root and scope", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const rootA = join(tmp, "manuals-a");
+    const rootB = join(tmp, "manuals-b");
+    mkdirSync(rootA, { recursive: true });
+    mkdirSync(rootB, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-a" as KnowledgeSourceId,
+      displayName: "A",
+      tags: [],
+      scope: { kind: "folder", rootPath: rootA, recursive: true },
+    });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-b" as KnowledgeSourceId,
+      displayName: "B",
+      tags: [],
+      scope: { kind: "folder", rootPath: realpathSync(rootB), recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: rootB }),
+        params: { capsuleId: "cap-1", sourceId: "src-a" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("already uses");
+  });
+
+  it("refuses to rebind a source root into a denied location", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const safeRoot = join(tmp, "manuals");
+    const deniedRoot = join(tmp, ".ssh");
+    mkdirSync(safeRoot, { recursive: true });
+    mkdirSync(deniedRoot, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-safe" as KnowledgeSourceId,
+      displayName: "Manuals",
+      tags: [],
+      scope: { kind: "folder", rootPath: safeRoot, recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: deniedRoot }),
+        params: { capsuleId: "cap-1", sourceId: "src-safe" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("denied");
+  });
+
+  it("rejects source rebind while indexing is already running", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const oldRoot = join(tmp, "manuals");
+    const newRoot = join(tmp, "manuals-new");
+    mkdirSync(oldRoot, { recursive: true });
+    mkdirSync(newRoot, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-running" as KnowledgeSourceId,
+      displayName: "Manuals",
+      tags: [],
+      scope: { kind: "folder", rootPath: oldRoot, recursive: true },
+    });
+    seeded.store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-rebind-running', :c, '[\"src-running\"]', 12, NULL, 'running', 1, 0, 0, 0, NULL, NULL, NULL, 0)",
+      )
+      .run({ c: seeded.capId });
+    localKnowledgeIndexingRegistry.start("cap-1");
+    localKnowledgeIndexingRegistry.attachJobId("cap-1", "job-rebind-running");
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: newRoot }),
+        params: { capsuleId: "cap-1", sourceId: "src-running" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("already running");
   });
 
   it("refuses a source path in a denied location (deny list)", async () => {

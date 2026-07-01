@@ -35,6 +35,7 @@ import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
 import { CapsuleRename } from "./capsule-rename";
+import { SourceRebindControl } from "./source-rebind-control";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -694,7 +695,15 @@ function ContextualRetrievalSection({
 // SourcesSection
 // ---------------------------------------------------------------------------
 
-function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): ReactNode {
+function SourcesSection({
+  capsuleId,
+  sources,
+  onActionComplete,
+}: {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sources: readonly SourceIndexStats[];
+  readonly onActionComplete: () => void;
+}): ReactNode {
   if (sources.length === 0) {
     return (
       <section aria-labelledby="lkd-sources-heading">
@@ -726,7 +735,14 @@ function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): 
                     {location}
                   </div>
                 </div>
-                <span className="lkd-source-scope">{src.scope.kind}</span>
+                <div className="lkd-source-card-actions">
+                  <span className="lkd-source-scope">{src.scope.kind}</span>
+                  <SourceRebindControl
+                    capsuleId={capsuleId}
+                    source={src}
+                    onRebound={onActionComplete}
+                  />
+                </div>
               </div>
               <div className="lkd-source-coverage" role="img" aria-label="Source document coverage">
                 <span
@@ -1260,7 +1276,11 @@ export function CapsuleDetail({
       ) : null}
       <OverviewSection data={data} />
       <PrivacySection />
-      <SourcesSection sources={data.sources} />
+      <SourcesSection
+        capsuleId={capsuleId}
+        sources={data.sources}
+        onActionComplete={reload}
+      />
       <HealthDiagnosticsSection diagnostics={data.parserDiagnostics} />
       <IndexingJobsSection jobs={data.indexingJobs} />
     </div>

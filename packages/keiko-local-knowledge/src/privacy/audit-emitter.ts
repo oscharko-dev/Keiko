@@ -154,6 +154,15 @@ function previewDocumentAccessDetails(
   };
 }
 
+function sourceReboundDetails(
+  event: Extract<CapsuleAuditEvent, { readonly kind: "source-rebound" }>,
+): Record<string, unknown> {
+  return {
+    previousScopeKind: event.previousScopeKind,
+    currentScopeKind: event.currentScopeKind,
+  };
+}
+
 function isSourceOnlyAuditEvent(event: CapsuleAuditEvent): event is SourceOnlyAuditEvent {
   return (
     event.kind === "indexing-job-started" ||
@@ -186,6 +195,9 @@ function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | 
   }
   if (event.kind === "citation-preview-document-accessed") {
     return previewDocumentAccessDetails(event);
+  }
+  if (event.kind === "source-rebound") {
+    return sourceReboundDetails(event);
   }
   return null;
 }

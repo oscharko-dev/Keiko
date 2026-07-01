@@ -11,6 +11,7 @@ import {
   fetchCapsules,
   fetchCapsuleSets,
   rebuildCapsuleIndex,
+  rebindCapsuleSourceRoot,
   reembedCapsuleForCurrentModel,
   refreshCapsuleChangedFiles,
   renameCapsule,
@@ -62,6 +63,7 @@ describe("local knowledge BFF boundary helpers", () => {
     await startIndexing(capsuleId);
     await cancelIndexing(capsuleId);
     await connectCapsuleSource(capsuleId, scope, "Release files");
+    await rebindCapsuleSourceRoot(capsuleId, "source 1", "/new repo");
     await disconnectCapsule(capsuleId);
     await fetchCapsuleDetail(capsuleId);
     await deleteCapsule(capsuleId);
@@ -120,6 +122,13 @@ describe("local knowledge BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ scope, displayName: "Release files" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/sources/source%201/root",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ rootPath: "/new repo" }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

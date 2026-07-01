@@ -26,6 +26,7 @@ import {
   removeSourceFromCapsule,
   resolveKnowledgeStorePath,
   runIndexingJob,
+  updateSourceScopeInCapsule,
   updateCapsuleEmbeddingModelIdentity,
   updateCapsuleDetails,
   updateCapsuleState,
@@ -1443,6 +1444,14 @@ function parseCapsuleId(ctx: RouteContext): KnowledgeCapsule["id"] {
   return capsuleId as KnowledgeCapsule["id"];
 }
 
+function parseSourceId(ctx: RouteContext): KnowledgeSourceId {
+  const sourceId = ctx.params.sourceId;
+  if (sourceId === undefined) {
+    throw new InvalidRequest("Route parameter sourceId is required.");
+  }
+  return sourceId as KnowledgeSourceId;
+}
+
 function requireSafeDisplayText(field: string, value: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0 || !isSafeDisplaySummary(trimmed)) {
@@ -2401,6 +2410,40 @@ function parseConnectSourceInput(body: Record<string, unknown>): {
   return { scope, displayName };
 }
 
+function parseRebindSourceInput(body: Record<string, unknown>): string {
+  const rootPath = body.rootPath;
+  if (typeof rootPath !== "string" || rootPath.trim().length === 0) {
+    throw new InvalidRequest('Field "rootPath" must be a non-empty string.');
+  }
+  return rootPath.trim();
+}
+
+function rebindScopeRoot(scope: KnowledgeSourceScope, rootPath: string): KnowledgeSourceScope {
+  if (scope.kind === "folder") {
+    return { ...scope, rootPath };
+  }
+  if (scope.kind === "files") {
+    return { ...scope, rootPath };
+  }
+  return { ...scope, repositoryRoot: rootPath };
+}
+
+function persistSourceRootRebind(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  source: KnowledgeSource,
+  scope: KnowledgeSourceScope,
+): void {
+  updateSourceScopeInCapsule(
+    store,
+    capsule.id,
+    source.id,
+    scope,
+    createSqliteAuditSink(store),
+  );
+  updateCapsuleState(store, capsule.id, "stale");
+}
+
 // Canonicalize (realpath) then refuse denied locations and non-directory roots BEFORE
 // touching the store. realpath resolves symlinks so a link into ~/.ssh cannot slip past.
 function guardConnectorSourcePath(scope: KnowledgeSourceScope): KnowledgeSourceScope {
@@ -2516,6 +2559,53 @@ export async function handleDisconnectLocalKnowledgeCapsule(
       }
       disconnectCapsuleSources(env.store, capsule.id);
       return actionResponse(capsule.id);
+    } finally {
+      env.close();
+    }
+  });
+}
+
+export async function handleRebindLocalKnowledgeCapsuleSource(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const capsuleId = parseCapsuleId(ctx);
+    const sourceId = parseSourceId(ctx);
+    const rootPath = parseRebindSourceInput(await readJsonObject(ctx.req));
+    const guardedScopeInput = (source: KnowledgeSource): KnowledgeSourceScope =>
+      guardConnectorSourcePath(rebindScopeRoot(source.scope, rootPath));
+    const env = openStoreForDeps(deps);
+    try {
+      const capsule = getCapsule(env.store, capsuleId);
+      if (capsule === undefined) {
+        return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      const runningJobId = latestRunningJobId(env.store, capsule.id);
+      if (runningJobId !== undefined) {
+        return runningIndexingJobConflict(capsule.id, runningJobId);
+      }
+      const sources = listCapsuleSources(env.store, capsule.id);
+      const source = sources.find((entry) => entry.id === sourceId);
+      if (source === undefined) {
+        return notFound(`Source not found: ${String(sourceId)}`);
+      }
+      const guarded = guardedScopeInput(source);
+      const targetIdentity = scopeIdentity(guarded);
+      const duplicate = sources.some(
+        (entry) => entry.id !== sourceId && scopeIdentity(entry.scope) === targetIdentity,
+      );
+      if (duplicate) {
+        return conflict("Another source in this capsule already uses that root and scope.");
+      }
+      if (scopeIdentity(source.scope) !== targetIdentity) {
+        persistSourceRootRebind(env.store, capsule, source, guarded);
+      }
+      const updated = getCapsule(env.store, capsule.id) ?? capsule;
+      return {
+        status: 200,
+        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, updated),
+      };
     } finally {
       env.close();
     }

@@ -266,6 +266,24 @@ export async function disconnectCapsule(
 }
 
 // ---------------------------------------------------------------------------
+// PATCH /api/local-knowledge/capsules/:id/sources/:sourceId/root
+// ---------------------------------------------------------------------------
+
+export async function rebindCapsuleSourceRoot(
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: string,
+  rootPath: string,
+): Promise<CapsuleDetailResponse> {
+  return fetchJson<CapsuleDetailResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/sources/${encodeURIComponent(sourceId)}/root`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ rootPath }),
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Issue #198 — CapsuleDetail wire shape
 // ---------------------------------------------------------------------------
 

@@ -29,6 +29,7 @@ const PUBLIC_EXPORTS = [
   "addSourceToCapsule",
   "listCapsuleSources",
   "removeSourceFromCapsule",
+  "updateSourceScopeInCapsule",
   "createCapsuleSet",
   "deleteCapsuleSet",
   "getCapsuleSet",

@@ -253,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 20 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(20);
+  it("is the integer 21 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(21);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -858,6 +858,40 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
       expect(countRows(db, "document_blobs")).toBe(0);
       expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v19 on top of a v18 database and enables source-rebound audit", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v19 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 19);
+      if (v19 === undefined) {
+        throw new Error("expected v19 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 19) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, occurred_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("audit-before-rebind", handles.capsuleId, "source-added", handles.sourceId, 1000);
+
+      for (const stmt of v19.up) db.exec(stmt);
+
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, details_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(
+        "audit-rebind",
+        handles.capsuleId,
+        "source-rebound",
+        handles.sourceId,
+        '{"previousScopeKind":"folder","currentScopeKind":"folder"}',
+        2000,
+      );
+      expect(countRows(db, "capsule_audit_events")).toBe(2);
     } finally {
       db.close();
     }
