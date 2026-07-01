@@ -2,8 +2,11 @@
   "issue": "#1405",
   "harness": "playwright.issue-1405-human-loop.config.ts",
   "productCss": "packages/keiko-ui/src/app/globals.css",
-  "generatedAt": "2026-07-01T20:22:10.782Z",
-  "artifacts": ["human-loop-1405.png", "manifest.json"],
+  "generatedAt": "2026-07-01T20:28:09.228Z",
+  "artifacts": [
+    "human-loop-1405.png",
+    "manifest.json"
+  ],
   "assertions": {
     "permissionScopeRowsRendered": true,
     "sensitiveActionUsesTypedConfirm": true,

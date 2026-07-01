@@ -759,7 +759,7 @@ describe("regenerateDesktopChat", () => {
         projectPath: "/repo",
         assistantMessageId: "a1",
         modelId: "example-chat-model",
-        memory: { enabled: false },
+        memory: { enabled: false, context: { userId: "user-1" } },
       },
       controller.signal,
     );
@@ -775,7 +775,7 @@ describe("regenerateDesktopChat", () => {
           projectPath: "/repo",
           assistantMessageId: "a1",
           modelId: "example-chat-model",
-          memory: { enabled: false },
+          memory: { enabled: false, context: { userId: "user-1" } },
         }),
         headers: expect.objectContaining({
           Accept: "application/json",
