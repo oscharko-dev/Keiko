@@ -112,6 +112,10 @@ describe("searchText (memFs)", () => {
     expect(atom?.redactionState).toBe("redacted");
     expect(atom?.score).toBeGreaterThan(0);
     expect(atom?.score).toBeLessThanOrEqual(1);
+    expect(result.coverage.incomplete).toBe(false);
+    expect(result.coverage.reasons).toEqual([]);
+    expect(result.coverage.filesScanned).toBe(1);
+    expect(result.coverage.matchesReturned).toBe(1);
   });
 
   it("honors an already-aborted signal before scanning files", async () => {
@@ -126,6 +130,8 @@ describe("searchText (memFs)", () => {
     expect(result.atoms).toHaveLength(0);
     expect(result.filesScanned).toBe(0);
     expect(result.truncated).toBe(true);
+    expect(result.coverage.incomplete).toBe(true);
+    expect(result.coverage.reasons).toContain("aborted");
   });
 
   it("scans files in sorted relative-path order", async () => {
@@ -562,6 +568,10 @@ describe("searchText (memFs)", () => {
     const r = await searchText(scope, nlq("x"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(2);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["match-cap"]);
+    expect(r.coverage.matchesReturned).toBe(2);
+    expect(r.coverage.limits.maxMatchesReturned).toBe(2);
   });
 
   it("respects maxFilesScanned with truncated=true", async () => {
@@ -575,6 +585,11 @@ describe("searchText (memFs)", () => {
     expect(r.filesScanned).toBeLessThanOrEqual(1);
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/f0.ts"]);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["file-cap"]);
+    expect(r.coverage.filesScanned).toBe(1);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
+    expect(r.coverage.limits.maxFilesScanned).toBe(1);
   });
 
   it("reports truncated when whole-workspace discovery hits maxFilesScanned without matches", async () => {
@@ -588,6 +603,9 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
     expect(r.filesScanned).toBe(1);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.reasons).toEqual(["file-cap"]);
+    expect(r.coverage.matchesReturned).toBe(0);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
   it("includes safe gitignored files from explicit-scope text search", async () => {
@@ -622,6 +640,8 @@ describe("searchText (memFs)", () => {
     ]);
     expect(r.diagnostics?.policyMode).toBe("explicit-scope");
     expect(r.truncated).toBe(false);
+    expect(r.coverage.incomplete).toBe(false);
+    expect(r.coverage.reasons).toEqual([]);
   });
 
   it("respects elapsedMsMax via injected nowMs (truncated=true)", async () => {
@@ -635,6 +655,27 @@ describe("searchText (memFs)", () => {
     const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 0 };
     const r = await searchText(scope, nlq("match"), limits, { fs, nowMs });
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["timeout"]);
+    expect(r.coverage.elapsedMs).toBeGreaterThan(r.coverage.limits.elapsedMsMax);
+  });
+
+  it("surfaces max-depth pruning as incomplete coverage without implying a file-cap hit", async () => {
+    const deepPath = `${Array.from({ length: 14 }, (_, i) => `d${String(i)}`).join("/")}/deep.ts`;
+    const { scope, fs } = memScope({
+      "src/top.ts": "match\n",
+      [deepPath]: "match\n",
+    });
+    const r = await searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/top.ts"]);
+    expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["depth-pruned"]);
+    expect(r.coverage.depthPrunedByDiscovery).toBeGreaterThan(0);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
   it("omits oversize files as size-exceeded candidates rather than failing the run", async () => {
@@ -661,6 +702,8 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
     expect(r.candidates).toHaveLength(0);
     expect(r.truncated).toBe(false);
+    expect(r.coverage.incomplete).toBe(false);
+    expect(r.coverage.reasons).toEqual([]);
   });
 
   it("can be driven by an injected fs (port-driven proof)", async () => {
@@ -837,6 +880,8 @@ describe("findFiles (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
     expect(r.filesScanned).toBe(0);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toContain("aborted");
   });
 
   it("rejects non-file-pattern queries", async () => {
@@ -891,6 +936,9 @@ describe("findFiles (memFs)", () => {
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(2);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["match-cap"]);
+    expect(r.coverage.matchesReturned).toBe(2);
   });
 
   it("reports truncated when whole-workspace file discovery hits maxFilesScanned", async () => {
@@ -903,6 +951,9 @@ describe("findFiles (memFs)", () => {
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/f0.ts"]);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["file-cap"]);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
   it("includes safe gitignored files from explicit-scope file search", async () => {
@@ -937,6 +988,8 @@ describe("findFiles (memFs)", () => {
     ]);
     expect(r.diagnostics?.policyMode).toBe("explicit-scope");
     expect(r.truncated).toBe(false);
+    expect(r.coverage.incomplete).toBe(false);
+    expect(r.coverage.reasons).toEqual([]);
   });
 
   it("omits node_modules from candidates", async () => {

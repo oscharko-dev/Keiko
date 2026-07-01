@@ -6,6 +6,7 @@
 import type {
   CandidateFile,
   CandidateOmissionReason,
+  ContextCoverageTruncationReason,
   EvidenceAtom,
   EvidenceAtomProvenanceKind,
   RetrievalQuery,
@@ -126,7 +127,14 @@ function collectFromDirectory(
   limits: LimitsShape,
   fs: WorkspaceFs,
   policy: SearchPolicy,
-): { files: readonly DiscoveredFile[]; truncated: boolean; ignored: number; denied: number } {
+): {
+  readonly files: readonly DiscoveredFile[];
+  readonly filesDiscovered: number;
+  readonly truncated: boolean;
+  readonly ignored: number;
+  readonly denied: number;
+  readonly depthPruned: number;
+} {
   const extraIgnoreLines = extraIgnoreLinesForSearch(policy);
   const workspace =
     extraIgnoreLines.length === 0
@@ -144,9 +152,11 @@ function collectFromDirectory(
   const files = result.files;
   return {
     files: files.slice(0, limits.maxFilesScanned),
-    truncated: files.length > limits.maxFilesScanned,
+    filesDiscovered: files.length,
+    truncated: files.length > limits.maxFilesScanned || result.stats.depthPruned > 0,
     ignored: result.stats.ignored,
     denied: result.stats.denied,
+    depthPruned: result.stats.depthPruned,
   };
 }
 
@@ -236,11 +246,16 @@ export function gatherCandidates(
       inputs.policy,
       result.ignored,
       result.denied,
+      result.depthPruned,
     );
     return {
       files: ordered.files,
       truncated: result.truncated,
-      diagnostics: ordered.diagnostics,
+      diagnostics: {
+        ...ordered.diagnostics,
+        filesDiscovered: result.filesDiscovered,
+        filesAfterPolicy: result.filesDiscovered,
+      },
     };
   }
   const result = collectFromEntries(scope, inputs.limits, inputs.fs);
@@ -248,7 +263,11 @@ export function gatherCandidates(
   return {
     files: ordered.files,
     truncated: result.truncated,
-    diagnostics: ordered.diagnostics,
+    diagnostics: {
+      ...ordered.diagnostics,
+      filesDiscovered: result.filesDiscovered,
+      filesAfterPolicy: result.filesDiscovered,
+    },
   };
 }
 
@@ -281,6 +300,7 @@ export interface RunState {
   filesScanned: number;
   matchesReturned: number;
   truncated: boolean;
+  truncationReasons?: Set<ContextCoverageTruncationReason> | undefined;
 }
 
 export function elapsed(runner: SearchTextRunner): number {
@@ -291,21 +311,26 @@ function isRunnerAborted(runner: SearchTextRunner): boolean {
   return runner.signal?.aborted === true;
 }
 
+function markTruncated(state: RunState, reason: ContextCoverageTruncationReason): void {
+  state.truncated = true;
+  state.truncationReasons?.add(reason);
+}
+
 export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
   if (isRunnerAborted(runner)) {
-    state.truncated = true;
+    markTruncated(state, "aborted");
     return true;
   }
   if (state.filesScanned >= runner.limits.maxFilesScanned) {
-    state.truncated = true;
+    markTruncated(state, "file-cap");
     return true;
   }
   if (state.matchesReturned >= runner.limits.maxMatchesReturned) {
-    state.truncated = true;
+    markTruncated(state, "match-cap");
     return true;
   }
   if (elapsed(runner) > runner.limits.elapsedMsMax) {
-    state.truncated = true;
+    markTruncated(state, "timeout");
     return true;
   }
   return false;
@@ -313,15 +338,15 @@ export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
 
 function hitEmissionLimit(runner: SearchTextRunner, state: RunState): boolean {
   if (isRunnerAborted(runner)) {
-    state.truncated = true;
+    markTruncated(state, "aborted");
     return true;
   }
   if (state.matchesReturned >= runner.limits.maxMatchesReturned) {
-    state.truncated = true;
+    markTruncated(state, "match-cap");
     return true;
   }
   if (elapsed(runner) > runner.limits.elapsedMsMax) {
-    state.truncated = true;
+    markTruncated(state, "timeout");
     return true;
   }
   return false;
@@ -444,7 +469,7 @@ export async function scanFile(
   candidates: CandidateFile[],
 ): Promise<void> {
   if (isRunnerAborted(runner)) {
-    state.truncated = true;
+    markTruncated(state, "aborted");
     return;
   }
   const policy = filePolicyOmission(runner, file);
@@ -459,7 +484,7 @@ export async function scanFile(
     return;
   }
   if (isRunnerAborted(runner)) {
-    state.truncated = true;
+    markTruncated(state, "aborted");
     return;
   }
   state.filesScanned += 1;

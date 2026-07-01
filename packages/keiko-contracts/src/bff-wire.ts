@@ -21,6 +21,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateOmissionReason,
   type ConnectedContextPack,
+  type ContextCoverageDiagnostics,
   type ExplorationBudget,
   type ExplorationUsage,
   type RetrievalQueryKind,
@@ -616,6 +617,9 @@ export interface GroundedAnswerContextPackSummary {
   readonly uncertaintyCount: number;
   readonly elapsedMs: number;
   readonly rankingSummary?: GroundedAnswerRankingSummary | undefined;
+  // Path-free coverage/truncation summary. Present only when the source pack carries search coverage
+  // diagnostics; contains counts and closed reason enums, never raw paths, query text, or excerpts.
+  readonly coverage?: ContextCoverageDiagnostics | undefined;
   // Path-free aggregate of the context-assembly pass (ADR-0057 D1). Absent on legacy / non-profiled
   // turns; present only when assembly diagnostics were supplied to the builder.
   readonly contextSummary?: GroundedAnswerContextSummary | undefined;
@@ -716,6 +720,7 @@ export function buildGroundedAnswerContextPackSummary(
   assemblyDiagnostics?: ContextAssemblyDiagnostics,
 ): GroundedAnswerContextPackSummary {
   const rankingSummary = buildRankingSummary(pack);
+  const coverage = pack.diagnostics?.coverage;
   const contextSummary =
     assemblyDiagnostics !== undefined ? buildContextSummary(assemblyDiagnostics) : undefined;
   return {
@@ -732,6 +737,7 @@ export function buildGroundedAnswerContextPackSummary(
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
+    ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
   };
 }

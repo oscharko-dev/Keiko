@@ -267,6 +267,60 @@ function mergeContextSummaries(
   return { totalEstimatedTokens, budgetPressure, laneCounts, compactionActive };
 }
 
+type CoverageSummary = NonNullable<GroundedAnswerContextPackSummary["coverage"]>;
+
+function isCoverageSummary(
+  coverage: GroundedAnswerContextPackSummary["coverage"],
+): coverage is CoverageSummary {
+  return coverage !== undefined;
+}
+
+function mergeCoverageSummaries(
+  summaries: readonly GroundedAnswerContextPackSummary[],
+): CoverageSummary | undefined {
+  const coverageSummaries = summaries.map((summary) => summary.coverage).filter(isCoverageSummary);
+  if (coverageSummaries.length === 0) {
+    return undefined;
+  }
+  const reasons = [...new Set(coverageSummaries.flatMap((coverage) => coverage.reasons))];
+  return {
+    incomplete: coverageSummaries.some((coverage) => coverage.incomplete),
+    reasons,
+    filesDiscovered: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesDiscovered, 0),
+    filesAfterPolicy: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesAfterPolicy, 0),
+    filesScanned: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesScanned, 0),
+    filesSkipped: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesSkipped, 0),
+    ignoredByDiscovery: coverageSummaries.reduce(
+      (sum, coverage) => sum + coverage.ignoredByDiscovery,
+      0,
+    ),
+    deniedByDiscovery: coverageSummaries.reduce(
+      (sum, coverage) => sum + coverage.deniedByDiscovery,
+      0,
+    ),
+    depthPrunedByDiscovery: coverageSummaries.reduce(
+      (sum, coverage) => sum + coverage.depthPrunedByDiscovery,
+      0,
+    ),
+    matchesReturned: coverageSummaries.reduce((sum, coverage) => sum + coverage.matchesReturned, 0),
+    elapsedMs: coverageSummaries.reduce((sum, coverage) => sum + coverage.elapsedMs, 0),
+    limits: {
+      maxFilesScanned: coverageSummaries.reduce(
+        (sum, coverage) => sum + coverage.limits.maxFilesScanned,
+        0,
+      ),
+      maxMatchesReturned: coverageSummaries.reduce(
+        (sum, coverage) => sum + coverage.limits.maxMatchesReturned,
+        0,
+      ),
+      elapsedMsMax: coverageSummaries.reduce(
+        (sum, coverage) => sum + coverage.limits.elapsedMsMax,
+        0,
+      ),
+    },
+  };
+}
+
 export function mergeContextPackSummaries(
   summaries: readonly GroundedAnswerContextPackSummary[],
 ): GroundedAnswerContextPackSummary {
@@ -277,6 +331,7 @@ export function mergeContextPackSummaries(
   // ADR-0057 D1: merge every contributing source's path-free contextSummary. The projection remains
   // structurally path-free: fixed lane-id keys, numeric counts/tokens, a pressure enum, and a boolean.
   const mergedContextSummary = mergeContextSummaries(summaries);
+  const mergedCoverage = mergeCoverageSummaries(summaries);
   return {
     schemaVersion: first.schemaVersion,
     scopeId: `scope-${createHash("sha256")
@@ -293,6 +348,7 @@ export function mergeContextPackSummaries(
     omittedCounts: mergeOmittedCounts(summaries),
     uncertaintyCount: summaries.reduce((acc, s) => acc + s.uncertaintyCount, 0),
     elapsedMs: summaries.reduce((acc, s) => acc + s.elapsedMs, 0),
+    ...(mergedCoverage !== undefined ? { coverage: mergedCoverage } : {}),
     ...(mergedContextSummary !== undefined ? { contextSummary: mergedContextSummary } : {}),
   };
 }

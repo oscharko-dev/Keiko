@@ -43,6 +43,7 @@ export interface DiscoveryStats {
   readonly discovered: number;
   readonly denied: number;
   readonly ignored: number;
+  readonly depthPruned: number;
 }
 
 // ─── File reads ─────────────────────────────────────────────────────────────────

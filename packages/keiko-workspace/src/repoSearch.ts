@@ -7,6 +7,8 @@
 
 import type {
   CandidateFile,
+  ContextCoverageDiagnostics,
+  ContextCoverageTruncationReason,
   EvidenceAtom,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -85,6 +87,7 @@ export interface SearchResult {
   readonly elapsedMs: number;
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics | undefined;
+  readonly coverage: ContextCoverageDiagnostics;
 }
 
 export interface ReadExcerptRequest {
@@ -139,14 +142,148 @@ function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
-function abortedSearchResult(elapsedMs: number): SearchResult {
+function coverageReasons(
+  reasons: ReadonlySet<ContextCoverageTruncationReason>,
+): readonly ContextCoverageTruncationReason[] {
+  const ordered: ContextCoverageTruncationReason[] = [];
+  for (const reason of ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"] as const) {
+    if (reasons.has(reason)) {
+      ordered.push(reason);
+    }
+  }
+  return ordered;
+}
+
+interface CoverageInputs {
+  readonly diagnostics: SearchDiagnostics | undefined;
+  readonly filesScanned: number;
+  readonly matchesReturned: number;
+  readonly elapsedMs: number;
+  readonly limits: SearchLimits;
+  readonly candidates: readonly CandidateFile[];
+  readonly candidateTruncated: boolean;
+  readonly truncationReasons: ReadonlySet<ContextCoverageTruncationReason>;
+}
+
+interface CoverageStats {
+  readonly filesDiscovered: number;
+  readonly filesAfterPolicy: number;
+  readonly ignoredByDiscovery: number;
+  readonly deniedByDiscovery: number;
+  readonly depthPrunedByDiscovery: number;
+}
+
+const EMPTY_COVERAGE_STATS: CoverageStats = {
+  filesDiscovered: 0,
+  filesAfterPolicy: 0,
+  ignoredByDiscovery: 0,
+  deniedByDiscovery: 0,
+  depthPrunedByDiscovery: 0,
+};
+
+function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStats {
+  if (diagnostics === undefined) {
+    return EMPTY_COVERAGE_STATS;
+  }
+  return {
+    filesDiscovered: diagnostics.filesDiscovered,
+    filesAfterPolicy: diagnostics.filesAfterPolicy,
+    ignoredByDiscovery: diagnostics.ignoredByDiscovery,
+    deniedByDiscovery: diagnostics.deniedByDiscovery,
+    depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
+  };
+}
+
+function inferredCoverageReasons(
+  inputs: CoverageInputs,
+  stats: CoverageStats,
+): Set<ContextCoverageTruncationReason> {
+  const reasons = new Set(inputs.truncationReasons);
+  if (stats.depthPrunedByDiscovery > 0) {
+    reasons.add("depth-pruned");
+  }
+  if (
+    inputs.candidateTruncated &&
+    (stats.depthPrunedByDiscovery === 0 || stats.filesDiscovered >= inputs.limits.maxFilesScanned)
+  ) {
+    reasons.add("file-cap");
+  }
+  if (inputs.elapsedMs > inputs.limits.elapsedMsMax) {
+    reasons.add("timeout");
+  }
+  return reasons;
+}
+
+function omittedCandidateCount(candidates: readonly CandidateFile[]): number {
+  return candidates.filter((candidate) => candidate.omitted !== undefined).length;
+}
+
+function unvisitedCandidateCount(
+  inputs: CoverageInputs,
+  stats: CoverageStats,
+  omittedCount: number,
+): number {
+  return Math.max(0, stats.filesAfterPolicy - inputs.filesScanned - omittedCount);
+}
+
+function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number {
+  const omittedCount = omittedCandidateCount(inputs.candidates);
+  return (
+    omittedCount +
+    unvisitedCandidateCount(inputs, stats, omittedCount) +
+    stats.ignoredByDiscovery +
+    stats.deniedByDiscovery +
+    stats.depthPrunedByDiscovery
+  );
+}
+
+function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagnostics {
+  const stats = coverageStats(inputs.diagnostics);
+  const orderedReasons = coverageReasons(inferredCoverageReasons(inputs, stats));
+  return {
+    incomplete: orderedReasons.length > 0,
+    reasons: orderedReasons,
+    filesDiscovered: stats.filesDiscovered,
+    filesAfterPolicy: stats.filesAfterPolicy,
+    filesScanned: inputs.filesScanned,
+    filesSkipped: skippedFileCount(inputs, stats),
+    ignoredByDiscovery: stats.ignoredByDiscovery,
+    deniedByDiscovery: stats.deniedByDiscovery,
+    depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
+    matchesReturned: inputs.matchesReturned,
+    elapsedMs: inputs.elapsedMs,
+    limits: {
+      maxFilesScanned: inputs.limits.maxFilesScanned,
+      maxMatchesReturned: inputs.limits.maxMatchesReturned,
+      elapsedMsMax: inputs.limits.elapsedMsMax,
+    },
+  };
+}
+
+function abortedSearchResult(
+  elapsedMs: number,
+  limits: SearchLimits = DEFAULT_SEARCH_LIMITS,
+  diagnostics?: SearchDiagnostics,
+  candidateTruncated = false,
+): SearchResult {
+  const truncationReasons = new Set<ContextCoverageTruncationReason>(["aborted"]);
   return {
     atoms: [],
     candidates: [],
     filesScanned: 0,
     elapsedMs,
     truncated: true,
-    diagnostics: undefined,
+    diagnostics,
+    coverage: buildCoverageDiagnostics({
+      diagnostics,
+      filesScanned: 0,
+      matchesReturned: 0,
+      elapsedMs,
+      limits,
+      candidates: [],
+      candidateTruncated,
+      truncationReasons,
+    }),
   };
 }
 
@@ -206,6 +343,40 @@ async function runScanLoop(
   }
 }
 
+interface CompletedSearchResultInputs {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly candidates: readonly CandidateFile[];
+  readonly filesScanned: number;
+  readonly matchesReturned: number;
+  readonly elapsedMs: number;
+  readonly truncated: boolean;
+  readonly diagnostics: SearchDiagnostics;
+  readonly limits: SearchLimits;
+  readonly candidateTruncated: boolean;
+  readonly truncationReasons: ReadonlySet<ContextCoverageTruncationReason>;
+}
+
+function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResult {
+  return {
+    atoms: inputs.atoms,
+    candidates: inputs.candidates,
+    filesScanned: inputs.filesScanned,
+    elapsedMs: inputs.elapsedMs,
+    truncated: inputs.truncated,
+    diagnostics: inputs.diagnostics,
+    coverage: buildCoverageDiagnostics({
+      diagnostics: inputs.diagnostics,
+      filesScanned: inputs.filesScanned,
+      matchesReturned: inputs.matchesReturned,
+      elapsedMs: inputs.elapsedMs,
+      limits: inputs.limits,
+      candidates: inputs.candidates,
+      candidateTruncated: inputs.candidateTruncated,
+      truncationReasons: inputs.truncationReasons,
+    }),
+  };
+}
+
 export async function searchText(
   scope: SearchScope,
   query: RetrievalQuery,
@@ -226,29 +397,35 @@ export async function searchText(
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   });
   if (isAborted(deps.signal)) {
-    return abortedSearchResult(elapsed(runner));
+    return abortedSearchResult(elapsed(runner), limits);
   }
   const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, runner.policy);
   if (isAborted(deps.signal)) {
-    return { ...abortedSearchResult(elapsed(runner)), diagnostics: candidateSet.diagnostics };
+    return abortedSearchResult(elapsed(runner), limits, candidateSet.diagnostics, candidateSet.truncated);
   }
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
+  const truncationReasons = new Set<ContextCoverageTruncationReason>();
   // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
   const state: RunState = {
     filesScanned: 0,
     matchesReturned: 0,
     truncated: candidateSet.truncated,
+    truncationReasons,
   };
   await runScanLoop(runner, candidateSet, state, atoms, candidates);
-  return {
+  return completedSearchResult({
     atoms,
     candidates,
     filesScanned: state.filesScanned,
+    matchesReturned: state.matchesReturned,
     elapsedMs: elapsed(runner),
     truncated: state.truncated,
     diagnostics: candidateSet.diagnostics,
-  };
+    limits: runner.limits,
+    candidateTruncated: candidateSet.truncated,
+    truncationReasons,
+  });
 }
 
 interface FindFilesContext {
@@ -263,6 +440,7 @@ interface FindFilesState {
   readonly candidates: CandidateFile[];
   filesScanned: number;
   truncated: boolean;
+  readonly truncationReasons: Set<ContextCoverageTruncationReason>;
 }
 
 function emitFileListing(ctx: FindFilesContext, relativePath: string, atoms: EvidenceAtom[]): void {
@@ -288,9 +466,19 @@ function hitFileListingLimit(
   limits: SearchLimits,
   signal?: AbortSignal,
 ): boolean {
-  return (
-    isAborted(signal) || state.atoms.length >= maxMatches || nowMs() - startMs > limits.elapsedMsMax
-  );
+  if (isAborted(signal)) {
+    state.truncationReasons.add("aborted");
+    return true;
+  }
+  if (state.atoms.length >= maxMatches) {
+    state.truncationReasons.add("match-cap");
+    return true;
+  }
+  if (nowMs() - startMs > limits.elapsedMsMax) {
+    state.truncationReasons.add("timeout");
+    return true;
+  }
+  return false;
 }
 
 function collectFileListings(
@@ -309,6 +497,7 @@ function collectFileListings(
     candidates: [],
     filesScanned: 0,
     truncated: candidateSet.truncated,
+    truncationReasons: new Set<ContextCoverageTruncationReason>(),
   };
   for (const file of candidateSet.files) {
     if (
@@ -352,7 +541,7 @@ function findFilesSync(
 ): SearchResult {
   const startMs = nowMs();
   if (isAborted(signal)) {
-    return abortedSearchResult(0);
+    return abortedSearchResult(0, limits);
   }
   // Honor the per-query cap alongside the global limit (Finding 2).
   const effectiveMaxMatches = Math.min(limits.maxMatchesReturned, query.maxResults);
@@ -365,7 +554,7 @@ function findFilesSync(
   const policy = resolveSearchPolicy(scope.relativePaths.length > 0, hints);
   const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, policy);
   if (isAborted(signal)) {
-    return { ...abortedSearchResult(nowMs() - startMs), diagnostics: candidateSet.diagnostics };
+    return abortedSearchResult(nowMs() - startMs, limits, candidateSet.diagnostics, candidateSet.truncated);
   }
   const state = collectFileListings(ctx, candidateSet, policy, {
     limits,
@@ -373,14 +562,19 @@ function findFilesSync(
     startMs,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return {
+  const elapsedMs = nowMs() - startMs;
+  return completedSearchResult({
     atoms: state.atoms,
     candidates: state.candidates,
     filesScanned: state.filesScanned,
-    elapsedMs: nowMs() - startMs,
+    matchesReturned: state.atoms.length,
+    elapsedMs,
     truncated: state.truncated,
     diagnostics: candidateSet.diagnostics,
-  };
+    limits: { ...limits, maxMatchesReturned: effectiveMaxMatches },
+    candidateTruncated: candidateSet.truncated,
+    truncationReasons: state.truncationReasons,
+  });
 }
 
 export async function findFiles(

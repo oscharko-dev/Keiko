@@ -602,6 +602,33 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("surfaces incomplete coverage when workspace discovery prunes deep directories", async () => {
+    const deepDir = join(
+      ROOT,
+      ...Array.from({ length: 14 }, (_, i) => `depth-${String(i)}`),
+    );
+    mkdirSync(deepDir, { recursive: true });
+    writeFileSync(join(deepDir, "deep.ts"), "export const DepthProbe = 'hidden';\n");
+    writeFileSync(join(ROOT, "src/top.ts"), "export const DepthProbe = 'visible';\n");
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Investigate DepthProbe repository coverage" }),
+      }),
+      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+    );
+
+    const coverage = out.pack.diagnostics?.coverage;
+    const marker = out.pack.uncertainty.find((entry) => entry.kind === "scope-incomplete");
+    expect(coverage?.incomplete).toBe(true);
+    expect(coverage?.reasons).toContain("depth-pruned");
+    expect(coverage?.depthPrunedByDiscovery).toBeGreaterThan(0);
+    expect(marker?.claim).toContain("Incomplete repository coverage");
+    expect(marker?.claim).toContain("depthPruned=");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("injects a root-level glob manifest (*.csproj) for a project-metadata question (M4 root glob scan)", async () => {
     // *.csproj has no fixed basename, so the exact-name injection list cannot enumerate it; the
     // bounded root glob sweep must surface it.

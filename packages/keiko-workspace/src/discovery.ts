@@ -36,6 +36,7 @@ interface Walk {
   readonly out: DiscoveredFile[];
   denied: number;
   ignored: number;
+  depthPruned: number;
 }
 
 export interface DiscoveryResult {
@@ -131,7 +132,11 @@ function handleEntry(
 }
 
 function descend(walk: Walk, absoluteDir: string, depth: number): void {
-  if (depth > walk.opts.maxDepth || walk.out.length >= walk.opts.maxFiles) {
+  if (depth > walk.opts.maxDepth) {
+    walk.depthPruned += 1;
+    return;
+  }
+  if (walk.out.length >= walk.opts.maxFiles) {
     return;
   }
   const entries = [...readDirSafe(walk, absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
@@ -153,6 +158,7 @@ function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: Workspace
     out: [],
     denied: 0,
     ignored: 0,
+    depthPruned: 0,
   };
   // Refuse to walk a benign-named root that resolves into a denied location via a symlink: discovery
   // does not realpath-contain the ROOT, so it would otherwise list a symlinked credential dir's files.
@@ -187,7 +193,12 @@ export function discoverWithStats(
   const walk = runWalk(workspace, opts, fs);
   return {
     files: walk.out,
-    stats: { discovered: walk.out.length, denied: walk.denied, ignored: walk.ignored },
+    stats: {
+      discovered: walk.out.length,
+      denied: walk.denied,
+      ignored: walk.ignored,
+      depthPruned: walk.depthPruned,
+    },
   };
 }
 

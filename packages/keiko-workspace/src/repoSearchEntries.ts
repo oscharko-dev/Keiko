@@ -128,7 +128,7 @@ export function collectFromEntries(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): { files: readonly DiscoveredFile[]; truncated: boolean } {
+): { files: readonly DiscoveredFile[]; filesDiscovered: number; truncated: boolean } {
   const out: DiscoveredFile[] = [];
   const walk: EntryWalk = {
     scope,
@@ -143,5 +143,9 @@ export function collectFromEntries(
     }
     handleScopeEntry(walk, entry);
   }
-  return { files: out.slice(0, limits.maxFilesScanned), truncated: walk.truncated };
+  return {
+    files: out.slice(0, limits.maxFilesScanned),
+    filesDiscovered: out.length,
+    truncated: walk.truncated,
+  };
 }
