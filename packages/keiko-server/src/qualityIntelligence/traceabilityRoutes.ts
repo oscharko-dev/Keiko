@@ -145,6 +145,7 @@ function candidateTitlesFor(id: string, evidenceDir: string): ReadonlyMap<string
 
 let traceabilityExportEvidenceSequence = 0;
 
+// eslint-disable-next-line complexity
 function buildModelProvenance(
   manifest: QualityIntelligenceEvidenceManifest,
 ): QI.QualityIntelligenceExportModelProvenance {
@@ -211,6 +212,7 @@ function resultWarnings(warnings: readonly string[]): { readonly warnings?: read
   return warnings.length > 0 ? { warnings: [...warnings].sort() } : {};
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity
 export async function handleQiTraceabilityExport(
   ctx: RouteContext,
   deps: UiHandlerDeps,

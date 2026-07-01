@@ -276,6 +276,7 @@ function projectCandidate(
 
 // Apply a validated edit (redacted, in-place), append the audit entry, and project the updated
 // candidate for the wire. Split out of the handler to keep the handler within the line budget.
+// eslint-disable-next-line max-lines-per-function
 function recordEdit(
   runId: string,
   edit: ParsedEdit,

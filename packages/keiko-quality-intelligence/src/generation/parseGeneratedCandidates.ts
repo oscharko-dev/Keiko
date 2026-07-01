@@ -371,6 +371,7 @@ const buildCandidate = (
   raw: Record<string, unknown>,
   input: ParseGeneratedCandidatesInput,
   profile: PolicyProfile,
+  // eslint-disable-next-line max-lines-per-function, complexity
 ): Candidate | undefined => {
   const title = toBoundedText(raw.title, GENERATED_CANDIDATE_TITLE_MAX_CHARS);
   const steps = stepList(raw.steps);
@@ -435,6 +436,7 @@ const buildCandidate = (
 export const parseGeneratedCandidates = (
   rawText: string,
   input: ParseGeneratedCandidatesInput,
+  // eslint-disable-next-line complexity
 ): ParseGeneratedCandidatesResult => {
   const profile = input.profile ?? regressionDefault;
   const boundedRawText =

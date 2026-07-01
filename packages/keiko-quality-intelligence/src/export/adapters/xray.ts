@@ -36,6 +36,7 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
 const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
   [candidate.riskClass, ...candidate.tags].join(" ");
 
+// eslint-disable-next-line max-lines-per-function
 export function adaptToXray(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],

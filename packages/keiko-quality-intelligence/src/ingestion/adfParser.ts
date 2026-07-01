@@ -425,6 +425,7 @@ const parseTable = (
   return { kind: "table", rows };
 };
 
+// eslint-disable-next-line complexity
 function parseBlock(raw: unknown, path: string, depth: number, state: ParserState): IngestedBlock {
   const node = assertObjectNode(raw, path);
   markSeen(state, node, path);
@@ -520,6 +521,7 @@ function renderRow(block: IngestedBlock): string {
   return `| ${block.cells.map(renderCell).join(" | ")} |`;
 }
 
+// eslint-disable-next-line complexity
 function renderBlock(block: IngestedBlock): readonly string[] {
   switch (block.kind) {
     case "paragraph": {

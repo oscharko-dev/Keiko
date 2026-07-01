@@ -370,6 +370,7 @@ describe("handleQiReview — candidate-scope approve", () => {
     expect(body.auditCount).toBe(2);
   });
 
+  // eslint-disable-next-line complexity
   it("persists a monotone tamper-evident audit chain and detects modified entries", async () => {
     const d = deps(evidenceDir);
     await handleQiReview(

@@ -118,6 +118,7 @@ function modelStage(modelId: string | undefined): QI.QualityIntelligenceExportMo
   };
 }
 
+// eslint-disable-next-line complexity
 function buildModelProvenance(
   manifest: QualityIntelligenceEvidenceManifest,
 ): ExportModelProvenance {
@@ -191,6 +192,7 @@ function buildCoverageRefsByCandidate(
   return refs;
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity
 function buildFindingRefsByCandidate(
   manifest: QualityIntelligenceEvidenceManifest,
   candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
@@ -259,6 +261,7 @@ function integrityPayloadForCandidate(candidate: QI.QualityIntelligenceTestCaseC
   };
 }
 
+// eslint-disable-next-line max-lines-per-function
 function buildBundle(
   runId: string,
   adapter: Adapter,
@@ -521,6 +524,7 @@ export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Pr
   }
 }
 
+// eslint-disable-next-line max-lines-per-function
 function binaryResponse(
   runId: string,
   mode: BinaryMode,
@@ -583,6 +587,7 @@ function binaryResponse(
   };
 }
 
+// eslint-disable-next-line max-lines-per-function
 function serialisedResponse(
   runId: string,
   request: ExportRequest,

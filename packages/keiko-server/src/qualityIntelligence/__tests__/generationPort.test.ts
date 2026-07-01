@@ -596,6 +596,7 @@ describe("createQiGenerationPort.generate — abort signal", () => {
   it("throws QI_MODEL_TIMEOUT when the model call exceeds the QI profile timeout", async () => {
     vi.useFakeTimers();
     const hungPort: ModelPort = {
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
       call: (): Promise<NormalizedResponse> => new Promise<NormalizedResponse>(() => {}),
     };
     const { deps } = depsFor("chat-model-1", "{}", {
@@ -697,6 +698,7 @@ function configWithSeeding(modelId: string): ReturnType<typeof parseGatewayConfi
 }
 
 describe("createQiGenerationPort.generate — determinism-first parameters", () => {
+  // eslint-disable-next-line complexity
   it("sends a json_schema responseFormat when the model supports it", async () => {
     const { deps, calls } = depsFor("rf-model", JSON.stringify({ testCases: [] }), {
       config: configWithResponseFormat("rf-model"),

@@ -412,6 +412,12 @@ export interface GatewaySamplingParameterIssue {
 
 export const GATEWAY_TEMPERATURE_RANGE = Object.freeze({ min: 0, max: 2 });
 export const GATEWAY_TOP_P_RANGE = Object.freeze({ min: 0, max: 1 });
+const GATEWAY_TEMPERATURE_RANGE_LABEL = `${String(GATEWAY_TEMPERATURE_RANGE.min)} and ${String(
+  GATEWAY_TEMPERATURE_RANGE.max,
+)}`;
+const GATEWAY_TOP_P_RANGE_LABEL = `${String(GATEWAY_TOP_P_RANGE.min)} and ${String(
+  GATEWAY_TOP_P_RANGE.max,
+)}`;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -438,13 +444,13 @@ export function validateGatewaySamplingParameters(
   if (parameters.temperature !== undefined && !isValidGatewayTemperature(parameters.temperature)) {
     issues.push({
       parameter: "temperature",
-      message: `temperature must be a finite number between ${GATEWAY_TEMPERATURE_RANGE.min} and ${GATEWAY_TEMPERATURE_RANGE.max}`,
+      message: `temperature must be a finite number between ${GATEWAY_TEMPERATURE_RANGE_LABEL}`,
     });
   }
   if (parameters.topP !== undefined && !isValidGatewayTopP(parameters.topP)) {
     issues.push({
       parameter: "topP",
-      message: `topP must be a finite number between ${GATEWAY_TOP_P_RANGE.min} and ${GATEWAY_TOP_P_RANGE.max}`,
+      message: `topP must be a finite number between ${GATEWAY_TOP_P_RANGE_LABEL}`,
     });
   }
   return Object.freeze(issues);

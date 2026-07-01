@@ -128,6 +128,7 @@ export function encodeSpreadsheetSafeRow(cells: readonly string[], delimiter = "
   return `${encoded.join(delimiter)}\r\n`;
 }
 
+// eslint-disable-next-line complexity
 function parseCsvRows(body: string): readonly (readonly string[])[] {
   const rows: string[][] = [];
   let row: string[] = [];

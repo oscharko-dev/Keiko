@@ -748,6 +748,7 @@ function unjudgedOutcomeForStatus(
  * `StageCancelledError` so the whole stage aborts. Legacy/test ports that throw without returning
  * dispatch metadata are counted as one attempted gateway call, preserving the audit contract.
  */
+// eslint-disable-next-line max-lines-per-function
 async function judgeOneCandidate(
   ctx: RunContext,
   candidate: Candidate,

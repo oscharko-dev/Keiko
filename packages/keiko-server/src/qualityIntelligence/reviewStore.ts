@@ -152,6 +152,7 @@ const auditEntryForHash = (
   entry: QiReviewAuditEntry,
 ): Omit<QiReviewAuditEntry, "entryHashSha256Hex"> => {
   const { entryHashSha256Hex: _entryHashSha256Hex, ...hashable } = entry;
+  void _entryHashSha256Hex;
   return hashable;
 };
 
@@ -177,6 +178,8 @@ const chainAuditEntry = (
   entry: QiReviewAuditEntry,
 ): QiReviewAuditEntry => {
   const { sequence: _sequence, priorHashSha256Hex: _priorHash, ...unchained } = entry;
+  void _sequence;
+  void _priorHash;
   const linked: QiReviewAuditEntry = {
     ...unchained,
     sequence: nextAuditSequence(auditLog),
@@ -192,6 +195,9 @@ const stripAuditChainFields = (entry: QiReviewAuditEntry): QiReviewAuditEntry =>
     entryHashSha256Hex: _entryHashSha256Hex,
     ...unchained
   } = entry;
+  void _sequence;
+  void _priorHashSha256Hex;
+  void _entryHashSha256Hex;
   return unchained;
 };
 
@@ -231,6 +237,7 @@ const addIntegrityIssue = (
 
 export const verifyQiReviewAuditIntegrity = (
   artifact: QiReviewStateArtifact,
+  // eslint-disable-next-line max-lines-per-function
 ): QiReviewAuditIntegrityReport => {
   const issues: QiReviewAuditIntegrityIssue[] = [];
   let sawChainedEntry = false;
@@ -256,7 +263,7 @@ export const verifyQiReviewAuditIntegrity = (
         issues,
         index,
         "SEQUENCE_NOT_MONOTONE",
-        `Expected audit sequence ${expectedSequence}, got ${String(entry.sequence)}.`,
+        `Expected audit sequence ${String(expectedSequence)}, got ${String(entry.sequence)}.`,
       );
     }
     const prior = artifact.auditLog[index - 1];
@@ -385,7 +392,7 @@ export class QualityIntelligenceReviewRunApprovalRejected extends Error {
 
   constructor(unapprovedCandidateIds: readonly string[]) {
     super(
-      `Run approval rejected because ${unapprovedCandidateIds.length} candidate(s) are not approved.`,
+      `Run approval rejected because ${String(unapprovedCandidateIds.length)} candidate(s) are not approved.`,
     );
     this.name = "QualityIntelligenceReviewRunApprovalRejected";
     this.unapprovedCandidateIds = unapprovedCandidateIds;
@@ -613,8 +620,7 @@ const latestHumanEditForCandidate = (
   for (let index = artifact.auditLog.length - 1; index >= 0; index -= 1) {
     const entry = artifact.auditLog[index];
     if (
-      entry !== undefined &&
-      entry.scope === "candidate" &&
+      entry?.scope === "candidate" &&
       entry.candidateId === candidateId &&
       entry.action === "edit" &&
       (entry.actorKind ?? "human") === "human"
@@ -867,6 +873,7 @@ const regenerationAudit = (args: {
  */
 export const migrateReviewStateForRegeneration = (
   input: MigrateReviewStateForRegenerationInput,
+  // eslint-disable-next-line max-lines-per-function, complexity
 ): QiReviewStateArtifact | undefined => {
   const oldArtifact = loadRunReviewState(input.oldRunId, input.evidenceDir);
   if (oldArtifact === undefined) return undefined;

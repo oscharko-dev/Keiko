@@ -49,7 +49,7 @@ const MARKDOWN_HEADING = /^\s{0,3}#{1,6}\s+\S/u;
 const MARKDOWN_TABLE_ROW = /^\s*\|.+\|\s*$/u;
 const GHERKIN_LINE =
   /^\s*(?:Feature|Funktionalität|Scenario(?: Outline)?|Szenario(?:grundriss)?|Szenariogrundriss|Given|When|Then|And|But|Angenommen|Gegeben|Wenn|Dann|Und|Aber|Examples|Beispiele)\b/iu;
-const inlineEnumerationMarker = (): RegExp => /(?:^|\s)([a-z])[\).]\s+/giu;
+const inlineEnumerationMarker = (): RegExp => /(?:^|\s)([a-z])[).]\s+/giu;
 const ABBREVIATION_PATTERNS: readonly RegExp[] = [
   /\bz\.\s*B\./giu,
   /\bd\.\s*h\./giu,
@@ -163,7 +163,7 @@ const splitInlineEnumerations = (value: string): readonly string[] | undefined =
   if (matches.length < 2) return undefined;
   const out: string[] = [];
   matches.forEach((match, index) => {
-    const start = (match.index ?? 0) + match[0].length;
+    const start = match.index + match[0].length;
     const end = matches[index + 1]?.index ?? value.length;
     const statement = normaliseStatement(value.slice(start, end));
     if (isMeaningful(statement)) out.push(statement);

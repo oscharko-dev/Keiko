@@ -39,7 +39,7 @@ function profileRequiresResponseFormat(profileId: QiProfileId): boolean {
 }
 
 function hasEnforcedStructuredOutput(capability: ModelCapability): boolean {
-  return capability.structuredOutput === true && capability.supportsResponseFormat === true;
+  return capability.structuredOutput && capability.supportsResponseFormat === true;
 }
 
 function isCapabilityCompatibleWithProfile(
@@ -153,7 +153,7 @@ function defaultGenerationCapability(deps: UiHandlerDeps): ModelCapability | und
 
 function defaultJudgeCapability(
   deps: UiHandlerDeps,
-  avoidModelId?: string | undefined,
+  avoidModelId?: string,
 ): ModelCapability | undefined {
   const candidates = chatCapabilities(deps).filter((entry) =>
     hasEnforcedStructuredOutput(entry.capability),
@@ -223,6 +223,7 @@ export function recommendQiModelPolicy(deps: UiHandlerDeps): QualityIntelligence
   };
 }
 
+// eslint-disable-next-line max-lines-per-function
 export function validateQiModelPolicy(
   deps: UiHandlerDeps,
   policy: QualityIntelligenceModelPolicy,

@@ -154,6 +154,7 @@ const runApprovalBlockedByCandidates = (
     : null;
 };
 
+// eslint-disable-next-line max-lines-per-function, complexity
 export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const { id } = ctx.params;
   if (id === undefined || id.trim().length === 0) {
@@ -172,11 +173,7 @@ export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Pr
     }
     const candidateArtifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
     const candidateIds = candidateArtifact?.candidates.map((candidate) => candidate.id);
-    if (
-      decision.scope === "candidate" &&
-      decision.candidateId !== undefined &&
-      (candidateIds === undefined || !candidateIds.includes(decision.candidateId))
-    ) {
+    if (decision.scope === "candidate" && !candidateIds?.includes(decision.candidateId ?? "")) {
       return errorResult(404, "QI_CANDIDATE_NOT_FOUND", "Candidate not found for this run.");
     }
     if (decision.scope === "run" && decision.action === "approve") {

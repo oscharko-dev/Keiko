@@ -439,30 +439,33 @@ function hasSourceNotice(summary: QiRunAccepted["sourceSummaries"][number]): boo
 function toWireSourceSummaries(
   summaries: readonly QiRunAccepted["sourceSummaries"][number][],
 ): readonly QualityIntelligenceSourceSummary[] {
-  return summaries.filter(hasSourceNotice).map((summary) => ({
-    label: summary.label,
-    kind: summary.kind,
-    atomCount: summary.atomCount,
-    ...(summary.totalAtomCount !== undefined ? { totalAtomCount: summary.totalAtomCount } : {}),
-    ...(summary.droppedAtomCount !== undefined
-      ? { droppedAtomCount: summary.droppedAtomCount }
-      : {}),
-    ...(summary.maxAtomCount !== undefined ? { maxAtomCount: summary.maxAtomCount } : {}),
-    ...(summary.truncated === true ? { truncated: true } : {}),
-    ...(summary.originalBytes !== undefined ? { originalBytes: summary.originalBytes } : {}),
-    ...(summary.retainedBytes !== undefined ? { retainedBytes: summary.retainedBytes } : {}),
-    ...(summary.droppedBytes !== undefined ? { droppedBytes: summary.droppedBytes } : {}),
-    ...(summary.byteLimit !== undefined ? { byteLimit: summary.byteLimit } : {}),
-    ...(summary.truncatedDocumentCount !== undefined
-      ? { truncatedDocumentCount: summary.truncatedDocumentCount }
-      : {}),
-    ...(summary.droppedDocumentCount !== undefined
-      ? { droppedDocumentCount: summary.droppedDocumentCount }
-      : {}),
-    ...(summary.notices !== undefined && summary.notices.length > 0
-      ? { notices: summary.notices }
-      : {}),
-  }));
+  return summaries.filter(hasSourceNotice).map(
+    // eslint-disable-next-line complexity
+    (summary) => ({
+      label: summary.label,
+      kind: summary.kind,
+      atomCount: summary.atomCount,
+      ...(summary.totalAtomCount !== undefined ? { totalAtomCount: summary.totalAtomCount } : {}),
+      ...(summary.droppedAtomCount !== undefined
+        ? { droppedAtomCount: summary.droppedAtomCount }
+        : {}),
+      ...(summary.maxAtomCount !== undefined ? { maxAtomCount: summary.maxAtomCount } : {}),
+      ...(summary.truncated === true ? { truncated: true } : {}),
+      ...(summary.originalBytes !== undefined ? { originalBytes: summary.originalBytes } : {}),
+      ...(summary.retainedBytes !== undefined ? { retainedBytes: summary.retainedBytes } : {}),
+      ...(summary.droppedBytes !== undefined ? { droppedBytes: summary.droppedBytes } : {}),
+      ...(summary.byteLimit !== undefined ? { byteLimit: summary.byteLimit } : {}),
+      ...(summary.truncatedDocumentCount !== undefined
+        ? { truncatedDocumentCount: summary.truncatedDocumentCount }
+        : {}),
+      ...(summary.droppedDocumentCount !== undefined
+        ? { droppedDocumentCount: summary.droppedDocumentCount }
+        : {}),
+      ...(summary.notices !== undefined && summary.notices.length > 0
+        ? { notices: summary.notices }
+        : {}),
+    }),
+  );
 }
 
 function writeAcceptedFrame(write: WriteFn, accepted: QiRunAccepted): void {
@@ -556,6 +559,7 @@ async function streamRunExecution(
   }
 }
 
+// eslint-disable-next-line max-lines-per-function
 export async function handleStartQiRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,

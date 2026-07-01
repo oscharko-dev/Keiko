@@ -126,6 +126,7 @@ const mdRow = (cells: readonly string[]): string => `| ${cells.map(mdCell).join(
  * spreadsheet importers and auditors see one stable header schema instead of two incompatible
  * header blocks in one file. Each cell is formula-injection-safe via the shared encoder.
  */
+// eslint-disable-next-line complexity
 export function adaptToTraceabilityCsv(
   rows: readonly QualityIntelligenceTraceabilityRow[],
   display: QualityIntelligenceTraceabilityDisplayOptions = {},

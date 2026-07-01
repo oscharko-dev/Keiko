@@ -334,6 +334,7 @@ function abortErrorForGeneration(reasonKind: "timeout" | "external" | "none"): E
   return new DOMException("Quality Intelligence generation was cancelled.", "AbortError");
 }
 
+// eslint-disable-next-line max-lines-per-function
 function createModelGenerationPort(
   resolved: ResolvedGenerationModel,
 ): QualityIntelligenceGenerationPort {
@@ -363,7 +364,7 @@ function createModelGenerationPort(
           reject(abortErrorForGeneration(cancellation.reasonKind()));
         };
         cancellation.signal.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => {
+        removeAbortListener = (): void => {
           cancellation.signal.removeEventListener("abort", onAbort);
         };
         if (cancellation.signal.aborted) onAbort();

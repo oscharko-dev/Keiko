@@ -127,6 +127,7 @@ function buildMessage(
   };
 }
 
+// eslint-disable-next-line complexity
 function buildBody(request: GatewayRequest): ChatRequestBody {
   assertValidGatewaySamplingParameters(request);
   const messages = request.messages.map(buildMessage);

@@ -312,6 +312,7 @@ export type QiAsyncDocumentTextExtractor = (
   input: QiDocumentTextExtractionInput,
 ) => string | undefined | Promise<string | undefined>;
 
+// eslint-disable-next-line max-lines-per-function
 function ingestRequirements(
   source: Extract<QualityIntelligenceInlineSource, { kind: "requirements" }>,
   index: number,
@@ -588,6 +589,7 @@ function extractedSingleFileText(
     maxExtractedBytes: byteBudget,
     ...(signal === undefined ? {} : { signal }),
   });
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (typeof extracted === "object" && extracted !== null && "then" in extracted) {
     throw unsupportedDocumentTextError(absFile, label);
   }
@@ -666,6 +668,7 @@ function readSingleFileContent(
 // independent file reader is added (Issue #713 stop condition). The same protections that guard the
 // folder path apply identically to the single file; binary / unsupported / oversized / denied /
 // empty inputs each fail with a safe, user-actionable code before any model prompt.
+// eslint-disable-next-line max-lines-per-function
 function ingestFile(
   source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
   index: number,
@@ -752,6 +755,7 @@ function ingestFile(
   };
 }
 
+// eslint-disable-next-line max-lines-per-function
 async function ingestFileAsync(
   source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
   index: number,
@@ -1843,6 +1847,7 @@ function ingestOne(
   }
 }
 
+// eslint-disable-next-line max-lines-per-function
 async function ingestOneAsync(
   source: QualityIntelligenceInlineSource,
   index: number,

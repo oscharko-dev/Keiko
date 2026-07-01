@@ -90,4 +90,4 @@ const valueContainsForbiddenSecretShape = (value: unknown, seen: WeakSet<object>
 
 export const payloadContainsForbiddenSecretShape = (
   payload: Readonly<Record<string, unknown>>,
-): boolean => valueContainsForbiddenSecretShape(payload, new WeakSet<object>());
+): boolean => valueContainsForbiddenSecretShape(payload, new WeakSet());

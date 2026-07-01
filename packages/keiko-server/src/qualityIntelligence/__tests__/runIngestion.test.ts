@@ -333,6 +333,7 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
       ...input([fileSource("PDF", path)]),
       signal: controller.signal,
       documentTextExtractor: async (extractInput) => {
+        await Promise.resolve();
         calls.push(extractInput);
         return "Fachkonzept: Der TAN-Code muss nach drei Fehlversuchen gesperrt werden.";
       },

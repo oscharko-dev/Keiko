@@ -591,7 +591,7 @@ async function computeDrift(
   id: string,
   ingestRunId: string,
   deps: UiHandlerDeps,
-  signal?: AbortSignal | undefined,
+  signal?: AbortSignal,
 ): Promise<DriftOutcome> {
   const parsed = await parseSources(req);
   if (!parsed.ok) return { ok: false, result: parsed.result };

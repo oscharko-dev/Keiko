@@ -685,6 +685,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
   it("throws QI_JUDGE_MODEL_TIMEOUT when the model call exceeds the QI profile timeout", async () => {
     vi.useFakeTimers();
     const hungPort: ModelPort = {
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
       call: (): Promise<NormalizedResponse> => new Promise<NormalizedResponse>(() => {}),
     };
     const { deps } = depsFor("chat-model-1", VALID_VERDICT_JSON, {

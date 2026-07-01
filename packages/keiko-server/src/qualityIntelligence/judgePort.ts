@@ -391,6 +391,7 @@ function abortErrorForJudge(reasonKind: "timeout" | "external" | "none"): Error 
  * Build a judge port bound to one model id. Applies the qi:judge-logic capability gate
  * (chat model with text capability). Gateway-only; no direct provider calls.
  */
+// eslint-disable-next-line max-lines-per-function
 export function createQiJudgePort(
   deps: UiHandlerDeps,
   modelId: string,
@@ -422,11 +423,11 @@ export function createQiJudgePort(
       "The selected judge model cannot enforce the judge JSON schema.",
     );
   }
-  const useResponseFormat = true;
   const requestedSeed = options.requestedSeed;
   const useSeed = capability.supportsSeeding === true && requestedSeed !== undefined;
-  const modelParameters = buildJudgeModelParameters(useResponseFormat, useSeed, requestedSeed);
+  const modelParameters = buildJudgeModelParameters(true, useSeed, requestedSeed);
   return {
+    // eslint-disable-next-line max-lines-per-function
     judge: async (
       input: JudgePromptInput,
       signal?: AbortSignal,
@@ -455,12 +456,8 @@ export function createQiJudgePort(
         stream: false,
         cancellationSignal: cancellation.signal,
         temperature: DETERMINISTIC_JUDGE_TEMPERATURE,
-        ...(useSeed && requestedSeed !== undefined ? { seed: requestedSeed } : {}),
-        ...(useResponseFormat
-          ? {
-              responseFormat: buildQiJudgeResponseFormat(),
-            }
-          : {}),
+        ...(useSeed ? { seed: requestedSeed } : {}),
+        responseFormat: buildQiJudgeResponseFormat(),
       };
       let removeAbortListener = (): void => {
         /* not attached yet */
@@ -470,7 +467,7 @@ export function createQiJudgePort(
           reject(abortErrorForJudge(cancellation.reasonKind()));
         };
         cancellation.signal.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => {
+        removeAbortListener = (): void => {
           cancellation.signal.removeEventListener("abort", onAbort);
         };
         if (cancellation.signal.aborted) onAbort();

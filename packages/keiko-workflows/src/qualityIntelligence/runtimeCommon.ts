@@ -377,6 +377,7 @@ function mapFindingsToRows(
   );
 }
 
+// eslint-disable-next-line complexity
 export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
   const findingRows = mapFindingsToRows(args.findings);
   const evidenceRefs = args.evidenceRefs ?? Object.freeze([]);

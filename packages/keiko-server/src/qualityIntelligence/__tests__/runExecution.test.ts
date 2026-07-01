@@ -679,6 +679,7 @@ describe("executeQiRun — model selection", () => {
     expect(persisted).toContain("[REDACTED]");
   });
 
+  // eslint-disable-next-line complexity
   it("proves Issue #749 end to end: weak judge rationale lowers quality score and reaches run detail redacted", async () => {
     const providerSecret = "literal-provider-secret-qi-judge-749";
     const weakRationale = `The candidate is unverifiable, misses the acceptance criteria, and echoed ${providerSecret}.`;
@@ -726,6 +727,7 @@ describe("executeQiRun — model selection", () => {
     expectIssue749RunDetail(detail, providerSecret);
   });
 
+  // eslint-disable-next-line complexity
   it("uses the run seed for a seed-capable judge and records it in modelParameters", async () => {
     const { port, calls } = recordingSequencePort([
       COVERING_TWO_REQUIREMENTS_JSON,

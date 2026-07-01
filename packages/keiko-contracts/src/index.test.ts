@@ -204,15 +204,17 @@ describe("keiko-contracts package surface", () => {
       topP: 1,
     };
     expect(isValidGatewaySamplingParameters(request)).toBe(true);
-    expect(() => assertValidGatewaySamplingParameters(request)).not.toThrow();
+    expect(() => {
+      assertValidGatewaySamplingParameters(request);
+    }).not.toThrow();
   });
 
   it("rejects invalid gateway sampling parameters", () => {
     const issues = validateGatewaySamplingParameters({ temperature: -0.1, topP: 1.1 });
     expect(issues.map((issue) => issue.parameter)).toEqual(["temperature", "topP"]);
-    expect(() => assertValidGatewaySamplingParameters({ temperature: Number.NaN })).toThrow(
-      RangeError,
-    );
+    expect(() => {
+      assertValidGatewaySamplingParameters({ temperature: Number.NaN });
+    }).toThrow(RangeError);
   });
 
   it("DEFAULT_LIMITS.maxIterations is 10", () => {
