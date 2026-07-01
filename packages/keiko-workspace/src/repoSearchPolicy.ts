@@ -10,7 +10,8 @@ import {
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
 } from "./ecosystems.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import type { DiscoveredFile } from "./types.js";
 
 export type SearchIntent =
@@ -166,6 +167,16 @@ const CONFIG_EXTENSIONS = new Set([
 ]);
 const DOC_EXTENSIONS = new Set(["adoc", "md", "mdx", "rst", "txt"]);
 const TEST_FILE_RE = /(?:^|[./_-])(?:test|spec|fixture|mock)s?(?:[./_-]|$)/iu;
+const IMPLEMENTATION_INTENT_TERMS = new Set([
+  "define",
+  "defined",
+  "definition",
+  "implement",
+  "implemented",
+  "implementation",
+  "source",
+]);
+
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
     "canonical-metadata": 0,
@@ -232,7 +243,7 @@ function isConfigPath(scopePath: string): boolean {
 }
 
 function normalizedQueryTerms(query: RetrievalQuery): readonly string[] {
-  return expandedQueryTerms(query.text, false);
+  return queryRankingTerms(query.text);
 }
 
 function bucketByPath(scopePath: string): CandidateBucket {
@@ -354,36 +365,28 @@ function genericBucketScore(bucket: CandidateBucket): number {
   return scores[bucket];
 }
 
-function pathTermBonus(scopePath: string, terms: readonly string[]): number {
-  const path = normalizedPath(scopePath);
-  const name = basename(path);
-  const segments = pathSegments(path);
-  let exactPath = 0;
-  let basenameHit = 0;
-  let segmentHit = 0;
-  let substringHit = 0;
-  for (const term of terms) {
-    if (path === term || path.endsWith(`/${term}`)) {
-      exactPath = Math.max(exactPath, 35);
-    } else if (name === term || name.startsWith(`${term}.`)) {
-      basenameHit = Math.max(basenameHit, 25);
-    } else if (segments.includes(term)) {
-      segmentHit = Math.max(segmentHit, 20);
-    } else if (path.includes(term)) {
-      substringHit = Math.max(substringHit, 12);
-    }
-  }
-  return Math.min(50, exactPath + basenameHit + segmentHit + substringHit);
-}
-
 function depthPenalty(scopePath: string): number {
   return Math.min(pathSegments(scopePath).length, 12);
+}
+
+function queryIntentBoost(bucket: CandidateBucket, terms: readonly string[]): number {
+  if (!terms.some((term) => IMPLEMENTATION_INTENT_TERMS.has(term))) {
+    return 0;
+  }
+  if (bucket === "source" || bucket === "symbol-source" || bucket === "exact-path") {
+    return 24;
+  }
+  if (bucket === "test" || bucket === "docs" || bucket === "overview-doc") {
+    return -12;
+  }
+  return 0;
 }
 
 interface ScoredCandidate {
   readonly file: DiscoveredFile;
   readonly bucket: CandidateBucket;
   readonly score: number;
+  readonly bucketTiebreak: number;
   readonly signals: readonly CandidateSignal[];
   readonly ecosystem: string | undefined;
 }
@@ -399,19 +402,29 @@ function scoreCandidate(
 ): ScoredCandidate {
   const path = file.relativePath;
   const bucket = bucketByPath(path);
-  const bucketWeight = bucketScore(bucket, policy.intent);
-  const termBonus = pathTermBonus(path, terms);
+  const lexical = lexicalPathSignals(path, terms);
   const depth = depthPenalty(path);
+  const bucketTiebreak = bucketScore(bucket, policy.intent);
+  const intentBoost = queryIntentBoost(bucket, terms);
   const ecosystem = bucket === "canonical-metadata" ? canonicalMetadataEcosystem(path) : undefined;
   const signals: CandidateSignal[] = [
-    { name: `bucket:${bucket}`, value: bucketWeight },
-    { name: "path-term-bonus", value: termBonus },
-    { name: "depth-penalty", value: -depth },
+    { name: "query-path-score", value: lexical.score },
+    { name: "query-coverage", value: lexical.coverageBonus },
+    { name: "query-intent-boost", value: intentBoost },
+    { name: `bucket:${bucket}`, value: bucketTiebreak / 100 },
+    { name: "depth-penalty", value: -(depth / 1000) },
   ];
   if (ecosystem !== undefined) {
     signals.push({ name: `ecosystem:${ecosystem}`, value: 1 });
   }
-  return { file, bucket, score: bucketWeight + termBonus - depth, signals, ecosystem };
+  return {
+    file,
+    bucket,
+    score: lexical.score + intentBoost + bucketTiebreak / 100 - depth / 1000,
+    bucketTiebreak,
+    signals,
+    ecosystem,
+  };
 }
 
 function rankCandidates(
@@ -427,6 +440,7 @@ function rankCandidates(
   const scored = files.map((file) => scoreCandidate(file, terms, policy));
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
+    if (a.bucketTiebreak !== b.bucketTiebreak) return b.bucketTiebreak - a.bucketTiebreak;
     if (a.file.relativePath < b.file.relativePath) return -1;
     return a.file.relativePath > b.file.relativePath ? 1 : 0;
   });
@@ -534,6 +548,9 @@ export function shouldScoreContent(
     return true;
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
-  const terms = normalizedQueryTerms(query).filter((term) => term.length >= 4);
+  const terms =
+    query.kind === "exact-symbol"
+      ? [query.caseSensitive ? query.text : query.text.toLowerCase()]
+      : naturalLanguageContentTerms(query.text, query.caseSensitive);
   return terms.length === 0 || terms.some((term) => haystack.includes(term));
 }

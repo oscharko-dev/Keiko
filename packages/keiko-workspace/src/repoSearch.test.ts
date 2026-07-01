@@ -320,6 +320,26 @@ describe("searchText (memFs)", () => {
     );
   });
 
+  it("keeps short identifier terms in the content gate for natural-language queries", async () => {
+    const { scope, fs } = memScope({
+      "src/http/ApiIdUrlMapper.ts":
+        'export const API_ID_URL = "/api/id";\nexport function mapApiIdUrl(): string { return API_ID_URL; }\n',
+      "docs/api.md": "The API id url constant is discussed in this document.\n",
+    });
+    const r = await searchText(
+      scope,
+      nlq("Which API id url constant is defined in source?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+    expect(r.atoms[0]?.scopePath).toBe("src/http/ApiIdUrlMapper.ts");
+    expect(r.atoms.map((atom) => atom.scopePath)).toContain("src/http/ApiIdUrlMapper.ts");
+  });
+
   // Issue #188 Case 2: exact-symbol question across a two-file scope where the named
   // symbol appears in both the defining file and a call site. exact-symbol is a substring
   // matcher (per repoSearchMatchers), so this regression locks two properties:

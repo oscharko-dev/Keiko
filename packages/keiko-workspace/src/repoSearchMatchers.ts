@@ -275,6 +275,17 @@ function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
 
+export function naturalLanguageContentTerms(
+  queryText: string,
+  caseSensitive: boolean,
+): readonly string[] {
+  const rawTokens = expandedQueryTerms(queryText, caseSensitive);
+  return uniqueStrings([
+    ...naturalLanguageContentTokens(rawTokens, caseSensitive),
+    ...technicalPhraseTerms(queryText, caseSensitive),
+  ]);
+}
+
 function isDefinitionIntentToken(token: string): boolean {
   return DEFINITION_INTENT_TOKENS.has(token.toLowerCase());
 }
@@ -421,15 +432,11 @@ function adjustedVersionDeclarationScore(
 }
 
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
-  const rawTokens = expandedQueryTerms(query.text, query.caseSensitive);
   const intentTokens = expandedQueryTerms(query.text, true);
   const normalizedTokens = naturalLanguageNormalizedTokens(intentTokens);
   // GRD-033: dedupe content tokens (as symbol/route/method tokens already are) so a repeated
   // query word does not double-count in `hits/total`, which over-rewarded prose-heavy scopes.
-  const tokens = uniqueStrings([
-    ...naturalLanguageContentTokens(rawTokens, query.caseSensitive),
-    ...technicalPhraseTerms(query.text, query.caseSensitive),
-  ]);
+  const tokens = naturalLanguageContentTerms(query.text, query.caseSensitive);
   const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
   // The ecosystem declaration-line patterns whose routing pattern matched this query (e.g. for a
   // Java question: maven.compiler/java.version; for a Go question: go/toolchain directives).
