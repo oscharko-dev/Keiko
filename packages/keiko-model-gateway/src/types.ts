@@ -28,6 +28,9 @@ export type {
   ToolDefinition,
   ResponseFormat,
   GatewayRequest,
+  GatewaySamplingParameterIssue,
+  GatewaySamplingParameterName,
+  GatewaySamplingParameters,
   NormalizedToolCall,
   UsageMetadata,
   NormalizedResponse,
@@ -44,11 +47,18 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  GATEWAY_TEMPERATURE_RANGE,
+  GATEWAY_TOP_P_RANGE,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  isValidGatewayTemperature,
+  isValidGatewayTopP,
   isConfiguredVoiceProvider,
   describeVoiceProviderAvailability,
   listVoicePersonas,
+  validateGatewaySamplingParameters,
 } from "@oscharko-dev/keiko-contracts";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
@@ -84,6 +94,15 @@ export interface ModelProviderConfig {
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
 }
 
+export interface RerankerConfig {
+  readonly modelId: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName?: string | undefined;
+  readonly timeoutMs: number;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
+}
+
 export interface OutboundHttpEgressConfig {
   readonly httpProxy?: string | undefined;
   readonly httpsProxy?: string | undefined;
@@ -106,6 +125,7 @@ export interface GatewayConfig {
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
+  readonly reranker?: RerankerConfig | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly figma?: FigmaConnectorConfig | undefined;
 }

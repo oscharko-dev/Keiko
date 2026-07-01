@@ -31,3 +31,22 @@ export function inlineField(value: string): string {
 export function inlineFields(values: readonly string[]): string[] {
   return values.map(inlineField);
 }
+
+const MARKDOWN_ACTIVE_CHARS = new Set<string>(["\\", "`", "!", "[", "]", "<", ">"]);
+
+/**
+ * Escape active Markdown syntax that can still exist after a field has been folded to one line.
+ * The literal text remains readable, but external Markdown viewers cannot turn it into links,
+ * images, fenced blocks, reference definitions, autolinks, or raw HTML.
+ */
+export function escapeMarkdownActiveSyntax(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    if (MARKDOWN_ACTIVE_CHARS.has(char)) {
+      escaped += `\\${char}`;
+    } else {
+      escaped += char;
+    }
+  }
+  return escaped;
+}

@@ -10,6 +10,8 @@ import {
   fetchCapsuleDetail,
   fetchCapsules,
   fetchCapsuleSets,
+  rebindCapsuleSourceRoot,
+  reembedCapsuleForCurrentModel,
   refreshCapsuleChangedFiles,
   renameCapsule,
   repairCapsuleFailedFiles,
@@ -53,11 +55,13 @@ describe("local knowledge BFF boundary helpers", () => {
     await startIndexing(capsuleId);
     await cancelIndexing(capsuleId);
     await connectCapsuleSource(capsuleId, scope, "Release files");
+    await rebindCapsuleSourceRoot(capsuleId, "source 1", "/new repo");
     await disconnectCapsule(capsuleId);
     await fetchCapsuleDetail(capsuleId);
     await deleteCapsule(capsuleId);
     await refreshCapsuleChangedFiles(capsuleId);
     await repairCapsuleFailedFiles(capsuleId);
+    await reembedCapsuleForCurrentModel(capsuleId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules",
@@ -98,6 +102,13 @@ describe("local knowledge BFF boundary helpers", () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/sources/source%201/root",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ rootPath: "/new repo" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules/cap%201",
       expect.objectContaining({
         method: "DELETE",
@@ -113,6 +124,13 @@ describe("local knowledge BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ capsuleId: "cap 1", mode: "repair-failed" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/reindex",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ capsuleId: "cap 1", mode: "full-reembed", force: true }),
       }),
     );
   });

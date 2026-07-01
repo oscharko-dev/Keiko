@@ -6,7 +6,7 @@
 // redactor is applied; an `edit` audit entry is recorded; and the IMMUTABLE `<runId>.qi.json`
 // manifest file is byte-identical after the edit. No network or SSE — pure function + real fs.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -380,7 +380,9 @@ describe("handleQiEditCandidate — valid edit", () => {
     const editEntries = (review?.auditLog ?? []).filter((e) => e.action === "edit");
     expect(editEntries).toHaveLength(1);
     expect(editEntries[0]?.candidateId).toBe("tc-1");
-    expect(editEntries[0]?.reviewerLabel).toBe("Alice");
+    expect(editEntries[0]?.reviewerLabel).toBe("local-operator");
+    expect(editEntries[0]?.actorId).toMatch(/^local:[a-f0-9]{16}$/);
+    expect(editEntries[0]?.selfAssertedReviewerLabel).toBe("Alice");
   });
 
   it("does NOT transition the candidate's review state on edit", async () => {
@@ -569,7 +571,7 @@ describe("handleQiEditCandidate — list-field clearing semantics", () => {
 });
 
 describe("handleQiEditCandidate — review-state preservation + observability", () => {
-  it("preserves an APPROVED candidate's review state across an edit", async () => {
+  it("moves an APPROVED candidate to changes-requested and marks revalidation after an edit", async () => {
     applyReviewDecision({
       runId: RUN_ID,
       evidenceDir,
@@ -595,11 +597,48 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
     );
     expect(result.status).toBe(200);
     const review = loadRunReviewState(RUN_ID, evidenceDir);
-    expect(review?.candidateStates["tc-1"]).toBe("approved");
+    expect(review?.candidateStates["tc-1"]).toBe("changes-requested");
     const editEntry = (review?.auditLog ?? []).find((e) => e.action === "edit");
-    // the edit audit entry records the candidate's CURRENT (approved) state on both sides
     expect(editEntry?.fromState).toBe("approved");
-    expect(editEntry?.toState).toBe("approved");
+    expect(editEntry?.toState).toBe("changes-requested");
+    expect(editEntry?.governanceFlags).toEqual(["needs-revalidation", "needs-rejudge"]);
+    expect(editEntry?.reason).toBe("candidate-edited-after-terminal-review");
+    expect((result.body as { candidate: { reviewState: string } }).candidate.reviewState).toBe(
+      "changes-requested",
+    );
+  });
+
+  it("invalidates a run-level approval when any candidate body is edited", async () => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "run",
+      reviewerLabel: "Release reviewer",
+      now: "2026-06-09T10:00:00.000Z",
+      redact: (v: unknown): unknown => v,
+    });
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { expectedResults: ["Edited expected result"] },
+            editorLabel: "Bob",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const review = loadRunReviewState(RUN_ID, evidenceDir);
+    expect(review?.runState).toBe("changes-requested");
+    expect(review?.candidateStates["tc-1"]).toBe("changes-requested");
+    const editEntry = (review?.auditLog ?? []).find((e) => e.action === "edit");
+    expect(editEntry?.fromState).toBe("approved");
+    expect(editEntry?.toState).toBe("changes-requested");
+    expect(editEntry?.governanceFlags).toEqual(["needs-revalidation", "needs-rejudge"]);
   });
 
   it("returns 404 QI_CANDIDATES_NOT_FOUND when the run exists but its candidates artifact is missing", async () => {
@@ -612,6 +651,30 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
     );
     expect(result.status).toBe(404);
     expect(errorOf(result).code).toBe("QI_CANDIDATES_NOT_FOUND");
+  });
+
+  it("returns 500 and rolls back the candidate body when the review audit write fails", async () => {
+    const reviewPath = join(evidenceDir, "qi", `${RUN_ID}.review.json`);
+    mkdirSync(reviewPath);
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "Should not survive audit failure" },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(500);
+    expect(errorOf(result).code).toBe("QI_EDIT_FAILED");
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.candidates[0]?.title).toBe("Original tc-1");
+    expect(reloaded?.editedRevisions ?? []).toHaveLength(0);
+    expect(loadRunReviewState(RUN_ID, evidenceDir)).toBeUndefined();
   });
 });
 
@@ -708,7 +771,8 @@ describe("handleQiEditCandidate — AC2 redaction attested at the persist layer"
     );
     const review = loadRunReviewState(RUN_ID, evidenceDir);
     const editEntry = (review?.auditLog ?? []).find((e) => e.action === "edit");
-    expect(editEntry?.reviewerLabel).toBe("BOB-SECRET");
+    expect(editEntry?.reviewerLabel).toBe("LOCAL-OPERATOR");
+    expect(editEntry?.selfAssertedReviewerLabel).toBe("BOB-SECRET");
   });
 });
 
@@ -816,10 +880,12 @@ describe("handleQiEditCandidate — strips bidi/zero-width/control chars before 
       steps: ["open the page", "submit"],
       tags: ["smoke"],
     });
-    // The provenance label and the `.review.json` audit label both derive from editorLabel → both clean.
+    // The provenance label and the `.review.json` display metadata both derive from editorLabel.
     expect((reloaded?.editedRevisions ?? [])[0]?.provenance.editorLabel).toBe("Alice");
     const auditLog = loadRunReviewState(RUN_ID, evidenceDir)?.auditLog ?? [];
-    expect(auditLog.find((e) => e.action === "edit")?.reviewerLabel).toBe("Alice");
+    const editAudit = auditLog.find((e) => e.action === "edit");
+    expect(editAudit?.reviewerLabel).toBe("local-operator");
+    expect(editAudit?.selfAssertedReviewerLabel).toBe("Alice");
   });
 
   it("reflects the cleaned title (no spoofing code points) on the next run-detail GET fetch", async () => {

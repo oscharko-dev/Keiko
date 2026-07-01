@@ -29,6 +29,9 @@ const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
 const PEM_PRIVATE_KEY_BLOCK_PATTERN =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
+const GERMAN_IBAN_PATTERN = /\bDE\d{2}(?:[ ]?\d{4}){4}[ ]?\d{2}\b/gi;
+const GERMAN_PHONE_PATTERN =
+  /(?<![0-9A-F-])(?:\+49|0049)(?:[ ./-]?\d){7,13}\b(?!-[0-9A-F])|(?<![0-9A-F-])0\d{1,4}[ ./-]\d(?:[ ./-]?\d){4,11}\b(?!-[0-9A-F])/gi;
 const GENERIC_API_KEY_HEADER_PATTERN = /\b(x-api-key\s*:\s*)[^\s"'`,;]+/gi;
 const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]+/gi;
 
@@ -89,6 +92,8 @@ export function redact(input: string, additionalSecrets: readonly string[] = [])
     .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
       SSH_USERINFO_SCHEME.test(scheme) ? match : `${scheme}${REDACTED}@`,
     )
+    .replace(GERMAN_IBAN_PATTERN, REDACTED)
+    .replace(GERMAN_PHONE_PATTERN, REDACTED)
     .replace(API_KEY_PATTERN, REDACTED);
   for (const pattern of BUILTIN_PATTERNS) {
     output = output.replace(pattern, REDACTED);

@@ -46,6 +46,7 @@ import {
 import {
   DEFAULT_RETRIEVAL_TOP_K,
   MAX_RETRIEVAL_TOP_K,
+  type QueryTransformer,
   type RetrievalNoEvidenceReason,
   type RetrievalQuery,
   type RetrievalResult,
@@ -54,6 +55,7 @@ import {
 export interface RetrievalDependencies {
   readonly store: KnowledgeStore;
   readonly embeddingAdapter: OpenAIEmbeddingAdapter;
+  readonly queryTransformer?: QueryTransformer;
   // Optional cancellation. Honoured by the embedding adapter; the store reads are
   // synchronous so they cannot be interrupted, only the model call.
   readonly signal?: AbortSignal;
@@ -75,6 +77,8 @@ export async function runLocalKnowledgeRetrieval(
   const search = await searchVectorsForScope(deps.store, deps.embeddingAdapter, scope, trimmed, {
     topK,
     ...(query.minScore !== undefined ? { minScore: query.minScore } : {}),
+    ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
+    ...(deps.queryTransformer !== undefined ? { queryTransformer: deps.queryTransformer } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
   });
 
@@ -187,6 +191,7 @@ function finaliseWithGrounding(
       references: [],
       noEvidence: true,
       reason: "answer-grounding-rejected",
+      diagnostics: search.diagnostics,
     };
   }
   if (search.references.length === 0) {
@@ -204,12 +209,14 @@ function finaliseWithGrounding(
       references: [],
       noEvidence: true,
       ...(reason !== undefined ? { reason } : {}),
+      diagnostics: search.diagnostics,
     };
   }
   return {
     references: search.references,
     noEvidence: false,
     ...(search.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
+    diagnostics: search.diagnostics,
   };
 }
 

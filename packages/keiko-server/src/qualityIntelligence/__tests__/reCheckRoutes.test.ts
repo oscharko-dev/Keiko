@@ -47,6 +47,7 @@ import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { ingestInlineSources } from "../runIngestion.js";
 import { handleQiReCheck, handleQiRegenerateStale } from "../reCheckRoutes.js";
+import { applyReviewDecision, candidateReviewStateOf, loadRunReviewState } from "../reviewStore.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -962,7 +963,15 @@ describe("handleQiRegenerateStale — carries model provenance forward (Issue #7
     expect(manifest?.status).toBe("succeeded");
     // The regeneration ran a model, so the merged run is model-attributed (not the baseline path).
     expect(manifest?.modelId).toBe(MODEL_ID);
-    expect(manifest?.modelParameters).toEqual({ responseFormat: "json_schema" });
+    expect(manifest?.modelParameters).toEqual({
+      temperature: 0,
+      topP: 1,
+      responseFormat: "json_schema",
+      responseFormatEnforced: true,
+      judgeTemperature: 0,
+      judgeSeedUsed: false,
+      judgeResponseFormat: "json_schema",
+    });
     // No seed flows through the regenerate path, so a model run records seedUsed: null (not absent).
     expect(manifest?.seedUsed).toBeNull();
   });
@@ -1595,6 +1604,24 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
         },
       ],
     });
+    for (const candidateId of ["cand-preserved", "cand-stale"]) {
+      applyReviewDecision({
+        runId,
+        evidenceDir,
+        action: "approve",
+        scope: "candidate",
+        candidateId,
+        reviewerLabel: "Release reviewer",
+        actor: {
+          actorId: "release-reviewer",
+          displayLabel: "Release reviewer",
+          source: "test",
+          kind: "human",
+        },
+        now: "2026-06-09T10:03:00.000Z",
+        redact: (value: unknown): unknown => value,
+      });
+    }
 
     const result = asResult(
       await handleQiRegenerateStale(
@@ -1630,6 +1657,28 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
     expect(artifact?.editedRevisions?.map((revision) => revision.candidateId)).toEqual([
       "cand-preserved",
     ]);
+    const review = loadRunReviewState(body.runId, evidenceDir);
+    expect(review?.runId).toBe(body.runId);
+    expect(candidateReviewStateOf(review, "cand-preserved")).toBe("approved");
+    expect(candidateReviewStateOf(review, "cand-stale")).toBe("open");
+    expect(review?.auditLog).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "regenerate-preserved",
+          candidateId: "cand-preserved",
+          sourceRunId: runId,
+          fromState: "approved",
+          toState: "approved",
+        }),
+        expect.objectContaining({
+          action: "regenerate-reopened",
+          candidateId: "cand-stale",
+          sourceRunId: runId,
+          fromState: "approved",
+          toState: "open",
+        }),
+      ]),
+    );
   });
 });
 

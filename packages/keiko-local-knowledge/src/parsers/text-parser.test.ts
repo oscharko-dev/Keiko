@@ -1,4 +1,5 @@
 import type { ParsedUnit } from "@oscharko-dev/keiko-contracts";
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -100,6 +101,41 @@ describe("textParser", () => {
     expect(asSection(result.units[0]).sectionPath).toEqual(["Hello"]);
   });
 
+  it("recognizes Setext headings", () => {
+    const doc = "Title\n=====\n\nBody\n\nSub\n---\nMore\n";
+    const result = textParser.parse(
+      selectionFromText(doc, { extension: "md", mediaType: "text/markdown" }),
+      frozenAt(0),
+    );
+    const paths = result.units
+      .filter((unit) => unit.kind === "section")
+      .map((unit) => asSection(unit).sectionPath);
+    expect(paths).toEqual([["Title"], ["Title", "Sub"]]);
+  });
+
+  it("does not split sections on headings inside fenced code blocks", () => {
+    const doc = "# Title\n\n```md\n# Not a heading\n```\n\n## Next\nBody\n";
+    const result = textParser.parse(
+      selectionFromText(doc, { extension: "md", mediaType: "text/markdown" }),
+      frozenAt(0),
+    );
+    const paths = result.units
+      .filter((unit) => unit.kind === "section")
+      .map((unit) => asSection(unit).sectionPath);
+    expect(paths).toEqual([["Title"], ["Title", "Next"]]);
+  });
+
+  it("emits markdown table data rows as csv-row units", () => {
+    const doc = "# Prices\n\n| Name | Price |\n| --- | ---: |\n| A | 42 |\n";
+    const result = textParser.parse(
+      selectionFromText(doc, { extension: "md", mediaType: "text/markdown" }),
+      frozenAt(0),
+    );
+    expect(result.units).toContainEqual(
+      expect.objectContaining({ kind: "csv-row", tableName: "markdown-table", rowIndex: 0 }),
+    );
+  });
+
   it("refuses oversize files with OVERSIZED_FILE diagnostic and zero units", () => {
     const big = encode("x".repeat(100));
     const result = textParser.parse(selectionFromBytes(big, { extension: "txt" }), {
@@ -153,5 +189,24 @@ describe("textParser", () => {
       frozenAt(0),
     );
     expect(asSection(result.units[0]).sectionPath).toEqual(["Title"]);
+  });
+
+  it("decodes UTF-16 LE text without a BOM", () => {
+    const bytes = Buffer.from("# Über\n\nGröße\n", "utf16le");
+    const result = textParser.parse(
+      selectionFromBytes(Uint8Array.from(bytes), { extension: "md", mediaType: "text/markdown" }),
+      frozenAt(0),
+    );
+    expect((result as { readonly normalizedText?: string }).normalizedText).toContain("Über");
+    expect(asSection(result.units[0]).sectionPath).toEqual(["Über"]);
+  });
+
+  it("falls back to Windows-1252 for non-UTF-8 text bytes", () => {
+    const bytes = Uint8Array.from(Buffer.from("Größe: 42", "latin1"));
+    const result = textParser.parse(
+      selectionFromBytes(bytes, { extension: "txt", mediaType: "text/plain" }),
+      frozenAt(0),
+    );
+    expect((result as { readonly normalizedText?: string }).normalizedText).toBe("Größe: 42");
   });
 });

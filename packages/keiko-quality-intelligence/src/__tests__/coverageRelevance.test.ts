@@ -28,6 +28,34 @@ describe("buildCoverageMap", () => {
     expect(map.runId).toBe(fixture.runId);
   });
 
+  it("does not create coverage for candidates marked with unverified provenance", () => {
+    const runId = QualityIntelligence.asQualityIntelligenceRunId("run-unverified-provenance");
+    const atom = makeAtom("atom-unverified");
+    const candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate = {
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("tc-unverified"),
+      runId,
+      derivedFromAtomIds: [],
+      title: "Unverified generated candidate",
+      preconditions: [],
+      steps: ["Execute the unverified candidate."],
+      expectedResults: ["The expected result remains manually reviewable."],
+      priority: "P2",
+      riskClass: "functional",
+      tags: ["provenance-unverified"],
+      status: "needs-review",
+    };
+
+    const map = buildCoverageMap({
+      runId,
+      atoms: [atom],
+      candidates: [candidate],
+    });
+    expect(map.mappings).toEqual([]);
+    const statuses = buildAtomCoverageStatuses([atom], map);
+    expect(statuses[0]?.status).toBe("uncovered");
+    expect(statuses[0]?.coveringCandidateIds).toEqual([]);
+  });
+
   it("links each atom to its derived candidate with confidence in [0, 1]", () => {
     const fixture = loadFixture("regressionRequirement.synthetic.json");
     const intent = deriveIntent(fixture.envelopes, regressionDefault);
@@ -415,5 +443,46 @@ describe("buildCoverageMap — coverage is not diluted by run size (regression f
     const statuses = buildAtomCoverageStatuses(atoms, map);
     expect(statuses.every((s) => s.status === "weakly-covered")).toBe(true);
     expect(runCoveragePercentage(statuses)).toBe(0);
+  });
+
+  it("downgrades uncorroborated explicit citations when canonical atom text is available", () => {
+    const atom = makeAtom("atom-iban");
+    const candidate = makeCandidate("tc-spurious", ["atom-iban"]);
+    const map = buildCoverageMap({
+      runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+      atoms: [atom],
+      candidates: [candidate],
+      atomTextById: new Map([
+        [
+          "atom-iban",
+          "IBAN-Empfänger muss vor der Überweisung gegen die Sperrliste geprüft werden.",
+        ],
+      ]),
+    });
+    const statuses = buildAtomCoverageStatuses([atom], map);
+    expect(statuses[0]?.status).toBe("weakly-covered");
+    expect(statuses[0]?.coveringCandidateIds.map(String)).toEqual(["tc-spurious"]);
+    expect(runCoveragePercentage(statuses)).toBe(0);
+  });
+
+  it("keeps a dedicated citation covered when candidate text corroborates the atom", () => {
+    const atom = makeAtom("atom-tan");
+    const candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate = {
+      ...makeCandidate("tc-tan", ["atom-tan"]),
+      title: "TAN Sperrliste bei Überweisung prüfen",
+      steps: ["Erfasse eine Überweisung mit TAN und prüfe die Sperrliste."],
+      expectedResults: ["Die TAN-Überweisung wird gegen die Sperrliste validiert."],
+    };
+    const map = buildCoverageMap({
+      runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+      atoms: [atom],
+      candidates: [candidate],
+      atomTextById: new Map([
+        ["atom-tan", "TAN muss vor Ausführung der Überweisung gegen die Sperrliste laufen."],
+      ]),
+    });
+    const statuses = buildAtomCoverageStatuses([atom], map);
+    expect(statuses[0]?.status).toBe("covered");
+    expect(runCoveragePercentage(statuses)).toBe(100);
   });
 });

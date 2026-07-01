@@ -8,6 +8,7 @@ import { CancelledError, UnknownModelError } from "@oscharko-dev/keiko-security/
 import { findConfiguredCapability } from "./model-selection.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
+import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
   Clock,
   CircuitBreakerStatus,
@@ -47,6 +48,7 @@ export class Gateway {
 
   async chat(request: GatewayRequest): Promise<NormalizedResponse> {
     const route = this.route(request.modelId);
+    assertValidGatewaySamplingParameters(request);
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const start = this.clock.now();
@@ -78,6 +80,7 @@ export class Gateway {
   // single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
     const route = this.route(request.modelId);
+    assertValidGatewaySamplingParameters(request);
     const breaker = this.breakerFor(route.provider);
     breaker.assertAllowed();
     const requestId = randomUUID();

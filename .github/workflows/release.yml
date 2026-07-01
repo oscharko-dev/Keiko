@@ -118,4 +118,5 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"

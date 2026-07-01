@@ -1,0 +1,182 @@
+{
+  "issue": 1696,
+  "epic": 1687,
+  "verdict": "PASS",
+  "cssSha256": "bb4d57273cf58d823d435a346feb87400145bcb0636348a22eefb17027e2585f",
+  "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
+  "route": "/",
+  "appPath": "packaged-cli-ui",
+  "generatedAt": "2026-06-30T17:11:30.507Z",
+  "captures": [
+    {
+      "file": "01-update-window-dark.png",
+      "mode": "dark",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "normal-update"
+    },
+    {
+      "file": "11-progress-state.png",
+      "mode": "dark",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "progress"
+    },
+    {
+      "file": "02-update-window-light.png",
+      "mode": "light",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "light",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "normal-update"
+    },
+    {
+      "file": "03-update-window-dark-high-contrast.png",
+      "mode": "dark-high-contrast",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "normal-update"
+    },
+    {
+      "file": "04-update-window-light-high-contrast.png",
+      "mode": "light-high-contrast",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "light",
+      "dataHc": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "normal-update"
+    },
+    {
+      "file": "05-update-window-prefers-contrast.png",
+      "mode": "prefers-contrast",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "normal-update"
+    },
+    {
+      "file": "06-update-window-forced-colors.png",
+      "mode": "forced-colors",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "active",
+      "reducedMotion": "no-preference",
+      "state": "normal-update"
+    },
+    {
+      "file": "07-update-window-reduced-motion.png",
+      "mode": "reduced-motion",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 1440,
+        "height": 980
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "reduce",
+      "state": "normal-update"
+    },
+    {
+      "file": "08-startup-notice-critical.png",
+      "mode": "dark",
+      "entrypoint": "startup",
+      "viewport": {
+        "width": 1280,
+        "height": 900
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "critical-startup-notice"
+    },
+    {
+      "file": "10-responsive-manual-path.png",
+      "mode": "dark",
+      "entrypoint": "settings",
+      "viewport": {
+        "width": 680,
+        "height": 900
+      },
+      "dataTheme": "dark",
+      "dataHc": null,
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "state": "responsive-manual-path"
+    }
+  ],
+  "assertions": {
+    "settingsEntryPointVisible": true,
+    "startupNoticeCriticalAlertVisible": true,
+    "updatesOpenedOnlyThroughSettingsOrStartup": true,
+    "normalUpdateStatusBeforeDetails": true,
+    "stateImpactVisible": true,
+    "remediationVisible": true,
+    "patchNotesCollapsedByDefault": true,
+    "technicalDetailsCollapsedByDefault": true,
+    "focusMovesToLoadedTitle": true,
+    "progressUsesNativeProgressAndLiveStatus": true,
+    "manualPathIsNotRenderedAsError": true,
+    "sevenModeThemeCoverage": 7
+  },
+  "artifacts": [
+    "01-update-window-dark.png",
+    "02-update-window-light.png",
+    "03-update-window-dark-high-contrast.png",
+    "04-update-window-light-high-contrast.png",
+    "05-update-window-prefers-contrast.png",
+    "06-update-window-forced-colors.png",
+    "07-update-window-reduced-motion.png",
+    "08-startup-notice-critical.png",
+    "09-settings-entrypoint.png",
+    "10-responsive-manual-path.png",
+    "11-progress-state.png",
+    "update-experience-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ]
+}

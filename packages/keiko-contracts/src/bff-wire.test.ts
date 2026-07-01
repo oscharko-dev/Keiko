@@ -517,12 +517,26 @@ describe("local-knowledge multi-source contract (#189)", () => {
           citationCount: 1,
           referenceBudget: 8,
           referencesUsed: 1,
+          reranker: {
+            status: "applied",
+            candidateCount: 100,
+            documentCount: 100,
+            keptCount: 8,
+            latencyMs: 12,
+          },
+        },
+        reranker: {
+          status: "applied",
+          candidateCount: 100,
+          documentCount: 100,
+          keptCount: 8,
         },
       },
     };
     const answer: GroundedAnswer = hybrid;
     expect(answer.groundingKind).toBe("hybrid");
     expect(citation.source).toBe("Capsule A");
+    expect(hybrid.contextPack.reranker?.status).toBe("applied");
   });
 });
 
@@ -536,8 +550,8 @@ describe("GroundingLimits defaults and back-compat constants", () => {
     expect(DEFAULT_GROUNDING_LIMITS.maxLocalKnowledgeSources).toBe(16);
   });
 
-  it("DEFAULT_GROUNDING_LIMITS.maxPromptReferences is 8", () => {
-    expect(DEFAULT_GROUNDING_LIMITS.maxPromptReferences).toBe(8);
+  it("DEFAULT_GROUNDING_LIMITS.maxPromptReferences is 16", () => {
+    expect(DEFAULT_GROUNDING_LIMITS.maxPromptReferences).toBe(16);
   });
 
   it("DEFAULT_GROUNDING_LIMITS.maxExcerptChars is 900", () => {
@@ -548,8 +562,8 @@ describe("GroundingLimits defaults and back-compat constants", () => {
     expect(DEFAULT_GROUNDING_LIMITS.referenceBudget).toBe(10);
   });
 
-  it("DEFAULT_GROUNDING_LIMITS.hybridMaxCandidates is 24", () => {
-    expect(DEFAULT_GROUNDING_LIMITS.hybridMaxCandidates).toBe(24);
+  it("DEFAULT_GROUNDING_LIMITS.hybridMaxCandidates is 100", () => {
+    expect(DEFAULT_GROUNDING_LIMITS.hybridMaxCandidates).toBe(100);
   });
 
   it("DEFAULT_GROUNDING_LIMITS.hybridMaxExcerptBytes is 131072", () => {

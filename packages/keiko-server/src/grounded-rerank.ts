@@ -3,6 +3,8 @@
 // candidates are ranked among themselves; RRF fuses by rank; a shared budget then selects globally
 // so neither engine structurally dominates. Deterministic. See ADR-0036.
 
+import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
+
 export const RRF_K = 60;
 
 export type RerankKind = "folder" | "connector";
@@ -29,6 +31,7 @@ export interface SelectedCandidate<P> {
   readonly engineRank: number; // 1-based within its engine
   readonly fusedScore: number; // quantized RRF score
   readonly marker: number; // 1-based GLOBAL marker assigned in final selection order
+  readonly rerankerScore?: number | undefined;
   readonly payload: P;
 }
 
@@ -121,4 +124,45 @@ export function rerankAndSelect<P>(
   }
 
   return selected;
+}
+
+function withFinalMarkers<P>(
+  candidates: readonly SelectedCandidate<P>[],
+): readonly SelectedCandidate<P>[] {
+  return candidates.map((candidate, index) => ({ ...candidate, marker: index + 1 }));
+}
+
+export function selectTopPromptCandidates<P>(
+  candidates: readonly SelectedCandidate<P>[],
+  topN: number,
+): readonly SelectedCandidate<P>[] {
+  if (topN <= 0) return [];
+  return withFinalMarkers(candidates.slice(0, topN));
+}
+
+// eslint-disable-next-line complexity
+export function applyModelRerankResults<P>(
+  candidates: readonly SelectedCandidate<P>[],
+  results: readonly RerankResult[],
+  topN: number,
+): readonly SelectedCandidate<P>[] | undefined {
+  if (candidates.length === 0) return [];
+  if (results.length === 0 || topN <= 0) return undefined;
+  const used = new Set<number>();
+  const reranked: SelectedCandidate<P>[] = [];
+  for (const result of results) {
+    if (!Number.isInteger(result.index) || result.index < 0 || result.index >= candidates.length) {
+      return undefined;
+    }
+    if (used.has(result.index)) return undefined;
+    const candidate = candidates[result.index];
+    if (candidate === undefined) return undefined;
+    used.add(result.index);
+    reranked.push(
+      result.relevanceScore === undefined
+        ? candidate
+        : { ...candidate, rerankerScore: result.relevanceScore },
+    );
+  }
+  return withFinalMarkers(reranked.slice(0, topN));
 }

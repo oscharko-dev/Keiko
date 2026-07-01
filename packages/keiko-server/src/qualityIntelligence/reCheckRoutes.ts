@@ -53,12 +53,14 @@ import type {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import { currentRedactionSecrets, type UiHandlerDeps } from "../deps.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
+import { extractQiDocumentText } from "./documentTextExtractor.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
+import { migrateReviewStateForRegeneration } from "./reviewStore.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
@@ -391,6 +393,15 @@ function toCandidateFindingRow(
     kind: finding.kind,
     severity: finding.severity,
     summaryRedacted: finding.summary,
+    ...(finding.evidenceAtomIds.length > 0
+      ? { evidenceAtomIds: finding.evidenceAtomIds.map(String) }
+      : {}),
+    ...("category" in finding && typeof finding.category === "string"
+      ? { category: finding.category }
+      : {}),
+    ...("confidence" in finding && typeof finding.confidence === "number"
+      ? { confidence: finding.confidence }
+      : {}),
     ...(finding.candidateId !== undefined ? { candidateId: String(finding.candidateId) } : {}),
   };
 }
@@ -422,6 +433,7 @@ function buildCoverageGapFindingRow(
     kind: "coverage-gap",
     severity,
     summaryRedacted,
+    evidenceAtomIds: Object.freeze([String(atomStatus.atomId)]),
   });
 }
 
@@ -503,6 +515,7 @@ async function ingestSourcesForDrift(
   sources: readonly QI.QualityIntelligenceInlineSource[],
   ingestRunId: string,
   deps: UiHandlerDeps,
+  signal: AbortSignal | undefined,
 ): Promise<IngestionOutcome> {
   try {
     return {
@@ -517,6 +530,8 @@ async function ingestSourcesForDrift(
         // write-once runId can never drift under its own identity (#735). Generate keeps pinning.
         figmaSnapshotLoader: makeFigmaSnapshotLoader(deps, { resolveLatestByScope: true }),
         figmaVision: makeFigmaVisionHintProvider(deps),
+        documentTextExtractor: extractQiDocumentText,
+        ...(signal === undefined ? {} : { signal }),
       }),
     };
   } catch (error) {
@@ -576,12 +591,13 @@ async function computeDrift(
   id: string,
   ingestRunId: string,
   deps: UiHandlerDeps,
+  signal?: AbortSignal,
 ): Promise<DriftOutcome> {
   const parsed = await parseSources(req);
   if (!parsed.ok) return { ok: false, result: parsed.result };
   const loaded = loadManifestForDrift(id, evidenceDir);
   if (!loaded.ok) return { ok: false, result: loaded.result };
-  const ingested = await ingestSourcesForDrift(parsed.sources, ingestRunId, deps);
+  const ingested = await ingestSourcesForDrift(parsed.sources, ingestRunId, deps, signal);
   if (!ingested.ok) return { ok: false, result: ingested.result };
   const oldArtifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
   if (oldArtifact === undefined && loaded.manifest.totals.candidates > 0) {
@@ -1203,7 +1219,15 @@ function buildCoverageArtifacts(
   readonly coverageGapRows: readonly QualityIntelligenceFindingRow[];
 } {
   const atoms = ingestion.ingestedAtoms.map((entry) => entry.atom);
-  const coverageMap = buildCoverageMap({ runId, atoms, candidates: mergedCandidates });
+  const atomTextById = new Map(
+    ingestion.ingestedAtoms.map((entry) => [String(entry.atom.id), entry.canonicalText] as const),
+  );
+  const coverageMap = buildCoverageMap({
+    runId,
+    atoms,
+    candidates: mergedCandidates,
+    atomTextById,
+  });
   const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
   const excerptByAtomId = excerptsByAtomId(ingestion.ingestedAtoms);
   return {
@@ -1538,6 +1562,15 @@ function persistRegenerationResult(args: {
     regeneratedManifest: args.regenerated.manifest,
     completedAt: args.regenerated.completedAt,
   });
+  migrateReviewStateForRegeneration({
+    oldRunId: args.drift.manifest.runId,
+    newRunId: args.newRunId,
+    evidenceDir: args.evidenceDir,
+    preservedCandidateIds: args.narrowed.preservedCandidates.map((candidate) => candidate.id),
+    staleCandidateIds: [...args.narrowed.staleIds],
+    now: args.regenerated.completedAt,
+    redact: args.deps.redactor,
+  });
 }
 
 function regenerationSuccessResult(args: {
@@ -1619,19 +1652,31 @@ export async function handleQiReCheck(
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
   try {
-    const drift = await computeDrift(ctx.req, evidenceDir, id, `qi-recheck-${id}`, deps);
-    if (!drift.ok) return drift.result;
-    const { staleness } = drift.value;
-    return {
-      status: 200,
-      body: {
-        runId: id,
-        staleCount: staleness.changedStale.length + staleness.orphanedStale.length,
-        fresh: staleness.fresh,
-        changedStale: staleness.changedStale,
-        orphanedStale: staleness.orphanedStale,
-      },
-    };
+    const abortScope = requestAbortSignal(ctx);
+    try {
+      const drift = await computeDrift(
+        ctx.req,
+        evidenceDir,
+        id,
+        `qi-recheck-${id}`,
+        deps,
+        abortScope.signal,
+      );
+      if (!drift.ok) return drift.result;
+      const { staleness } = drift.value;
+      return {
+        status: 200,
+        body: {
+          runId: id,
+          staleCount: staleness.changedStale.length + staleness.orphanedStale.length,
+          fresh: staleness.fresh,
+          changedStale: staleness.changedStale,
+          orphanedStale: staleness.orphanedStale,
+        },
+      };
+    } finally {
+      abortScope.dispose();
+    }
   } catch {
     return errorResult(
       500,
@@ -1659,7 +1704,7 @@ export async function handleQiRegenerateStale(
   const requestedAt = new Date().toISOString();
   const abortScope = requestAbortSignal(ctx);
   try {
-    const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps);
+    const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps, abortScope.signal);
     if (!drift.ok) return drift.result;
     return await regenerateFromDrift({
       deps,

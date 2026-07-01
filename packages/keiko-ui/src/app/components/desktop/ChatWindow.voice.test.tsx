@@ -645,7 +645,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(box.querySelector('[role="status"][aria-atomic="true"]')).toBeNull();
   });
 
-  it("entering dialogue mode reduces the composer to voice stop and microphone mute controls", async () => {
+  it("entering dialogue mode keeps context controls while hiding send-only actions", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
@@ -660,6 +660,8 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
     expect(box).toHaveClass("cmp-box-voice-dialog");
+    expect(within(box).getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+    expect(within(box).getByRole("button", { name: "Attach file" })).toBeInTheDocument();
     expect(within(box).getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(
       within(box).getByRole("button", { name: "Mute voice dialogue microphone" }),

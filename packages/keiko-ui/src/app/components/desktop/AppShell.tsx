@@ -59,6 +59,7 @@ import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
 import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
+import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 
@@ -759,6 +760,11 @@ function AppShellInner(): ReactNode {
   });
   const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
   const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
+  const updateStartupReady = ws.wins !== null && !session.loading && !needsGatewaySetup;
+  const openUpdatesFromStartup = useCallback((): void => {
+    const createdId = ws.api.add("updates", { entrypoint: "startup" });
+    if (createdId !== null) focusCreatedWindow(createdId);
+  }, [ws.api]);
 
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
@@ -795,7 +801,12 @@ function AppShellInner(): ReactNode {
                 />
               )}
               <div className="stage" id="main" tabIndex={-1}>
-                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode}>
+                  <UpdateStartupNotice
+                    ready={updateStartupReady}
+                    openUpdates={openUpdatesFromStartup}
+                  />
+                </Workspace>
                 {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
                 {sourceConnectionNotice !== null && (

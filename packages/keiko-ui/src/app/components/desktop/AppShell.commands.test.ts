@@ -348,6 +348,19 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(commands.find((c) => c.id === "open-project")).toBeUndefined();
   });
 
+  it("does not expose the governed Updates surface through global commands", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "open-updates")).toBeUndefined();
+    expect(commands.find((c) => c.id === "new-updates")).toBeUndefined();
+  });
+
   it("does not expose the hidden Keiko Digital Twin surface through commands", () => {
     const commands = buildAppShellCommands(
       fakeApi(),

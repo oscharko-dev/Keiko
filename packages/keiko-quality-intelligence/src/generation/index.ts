@@ -31,6 +31,8 @@ export {
 
 export {
   splitRequirementsIntoAtoms,
+  splitRequirementsIntoAtomsWithStats,
   type IngestedRequirementAtom,
   type SplitRequirementsOptions,
+  type SplitRequirementsResult,
 } from "./requirementsIngestion.js";

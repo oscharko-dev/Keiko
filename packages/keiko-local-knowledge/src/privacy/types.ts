@@ -42,6 +42,7 @@ export type CapsuleAuditEvent =
   | CapsuleDeletedEvent
   | CapsuleSourceAddedEvent
   | CapsuleSourceRemovedEvent
+  | CapsuleSourceReboundEvent
   | IndexingJobStartedEvent
   | IndexingJobCompletedEvent
   | IndexingJobFailedEvent
@@ -77,6 +78,15 @@ export interface CapsuleSourceRemovedEvent {
   readonly kind: "source-removed";
   readonly capsuleId: KnowledgeCapsuleId;
   readonly sourceId: KnowledgeSourceId;
+  readonly occurredAt: number;
+}
+
+export interface CapsuleSourceReboundEvent {
+  readonly kind: "source-rebound";
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
+  readonly previousScopeKind: string;
+  readonly currentScopeKind: string;
   readonly occurredAt: number;
 }
 

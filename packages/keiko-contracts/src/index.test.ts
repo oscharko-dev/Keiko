@@ -57,6 +57,9 @@ import {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
   normalizePdfCitationPreviewMarkerIndex,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  validateGatewaySamplingParameters,
 } from "./index.js";
 import type {
   ConnectedContextPack,
@@ -125,6 +128,7 @@ import type {
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
+  GatewayRequest,
   GitDeliveryActionEnvelope,
   GitDeliveryResolvedInputs,
   GitDeliveryConstraint,
@@ -181,6 +185,36 @@ describe("keiko-contracts package surface", () => {
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
     expect(HARNESS_CODES.LIMIT_ITERATIONS).toBe("HARNESS_LIMIT_ITERATIONS");
+  });
+
+  it("accepts legacy gateway requests without sampling parameters", () => {
+    const request: GatewayRequest = {
+      modelId: "plain-chat",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    expect(isValidGatewaySamplingParameters(request)).toBe(true);
+    expect(validateGatewaySamplingParameters(request)).toEqual([]);
+  });
+
+  it("accepts deterministic gateway sampling parameters", () => {
+    const request: GatewayRequest = {
+      modelId: "deterministic-chat",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0,
+      topP: 1,
+    };
+    expect(isValidGatewaySamplingParameters(request)).toBe(true);
+    expect(() => {
+      assertValidGatewaySamplingParameters(request);
+    }).not.toThrow();
+  });
+
+  it("rejects invalid gateway sampling parameters", () => {
+    const issues = validateGatewaySamplingParameters({ temperature: -0.1, topP: 1.1 });
+    expect(issues.map((issue) => issue.parameter)).toEqual(["temperature", "topP"]);
+    expect(() => {
+      assertValidGatewaySamplingParameters({ temperature: Number.NaN });
+    }).toThrow(RangeError);
   });
 
   it("DEFAULT_LIMITS.maxIterations is 10", () => {
@@ -379,7 +413,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(15);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(19);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
@@ -387,11 +421,13 @@ describe("keiko-contracts package surface", () => {
     expect(KNOWLEDGE_CAPSULE_DDL[0]).toBe("PRAGMA foreign_keys = ON;");
     expect(KNOWLEDGE_CAPSULE_TABLES).toContain("capsules");
     expect(KNOWLEDGE_CAPSULE_TABLES).toContain("document_blobs");
+    expect(KNOWLEDGE_CAPSULE_TABLES).toContain("chunk_lexical_index");
     expect(KNOWLEDGE_CAPSULE_TABLES).toContain("vectors");
     expect(KNOWLEDGE_CAPSULE_INDEXES.length).toBeGreaterThan(0);
     expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_vectors_capsule_identity");
     expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_sections_document_section_path_hash");
     expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_document_blobs_created_document");
+    expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_chunk_lexical_capsule_document");
     expect(KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.version).toBe(1);
     expect(DELETE_CAPSULE_SQL).toContain("DELETE FROM capsules");
     expect(typeof validateCapsuleRowShape).toBe("function");

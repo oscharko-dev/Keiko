@@ -46,6 +46,8 @@ import {
 import {
   assertCompatibleEmbeddingIdentity,
   verifyEmbeddingCapability,
+  type EmbeddingCapabilityCheck,
+  type EmbeddingProbeOptions,
 } from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
@@ -54,7 +56,7 @@ import {
   deleteChunksForDocument,
   hasStaleChunksForDocument,
 } from "../chunking/chunker-persist.js";
-import { chunkingStrategyKey } from "../chunking/index.js";
+import { chunkingStrategyKey, type ChunkingOptions } from "../chunking/index.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "../discovery/index.js";
@@ -89,6 +91,11 @@ import {
   selectChunksForDocument,
 } from "./vector-persist.js";
 import {
+  countLexicalRowsForDocument,
+  deleteLexicalRowsForDocument,
+  replaceLexicalRowsForDocument,
+} from "./lexical-index-persist.js";
+import {
   DEFAULT_INDEXING_BATCH_SIZE,
   DEFAULT_INDEXING_CONCURRENCY,
   IndexingError,
@@ -97,6 +104,16 @@ import {
   type IndexingOptions,
   type IndexingResult,
 } from "./types.js";
+import {
+  boundedDocumentContext,
+  contextualizeChunk,
+  contextualRetrievalStrategyKey,
+} from "./contextual-retrieval.js";
+import {
+  persistChunkIndexedText,
+  readStoredAugmentedText,
+  type StoredChunkIndexedTextColumns,
+} from "./chunk-indexed-text-persist.js";
 
 // ─── Abort helper ─────────────────────────────────────────────────────────────
 // Reads `signal?.aborted` through a function call so TypeScript's control-flow analysis
@@ -137,6 +154,14 @@ function resolvedDiscoveryOptions(state: RunState): DiscoveryOptions {
   };
   const signal = raw?.signal ?? state.options.signal;
   return signal === undefined ? base : { ...base, signal };
+}
+
+function chunkingOptionsForState(state: RunState): ChunkingOptions | undefined {
+  const indexingTextStrategyKey = contextualRetrievalStrategyKey(state.options.contextualRetrieval);
+  if (state.options.chunkingOptions === undefined && state.options.contextualRetrieval?.enabled !== true) {
+    return undefined;
+  }
+  return { ...(state.options.chunkingOptions ?? {}), indexingTextStrategyKey };
 }
 
 // ─── Source resolution ────────────────────────────────────────────────────────
@@ -220,12 +245,18 @@ function clearDocumentArtifacts(
 ): void {
   deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
   if (options.deleteChunks) {
+    deleteLexicalRowsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
     deleteChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId);
   }
 }
 
 function markDocumentFailed(state: RunState, documentId: DocumentId): void {
-  updateDocumentStatusRow(state.options.store._internal.db, state.capsule.id, documentId, "failed");
+  updateDocumentStatusRow(
+    state.options.store._internal.db,
+    state.capsule.id,
+    documentId,
+    "failed",
+  );
 }
 
 // ─── Per-chunk text projection ────────────────────────────────────────────────
@@ -242,12 +273,19 @@ interface ChunkProjectionRow {
   readonly document_id: string;
   readonly parsed_unit_id: string;
   readonly order_index: number;
+  readonly safe_excerpt_hash: string;
   readonly char_start: number | null;
   readonly char_end: number | null;
+  readonly contextual_retrieval_key: string | null;
+  readonly context_prefix: string | null;
+  readonly augmented_text: string | null;
+  readonly context_status: string | null;
 }
 
 const SELECT_CHUNKS_WITH_OFFSETS_SQL = [
   "SELECT c.id, c.capsule_id, c.source_id, c.document_id, c.parsed_unit_id, c.order_index,",
+  "  c.safe_excerpt_hash, c.contextual_retrieval_key, c.context_prefix,",
+  "  c.augmented_text, c.context_status,",
   "  COALESCE(c.character_start, pu.character_start) AS char_start,",
   "  COALESCE(c.character_end, pu.character_end) AS char_end",
   "FROM chunks AS c",
@@ -266,26 +304,167 @@ function selectChunkProjections(
   return rows as unknown as readonly ChunkProjectionRow[];
 }
 
-function projectChunksToEmbed(
+function storedColumns(row: ChunkProjectionRow): StoredChunkIndexedTextColumns {
+  return {
+    contextual_retrieval_key: row.contextual_retrieval_key,
+    context_prefix: row.context_prefix,
+    augmented_text: row.augmented_text,
+    context_status: row.context_status,
+  };
+}
+
+function expectedContextualKey(state: RunState, row: ChunkProjectionRow): string {
+  return `${contextualRetrievalStrategyKey(state.options.contextualRetrieval)}|chunk=${row.safe_excerpt_hash}`;
+}
+
+function readStoredChunkToEmbed(
   state: RunState,
   documentId: DocumentId,
-  sourceText: string,
-): readonly ChunkToEmbed[] {
+  row: ChunkProjectionRow,
+): ChunkToEmbed | undefined {
+  const text = readStoredAugmentedText(
+    state.options.store._internal.contentCipher,
+    storedColumns(row),
+    expectedContextualKey(state, row),
+  );
+  if (text === undefined) return undefined;
+  return {
+    id: row.id as ChunkId,
+    capsuleId: row.capsule_id as ChunkToEmbed["capsuleId"],
+    sourceId: row.source_id as KnowledgeSourceId,
+    documentId,
+    text,
+  };
+}
+
+function storedChunksToEmbed(
+  state: RunState,
+  documentId: DocumentId,
+): readonly ChunkToEmbed[] | undefined {
   const projections = selectChunkProjections(state, documentId);
   const out: ChunkToEmbed[] = [];
   for (const row of projections) {
-    const start = row.char_start ?? 0;
-    const end = row.char_end ?? sourceText.length;
-    const text = sourceText.slice(start, end);
-    out.push({
-      id: row.id as ChunkId,
-      capsuleId: row.capsule_id as ChunkToEmbed["capsuleId"],
-      sourceId: row.source_id as KnowledgeSourceId,
-      documentId,
-      text,
-    });
+    const chunk = readStoredChunkToEmbed(state, documentId, row);
+    if (chunk === undefined) return undefined;
+    out.push(chunk);
   }
   return out;
+}
+
+async function contextualizedChunkToEmbed(
+  state: RunState,
+  documentId: DocumentId,
+  row: ChunkProjectionRow,
+  sourceText: string,
+): Promise<ChunkToEmbed> {
+  const stored = readStoredChunkToEmbed(state, documentId, row);
+  if (stored !== undefined) return stored;
+  const start = row.char_start ?? 0;
+  const end = row.char_end ?? sourceText.length;
+  const originalText = sourceText.slice(start, end);
+  const result = await contextualizeChunk(
+    {
+      documentId,
+      chunkId: row.id as ChunkId,
+      originalText,
+      safeExcerptHash: row.safe_excerpt_hash,
+      documentText: boundedDocumentContext(
+        sourceText,
+        start,
+        end,
+        state.options.contextualRetrieval,
+      ),
+      ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+    },
+    state.options.contextualRetrieval,
+  );
+  persistChunkIndexedText(
+    state.options.store._internal.db,
+    state.options.store._internal.contentCipher,
+    {
+      capsuleId: state.capsule.id,
+      chunkId: row.id as ChunkId,
+      contextualRetrievalKey: result.contextualRetrievalKey,
+      contextPrefix: result.contextPrefix,
+      augmentedText: result.augmentedText,
+      contextStatus: result.status,
+      updatedAt: state.now(),
+    },
+  );
+  return {
+    id: row.id as ChunkId,
+    capsuleId: row.capsule_id as ChunkToEmbed["capsuleId"],
+    sourceId: row.source_id as KnowledgeSourceId,
+    documentId,
+    text: result.augmentedText,
+  };
+}
+
+function persistContextualRetrievalDiagnostic(
+  state: RunState,
+  documentId: DocumentId,
+  degradedCount: number,
+): void {
+  if (degradedCount <= 0) return;
+  state.options.store._internal.db
+    .prepare(
+      [
+        "INSERT OR REPLACE INTO parser_diagnostics (",
+        "  id, capsule_id, document_id, severity, code, message, created_at",
+        ") VALUES (",
+        "  :id, :capsule_id, :document_id, 'warning', 'CONTEXTUAL_RETRIEVAL_DEGRADED',",
+        "  :message, :created_at",
+        ")",
+      ].join(" "),
+    )
+    .run({
+      id: `${String(documentId)}#contextual-retrieval-degraded`,
+      capsule_id: String(state.capsule.id),
+      document_id: String(documentId),
+      message: `${String(degradedCount)} chunk context generations degraded to raw chunk text.`,
+      created_at: state.now(),
+    });
+}
+
+async function prepareChunksToEmbed(
+  state: RunState,
+  documentId: DocumentId,
+  sourceText: string,
+): Promise<readonly ChunkToEmbed[]> {
+  const rows = selectChunkProjections(state, documentId);
+  const chunks: ChunkToEmbed[] = [];
+  for (const row of rows) {
+    chunks.push(await contextualizedChunkToEmbed(state, documentId, row, sourceText));
+  }
+  const degraded = state.options.store._internal.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM chunks WHERE capsule_id = :c AND document_id = :d AND context_status = 'degraded'",
+    )
+    .get({ c: String(state.capsule.id), d: String(documentId) }) as { readonly n: number };
+  persistContextualRetrievalDiagnostic(state, documentId, degraded.n);
+  return chunks;
+}
+
+function replaceLexicalRowsForChunks(
+  state: RunState,
+  documentId: DocumentId,
+  chunks: readonly ChunkToEmbed[],
+): void {
+  const updatedAt = state.now();
+  replaceLexicalRowsForDocument(
+    state.options.store._internal.db,
+    state.capsule.id,
+    documentId,
+    chunks.map((chunk) => ({
+      capsuleId: chunk.capsuleId,
+      sourceId: chunk.sourceId,
+      documentId: chunk.documentId,
+      chunkId: chunk.id,
+      text: chunk.text,
+      exactText: chunk.text,
+      updatedAt,
+    })),
+  );
 }
 
 // ─── Source-text reload (the orchestrator owns this; discovery does not expose it) ─
@@ -392,6 +571,7 @@ function recordCancellationIfRequested(state: RunState, errors: IndexingJobError
   }
 }
 
+// eslint-disable-next-line max-lines-per-function
 async function embedDocumentChunks(
   state: RunState,
   documentId: DocumentId,
@@ -401,7 +581,22 @@ async function embedDocumentChunks(
   // Text-like documents are re-read from disk; binary parsers persist a normalized text
   // projection so chunk slicing stays aligned with extracted content.
   const sourceText = resolveChunkSourceText(state, documentId, source, relativePath);
-  const chunks = projectChunksToEmbed(state, documentId, sourceText);
+  let chunks: readonly ChunkToEmbed[];
+  try {
+    chunks = await prepareChunksToEmbed(state, documentId, sourceText);
+  } catch {
+    return {
+      vectorCount: 0,
+      errors: [
+        {
+          code: "CONTEXTUAL_RETRIEVAL_FAILED",
+          message: "contextual retrieval generation failed",
+        },
+      ],
+      lastChunkId: null,
+    };
+  }
+  replaceLexicalRowsForChunks(state, documentId, chunks);
   if (chunks.length === 0) {
     return { vectorCount: 0, errors: [], lastChunkId: null };
   }
@@ -585,7 +780,7 @@ function chunkPersistedDocument(
       force: state.options.force === true,
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     },
-    state.options.chunkingOptions,
+    chunkingOptionsForState(state),
   );
   const chunkCount = resolveChunkCount(
     state,
@@ -650,20 +845,37 @@ function sourceForResult(state: RunState, result: ExtractionResult): KnowledgeSo
 // Incremental fast-path: skips embedding when vectors already exist (non-force run), or
 // deletes prior vectors to prepare for a forced re-embed.
 // Returns a PersistedHandling to short-circuit when already-embedded, undefined to continue.
+function hasCompleteIndexedTextCoverage(state: RunState, documentId: DocumentId): boolean {
+  return storedChunksToEmbed(state, documentId) !== undefined;
+}
+
 function applyIncrementalFastPath(
   state: RunState,
-  sourceId: KnowledgeSourceId,
+  result: ExtractionResult,
   documentId: DocumentId,
 ): PersistedHandling | undefined {
   const staleChunks = hasStaleChunksForDocument(
     state.options.store._internal.db,
     state.capsule.id,
     documentId,
-    chunkingStrategyKey(state.options.chunkingOptions),
+    chunkingStrategyKey(chunkingOptionsForState(state)),
   );
   if (state.options.force !== true) {
     const coverage = embeddingCoverage(state, documentId);
-    if (coverage.chunkCount > 0 && coverage.vectorCount === coverage.chunkCount && !staleChunks) {
+    const indexedTextComplete = hasCompleteIndexedTextCoverage(state, documentId);
+    if (
+      coverage.chunkCount > 0 &&
+      coverage.vectorCount === coverage.chunkCount &&
+      !staleChunks &&
+      indexedTextComplete
+    ) {
+      if (countLexicalRowsForDocument(state.options.store._internal.db, state.capsule.id, documentId) !==
+        coverage.chunkCount) {
+        const stored = storedChunksToEmbed(state, documentId);
+        if (stored !== undefined) {
+          replaceLexicalRowsForChunks(state, documentId, stored);
+        }
+      }
       state.skippedDocuments += 1;
       return {
         events: [
@@ -671,7 +883,7 @@ function applyIncrementalFastPath(
             kind: "document-skipped",
             jobId: state.jobId,
             capsuleId: state.capsule.id,
-            sourceId,
+            sourceId: result.sourceId,
             documentId,
             reason: "already-embedded",
           },
@@ -827,7 +1039,7 @@ function boundedCurrentFingerprint(
   return {
     ...checkpoint.fingerprint,
     policyFingerprint: largeDocumentPolicyFingerprint(policy),
-    chunkingStrategyVersion: chunkingStrategyKey(state.options.chunkingOptions),
+    chunkingStrategyVersion: chunkingStrategyKey(chunkingOptionsForState(state)),
     embeddingIdentity: state.capsule.embeddingModelIdentity,
   };
 }
@@ -919,6 +1131,9 @@ function boundedEmbedDeps(
     now: state.now,
     idSource: state.idSource,
     policy: boundedPolicy(state),
+    ...(state.options.contextualRetrieval !== undefined
+      ? { contextualRetrieval: state.options.contextualRetrieval }
+      : {}),
     ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     onBatch: (cursor, lastId): void => {
       writeBoundedCheckpoint(
@@ -957,7 +1172,7 @@ function prepareBoundedChunks(
     chunkDocumentBounded(
       state.options.store,
       { capsuleId: state.capsule.id, sourceId: result.sourceId, documentId },
-      state.options.chunkingOptions,
+      chunkingOptionsForState(state),
       state.options.signal,
       boundedPolicy(state),
     );
@@ -1214,7 +1429,7 @@ async function* handlePersistedDocument(
     return;
   }
 
-  const fastPath = applyIncrementalFastPath(state, result.sourceId, documentId);
+  const fastPath = applyIncrementalFastPath(state, result, documentId);
   if (fastPath !== undefined) {
     yield* persistedEvents(fastPath);
     return;
@@ -1269,7 +1484,7 @@ async function* handleFileExtracted(
       state.options.store._internal.db,
       state.capsule.id,
       result.outcome.document.id,
-      chunkingStrategyKey(state.options.chunkingOptions),
+      chunkingStrategyKey(chunkingOptionsForState(state)),
     );
     const missingVectors =
       result.outcome.document.status === "extracted" &&
@@ -1376,7 +1591,7 @@ async function* runOneSource(
         ? { extractionCapabilities: state.options.extractionCapabilities }
         : {}),
       largeDocumentJobId: state.jobId,
-      chunkingStrategyVersion: chunkingStrategyKey(state.options.chunkingOptions),
+      chunkingStrategyVersion: chunkingStrategyKey(chunkingOptionsForState(state)),
     },
     sourceDiscoveryParams(state, source),
   );
@@ -1528,33 +1743,54 @@ function buildResult(
   };
 }
 
+function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
+  const identity = state.capsule.embeddingModelIdentity;
+  return {
+    modelId: identity.modelId,
+    provider: identity.provider,
+    vectorMetric: identity.vectorMetric,
+    expectedDimensions: identity.vectorDimensions,
+    ...(identity.dimensionsParam !== undefined ? { dimensionsParam: identity.dimensionsParam } : {}),
+    ...(identity.normalization !== undefined ? { normalization: identity.normalization } : {}),
+    ...(identity.instructionVersion !== undefined
+      ? { instructionVersion: identity.instructionVersion }
+      : {}),
+    includeSpaceFingerprint: identity.embeddingSpaceFingerprint !== undefined,
+    ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+  };
+}
+
+function embeddingPreflightFailure(
+  state: RunState,
+  result: EmbeddingCapabilityCheck,
+): IndexingJobError | undefined {
+  if (result.ok) {
+    const compatibility = assertCompatibleEmbeddingIdentity(
+      state.capsule.embeddingModelIdentity,
+      result.identity,
+    );
+    if (compatibility.ok) return undefined;
+    return {
+      code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+      message: compatibility.safeMessage,
+    };
+  }
+  return {
+    code:
+      result.reason === "dimension-mismatch"
+        ? "INCOMPATIBLE_EMBEDDING_IDENTITY"
+        : "EMBEDDING_ADAPTER_FAILED",
+    message: result.safeMessage,
+  };
+}
+
 async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobError | undefined> {
   try {
-    const result = await verifyEmbeddingCapability(state.options.embeddingAdapter, {
-      modelId: state.capsule.embeddingModelIdentity.modelId,
-      provider: state.capsule.embeddingModelIdentity.provider,
-      vectorMetric: state.capsule.embeddingModelIdentity.vectorMetric,
-      expectedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
-      ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
-    });
-    if (result.ok) {
-      const compatibility = assertCompatibleEmbeddingIdentity(
-        state.capsule.embeddingModelIdentity,
-        result.identity,
-      );
-      if (compatibility.ok) return undefined;
-      return {
-        code: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-        message: compatibility.safeMessage,
-      };
-    }
-    return {
-      code:
-        result.reason === "dimension-mismatch"
-          ? "INCOMPATIBLE_EMBEDDING_IDENTITY"
-          : "EMBEDDING_ADAPTER_FAILED",
-      message: result.safeMessage,
-    };
+    const result = await verifyEmbeddingCapability(
+      state.options.embeddingAdapter,
+      embeddingPreflightOptions(state),
+    );
+    return embeddingPreflightFailure(state, result);
   } catch (cause) {
     if (
       cancellationRequested(state) ||

@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "356386f8fcff2106ecacd28ade19146e1c4054f1922983477d175d39b2fc9e28",
+  "postCssSha256": "a6eee5342296640f4bde69e4811d47b037efe0586f662c82d0db260cdf77421b",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -21,9 +21,9 @@
     "keiko-nav.css": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
   },
   "run": {
-    "startedAt": "2026-06-30T21:49:52.882Z",
-    "generatedAt": "2026-06-30T21:49:55.541Z",
-    "repoHeadSha": "e666b472f8d94c338410a00e42c232a1020269e4"
+    "startedAt": "2026-07-01T20:01:26.505Z",
+    "generatedAt": "2026-07-01T20:01:29.117Z",
+    "repoHeadSha": "6e7190b26e1b5bb8f5887bc9efd85d8066b79561"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "groupR": {
@@ -259,7 +259,7 @@
     "focusProof": {
       "activeIsBack": true,
       "outlineStyle": "solid",
-      "outlineWidth": "2px",
+      "outlineWidth": "3px",
       "hasFocusRing": true
     },
     "nameRoleValue": {
@@ -276,7 +276,7 @@
   "boundedRowSmoke": {
     "ok": true,
     "rowCount": 250,
-    "durationMs": 0.10000002384185791,
+    "durationMs": 0,
     "afterScrollTop": 8363,
     "scrollHeight": 8783,
     "clientHeight": 420,

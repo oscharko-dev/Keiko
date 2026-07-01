@@ -90,10 +90,10 @@ export interface GroundingLimits {
 export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
   maxConnectedSources: 16,
   maxLocalKnowledgeSources: 16,
-  maxPromptReferences: 8,
+  maxPromptReferences: 16,
   maxExcerptChars: 900,
   referenceBudget: 10,
-  hybridMaxCandidates: 24,
+  hybridMaxCandidates: 100,
   hybridMaxExcerptBytes: 131_072,
 } as const;
 
@@ -576,6 +576,22 @@ export interface GroundedUncertainty {
   readonly claim: string;
 }
 
+export type GroundedRerankerStatus =
+  | "disabled"
+  | "not-configured"
+  | "unavailable"
+  | "invalid-response"
+  | "applied";
+
+export interface GroundedRerankerDiagnostics {
+  readonly status: GroundedRerankerStatus;
+  readonly candidateCount: number;
+  readonly documentCount: number;
+  readonly keptCount: number;
+  readonly failureKind?: string | undefined;
+  readonly latencyMs?: number | undefined;
+}
+
 // Path-free aggregate of the candidate-ranking rationale (enterprise retrieval M2). Carries only
 // bucket counts + ecosystem counts — NO scope path, NO score, NO signal-per-file — so it preserves
 // the path-free privacy contract below. Full per-file rationale lives only in the regulated audit
@@ -635,6 +651,21 @@ export interface LocalKnowledgeGroundedAnswerContextSummary {
   readonly citationCount: number;
   readonly referenceBudget: number;
   readonly referencesUsed: number;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+  readonly indexLifecycle?: LocalKnowledgeIndexLifecycleSummary | undefined;
+}
+
+export interface LocalKnowledgeCapsuleIndexLifecycleStamp {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly updatedAt: number;
+}
+
+export interface LocalKnowledgeIndexLifecycleSummary {
+  readonly schemaVersion: "local-knowledge-index-lifecycle-v1";
+  readonly capturedAt: number;
+  readonly capsules: readonly LocalKnowledgeCapsuleIndexLifecycleStamp[];
+  readonly stale: boolean;
+  readonly staleCapsuleIds?: readonly KnowledgeCapsuleId[] | undefined;
 }
 
 function buildOmittedCounts(
@@ -801,6 +832,7 @@ export interface HybridGroundedAnswerContextSummary {
   readonly connectorSourceCount: number;
   readonly folder: GroundedAnswerContextPackSummary;
   readonly knowledge: LocalKnowledgeGroundedAnswerContextSummary;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
 }
 
 export interface HybridGroundedAnswer {
@@ -1249,6 +1281,8 @@ export type GatewayReadinessProbeName =
   | "streaming"
   | "tool_calling"
   | "json_schema"
+  | "embedding"
+  | "reranker"
   | "reasoning"
   | "image_input"
   | "document_input"
@@ -1273,6 +1307,10 @@ export interface GatewayReadinessVerifiedCapabilities {
   readonly reasoningOutput?: boolean | undefined;
   readonly imageInput?: boolean | undefined;
   readonly documentInput?: boolean | undefined;
+  readonly embedding?: boolean | undefined;
+  readonly embeddingDimensions?: number | undefined;
+  readonly embeddingNorm?: number | undefined;
+  readonly reranker?: boolean | undefined;
   readonly testedContextTokens?: number | undefined;
 }
 

@@ -62,6 +62,12 @@ const SELECT_BY_TUPLE_SQL = "SELECT id FROM capsule_sources WHERE capsule_id = :
 
 const DELETE_BY_TUPLE_SQL = "DELETE FROM capsule_sources WHERE capsule_id = :c AND id = :s";
 
+const UPDATE_SOURCE_SCOPE_SQL =
+  "UPDATE knowledge_sources SET scope_kind = :scope_kind, scope_json = :scope_json, updated_at = :updated_at WHERE id = :id";
+
+const UPDATE_CAPSULE_SOURCE_SCOPE_SQL =
+  "UPDATE capsule_sources SET scope_kind = :scope_kind, scope_json = :scope_json, updated_at = :updated_at WHERE capsule_id = :c AND id = :id";
+
 function parseTags(json: string): readonly string[] {
   const parsed = JSON.parse(json) as unknown;
   if (!Array.isArray(parsed)) return [];
@@ -209,6 +215,52 @@ export function listCapsuleSources(
 ): readonly KnowledgeSource[] {
   const rows = store._internal.db.prepare(SELECT_BY_CAPSULE_SQL).all({ c: capsuleId });
   return rows.map((row) => rowToSource(row as unknown as CapsuleSourceRow));
+}
+
+export function updateSourceScopeInCapsule(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+  scope: KnowledgeSourceScope,
+  auditSink?: AuditEventSink,
+): KnowledgeSource {
+  assertSafeScope(scope);
+  const current = readSource(store, capsuleId, sourceId);
+  const now = store._internal.now();
+  const params = {
+    id: sourceId,
+    scope_kind: scope.kind,
+    scope_json: scopeToJson(scope),
+    updated_at: now,
+  };
+  const db = store._internal.db;
+  db.exec("BEGIN");
+  try {
+    const probe = db.prepare(SELECT_BY_TUPLE_SQL).get({ c: capsuleId, s: sourceId });
+    if (probe === undefined) {
+      db.exec("ROLLBACK");
+      throw new KnowledgeNotFoundError(
+        `Source not found for tuple capsule=${String(capsuleId)} source=${String(sourceId)}`,
+      );
+    }
+    db.prepare(UPDATE_SOURCE_SCOPE_SQL).run(params);
+    db.prepare(UPDATE_CAPSULE_SOURCE_SCOPE_SQL).run({ ...params, c: capsuleId });
+    db.exec("COMMIT");
+  } catch (error) {
+    if (!(error instanceof KnowledgeNotFoundError)) {
+      db.exec("ROLLBACK");
+    }
+    throw error;
+  }
+  auditSink?.emit({
+    kind: "source-rebound",
+    capsuleId,
+    sourceId,
+    previousScopeKind: current.scope.kind,
+    currentScopeKind: scope.kind,
+    occurredAt: now,
+  });
+  return readSource(store, capsuleId, sourceId);
 }
 
 export function removeSourceFromCapsule(

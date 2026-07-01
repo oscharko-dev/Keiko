@@ -203,6 +203,29 @@ describe("redact", () => {
     expect(redact(url)).toBe(url);
   });
 
+  it("does not mask standalone emails or scp-like SSH remotes as URL userinfo", () => {
+    expect(redact("Kontakt: kunde@example.test")).toBe("Kontakt: kunde@example.test");
+    expect(redact("git@github.com:org/repo.git")).toBe("git@github.com:org/repo.git");
+  });
+
+  it("redacts German IBANs in compact and grouped form", () => {
+    expect(redact("IBAN DE89370400440532013000")).not.toContain("DE89370400440532013000");
+    expect(redact("IBAN DE89 3704 0044 0532 0130 00")).not.toContain("DE89 3704");
+  });
+
+  it("redacts German phone numbers while leaving short ticket-like values intact", () => {
+    expect(redact("Telefon +49 30 1234567")).toBe("Telefon [REDACTED]");
+    expect(redact("Ruf 0049-89-12345678 an")).toBe("Ruf [REDACTED] an");
+    expect(redact("Telefon 030-1234567")).toBe("Telefon [REDACTED]");
+    expect(redact("Ticket 030-123")).toBe("Ticket 030-123");
+  });
+
+  it("does not redact UUID-like run ids as German phone numbers", () => {
+    const runId = "00000000-0000-4000-8000-000000000002";
+    expect(redact(runId)).toBe(runId);
+    expect(redact(`fs-${runId}`)).toBe(`fs-${runId}`);
+  });
+
   it("does not redact a benign 'password reset' sentence with no assignment", () => {
     const prose = "Follow the password reset link to continue.";
     expect(redact(prose)).toBe(prose);

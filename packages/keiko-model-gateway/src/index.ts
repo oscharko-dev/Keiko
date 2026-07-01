@@ -39,6 +39,7 @@ export type {
   OutboundHttpEgressConfig,
   ProviderAdapter,
   ResponseFormat,
+  RerankerConfig,
   StreamDelta,
   StreamEvent,
   ToolDefinition,
@@ -46,6 +47,19 @@ export type {
   VoicePersona,
   VoicePersonaVoice,
   VoiceProviderAvailability,
+  GatewaySamplingParameterIssue,
+  GatewaySamplingParameterName,
+  GatewaySamplingParameters,
+} from "./types.js";
+
+export {
+  GATEWAY_TEMPERATURE_RANGE,
+  GATEWAY_TOP_P_RANGE,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  isValidGatewayTemperature,
+  isValidGatewayTopP,
+  validateGatewaySamplingParameters,
 } from "./types.js";
 
 export {
@@ -98,6 +112,7 @@ export {
   type EnvSource,
   type SafeGatewayConfig,
   type SafeProviderConfig,
+  type SafeRerankerConfig,
 } from "./config.js";
 
 export { Gateway, type GatewayDeps } from "./gateway.js";
@@ -162,10 +177,17 @@ export {
 } from "./realtime-voice-adapter.js";
 
 export {
+  EMBEDDING_INSTRUCTION_VERSION,
+  EMBEDDING_NORMALIZATION,
   assertCompatibleEmbeddingIdentity,
+  embeddingIdentityHardeningStatus,
+  embeddingSpaceFingerprintForVectors,
+  l2NormalizeVector,
+  vectorL2Norm,
   verifyEmbeddingCapability,
   type EmbeddingCapabilityCheck,
   type EmbeddingFailureReason,
+  type EmbeddingIdentityHardeningStatus,
   type EmbeddingIdentityWarning,
   type EmbeddingProbeOptions,
   type OpenAIEmbeddingAdapter,
@@ -181,6 +203,16 @@ export {
   type OpenAIEmbeddingRequest,
   type OpenAIEmbeddingSuccess,
 } from "./openai-embedding-adapter.js";
+
+export {
+  requestLiteLLMRerank,
+  type LiteLLMRerankRequest,
+  type RerankErrorKind,
+  type RerankOutcome,
+  type RerankRequest,
+  type RerankResult,
+  type RerankSuccess,
+} from "./rerank-adapter.js";
 
 export { redact } from "@oscharko-dev/keiko-security";
 

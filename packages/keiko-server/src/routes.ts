@@ -81,6 +81,19 @@ import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
+import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
+import {
+  handleCancelUpdateSession,
+  handleCreateUpdateSession,
+  handleGetUpdateSession,
+  handleRetryUpdateSession,
+  handleVerifyUpdateRestart,
+} from "./update-session-routes.js";
+import {
+  handleGetUpdateRemediation,
+  handlePostUpdateRemediationStatus,
+  handleRunUpdateRemediationAction,
+} from "./update-remediation-routes.js";
 import {
   handleCreateTerminalExecution,
   handleDeleteTerminalExecution,
@@ -177,6 +190,7 @@ import {
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleListLocalKnowledgeCapsuleSets,
+  handleRebindLocalKnowledgeCapsuleSource,
   handleReindexLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
   handleUpdateLocalKnowledgeCapsule,
@@ -301,6 +315,32 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
+  { method: "GET", pattern: "/api/update/preflight", handler: handleGetUpdatePreflight },
+  {
+    method: "POST",
+    pattern: "/api/update/preflight/check",
+    handler: handlePostUpdatePreflightCheck,
+  },
+  { method: "GET", pattern: "/api/update/session", handler: handleGetUpdateSession },
+  { method: "POST", pattern: "/api/update/session", handler: handleCreateUpdateSession },
+  { method: "POST", pattern: "/api/update/session/retry", handler: handleRetryUpdateSession },
+  {
+    method: "POST",
+    pattern: "/api/update/session/verify-restart",
+    handler: handleVerifyUpdateRestart,
+  },
+  { method: "DELETE", pattern: "/api/update/session", handler: handleCancelUpdateSession },
+  { method: "GET", pattern: "/api/update/remediation", handler: handleGetUpdateRemediation },
+  {
+    method: "POST",
+    pattern: "/api/update/remediation/status",
+    handler: handlePostUpdateRemediationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/update/remediation/actions",
+    handler: handleRunUpdateRemediationAction,
+  },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },
@@ -682,6 +722,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "DELETE",
     pattern: "/api/local-knowledge/capsules/:capsuleId/connection",
     handler: handleDisconnectLocalKnowledgeCapsule,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/sources/:sourceId/root",
+    handler: handleRebindLocalKnowledgeCapsuleSource,
   },
   {
     method: "DELETE",

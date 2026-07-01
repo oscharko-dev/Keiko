@@ -51,6 +51,7 @@ records whether each family has full, partial, or worked-example coverage agains
 | Navigation set                 | Ready      | @core-ui  | v0.4                            | #1298       | Done         |
 | AI & Agent surfaces            | Ready      | @agent-ux | v0.4                            | #1296       | Done         |
 | Data Visualisation             | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
+| Update experience window       | Draft      | @core-ui  | v0.2.11 candidate               | #1696       | In Progress  |
 | Legacy 2-way theme toggle      | Deprecated | @core-ui  | migration target: theme-control | replaced    | Done         |
 
 **Draft** is a defined status, but no current component uses it — every shipped family is Ready, and the one
@@ -148,5 +149,6 @@ implementation and review evidence at every row; it is never process for its own
 ## See also
 
 [state-matrix.md](state-matrix.md) · [component-template.md](component-template.md) ·
-[editor-governance.md](editor-governance.md) · [visual-qa-matrix.md](visual-qa-matrix.md) ·
+[editor-governance.md](editor-governance.md) · [update-experience.md](update-experience.md) ·
+[visual-qa-matrix.md](visual-qa-matrix.md) ·
 [ADR-0050](../adr/ADR-0050-component-state-and-governance-contract.md).

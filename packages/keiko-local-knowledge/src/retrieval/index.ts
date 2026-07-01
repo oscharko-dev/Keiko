@@ -34,6 +34,8 @@ export {
   RetrievalError,
   type RetrievalErrorCode,
   type RetrievalNoEvidenceReason,
+  type QueryTransformer,
+  type QueryTransformRequest,
   type RetrievalQuery,
   type RetrievalResult,
 } from "./types.js";

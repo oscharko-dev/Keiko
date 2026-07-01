@@ -113,7 +113,7 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(17);
+    expect(localKnowledgeRoutes).toHaveLength(18);
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
@@ -174,6 +174,13 @@ describe("API route contract", () => {
       localKnowledgeRoutes.find(
         (r) =>
           r.method === "POST" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/reindex",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "PATCH" &&
+          r.pattern === "/api/local-knowledge/capsules/:capsuleId/sources/:sourceId/root",
       ),
     ).toBeDefined();
     expect(
@@ -252,6 +259,21 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/gateway/setup"),
     ).toBeDefined();
+  });
+
+  it("includes the update preflight routes (#1692)", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/update/preflight"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/update/preflight/check"),
+    ).toBeDefined();
+    expect(matchRoute("GET", "/api/update/preflight")).toMatchObject({
+      definition: { pattern: "/api/update/preflight" },
+    });
+    expect(matchRoute("POST", "/api/update/preflight/check")).toMatchObject({
+      definition: { pattern: "/api/update/preflight/check" },
+    });
   });
 
   it("includes the optional voice STT dictation route (#494)", () => {

@@ -31,8 +31,13 @@ import { chunkDocument } from "../chunking/chunker-runner.js";
 import type { ChunkingOptions } from "../chunking/types.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
-import { insertDocumentRow, insertParsedUnitRow } from "../discovery/persist.js";
+import {
+  insertDocumentRow,
+  insertDocumentTextRow,
+  insertParsedUnitRow,
+} from "../discovery/persist.js";
 import { embedChunkBatch } from "../indexing/embedding-batcher.js";
+import { replaceLexicalRowsForDocument } from "../indexing/lexical-index-persist.js";
 import type { ChunkToEmbed } from "../indexing/types.js";
 import { DEFAULT_EMBEDDING, sampleCapsuleInput, sampleSourceInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
@@ -170,6 +175,13 @@ function seedRows(store: KnowledgeStore, options: SeedVectorsOptions, seed: Reso
     status: "extracted",
     safeDisplayName: options.safeDisplayName ?? "sample.txt",
   });
+  insertDocumentTextRow(
+    store._internal.db,
+    store._internal.contentCipher,
+    seed.capsuleId,
+    seed.documentId,
+    seed.text,
+  );
   insertParsedUnitRow(
     store._internal.db,
     store._internal.contentCipher,
@@ -223,6 +235,54 @@ async function embedSeedChunks(
   return chunks;
 }
 
+interface SeedChunkSpanRow {
+  readonly id: string;
+  readonly source_id: string;
+  readonly character_start: number | null;
+  readonly character_end: number | null;
+}
+
+function indexSeedLexicalRows(
+  store: KnowledgeStore,
+  seed: ResolvedSeed,
+  chunkIds: readonly ChunkId[],
+): void {
+  if (chunkIds.length === 0) {
+    replaceLexicalRowsForDocument(store._internal.db, seed.capsuleId, seed.documentId, []);
+    return;
+  }
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT id, source_id, character_start, character_end",
+        "FROM chunks",
+        "WHERE capsule_id = :c AND document_id = :d",
+        "ORDER BY order_index ASC",
+      ].join(" "),
+    )
+    .all({ c: String(seed.capsuleId), d: String(seed.documentId) }) as unknown as
+    readonly SeedChunkSpanRow[];
+  replaceLexicalRowsForDocument(
+    store._internal.db,
+    seed.capsuleId,
+    seed.documentId,
+    rows.map((row) => {
+      const start = row.character_start ?? 0;
+      const end = row.character_end ?? seed.text.length;
+      const text = seed.text.slice(start, end);
+      return {
+        capsuleId: seed.capsuleId,
+        sourceId: row.source_id as KnowledgeSourceId,
+        documentId: seed.documentId,
+        chunkId: row.id as ChunkId,
+        text,
+        exactText: text,
+        updatedAt: 1_700_000_000_000,
+      };
+    }),
+  );
+}
+
 export async function seedCapsuleWithVectors(
   store: KnowledgeStore,
   options: SeedVectorsOptions = {},
@@ -241,6 +301,7 @@ export async function seedCapsuleWithVectors(
     // discriminate. A caller can pass an explicit `chunkingOptions` to override.
     options.chunkingOptions ?? { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
   );
+  indexSeedLexicalRows(store, seed, chunkResult.chunkIds);
   const chunks = await embedSeedChunks(store, seed, chunkResult.chunkIds);
   return {
     capsuleId: seed.capsuleId,

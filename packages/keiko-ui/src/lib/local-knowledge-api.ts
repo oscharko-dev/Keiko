@@ -251,6 +251,24 @@ export async function disconnectCapsule(
 }
 
 // ---------------------------------------------------------------------------
+// PATCH /api/local-knowledge/capsules/:id/sources/:sourceId/root
+// ---------------------------------------------------------------------------
+
+export async function rebindCapsuleSourceRoot(
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: string,
+  rootPath: string,
+): Promise<CapsuleDetailResponse> {
+  return fetchJson<CapsuleDetailResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/sources/${encodeURIComponent(sourceId)}/root`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ rootPath }),
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Issue #198 — CapsuleDetail wire shape
 // ---------------------------------------------------------------------------
 
@@ -331,6 +349,20 @@ export async function repairCapsuleFailedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
   const request: CapsuleReindexRequest = { capsuleId, mode: "repair-failed" };
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify(request) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsules/:id/reindex — rebuild vectors for the current model
+// ---------------------------------------------------------------------------
+
+export async function reembedCapsuleForCurrentModel(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "full-reembed", force: true };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
     { method: "POST", body: JSON.stringify(request) },

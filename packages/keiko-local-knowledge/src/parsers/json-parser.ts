@@ -1,10 +1,9 @@
 // JSON parser adapter (Epic #189, Issue #266). Pure: bytes -> ParserResult.
 //
-// Emits one ParsedUnit { kind: "json-path", jsonPointer } per LEAF value (string / number /
-// boolean / null / empty array / empty object). Pointers follow RFC 6901 — keys are encoded
-// with `~0` for `~` and `~1` for `/`. Object keys with the same name are NOT deduplicated;
-// callers see one unit per traversal step so duplicate keys (which `JSON.parse` itself
-// resolves by last-wins) collapse the same way they do in the parsed object.
+// Emits one ParsedUnit { kind: "json-path", jsonPointer } per logical record. Objects keep
+// sibling scalar fields together, arrays of objects emit one unit per element, and primitive
+// / empty values still emit a unit at their own pointer. Pointers follow RFC 6901 — keys are
+// encoded with `~0` for `~` and `~1` for `/`.
 //
 // Character offsets target a normalized line-oriented projection, not the raw JSON bytes:
 //   /json/pointer: <leaf-json>
@@ -59,31 +58,31 @@ interface ScanContext {
   stopped: boolean;
 }
 
-function stringifyLeaf(value: unknown): string {
+function stringifyValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function appendNormalizedLeaf(
+function appendNormalizedRecord(
   ctx: ScanContext,
   pointer: string,
-  value: unknown,
+  text: string,
 ): { readonly start: number; readonly end: number } {
   const label = pointer.length === 0 ? "/" : pointer;
-  const line = `${label}: ${stringifyLeaf(value)}\n`;
+  const line = `${label}: ${text}\n`;
   const start = ctx.normalizedLength;
   ctx.normalizedParts.push(line);
   ctx.normalizedLength += line.length;
   return { start, end: ctx.normalizedLength };
 }
 
-function pushLeaf(ctx: ScanContext, pointer: string, value: unknown): void {
+function pushRecord(ctx: ScanContext, pointer: string, text: string): void {
   const limit = shouldStop(ctx.startedAt, ctx.options, ctx.units.length);
   if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
     ctx.diagnostics.push(diagnostic(limit.code, limit.message, ctx.input.documentId, "info"));
     ctx.stopped = true;
     return;
   }
-  const span = appendNormalizedLeaf(ctx, pointer, value);
+  const span = appendNormalizedRecord(ctx, pointer, text);
   ctx.units.push({
     kind: "json-path",
     documentId: ctx.input.documentId,
@@ -93,13 +92,27 @@ function pushLeaf(ctx: ScanContext, pointer: string, value: unknown): void {
   });
 }
 
-function isLeaf(value: unknown): boolean {
+function isScalar(value: unknown): boolean {
   if (value === null) return true;
   const t = typeof value;
-  if (t === "string" || t === "number" || t === "boolean") return true;
+  return t === "string" || t === "number" || t === "boolean";
+}
+
+function isEmptyContainer(value: unknown): boolean {
   if (Array.isArray(value)) return value.length === 0;
-  if (t === "object") return Object.keys(value as Record<string, unknown>).length === 0;
-  return true;
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    Object.keys(value).length === 0
+  );
+}
+
+function isScalarOrEmpty(value: unknown): boolean {
+  return isScalar(value) || isEmptyContainer(value);
+}
+
+function scalarProjection(value: unknown): string {
+  return stringifyValue(value);
 }
 
 function pushNestingLimit(ctx: ScanContext, pointer: string): void {
@@ -121,10 +134,24 @@ function descendArray(
   pointer: string,
   depth: number,
 ): void {
+  if (value.length === 0) {
+    pushRecord(ctx, pointer, "[]");
+    return;
+  }
+  if (value.every(isScalarOrEmpty)) {
+    pushRecord(ctx, pointer, scalarProjection(value));
+    return;
+  }
   for (let i = 0; i < value.length; i += 1) {
     if (ctx.stopped) return;
     walk(ctx, value[i], joinPointer(pointer, String(i)), depth + 1);
   }
+}
+
+function objectScalarFields(value: Record<string, unknown>): readonly string[] {
+  return Object.keys(value)
+    .filter((key) => isScalarOrEmpty(value[key]))
+    .map((key) => `${key}=${scalarProjection(value[key])}`);
 }
 
 function descendObject(
@@ -133,16 +160,28 @@ function descendObject(
   pointer: string,
   depth: number,
 ): void {
+  const keys = Object.keys(value);
+  if (keys.length === 0) {
+    pushRecord(ctx, pointer, "{}");
+    return;
+  }
+  const fields = objectScalarFields(value);
+  if (fields.length > 0) {
+    pushRecord(ctx, pointer, fields.join(" | "));
+    if (ctx.stopped) return;
+  }
   for (const key of Object.keys(value)) {
     if (ctx.stopped) return;
-    walk(ctx, value[key], joinPointer(pointer, encodePointerSegment(key)), depth + 1);
+    const child = value[key];
+    if (isScalarOrEmpty(child)) continue;
+    walk(ctx, child, joinPointer(pointer, encodePointerSegment(key)), depth + 1);
   }
 }
 
 function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number): void {
   if (ctx.stopped) return;
-  if (isLeaf(value)) {
-    pushLeaf(ctx, pointer, value);
+  if (isScalarOrEmpty(value)) {
+    pushRecord(ctx, pointer, scalarProjection(value));
     return;
   }
   if (depth >= ctx.options.maxNestingDepth) {
