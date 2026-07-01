@@ -18,7 +18,7 @@ import {
   composeConversationPrompt,
   renderConversationDocumentContextBlock,
 } from "./conversation-prompt.js";
-import type { GatewayConversationMessage } from "./chat-prompt-budget.js";
+import type { GatewayConversationMessage } from "./conversation-gateway.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 
 function pressureForTokens(tokens: number, budgetTokens: number): ContextBudgetPressure {

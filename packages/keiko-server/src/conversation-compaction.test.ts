@@ -332,6 +332,24 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     ).toBeLessThanOrEqual(tightProfile.effectiveInputBudget);
   });
 
+  it("explicit history budget override matches the same real profile under the tighter limit", () => {
+    const tightProfile = deriveContextProfile({
+      maxInputTokens: 1_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const overridden = conversationForGatewayWithCompaction(messages, {
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+      effectiveInputBudget: tightProfile.effectiveInputBudget,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    const direct = conversationForGatewayWithCompaction(messages, {
+      contextProfile: tightProfile,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    expect(overridden).toEqual(direct);
+  });
+
   it("drops only the minimum oldest prefix needed when more than 24 recent turns still fit", () => {
     const outcome = conversationForGatewayWithCompaction(longTailMessages(), {
       contextProfile: DEFAULT_CONTEXT_PROFILE,

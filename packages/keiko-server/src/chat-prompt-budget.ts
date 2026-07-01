@@ -12,13 +12,10 @@ import {
 } from "./conversation-compaction.js";
 import { buildPromptAssemblyDiagnostics } from "./chat-prompt-budget-diagnostics.js";
 
-export interface GatewayConversationMessage {
-  readonly role: "system" | "user" | "assistant";
-  readonly content: string;
-}
+export type { GatewayConversationMessage } from "./conversation-gateway.js";
 
 export interface GatewayPromptAssembly {
-  readonly messages: GatewayConversationMessage[];
+  readonly messages: import("./conversation-gateway.js").GatewayConversationMessage[];
   readonly compaction: ConversationCompactionOutcome["compaction"];
   readonly diagnostics: import("@oscharko-dev/keiko-contracts").ContextAssemblyDiagnostics;
 }
@@ -67,10 +64,8 @@ function assembleGatewayPromptCandidate(
   }
   const historyBudget = input.profile.effectiveInputBudget - latestTurnTokens;
   const historyOutcome = conversationForGatewayWithCompaction(input.historyPrefix, {
-    contextProfile: {
-      ...input.profile,
-      effectiveInputBudget: historyBudget,
-    },
+    contextProfile: input.profile,
+    effectiveInputBudget: historyBudget,
     redactionSecrets: input.redactionSecrets,
   });
   const messages = [...historyOutcome.messages, { role: "user" as const, content: latestTurn }];

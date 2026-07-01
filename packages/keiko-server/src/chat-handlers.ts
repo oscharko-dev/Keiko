@@ -56,7 +56,6 @@ import {
   type ChatMessage,
   type Project,
 } from "./store/index.js";
-import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 import {
   validateConversationPayload,
   type ConversationAttachment,
@@ -95,18 +94,21 @@ import {
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
-import {
-  selectGatewayPromptAssembly,
-  type GatewayConversationMessage,
-  type GatewayPromptAssembly,
-} from "./chat-prompt-budget.js";
-export type { GatewayConversationMessage, GatewayPromptAssembly } from "./chat-prompt-budget.js";
+import { selectGatewayPromptAssembly, type GatewayPromptAssembly } from "./chat-prompt-budget.js";
+import { usableGatewayMessages } from "./conversation-gateway.js";
+import type { GatewayConversationMessage } from "./conversation-gateway.js";
+export {
+  MAX_CONTEXT_MESSAGES,
+  conversationForGateway,
+  usableGatewayMessages,
+} from "./conversation-gateway.js";
+export type { GatewayConversationMessage } from "./conversation-gateway.js";
+export type { GatewayPromptAssembly } from "./chat-prompt-budget.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
-export const MAX_CONTEXT_MESSAGES = 24;
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -295,45 +297,6 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
     };
   }
   throw error;
-}
-
-function messageForGateway(
-  message: ChatMessage,
-): { role: "user" | "assistant"; content: string } | null {
-  if (isLegacyEmptyAssistantPlaceholder(message)) {
-    return null;
-  }
-  if (message.role !== "user" && message.role !== "assistant") {
-    return null;
-  }
-  return { role: message.role, content: message.content };
-}
-
-// The map+filter projection shared by conversationForGateway and the budget-aware compaction shim
-// (conversation-compaction.ts). Returns the full filtered, ORDER-PRESERVED set of user/assistant
-// turns so the shim can budget-check, retain the full safe verbatim history, or compact the
-// minimum oldest prefix without re-filtering.
-export function usableGatewayMessages(
-  messages: readonly ChatMessage[],
-): { role: "user" | "assistant"; content: string }[] {
-  return messages
-    .map(messageForGateway)
-    .filter(
-      (message): message is { role: "user" | "assistant"; content: string } => message !== null,
-    );
-}
-
-export function conversationForGateway(
-  messages: readonly ChatMessage[],
-): GatewayConversationMessage[] {
-  const usable = usableGatewayMessages(messages).slice(-MAX_CONTEXT_MESSAGES);
-  return [
-    {
-      role: "system",
-      content: CONVERSATION_SYSTEM_PROMPT,
-    },
-    ...usable,
-  ];
 }
 
 export interface SendDesktopChatRequest {
