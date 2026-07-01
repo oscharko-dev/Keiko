@@ -95,6 +95,13 @@ export interface BuildCoverageMapInput {
   readonly runId: QualityIntelligence.QualityIntelligenceRunId;
   readonly atoms: readonly QualityIntelligence.QualityIntelligenceEvidenceAtom[];
   readonly candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[];
+  /**
+   * Optional canonical atom text keyed by atom id. When present, coverage confidence is based on
+   * explicit provenance AND corroborating test-case text so model-generated over-citation cannot
+   * turn unrelated atoms into "covered" requirements.
+   */
+  readonly atomTextById?:
+    ReadonlyMap<string, string> | Readonly<Record<string, string | undefined>>;
 }
 
 const compareString = (left: string, right: string): number =>
@@ -113,6 +120,123 @@ const compareString = (left: string, right: string): number =>
 export const FOCUS_COVERED_MAX = 3 as const;
 
 const clamp01 = (value: number, max: number): number => Math.max(0, Math.min(max, value));
+
+const GERMAN_FOLD_MAP: Readonly<Record<string, string>> = Object.freeze({
+  ä: "ae",
+  ö: "oe",
+  ü: "ue",
+  Ä: "ae",
+  Ö: "oe",
+  Ü: "ue",
+  ß: "ss",
+});
+
+const STOPWORDS = new Set([
+  "aber",
+  "alle",
+  "also",
+  "als",
+  "and",
+  "auf",
+  "aus",
+  "bei",
+  "beim",
+  "by",
+  "das",
+  "dem",
+  "den",
+  "der",
+  "des",
+  "die",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "einer",
+  "eines",
+  "for",
+  "from",
+  "ist",
+  "mit",
+  "muss",
+  "oder",
+  "shall",
+  "sich",
+  "soll",
+  "system",
+  "the",
+  "und",
+  "vom",
+  "von",
+  "wenn",
+  "werden",
+  "wird",
+  "with",
+  "zu",
+  "zum",
+  "zur",
+]);
+
+const foldGermanText = (value: string): string =>
+  value
+    .replace(/[äöüÄÖÜß]/gu, (match) => GERMAN_FOLD_MAP[match] ?? match)
+    .normalize("NFKC")
+    .toLowerCase();
+
+const tokensFromText = (value: string): readonly string[] =>
+  foldGermanText(value)
+    .match(/[a-z0-9][a-z0-9_-]*/gu)
+    ?.filter((token) => token.length >= 3 && !STOPWORDS.has(token)) ?? [];
+
+const uniqueTokens = (tokens: readonly string[]): readonly string[] =>
+  Object.freeze([...new Set(tokens)].sort(compareString));
+
+const candidateCoverageText = (
+  candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
+): string =>
+  [
+    candidate.title,
+    ...candidate.preconditions,
+    ...candidate.steps,
+    ...candidate.expectedResults,
+    ...candidate.tags,
+    candidate.priority,
+    candidate.riskClass,
+  ].join("\n");
+
+const atomTextLookup = (
+  atomTextById: BuildCoverageMapInput["atomTextById"],
+  atomId: QualityIntelligence.QualityIntelligenceEvidenceAtomId,
+): string | undefined => {
+  if (atomTextById === undefined) return undefined;
+  const key = String(atomId);
+  const maybeMap = atomTextById as { readonly get?: unknown };
+  return typeof maybeMap.get === "function"
+    ? (atomTextById as ReadonlyMap<string, string>).get(key)
+    : (atomTextById as Readonly<Record<string, string | undefined>>)[key];
+};
+
+const isHighSignalToken = (token: string): boolean =>
+  /\d/u.test(token) || token.length >= 8 || /^[a-z]{2,}[-_]\d/u.test(token);
+
+const hasCorroboratingCoverageText = (
+  candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
+  atomText: string | undefined,
+): boolean => {
+  if (atomText === undefined || atomText.trim().length === 0) return true;
+  const atomTokens = uniqueTokens(tokensFromText(atomText));
+  if (atomTokens.length === 0) return true;
+  const candidateTokens = new Set(tokensFromText(candidateCoverageText(candidate)));
+  if (candidateTokens.size === 0) return false;
+  let overlap = 0;
+  for (const token of atomTokens) {
+    if (!candidateTokens.has(token)) continue;
+    if (isHighSignalToken(token)) return true;
+    overlap += 1;
+    if (overlap >= 2) return true;
+  }
+  return false;
+};
 
 /**
  * Deterministic, run-size-INDEPENDENT structural confidence in [0, 1] that an atom is covered.
@@ -157,13 +281,14 @@ const deriveCoverageMapIdString = (
  *
  * Atoms with no candidate citation are omitted from the returned mappings — including a zero-
  * confidence mapping would violate the contract invariant (every mapping must cite at least one
- * candidate). This function intentionally does not infer coverage from free-text step mentions; the
- * confidence is based only on explicit `derivedFromAtomIds` provenance and citing-test focus.
+ * candidate). When canonical atom text is available, explicit `derivedFromAtomIds` provenance must
+ * be corroborated by the candidate text; broad or uncorroborated model citations remain visible but
+ * are downgraded to weak coverage.
  */
 export const buildCoverageMap = (
   input: BuildCoverageMapInput,
 ): QualityIntelligence.QualityIntelligenceCoverageMap => {
-  const { runId, atoms, candidates } = input;
+  const { runId, atoms, candidates, atomTextById } = input;
 
   const sortedAtoms = [...atoms].sort((left, right) =>
     compareString(left.canonicalHashSha256Hex, right.canonicalHashSha256Hex),
@@ -172,20 +297,36 @@ export const buildCoverageMap = (
   const mappings: QualityIntelligence.QualityIntelligenceCoverageMapping[] = [];
   for (const atom of sortedAtoms) {
     const candidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
+    const corroboratedCandidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
     // Track the most-focused citing test (smallest derivedFromAtomIds) so an atom covered only by
     // sprawling tests is classified weakly-covered, while a dedicated test yields "covered". The
     // confidence is atom-local — it does NOT depend on how many candidates the run produced.
     let bestFocus = Number.POSITIVE_INFINITY;
+    let bestCorroboratedFocus = Number.POSITIVE_INFINITY;
+    const atomText = atomTextLookup(atomTextById, atom.id);
     for (const candidate of candidates) {
       if (candidate.derivedFromAtomIds.includes(atom.id)) {
         candidateIds.push(candidate.id);
         bestFocus = Math.min(bestFocus, candidate.derivedFromAtomIds.length);
+        if (hasCorroboratingCoverageText(candidate, atomText)) {
+          corroboratedCandidateIds.push(candidate.id);
+          bestCorroboratedFocus = Math.min(
+            bestCorroboratedFocus,
+            candidate.derivedFromAtomIds.length,
+          );
+        }
       }
     }
     if (candidateIds.length === 0) {
       continue;
     }
-    const confidence = coverageConfidence(candidateIds.length, bestFocus);
+    const confidence =
+      atomTextById === undefined || corroboratedCandidateIds.length > 0
+        ? coverageConfidence(
+            atomTextById === undefined ? candidateIds.length : corroboratedCandidateIds.length,
+            atomTextById === undefined ? bestFocus : bestCorroboratedFocus,
+          )
+        : coverageConfidence(candidateIds.length, FOCUS_COVERED_MAX + 1);
     if (confidence <= 0) {
       continue;
     }

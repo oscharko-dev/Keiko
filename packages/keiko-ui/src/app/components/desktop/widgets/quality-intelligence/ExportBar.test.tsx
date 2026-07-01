@@ -339,7 +339,7 @@ describe("ExportBar — local adapter export", () => {
       expect(JSON.parse(String(init.body))).toEqual({
         adapter: "csv",
         dryRun: false,
-        approvedOnly: false,
+        approvedOnly: true,
       });
       expect(await screen.findByTestId("qi-export-success")).toHaveTextContent(
         /qi-run-export-885\.csv/,
@@ -750,9 +750,9 @@ describe("ExportBar — traceability matrix export", () => {
 // Tests — "Approved only" scope control (Issue #282 A11y-3 / AC3)
 // ---------------------------------------------------------------------------
 //
-// The ExportBar now shows an "Approved only" checkbox for local (non-TMS) adapters that controls
-// whether the export is scoped to approved candidates only. Default is unchecked (all test cases),
-// preserving the previous behaviour. TMS adapters hide the checkbox (server forces approvedOnly).
+// The ExportBar shows an "Approved only" checkbox for local (non-TMS) adapters that controls
+// whether the export is scoped to approved candidates only. Default is checked so ordinary downloads
+// use the reviewed deliverable scope. TMS adapters hide the checkbox (server forces approvedOnly).
 //
 // Contract: approvedOnly is forwarded to exportImpl as the third argument's approvedOnly key.
 
@@ -763,48 +763,31 @@ describe("ExportBar — approvedOnly scope control (Issue #282 A11y-3)", () => {
     expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeInTheDocument();
   });
 
-  it("defaults the 'Approved only' checkbox to unchecked (preserves previous scope)", () => {
+  it("defaults the 'Approved only' checkbox to checked (deliverable-safe scope)", () => {
     render(<ExportBar runId="run-001" />);
-    expect(screen.getByRole("checkbox", { name: /approved only/i })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /approved only/i })).toBeChecked();
   });
 
-  it("shows an 'all test cases' scope notice when unchecked", () => {
+  it("shows an 'approved only' scope notice by default", () => {
     render(<ExportBar runId="run-001" />);
-    expect(screen.getByTestId("qi-export-scope-notice")).toHaveTextContent(
-      /all test cases.*unapproved/i,
-    );
-  });
-
-  it("shows an 'approved only' scope notice when checked", async () => {
-    const user = userEvent.setup();
-    render(<ExportBar runId="run-001" />);
-    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
     expect(screen.getByTestId("qi-export-scope-notice")).toHaveTextContent(
       /approved test cases only/i,
     );
   });
 
-  it("passes approvedOnly:false to exportImpl when checkbox is unchecked (default)", async () => {
+  it("shows an 'all test cases' scope notice when explicitly unchecked", async () => {
     const user = userEvent.setup();
-    const exportImpl = makeLocalExportFake();
-    render(<ExportBar runId="run-scope-off" exportImpl={exportImpl} />);
-    await user.click(screen.getByRole("button", { name: /download/i }));
-    await waitFor(() => {
-      expect(exportImpl).toHaveBeenCalledOnce();
-    });
-    const [, , opts] = (exportImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
-      string,
-      string,
-      { approvedOnly: boolean },
-    ];
-    expect(opts.approvedOnly).toBe(false);
+    render(<ExportBar runId="run-001" />);
+    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
+    expect(screen.getByTestId("qi-export-scope-notice")).toHaveTextContent(
+      /all test cases.*unapproved/i,
+    );
   });
 
-  it("passes approvedOnly:true to exportImpl when checkbox is checked", async () => {
+  it("passes approvedOnly:true to exportImpl by default", async () => {
     const user = userEvent.setup();
     const exportImpl = makeLocalExportFake();
     render(<ExportBar runId="run-scope-on" exportImpl={exportImpl} />);
-    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
     await user.click(screen.getByRole("button", { name: /download/i }));
     await waitFor(() => {
       expect(exportImpl).toHaveBeenCalledOnce();
@@ -815,6 +798,23 @@ describe("ExportBar — approvedOnly scope control (Issue #282 A11y-3)", () => {
       { approvedOnly: boolean },
     ];
     expect(opts.approvedOnly).toBe(true);
+  });
+
+  it("passes approvedOnly:false to exportImpl when checkbox is explicitly unchecked", async () => {
+    const user = userEvent.setup();
+    const exportImpl = makeLocalExportFake();
+    render(<ExportBar runId="run-scope-off" exportImpl={exportImpl} />);
+    await user.click(screen.getByRole("checkbox", { name: /approved only/i }));
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(exportImpl).toHaveBeenCalledOnce();
+    });
+    const [, , opts] = (exportImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      string,
+      { approvedOnly: boolean },
+    ];
+    expect(opts.approvedOnly).toBe(false);
   });
 
   it("hides the 'Approved only' checkbox for TMS adapters", async () => {

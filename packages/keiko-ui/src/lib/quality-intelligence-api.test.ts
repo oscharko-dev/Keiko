@@ -381,6 +381,32 @@ describe("quality intelligence JSON BFF helpers", () => {
     );
   });
 
+  it("defaults export requests to approvedOnly when options omit the scope", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          dryRun: false,
+          adapter: "csv",
+          filename: "run-1.csv",
+          contentType: "text/csv",
+          byteLen: 12,
+          body: "sep=,\nid",
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await exportQiRun("run 1", "csv");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/quality-intelligence/runs/run%201/export",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ adapter: "csv", dryRun: false, approvedOnly: true }),
+      }),
+    );
+  });
+
   it("maps BFF JSON errors and unparseable failures to ApiError", async () => {
     vi.stubGlobal(
       "fetch",
