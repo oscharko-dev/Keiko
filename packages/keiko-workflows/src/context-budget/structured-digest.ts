@@ -1,7 +1,6 @@
 import {
   stripUnsafeFormatChars,
   type ContextAssumption,
-  type ContextCommandOutcome,
   type ContextPreservedFact,
   type ContextProvenanceRef,
   type ContextUserConstraint,
@@ -28,7 +27,6 @@ interface DigestBuckets {
   readonly decisions: string[];
   readonly openQuestions: string[];
   readonly filesInspected: string[];
-  readonly commandOutcomes: ContextCommandOutcome[];
   readonly failingTests: string[];
   readonly droppedCategories: string[];
 }
@@ -40,7 +38,6 @@ interface Classification {
 
 const MAX_ITEMS_PER_BUCKET = 8;
 const MAX_TEXT_CHARS = 260;
-const MAX_COMMAND_SUMMARY_CHARS = 180;
 const SAFE_RELATIVE_PATH = /^\.?(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][\w+.-]*$/u;
 const FILE_REF_PATTERN =
   /(?:^|[\s`"'(])((?:\.\/)?(?:[\w.-]+\/)+[\w.-]+\.[A-Za-z][\w+.-]*)(?::(\d+)(?::(\d+))?)?/gu;
@@ -48,7 +45,6 @@ const BACKTICK_SYMBOL_PATTERN = /`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)`/gu;
 const CALL_SYMBOL_PATTERN = /\b([A-Za-z_$][\w$]*)\(\)/gu;
 const ABSOLUTE_PATH_PATTERN = /(?:^|\s)(?:\/[\w.-]+(?:\/[\w.-]+)+|[A-Za-z]:\\[^\s]+)/u;
 const ERROR_PATTERN = /\b(?:FAIL|Error|TypeError|ReferenceError|SyntaxError|AssertionError):?\b/u;
-const COMMAND_PATTERN = /^(?:\$|>)\s*(.+)$/u;
 const SYMBOL_STOP_WORDS = new Set(["if", "for", "while", "switch", "return", "expect"]);
 const EXPLICIT_CLASSIFICATIONS = new Map<string, Classification["kind"]>([
   ["fact", "fact"],
@@ -82,7 +78,6 @@ function emptyBuckets(): DigestBuckets {
     decisions: [],
     openQuestions: [],
     filesInspected: [],
-    commandOutcomes: [],
     failingTests: [],
     droppedCategories: [],
   };
@@ -117,7 +112,6 @@ function consumeLine(buckets: DigestBuckets, line: string, sourceRef: ContextPro
   if (classification.kind !== "assumption") {
     collectReferences(buckets, line, sourceRef);
   }
-  collectCommandOutcome(buckets, line);
 }
 
 function cleanLine(rawLine: string, redactionSecrets: readonly string[]): string {
@@ -198,18 +192,6 @@ function collectReferences(
   }
 }
 
-function collectCommandOutcome(buckets: DigestBuckets, line: string): void {
-  const command = COMMAND_PATTERN.exec(line)?.[1]?.trim();
-  if (command === undefined || command.length === 0) {
-    return;
-  }
-  pushCommand(buckets, {
-    command: boundText(command),
-    exitCode: 0,
-    summary: "Command was referenced in compacted conversation; exit status was not available.",
-  });
-}
-
 function safeFileRefs(
   line: string,
 ): readonly { readonly path: string; readonly line?: number; readonly summary: string }[] {
@@ -287,17 +269,6 @@ function pushConstraint(buckets: DigestBuckets, constraint: ContextUserConstrain
   buckets.userConstraints.push(constraint);
 }
 
-function pushCommand(buckets: DigestBuckets, outcome: ContextCommandOutcome): void {
-  if (buckets.commandOutcomes.length >= MAX_ITEMS_PER_BUCKET) {
-    return;
-  }
-  const summary =
-    outcome.summary.length <= MAX_COMMAND_SUMMARY_CHARS
-      ? outcome.summary
-      : outcome.summary.slice(0, MAX_COMMAND_SUMMARY_CHARS);
-  buckets.commandOutcomes.push({ ...outcome, summary });
-}
-
 function pushUnique(values: string[], value: string): void {
   if (values.length >= MAX_ITEMS_PER_BUCKET || values.includes(value)) {
     return;
@@ -313,7 +284,6 @@ function compactBuckets(buckets: DigestBuckets): CompactionDigest {
     ...(buckets.decisions.length > 0 ? { decisions: buckets.decisions } : {}),
     ...(buckets.openQuestions.length > 0 ? { openQuestions: buckets.openQuestions } : {}),
     ...(buckets.filesInspected.length > 0 ? { filesInspected: buckets.filesInspected } : {}),
-    ...(buckets.commandOutcomes.length > 0 ? { commandOutcomes: buckets.commandOutcomes } : {}),
     ...(buckets.failingTests.length > 0 ? { failingTests: buckets.failingTests } : {}),
     ...(buckets.droppedCategories.length > 0
       ? { droppedCategories: buckets.droppedCategories }
