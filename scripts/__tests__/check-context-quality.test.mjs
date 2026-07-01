@@ -721,23 +721,23 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
       redactionSecrets: [f.earlySecret],
     });
     const plain = conversationForGateway(f.pressure);
-    const system = outcome.messages[0];
-    const summary = outcome.messages[1];
     const leaked = {
       ...outcome,
       messages: [
-        system,
-        { ...summary, content: `${summary.content} leaked ${f.earlySecret}` },
-        ...plain.slice(1),
+        {
+          ...outcome.messages[0],
+          content: `${outcome.messages[0].content} leaked ${f.earlySecret}`,
+        },
+        ...outcome.messages.slice(1),
       ],
     };
     expect(evaluateLongSessionCompaction(leaked, plain, f)).toBe(false);
   });
 
-  it("evaluateLongSessionCompaction is false when the summary segment is missing (mutation guard)", () => {
+  it("evaluateLongSessionCompaction is false when the summary block is missing (mutation guard)", () => {
     const f = buildChatHistoryFixtures();
     const plain = conversationForGateway(f.pressure);
-    // No summary head + no record: the budget-pressure invariant must fail.
+    // No generated summary block + no record: the budget-pressure invariant must fail.
     const stripped = { messages: plain, compaction: undefined };
     expect(evaluateLongSessionCompaction(stripped, plain, f)).toBe(false);
   });

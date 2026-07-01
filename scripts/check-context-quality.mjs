@@ -502,8 +502,25 @@ function someContentIncludes(messages, needle) {
   return messages.some((message) => message.content.includes(needle));
 }
 
-function hasSystemThenSummary(messages) {
-  return messages[0]?.role === "system" && messages[1]?.role === "user";
+function hasSystemScopedGeneratedSummary(messages, plain) {
+  const systemMessage = messages[0];
+  const plainSystemContent = plain[0]?.content;
+  if (systemMessage?.role !== "system" || plainSystemContent === undefined) {
+    return false;
+  }
+  if (!systemMessage.content.includes(plainSystemContent)) {
+    return false;
+  }
+  if (!systemMessage.content.includes("Automated structured summary")) {
+    return false;
+  }
+  if (!systemMessage.content.includes("not user-authored")) {
+    return false;
+  }
+  return !messages.some(
+    (message) =>
+      message.role === "user" && message.content.includes("Automated structured summary"),
+  );
 }
 
 function hasExactLatestUserInstruction(messages, instruction) {
@@ -526,7 +543,7 @@ function buildFullGatewayProjection(messages) {
 }
 
 function retainedTailMatches(outcomeMessages, plainMessages, itemsBefore) {
-  return deepEqual(outcomeMessages.slice(2), plainMessages.slice(1 + itemsBefore));
+  return deepEqual(outcomeMessages.slice(1), plainMessages.slice(1 + itemsBefore));
 }
 
 function evaluatePressureCompactionContent(outcome, plain, fixtures) {
@@ -534,7 +551,7 @@ function evaluatePressureCompactionContent(outcome, plain, fixtures) {
   if (!hasValidCompactionRecord(compaction)) {
     return false;
   }
-  if (!hasSystemThenSummary(messages)) {
+  if (!hasSystemScopedGeneratedSummary(messages, plain)) {
     return false;
   }
   if (!retainedTailMatches(messages, plain, compaction.itemsBefore)) {
@@ -556,10 +573,11 @@ function evaluatePressureCompactionContent(outcome, plain, fixtures) {
 }
 
 // chatLongSessionCompaction (required true): the full budget-pressure invariant set over the
-// oversized fixture. (1) a validated ContextCompactionRecord is present; (2) messages[0] stays the
-// system message and messages[1] is the role:"user" summary segment; (3) the LATEST user
-// instruction survives VERBATIM; (4) the dropped early secret is NOT present verbatim; (5) the
-// dropped durable instruction's raw text + distinctive marker are NOT present verbatim (digested).
+// oversized fixture. (1) a validated ContextCompactionRecord is present; (2) messages[0] is the
+// system-scoped generated summary block and no generated summary is injected as role:"user"; (3)
+// the LATEST user instruction survives VERBATIM; (4) the dropped early secret is NOT present
+// verbatim; (5) the dropped durable instruction's raw text + distinctive marker are NOT present
+// verbatim (digested).
 // `plain` is conversationForGateway(pressureHistory) — the un-compacted projection used only to
 // check the current instruction and redaction facts, not tail preservation.
 export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
