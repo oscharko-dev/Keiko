@@ -199,6 +199,16 @@ describe("adaptToMarkdown — export sanitisation", () => {
     expect(out).not.toContain("<script>");
   });
 
+  it("escapes angle brackets inside Markdown link text", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["[<script](1)"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\[\\<script\\](1)");
+    expect(out).not.toContain("[<script](1)");
+  });
+
   it("escapes existing backslashes before Markdown-active syntax", () => {
     expect(escapeMarkdownActiveSyntax("\\")).toBe("\\\\");
     const escaped = escapeMarkdownActiveSyntax("\\<script>alert(1)</script>");

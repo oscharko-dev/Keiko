@@ -32,26 +32,7 @@ export function inlineFields(values: readonly string[]): string[] {
   return values.map(inlineField);
 }
 
-const FENCED_CODE = /```/gu;
-const BACKSLASH = /\\/gu;
-const IMAGE_OPEN = /!\[/gu;
-const REFERENCE_DEFINITION = /\[([^\]]+)\]:/gu;
-const REFERENCE_LINK = /(?<!!)\[([^\]]*)\]\[([^\]]*)\]/gu;
-const LINK_OPEN = /(?<!!)\[([^\]]*)\]\(/gu;
-const AUTOLINK = /<((?:https?|mailto):[^>\s]+)>/giu;
-const HTML_TAG = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?>/gu;
-
-function escapeHtmlTagMarkdownSyntax(tag: string): string {
-  let escaped = "";
-  for (const char of tag) {
-    if (char === "\\" || char === "<" || char === ">") {
-      escaped += `\\${char}`;
-    } else {
-      escaped += char;
-    }
-  }
-  return escaped;
-}
+const MARKDOWN_ACTIVE_CHARS = new Set<string>(["\\", "`", "!", "[", "]", "<", ">"]);
 
 /**
  * Escape active Markdown syntax that can still exist after a field has been folded to one line.
@@ -59,16 +40,13 @@ function escapeHtmlTagMarkdownSyntax(tag: string): string {
  * images, fenced blocks, reference definitions, autolinks, or raw HTML.
  */
 export function escapeMarkdownActiveSyntax(value: string): string {
-  return value
-    .replace(BACKSLASH, "\\\\")
-    .replace(FENCED_CODE, "\\`\\`\\`")
-    .replace(IMAGE_OPEN, "\\!\\[")
-    .replace(REFERENCE_DEFINITION, (_match: string, label: string): string => `\\[${label}\\]:`)
-    .replace(
-      REFERENCE_LINK,
-      (_match: string, text: string, ref: string): string => `\\[${text}\\]\\[${ref}\\]`,
-    )
-    .replace(LINK_OPEN, (_match: string, inner: string): string => `\\[${inner}\\](`)
-    .replace(AUTOLINK, (_match: string, inner: string): string => `\\<${inner}\\>`)
-    .replace(HTML_TAG, escapeHtmlTagMarkdownSyntax);
+  let escaped = "";
+  for (const char of value) {
+    if (MARKDOWN_ACTIVE_CHARS.has(char)) {
+      escaped += `\\${char}`;
+    } else {
+      escaped += char;
+    }
+  }
+  return escaped;
 }
