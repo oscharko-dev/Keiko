@@ -25,9 +25,11 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
+const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
 
 let server: Server;
 let port: number;
@@ -149,6 +151,11 @@ function deps(
     configPresent: true,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
+    contextProfile: deriveContextProfile({
+      maxInputTokens: 1_000_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    }),
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => model,
@@ -161,13 +168,16 @@ function base(): string {
   return `http://${UI_HOST}:${String(port)}`;
 }
 
-function customModelConfig(modelId = "example-private-chat"): GatewayConfig {
+function customModelConfig(
+  modelId = "example-private-chat",
+  apiKey = "test-config-secret-value-1234567890",
+): GatewayConfig {
   return {
     providers: [
       {
         modelId,
         baseUrl: "https://provider.example/v1",
-        apiKey: "test-config-secret-value-1234567890",
+        apiKey,
         timeoutMs: 30_000,
         maxRetries: 0,
         retryBaseDelayMs: 500,
@@ -392,6 +402,84 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  it("compacts long chat history from the active model profile resolver when the singleton profile is absent", async () => {
+    await restartWithDeps(
+      deps(fakeModel("compacted response"), {
+        config: customModelConfig(CHAT_MODEL, NON_PATTERN_SECRET),
+        contextProfile: undefined,
+        contextProfileForModel: () => DEFAULT_CONTEXT_PROFILE,
+      }),
+    );
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const now = Date.now();
+    const huge = "x".repeat(300_000);
+    const history = [
+      {
+        chatId: created.chat.id,
+        role: "user" as const,
+        content: `history turn 0 ${NON_PATTERN_SECRET} ${huge}`,
+        timestamp: now,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId: created.chat.id,
+        role: "assistant" as const,
+        content: `history turn 1 ${huge}`,
+        timestamp: now + 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId: created.chat.id,
+        role: "user" as const,
+        content: `history turn 2 ${huge}`,
+        timestamp: now + 2,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+    ];
+    store.createMessages(history);
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Summarize the latest state",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages[0]?.role).toBe("system");
+    expect(seenRequests[0]?.messages[0]?.content).toContain("Automated structured summary");
+    expect(seenRequests[0]?.messages[0]?.content).toContain("not user-authored");
+    expect(seenRequests[0]?.messages[0]?.content).not.toContain(NON_PATTERN_SECRET);
+    expect(
+      seenRequests[0]?.messages.some(
+        (message) =>
+          message.role === "user" && message.content.includes("Automated structured summary"),
+      ),
+    ).toBe(false);
   });
 
   it("appends realtime voice turns without calling the chat model", async () => {

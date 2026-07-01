@@ -20,12 +20,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildChatPatch,
-  buildGatewayMessages,
+  buildGatewayAssembly,
   buildMemoryResult,
   collectMemoryActions,
   createAssistantMessage,
   createUserMessage,
-  deriveCompactionOutcome,
   desktopChatErrorResult,
   emptyMemoryResult,
   prepareDesktopChatSend,
@@ -168,8 +167,8 @@ async function streamAndPersist(
   const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
   const startedAt = Date.now();
   const userMessage = createUserMessage(deps, request);
-  const outcome = deriveCompactionOutcome(deps, request);
-  const messages = buildGatewayMessages(deps, request, memory.context.text);
+  const assembly = buildGatewayAssembly(deps, request, memory, modelId);
+  const messages = assembly.messages;
   const stream = callStream({ modelId, messages }, controller.signal);
   const turn = await streamConversation(ctx, deps, stream, controller);
   if (turn === undefined || controller.signal.aborted) {
@@ -187,7 +186,7 @@ async function streamAndPersist(
     userMessage,
   );
   recordChatCompaction(deps, {
-    outcome,
+    compaction: assembly.compaction,
     request,
     modelId,
     messageCount: messageCountBeforeTurn,

@@ -250,7 +250,7 @@ function fakeModel(): ModelPort {
   };
 }
 
-function routeDeps(withProfile: boolean): UiHandlerDeps {
+function routeDeps(withProfile: boolean, overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   const config = modelConfig();
   return {
     config,
@@ -262,6 +262,7 @@ function routeDeps(withProfile: boolean): UiHandlerDeps {
     modelPortFactory: () => fakeModel(),
     store,
     ...(withProfile ? { contextProfile: DEFAULT_CONTEXT_PROFILE } : {}),
+    ...overrides,
   };
 }
 
@@ -323,5 +324,17 @@ describe("handleGroundedAsk wire summary call site (ADR-0057 D1)", () => {
     );
     expect(result.status).toBe(200);
     expect(asConnected(result).contextPack.contextSummary).toBeUndefined();
+  });
+
+  it("emits contextSummary from the active model profile resolver when the singleton profile is absent", async () => {
+    const chatId = scopedChat();
+    const pack = attachContextBudgetDiagnostics(basePack(), DEFAULT_CONTEXT_PROFILE);
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "investigate MyClass", modelId: CHAT_MODEL })),
+      routeDeps(false, { contextProfileForModel: () => DEFAULT_CONTEXT_PROFILE }),
+      runner(pack),
+    );
+    expect(result.status).toBe(200);
+    expect(asConnected(result).contextPack.contextSummary).toBeDefined();
   });
 });

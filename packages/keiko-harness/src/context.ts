@@ -34,10 +34,13 @@ export interface RunContext {
   // tier injects an implementation backed by the keiko-workflows shapers; the harness never imports
   // keiko-workflows (no new package edge).
   readonly shaperPort?: HarnessShaperPort | undefined;
-  // Accumulator of shaped tool observations produced this run (ADR-0055 D4, PR4-W3). NEVER
-  // serialized into `messages` and NOT part of contextBytes; diagnostic-only in PR4. Stays empty
-  // when no shaperPort is injected.
+  // Accumulator of shaped tool observations produced this run (ADR-0055 D4, PR4-W3). Stays empty
+  // when no shaperPort is injected. The raw observation object is not appended directly; the
+  // executor may render a bounded compact message from it only under context-budget pressure.
   shapedObservations: ContextToolObservation[];
+  // Compact model-facing alternatives keyed by toolCallId. The executor only reads this under
+  // budget pressure; small runs keep raw role:tool output byte-identical.
+  compactedToolMessages: Map<string, ChatMessage>;
   // Accumulating conversation passed to the model on each call.
   messages: ChatMessage[];
   // The most recent model response; the tool-call handler reads its toolCalls.

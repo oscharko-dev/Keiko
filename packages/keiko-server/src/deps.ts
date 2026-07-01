@@ -8,10 +8,12 @@
 
 import {
   createDefaultChatCapability,
+  findConfiguredCapability,
   loadConfigFromFile,
   loadEgressConfigFromFile,
   parseGatewayConfig,
   resolveOutboundHttpEgressConfig,
+  selectConfiguredModel,
   type EnvSource,
   type GatewayConfig,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -25,6 +27,7 @@ import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfileFromCapability,
   type ContextProfile,
   type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
@@ -184,6 +187,7 @@ export interface GatewayDiscoveredModels {
 }
 
 export type GatewayModelDiscoveryOutput = readonly string[] | GatewayDiscoveredModels;
+export type ContextProfileResolver = (modelId: string) => ContextProfile;
 
 export interface UiHandlerDeps {
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -301,8 +305,7 @@ export interface UiHandlerDeps {
   // Production builds this over the configured Gateway; tests inject a deterministic chat gateway
   // so the normal indexing route can prove contextual text reaches embedding/FTS without network IO.
   readonly localKnowledgeContextualRetrievalChatGateway?:
-    | ContextualRetrievalChatGateway
-    | undefined;
+    ContextualRetrievalChatGateway | undefined;
   // Work Package 2 — optional LiteLLM/Cohere-compatible reranker seam. Production leaves this
   // undefined and uses requestLiteLLMRerank with config.reranker; tests inject deterministic
   // structural outcomes without touching global fetch.
@@ -346,11 +349,17 @@ export interface UiHandlerDeps {
   // Issue #1633 (Epic #1631) — ephemeral, non-durable PDF preview session registry. Optional so tests
   // can inject a deterministic clock/TTL; production falls back to a per-BFF in-memory registry.
   readonly pdfCitationPreviewSessions?: PdfCitationPreviewSessionManager | undefined;
-  // ADR-0055 D5 (PR4-W1) — deterministic context-engineering profile. buildUiHandlerDeps
-  // provisions DEFAULT_CONTEXT_PROFILE so the grounded diagnostics observer is active by default
-  // (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam: injecting
-  // `undefined` pins the legacy no-profile code path (observer not invoked, pack byte-identical).
+  // ADR-0055 D5 (PR4-W1) / Issue #1722 — deterministic context-engineering profile. buildUiHandlerDeps
+  // provisions the selected chat model's derived profile when capability metadata is available,
+  // otherwise falls back to DEFAULT_CONTEXT_PROFILE so the grounded diagnostics observer is active
+  // by default (non-mutating, additive `diagnostics.contextBudget?`). Optional + test seam:
+  // injecting `undefined` pins the legacy no-profile code path (observer not invoked, pack
+  // byte-identical).
   readonly contextProfile?: ContextProfile | undefined;
+  // Issue #1722 — single model-keyed context-profile source. buildUiHandlerDeps resolves this from
+  // configured chat capabilities so later prompt assembly / compaction wiring can ask for the
+  // exact profile of the selected model without inventing a second budget path.
+  readonly contextProfileForModel?: ContextProfileResolver | undefined;
   // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0058 D4). Lets the BFF
   // dictation route call the provider-neutral STT adapter without touching global fetch in tests.
   // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
@@ -571,8 +580,67 @@ export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undef
   return deps.gatewayConfig?.current() ?? deps.config;
 }
 
+function configuredChatContextProfile(
+  config: GatewayConfig,
+  modelId: string,
+): ContextProfile | undefined {
+  const capability = findConfiguredCapability(config, modelId);
+  return capability?.kind === "chat" ? deriveContextProfileFromCapability(capability) : undefined;
+}
+
+function buildContextProfileResolver(
+  currentConfig: () => GatewayConfig | undefined,
+): ContextProfileResolver {
+  const cache = new WeakMap<GatewayConfig, Map<string, ContextProfile>>();
+  return (modelId: string): ContextProfile => {
+    const config = currentConfig();
+    if (config === undefined) {
+      return DEFAULT_CONTEXT_PROFILE;
+    }
+    let modelProfiles = cache.get(config);
+    if (modelProfiles === undefined) {
+      modelProfiles = new Map<string, ContextProfile>();
+      cache.set(config, modelProfiles);
+    }
+    const cached = modelProfiles.get(modelId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const profile = configuredChatContextProfile(config, modelId);
+    if (profile === undefined) {
+      return DEFAULT_CONTEXT_PROFILE;
+    }
+    modelProfiles.set(modelId, profile);
+    return profile;
+  };
+}
+
+function defaultContextProfile(
+  config: GatewayConfig | undefined,
+  resolveProfile: ContextProfileResolver,
+): ContextProfile {
+  if (config === undefined) {
+    return DEFAULT_CONTEXT_PROFILE;
+  }
+  const modelId = selectConfiguredModel(config, { kind: "chat" });
+  return modelId === undefined ? DEFAULT_CONTEXT_PROFILE : resolveProfile(modelId);
+}
+
 export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
+}
+
+export function currentContextProfileForModel(
+  deps: Pick<UiHandlerDeps, "contextProfile" | "contextProfileForModel">,
+  modelId: string | undefined,
+): ContextProfile | undefined {
+  if (modelId !== undefined) {
+    const profile = deps.contextProfileForModel?.(modelId);
+    if (profile !== undefined) {
+      return profile;
+    }
+  }
+  return deps.contextProfile;
 }
 
 export function currentGatewayEgressConfig(
@@ -1526,6 +1594,61 @@ function runtimePathFields(options: BuildHandlerDepsOptions): {
   return { resolvedUiDbPath, runtimeConfigPath: localGatewayConfigPath(resolvedUiDbPath) };
 }
 
+interface UiHandlerDepsAssemblyArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly resolvedUiDbPath: string;
+  readonly resolvedEvidenceDir: string;
+  readonly config: GatewayConfig | undefined;
+  readonly configPresent: boolean;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly egress: GatewayEgressConfig | undefined;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly bundle: PersistenceBundle;
+  readonly contextProfileForModel: ContextProfileResolver;
+}
+
+function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
+  return {
+    ...gatewayConfigFields(args.config, args.configPresent),
+    evidenceStore: args.evidenceStore,
+    evidenceDir: args.resolvedEvidenceDir,
+    env: args.options.env,
+    egress: args.egress,
+    redactor: args.liveRedactor,
+    registry: args.options.registry ?? createRunRegistry(),
+    modelPortFactory: args.options.modelPortFactory ?? defaultModelPortFactory(args.runtimeConfig),
+    redactionSecrets: runtimeRedactionSecrets(args.options.env, args.runtimeConfig, args.egress),
+    store: args.bundle.uiStore,
+    uiDbPath: args.resolvedUiDbPath,
+    preferredProjectPath: args.bundle.preferredProjectPath,
+    gatewayConfig: args.runtimeConfig,
+    gatewaySetupTester: args.options.gatewaySetupTester,
+    gatewayModelDiscovery: args.options.gatewayModelDiscovery,
+    figmaCredentialTester: args.options.figmaCredentialTester,
+    localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+    contextProfile: defaultContextProfile(
+      args.runtimeConfig.current(),
+      args.contextProfileForModel,
+    ),
+    contextProfileForModel: args.contextProfileForModel,
+    ...buildPeripherals({
+      options: args.options,
+      uiStore: args.bundle.uiStore,
+      evidenceStore: args.evidenceStore,
+      redactString: args.redactString,
+      liveRedactor: args.liveRedactor,
+      runtimeConfig: args.runtimeConfig,
+      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
+      runtimeStateDir: dirname(args.resolvedUiDbPath),
+    }),
+    consolidationJobs: createConsolidationJobRegistry({ evidenceStore: args.evidenceStore }),
+    ...optionalPersistenceServices(args.bundle),
+  };
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
   const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
@@ -1541,37 +1664,21 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({ env: options.env });
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
+  const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle);
-  return {
-    ...gatewayConfigFields(config, configPresent),
-    evidenceStore,
-    evidenceDir: resolvedEvidenceDir,
-    env: options.env,
+  return assembleUiHandlerDeps({
+    options,
+    resolvedUiDbPath,
+    resolvedEvidenceDir,
+    config,
+    configPresent,
+    runtimeConfig,
     egress,
-    redactor: liveRedactor,
-    registry: options.registry ?? createRunRegistry(),
-    modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
-    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig, egress),
-    store: bundle.uiStore,
-    uiDbPath: resolvedUiDbPath,
-    preferredProjectPath: bundle.preferredProjectPath,
-    gatewayConfig: runtimeConfig,
-    gatewaySetupTester: options.gatewaySetupTester,
-    gatewayModelDiscovery: options.gatewayModelDiscovery,
-    figmaCredentialTester: options.figmaCredentialTester,
+    evidenceStore,
+    redactString,
+    liveRedactor,
     localKnowledgeKeyProvider,
-    contextProfile: DEFAULT_CONTEXT_PROFILE,
-    ...buildPeripherals({
-      options,
-      uiStore: bundle.uiStore,
-      evidenceStore,
-      redactString,
-      liveRedactor,
-      runtimeConfig,
-      localKnowledgeKeyProvider,
-      runtimeStateDir: dirname(resolvedUiDbPath),
-    }),
-    consolidationJobs: createConsolidationJobRegistry({ evidenceStore }),
-    ...optionalPersistenceServices(bundle),
-  };
+    bundle,
+    contextProfileForModel,
+  });
 }
