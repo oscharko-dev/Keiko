@@ -335,14 +335,14 @@ describe("captureSalientFromTurn", () => {
     expect(seen[0]?.responseFormat?.type).toBe("json_schema");
   });
 
-  it("forwards assistant text to the salience model as context-only", async () => {
+  it("forwards assistant text to the salience model as a context-only assistant message", async () => {
     const vault = makeVault();
-    let saliencePrompt = "";
+    let salienceMessages: GatewayRequest["messages"] = [];
     const deps = makeDeps({
       memoryVault: vault,
       modelPortFactory: () => ({
         call(request): Promise<NormalizedResponse> {
-          saliencePrompt = request.messages.map((message) => message.content).join("\n");
+          salienceMessages = request.messages;
           return Promise.resolve({
             modelId: request.modelId,
             content: ATLAS_FACTS,
@@ -368,10 +368,17 @@ describe("captureSalientFromTurn", () => {
       "gpt-test",
       "assistant-context-marker",
     );
-    // User text is the extraction subject; assistant text is forwarded as a context-only block so
-    // the model can resolve ambiguous affirmative turns (e.g. "yes, exactly that").
-    expect(saliencePrompt).toContain(USER_TEXT);
-    expect(saliencePrompt).toContain("assistant-context-marker");
+    expect(salienceMessages.map((message) => message.role)).toEqual([
+      "system",
+      "assistant",
+      "user",
+    ]);
+    const userMessage = salienceMessages.find((message) => message.role === "user");
+    const assistantMessage = salienceMessages.find((message) => message.role === "assistant");
+    expect(userMessage?.content).toContain(USER_TEXT);
+    expect(userMessage?.content).not.toContain("assistant-context-marker");
+    expect(assistantMessage?.content).toContain("CONTEXT ONLY");
+    expect(assistantMessage?.content).toContain("assistant-context-marker");
   });
 
   it("persists records that carry tags and the salience captureRationale through validation", async () => {
