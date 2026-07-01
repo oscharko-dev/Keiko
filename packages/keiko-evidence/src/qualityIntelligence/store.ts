@@ -414,6 +414,8 @@ export interface QualityIntelligenceRecordInput {
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
   /** Optional run quality score — percent of candidates with a strong judge outcome [0-100]; null when judge was skipped. Added in #736. */
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
+  /** Optional count-only judge diagnostics separating judged from unjudged candidates. */
+  readonly qualityDiagnostics?: QualityIntelligenceEvidenceManifest["qualityDiagnostics"];
   /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
   /** Optional per-atom content fingerprints for atom-aware drift detection (#798/#799). */
@@ -516,6 +518,7 @@ function optionalManifestFields(
     QualityIntelligenceEvidenceManifest,
     | "coverageMatrix"
     | "qualityScore"
+    | "qualityDiagnostics"
     | "sourceFingerprints"
     | "atomFingerprints"
     | "modelId"
@@ -529,6 +532,9 @@ function optionalManifestFields(
     // ids / sha-256 hashes / numbers that carry no free text and need no persist-time scrub.
     ...(redacted.coverageMatrix !== undefined ? { coverageMatrix: redacted.coverageMatrix } : {}),
     ...(input.qualityScore !== undefined ? { qualityScore: input.qualityScore } : {}),
+    ...(input.qualityDiagnostics !== undefined
+      ? { qualityDiagnostics: input.qualityDiagnostics }
+      : {}),
     ...(input.sourceFingerprints !== undefined
       ? { sourceFingerprints: input.sourceFingerprints }
       : {}),
@@ -663,9 +669,9 @@ function foldRedactionSummary(
  * integrity hash, the redaction attestation, and whether it was a dry-run. The disabled external-TMS
  * write path produces no artifact and therefore records nothing.
  *
- * Rows are deduplicated by `(id, dryRun)` so re-exporting the same adapter in the same mode is
- * idempotent — the audit captures each distinct (artifact, mode) once rather than once per click,
- * which also bounds manifest growth.
+ * Rows are deduplicated by exact `(id, dryRun)` to make append retries idempotent. Export routes
+ * mint a fresh id for each successful user action, so repeated downloads are still auditable as
+ * distinct actions while a retried append of the same row remains safe.
  *
  * Invariants preserved (mirrors {@link recordQualityIntelligenceRun}):
  *  - the new row's string leaves pass the persist redactor before assembly (the row carries only

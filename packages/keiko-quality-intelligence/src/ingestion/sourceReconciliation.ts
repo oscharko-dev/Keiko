@@ -14,6 +14,7 @@ import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 
 type Envelope = QualityIntelligence.QualityIntelligenceSourceEnvelope;
 type EnvelopeId = QualityIntelligence.QualityIntelligenceSourceEnvelopeId;
+type EnvelopeIdentity = string;
 
 /** A logical group of envelopes (e.g. one Conversation Center thread, one repo scan). */
 export interface SourceGroup {
@@ -33,7 +34,7 @@ export interface ProvenanceEntry {
 export interface ReconciledSourceSet {
   /** Distinct envelopes in encounter order across the input groups. */
   readonly envelopes: readonly Envelope[];
-  /** One provenance entry per distinct envelope id. */
+  /** One provenance entry per distinct envelope identity (kind + id). */
   readonly provenance: readonly ProvenanceEntry[];
   /** Envelope ids that appeared in more than one group. */
   readonly duplicatedAcrossGroups: readonly EnvelopeId[];
@@ -44,26 +45,26 @@ export interface ReconciledSourceSet {
 const indexEnvelope = (
   envelope: Envelope,
   groupLabel: string,
-  byId: Map<EnvelopeId, Envelope>,
-  provById: Map<EnvelopeId, { firstGroupLabel: string; contributingGroupLabels: string[] }>,
+  byIdentity: Map<EnvelopeIdentity, Envelope>,
+  provByIdentity: Map<
+    EnvelopeIdentity,
+    { firstGroupLabel: string; contributingGroupLabels: string[] }
+  >,
   conflicts: Set<EnvelopeId>,
   duplicates: Set<EnvelopeId>,
 ): void => {
-  const existing = byId.get(envelope.id);
+  const identity = `${envelope.kind}\u0000${envelope.id}`;
+  const existing = byIdentity.get(identity);
   if (existing === undefined) {
-    byId.set(envelope.id, envelope);
-    provById.set(envelope.id, {
+    byIdentity.set(identity, envelope);
+    provByIdentity.set(identity, {
       firstGroupLabel: groupLabel,
       contributingGroupLabels: [groupLabel],
     });
     return;
   }
-  if (existing.kind !== envelope.kind) {
-    conflicts.add(envelope.id);
-    return;
-  }
   duplicates.add(envelope.id);
-  const prov = provById.get(envelope.id);
+  const prov = provByIdentity.get(identity);
   if (prov !== undefined && !prov.contributingGroupLabels.includes(groupLabel)) {
     prov.contributingGroupLabels.push(groupLabel);
   }
@@ -74,15 +75,14 @@ const indexEnvelope = (
  *
  * Invariants:
  *   * Order: first appearance wins (encounter order across groups, then within group).
- *   * Conflict: same id with different kind = both contributors are recorded in
- *     `conflictingEnvelopeIds` and neither appears in `envelopes`.
- *   * Duplicate: same id with same kind = first envelope kept; later groups appear in
+ *   * Identity: kind + id mirrors source-mix planning. Same id with different kind is distinct.
+ *   * Duplicate: same kind + same id = first envelope kept; later groups appear in
  *     the provenance entry's `contributingGroupLabels`.
  */
 export const reconcileSourceGroups = (groups: readonly SourceGroup[]): ReconciledSourceSet => {
-  const byId = new Map<EnvelopeId, Envelope>();
-  const provById = new Map<
-    EnvelopeId,
+  const byIdentity = new Map<EnvelopeIdentity, Envelope>();
+  const provByIdentity = new Map<
+    EnvelopeIdentity,
     { firstGroupLabel: string; contributingGroupLabels: string[] }
   >();
   const conflicts = new Set<EnvelopeId>();
@@ -90,23 +90,21 @@ export const reconcileSourceGroups = (groups: readonly SourceGroup[]): Reconcile
 
   for (const group of groups) {
     for (const envelope of group.envelopes) {
-      indexEnvelope(envelope, group.groupLabel, byId, provById, conflicts, duplicates);
+      indexEnvelope(envelope, group.groupLabel, byIdentity, provByIdentity, conflicts, duplicates);
     }
   }
 
   for (const id of conflicts) {
-    byId.delete(id);
-    provById.delete(id);
     duplicates.delete(id);
   }
 
   const envelopes: Envelope[] = [];
   const provenance: ProvenanceEntry[] = [];
-  for (const [id, envelope] of byId) {
-    const prov = provById.get(id);
+  for (const [identity, envelope] of byIdentity) {
+    const prov = provByIdentity.get(identity);
     envelopes.push(envelope);
     provenance.push({
-      envelopeId: id,
+      envelopeId: envelope.id,
       firstGroupLabel: prov?.firstGroupLabel ?? "",
       contributingGroupLabels: prov?.contributingGroupLabels ?? [],
     });

@@ -13,6 +13,7 @@ export {
 
 export {
   parseAdfDocument,
+  renderAdfDocumentText,
   AdfParserError,
   ADF_PARSER_DEFAULTS,
   type AdfParserErrorCode,

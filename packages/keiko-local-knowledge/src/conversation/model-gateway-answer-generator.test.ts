@@ -180,4 +180,12 @@ describe("ModelGatewayAnswerGenerator", () => {
     const second = buildPromptMessages("q", pack);
     expect(JSON.stringify(first)).toBe(JSON.stringify(second));
   });
+
+  it("adds stricter citation instructions for repair attempts", () => {
+    const refs = [reference("ch-1")];
+    const pack = assembleGroundedContext(refs);
+    const messages = buildPromptMessages("q", pack, (value) => value, true);
+    expect(messages[1]?.content).toContain("previous answer was rejected");
+    expect(messages[1]?.content).toContain("Do not invent citations");
+  });
 });

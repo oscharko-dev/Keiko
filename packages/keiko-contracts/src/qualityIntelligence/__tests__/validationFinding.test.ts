@@ -19,15 +19,28 @@ import { assertQualityIntelligenceNever } from "../assertNever.js";
 
 const makeFinding = (
   kind: QualityIntelligenceValidationFindingKind,
-): QualityIntelligenceValidationFinding => ({
-  kind,
-  id: asQualityIntelligenceValidationFindingId(`finding-${kind}`),
-  runId: asQualityIntelligenceRunId("run-001"),
-  candidateId: asQualityIntelligenceTestCaseId("tc-001"),
-  severity: "medium",
-  summary: "redacted finding summary",
-  evidenceAtomIds: [asQualityIntelligenceEvidenceAtomId("atom-1")],
-});
+): QualityIntelligenceValidationFinding => {
+  const common = {
+    id: asQualityIntelligenceValidationFindingId(`finding-${kind}`),
+    runId: asQualityIntelligenceRunId("run-001"),
+    candidateId: asQualityIntelligenceTestCaseId("tc-001"),
+    severity: "medium" as const,
+    summary: "redacted finding summary",
+    evidenceAtomIds: [asQualityIntelligenceEvidenceAtomId("atom-1")],
+  };
+  if (kind === "requirement-quality") {
+    return {
+      ...common,
+      kind,
+      category: "ambiguity",
+      confidence: 0.86,
+    };
+  }
+  return {
+    ...common,
+    kind,
+  };
+};
 
 const narrow = (f: QualityIntelligenceValidationFinding): string => {
   switch (f.kind) {
@@ -45,6 +58,8 @@ const narrow = (f: QualityIntelligenceValidationFinding): string => {
       return f.kind;
     case "coverage-gap":
       return f.kind;
+    case "requirement-quality":
+      return f.kind;
     case "test-quality":
       return f.kind;
     default:
@@ -53,7 +68,7 @@ const narrow = (f: QualityIntelligenceValidationFinding): string => {
 };
 
 describe("QualityIntelligenceValidationFinding", () => {
-  it("enumerates all eight kinds", () => {
+  it("enumerates all nine kinds", () => {
     expect(QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS).toEqual<
       readonly QualityIntelligenceValidationFindingKind[]
     >([
@@ -64,6 +79,7 @@ describe("QualityIntelligenceValidationFinding", () => {
       "policy-violation",
       "manual-rejection",
       "coverage-gap",
+      "requirement-quality",
       "test-quality",
     ]);
   });

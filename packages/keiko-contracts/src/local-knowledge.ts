@@ -39,11 +39,18 @@ export type VectorId = string & { readonly [VectorIdBrand]: true };
 
 // ─── Embedding model + parser identity ────────────────────────────────────────
 export type EmbeddingVectorMetric = "cosine" | "euclidean" | "dot";
+export type EmbeddingVectorNormalization = "l2" | "none" | "unknown";
 
 export const EMBEDDING_VECTOR_METRICS: readonly EmbeddingVectorMetric[] = [
   "cosine",
   "euclidean",
   "dot",
+] as const;
+
+export const EMBEDDING_VECTOR_NORMALIZATIONS: readonly EmbeddingVectorNormalization[] = [
+  "l2",
+  "none",
+  "unknown",
 ] as const;
 
 export interface EmbeddingModelIdentity {
@@ -52,6 +59,10 @@ export interface EmbeddingModelIdentity {
   readonly vectorDimensions: number;
   readonly vectorMetric: EmbeddingVectorMetric;
   readonly modelRevision?: string;
+  readonly normalization?: EmbeddingVectorNormalization;
+  readonly instructionVersion?: string;
+  readonly embeddingSpaceFingerprint?: string;
+  readonly dimensionsParam?: number;
 }
 
 export interface ParserDependencyVersion {

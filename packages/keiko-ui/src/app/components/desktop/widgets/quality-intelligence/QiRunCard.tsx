@@ -28,7 +28,8 @@ import {
 } from "./qiShared";
 
 const REVIEWER_LABEL_STORAGE_KEY = "keiko.qi.reviewerLabel";
-const GOVERNANCE_REQUIRED_MESSAGE = "Set a reviewer label to review or edit candidates.";
+const GOVERNANCE_REQUIRED_MESSAGE =
+  "Add a display label for audit notes; review identity is resolved by the server.";
 
 function readStoredReviewerLabel(): string {
   if (typeof window === "undefined") return "";
@@ -493,12 +494,12 @@ export function QiRunCard({
             ) : null}
             <section className="qi-run-governance" aria-label="Review governance">
               <label className="qi-field" htmlFor={`qi-reviewer-label-${runId}`}>
-                <span className="qi-field-label">Reviewer label</span>
+                <span className="qi-field-label">Audit display label</span>
                 <input
                   id={`qi-reviewer-label-${runId}`}
                   className="qi-input qi-run-governance-input"
                   value={reviewerLabel}
-                  placeholder="Required for review and edit actions"
+                  placeholder="Display name for audit notes"
                   aria-invalid={!governanceEnabled}
                   aria-describedby={
                     governanceEnabled ? reviewerHelpId : `${reviewerHelpId} ${reviewerWarningId}`
@@ -509,7 +510,7 @@ export function QiRunCard({
                 />
               </label>
               <p id={reviewerHelpId} className="qi-run-governance-help">
-                Used for QI review and edit audit entries.
+                Stored as display metadata only. Governance identity is resolved by the server.
               </p>
               {/* Persistent live region (a11y M-02): always mounted so AT announces when the user
                   clears the reviewer label and governance turns off. role="note" carries no implicit

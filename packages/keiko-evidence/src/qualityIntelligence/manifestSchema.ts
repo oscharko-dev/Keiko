@@ -79,6 +79,19 @@ export interface QualityIntelligenceManifestTotals {
   readonly exports: number;
 }
 
+export interface QualityIntelligenceQualityDiagnostics {
+  readonly judgedCandidates: number;
+  readonly strongCandidates: number;
+  readonly weakCandidates: number;
+  readonly needsReviewCandidates: number;
+  readonly unjudgedCandidates: number;
+  readonly budgetSkippedCandidates: number;
+  readonly judgeErrorCandidates: number;
+  readonly judgeParseFailedCandidates: number;
+  readonly judgePromptTooLargeCandidates: number;
+  readonly judgeIsSelfModel?: boolean;
+}
+
 /**
  * Per-atom coverage status row persisted in the run manifest. Carries refs plus an optional short
  * REDACTED requirement excerpt (#790) so coverage/traceability surfaces are auditor-readable —
@@ -99,6 +112,12 @@ export interface QualityIntelligenceFindingRow {
   readonly kind: QualityIntelligenceValidationFindingKind;
   readonly severity: QualityIntelligenceSeverity;
   readonly summaryRedacted: string;
+  /** Evidence atoms this finding traces to. Optional for manifests written before WP2. */
+  readonly evidenceAtomIds?: readonly string[];
+  /** Optional deterministic finding subcategory, currently used by requirement-quality findings. */
+  readonly category?: string;
+  /** Optional producer confidence in [0, 1], currently used by requirement-quality findings. */
+  readonly confidence?: number;
   /**
    * Optional candidate this finding is scoped to (Epic #736). Present on candidate-scoped findings
    * (e.g. test-quality, logic-defect) so the UI can associate a finding with a single test case;
@@ -112,6 +131,10 @@ export interface QualityIntelligenceExportRow {
   readonly targetAdapter: QualityIntelligenceExportTarget;
   readonly integrityHash: string;
   readonly redactionAttested: boolean;
+  /** ISO 8601 timestamp for this concrete export action. */
+  readonly createdAt?: string;
+  /** Redaction-safe model provenance copied from the export bundle when available. */
+  readonly modelProvenance?: QualityIntelligence.QualityIntelligenceExportModelProvenance;
   /**
    * Whether this row records a dry-run preview rather than a materialised export (Issue #283, AC4).
    * Absent/`false` means the export produced a downloadable artifact (local serialisation or a
@@ -194,6 +217,8 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly modelRouting?: QualityIntelligenceModelRouting;
   /** Optional: seed used for deterministic sampling; null when model does not support seeding. */
   readonly seedUsed?: number | null;
+  /** Optional: count-only judge diagnostics separating judged quality from unjudged candidates. */
+  readonly qualityDiagnostics?: QualityIntelligenceQualityDiagnostics;
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────────────
@@ -225,6 +250,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "modelParameters",
   "modelRouting",
   "seedUsed",
+  "qualityDiagnostics",
 ]);
 
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set<string>([

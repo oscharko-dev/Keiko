@@ -18,12 +18,19 @@ describe("grounded answer prompts", () => {
     );
   });
 
-  it("sets German as the default answer language for grounded answers", () => {
-    expect(GROUNDED_SYSTEM_PROMPT).toContain("Answer in German by default");
-    expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).toContain("Answer in German by default");
+  it("mirrors the user's question language for grounded answers", () => {
+    expect(GROUNDED_SYSTEM_PROMPT).toContain(
+      "Respond in the same language as the user's question",
+    );
+    expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).toContain(
+      "Respond in the same language as the user's question",
+    );
   });
 
-  it("uses a German no-evidence fallback for local knowledge", () => {
-    expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).toContain(LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER);
+  it("keeps a stable local-knowledge no-evidence fallback for structured no-evidence paths", () => {
+    expect(LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER).toBe(
+      "No evidence found in the selected knowledge scope.",
+    );
+    expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).not.toContain("reply exactly");
   });
 });

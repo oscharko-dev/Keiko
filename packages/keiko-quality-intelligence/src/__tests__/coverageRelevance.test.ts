@@ -28,6 +28,34 @@ describe("buildCoverageMap", () => {
     expect(map.runId).toBe(fixture.runId);
   });
 
+  it("does not create coverage for candidates marked with unverified provenance", () => {
+    const runId = QualityIntelligence.asQualityIntelligenceRunId("run-unverified-provenance");
+    const atom = makeAtom("atom-unverified");
+    const candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate = {
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("tc-unverified"),
+      runId,
+      derivedFromAtomIds: [],
+      title: "Unverified generated candidate",
+      preconditions: [],
+      steps: ["Execute the unverified candidate."],
+      expectedResults: ["The expected result remains manually reviewable."],
+      priority: "P2",
+      riskClass: "functional",
+      tags: ["provenance-unverified"],
+      status: "needs-review",
+    };
+
+    const map = buildCoverageMap({
+      runId,
+      atoms: [atom],
+      candidates: [candidate],
+    });
+    expect(map.mappings).toEqual([]);
+    const statuses = buildAtomCoverageStatuses([atom], map);
+    expect(statuses[0]?.status).toBe("uncovered");
+    expect(statuses[0]?.coveringCandidateIds).toEqual([]);
+  });
+
   it("links each atom to its derived candidate with confidence in [0, 1]", () => {
     const fixture = loadFixture("regressionRequirement.synthetic.json");
     const intent = deriveIntent(fixture.envelopes, regressionDefault);

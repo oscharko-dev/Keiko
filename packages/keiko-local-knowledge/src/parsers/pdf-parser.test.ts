@@ -28,6 +28,20 @@ function textPage(text: string, onCancel?: () => void): ReturnType<PdfDocumentLi
   });
 }
 
+function positionedPage(
+  items: readonly PdfTextContentChunk["items"][number][],
+): ReturnType<PdfDocumentLike["getPage"]> {
+  return Promise.resolve({
+    streamTextContent: () =>
+      new ReadableStream<PdfTextContentChunk>({
+        start: (controller): void => {
+          controller.enqueue({ items });
+          controller.close();
+        },
+      }),
+  });
+}
+
 function fakePdf(
   pageTexts: readonly string[],
   labels?: readonly (string | null)[],
@@ -164,5 +178,26 @@ describe("pdfParser", () => {
       severity: "error",
     });
     expect(cancelled).toBe(false);
+  });
+
+  it("orders simple two-column positioned text by column and normalizes ligatures", async () => {
+    const input = selectionFromBytes(PDF_MAGIC, {
+      extension: "pdf",
+      mediaType: "application/pdf",
+    });
+    const doc: PdfDocumentLike = {
+      numPages: 1,
+      getPage: () =>
+        positionedPage([
+          { str: "Left 1", transform: [1, 0, 0, 1, 50, 700] },
+          { str: "Right 1", transform: [1, 0, 0, 1, 350, 700] },
+          { str: "Left \ufb01le", transform: [1, 0, 0, 1, 50, 680] },
+          { str: "Right 2", transform: [1, 0, 0, 1, 350, 680] },
+        ]),
+    };
+
+    const result = await extractPages(doc, input, buildParserOptions({ now: () => 0 }), 0);
+
+    expect(result.normalizedText).toBe("Left 1\nLeft file\nRight 1\nRight 2");
   });
 });

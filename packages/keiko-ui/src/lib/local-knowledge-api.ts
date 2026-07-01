@@ -338,6 +338,20 @@ export async function repairCapsuleFailedFiles(
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsules/:id/reindex — rebuild vectors for the current model
+// ---------------------------------------------------------------------------
+
+export async function reembedCapsuleForCurrentModel(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "full-reembed", force: true };
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify(request) },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/local-knowledge/capsules/:id/reindex — resume interrupted large-document jobs
 // ---------------------------------------------------------------------------
 

@@ -10,11 +10,15 @@ export { adaptToPolarion, POLARION_CSV_HEADERS } from "./polarion.js";
 export { adaptToQtest, QTEST_CSV_HEADERS } from "./qtest.js";
 export {
   adaptToSpreadsheetSafeCsv,
+  convertCsvDelimiter,
   encodeSpreadsheetSafeCell,
   encodeSpreadsheetSafeRow,
+  EXCEL_CSV_SEPARATOR_HINT,
   SPREADSHEET_FORMULA_LEAD_CHARS,
   SPREADSHEET_SAFE_CSV_HEADERS,
   startsWithFormulaLead,
+  toExcelFriendlyCsv,
+  UTF8_BOM,
 } from "./spreadsheetSafeCsv.js";
 export { adaptToXray, XRAY_CSV_HEADERS } from "./xray.js";
 export { adaptToMarkdown } from "./markdown.js";
@@ -23,6 +27,7 @@ export { adaptToQualityCenter } from "./qualityCenter.js";
 export {
   adaptToTraceabilityCsv,
   adaptToTraceabilityMarkdown,
+  TRACEABILITY_CSV_HEADERS,
   TRACEABILITY_HEADERS,
   TRACEABILITY_REVERSE_HEADERS,
   type QualityIntelligenceTraceabilityDisplayOptions,

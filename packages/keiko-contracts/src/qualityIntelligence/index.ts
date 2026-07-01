@@ -108,10 +108,13 @@ export type {
   QualityIntelligencePolicyViolationFinding,
   QualityIntelligenceManualRejectionFinding,
   QualityIntelligenceCoverageGapFinding,
+  QualityIntelligenceRequirementQualityCategory,
+  QualityIntelligenceRequirementQualityFinding,
   QualityIntelligenceTestQualityFinding,
   QualityIntelligenceValidationFinding,
 } from "./validationFinding.js";
 export {
+  QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES,
   QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS,
   QUALITY_INTELLIGENCE_SEVERITIES,
   QUALITY_INTELLIGENCE_SEVERITY_RANK,
@@ -160,6 +163,8 @@ export {
 export type {
   QualityIntelligenceExportAdapter,
   QualityIntelligenceExportBundleEntry,
+  QualityIntelligenceExportModelStageProvenance,
+  QualityIntelligenceExportModelProvenance,
   QualityIntelligenceExportBundle,
 } from "./exportBundle.js";
 export {
@@ -206,6 +211,7 @@ export type {
   QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceUiDriftMetadata,
+  QualityIntelligenceQualityDiagnostics,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceInlineSourceKind,
   QualityIntelligenceRequirementsSource,
@@ -235,6 +241,7 @@ export type {
   QualityIntelligenceModelPolicyPreflightResponse,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceSkippedSource,
+  QualityIntelligenceSourceSummary,
   QualityIntelligenceRunStreamAccepted,
   QualityIntelligenceRunStreamEvent,
   QualityIntelligenceRunStreamDone,

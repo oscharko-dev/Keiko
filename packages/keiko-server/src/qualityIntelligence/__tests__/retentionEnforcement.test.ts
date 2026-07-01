@@ -8,7 +8,7 @@
 // We also prove buildUiHandlerDeps runs it once at construction and forwards events to the injected
 // sink. Deterministic: injected clock, no network, no keychain.
 
-import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +17,10 @@ import {
   type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceRunDeletedEvent,
 } from "@oscharko-dev/keiko-evidence";
-import { enforceQiRetentionAtStartup } from "../retentionEnforcement.js";
+import {
+  enforceQiRetentionAtStartup,
+  qiRetentionDeletionAuditLedgerPath,
+} from "../retentionEnforcement.js";
 import { buildUiHandlerDeps } from "../../deps.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 
@@ -114,12 +117,21 @@ describe("enforceQiRetentionAtStartup", () => {
     }).not.toThrow();
   });
 
-  it("defaults the audit sink to a no-op (no throw when sink omitted)", () => {
+  it("defaults the audit sink to a durable JSONL deletion receipt ledger", () => {
     recordQualityIntelligenceRun(recordInput("run-nosink", AGE_EXPIRED_AT), { evidenceDir });
     expect(() => {
       enforceQiRetentionAtStartup({ evidenceDir, now: NOW_FAR_FUTURE });
     }).not.toThrow();
     expect(existsSync(manifestPath("run-nosink"))).toBe(false);
+    const lines = readFileSync(qiRetentionDeletionAuditLedgerPath(evidenceDir), "utf8")
+      .trim()
+      .split("\n");
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0] ?? "{}")).toMatchObject({
+      type: "qi:run:deleted",
+      runId: "run-nosink",
+      status: "deleted",
+    });
   });
 });
 

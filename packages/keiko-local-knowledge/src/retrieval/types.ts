@@ -49,6 +49,18 @@ export interface RetrievalQuery {
   readonly text: string;
   readonly topK?: number;
   readonly minScore?: number;
+  readonly strategy?: "auto" | "balanced" | "exact" | "broad";
+}
+
+export interface QueryTransformRequest {
+  readonly query: string;
+  readonly strategy: "broad";
+  readonly maxVariants: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface QueryTransformer {
+  readonly rewrite: (request: QueryTransformRequest) => Promise<readonly string[]>;
 }
 
 // Closed enumeration of `noEvidence` reasons. The strings line up with the BLOCKER
@@ -74,6 +86,15 @@ export interface RetrievalResult {
   // candidates kept the result non-empty. Observability signal for callers; does
   // not change which references are returned or whether noEvidence fires.
   readonly embeddingDegraded?: true;
+  readonly diagnostics?: RetrievalDiagnostics;
+}
+
+export interface RetrievalDiagnostics {
+  readonly mode: "hybrid" | "dense-only" | "lexical-only" | "lexical-degraded";
+  readonly denseCandidateCount: number;
+  readonly lexicalCandidateCount: number;
+  readonly fusedCandidateCount: number;
+  readonly lexicalIndex: "available" | "missing" | "query-error";
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────

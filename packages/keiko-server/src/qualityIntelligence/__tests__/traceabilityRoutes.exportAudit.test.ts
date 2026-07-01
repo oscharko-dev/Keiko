@@ -127,19 +127,18 @@ describe("handleQiTraceabilityExport — export audit (Markdown)", () => {
   });
 });
 
-// ─── Deduplicate repeated identical export ────────────────────────────────────
+// ─── Repeated identical export is auditable as a second action ─────────────────
 
-describe("handleQiTraceabilityExport — export audit (dedupe)", () => {
-  it("records exactly one row even when the same export is requested twice", async () => {
+describe("handleQiTraceabilityExport — export audit (re-export history)", () => {
+  it("records distinct rows when the same export is requested twice", async () => {
     recordQualityIntelligenceRun(runInput(RUN_ID, MATRIX), { evidenceDir });
 
     await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
     await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
 
     const manifest = loadQualityIntelligenceRun(RUN_ID, { evidenceDir });
-    // appendQualityIntelligenceExportRow dedupes by (id, dryRun) — the deterministic row id is
-    // derived from runId|target so a repeated export produces the same id and is skipped.
-    expect(manifest?.exports).toHaveLength(1);
+    expect(manifest?.exports).toHaveLength(2);
+    expect(new Set(manifest?.exports.map((row) => row.id))).toHaveProperty("size", 2);
   });
 });
 

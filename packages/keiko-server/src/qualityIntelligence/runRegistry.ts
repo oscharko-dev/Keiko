@@ -10,6 +10,16 @@ import type { QualityIntelligenceUiRunSummary } from "@oscharko-dev/keiko-contra
 
 export type QiActiveRunStatus = "running" | "succeeded" | "failed" | "cancelled";
 
+export class QiRunConcurrencyLimitError extends Error {
+  public readonly maxActiveRuns: number;
+
+  constructor(maxActiveRuns: number) {
+    super("Too many Quality Intelligence runs are already active.");
+    this.name = "QiRunConcurrencyLimitError";
+    this.maxActiveRuns = maxActiveRuns;
+  }
+}
+
 interface QiActiveRun {
   readonly runId: string;
   status: QiActiveRunStatus;
@@ -22,7 +32,19 @@ export class QiRunRegistry {
   private readonly runs = new Map<string, QiActiveRun>();
 
   /** Register a starting run and return its AbortController so the executor can wire cancellation. */
-  register(runId: string, requestedAt: string): AbortController {
+  register(
+    runId: string,
+    requestedAt: string,
+    options: { readonly maxActiveRuns?: number | undefined } = {},
+  ): AbortController {
+    const maxActiveRuns = options.maxActiveRuns;
+    if (
+      maxActiveRuns !== undefined &&
+      Number.isFinite(maxActiveRuns) &&
+      this.runs.size >= maxActiveRuns
+    ) {
+      throw new QiRunConcurrencyLimitError(maxActiveRuns);
+    }
     const controller = new AbortController();
     this.runs.set(runId, {
       runId,
@@ -32,6 +54,10 @@ export class QiRunRegistry {
       totals: { candidates: 0, findings: 0, exports: 0 },
     });
     return controller;
+  }
+
+  activeCount(): number {
+    return this.runs.size;
   }
 
   updateTotals(runId: string, totals: Partial<QiActiveRun["totals"]>): void {
@@ -51,6 +77,7 @@ export class QiRunRegistry {
   cancel(runId: string): boolean {
     const run = this.runs.get(runId);
     if (run === undefined) return false;
+    if (run.controller.signal.aborted) return false;
     run.controller.abort();
     return true;
   }

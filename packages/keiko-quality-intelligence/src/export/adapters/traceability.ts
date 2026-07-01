@@ -11,7 +11,7 @@
 // and there are no timestamps — so the export is byte-stable for identical inputs.
 
 import type { CoverageStatus } from "../../domain/coverageRelevance.js";
-import { inlineField } from "../textSafety.js";
+import { escapeMarkdownActiveSyntax, inlineField } from "../textSafety.js";
 import { encodeSpreadsheetSafeRow, startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 
 /**
@@ -32,7 +32,7 @@ export interface QualityIntelligenceTraceabilityDisplayOptions {
   readonly candidateTitleById?: ReadonlyMap<string, string>;
 }
 
-/** CSV header row for the requirement -> tests direction. */
+/** Markdown header row for the requirement -> tests direction. */
 export const TRACEABILITY_HEADERS: readonly string[] = Object.freeze([
   "Requirement ID",
   "Requirement (redacted excerpt)",
@@ -42,12 +42,23 @@ export const TRACEABILITY_HEADERS: readonly string[] = Object.freeze([
   "Test Count",
 ]);
 
-/** CSV header row for the test -> requirements (reverse) direction. */
+/** Markdown header row for the test -> requirements (reverse) direction. */
 export const TRACEABILITY_REVERSE_HEADERS: readonly string[] = Object.freeze([
   "Test ID",
   "Test Title",
   "Requirements Covered",
   "Requirement Count",
+]);
+
+/** CSV uses one normalised table with a record discriminator instead of two header blocks. */
+export const TRACEABILITY_CSV_HEADERS: readonly string[] = Object.freeze([
+  "RecordType",
+  "Requirement ID",
+  "Requirement (redacted excerpt)",
+  "Status",
+  "Confidence",
+  "Test ID",
+  "Test Title",
 ]);
 
 /** Placeholder for an absent display value (legacy rows / unknown candidate). Em-dash, not a formula lead. */
@@ -61,6 +72,8 @@ const byAtomIdAsc = (
 const ascending = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 const fixed2 = (value: number): string => value.toFixed(2);
+
+const fixed2German = (value: number): string => value.toFixed(2).replace(".", ",");
 
 const joinSemicolon = (values: readonly string[]): string => values.join(" ; ");
 
@@ -102,43 +115,59 @@ function invertToReverseRows(
 const mdCell = (value: string): string => {
   const oneLine = inlineField(value);
   const safe = startsWithFormulaLead(oneLine) ? `'${oneLine}` : oneLine;
-  return safe.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|");
+  let escaped = "";
+  for (const char of escapeMarkdownActiveSyntax(safe)) {
+    if (char === "\\" || char === "|") escaped += `\\${char}`;
+    else escaped += char;
+  }
+  return escaped;
 };
 
 const mdRow = (cells: readonly string[]): string => `| ${cells.map(mdCell).join(" | ")} |`;
 
 /**
- * Render the coverage matrix as a spreadsheet-safe, BIDIRECTIONAL CSV traceability matrix: a
- * requirement->tests section followed by a blank line and a tests->requirements section. Each cell
- * is formula-injection-safe via the shared encoder.
+ * Render the coverage matrix as a spreadsheet-safe, BIDIRECTIONAL CSV traceability matrix in a
+ * single table. `RecordType` distinguishes requirement->test rows from test->requirement rows, so
+ * spreadsheet importers and auditors see one stable header schema instead of two incompatible
+ * header blocks in one file. Each cell is formula-injection-safe via the shared encoder.
  */
+// eslint-disable-next-line complexity
 export function adaptToTraceabilityCsv(
   rows: readonly QualityIntelligenceTraceabilityRow[],
   display: QualityIntelligenceTraceabilityDisplayOptions = {},
 ): string {
   const sorted = [...rows].sort(byAtomIdAsc);
-  let body = encodeSpreadsheetSafeRow(["Requirements to tests"]);
-  body += encodeSpreadsheetSafeRow(TRACEABILITY_HEADERS);
+  let body = encodeSpreadsheetSafeRow(TRACEABILITY_CSV_HEADERS);
   for (const row of sorted) {
-    body += encodeSpreadsheetSafeRow([
-      inlineField(row.atomId),
-      inlineField(row.requirementExcerptRedacted ?? ABSENT),
-      row.status,
-      fixed2(row.confidence),
-      inlineField(joinSemicolon(row.coveringCandidateIds)),
-      String(row.coveringCandidateIds.length),
-    ]);
+    const covering = [...row.coveringCandidateIds].sort(ascending);
+    const testIds = covering.length > 0 ? covering : [ABSENT];
+    for (const candidateId of testIds) {
+      body += encodeSpreadsheetSafeRow([
+        "requirement-to-test",
+        inlineField(row.atomId),
+        inlineField(row.requirementExcerptRedacted ?? ABSENT),
+        row.status,
+        fixed2German(row.confidence),
+        inlineField(candidateId),
+        candidateId === ABSENT
+          ? ABSENT
+          : inlineField(display.candidateTitleById?.get(candidateId) ?? ABSENT),
+      ]);
+    }
   }
-  body += "\r\n";
-  body += encodeSpreadsheetSafeRow(["Tests to requirements"]);
-  body += encodeSpreadsheetSafeRow(TRACEABILITY_REVERSE_HEADERS);
   for (const reverse of invertToReverseRows(sorted)) {
-    body += encodeSpreadsheetSafeRow([
-      inlineField(reverse.candidateId),
-      inlineField(display.candidateTitleById?.get(reverse.candidateId) ?? ABSENT),
-      inlineField(joinSemicolon(reverse.requirementIds)),
-      String(reverse.requirementIds.length),
-    ]);
+    for (const requirementId of reverse.requirementIds) {
+      const requirement = sorted.find((row) => row.atomId === requirementId);
+      body += encodeSpreadsheetSafeRow([
+        "test-to-requirement",
+        inlineField(requirementId),
+        inlineField(requirement?.requirementExcerptRedacted ?? ABSENT),
+        requirement?.status ?? ABSENT,
+        requirement === undefined ? ABSENT : fixed2German(requirement.confidence),
+        inlineField(reverse.candidateId),
+        inlineField(display.candidateTitleById?.get(reverse.candidateId) ?? ABSENT),
+      ]);
+    }
   }
   return body;
 }

@@ -70,7 +70,7 @@ describe("capability registry", () => {
       id: "example-chat-model",
       kind: "chat",
       toolCalling: true,
-      structuredOutput: true,
+      structuredOutput: false,
       costClass: "medium",
       latencyClass: "standard",
     });
@@ -261,6 +261,20 @@ describe("isLikelyEmbeddingModelId — positive cases", () => {
 
   it("matches 'nomic-embed-text'", () => {
     expect(isLikelyEmbeddingModelId("nomic-embed-text")).toBe(true);
+  });
+
+  it("matches common open-weight embedding model families", () => {
+    for (const id of [
+      "bge-m3",
+      "multilingual-e5-large",
+      "gte-large",
+      "nomic-embed-text",
+      "mxbai-embed-large",
+      "jina-embeddings",
+      "instructor-xl",
+    ]) {
+      expect(isLikelyEmbeddingModelId(id), id).toBe(true);
+    }
   });
 
   it("matches 'model/embed' (slash boundary)", () => {

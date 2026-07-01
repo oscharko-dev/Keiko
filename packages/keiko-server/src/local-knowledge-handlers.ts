@@ -8,6 +8,7 @@ import {
   composeCapsules,
   CompositionError,
   createSqliteAuditSink,
+  type ContextualRetrievalOptions,
   createDefaultParserRegistry,
   createCapsule,
   deleteCapsule,
@@ -53,13 +54,15 @@ import {
   validateCapsuleReindexRequest,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
-import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
+  Gateway,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
+  selectConfiguredModel,
   verifyEmbeddingCapability,
   type GatewayConfig,
   type ModelProviderConfig,
@@ -364,6 +367,7 @@ async function probeConfiguredProviderForCapsule(
     provider,
     requestEmbeddingImpl(deps),
     requestEmbeddingBatchImpl(deps),
+    currentGatewayEgressConfig(deps),
   );
   try {
     const result = await verifyEmbeddingCapability(adapter, {
@@ -371,6 +375,16 @@ async function probeConfiguredProviderForCapsule(
       provider: embeddingProviderIdentity(provider),
       vectorMetric: capsule.embeddingModelIdentity.vectorMetric,
       expectedDimensions: capsule.embeddingModelIdentity.vectorDimensions,
+      ...(capsule.embeddingModelIdentity.normalization !== undefined
+        ? { normalization: capsule.embeddingModelIdentity.normalization }
+        : {}),
+      ...(capsule.embeddingModelIdentity.instructionVersion !== undefined
+        ? { instructionVersion: capsule.embeddingModelIdentity.instructionVersion }
+        : {}),
+      ...(capsule.embeddingModelIdentity.dimensionsParam !== undefined
+        ? { dimensionsParam: capsule.embeddingModelIdentity.dimensionsParam }
+        : {}),
+      includeSpaceFingerprint: true,
       timeoutMs: provider.timeoutMs,
     });
     return result.ok ? result.identity : undefined;
@@ -407,11 +421,83 @@ async function resolveIndexingProviderForCapsule(
   return undefined;
 }
 
+function forceReembedProviderForCapsule(
+  deps: UiHandlerDeps,
+  capsule: KnowledgeCapsule,
+): ModelProviderConfig | undefined {
+  const exact = configuredProviderForCapsule(deps, capsule);
+  if (exact !== undefined) return exact;
+  return configuredEmbeddingProviders(currentGatewayConfig(deps))[0];
+}
+
+async function verifiedForceReembedIdentity(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  capsule: KnowledgeCapsule,
+): Promise<
+  | { readonly ok: true; readonly identity: EmbeddingModelIdentity }
+  | { readonly ok: false; readonly message: string }
+> {
+  const adapter = createEmbeddingAdapter(
+    provider,
+    requestEmbeddingImpl(deps),
+    requestEmbeddingBatchImpl(deps),
+    currentGatewayEgressConfig(deps),
+  );
+  try {
+    const result = await verifyEmbeddingCapability(adapter, {
+      modelId: provider.modelId,
+      provider: embeddingProviderIdentity(provider),
+      vectorMetric: capsule.embeddingModelIdentity.vectorMetric,
+      ...(capsule.embeddingModelIdentity.normalization !== undefined
+        ? { normalization: capsule.embeddingModelIdentity.normalization }
+        : {}),
+      ...(capsule.embeddingModelIdentity.instructionVersion !== undefined
+        ? { instructionVersion: capsule.embeddingModelIdentity.instructionVersion }
+        : {}),
+      ...(capsule.embeddingModelIdentity.dimensionsParam !== undefined
+        ? { dimensionsParam: capsule.embeddingModelIdentity.dimensionsParam }
+        : {}),
+      includeSpaceFingerprint: true,
+      timeoutMs: provider.timeoutMs,
+    });
+    return result.ok
+      ? { ok: true, identity: result.identity }
+      : { ok: false, message: result.safeMessage };
+  } catch {
+    return { ok: false, message: "embedding capability preflight failed before full re-embed" };
+  }
+}
+
+async function rebindCapsuleEmbeddingIdentityForForceReembed(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+): Promise<
+  | { readonly ok: true; readonly resolved: ResolvedCapsuleEmbeddingProvider }
+  | { readonly ok: false; readonly message: string }
+> {
+  const provider = forceReembedProviderForCapsule(deps, capsule);
+  if (provider === undefined) {
+    return {
+      ok: false,
+      message:
+        "No configured embedding-capable model is available for a full re-embed. Configure the Model Gateway before refreshing this capsule.",
+    };
+  }
+  const verified = await verifiedForceReembedIdentity(deps, provider, capsule);
+  if (!verified.ok) return verified;
+  const rebound = updateCapsuleEmbeddingModelIdentity(store, capsule.id, verified.identity);
+  return { ok: true, resolved: { capsule: rebound, provider } };
+}
+
 function embeddingCompatibilityReason(
   config: GatewayConfig | undefined,
   capsule: KnowledgeCapsule,
 ): string | undefined {
-  if (config === undefined) return undefined;
+  if (config === undefined) {
+    return "No embedding gateway configuration is available for this capsule.";
+  }
   const modelId = capsule.embeddingModelIdentity.modelId;
   if (!config.providers.some((entry) => entry.modelId === modelId)) {
     return "The configured embedding model no longer matches this capsule.";
@@ -442,7 +528,7 @@ function vectorCompatibility(
     reasons.push("The last indexing run ended with errors.");
   }
   return {
-    vectorCompatible: provider !== undefined || config === undefined,
+    vectorCompatible: provider !== undefined,
     staleReasons: reasons,
   };
 }
@@ -834,14 +920,16 @@ function createEmbeddingAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
   batchImpl?: (request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>,
+  fallbackEgress?: ModelProviderConfig["egress"],
 ): OpenAIEmbeddingAdapter {
+  const egress = provider.egress ?? fallbackEgress;
   const providerCreds = {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
-    ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+    ...(egress !== undefined ? { egress } : {}),
   };
   return {
     ...providerCreds,
@@ -1081,12 +1169,14 @@ async function verifiedNewCapsuleEmbeddingIdentity(
     provider,
     requestEmbeddingImpl(deps),
     requestEmbeddingBatchImpl(deps),
+    currentGatewayEgressConfig(deps),
   );
   try {
     const result = await verifyEmbeddingCapability(adapter, {
       modelId: provider.modelId,
       provider: embeddingProviderIdentity(provider),
       vectorMetric: "cosine",
+      includeSpaceFingerprint: true,
       timeoutMs: provider.timeoutMs,
     });
     if (result.ok) {
@@ -1264,7 +1354,60 @@ function runningIndexingJobConflict(
   );
 }
 
+function envFlagEnabled(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function envPositiveInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function resolveContextualRetrievalModelId(
+  deps: UiHandlerDeps,
+  config: GatewayConfig | undefined,
+): string | undefined {
+  const configured = deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MODEL_ID?.trim();
+  if (configured !== undefined && configured.length > 0) {
+    if (config === undefined) return undefined;
+    return findConfiguredCapability(config, configured)?.kind === "chat" ? configured : undefined;
+  }
+  return config === undefined ? undefined : selectConfiguredModel(config, { kind: "chat" });
+}
+
+function localKnowledgeContextualRetrievalOptions(
+  deps: UiHandlerDeps,
+): ContextualRetrievalOptions | undefined {
+  if (!envFlagEnabled(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL)) {
+    return undefined;
+  }
+  const config = currentGatewayConfig(deps);
+  const modelId = resolveContextualRetrievalModelId(deps, config);
+  const maxContextChars = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MAX_CHARS);
+  const documentContextMaxChars = envPositiveInt(
+    deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_DOCUMENT_MAX_CHARS,
+  );
+  const gateway =
+    modelId === undefined || config === undefined
+      ? undefined
+      : deps.localKnowledgeContextualRetrievalChatGateway ?? new Gateway(config);
+  return {
+    enabled: true,
+    ...(gateway !== undefined ? { chatGateway: gateway } : {}),
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(envFlagEnabled(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_STRICT) ? { strict: true } : {}),
+    ...(maxContextChars !== undefined ? { maxContextChars } : {}),
+    ...(documentContextMaxChars !== undefined ? { documentContextMaxChars } : {}),
+  };
+}
+
 function buildIndexingOptions(
+  deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
   adapter: OpenAIEmbeddingAdapter,
@@ -1272,6 +1415,7 @@ function buildIndexingOptions(
   sourceSelection: IndexingSourceSelection,
   signal: AbortSignal,
 ): Parameters<typeof runIndexingJob>[0] {
+  const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps);
   return {
     capsuleId: capsule.id,
     ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
@@ -1283,10 +1427,31 @@ function buildIndexingOptions(
     auditSink: createSqliteAuditSink(store),
     store,
     force: options.force,
+    ...(contextualRetrieval !== undefined ? { contextualRetrieval } : {}),
     largeDocumentPolicy: resolveLargeDocumentPolicy(),
     ...(options.mode === "resume" ? { resume: true } : {}),
     signal,
   };
+}
+
+async function consumeCapsuleIndexingEvents(
+  capsuleId: KnowledgeCapsuleId,
+  events: ReturnType<typeof runIndexingJob>,
+): Promise<IndexingTerminal | undefined> {
+  let terminal: IndexingTerminal | undefined;
+  for await (const event of events) {
+    if (event.kind === "job-started") {
+      localKnowledgeIndexingRegistry.attachJobId(String(capsuleId), event.jobId);
+    }
+    if (
+      event.kind === "job-completed" ||
+      event.kind === "job-failed" ||
+      event.kind === "job-cancelled"
+    ) {
+      terminal = event;
+    }
+  }
+  return terminal;
 }
 
 async function runCapsuleIndexingJob(
@@ -1304,32 +1469,31 @@ async function runCapsuleIndexingJob(
     provider,
     requestEmbeddingImpl(deps),
     requestEmbeddingBatchImpl(deps),
+    currentGatewayEgressConfig(deps),
   );
   const sourceSelection = resolveIndexingSourceSelection(store, capsule, options.mode);
   if (!sourceSelection.shouldRun) {
     return undefined;
   }
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
-  let terminal: IndexingTerminal | undefined;
   try {
-    for await (const event of runIndexingJob(
-      buildIndexingOptions(store, capsule, adapter, options, sourceSelection, controller.signal),
-    )) {
-      if (event.kind === "job-started") {
-        localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
-      }
-      if (
-        event.kind === "job-completed" ||
-        event.kind === "job-failed" ||
-        event.kind === "job-cancelled"
-      ) {
-        terminal = event;
-      }
-    }
+    return await consumeCapsuleIndexingEvents(
+      capsule.id,
+      runIndexingJob(
+        buildIndexingOptions(
+          deps,
+          store,
+          capsule,
+          adapter,
+          options,
+          sourceSelection,
+          controller.signal,
+        ),
+      ),
+    );
   } finally {
     localKnowledgeIndexingRegistry.complete(String(capsule.id));
   }
-  return terminal;
 }
 
 function failedSourceIds(
@@ -1843,10 +2007,12 @@ export async function handleDeleteLocalKnowledgeCapsule(
   });
 }
 
+// eslint-disable-next-line max-lines-per-function
 export async function handleReindexLocalKnowledgeCapsule(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  // eslint-disable-next-line max-lines-per-function
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
     const body = await readJsonObject(ctx.req);
@@ -1855,7 +2021,8 @@ export async function handleReindexLocalKnowledgeCapsule(
       throw new InvalidRequest(reindexRequest.errors.join(" "));
     }
     const mode = reindexRequest.value.mode;
-    const force = reindexRequest.value.force ?? false;
+    const force =
+      reindexRequest.value.mode === "full-reembed" || (reindexRequest.value.force ?? false);
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);
@@ -1865,16 +2032,29 @@ export async function handleReindexLocalKnowledgeCapsule(
       if (capsule.sourceIds.length === 0) {
         return emptyCapsuleIndexingConflict();
       }
-      const resolved = await resolveIndexingProviderForCapsule(deps, env.store, capsule);
+      // LK-003 (Epic #189): same concurrent-run guard as the start handler. Do this before
+      // a force-reembed identity rebind so a duplicate refresh cannot mutate the capsule
+      // while another indexer is already running.
+      const runningJobId = latestRunningJobId(env.store, capsule.id);
+      if (runningJobId !== undefined) {
+        return runningIndexingJobConflict(capsule.id, runningJobId);
+      }
+      let resolved: ResolvedCapsuleEmbeddingProvider | undefined;
+      if (force) {
+        const rebound = await rebindCapsuleEmbeddingIdentityForForceReembed(
+          deps,
+          env.store,
+          capsule,
+        );
+        if (!rebound.ok) return conflict(rebound.message);
+        resolved = rebound.resolved;
+      } else {
+        resolved = await resolveIndexingProviderForCapsule(deps, env.store, capsule);
+      }
       if (resolved === undefined) {
         return conflict(
           "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before refreshing it.",
         );
-      }
-      // LK-003 (Epic #189): same concurrent-run guard as the start handler.
-      const runningJobId = latestRunningJobId(env.store, resolved.capsule.id);
-      if (runningJobId !== undefined) {
-        return runningIndexingJobConflict(resolved.capsule.id, runningJobId);
       }
       const terminal = await runCapsuleIndexingJob(deps, env.store, resolved.capsule, {
         mode,

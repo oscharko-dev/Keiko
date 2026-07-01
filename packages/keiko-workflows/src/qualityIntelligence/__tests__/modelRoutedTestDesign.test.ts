@@ -171,6 +171,30 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(uncoveredRow?.status).toBe("uncovered");
   });
 
+  it("persists requirement-quality findings with atom trace metadata", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "ZAHL: Die Auszahlung sollte zeitnah erfolgen."),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDepsWithCandidateCap(store, 1));
+
+    const manifest = store.load(String(PLAN.id));
+    const finding = manifest?.findings.find(
+      (row) => row.kind === "requirement-quality" && row.category === "ambiguity",
+    );
+    expect(finding).toBeDefined();
+    expect(finding?.evidenceAtomIds).toEqual(["atom-1"]);
+    expect(finding?.confidence).toBeGreaterThan(0.8);
+    expect(finding?.summaryRedacted).toContain("Requirement-Quality");
+  });
+
   it("records the generating modelId and seed in evidence (Epic #761)", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
@@ -696,6 +720,13 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(summary.qualityScore).not.toBeNull();
     // Pass-rate formula (#747): every candidate weak → 0 strong of N → score 0.
     expect(summary.qualityScore).toBe(0);
+    expect(summary.qualityDiagnostics).toMatchObject({
+      judgedCandidates: 2,
+      strongCandidates: 0,
+      weakCandidates: 2,
+      needsReviewCandidates: 2,
+      unjudgedCandidates: 0,
+    });
   });
 
   it("computes qualityScore as the strong-candidate pass rate (1 strong of 2 → 50)", async () => {
@@ -721,11 +752,63 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
     expect(summary.qualityScore).toBe(50);
+    expect(summary.qualityDiagnostics).toMatchObject({
+      judgedCandidates: 2,
+      strongCandidates: 1,
+      weakCandidates: 1,
+      needsReviewCandidates: 1,
+      unjudgedCandidates: 0,
+    });
 
     const manifest = store.load(String(input.plan.id));
+    expect(manifest?.qualityDiagnostics).toMatchObject(summary.qualityDiagnostics ?? {});
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     // Only the weak candidate is flagged.
     expect(qualityFindings.length).toBe(1);
+  });
+
+  it("sets judgeIsSelfModel when generation and judge routing resolve to the same model", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-self-model"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) => Promise.resolve(STRONG_VERDICT)),
+      modelRouting: {
+        policyVersion: 1,
+        requested: {
+          policyVersion: 1,
+          testDesignModelId: "test-model",
+          judgeModelId: "test-model",
+        },
+        resolved: {
+          testDesignModelId: "test-model",
+          judgeModelId: "test-model",
+        },
+        preflight: {
+          status: "passed",
+          generation: { stage: "generate", status: "passed", modelId: "test-model" },
+          judge: { stage: "judge", status: "passed", modelId: "test-model" },
+        },
+      },
+    };
+
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityDiagnostics?.judgeIsSelfModel).toBe(true);
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.qualityDiagnostics?.judgeIsSelfModel).toBe(true);
   });
 
   it("normalizes a strong judge verdict to weak when a mandatory dimension is below threshold", async () => {
@@ -772,6 +855,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(persistedModelCandidate?.qualityVerdict).toEqual(
       expect.objectContaining({ verdict: "weak", score: 74.5 }),
     );
+    expect(persistedModelCandidate?.status).toBe("needs-review");
   });
 
   it("passes candidate preconditions into the judge prompt", async () => {
@@ -884,6 +968,8 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     );
     expect(strongCandidate?.qualityVerdict?.dimensions).toEqual(STRONG_VERDICT.dimensions);
     expect(weakCandidate?.qualityVerdict?.dimensions).toEqual(WEAK_VERDICT.dimensions);
+    expect(strongCandidate?.status).toBe("proposed");
+    expect(weakCandidate?.status).toBe("needs-review");
   });
 
   it("does not emit test-quality findings for strong candidates", async () => {
@@ -1112,7 +1198,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect((manifest?.findings ?? []).filter((f) => f.kind === "test-quality")).toHaveLength(2);
   });
 
-  it("is fail-soft: a transient judge error becomes an explicit weak finding", async () => {
+  it("is fail-soft: a transient judge error becomes an explicit unjudged finding", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
     const ingestedAtoms = [
@@ -1149,8 +1235,16 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(recorded).toHaveLength(4);
     const manifest = store.load(String(input.plan.id));
     expect(manifest?.totals.candidates).toBe(4);
-    // The failed judge call is represented as an explicit weak verdict so it cannot look strong.
-    expect(summary.qualityScore).toBe(50);
+    // The failed judge call is represented as unjudged/needs-review and does not dilute judged quality.
+    expect(summary.qualityScore).toBe(100);
+    expect(summary.qualityDiagnostics).toMatchObject({
+      judgedCandidates: 1,
+      strongCandidates: 1,
+      weakCandidates: 0,
+      unjudgedCandidates: 1,
+      judgeErrorCandidates: 1,
+      needsReviewCandidates: 1,
+    });
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(1);
     expect(qualityFindings[0]?.summaryRedacted).toContain(
@@ -1159,9 +1253,18 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(qualityFindings[0]?.summaryRedacted).not.toContain("HTTP 429");
     // Both model-delta judge dispatches are still counted for an honest audit trail.
     expect(summary.modelGatewayCallCount).toBe(3);
+    const failedCandidate = recorded.find((candidate) =>
+      candidate.title.includes("Test atom 1 behavior"),
+    ) as
+      | (QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
+          readonly qualityVerdict?: unknown;
+        })
+      | undefined;
+    expect(failedCandidate?.status).toBe("needs-review");
+    expect(failedCandidate?.qualityVerdict).toBeUndefined();
   });
 
-  it("is fail-soft when EVERY judge call errors: run succeeds with weak findings", async () => {
+  it("is fail-soft when EVERY judge call errors: run succeeds with unjudged findings", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
@@ -1181,7 +1284,13 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     );
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
-    expect(summary.qualityScore).toBe(0);
+    expect(summary.qualityScore).toBeNull();
+    expect(summary.qualityDiagnostics).toMatchObject({
+      judgedCandidates: 0,
+      unjudgedCandidates: 2,
+      judgeErrorCandidates: 2,
+      needsReviewCandidates: 2,
+    });
     const manifest = store.load(String(input.plan.id));
     expect(manifest?.totals.candidates).toBe(4);
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
@@ -1192,7 +1301,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("gateway 503");
   });
 
-  it("bounds gateway calls by maxJudgeCallsPerRun and marks overflow candidates weak", async () => {
+  it("bounds gateway calls by maxJudgeCallsPerRun and marks overflow candidates unjudged", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [
       makeIngestedAtom("atom-1", "Requirement 1"),
@@ -1221,7 +1330,14 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(judgeCallCount).toBe(1);
     // 1 generation + 1 judge call.
     expect(summary.modelGatewayCallCount).toBe(2);
-    expect(summary.qualityScore).toBe(50);
+    expect(summary.qualityScore).toBe(100);
+    expect(summary.qualityDiagnostics).toMatchObject({
+      judgedCandidates: 1,
+      strongCandidates: 1,
+      unjudgedCandidates: 1,
+      budgetSkippedCandidates: 1,
+      needsReviewCandidates: 1,
+    });
     const manifest = store.load(String(input.plan.id));
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings).toHaveLength(1);

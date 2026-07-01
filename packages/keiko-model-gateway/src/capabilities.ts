@@ -116,7 +116,7 @@ export function listCapabilities(): readonly ModelCapability[] {
 // embedding model name that predates the `text-embedding-*` convention.
 // ReDoS-safe: no nested quantifiers, linear worst-case.
 export const EMBEDDING_ID_PATTERN =
-  /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
+  /(?:^|[-_/. ])(?:(?:text-)?embed(?:ding)?s?|bge|e5|gte|nomic|mxbai|jina|instructor)(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
 
 export function isLikelyEmbeddingModelId(id: string): boolean {
   return EMBEDDING_ID_PATTERN.test(id);
@@ -151,7 +151,7 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: true,
-    structuredOutput: true,
+    structuredOutput: false,
     streaming: true,
     // Conservative defaults for an UNKNOWN discovered chat model (Issue #143 / AC #2):
     // text-only and not workflow-eligible until explicitly enriched.
@@ -164,7 +164,7 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     preferredUseCases: ["Chat"],
     knownLimitations: [
       "Runtime-configured capability; validate against the target endpoint before production use",
-      "Image input, document input, and workflow eligibility require explicit enrichment",
+      "Structured output, response-format enforcement, image input, document input, and workflow eligibility require explicit enrichment",
     ],
   };
 }

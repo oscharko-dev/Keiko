@@ -41,6 +41,8 @@ interface JsonExportEnvelope {
   readonly createdAt: string;
   readonly integrityHashSha256Hex: string;
   readonly redactionAttested: boolean;
+  readonly diagnostics?: readonly string[];
+  readonly modelProvenance?: QualityIntelligenceExportBundle["modelProvenance"];
   readonly candidates: readonly JsonExportCandidatePayload[];
 }
 
@@ -89,6 +91,8 @@ export function adaptToJson(
     createdAt: bundle.createdAt,
     integrityHashSha256Hex: bundle.integrityHashSha256Hex,
     redactionAttested: bundle.redactionAttested,
+    ...(bundle.diagnostics !== undefined ? { diagnostics: bundle.diagnostics } : {}),
+    ...(bundle.modelProvenance !== undefined ? { modelProvenance: bundle.modelProvenance } : {}),
     candidates: payloadCandidates,
   };
   return JSON.stringify(envelope, null, 2);

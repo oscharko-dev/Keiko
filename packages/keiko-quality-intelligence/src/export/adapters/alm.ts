@@ -19,6 +19,9 @@ export const ALM_CSV_HEADERS: readonly string[] = Object.freeze([
   "Type",
   "Designer",
   "Subject",
+  "Priority",
+  "Status",
+  "Labels",
   "StepName",
   "StepDescription",
   "ExpectedResult",
@@ -37,6 +40,9 @@ const buildSubject = (candidate: QualityIntelligenceTestCaseCandidate): string =
   return `Subject/${candidate.riskClass}`;
 };
 
+const buildLabels = (candidate: QualityIntelligenceTestCaseCandidate): string =>
+  [candidate.riskClass, ...candidate.tags].join(" ");
+
 // Build the ALM rows for a single candidate. One row per (step, expected) pair — the row count is
 // the longer of `steps`/`expectedResults` so a trailing expected result is never dropped (Issue
 // #283); a candidate with neither yields one empty-step row.
@@ -47,6 +53,9 @@ function almRowsFor(candidate: QualityIntelligenceTestCaseCandidate): string {
     "MANUAL",
     ALM_DESIGNER,
     buildSubject(candidate),
+    candidate.priority,
+    candidate.status,
+    buildLabels(candidate),
   ];
   const rowCount = Math.max(candidate.steps.length, candidate.expectedResults.length);
   if (rowCount === 0) {

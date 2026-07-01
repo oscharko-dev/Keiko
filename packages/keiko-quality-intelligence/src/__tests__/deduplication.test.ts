@@ -64,6 +64,28 @@ describe("deduplicateCandidates", () => {
     );
   });
 
+  it("deduplicates German Eszett/ss variants without mutating the surviving original text", () => {
+    const eszett = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-aaaaaaaaaaaa"),
+      title: "Zahlung in der Straße freigeben",
+      steps: ["Konto Straße öffnen", "TAN eingeben"],
+      expectedResults: ["Zahlung für Straße ist freigegeben"],
+    });
+    const ss = baseCandidate({
+      id: QualityIntelligence.asQualityIntelligenceTestCaseId("qi-candidate-bbbbbbbbbbbb"),
+      title: "Zahlung in der Strasse freigeben",
+      steps: ["Konto Strasse öffnen", "TAN eingeben"],
+      expectedResults: ["Zahlung für Strasse ist freigegeben"],
+    });
+
+    expect(computeCandidateEquivalenceSignature(eszett)).toBe(
+      computeCandidateEquivalenceSignature(ss),
+    );
+    const result = deduplicateCandidates([eszett, ss]);
+    expect(result).toHaveLength(1);
+    expect(result[0]?.title).toBe("Zahlung in der Straße freigeben");
+  });
+
   it("produces different signatures for differing priority", () => {
     const left = baseCandidate({ priority: "P1" });
     const right = baseCandidate({ priority: "P3" });

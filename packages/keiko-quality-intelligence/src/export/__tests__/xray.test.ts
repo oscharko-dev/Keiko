@@ -89,6 +89,19 @@ describe("adaptToXray", () => {
     }
   });
 
+  it("preserves priority, status, risk class, and tags for Xray traceability", () => {
+    const c = candidate("tc-1", {
+      priority: "P0",
+      status: "accepted",
+      riskClass: "compliance",
+      tags: ["smoke", "regression"],
+    });
+    const rows = parseRows(adaptToXray(bundle([c]), [c]));
+    expect(rows[1]?.[XRAY_CSV_HEADERS.indexOf("Priority")]).toBe("P0");
+    expect(rows[1]?.[XRAY_CSV_HEADERS.indexOf("Status")]).toBe("accepted");
+    expect(rows[1]?.[XRAY_CSV_HEADERS.indexOf("Labels")]).toBe("compliance smoke regression");
+  });
+
   // M1 regression: more expected results than steps
   it("M1: produces TWO rows when steps.length=1 and expectedResults.length=2", () => {
     const c = candidate("tc-1", {

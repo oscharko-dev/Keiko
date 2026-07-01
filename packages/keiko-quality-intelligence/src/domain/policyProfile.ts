@@ -18,14 +18,15 @@ export interface PolicyProfile {
   /** Display-only label. */
   readonly displayLabel: string;
   /**
-   * Lower-cased keywords that, when present in source envelopes or atoms,
-   * bias the derived intent's priority toward the head of this list.
+   * Keywords that, when present in source envelopes or atoms, bias the derived
+   * intent's priority toward the head of this list. Matching uses the shared
+   * German keyword fold, so umlaut and ASCII transliteration variants compare equal.
    * Ordering implies severity: index 0 is the highest-priority bucket.
    */
   readonly priorityKeywords: readonly (readonly string[])[];
   /**
-   * Lower-cased keywords that signal a risk class. The first matching class
-   * (in the order risk-classes are enumerated below) wins. Pure heuristic.
+   * Keywords that signal a risk class. The first matching class (in the order
+   * risk-classes are enumerated below) wins. Pure heuristic.
    */
   readonly riskKeywords: Readonly<
     Record<QualityIntelligence.QualityIntelligenceRiskClass, readonly string[]>
@@ -55,16 +56,68 @@ export const bankingDefault: PolicyProfile = freezeProfile({
   id: "banking-default",
   displayLabel: "Banking — default",
   priorityKeywords: [
-    ["fraud", "aml", "kyc", "sanction"],
-    ["payment", "transfer", "settlement", "interest"],
-    ["statement", "balance", "ledger"],
+    [
+      "fraud",
+      "aml",
+      "kyc",
+      "sanction",
+      "betrug",
+      "geldwäsche",
+      "sanktion",
+      "dsgvo",
+      "bafin",
+    ],
+    [
+      "payment",
+      "transfer",
+      "settlement",
+      "interest",
+      "zahlung",
+      "überweisung",
+      "sepa",
+      "konto",
+      "limit",
+      "kredit",
+      "bonität",
+      "sperrung",
+      "vier-augen",
+      "freigabe",
+    ],
+    ["statement", "balance", "ledger", "kontoauszug", "saldo", "buchung"],
     ["preference", "theme", "marketing"],
   ],
   riskKeywords: {
-    safety: ["unauthorised", "lockout", "credential", "session"],
-    compliance: ["aml", "kyc", "gdpr", "regulator", "sanction", "audit"],
+    safety: ["unauthorised", "lockout", "credential", "session", "sperrung", "pin", "tan"],
+    compliance: [
+      "aml",
+      "kyc",
+      "gdpr",
+      "regulator",
+      "sanction",
+      "audit",
+      "dsgvo",
+      "bafin",
+      "geldwäsche",
+      "sanktion",
+      "betrug",
+      "vier-augen",
+      "freigabe",
+    ],
     regression: ["regression", "smoke", "release"],
-    functional: ["enter", "submit", "confirm", "cancel"],
+    functional: [
+      "enter",
+      "submit",
+      "confirm",
+      "cancel",
+      "zahlung",
+      "überweisung",
+      "iban",
+      "bic",
+      "konto",
+      "limit",
+      "kredit",
+      "bonität",
+    ],
     visual: ["layout", "spacing", "colour", "color", "icon"],
   },
   defaultRiskClass: "compliance",
@@ -78,16 +131,48 @@ export const insuranceDefault: PolicyProfile = freezeProfile({
   id: "insurance-default",
   displayLabel: "Insurance — default",
   priorityKeywords: [
-    ["fraud", "denial", "fatality"],
-    ["claim", "policy", "premium", "underwriting"],
-    ["quote", "renewal"],
+    ["fraud", "denial", "fatality", "betrug", "ablehnung"],
+    [
+      "claim",
+      "policy",
+      "premium",
+      "underwriting",
+      "schaden",
+      "schadenfall",
+      "police",
+      "prämie",
+      "deckung",
+      "selbstbehalt",
+      "versicherungsnehmer",
+    ],
+    ["quote", "renewal", "angebot", "verlängerung"],
     ["preference", "marketing", "newsletter"],
   ],
   riskKeywords: {
-    safety: ["fatal", "injury", "exposure"],
-    compliance: ["regulator", "gdpr", "consent", "broker"],
+    safety: ["fatal", "injury", "exposure", "verletzung", "selbstbehalt"],
+    compliance: [
+      "regulator",
+      "gdpr",
+      "consent",
+      "broker",
+      "dsgvo",
+      "bafin",
+      "einwilligung",
+      "makler",
+    ],
     regression: ["regression", "smoke"],
-    functional: ["submit", "renew", "approve", "decline"],
+    functional: [
+      "submit",
+      "renew",
+      "approve",
+      "decline",
+      "schaden",
+      "schadenfall",
+      "police",
+      "prämie",
+      "deckung",
+      "versicherungsnehmer",
+    ],
     visual: ["layout", "spacing", "icon", "logo"],
   },
   defaultRiskClass: "functional",
@@ -102,16 +187,16 @@ export const regressionDefault: PolicyProfile = freezeProfile({
   id: "regression-default",
   displayLabel: "Regression — default",
   priorityKeywords: [
-    ["smoke", "critical-path", "release"],
-    ["regression"],
-    ["edge-case"],
-    ["nice-to-have"],
+    ["smoke", "critical-path", "release", "kritischer-pfad", "freigabe"],
+    ["regression", "regressionstest"],
+    ["edge-case", "randfall"],
+    ["nice-to-have", "optional"],
   ],
   riskKeywords: {
-    safety: ["crash", "data-loss"],
-    compliance: ["audit", "log"],
-    regression: ["regression", "smoke", "release", "stable"],
-    functional: ["form", "click", "submit"],
+    safety: ["crash", "data-loss", "datenverlust", "absturz"],
+    compliance: ["audit", "log", "prüfprotokoll"],
+    regression: ["regression", "smoke", "release", "stable", "stabil", "regressionstest"],
+    functional: ["form", "click", "submit", "formular", "klick", "absenden"],
     visual: ["layout", "colour", "color", "spacing"],
   },
   defaultRiskClass: "regression",
