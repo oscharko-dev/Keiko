@@ -19,6 +19,10 @@ export default defineConfig({
     // strictly required). The flag covers both, and the warning suppressor keeps test output clean.
     // In vitest 4 the worker-process flags live at test.execArgv (was test.poolOptions in vitest 1).
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
+    // The root suite includes integration-style tests that bind local servers, create git worktrees,
+    // and parse binary documents. Keep a bounded timeout, but align the default with existing
+    // integration-test allowances so full-suite scheduler load does not produce false red receipts.
+    testTimeout: 15_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "json"],

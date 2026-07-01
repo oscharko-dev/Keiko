@@ -32,6 +32,7 @@ let server;
 let shuttingDown = false;
 let publicReady = false;
 let readinessCheckRunning = false;
+const requiredReadyProbeSuccesses = 2;
 
 const devServiceWorker = `
 self.addEventListener("install", (event) => {
@@ -227,15 +228,22 @@ async function waitForPublicReadiness() {
   writeState({ ready: false });
   try {
     let lastError = "not started";
+    let consecutiveReadyProbes = 0;
     while (!shuttingDown) {
       lastError = await readinessProbe();
       if (lastError === "ok") {
-        publicReady = true;
-        writeState({ ready: true });
-        console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
-        return;
+        consecutiveReadyProbes += 1;
+        if (consecutiveReadyProbes >= requiredReadyProbeSuccesses) {
+          publicReady = true;
+          writeState({ ready: true });
+          console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
+          return;
+        }
+        writeState({ ready: false, starting: "stabilizing UI" });
+      } else {
+        consecutiveReadyProbes = 0;
+        writeState({ ready: false, starting: lastError });
       }
-      writeState({ ready: false, starting: lastError });
       await sleep(500);
     }
   } finally {
