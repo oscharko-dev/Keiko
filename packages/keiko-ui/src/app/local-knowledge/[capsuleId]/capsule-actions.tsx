@@ -17,6 +17,7 @@ import {
   connectCapsuleSource,
   deleteCapsule,
   fetchCapsuleDetail,
+  rebuildCapsuleIndex,
   reembedCapsuleForCurrentModel,
   refreshCapsuleChangedFiles,
   repairCapsuleFailedFiles,
@@ -43,7 +44,7 @@ import { formatError } from "../format-error";
 // Types
 // ---------------------------------------------------------------------------
 
-type ActionKind = "delete" | "refresh" | "repair" | "reembed";
+type ActionKind = "delete" | "refresh" | "repair" | "reembed" | "rebuild";
 type ProgressActionKind = Exclude<ActionKind, "delete"> | "index";
 
 interface ConfirmState {
@@ -64,7 +65,8 @@ interface ProgressState {
 
 function actionTitle(kind: ActionKind): string {
   if (kind === "delete") return "Delete capsule";
-  if (kind === "reembed") return "Re-index for current embedding model";
+  if (kind === "reembed") return "Full re-embed for current model";
+  if (kind === "rebuild") return "Full rebuild / rechunk";
   if (kind === "refresh") return "Refresh changed files";
   return "Repair failed files";
 }
@@ -79,13 +81,17 @@ function actionDescription(kind: ActionKind, capsuleDisplayName: string): string
   if (kind === "reembed") {
     return "This rebuilds every vector for the current embedding model. Use it after changing the configured embedding model or gateway.";
   }
+  if (kind === "rebuild") {
+    return "This reprocesses every source, rebuilds chunks and retrieval text, and embeds with the current model. Use it after tokenizer, analyzer, or contextual retrieval changes.";
+  }
   return "This retries files that previously failed indexing and also picks up any newly changed files in the same incremental pass.";
 }
 
 function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
   if (busy) return "Working…";
   if (kind === "delete") return "Delete";
-  if (kind === "reembed") return "Re-index";
+  if (kind === "reembed") return "Re-embed";
+  if (kind === "rebuild") return "Rebuild";
   if (kind === "refresh") return "Refresh";
   return "Repair";
 }
@@ -668,6 +674,7 @@ export interface CapsuleActionsProps {
   readonly sourceCount: number;
   readonly lifecycleState: CapsuleLifecycleState;
   readonly vectorCompatible?: boolean;
+  readonly contextualRebuildRequired?: boolean;
   readonly onActionComplete: () => void;
   readonly onDeleted?: (response: CapsuleActionResponse) => void;
   // Injectable seams for tests
@@ -676,6 +683,7 @@ export interface CapsuleActionsProps {
   readonly refreshCapsuleImpl?: typeof refreshCapsuleChangedFiles;
   readonly repairCapsuleImpl?: typeof repairCapsuleFailedFiles;
   readonly reembedCapsuleImpl?: typeof reembedCapsuleForCurrentModel;
+  readonly rebuildCapsuleImpl?: typeof rebuildCapsuleIndex;
   readonly startIndexingImpl?: typeof startIndexing;
   readonly fetchCapsuleDetailImpl?: typeof fetchCapsuleDetail;
 }
@@ -686,6 +694,7 @@ export function CapsuleActions({
   sourceCount,
   lifecycleState,
   vectorCompatible = true,
+  contextualRebuildRequired = false,
   onActionComplete,
   onDeleted,
   connectCapsuleSourceImpl = connectCapsuleSource,
@@ -693,6 +702,7 @@ export function CapsuleActions({
   refreshCapsuleImpl = refreshCapsuleChangedFiles,
   repairCapsuleImpl = repairCapsuleFailedFiles,
   reembedCapsuleImpl = reembedCapsuleForCurrentModel,
+  rebuildCapsuleImpl = rebuildCapsuleIndex,
   startIndexingImpl = startIndexing,
   fetchCapsuleDetailImpl = fetchCapsuleDetail,
 }: CapsuleActionsProps): ReactNode {
@@ -815,13 +825,17 @@ export function CapsuleActions({
       void runAction(kind, () => refreshCapsuleImpl(capsuleId));
     } else if (kind === "reembed") {
       void runAction(kind, () => reembedCapsuleImpl(capsuleId));
+    } else if (kind === "rebuild") {
+      void runAction(kind, () => rebuildCapsuleImpl(capsuleId));
     } else {
       void runAction(kind, () => repairCapsuleImpl(capsuleId));
     }
   }
 
   const showIndexButton = sourceCount > 0 && lifecycleState !== "ready";
-  const showReembedButton = sourceCount > 0 && !vectorCompatible;
+  const showReembedButton = sourceCount > 0;
+  const showRebuildButton = sourceCount > 0;
+  const reembedRecommended = sourceCount > 0 && !vectorCompatible;
   const actionDisabled = busy || indexBusy || lifecycleState === "indexing";
 
   // Rendered as its own block BELOW the .lk-header row (capsule-detail.tsx):
@@ -868,11 +882,24 @@ export function CapsuleActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            aria-label={`Re-index capsule ${capsuleDisplayName} for current embedding model`}
+            data-recommended={reembedRecommended ? "true" : "false"}
+            aria-label={`Full re-embed capsule ${capsuleDisplayName} for current embedding model`}
             disabled={actionDisabled}
             onClick={() => openModal("reembed")}
           >
-            Re-index for current model
+            Full re-embed current model
+          </button>
+        ) : null}
+        {showRebuildButton ? (
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            data-recommended={contextualRebuildRequired ? "true" : "false"}
+            aria-label={`Full rebuild capsule ${capsuleDisplayName}`}
+            disabled={actionDisabled}
+            onClick={() => openModal("rebuild")}
+          >
+            Full rebuild / rechunk
           </button>
         ) : null}
         <button

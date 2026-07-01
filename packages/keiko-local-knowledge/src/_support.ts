@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import type {
   CapsuleAnswerGroundingPolicy,
+  CapsuleContextualRetrievalSettings,
   CapsuleLifecycleState,
   CapsuleOutputMode,
   CapsuleRetrievalEffort,
@@ -47,6 +48,7 @@ export interface SampleCapsuleOverrides {
   readonly retrievalEffort?: CapsuleRetrievalEffort;
   readonly outputMode?: CapsuleOutputMode;
   readonly answerGroundingPolicy?: CapsuleAnswerGroundingPolicy;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
   readonly embeddingModelIdentity?: EmbeddingModelIdentity;
   readonly lifecycleState?: CapsuleLifecycleState;
   readonly storageReference?: string;
@@ -56,6 +58,7 @@ interface OptionalCapsuleFields {
   readonly description?: string;
   readonly sourceRoutingInstructions?: string;
   readonly alwaysQuery?: boolean;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
 }
 
 function optionalCapsuleFields(overrides: SampleCapsuleOverrides): OptionalCapsuleFields {
@@ -65,6 +68,9 @@ function optionalCapsuleFields(overrides: SampleCapsuleOverrides): OptionalCapsu
       ? { sourceRoutingInstructions: overrides.sourceRoutingInstructions }
       : {}),
     ...(overrides.alwaysQuery !== undefined ? { alwaysQuery: overrides.alwaysQuery } : {}),
+    ...(overrides.contextualRetrieval !== undefined
+      ? { contextualRetrieval: overrides.contextualRetrieval }
+      : {}),
   };
 }
 

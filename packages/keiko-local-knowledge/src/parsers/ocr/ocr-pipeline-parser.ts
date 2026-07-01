@@ -102,6 +102,14 @@ function pageNumberForInput(input: ParserSelectionInput): number {
     : 1;
 }
 
+function ocrAdapterInput(
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): Parameters<OcrAdapter["ocrPage"]>[0] {
+  const base = { bytes: input.bytes, pageNumber: pageNumberForInput(input) };
+  return options.signal === undefined ? base : { ...base, signal: options.signal };
+}
+
 // eslint-disable-next-line max-lines-per-function
 function resultFromOcrOutcome(
   ocrResult: OcrPageResult,
@@ -200,10 +208,7 @@ function buildAsyncParse(cap: ParserCapability, adapter: OcrAdapter) {
         diagnostic(preCheck.code, preCheck.message, input.documentId, "info"),
       ]);
     }
-    const ocrResult = await adapter.ocrPage({
-      bytes: input.bytes,
-      pageNumber: pageNumberForInput(input),
-    });
+    const ocrResult = await adapter.ocrPage(ocrAdapterInput(input, options));
     if (isAborted(options.signal)) return cancelled(cap, input, options);
     const postCheck = shouldStop(startedAt, options, 0);
     if (postCheck.stop && postCheck.code !== undefined && postCheck.message !== undefined) {

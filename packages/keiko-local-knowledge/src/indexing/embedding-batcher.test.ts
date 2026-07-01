@@ -18,6 +18,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
+import type { LocalKnowledgeTokenizer } from "../chunking/index.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
 import { countVectorsForCapsule, countVectorsForDocument } from "./vector-persist.js";
 import {
@@ -687,6 +688,41 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(result.vectors).toHaveLength(chunks.length);
       expect(batchCallSizes.length).toBeGreaterThan(1);
       expect(batchCallSizes.reduce((sum, n) => sum + n, 0)).toBe(chunks.length);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        chunks.length,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("uses the injected tokenizer for array-batch token budgeting", async () => {
+    const { store, cleanup, seeded, chunks: seededChunks } = buildFixture("alpha ".repeat(400));
+    const chunks: ChunkToEmbed[] = seededChunks.slice(0, 3).map((chunk, i) => ({
+      ...chunk,
+      text: `short-${String(i)}`,
+    }));
+    const tokenizer: LocalKnowledgeTokenizer = {
+      identity: "test-tokenizer-v1",
+      kind: "tokenizer",
+      countTokens: () => 16_000,
+    };
+    const { adapter, batchCallSizes } = batchAdapter();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        tokenizer,
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(chunks.length);
+      expect(batchCallSizes.length).toBeGreaterThan(1);
+      expect(batchCallSizes.every((n) => n === 1)).toBe(true);
       expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
         chunks.length,
       );

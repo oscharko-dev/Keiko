@@ -26,7 +26,7 @@ import {
   chunkingStrategyKey,
   resolveChunkingOptions,
 } from "../chunking/chunker.js";
-import type { ChunkingOptions } from "../chunking/types.js";
+import type { ChunkingOptions, LocalKnowledgeTokenizer } from "../chunking/types.js";
 import { composeChunkId, rowToParsedUnit } from "../chunking/chunker-runner.js";
 import {
   deleteChunksForDocument,
@@ -262,6 +262,7 @@ export interface BoundedEmbedDeps {
   readonly concurrency: number;
   readonly now: () => number;
   readonly idSource: () => string;
+  readonly tokenizer?: LocalKnowledgeTokenizer;
   readonly signal?: AbortSignal;
   readonly policy?: LargeDocumentResourcePolicy;
   readonly contextualRetrieval?: ContextualRetrievalOptions;
@@ -362,6 +363,7 @@ function embedOptions(deps: BoundedEmbedDeps): Parameters<typeof embedChunkBatch
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     now: deps.now,
     idSource: deps.idSource,
+    ...(deps.tokenizer !== undefined ? { tokenizer: deps.tokenizer } : {}),
   };
 }
 

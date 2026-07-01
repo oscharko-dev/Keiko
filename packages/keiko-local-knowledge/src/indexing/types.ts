@@ -23,7 +23,7 @@ import type {
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
-import type { ChunkingOptions } from "../chunking/index.js";
+import type { ChunkingOptions, LocalKnowledgeTokenizer } from "../chunking/index.js";
 import type { ContextualRetrievalOptions } from "./contextual-retrieval.js";
 import type { DiscoveryOptions } from "../discovery/index.js";
 import { KnowledgeStoreError } from "../errors.js";
@@ -258,6 +258,7 @@ export interface EmbedBatchOptions {
   readonly signal?: AbortSignal;
   readonly now: () => number;
   readonly idSource: () => string;
+  readonly tokenizer?: LocalKnowledgeTokenizer;
   // Optional; defaults to 2 retries with a 200 ms exponential backoff.
   readonly retry?: EmbedRetryOptions;
 }

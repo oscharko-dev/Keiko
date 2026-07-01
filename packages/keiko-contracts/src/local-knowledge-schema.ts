@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `18`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `20`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 18 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 20 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -49,6 +49,12 @@ CREATE TABLE capsules (
   retrieval_effort TEXT NOT NULL,
   output_mode TEXT NOT NULL,
   answer_grounding_policy TEXT NOT NULL,
+  contextual_retrieval_enabled INTEGER,
+  contextual_retrieval_model_id TEXT,
+  contextual_retrieval_prompt_version TEXT,
+  contextual_retrieval_strict INTEGER,
+  contextual_retrieval_max_context_chars INTEGER,
+  contextual_retrieval_document_context_max_chars INTEGER,
   embedding_model_provider TEXT NOT NULL,
   embedding_model_id TEXT NOT NULL,
   embedding_model_revision TEXT,
@@ -408,6 +414,38 @@ CREATE TABLE vectors (
 ) STRICT;
 `.trim();
 
+// vector_index_state records runtime vector-index materialization for optional local
+// sqlite-vec search. The actual sqlite-vec table is TEMP/runtime-local so encrypted stores do not
+// gain a second plaintext vector copy, but this durable state lets reindex/delete flows invalidate
+// an index and lets diagnostics explain whether the active dense path is indexed or fallback.
+const CREATE_VECTOR_INDEX_STATE = `
+CREATE TABLE vector_index_state (
+  capsule_id TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  index_name TEXT NOT NULL,
+  vector_dimensions INTEGER NOT NULL,
+  vector_metric TEXT NOT NULL,
+  embedding_identity_key TEXT NOT NULL,
+  vector_count INTEGER NOT NULL DEFAULT 0,
+  vector_max_created_at INTEGER,
+  status TEXT NOT NULL CHECK (status IN ('dirty', 'ready', 'unavailable')),
+  reason TEXT,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (
+    capsule_id,
+    provider,
+    index_name,
+    vector_dimensions,
+    vector_metric,
+    embedding_identity_key
+  ),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_VECTOR_INDEX_STATE_STATUS_INDEX =
+  "CREATE INDEX idx_vector_index_state_capsule_status ON vector_index_state(capsule_id, status);";
+
 const CREATE_PARSER_DIAGNOSTICS = `
 CREATE TABLE parser_diagnostics (
   id TEXT PRIMARY KEY NOT NULL,
@@ -661,6 +699,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CHUNK_LEXICAL_INDEX_AD,
   CREATE_CHUNK_LEXICAL_INDEX_AU,
   CREATE_VECTORS,
+  CREATE_VECTOR_INDEX_STATE,
   CREATE_PARSER_DIAGNOSTICS,
   CREATE_INDEXING_JOBS,
   CREATE_SCHEMA_META,
@@ -690,6 +729,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_vectors_capsule_document ON vectors(capsule_id, document_id);",
   "CREATE INDEX idx_vectors_capsule_created ON vectors(capsule_id, created_at);",
   "CREATE INDEX idx_vectors_capsule_identity ON vectors(capsule_id, embedding_model_provider, embedding_model_id, vector_dimensions);",
+  CREATE_VECTOR_INDEX_STATE_STATUS_INDEX,
   "CREATE INDEX idx_parsed_units_capsule_document ON parsed_units(capsule_id, document_id);",
   "CREATE INDEX idx_parser_diagnostics_capsule_doc ON parser_diagnostics(capsule_id, document_id);",
   "CREATE INDEX idx_parser_diagnostics_capsule_created ON parser_diagnostics(capsule_id, created_at DESC, id DESC);",
@@ -721,7 +761,19 @@ export interface KnowledgeCapsuleMigration {
 // forward-only semantics we split v2 out as a *delta*: existing v1 databases run only the
 // new CREATE TABLE + CREATE INDEX. Fresh installs apply v1 followed by v2 and end at the
 // same on-disk shape. Each `up` entry stays a single complete statement.
-const CREATE_CAPSULES_V17 = CREATE_CAPSULES.replace(
+const CREATE_CAPSULES_V18 = CREATE_CAPSULES.replace(
+  [
+    "  contextual_retrieval_enabled INTEGER,",
+    "  contextual_retrieval_model_id TEXT,",
+    "  contextual_retrieval_prompt_version TEXT,",
+    "  contextual_retrieval_strict INTEGER,",
+    "  contextual_retrieval_max_context_chars INTEGER,",
+    "  contextual_retrieval_document_context_max_chars INTEGER,",
+  ].join("\n"),
+  "",
+);
+
+const CREATE_CAPSULES_V17 = CREATE_CAPSULES_V18.replace(
   [
     "  embedding_normalization TEXT,",
     "  embedding_instruction_version TEXT,",
@@ -1020,6 +1072,25 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "ALTER TABLE vectors ADD COLUMN embedding_dimensions_param INTEGER;",
     ],
   },
+  {
+    version: 19,
+    reason:
+      "Persist per-capsule contextual retrieval settings so index-time context generation is controlled by capsule configuration.",
+    up: [
+      "ALTER TABLE capsules ADD COLUMN contextual_retrieval_enabled INTEGER;",
+      "ALTER TABLE capsules ADD COLUMN contextual_retrieval_model_id TEXT;",
+      "ALTER TABLE capsules ADD COLUMN contextual_retrieval_prompt_version TEXT;",
+      "ALTER TABLE capsules ADD COLUMN contextual_retrieval_strict INTEGER;",
+      "ALTER TABLE capsules ADD COLUMN contextual_retrieval_max_context_chars INTEGER;",
+      "ALTER TABLE capsules ADD COLUMN contextual_retrieval_document_context_max_chars INTEGER;",
+    ],
+  },
+  {
+    version: 20,
+    reason:
+      "Persist optional runtime vector-index state so sqlite-vec dense search can be invalidated by reindex/delete flows and diagnosed independently from the vectors table.",
+    up: [CREATE_VECTOR_INDEX_STATE, CREATE_VECTOR_INDEX_STATE_STATUS_INDEX],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -1053,6 +1124,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "extraction_checkpoints",
   "document_text_windows",
   "document_blobs",
+  "vector_index_state",
   "chunk_lexical_index",
   "chunk_lexical_fts",
 ] as const;
@@ -1076,6 +1148,7 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_vectors_capsule_document",
   "idx_vectors_capsule_created",
   "idx_vectors_capsule_identity",
+  "idx_vector_index_state_capsule_status",
   "idx_parsed_units_capsule_document",
   "idx_parser_diagnostics_capsule_doc",
   "idx_parser_diagnostics_capsule_created",

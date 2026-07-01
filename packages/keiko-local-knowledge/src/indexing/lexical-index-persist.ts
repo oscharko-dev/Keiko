@@ -7,7 +7,7 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import { readDocumentTextSpan } from "../discovery/persist.js";
-import { lexicalIndexedText } from "../retrieval/lexical-normalization.js";
+import { lexicalExactText, lexicalIndexedText } from "../retrieval/lexical-normalization.js";
 import type { KnowledgeStore } from "../store.js";
 
 const DELETE_LEXICAL_FOR_DOCUMENT_SQL =
@@ -129,7 +129,7 @@ export function replaceLexicalRowsForDocument(
         document_id: String(row.documentId),
         chunk_id: String(row.chunkId),
         text: lexicalIndexedText(row.text),
-        exact_text: row.exactText ?? row.text,
+        exact_text: lexicalExactText(row.exactText ?? row.text),
         updated_at: row.updatedAt,
       });
     }
@@ -148,7 +148,7 @@ export function upsertLexicalRows(
         document_id: String(row.documentId),
         chunk_id: String(row.chunkId),
         text: lexicalIndexedText(row.text),
-        exact_text: row.exactText ?? row.text,
+        exact_text: lexicalExactText(row.exactText ?? row.text),
         updated_at: row.updatedAt,
       });
     }

@@ -8,6 +8,7 @@ import type {
   ChunkId,
   DocumentId,
   EmbeddingModelIdentity,
+  EmbeddingVectorMetric,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   ParserIdentity,
@@ -220,13 +221,19 @@ export const INDEXING_JOB_STATUSES: readonly IndexingJobStatus[] = [
 // where the source, parser, policy, chunking strategy, and embedding identity remain
 // compatible; incompatible checkpoints are refused and that document restarts cleanly
 // (Epic #1160, Issue #1286).
-export type CapsuleReindexMode = "changed-files" | "repair-failed" | "resume" | "full-reembed";
+export type CapsuleReindexMode =
+  | "changed-files"
+  | "repair-failed"
+  | "resume"
+  | "full-reembed"
+  | "full-rebuild";
 
 export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
   "changed-files",
   "repair-failed",
   "resume",
   "full-reembed",
+  "full-rebuild",
 ] as const;
 
 export interface CapsuleReindexRequest {
@@ -261,6 +268,51 @@ export interface IndexingJobRecord {
   readonly resumableDocuments?: number;
 }
 
+export type CapsuleEmbeddingCompatibilityStatus = "compatible" | "incompatible" | "unknown";
+
+export type CapsuleEmbeddingCompatibilityReason =
+  | "current-model-matches-pinned"
+  | "gateway-config-missing"
+  | "no-current-embedding-model"
+  | "pinned-model-not-configured"
+  | "configured-model-not-embedding"
+  | "gateway-provider-mismatch";
+
+export interface CapsuleEmbeddingCompatibility {
+  readonly status: CapsuleEmbeddingCompatibilityStatus;
+  readonly reason: CapsuleEmbeddingCompatibilityReason;
+  readonly pinnedModelId: string;
+  readonly pinnedProvider: string;
+  readonly pinnedVectorDimensions: number;
+  readonly pinnedVectorMetric: EmbeddingVectorMetric;
+  readonly currentModelId?: string;
+  readonly currentProvider?: string;
+  readonly message: string;
+}
+
+export type CapsuleContextualRetrievalHealthSource = "capsule" | "env" | "default";
+
+export type CapsuleContextualRetrievalHealthStatus =
+  | "disabled"
+  | "ready"
+  | "rebuild-required"
+  | "degraded"
+  | "unavailable";
+
+export interface CapsuleContextualRetrievalHealth {
+  readonly enabled: boolean;
+  readonly source: CapsuleContextualRetrievalHealthSource;
+  readonly status: CapsuleContextualRetrievalHealthStatus;
+  readonly strict: boolean;
+  readonly rebuildRequired: boolean;
+  readonly staleChunkCount: number;
+  readonly degradedChunkCount: number;
+  readonly modelId?: string;
+  readonly maxContextChars?: number;
+  readonly documentContextMaxChars?: number;
+  readonly message: string;
+}
+
 // ─── Capsule health + delete ──────────────────────────────────────────────────
 export interface CapsuleHealth {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -276,11 +328,13 @@ export interface CapsuleHealth {
   // identity (provider, modelId, vectorDimensions, vectorMetric). Downstream surfaces
   // treat `vectorCompatible: false` as a "stale" signal requiring reindex.
   readonly vectorCompatible: boolean;
+  readonly embeddingCompatibility?: CapsuleEmbeddingCompatibility;
   readonly failedDocuments: number;
   readonly skippedDocuments: number;
   readonly unsupportedDocuments: number;
   readonly unsupportedGuidance: readonly string[];
   readonly staleReasons: readonly string[];
+  readonly contextualRetrieval?: CapsuleContextualRetrievalHealth;
   // Bounded large-document ingestion (Epic #1160, Issue #1286). Optional and content-free.
   // `partialCoverageDocuments` counts documents indexed with explicit quality limits (e.g.
   // missing OCR/multimodal capability); `qualityWarnings` are browser-safe summaries that

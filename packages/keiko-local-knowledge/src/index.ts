@@ -91,13 +91,34 @@ export {
   type ParserSelectionInput,
 } from "./parsers/index.js";
 
+export {
+  createProgressivePdfExtractor,
+  discoverExtractionCapabilities,
+  probeMultimodalCapability,
+  probeOcrCapability,
+  type CapabilityProbeDeps,
+  type MultimodalAdapter,
+  type MultimodalResult,
+  type OcrPageFn,
+  type ProgressivePdfExtractorDeps,
+} from "./parsers/large-document/index.js";
+
 // OCR adapter seam (Issue #202).
 export {
   createOcrPipelineParser,
+  createOcrAdapterFromEnv,
+  createTesseractOcrAdapter,
   nullOcrAdapter,
+  resolveOcrRuntimeFromEnv,
   type OcrAdapter,
   type OcrPageResult,
   type OcrPipelineAdapter,
+  type OcrRuntimeEngine,
+  type OcrRuntimeResolution,
+  type TesseractCommandRequest,
+  type TesseractCommandResult,
+  type TesseractCommandRunner,
+  type TesseractOcrAdapterOptions,
 } from "./parsers/ocr/index.js";
 
 // Bounded request-local small-document text extraction for Repository Search (Issue #1285).
