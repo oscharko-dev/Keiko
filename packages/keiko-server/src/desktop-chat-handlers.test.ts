@@ -29,6 +29,7 @@ import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
+const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
 
 let server: Server;
 let port: number;
@@ -58,11 +59,6 @@ function fakeModel(content: string): ModelPort {
       });
     },
   };
-}
-
-function oversizedHistoryTurn(index: number): string {
-  const oversized = "x".repeat(150_000);
-  return `history turn ${String(index)} ${oversized}`;
 }
 
 function scriptedIdentityRecallModel(): ModelPort {
@@ -167,13 +163,16 @@ function base(): string {
   return `http://${UI_HOST}:${String(port)}`;
 }
 
-function customModelConfig(modelId = "example-private-chat"): GatewayConfig {
+function customModelConfig(
+  modelId = "example-private-chat",
+  apiKey = "test-config-secret-value-1234567890",
+): GatewayConfig {
   return {
     providers: [
       {
         modelId,
         baseUrl: "https://provider.example/v1",
-        apiKey: "test-config-secret-value-1234567890",
+        apiKey,
         timeoutMs: 30_000,
         maxRetries: 0,
         retryBaseDelayMs: 500,
@@ -396,6 +395,7 @@ describe("desktop chat routes", () => {
   it("compacts long chat history from the active model profile resolver when the singleton profile is absent", async () => {
     await restartWithDeps(
       deps(fakeModel("compacted response"), {
+        config: customModelConfig(CHAT_MODEL, NON_PATTERN_SECRET),
         contextProfile: undefined,
         contextProfileForModel: () => DEFAULT_CONTEXT_PROFILE,
       }),
@@ -407,17 +407,42 @@ describe("desktop chat routes", () => {
     });
     const created = (await createRes.json()) as { chat: { id: string } };
     const now = Date.now();
-    const history = Array.from({ length: 3 }, (_, index) => ({
-      chatId: created.chat.id,
-      role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
-      content: oversizedHistoryTurn(index),
-      timestamp: now + index,
-      runId: undefined,
-      workflowId: undefined,
-      workflowStatus: undefined,
-      shortResult: undefined,
-      taskType: undefined,
-    }));
+    const huge = "x".repeat(300_000);
+    const history = [
+      {
+        chatId: created.chat.id,
+        role: "user" as const,
+        content: `history turn 0 ${NON_PATTERN_SECRET} ${huge}`,
+        timestamp: now,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId: created.chat.id,
+        role: "assistant" as const,
+        content: `history turn 1 ${huge}`,
+        timestamp: now + 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId: created.chat.id,
+        role: "user" as const,
+        content: `history turn 2 ${huge}`,
+        timestamp: now + 2,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+    ];
     store.createMessages(history);
 
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
@@ -433,10 +458,8 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0]?.messages[1]?.content).toContain(
-      "Automated summary of earlier conversation turns",
-    );
-    expect(seenRequests[0]?.messages[1]?.content).not.toContain("history turn 2");
+    expect(seenRequests[0]?.messages[1]?.content).toContain("Automated summary");
+    expect(seenRequests[0]?.messages[1]?.content).not.toContain(NON_PATTERN_SECRET);
   });
 
   it("appends realtime voice turns without calling the chat model", async () => {

@@ -11,13 +11,17 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
+  estimateTokensForSegments,
   validateContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import { conversationForGateway, MAX_CONTEXT_MESSAGES } from "./chat-handlers.js";
 import type { ChatMessage } from "./store/index.js";
 
-const SECRET = "sk-test-ABCDEF0123456789ABCDEF0123456789";
+const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
+const CURRENT_INSTRUCTION = "latest question";
 
 function msg(role: ChatMessage["role"], content: string, index: number): ChatMessage {
   return {
@@ -44,13 +48,21 @@ function history(count: number): ChatMessage[] {
   return out;
 }
 
-function oversizedHistory(): ChatMessage[] {
-  const huge = "x".repeat(150_000);
+function budgetPressureHistory(): ChatMessage[] {
+  const huge = "x".repeat(300_000);
   return [
-    msg("user", `here is my key ${SECRET} keep it ${huge}`, 0),
+    msg("user", `here is my key ${NON_PATTERN_SECRET} keep it ${huge}`, 0),
     msg("assistant", `assistant reply ${huge}`, 1),
-    msg("user", `latest question ${huge}`, 2),
+    msg("user", CURRENT_INSTRUCTION, 2),
   ];
+}
+
+function zeroBudgetProfile() {
+  return deriveContextProfile({
+    maxInputTokens: 1,
+    reservedOutputTokens: 1,
+    safetyMarginTokens: 0,
+  });
 }
 
 describe("conversationForGatewayWithCompaction — fast path (unchanged guarantee)", () => {
@@ -86,6 +98,24 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
     expect(outcome.messages).toEqual(conversationForGateway(messages));
   });
 
+  it("empty history with profile stays byte-identical and never emits a compaction record", () => {
+    const messages: ChatMessage[] = [];
+    const outcome = conversationForGatewayWithCompaction(messages, {
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+    });
+    expect(outcome.compaction).toBeUndefined();
+    expect(outcome.messages).toEqual(conversationForGateway(messages));
+  });
+
+  it("zero-budget history fails closed without a zero-item summary record", () => {
+    const messages = history(1);
+    expect(() =>
+      conversationForGatewayWithCompaction(messages, {
+        contextProfile: zeroBudgetProfile(),
+      }),
+    ).toThrow(ContextOverflowError);
+  });
+
   it("manyShortTurnsStayVerbatim: count above MAX_CONTEXT_MESSAGES still stays byte-identical when under budget", () => {
     const messages = history(30);
     const outcome = conversationForGatewayWithCompaction(messages, {
@@ -97,11 +127,12 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
 });
 
 describe("conversationForGatewayWithCompaction — slow path (compaction)", () => {
-  const messages = oversizedHistory();
+  const messages = budgetPressureHistory();
 
   it("fewOversizedTurnsCompact: keeps the system message first and inserts a user-role summary second", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     const first = outcome.messages[0];
     const second = outcome.messages[1];
@@ -113,45 +144,65 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
   it("fewOversizedTurnsCompact: the retained recent window after the summary is preserved verbatim", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
-    expect(outcome.messages[0]).toEqual(conversationForGateway(messages)[0]);
-    expect(outcome.messages.slice(2)).toEqual(messages.slice(1).map((message) => ({
-      role: message.role,
-      content: message.content,
-    })));
+    const plain = conversationForGateway(messages);
+    expect(outcome.messages[0]).toEqual(plain[0]);
+    expect(outcome.compaction?.itemsBefore).toBe(1);
+    expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
+  });
+
+  it("fewOversizedTurnsCompact: a smaller profile drops multiple turns and preserves the retained tail", () => {
+    const smallProfile = deriveContextProfile({
+      maxInputTokens: 40_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const outcome = conversationForGatewayWithCompaction(messages, {
+      contextProfile: smallProfile,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    const plain = conversationForGateway(messages);
+    expect(outcome.compaction?.itemsBefore).toBe(2);
+    expect(outcome.compaction?.sourceSpans?.length).toBe(2);
+    expect(outcome.messages.slice(2)).toEqual(plain.slice(3));
+    expect(
+      estimateTokensForSegments(outcome.messages.map((message) => message.content)),
+    ).toBeLessThanOrEqual(smallProfile.effectiveInputBudget);
   });
 
   it("fewOversizedTurnsCompact: the current (latest) user turn is preserved exactly", () => {
-    const latestUser = [...messages].reverse().find((m) => m.role === "user");
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const present = outcome.messages.some(
-      (m) => m.role === "user" && m.content === latestUser?.content,
-    );
-    expect(present).toBe(true);
+    const latestUser = [...outcome.messages].reverse().find((m) => m.role === "user");
+    expect(latestUser?.content).toBe(CURRENT_INSTRUCTION);
   });
 
   it("fewOversizedTurnsCompact: dropped content is NOT present verbatim", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     const summary = outcome.messages[1]?.content ?? "";
-    // The full dropped turn-1 text ("here is my key <secret> keep it") never appears verbatim.
-    expect(summary).not.toContain(`here is my key ${SECRET} keep it`);
+    // The full dropped turn-0 text never appears verbatim.
+    expect(summary).not.toContain(`here is my key ${NON_PATTERN_SECRET} keep it`);
   });
 
   it("fewOversizedTurnsCompact: a secret in a dropped message is redacted in the summary", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     const summary = outcome.messages[1]?.content ?? "";
-    expect(summary).not.toContain(SECRET);
+    expect(summary).not.toContain(NON_PATTERN_SECRET);
   });
 
   it("fewOversizedTurnsCompact: the compaction record validates", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     expect(outcome.compaction).toBeDefined();
     expect(validateContextCompactionRecord(outcome.compaction).ok).toBe(true);
@@ -161,6 +212,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
   it("fewOversizedTurnsCompact: record itemsBefore equals the dropped count and itemsAfter is 0", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     expect(outcome.compaction?.itemsBefore).toBe(1);
     expect(outcome.compaction?.itemsAfter).toBe(0);
@@ -170,6 +222,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
   it("fewOversizedTurnsCompact: every source span is a message ref with a deterministic stableId", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     for (const span of outcome.compaction?.sourceSpans ?? []) {
       expect(span.kind).toBe("message");
@@ -178,12 +231,24 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(outcome.compaction?.sourceSpans?.[0]?.stableId).toBe("history-msg-0");
   });
 
-  it("determinism: identical input yields identical output (no clock, no random)", () => {
-    const a = conversationForGatewayWithCompaction(oversizedHistory(), {
+  it("fewOversizedTurnsCompact: the final assembled token count stays within the effective budget", () => {
+    const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const b = conversationForGatewayWithCompaction(oversizedHistory(), {
+    expect(
+      estimateTokensForSegments(outcome.messages.map((message) => message.content)),
+    ).toBeLessThanOrEqual(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
+  });
+
+  it("determinism: identical input yields identical output (no clock, no random)", () => {
+    const a = conversationForGatewayWithCompaction(budgetPressureHistory(), {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    const b = conversationForGatewayWithCompaction(budgetPressureHistory(), {
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
     });
     expect(a).toEqual(b);
   });

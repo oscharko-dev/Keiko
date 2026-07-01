@@ -79,6 +79,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_BUDGET_PATH = resolve(HERE, "check-context-quality.budget.json");
 const LATENCY_ITERATIONS = 200;
 const LATENCY_WARMUP = 20;
+const CHAT_LATENCY_ITERATIONS = 120;
+const CHAT_LATENCY_WARMUP = 20;
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -518,12 +520,19 @@ export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
   if (!hasSystemThenSummary(messages)) {
     return false;
   }
-  const currentPreserved = someContentIncludes(messages, fixtures.currentInstruction);
+  const expectedTail = plain.slice(1 + compaction.itemsBefore);
+  const actualTail = messages.slice(2);
+  if (!deepEqual(actualTail, expectedTail)) {
+    return false;
+  }
+  const currentPreserved =
+    messages.at(-1)?.role === "user" && messages.at(-1)?.content === fixtures.currentInstruction;
   const secretRedacted = !someContentIncludes(messages, fixtures.earlySecret);
   const durableDigested =
     !someContentIncludes(messages, fixtures.droppedDurableInstruction) &&
     !someContentIncludes(messages, fixtures.droppedDurableMarker);
-  const plainKeptCurrent = someContentIncludes(plain, fixtures.currentInstruction);
+  const plainKeptCurrent =
+    plain.at(-1)?.role === "user" && plain.at(-1)?.content === fixtures.currentInstruction;
   return currentPreserved && plainKeptCurrent && secretRedacted && durableDigested;
 }
 
@@ -531,7 +540,8 @@ export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
 // content appears UNCHANGED in the spliced output. Isolated from the broader compaction invariant so
 // a regression that drops the current instruction fails THIS metric distinctly.
 export function evaluateCurrentInstructionPreserved(outcome, fixtures) {
-  return someContentIncludes(outcome.messages, fixtures.currentInstruction);
+  const latest = outcome.messages.at(-1);
+  return latest?.role === "user" && latest.content === fixtures.currentInstruction;
 }
 
 // chatShortSessionByteIdentical (required true): a session AT the threshold WITH a profile must be
@@ -560,7 +570,10 @@ export function evaluateNoProfileUnchanged(outcome, plain) {
 // carry the secret + markers) are never returned — only the boolean verdicts.
 export function evaluateChatCompaction(fixtures) {
   const profile = { contextProfile: DEFAULT_CONTEXT_PROFILE };
-  const pressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, profile);
+  const pressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, {
+    ...profile,
+    redactionSecrets: [fixtures.earlySecret],
+  });
   const pressurePlain = conversationForGateway(fixtures.pressure);
   const longOutcome = conversationForGatewayWithCompaction(fixtures.long, profile);
   const longPlain = conversationForGateway(fixtures.long);
@@ -581,6 +594,20 @@ export function evaluateChatCompaction(fixtures) {
     chatShortSessionByteIdentical: evaluateShortSessionByteIdentical(shortOutcome, shortPlain),
     chatNoProfileUnchanged: evaluateNoProfileUnchanged(noProfileOutcome, longPlain),
   };
+}
+
+function measureChatCompactionLatency(fixtures) {
+  const profile = { contextProfile: DEFAULT_CONTEXT_PROFILE };
+  for (let i = 0; i < CHAT_LATENCY_WARMUP; i += 1) {
+    conversationForGatewayWithCompaction(fixtures.pressure, profile);
+  }
+  const samples = [];
+  for (let i = 0; i < CHAT_LATENCY_ITERATIONS; i += 1) {
+    const start = performance.now();
+    conversationForGatewayWithCompaction(fixtures.pressure, profile);
+    samples.push(performance.now() - start);
+  }
+  return samples;
 }
 
 // ─── Scenario evaluation ────────────────────────────────────────────────────────
@@ -772,12 +799,21 @@ function evaluateSummaryDeterminism(scenarios) {
 }
 
 // ─── Summary assembly ───────────────────────────────────────────────────────────
-export function buildSummary(scenarios, latencySamples, rehydrations, shaping, chat) {
+export function buildSummary(
+  scenarios,
+  latencySamples,
+  chatLatencySamples,
+  rehydrations,
+  shaping,
+  chat,
+) {
   const determinism = evaluateSummaryDeterminism(scenarios);
   const metrics = aggregateScenarioMetrics(determinism.perScenario);
   const rehydration = aggregateRehydrationMetrics(rehydrations);
   const p50 = percentile(latencySamples, 50);
   const p95 = percentile(latencySamples, 95);
+  const chatP50 = percentile(chatLatencySamples, 50);
+  const chatP95 = percentile(chatLatencySamples, 95);
   return {
     schemaVersion: "1",
     measured: {
@@ -801,6 +837,12 @@ export function buildSummary(scenarios, latencySamples, rehydrations, shaping, c
       p95Ms: p95,
       iterations: LATENCY_ITERATIONS,
       note: "the ONLY nondeterministic measurement; gated by a generous soft ceiling",
+    },
+    chatLatency: {
+      p50Ms: chatP50,
+      p95Ms: chatP95,
+      iterations: CHAT_LATENCY_ITERATIONS,
+      note: "real chat-compaction slow-path latency, measured separately from allocator latency",
     },
     perScenario: determinism.perScenario.map((s) => ({
       id: s.id,
@@ -944,6 +986,12 @@ const BUDGET_CHECKS = [
     kind: "flag",
   },
   {
+    metric: "chatCompactionLatencyP95Ms",
+    observed: (s) => s.chatLatency.p95Ms,
+    threshold: (b) => b.maxChatCompactionLatencyP95Ms,
+    kind: "max",
+  },
+  {
     metric: "assemblyLatencyP95Ms",
     observed: (s) => s.latency.p95Ms,
     threshold: (b) => b.maxAssemblyLatencyP95Ms,
@@ -999,7 +1047,9 @@ function logSummary(onLog, summary, vacuity) {
       m.budgetOverflowRate,
     )} determinism=${String(m.determinism)} p50=${summary.latency.p50Ms.toFixed(
       2,
-    )}ms p95=${summary.latency.p95Ms.toFixed(2)}ms.`,
+    )}ms p95=${summary.latency.p95Ms.toFixed(2)}ms chat-p95=${summary.chatLatency.p95Ms.toFixed(
+      2,
+    )}ms.`,
   );
   onLog(
     `context-quality measured (PR2 load-bearing): rehydration-readiness=${formatPct(
@@ -1067,10 +1117,19 @@ export async function runContextQualityCheck({ budgetPath = DEFAULT_BUDGET_PATH,
   const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
   const scenarios = await buildScenarioCorpus();
   const latencySamples = measureAssemblyLatency(scenarios);
+  const chatFixtures = buildChatHistoryFixtures();
+  const chatLatencySamples = measureChatCompactionLatency(chatFixtures);
   const rehydrations = await rehydrateScenarios(scenarios);
   const shaping = evaluateToolObservationShapingFidelity(await buildToolObservationFixtures());
-  const chat = evaluateChatCompaction(buildChatHistoryFixtures());
-  const summary = buildSummary(scenarios, latencySamples, rehydrations, shaping, chat);
+  const chat = evaluateChatCompaction(chatFixtures);
+  const summary = buildSummary(
+    scenarios,
+    latencySamples,
+    chatLatencySamples,
+    rehydrations,
+    shaping,
+    chat,
+  );
   const vacuity = evaluateNonVacuousRehydration(summary);
   const budgetResult = evaluateContextQualityBudget(summary, budget);
   logSummary(onLog, summary, vacuity);

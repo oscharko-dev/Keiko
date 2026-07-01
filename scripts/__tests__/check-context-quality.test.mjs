@@ -68,6 +68,7 @@ const STRICT_BUDGET = {
   requireChatCurrentInstructionPreserved: true,
   requireChatShortSessionByteIdentical: true,
   requireChatNoProfileUnchanged: true,
+  maxChatCompactionLatencyP95Ms: 1000,
   maxAssemblyLatencyP95Ms: 1000,
 };
 
@@ -99,6 +100,7 @@ function passingSummary() {
       chatNoProfileUnchanged: true,
     },
     latency: { p95Ms: 3 },
+    chatLatency: { p50Ms: 2, p95Ms: 3, iterations: 120 },
   };
 }
 
@@ -447,6 +449,7 @@ describe("evaluateContextQualityBudget", () => {
       ],
       ["chatShortSessionByteIdentical", (s) => (s.measured.chatShortSessionByteIdentical = false)],
       ["chatNoProfileUnchanged", (s) => (s.measured.chatNoProfileUnchanged = false)],
+      ["chatCompactionLatencyP95Ms", (s) => (s.chatLatency.p95Ms = 99999)],
       ["assemblyLatencyP95Ms", (s) => (s.latency.p95Ms = 99999)],
     ];
     for (const [metric, mutate] of cases) {
@@ -630,7 +633,7 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
     const dropped = f.pressure.slice(0, 1);
     expect(dropped.length).toBe(1);
     expect(dropped[0].content).toContain(f.earlySecret);
-    expect(dropped[0].content).toMatch(/sk-live/u);
+    expect(dropped[0].content).toContain("customer-secret-ABC-1234567890");
     // The distinctive durable marker also lives in that dropped turn, but the compacted summary
     // must digest it rather than carry the raw string verbatim.
     expect(dropped[0].content).toContain(f.droppedDurableMarker);
@@ -654,14 +657,20 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
 
   it("evaluateLongSessionCompaction is true on the real budget-pressure splice", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, {
+      ...PROFILE,
+      redactionSecrets: [f.earlySecret],
+    });
     const plain = conversationForGateway(f.pressure);
     expect(evaluateLongSessionCompaction(outcome, plain, f)).toBe(true);
   });
 
   it("evaluateLongSessionCompaction is false when the current instruction is dropped (mutation guard)", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, {
+      ...PROFILE,
+      redactionSecrets: [f.earlySecret],
+    });
     const plain = conversationForGateway(f.pressure);
     // Strip the latest user instruction from every spliced message.
     const tampered = {
@@ -676,7 +685,10 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
 
   it("evaluateLongSessionCompaction is false when the dropped secret survives verbatim (mutation guard)", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, {
+      ...PROFILE,
+      redactionSecrets: [f.earlySecret],
+    });
     const plain = conversationForGateway(f.pressure);
     const system = outcome.messages[0];
     const summary = outcome.messages[1];
@@ -701,7 +713,10 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
 
   it("evaluateLongSessionCompaction is false when the summary is placed before the system message", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, {
+      ...PROFILE,
+      redactionSecrets: [f.earlySecret],
+    });
     const plain = conversationForGateway(f.pressure);
     const reordered = {
       ...outcome,
