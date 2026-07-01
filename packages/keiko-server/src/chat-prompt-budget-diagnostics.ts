@@ -50,13 +50,23 @@ function textTokens(text: string | undefined): number {
 
 function renderMemoryContextText(
   memories: readonly ConversationMemoryContextEntryWire[],
+  compactionContextText: string | undefined,
 ): string | undefined {
-  if (memories.length === 0) {
+  if (memories.length === 0 && compactionContextText === undefined) {
     return undefined;
   }
-  const lines = ["# Relevant memories"];
-  for (const memory of memories) {
-    lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
+  const lines: string[] = [];
+  if (memories.length > 0) {
+    lines.push("# Relevant memories");
+    for (const memory of memories) {
+      lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
+    }
+  }
+  if (compactionContextText !== undefined) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(compactionContextText);
   }
   return lines.join("\n");
 }
@@ -87,6 +97,7 @@ function estimateFinalPromptTokens(finalMessages: readonly GatewayConversationMe
 function buildPromptAssemblyTokenSummary(input: {
   readonly historyOutcome: ConversationCompactionOutcome;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly request: {
     readonly content: string;
@@ -104,7 +115,9 @@ function buildPromptAssemblyTokenSummary(input: {
   const historyTokens = estimateTokensForSegments(
     input.historyOutcome.messages.slice(1).map((message) => message.content),
   );
-  const memoryTokens = textTokens(renderMemoryContextText(input.memoryEntries));
+  const memoryTokens = textTokens(
+    renderMemoryContextText(input.memoryEntries, input.compactionContextText),
+  );
   const documentTokens = textTokens(renderDocumentContextText(input.documentContext));
   const latestTurnTokens = estimateUserTaskTokens(input.request);
   const systemTokens = estimateTokens(CONVERSATION_SYSTEM_PROMPT);
@@ -228,31 +241,38 @@ function buildPromptAssemblyLanes(input: {
   readonly totalMemoryEntries: number;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
+  readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
 }): ContextLaneDiagnostics[] {
   const inputBudget = input.profile.effectiveInputBudget;
   const { historyTokens, memoryTokens, documentTokens, latestTurnTokens, systemTokens } =
     input.tokenSummary;
+  const allocatorLane = (
+    laneId: ContextLaneDiagnostics["laneId"],
+  ): ContextLaneDiagnostics | undefined =>
+    input.allocatorDiagnostics?.lanes.find((lane) => lane.laneId === laneId);
   return [
-    buildSystemContractLane({ systemTokens, inputBudget }),
-    buildWorkingMemoryLane({
-      memoryTokens,
-      memoryEntries: input.memoryEntries,
-      totalMemoryEntries: input.totalMemoryEntries,
-      inputBudget,
-    }),
-    buildRepoEvidenceLane({
-      documentTokens,
-      documentContext: input.documentContext,
-      totalDocumentEntries: input.totalDocumentEntries,
-      inputBudget,
-    }),
+    allocatorLane("system-contract") ?? buildSystemContractLane({ systemTokens, inputBudget }),
+    allocatorLane("user-task") ?? buildUserTaskLane({ latestTurnTokens, inputBudget }),
+    allocatorLane("repo-evidence") ??
+      buildRepoEvidenceLane({
+        documentTokens,
+        documentContext: input.documentContext,
+        totalDocumentEntries: input.totalDocumentEntries,
+        inputBudget,
+      }),
+    allocatorLane("working-memory") ??
+      buildWorkingMemoryLane({
+        memoryTokens,
+        memoryEntries: input.memoryEntries,
+        totalMemoryEntries: input.totalMemoryEntries,
+        inputBudget,
+      }),
     buildHistorySummaryLane({
       historyOutcome: input.historyOutcome,
       historyTurnCount: input.historyTurnCount,
       historyTokens,
       inputBudget,
     }),
-    buildUserTaskLane({ latestTurnTokens, inputBudget }),
     buildVerificationEvidenceLane({
       reservedOutputTokens: input.profile.reservedOutputTokens,
       maxInputTokens: input.profile.maxInputTokens,
@@ -268,11 +288,13 @@ export function buildPromptAssemblyDiagnostics(input: {
   readonly totalMemoryEntries: number;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
+  readonly compactionContextText?: string | undefined;
   readonly request: {
     readonly content: string;
     readonly discussionMode: DiscussionMode | undefined;
   };
   readonly finalMessages: readonly GatewayConversationMessage[];
+  readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
 }): ContextAssemblyDiagnostics {
   const tokenSummary = buildPromptAssemblyTokenSummary(input);
   return {
@@ -292,6 +314,7 @@ export function buildPromptAssemblyDiagnostics(input: {
       totalMemoryEntries: input.totalMemoryEntries,
       documentContext: input.documentContext,
       totalDocumentEntries: input.totalDocumentEntries,
+      allocatorDiagnostics: input.allocatorDiagnostics,
     }),
     orderedForRecency: true,
   };

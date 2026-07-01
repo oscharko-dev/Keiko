@@ -1,11 +1,23 @@
 import { estimateTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  allocateContext,
+  DEFAULT_CONTEXT_BUDGET,
+  type AllocatedContextLane,
+  type ContextLaneInput,
+} from "@oscharko-dev/keiko-workflows/context-budget";
 import type {
+  ContextAssemblyDiagnostics,
   ConversationDocumentContextWire,
   DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";
-import { composeConversationPrompt } from "./conversation-prompt.js";
+import { usableGatewayMessages } from "./conversation-gateway.js";
+import {
+  CONVERSATION_SYSTEM_PROMPT,
+  composeConversationPrompt,
+  renderConversationDocumentContextBlock,
+} from "./conversation-prompt.js";
 import {
   conversationForGatewayWithCompaction,
   type ConversationCompactionOutcome,
@@ -36,6 +48,14 @@ interface PromptAssemblyInput {
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
   readonly redactionSecrets: readonly string[];
+  readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
+}
+
+interface PromptLaneSelection {
+  readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly compactionContextText?: string | undefined;
+  readonly documentContext: readonly ConversationDocumentContextWire[];
+  readonly diagnostics: ContextAssemblyDiagnostics;
 }
 
 function renderMemoryContextText(
@@ -59,6 +79,142 @@ function renderMemoryContextText(
     lines.push(compactionContextText);
   }
   return lines.join("\n");
+}
+
+function scoreForIndex(total: number, index: number): number {
+  return total - index;
+}
+
+function memoryLaneItemId(index: number): string {
+  return `memory-${String(index).padStart(4, "0")}`;
+}
+
+function documentLaneItemId(index: number): string {
+  return `document-${String(index).padStart(4, "0")}`;
+}
+
+function memoryLaneItemText(memory: ConversationMemoryContextEntryWire): string {
+  return `- (${memory.inclusionReason}) ${memory.bodyExcerpt}`;
+}
+
+function includedLaneIds(
+  lanes: readonly AllocatedContextLane[],
+  laneId: ContextLaneInput["laneId"],
+): ReadonlySet<string> {
+  return new Set(lanes.find((lane) => lane.laneId === laneId)?.includedItemIds ?? []);
+}
+
+function promptAllocationBudget(profile: ContextProfile): typeof DEFAULT_CONTEXT_BUDGET {
+  return { ...DEFAULT_CONTEXT_BUDGET, profile };
+}
+
+function compactionLaneItems(compactionContextText: string | undefined): ContextLaneInput["items"] {
+  return compactionContextText === undefined
+    ? []
+    : [{ id: "compaction-context", text: compactionContextText, score: 1_000_000 }];
+}
+
+function memoryLaneItems(
+  memories: readonly ConversationMemoryContextEntryWire[],
+): ContextLaneInput["items"] {
+  return memories.map((memory, index) => ({
+    id: memoryLaneItemId(index),
+    text: memoryLaneItemText(memory),
+    score: scoreForIndex(memories.length, index),
+  }));
+}
+
+function documentLaneItems(
+  documents: readonly ConversationDocumentContextWire[],
+): ContextLaneInput["items"] {
+  return documents.map((document, index) => ({
+    id: documentLaneItemId(index),
+    text: renderConversationDocumentContextBlock(document),
+    score: scoreForIndex(documents.length, index),
+  }));
+}
+
+function historyLaneItems(historyPrefix: readonly ChatMessage[]): ContextLaneInput["items"] {
+  const usable = usableGatewayMessages(historyPrefix);
+  return usable.map((message, index) => ({
+    id: `history-${String(index).padStart(4, "0")}`,
+    text: message.content,
+    score: index + 1,
+  }));
+}
+
+function buildPromptAllocatorLanes(input: {
+  readonly request: PromptAssemblyInput["request"];
+  readonly historyPrefix: readonly ChatMessage[];
+  readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly compactionContextText?: string | undefined;
+  readonly documentContext: readonly ConversationDocumentContextWire[];
+}): readonly ContextLaneInput[] {
+  return [
+    {
+      laneId: "system-contract",
+      items: [{ id: "system-contract", text: CONVERSATION_SYSTEM_PROMPT, score: 1 }],
+    },
+    {
+      laneId: "user-task",
+      items: [
+        {
+          id: "latest-user-task",
+          text: composeConversationPrompt(
+            input.request.content,
+            [],
+            undefined,
+            input.request.discussionMode,
+          ),
+          score: 1,
+        },
+      ],
+    },
+    {
+      laneId: "working-memory",
+      items: [
+        ...compactionLaneItems(input.compactionContextText),
+        ...memoryLaneItems(input.memoryEntries),
+      ],
+    },
+    {
+      laneId: "repo-evidence",
+      items: documentLaneItems(input.documentContext),
+    },
+    {
+      laneId: "history-summary",
+      items: historyLaneItems(input.historyPrefix),
+    },
+  ];
+}
+
+function selectPromptLanes(input: {
+  readonly profile: ContextProfile;
+  readonly request: PromptAssemblyInput["request"];
+  readonly historyPrefix: readonly ChatMessage[];
+  readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly compactionContextText?: string | undefined;
+  readonly documentContext: readonly ConversationDocumentContextWire[];
+}): PromptLaneSelection {
+  const allocation = allocateContext({
+    profile: input.profile,
+    budget: promptAllocationBudget(input.profile),
+    lanes: buildPromptAllocatorLanes(input),
+  });
+  const memoryIncluded = includedLaneIds(allocation.lanes, "working-memory");
+  const documentIncluded = includedLaneIds(allocation.lanes, "repo-evidence");
+  return {
+    memoryEntries: input.memoryEntries.filter((_, index) =>
+      memoryIncluded.has(memoryLaneItemId(index)),
+    ),
+    compactionContextText: memoryIncluded.has("compaction-context")
+      ? input.compactionContextText
+      : undefined,
+    documentContext: input.documentContext.filter((_, index) =>
+      documentIncluded.has(documentLaneItemId(index)),
+    ),
+    diagnostics: allocation.diagnostics,
+  };
 }
 
 function assembleGatewayPromptCandidate(
@@ -101,19 +257,10 @@ function assembleGatewayPromptCandidate(
       totalDocumentEntries: input.totalDocumentEntries,
       request: input.request,
       finalMessages: messages,
+      compactionContextText: input.compactionContextText,
+      allocatorDiagnostics: input.allocatorDiagnostics,
     }),
   };
-}
-
-function selectPrefixCount(items: readonly unknown[], canFit: (count: number) => boolean): number {
-  let selected = 0;
-  for (let count = 1; count <= items.length; count += 1) {
-    if (!canFit(count)) {
-      break;
-    }
-    selected = count;
-  }
-  return selected;
 }
 
 export function selectGatewayPromptAssembly(input: {
@@ -139,28 +286,20 @@ export function selectGatewayPromptAssembly(input: {
     compactionContextText: input.compactionContextText,
     redactionSecrets: input.redactionSecrets,
   };
-  const selectedMemoryCount = selectPrefixCount(
-    input.memoryEntries,
-    (count) =>
-      assembleGatewayPromptCandidate({
-        ...baseInput,
-        memoryEntries: input.memoryEntries.slice(0, count),
-        documentContext: [],
-      }) !== undefined,
-  );
-  const selectedDocumentCount = selectPrefixCount(
-    input.documentContext,
-    (count) =>
-      assembleGatewayPromptCandidate({
-        ...baseInput,
-        memoryEntries: input.memoryEntries.slice(0, selectedMemoryCount),
-        documentContext: input.documentContext.slice(0, count),
-      }) !== undefined,
-  );
+  const selection = selectPromptLanes({
+    profile: input.profile,
+    request: input.request,
+    historyPrefix: input.historyPrefix,
+    memoryEntries: input.memoryEntries,
+    compactionContextText: input.compactionContextText,
+    documentContext: input.documentContext,
+  });
   return assembleGatewayPromptCandidate({
     ...baseInput,
-    memoryEntries: input.memoryEntries.slice(0, selectedMemoryCount),
-    documentContext: input.documentContext.slice(0, selectedDocumentCount),
+    memoryEntries: selection.memoryEntries,
+    compactionContextText: selection.compactionContextText,
+    documentContext: selection.documentContext,
+    allocatorDiagnostics: selection.diagnostics,
   });
 }
 
