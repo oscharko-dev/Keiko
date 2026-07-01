@@ -273,6 +273,64 @@ const deriveCoverageMapIdString = (
   return `qi-coverage-${sha256Hex(payload).slice(0, 32)}`;
 };
 
+interface CoverageCitationStats {
+  readonly candidateIds: readonly QualityIntelligence.QualityIntelligenceTestCaseId[];
+  readonly corroboratedCandidateIds: readonly QualityIntelligence.QualityIntelligenceTestCaseId[];
+  readonly bestFocus: number;
+  readonly bestCorroboratedFocus: number;
+}
+
+const collectCoverageCitationStats = (
+  atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
+  candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[],
+  atomText: string | undefined,
+): CoverageCitationStats => {
+  const candidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
+  const corroboratedCandidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
+  let bestFocus = Number.POSITIVE_INFINITY;
+  let bestCorroboratedFocus = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    if (!candidate.derivedFromAtomIds.includes(atom.id)) continue;
+    candidateIds.push(candidate.id);
+    bestFocus = Math.min(bestFocus, candidate.derivedFromAtomIds.length);
+    if (!hasCorroboratingCoverageText(candidate, atomText)) continue;
+    corroboratedCandidateIds.push(candidate.id);
+    bestCorroboratedFocus = Math.min(bestCorroboratedFocus, candidate.derivedFromAtomIds.length);
+  }
+  return { candidateIds, corroboratedCandidateIds, bestFocus, bestCorroboratedFocus };
+};
+
+const coverageConfidenceForCitationStats = (
+  stats: CoverageCitationStats,
+  corroborationRequired: boolean,
+): number => {
+  if (!corroborationRequired) {
+    return coverageConfidence(stats.candidateIds.length, stats.bestFocus);
+  }
+  if (stats.corroboratedCandidateIds.length > 0) {
+    return coverageConfidence(stats.corroboratedCandidateIds.length, stats.bestCorroboratedFocus);
+  }
+  return coverageConfidence(stats.candidateIds.length, FOCUS_COVERED_MAX + 1);
+};
+
+const coverageMappingForAtom = (
+  atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
+  candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[],
+  atomTextById: BuildCoverageMapInput["atomTextById"],
+): QualityIntelligence.QualityIntelligenceCoverageMapping | undefined => {
+  const atomText = atomTextLookup(atomTextById, atom.id);
+  const stats = collectCoverageCitationStats(atom, candidates, atomText);
+  if (stats.candidateIds.length === 0) return undefined;
+  const confidence = coverageConfidenceForCitationStats(stats, atomTextById !== undefined);
+  if (confidence <= 0) return undefined;
+  return Object.freeze({
+    atomId: atom.id,
+    candidateIds: Object.freeze([...stats.candidateIds].sort(compareString)),
+    coverageKind: "derived" as const,
+    confidence,
+  });
+};
+
 /**
  * Build a coverage map for the supplied run. The returned map is validated
  * against `assertCoverageMapInvariant` before being returned — callers can
@@ -294,51 +352,12 @@ export const buildCoverageMap = (
     compareString(left.canonicalHashSha256Hex, right.canonicalHashSha256Hex),
   );
 
-  const mappings: QualityIntelligence.QualityIntelligenceCoverageMapping[] = [];
-  for (const atom of sortedAtoms) {
-    const candidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
-    const corroboratedCandidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
-    // Track the most-focused citing test (smallest derivedFromAtomIds) so an atom covered only by
-    // sprawling tests is classified weakly-covered, while a dedicated test yields "covered". The
-    // confidence is atom-local — it does NOT depend on how many candidates the run produced.
-    let bestFocus = Number.POSITIVE_INFINITY;
-    let bestCorroboratedFocus = Number.POSITIVE_INFINITY;
-    const atomText = atomTextLookup(atomTextById, atom.id);
-    for (const candidate of candidates) {
-      if (candidate.derivedFromAtomIds.includes(atom.id)) {
-        candidateIds.push(candidate.id);
-        bestFocus = Math.min(bestFocus, candidate.derivedFromAtomIds.length);
-        if (hasCorroboratingCoverageText(candidate, atomText)) {
-          corroboratedCandidateIds.push(candidate.id);
-          bestCorroboratedFocus = Math.min(
-            bestCorroboratedFocus,
-            candidate.derivedFromAtomIds.length,
-          );
-        }
-      }
-    }
-    if (candidateIds.length === 0) {
-      continue;
-    }
-    const confidence =
-      atomTextById === undefined || corroboratedCandidateIds.length > 0
-        ? coverageConfidence(
-            atomTextById === undefined ? candidateIds.length : corroboratedCandidateIds.length,
-            atomTextById === undefined ? bestFocus : bestCorroboratedFocus,
-          )
-        : coverageConfidence(candidateIds.length, FOCUS_COVERED_MAX + 1);
-    if (confidence <= 0) {
-      continue;
-    }
-    mappings.push(
-      Object.freeze({
-        atomId: atom.id,
-        candidateIds: Object.freeze([...candidateIds].sort(compareString)),
-        coverageKind: "derived" as const,
-        confidence,
-      }),
+  const mappings = sortedAtoms
+    .map((atom) => coverageMappingForAtom(atom, candidates, atomTextById))
+    .filter(
+      (mapping): mapping is QualityIntelligence.QualityIntelligenceCoverageMapping =>
+        mapping !== undefined,
     );
-  }
 
   const idString = deriveCoverageMapIdString(
     runId,
