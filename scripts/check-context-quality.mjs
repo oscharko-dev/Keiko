@@ -36,6 +36,7 @@ import { redact, detectPromptInjectionSignals } from "@oscharko-dev/keiko-securi
 import {
   conversationForGateway,
   conversationForGatewayWithCompaction,
+  usableGatewayMessages,
 } from "@oscharko-dev/keiko-server";
 import {
   allocateContext,
@@ -520,9 +521,7 @@ function hasValidCompactionRecord(compaction) {
 
 function buildFullGatewayProjection(messages) {
   const system = conversationForGateway(messages)[0];
-  const filtered = messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => ({ role: message.role, content: message.content }));
+  const filtered = usableGatewayMessages(messages);
   return system === undefined ? filtered : [system, ...filtered];
 }
 
@@ -567,6 +566,10 @@ export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
   return evaluatePressureCompactionContent(outcome, plain, fixtures);
 }
 
+export function evaluateNoProfileOverflowCompaction(outcome, plain, fixtures) {
+  return evaluatePressureCompactionContent(outcome, plain, fixtures);
+}
+
 // chatCurrentInstructionPreserved (required true): the milestone headline — the latest user message
 // content appears UNCHANGED in the spliced output. Isolated from the broader compaction invariant so
 // a regression that drops the current instruction fails THIS metric distinctly.
@@ -597,13 +600,16 @@ export function evaluateNoProfileUnchanged(outcome, plain) {
   return outcome.compaction === undefined && deepEqual(outcome.messages, plain);
 }
 
-// Drives the REAL splice over the chat fixtures and returns the five measured hard booleans. The
+// Drives the REAL splice over the chat fixtures and returns the six measured hard booleans. The
 // splice is deterministic (no clock/random), so this is reproducible. Internal message bodies (which
 // carry the secret + markers) are never returned — only the boolean verdicts.
 export function evaluateChatCompaction(fixtures) {
   const profile = { contextProfile: DEFAULT_CONTEXT_PROFILE };
   const pressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, {
     ...profile,
+    redactionSecrets: [fixtures.earlySecret],
+  });
+  const noProfilePressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, {
     redactionSecrets: [fixtures.earlySecret],
   });
   const pressurePlain = conversationForGateway(fixtures.pressure);
@@ -615,6 +621,11 @@ export function evaluateChatCompaction(fixtures) {
   return {
     chatLongSessionCompaction: evaluateLongSessionCompaction(
       pressureOutcome,
+      pressurePlain,
+      fixtures,
+    ),
+    chatNoProfileOverflowCompaction: evaluateNoProfileOverflowCompaction(
+      noProfilePressureOutcome,
       pressurePlain,
       fixtures,
     ),
@@ -873,6 +884,7 @@ function buildMeasuredSummary(metrics, determinism, rehydration, shaping, chat) 
     chatCurrentInstructionPreserved: chat.chatCurrentInstructionPreserved,
     chatShortSessionByteIdentical: chat.chatShortSessionByteIdentical,
     chatNoProfileUnchanged: chat.chatNoProfileUnchanged,
+    chatNoProfileOverflowCompaction: chat.chatNoProfileOverflowCompaction,
   };
 }
 
@@ -1026,6 +1038,12 @@ const BUDGET_CHECKS = [
     kind: "flag",
   },
   {
+    metric: "chatNoProfileOverflowCompaction",
+    observed: (s) => s.measured.chatNoProfileOverflowCompaction,
+    threshold: (b) => b.requireChatNoProfileOverflowCompaction,
+    kind: "flag",
+  },
+  {
     metric: "chatCompactionLatencyP95Ms",
     observed: (s) => s.chatLatency.p95Ms,
     threshold: (b) => b.maxChatCompactionLatencyP95Ms,
@@ -1116,7 +1134,9 @@ function logSummary(onLog, summary, vacuity) {
       m.chatCurrentInstructionPreserved,
     )} short-session-byte-identical=${String(
       m.chatShortSessionByteIdentical,
-    )} no-profile-unchanged=${String(m.chatNoProfileUnchanged)}.`,
+    )} no-profile-unchanged=${String(
+      m.chatNoProfileUnchanged,
+    )} no-profile-overflow-compaction=${String(m.chatNoProfileOverflowCompaction)}.`,
   );
 }
 
