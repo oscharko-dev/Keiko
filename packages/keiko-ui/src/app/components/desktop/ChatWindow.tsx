@@ -56,6 +56,7 @@ import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
 import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
+import { VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import {
   usePdfCitationPreviewController,
   type PdfCitationPreviewWindowApi,
@@ -1801,8 +1802,9 @@ function ComposerCore({
     messageId: undefined,
   });
   const voiceGrounding = voiceSessionGroundingContext(activeChat);
+  const voiceGroundingActive = voiceGrounding?.enabled === true;
   const voiceGroundingToolAvailable =
-    voiceGrounding?.enabled === true && supportsRealtimeToolCalling(voiceCapability);
+    voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability);
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
     chatContext:
@@ -1816,7 +1818,8 @@ function ComposerCore({
             },
             ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
           },
-    groundingActive: voiceGroundingToolAvailable,
+    groundingActive: voiceGroundingActive,
+    groundingToolActive: voiceGroundingToolAvailable,
     memoryContextText: session.latestMemory?.context.text,
     onGroundedToolCall: session.runRealtimeGroundedTool,
     onVoiceTurnCommitted: (messages) => session.appendVoiceTurn?.(messages),
@@ -2173,6 +2176,17 @@ function ComposerCore({
           <VoiceDictationPreviewFromController
             controller={dictation}
             onAfterDiscard={() => micButtonRef.current?.focus()}
+          />
+        ) : null}
+        {voiceDialog.active ? (
+          <VoiceRealtimeStatusFromController
+            controller={realtimeVoice}
+            memoryContextText={session.latestMemory?.context.text}
+            memoryContextCount={session.latestMemory?.context.memories.length}
+            memoryActions={session.latestMemory?.actions}
+            onAcceptMemoryCandidate={session.acceptMemoryCandidate}
+            onRejectMemoryCandidate={session.rejectMemoryCandidate}
+            onAfterDismiss={voiceDialog.leave}
           />
         ) : null}
       </div>

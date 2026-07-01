@@ -195,7 +195,7 @@ describe("MemoryList — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Source explicit-user-instruction")).toBeInTheDocument();
       expect(screen.getByText("87% confidence")).toBeInTheDocument();
-      expect(screen.getByText("Sensitivity confidential")).toBeInTheDocument();
+      expect(screen.getByText("Sensitivity Confidential")).toBeInTheDocument();
     });
   });
 

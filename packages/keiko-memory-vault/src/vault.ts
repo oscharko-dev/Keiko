@@ -19,7 +19,7 @@ import type {
   MemoryRecord,
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { openMemoryDatabase } from "./db.js";
+import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
 import { createMemoryContentCipher, resolveVaultKey, type MemoryContentCipher } from "./cipher.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
@@ -27,8 +27,9 @@ import {
   deleteMemoryRow,
   getMemoryRow,
   insertMemoryRow,
+  listMemoriesAcrossScopeRows,
+  listMemoryScopeRows,
   listMemoryMetadataByScopeRows,
-  listMemoriesRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
 } from "./memories.js";
@@ -86,11 +87,16 @@ interface ResolvedOptions {
   readonly newTombstoneId: () => string;
   readonly redactString: (input: string) => string;
   readonly emit: (event: MemoryEvent) => void;
+  readonly beforeDeleteCommit: (events: readonly MemoryEvent[]) => void;
+  readonly hardenSidecars: () => void;
   readonly cipher: MemoryContentCipher;
 }
 
 const IDENTITY: (s: string) => string = (s) => s;
+const DEFAULT_NOW: () => number = () => Date.now();
+const DEFAULT_NEW_TOMBSTONE_ID: () => string = () => randomUUID();
 const NOOP_EMIT: (e: MemoryEvent) => void = () => undefined;
+const NOOP_BEFORE_DELETE_COMMIT: (events: readonly MemoryEvent[]) => void = () => undefined;
 
 // Single named entry point for the default environment read so the literal `process.env`
 // reference does not appear inline in business logic (audit AC19).
@@ -101,14 +107,34 @@ function defaultEnv(): Readonly<Record<string, string | undefined>> {
 function resolveOptions(
   opts: MemoryVaultFactoryOptions | undefined,
   cipher: MemoryContentCipher,
+  dbPath: string,
 ): ResolvedOptions {
+  const resolved: MemoryVaultFactoryOptions = opts ?? {};
   return {
-    now: opts?.now ?? ((): number => Date.now()),
-    newTombstoneId: opts?.newTombstoneId ?? ((): string => randomUUID()),
-    redactString: opts?.redactString ?? IDENTITY,
-    emit: opts?.onMemoryEvent ?? NOOP_EMIT,
+    now: resolved.now ?? DEFAULT_NOW,
+    newTombstoneId: resolved.newTombstoneId ?? DEFAULT_NEW_TOMBSTONE_ID,
+    redactString: resolved.redactString ?? IDENTITY,
+    emit: resolved.onMemoryEvent ?? NOOP_EMIT,
+    beforeDeleteCommit: resolved.onDeleteEventsBeforeCommit ?? NOOP_BEFORE_DELETE_COMMIT,
+    hardenSidecars: (): void => {
+      hardenVaultSidecars(dbPath);
+    },
     cipher,
   };
+}
+
+function hardenVaultSidecars(dbPath: string): void {
+  chmodIfPresent(dbPath, 0o600);
+  chmodIfPresent(`${dbPath}-wal`, 0o600);
+  chmodIfPresent(`${dbPath}-shm`, 0o600);
+}
+
+function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
+  try {
+    return write();
+  } finally {
+    opts.hardenSidecars();
+  }
 }
 
 // Resolve the content cipher. Precedence: an explicitly injected cipher (tests), then an injected
@@ -189,6 +215,19 @@ function buildTombstone(
   };
 }
 
+function assertTombstoneMatchesRecord(record: MemoryRecord, tombstone: MemoryTombstone): void {
+  if (
+    tombstone.memoryId !== record.id ||
+    tombstone.scopeKind !== scopeKindOf(record.scope) ||
+    tombstone.scopeCoordinate !== scopeCoordinateOf(record.scope)
+  ) {
+    throw new MemoryStorageError(
+      "internal",
+      "Tombstone scope invariant violated for deleted memory.",
+    );
+  }
+}
+
 type MemoryMutators = Pick<
   MemoryVaultStore,
   | "insertMemory"
@@ -197,7 +236,8 @@ type MemoryMutators = Pick<
   | "deleteMemory"
   | "deleteMemories"
   | "getMemory"
-  | "listMemories"
+  | "listMemoryScopes"
+  | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
 >;
@@ -213,6 +253,9 @@ function prepareDelete(
   const tombstone = options.tombstone
     ? redactTombstone(buildTombstone(existing, options, opts), opts.redactString)
     : undefined;
+  if (tombstone !== undefined) {
+    assertTombstoneMatchesRecord(existing, tombstone);
+  }
   return { memoryId: id, scope: existing.scope, tombstone };
 }
 
@@ -229,6 +272,22 @@ function applyPreparedDelete(
   }
 }
 
+function eventsForDeletedRecords(results: readonly MemoryDeleteResult[]): readonly MemoryEvent[] {
+  const events: MemoryEvent[] = [];
+  for (const result of results) {
+    events.push({
+      kind: "memory:deleted",
+      memoryId: result.memoryId,
+      scope: result.scope,
+      tombstoned: result.tombstone !== undefined,
+    });
+    if (result.tombstone !== undefined) {
+      events.push({ kind: "memory:tombstoned", tombstone: result.tombstone });
+    }
+  }
+  return events;
+}
+
 function runDelete(
   db: DatabaseSync,
   id: MemoryId,
@@ -239,6 +298,7 @@ function runDelete(
   db.exec("BEGIN");
   try {
     applyPreparedDelete(db, ready, opts);
+    opts.beforeDeleteCommit(eventsForDeletedRecords([ready]));
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -258,6 +318,7 @@ function runBatchDeleteMemories(
     for (const result of ready) {
       applyPreparedDelete(db, result, opts);
     }
+    opts.beforeDeleteCommit(eventsForDeletedRecords(ready));
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -304,16 +365,8 @@ function emitUpdatedRecords(records: readonly MemoryRecord[], opts: ResolvedOpti
 }
 
 function emitDeletedRecords(results: readonly MemoryDeleteResult[], opts: ResolvedOptions): void {
-  for (const result of results) {
-    opts.emit({
-      kind: "memory:deleted",
-      memoryId: result.memoryId,
-      scope: result.scope,
-      tombstoned: result.tombstone !== undefined,
-    });
-    if (result.tombstone !== undefined) {
-      opts.emit({ kind: "memory:tombstoned", tombstone: result.tombstone });
-    }
+  for (const event of eventsForDeletedRecords(results)) {
+    opts.emit(event);
   }
 }
 
@@ -334,34 +387,48 @@ type MemoryWriteOps = Pick<
 
 type MemoryReadOps = Pick<
   MemoryMutators,
-  "getMemory" | "listMemories" | "listMemoriesByScope" | "listMemoryMetadataByScope"
+  | "getMemory"
+  | "listMemoryScopes"
+  | "listMemoriesAcrossScopes"
+  | "listMemoriesByScope"
+  | "listMemoryMetadataByScope"
 >;
 
 function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWriteOps {
   return {
     insertMemory: (record: MemoryRecord): MemoryRecord => {
-      const ready = preparedForWrite(record, opts);
-      insertMemoryRow(db, ready, opts.cipher);
-      opts.emit({ kind: "memory:inserted", record: ready });
-      return ready;
+      return withSidecarHardening(opts, () => {
+        const ready = preparedForWrite(record, opts);
+        insertMemoryRow(db, ready, opts.cipher);
+        opts.emit({ kind: "memory:inserted", record: ready });
+        return ready;
+      });
     },
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
-      const ready = updateMemoryInPlace(db, { id, patch, nowMs }, opts);
-      opts.emit({ kind: "memory:updated", record: ready });
-      return ready;
+      return withSidecarHardening(opts, () => {
+        const ready = updateMemoryInPlace(db, { id, patch, nowMs }, opts);
+        opts.emit({ kind: "memory:updated", record: ready });
+        return ready;
+      });
     },
     updateMemories: (updates: readonly MemoryBatchUpdate[]): readonly MemoryRecord[] => {
-      const ready = runBatchUpdateMemories(db, updates, opts);
-      emitUpdatedRecords(ready, opts);
-      return ready;
+      return withSidecarHardening(opts, () => {
+        const ready = runBatchUpdateMemories(db, updates, opts);
+        emitUpdatedRecords(ready, opts);
+        return ready;
+      });
     },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
-      deleteMemoryWithEvents(db, id, options, opts);
+      withSidecarHardening(opts, () => {
+        deleteMemoryWithEvents(db, id, options, opts);
+      });
     },
     deleteMemories: (deletes: readonly MemoryBatchDelete[]): readonly MemoryDeleteResult[] => {
-      const ready = runBatchDeleteMemories(db, deletes, opts);
-      emitDeletedRecords(ready, opts);
-      return ready;
+      return withSidecarHardening(opts, () => {
+        const ready = runBatchDeleteMemories(db, deletes, opts);
+        emitDeletedRecords(ready, opts);
+        return ready;
+      });
     },
   };
 }
@@ -369,10 +436,15 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
   return {
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
-    listMemories: (options?: ListMemoriesOptions): readonly MemoryRecord[] => {
+    listMemoryScopes: (): readonly MemoryScope[] => listMemoryScopeRows(db),
+    listMemoriesAcrossScopes: (
+      scopes: readonly MemoryScope[],
+      options?: ListMemoriesOptions,
+    ): readonly MemoryRecord[] => {
+      for (const scope of scopes) gateMemoryScope(scope);
       const effective = options ?? {};
       const nowMs = effective.nowMs ?? opts.now();
-      return listMemoriesRows(db, effective, nowMs, opts.cipher);
+      return listMemoriesAcrossScopeRows(db, scopes, effective, nowMs, opts.cipher);
     },
     listMemoriesByScope: (
       scope: MemoryScope,
@@ -415,6 +487,16 @@ type EdgeAndEmbeddingOps = Pick<
   | "getEmbeddings"
 >;
 
+type EdgeOps = Pick<
+  MemoryVaultStore,
+  "insertEdge" | "listOutgoingEdges" | "listIncomingEdges" | "listEdgesForMemories" | "deleteEdge"
+>;
+
+type EmbeddingOps = Pick<
+  MemoryVaultStore,
+  "upsertEmbedding" | "deleteEmbedding" | "getEmbedding" | "getEmbeddings"
+>;
+
 type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
@@ -424,13 +506,15 @@ type TombstoneAndAccessOps = Pick<
   | "getAccessStats"
 >;
 
-function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
+function buildEdgeOps(db: DatabaseSync, opts: ResolvedOptions): EdgeOps {
   return {
     insertEdge: (edge: MemoryEdge): MemoryEdge => {
-      const ready = preparedEdgeForWrite(edge, opts);
-      insertEdgeRow(db, ready, opts.cipher);
-      opts.emit({ kind: "edge:inserted", edge: ready });
-      return ready;
+      return withSidecarHardening(opts, () => {
+        const ready = preparedEdgeForWrite(edge, opts);
+        insertEdgeRow(db, ready, opts.cipher);
+        opts.emit({ kind: "edge:inserted", edge: ready });
+        return ready;
+      });
     },
     listOutgoingEdges: (memoryId: MemoryId): readonly MemoryEdge[] =>
       listOutgoingEdgeRows(db, memoryId, opts.cipher),
@@ -441,37 +525,55 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
     ): ReturnType<MemoryVaultStore["listEdgesForMemories"]> =>
       listEdgeRowsForMemoryIds(db, memoryIds, opts.cipher),
     deleteEdge: (edgeId: MemoryEdgeId): void => {
-      const removed = deleteEdgeRow(db, edgeId);
-      if (!removed) {
-        throw new MemoryStorageError("not-found", "Edge not found.");
-      }
-      opts.emit({ kind: "edge:deleted", edgeId });
+      withSidecarHardening(opts, () => {
+        const removed = deleteEdgeRow(db, edgeId);
+        if (!removed) {
+          throw new MemoryStorageError("not-found", "Edge not found.");
+        }
+        opts.emit({ kind: "edge:deleted", edgeId });
+      });
     },
+  };
+}
+
+function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOps {
+  return {
     upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
-      gateEmbeddingInput(embedding);
-      if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
-        throw new MemoryStorageError("not-found", "Memory not found.");
-      }
-      upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
-      opts.emit({
-        kind: "embedding:upserted",
-        memoryId,
-        provider: embedding.provider,
-        modelId: embedding.modelId,
+      withSidecarHardening(opts, () => {
+        gateEmbeddingInput(embedding);
+        if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+          throw new MemoryStorageError("not-found", "Memory not found.");
+        }
+        upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
+        opts.emit({
+          kind: "embedding:upserted",
+          memoryId,
+          provider: embedding.provider,
+          modelId: embedding.modelId,
+        });
       });
     },
     deleteEmbedding: (memoryId: MemoryId): void => {
-      if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
-        throw new MemoryStorageError("not-found", "Memory not found.");
-      }
-      if (deleteEmbeddingRow(db, memoryId)) {
-        opts.emit({ kind: "embedding:deleted", memoryId });
-      }
+      withSidecarHardening(opts, () => {
+        if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
+          throw new MemoryStorageError("not-found", "Memory not found.");
+        }
+        if (deleteEmbeddingRow(db, memoryId)) {
+          opts.emit({ kind: "embedding:deleted", memoryId });
+        }
+      });
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
       getEmbeddingRow(db, memoryId, opts.cipher),
     getEmbeddings: (memoryIds: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryEmbeddingRow> =>
       getEmbeddingRows(db, memoryIds, opts.cipher),
+  };
+}
+
+function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
+  return {
+    ...buildEdgeOps(db, opts),
+    ...buildEmbeddingOps(db, opts),
   };
 }
 
@@ -485,14 +587,20 @@ function buildTombstoneAndAccessOps(
       return listTombstonesByScopeRows(db, scope, opts.cipher);
     },
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
-      gateMemoryScope(scope);
-      return deleteTombstonesByScopeBeforeRows(db, scope, forgottenBeforeMs);
+      return withSidecarHardening(opts, () => {
+        gateMemoryScope(scope);
+        return deleteTombstonesByScopeBeforeRows(db, scope, forgottenBeforeMs);
+      });
     },
     recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
-      recordAccessRows(db, ids, nowMs);
+      withSidecarHardening(opts, () => {
+        recordAccessRows(db, ids, nowMs);
+      });
     },
     recordOutcome: (ids: readonly MemoryId[], utility: number, nowMs: number): void => {
-      recordOutcomeRows(db, ids, utility, nowMs);
+      withSidecarHardening(opts, () => {
+        recordOutcomeRows(db, ids, utility, nowMs);
+      });
     },
     getAccessStats: (ids?: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryAccessStat> =>
       getAccessStatsRows(db, ids),
@@ -515,5 +623,5 @@ export function createMemoryVault(options?: MemoryVaultFactoryOptions): MemoryVa
   const dbPath = resolveMemoryDbPath(options?.memoryDir, env);
   const cipher = resolveCipher(options, env);
   const db = openMemoryDatabase(dbPath, cipher);
-  return buildStore(db, resolveOptions(options, cipher));
+  return buildStore(db, resolveOptions(options, cipher, dbPath));
 }

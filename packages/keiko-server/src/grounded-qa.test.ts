@@ -23,6 +23,7 @@ import {
   handleGroundedAsk,
   modelInputPromptByteLimit,
   promptByteLength,
+  withPromptExcerptByteLimit,
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -452,6 +453,24 @@ async function runHandler(
 describe("buildGroundedGatewayMessages", () => {
   it("derives prompt byte limits from the canonical contracts estimator", () => {
     expect(modelInputPromptByteLimit(1_024)).toBe(maxUtf8BytesForTokenBudget(1_024));
+  });
+
+  it("packs prompt excerpts by score and drops low-score evidence before high-score evidence", () => {
+    const packed = withPromptExcerptByteLimit(packWithCitations(), 8);
+
+    expect(packed.files.map((file) => file.scopePath)).toEqual(["src/bar.ts"]);
+    expect(packed.files[0]?.excerpts[0]?.atom.stableId).toBe("atom-high");
+    expect(packed.files[0]?.excerpts[0]?.content).toBe("import { MyClass");
+  });
+
+  it("keeps whole high-score excerpts when lower-score evidence exceeds the remaining budget", () => {
+    const packed = withPromptExcerptByteLimit(packWithCitations(), 32);
+
+    expect(packed.files.map((file) => file.scopePath)).toEqual(["src/bar.ts", "src/foo.ts"]);
+    expect(packed.files[0]?.excerpts[0]?.content).toBe("import { MyClass } from './foo';");
+    expect(packed.files[1]?.excerpts[0]?.content.length).toBeLessThan(
+      "function MyClass() { return 'foo'; }".length,
+    );
   });
 
   it("prunes prompt-only excerpt content to fit the model input budget", () => {
@@ -1150,6 +1169,8 @@ describe("handleGroundedAsk", () => {
     });
     const seeded = await seedCapsuleWithVectors(knowledgeStore, {
       capsuleId: "cap-local",
+      text: "alpha beta indexed knowledge context",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
     updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
     knowledgeStore.close();
@@ -1161,7 +1182,7 @@ describe("handleGroundedAsk", () => {
       },
     });
     const requests: GatewayRequest[] = [];
-    const model = fakeModel("Grounded answer from indexed knowledge [1].", requests);
+    const model = fakeModel("Alpha beta context from indexed knowledge [1].", requests);
     const adapter = scriptedAdapter();
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId: chat.id, content: "What is alpha?" })),

@@ -2,10 +2,10 @@
 // prepared-statement wrapper around a single table; the transaction boundary lives in
 // extract.ts so a per-file failure rolls back exactly the rows from that file.
 //
-// All inserts use REPLACE semantics on the document row (PRIMARY KEY id), but the
-// dependent rows (pages, sections, parsed_units, parser_diagnostics) are deleted first via
-// the documents-cascade chain — see deleteDependentRows. That keeps a re-extract idempotent:
-// running extract twice on the same file leaves exactly one set of rows on disk.
+// Document writes use an UPSERT rather than INSERT OR REPLACE. REPLACE deletes the existing
+// document row before inserting the replacement, which would cascade through long-lived child
+// tables such as document_blobs. The volatile extraction dependents are still cleaned explicitly
+// via deleteDependentRows, keeping re-extract idempotent without deleting historical PDF blobs.
 
 import type {
   DocumentId,
@@ -22,13 +22,29 @@ import { sectionPathHash } from "../section-path-hash.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
 const INSERT_DOCUMENT_SQL = [
-  "INSERT OR REPLACE INTO documents (",
+  "INSERT INTO documents (",
   "  id, capsule_id, source_id, document_path, size_bytes, media_type,",
   "  content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name",
   ") VALUES (",
   "  :id, :capsule_id, :source_id, :document_path, :size_bytes, :media_type,",
   "  :content_hash, :parser_id, :parser_version, :last_extracted_at, :status, :safe_display_name",
   ")",
+  "ON CONFLICT(id) DO UPDATE SET",
+  "  capsule_id = excluded.capsule_id,",
+  "  source_id = excluded.source_id,",
+  "  document_path = excluded.document_path,",
+  "  size_bytes = excluded.size_bytes,",
+  "  media_type = excluded.media_type,",
+  "  blob_ref = CASE",
+  "    WHEN documents.content_hash = excluded.content_hash THEN documents.blob_ref",
+  "    ELSE NULL",
+  "  END,",
+  "  content_hash = excluded.content_hash,",
+  "  parser_id = excluded.parser_id,",
+  "  parser_version = excluded.parser_version,",
+  "  last_extracted_at = excluded.last_extracted_at,",
+  "  status = excluded.status,",
+  "  safe_display_name = excluded.safe_display_name",
 ].join(" ");
 
 const INSERT_DOCUMENT_TEXT_SQL = [
@@ -128,6 +144,8 @@ const SELECT_DOCUMENTS_FOR_SOURCE_SQL = [
   "ORDER BY document_path ASC",
 ].join(" ");
 const DELETE_DOCUMENT_SQL = "DELETE FROM documents WHERE capsule_id = :c AND id = :d";
+const DELETE_DOCUMENT_BY_ID_SQL = "DELETE FROM documents WHERE id = :id";
+const SELECT_DOCUMENT_CAPSULE_BY_ID_SQL = "SELECT capsule_id FROM documents WHERE id = :id";
 const UPDATE_DOCUMENT_STATUS_SQL =
   "UPDATE documents SET status = :status WHERE capsule_id = :c AND id = :d";
 
@@ -155,6 +173,8 @@ interface DiscoveryStatements {
   readonly deleteParsedUnits: RunStatement;
   readonly deleteDiagnostics: RunStatement;
   readonly deleteDocument: RunStatement;
+  readonly deleteDocumentById: RunStatement;
+  readonly selectDocumentCapsuleById: GetStatement;
   readonly selectDocumentText: GetStatement;
   readonly insertDocumentTextWindow: RunStatement;
   readonly deleteDocumentTextWindows: RunStatement;
@@ -187,6 +207,8 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL) as RunStatement,
     deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
     deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
+    deleteDocumentById: db.prepare(DELETE_DOCUMENT_BY_ID_SQL) as RunStatement,
+    selectDocumentCapsuleById: db.prepare(SELECT_DOCUMENT_CAPSULE_BY_ID_SQL) as GetStatement,
     selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
     insertDocumentTextWindow: db.prepare(INSERT_DOCUMENT_TEXT_WINDOW_SQL) as RunStatement,
     deleteDocumentTextWindows: db.prepare(DELETE_DOCUMENT_TEXT_WINDOWS_SQL) as RunStatement,
@@ -218,7 +240,17 @@ export interface DocumentInsertRow {
 }
 
 export function insertDocumentRow(db: DatabaseSync, row: DocumentInsertRow): void {
-  statements(db).insertDocument.run({
+  const prepared = statements(db);
+  const existing = prepared.selectDocumentCapsuleById.get({ id: row.id }) as
+    { readonly capsule_id: string } | undefined;
+  if (existing !== undefined && existing.capsule_id !== row.capsuleId) {
+    // Document ids are globally primary-keyed in the current schema. Production ids include the
+    // capsule/source lineage, but older tests and seeds can collide across capsules; preserve the
+    // legacy replacement behavior for that impossible production state while keeping same-capsule
+    // re-extraction non-destructive for document_blobs.
+    prepared.deleteDocumentById.run({ id: row.id });
+  }
+  prepared.insertDocument.run({
     id: row.id,
     capsule_id: row.capsuleId,
     source_id: row.sourceId,
@@ -323,9 +355,9 @@ interface WindowFullRow {
 }
 
 // Reads a bounded, document-relative character span without ever materializing the whole
-// document text. Resolves from `document_texts` when a small file stored a single row, otherwise
-// from the one `document_text_windows` row that contains the span (every chunk lies inside one
-// page → one window). Returns undefined when no text is stored for the document.
+// document text. Resolves from the one `document_text_windows` row that contains the span
+// when a large document has bounded windows, otherwise falls back to `document_texts` for
+// small files. Returns undefined when no text is stored for the document.
 //
 // Plaintext stores slice the span in SQLite via SUBSTR so the whole column never enters JS. Encrypted
 // stores cannot SUBSTR a sealed envelope, so they decrypt exactly one bounded unit — the small-document
@@ -345,26 +377,26 @@ export function readDocumentTextSpan(
   const c = String(capsuleId);
   const d = String(documentId);
   if (!cipher.isEncrypted) {
-    const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
-      SpanRow | undefined;
-    if (single !== undefined) {
-      return single.span ?? "";
-    }
     const windowed = statements(db).selectDocumentTextWindowSpan.get({ c, d, start, end, len }) as
       SpanRow | undefined;
-    return windowed === undefined ? undefined : (windowed.span ?? "");
+    if (windowed !== undefined) {
+      return windowed.span ?? "";
+    }
+    const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
+      SpanRow | undefined;
+    return single === undefined ? undefined : (single.span ?? "");
+  }
+  const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end }) as
+    WindowFullRow | undefined;
+  if (windowed !== undefined) {
+    const offset = start - windowed.character_start;
+    return cipher.openText(windowed.normalized_text).slice(offset, offset + len);
   }
   const single = statements(db).selectDocumentText.get({ c, d }) as DocumentTextRow | undefined;
   if (single !== undefined) {
     return cipher.openText(single.normalized_text).slice(start, start + len);
   }
-  const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end }) as
-    WindowFullRow | undefined;
-  if (windowed === undefined) {
-    return undefined;
-  }
-  const offset = start - windowed.character_start;
-  return cipher.openText(windowed.normalized_text).slice(offset, offset + len);
+  return undefined;
 }
 
 export interface PersistedSourceDocumentRow {

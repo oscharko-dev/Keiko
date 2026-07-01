@@ -15,11 +15,13 @@ import type {
 } from "./local-knowledge.js";
 
 // ─── Document, page, section, parsed unit ─────────────────────────────────────
-export type DocumentStatus = "pending" | "extracted" | "skipped" | "failed" | "unsupported";
+export type DocumentStatus =
+  "pending" | "extracted" | "extracted-image" | "skipped" | "failed" | "unsupported";
 
 export const DOCUMENT_STATUSES: readonly DocumentStatus[] = [
   "pending",
   "extracted",
+  "extracted-image",
   "skipped",
   "failed",
   "unsupported",
@@ -218,12 +220,13 @@ export const INDEXING_JOB_STATUSES: readonly IndexingJobStatus[] = [
 // where the source, parser, policy, chunking strategy, and embedding identity remain
 // compatible; incompatible checkpoints are refused and that document restarts cleanly
 // (Epic #1160, Issue #1286).
-export type CapsuleReindexMode = "changed-files" | "repair-failed" | "resume";
+export type CapsuleReindexMode = "changed-files" | "repair-failed" | "resume" | "full-reembed";
 
 export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
   "changed-files",
   "repair-failed",
   "resume",
+  "full-reembed",
 ] as const;
 
 export interface CapsuleReindexRequest {

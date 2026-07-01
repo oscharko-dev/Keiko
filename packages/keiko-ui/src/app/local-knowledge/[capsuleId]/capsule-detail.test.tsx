@@ -552,6 +552,9 @@ describe("CapsuleDetail — vectorCompatible=false", () => {
     await waitFor(() => {
       expect(screen.getByText("No — re-index required")).toBeInTheDocument();
     });
+    expect(
+      screen.getByRole("button", { name: /current embedding model/i }),
+    ).toBeInTheDocument();
   });
 
   it("renders stale-reason list items when staleReasons is non-empty", async () => {

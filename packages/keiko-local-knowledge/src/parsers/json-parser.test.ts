@@ -41,13 +41,16 @@ describe("jsonParser", () => {
     );
   });
 
-  it("emits one unit per leaf for a flat object", () => {
+  it("emits one unit per object record for a flat object", () => {
     const result = jsonParser.parse(
       selectionFromText(JSON_FLAT, { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(pointers(result.units)).toEqual(["/name", "/count", "/active"]);
+    expect(pointers(result.units)).toEqual([""]);
     expect(result.diagnostics).toEqual([]);
+    expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
+      '/: name="alpha" | count=3 | active=true',
+    );
   });
 
   it("descends into nested arrays and objects with RFC 6901 pointers", () => {
@@ -55,14 +58,7 @@ describe("jsonParser", () => {
       selectionFromText(JSON_NESTED, { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(pointers(result.units)).toEqual([
-      "/meta/id",
-      "/meta/version",
-      "/items/0/sku",
-      "/items/0/price",
-      "/items/1/sku",
-      "/items/1/price",
-    ]);
+    expect(pointers(result.units)).toEqual(["/meta", "/items/0", "/items/1"]);
   });
 
   it("escapes ~ and / in object keys per RFC 6901", () => {
@@ -71,7 +67,10 @@ describe("jsonParser", () => {
       selectionFromText(obj, { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(pointers(result.units)).toEqual(["/a~1b", "/c~0d"]);
+    expect(pointers(result.units)).toEqual([""]);
+    expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
+      '/: a/b=1 | c~d=2',
+    );
   });
 
   it("escapes keys that contain both ~ and / per RFC 6901", () => {
@@ -81,7 +80,10 @@ describe("jsonParser", () => {
       selectionFromText(obj, { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(pointers(result.units)).toEqual(["/a~0~1b"]);
+    expect(pointers(result.units)).toEqual([""]);
+    expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
+      "/: a~/b=1",
+    );
   });
 
   it("emits a single root-pointer leaf for a primitive root", () => {
@@ -92,24 +94,21 @@ describe("jsonParser", () => {
     expect(pointers(result.units)).toEqual([""]);
   });
 
-  it("aligns leaf offsets to bounded normalized leaf text", () => {
+  it("aligns record offsets to bounded normalized record text", () => {
     const result = jsonParser.parse(
       selectionFromText(JSON.stringify({ a: "first", b: "second" }), { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
     const normalizedText = (result as { readonly normalizedText?: string }).normalizedText;
-    expect(normalizedText).toBe('/a: "first"\n/b: "second"\n');
-    expect(result.units).toHaveLength(2);
+    expect(normalizedText).toBe('/: a="first" | b="second"\n');
+    expect(result.units).toHaveLength(1);
     const first = result.units[0];
-    const second = result.units[1];
-    if (first === undefined || second === undefined) throw new Error("expected two JSON leaves");
-    if (first.kind !== "json-path" || second.kind !== "json-path") {
+    if (first === undefined) throw new Error("expected JSON record");
+    if (first.kind !== "json-path") {
       throw new Error("expected JSON path units");
     }
     expect(first.characterStart).toBe(0);
-    expect(first.characterEnd).toBe('/a: "first"\n'.length);
-    expect(second.characterStart).toBe(first.characterEnd);
-    expect(second.characterEnd).toBe(normalizedText?.length);
+    expect(first.characterEnd).toBe(normalizedText?.length);
   });
 
   it("treats empty arrays and empty objects as leaves", () => {
@@ -118,7 +117,10 @@ describe("jsonParser", () => {
       selectionFromText(obj, { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(pointers(result.units)).toEqual(["/empties", "/empty"]);
+    expect(pointers(result.units)).toEqual([""]);
+    expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
+      "/: empties=[] | empty={}",
+    );
   });
 
   it("emits MALFORMED_INPUT error on invalid JSON", () => {
@@ -154,7 +156,7 @@ describe("jsonParser", () => {
   });
 
   it("truncates with UNIT_LIMIT_REACHED when there are more leaves than allowed", () => {
-    const obj = JSON.stringify({ a: 1, b: 2, c: 3, d: 4, e: 5 });
+    const obj = JSON.stringify({ items: [{ a: 1 }, { a: 2 }, { a: 3 }] });
     const result = jsonParser.parse(
       selectionFromText(obj, { extension: "json" }),
       buildParserOptions({ now: () => 0, maxUnitsPerDocument: 2 }),
@@ -198,11 +200,11 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
     );
     expect(result.diagnostics.filter((d) => d.severity === "error")).toEqual([]);
     const pointers = pointersOf(result.units);
-    expect(pointers).toContain("/0/a");
-    expect(pointers).toContain("/1/b");
+    expect(pointers).toContain("/0");
+    expect(pointers).toContain("/1");
     const text = ("normalizedText" in result ? result.normalizedText : undefined) ?? "";
-    expect(text).toContain("/0/a: 1");
-    expect(text).toContain("/1/b: 2");
+    expect(text).toContain("/0: a=1");
+    expect(text).toContain("/1: b=2");
   });
 
   it("skips a malformed line as a non-fatal warning while keeping good records (.ndjson)", () => {
@@ -211,8 +213,8 @@ describe("jsonParser — JSON Lines / NDJSON (GRD-011)", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const pointers = pointersOf(result.units);
-    expect(pointers).toContain("/0/a");
-    expect(pointers).toContain("/2/c");
+    expect(pointers).toContain("/0");
+    expect(pointers).toContain("/2");
     expect(
       result.diagnostics.some((d) => d.severity === "warning" && d.code === "MALFORMED_INPUT"),
     ).toBe(true);

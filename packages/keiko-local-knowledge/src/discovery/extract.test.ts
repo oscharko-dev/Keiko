@@ -4,12 +4,14 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
+  ParserResult,
 } from "@oscharko-dev/keiko-contracts";
 
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
+import { readPdfDocumentBlob } from "../document-blob-store.js";
 import {
   createDefaultParserRegistry,
   buildParserOptions,
@@ -20,6 +22,7 @@ import {
 } from "../parsers/index.js";
 import type {
   AsyncParserAdapter,
+  OcrAdapter,
   ParserAdapter,
   ParserOptions,
   ParserRegistry,
@@ -135,6 +138,84 @@ describe("extractDocument — markdown success path", () => {
     expect(count("documents")).toBe(2);
     expect(count("document_texts")).toBe(2);
   });
+
+  it("records partial extraction coverage when a standard parser hits the unit limit", async () => {
+    const content = "first page";
+    const fs = memoryFs(ROOT, [{ relativePath: "limited.txt", content }]);
+    const adapter: ParserAdapter = {
+      capability: {
+        parserId: "unit-limited-parser",
+        parserVersion: "1",
+        matches: () => true,
+      },
+      parse: (input: ParserSelectionInput, options: ParserOptions): ParserResult =>
+        ({
+          documentId: input.documentId,
+          parser: { parserId: "unit-limited-parser", parserVersion: "1" },
+          pages: [
+            {
+              documentId: input.documentId,
+              pageNumber: 1,
+              characterStart: 0,
+              characterEnd: content.length,
+            },
+          ],
+          sections: [],
+          units: [
+            {
+              kind: "page",
+              documentId: input.documentId,
+              pageNumber: 1,
+              characterStart: 0,
+              characterEnd: content.length,
+            },
+          ],
+          diagnostics: [
+            {
+              code: "UNIT_LIMIT_REACHED",
+              documentId: input.documentId,
+              message: "reached maxUnitsPerDocument=1",
+              severity: "info",
+            },
+          ],
+          normalizedText: content,
+          extractedAt: options.now(),
+        }) as ParserResult,
+    };
+    const registry: ParserRegistry = {
+      list: () => [adapter],
+      resolve: () => ({ kind: "matched", adapter }),
+    };
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "limited.txt", sizeBytes: content.length } },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    const checkpoint = store._internal.db
+      .prepare(
+        "SELECT phase, coverage, page_cursor, extracted_text_bytes, terminal_diagnostics_json FROM extraction_checkpoints WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | {
+          readonly coverage?: string;
+          readonly extracted_text_bytes?: number;
+          readonly page_cursor?: number;
+          readonly phase?: string;
+          readonly terminal_diagnostics_json?: string;
+        }
+      | undefined;
+
+    expect(checkpoint).toMatchObject({
+      coverage: "partial",
+      extracted_text_bytes: Buffer.byteLength(content, "utf8"),
+      page_cursor: 1,
+      phase: "extracted",
+    });
+    expect(checkpoint?.terminal_diagnostics_json).toContain("UNIT_LIMIT_REACHED");
+  });
 });
 
 describe("extractDocument — unsupported format", () => {
@@ -218,6 +299,7 @@ describe("extractDocument — parser failure", () => {
 
 describe("extractDocument — normalized binary text", () => {
   it("persists extracted text for binary parsers that emit normalized content", async () => {
+    const expectedPdfBytes = Buffer.from(PDF_TEXT_LAYER);
     const fs = memoryFs(ROOT, [{ relativePath: "policy.pdf", content: PDF_TEXT_LAYER }]);
     const registry = createDefaultParserRegistry();
     const result = await extractDocument(
@@ -237,6 +319,10 @@ describe("extractDocument — normalized binary text", () => {
       .get({ c: capsuleId, d: result.outcome.document.id }) as
       { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toContain("Hello PDF");
+    const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
+    expect(blob.kind).toBe("ok");
+    if (blob.kind !== "ok") return;
+    expect(Buffer.from(blob.blob.bytes).equals(expectedPdfBytes)).toBe(true);
   });
 
   it("persists XLSX workbook text and row lineage", async () => {
@@ -264,7 +350,7 @@ describe("extractDocument — normalized binary text", () => {
       .get({ c: capsuleId, d: result.outcome.document.id }) as
       { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toContain(
-      "Controls!2: A=Control-17 | B=Encrypt backups | C=Q4 & audit",
+      "Controls!2: Key=Control-17 | Value=Encrypt backups | Column C=Q4 & audit",
     );
     const unitRows = store._internal.db
       .prepare(
@@ -284,7 +370,7 @@ describe("extractDocument — normalized binary text", () => {
 });
 
 describe("extractDocument — unsupported OCR and scanned inputs", () => {
-  it("marks a scanned PDF without a text layer as unsupported", async () => {
+  it("marks a scanned PDF without a text layer as unsupported when OCR is not configured", async () => {
     const fs = memoryFs(ROOT, [{ relativePath: "scan.pdf", content: PDF_NO_TEXT_LAYER }]);
     const registry = createDefaultParserRegistry();
     const result = await extractDocument(
@@ -299,9 +385,55 @@ describe("extractDocument — unsupported OCR and scanned inputs", () => {
     if (result.outcome.kind !== "persisted") return;
     expect(result.outcome.document.status).toBe("unsupported");
     expect(result.outcome.document.parser.parserId).toBe("pdf");
+    expect(count("pages")).toBe(1);
+    expect(count("document_texts")).toBe(0);
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: "UNSUPPORTED_FORMAT", severity: "info" }),
     );
+  });
+
+  it("routes scanned PDFs through registered OCR and persists recognized text", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "scan.pdf", content: PDF_NO_TEXT_LAYER }]);
+    const adapter: OcrAdapter = {
+      kind: "ocr",
+      ocrPage: (input) =>
+        Promise.resolve({
+          ok: true,
+          text: `OCR page ${String(input.pageNumber)}`,
+          confidence: 0.92,
+        }),
+    };
+    let registry = createDefaultParserRegistry();
+    registry = registerParser(registry, createOcrPipelineParser(adapter));
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "scan.pdf", sizeBytes: PDF_NO_TEXT_LAYER.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted");
+    expect(result.outcome.document.parser.parserId).toBe("ocr-pipeline");
+    const textRow = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | { readonly normalized_text?: string }
+      | undefined;
+    expect(textRow?.normalized_text).toBe("OCR page 1");
+    const units = store._internal.db
+      .prepare(
+        "SELECT kind, page_number FROM parsed_units WHERE capsule_id = :c AND document_id = :d ORDER BY id ASC",
+      )
+      .all({ c: capsuleId, d: result.outcome.document.id }) as unknown as readonly {
+      readonly kind: string;
+      readonly page_number: number | null;
+    }[];
+    expect(units).toContainEqual({ kind: "page", page_number: 1 });
   });
 
   it("marks OCR-pipeline fallback results as unsupported instead of extracted", async () => {
@@ -540,16 +672,20 @@ describe("extractDocument — path containment", () => {
     expect(result.outcome.kind).toBe("persisted");
     if (result.outcome.kind !== "persisted") return;
     expect(result.outcome.document.documentPath).toBe("docs/link.txt");
+    expect(result.outcome.document.sizeBytes).toBe(
+      new TextEncoder().encode("target text").byteLength,
+    );
     const row = store._internal.db
       .prepare(
-        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+        "SELECT d.size_bytes, dt.normalized_text FROM documents d JOIN document_texts dt ON dt.capsule_id = d.capsule_id AND dt.document_id = d.id WHERE d.capsule_id = :c AND d.id = :d",
       )
       .get({ c: capsuleId, d: result.outcome.document.id }) as
-      { readonly normalized_text?: string } | undefined;
+      { readonly normalized_text?: string; readonly size_bytes?: number } | undefined;
+    expect(row?.size_bytes).toBe(new TextEncoder().encode("target text").byteLength);
     expect(row?.normalized_text).toBe("target text");
   });
 
-  it("rejects hard-linked direct extraction targets before reading bytes", async () => {
+  it("extracts hard-linked direct targets after realpath containment", async () => {
     const fs = memoryFs(ROOT, [
       {
         relativePath: "docs/allowed.txt",
@@ -564,11 +700,35 @@ describe("extractDocument — path containment", () => {
       { capsuleId, source, file: { relativePath: "docs/allowed.txt", sizeBytes: 6 } },
     );
 
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.documentPath).toBe("docs/allowed.txt");
+    expect(count("documents")).toBe(1);
+  });
+
+  it("rejects direct extraction targets when byte reads are shorter than the selected size", async () => {
+    const baseFs = memoryFs(ROOT, [{ relativePath: "docs/short.txt", content: "secret" }]);
+    const fs = {
+      ...baseFs,
+      readFileBytes: async (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
+        if (baseFs.readFileBytes === undefined) throw new Error("readFileBytes unavailable");
+        const bytes = await baseFs.readFileBytes(absolutePath, maxBytes);
+        return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
+      },
+    };
+    const registry = createDefaultParserRegistry();
+
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      { capsuleId, source, file: { relativePath: "docs/short.txt", sizeBytes: 6 } },
+    );
+
     expect(result.outcome.kind).toBe("failed");
     if (result.outcome.kind !== "failed") return;
     expect(result.outcome.error.code).toBe("READ_FAILED");
-    expect(result.outcome.error.message).toBe("selected file is not eligible for extraction");
-    expect(count("documents")).toBe(1);
+    expect(result.outcome.error.message).toBe(
+      "readFileBytes returned fewer bytes than the resolved file size",
+    );
   });
 
   it("redacts absolute paths from parser diagnostics before returning and persisting them", async () => {

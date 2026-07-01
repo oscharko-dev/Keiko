@@ -266,11 +266,13 @@ describe("capsule storage references", () => {
 const ALL_DEPENDENT_TABLES = [
   "capsule_sources",
   "documents",
+  "document_blobs",
   "document_texts",
   "pages",
   "sections",
   "parsed_units",
   "chunks",
+  "chunk_lexical_index",
   "vectors",
   "parser_diagnostics",
   "indexing_jobs",
@@ -281,11 +283,13 @@ interface CountMap {
   readonly knowledge_sources: number;
   readonly capsule_sources: number;
   readonly documents: number;
+  readonly document_blobs: number;
   readonly document_texts: number;
   readonly pages: number;
   readonly sections: number;
   readonly parsed_units: number;
   readonly chunks: number;
+  readonly chunk_lexical_index: number;
   readonly vectors: number;
   readonly parser_diagnostics: number;
   readonly indexing_jobs: number;
@@ -299,11 +303,13 @@ function countAll(s: KnowledgeStore): CountMap {
     knowledge_sources: c("knowledge_sources"),
     capsule_sources: c("capsule_sources"),
     documents: c("documents"),
+    document_blobs: c("document_blobs"),
     document_texts: c("document_texts"),
     pages: c("pages"),
     sections: c("sections"),
     parsed_units: c("parsed_units"),
     chunks: c("chunks"),
+    chunk_lexical_index: c("chunk_lexical_index"),
     vectors: c("vectors"),
     parser_diagnostics: c("parser_diagnostics"),
     indexing_jobs: c("indexing_jobs"),
@@ -333,6 +339,14 @@ function seedFullLineage(s: KnowledgeStore, capsuleId: string, suffix: string): 
   ).run({ id: documentId, c: capsuleId, s: sourceId });
 
   db.prepare(
+    "INSERT INTO document_blobs (capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version, blob_bytes, created_at, created_source_id, created_document_id) VALUES (:c, 'h', 1, 'application/pdf', 'plaintext', NULL, :b, 1, :s, :d)",
+  ).run({ c: capsuleId, b: new Uint8Array([0x25]), s: sourceId, d: documentId });
+  db.prepare("UPDATE documents SET blob_ref = 'h' WHERE capsule_id = :c AND id = :d").run({
+    c: capsuleId,
+    d: documentId,
+  });
+
+  db.prepare(
     "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, 'body')",
   ).run({ c: capsuleId, d: documentId });
 
@@ -351,6 +365,10 @@ function seedFullLineage(s: KnowledgeStore, capsuleId: string, suffix: string): 
   db.prepare(
     "INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash) VALUES (:id, :c, :s, :d, :p, 0, 10, 'hash')",
   ).run({ id: chunkId, c: capsuleId, s: sourceId, d: documentId, p: parsedUnitId });
+
+  db.prepare(
+    "INSERT INTO chunk_lexical_index (capsule_id, source_id, document_id, chunk_id, text, exact_text, updated_at) VALUES (:c, :s, :d, :ch, 'body', 'body', 1)",
+  ).run({ c: capsuleId, s: sourceId, d: documentId, ch: chunkId });
 
   db.prepare(
     "INSERT INTO vectors (id, capsule_id, source_id, document_id, chunk_id, embedding, embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric, storage_reference, created_at) VALUES (:id, :c, :s, :d, :ch, :emb, 'openai', 'text-embedding-3-small', 1536, 'cosine', 'r', 1)",

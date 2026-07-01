@@ -23,6 +23,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
+  GatewayRequest,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -848,8 +849,8 @@ describe("local-knowledge handlers", () => {
       deps,
     );
 
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
 
     const inspect = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
@@ -872,6 +873,204 @@ describe("local-knowledge handlers", () => {
       "indexing-job-completed",
       "indexing-job-started",
     ]);
+  });
+
+  it("maps full-reembed mode to a force reindex even when files are unchanged", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Policy alpha beta gamma delta epsilon.\n".repeat(20),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const deps = depsFor(tmp);
+    const first = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    const second = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "full-reembed" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const jobs = inspect._internal.db
+      .prepare(
+        "SELECT status, processed_documents FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at ASC, id ASC",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly status: string;
+      readonly processed_documents: number;
+    }[];
+    inspect.close();
+
+    expect(jobs).toHaveLength(2);
+    expect(jobs[1]).toMatchObject({ status: "succeeded", processed_documents: 1 });
+  });
+
+  it("rebinds capsule embedding identity before full-reembed when the configured model changed", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Policy alpha beta gamma delta epsilon.\n".repeat(20),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "full-reembed" }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp, "text-embedding-3-large"),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const capsule = getCapsule(inspect, capId);
+    inspect.close();
+
+    expect(capsule?.embeddingModelIdentity.modelId).toBe("text-embedding-3-large");
+    expect(capsule?.embeddingModelIdentity.vectorDimensions).toBe(3072);
+    expect(capsule?.embeddingModelIdentity.embeddingSpaceFingerprint).toMatch(
+      /^keiko-embedding-space-fingerprint-v1:[a-f0-9]{24}$/u,
+    );
+  });
+
+  it("wires opt-in contextual retrieval through the normal indexing handler", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Release TS-999 changes retry handling and billing rollout.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const embeddingInputs: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+    if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+    const base = depsFor(tmp, {
+      providers: [
+        embeddingProvider,
+        {
+          modelId: "context-chat",
+          baseUrl: "https://gateway.example.test/v1",
+          apiKey: "redacted",
+          timeoutMs: 30_000,
+          maxRetries: 1,
+          retryBaseDelayMs: 100,
+        },
+      ],
+      capabilities: [embeddingCapability("text-embedding-3-small"), chatCapability("context-chat")],
+      circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: {
+        KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true",
+        KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MODEL_ID: "context-chat",
+      },
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: TS-999 retry handling and billing rollout.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          embeddingInputs.push(request.input);
+          return Promise.resolve({
+            ok: true,
+            value: {
+              vector: Float32Array.from(
+                { length: embeddingDimensionsForTestModel(request.modelId) },
+                (_, index) => index / 1000,
+              ),
+              modelId: request.modelId,
+            },
+          });
+        },
+      ),
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls).not.toHaveLength(0);
+    expect(contextCalls[0]?.modelId).toBe("context-chat");
+    expect(contextCalls[0]?.messages[1]?.content).toContain("<document>");
+    expect(
+      embeddingInputs.some((input) =>
+        input.startsWith("Context: TS-999 retry handling and billing rollout."),
+      ),
+    ).toBe(true);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const row = inspect._internal.db
+      .prepare(
+        "SELECT context_status FROM chunks WHERE capsule_id = :c ORDER BY order_index ASC LIMIT 1",
+      )
+      .get({ c: capId }) as { readonly context_status: string | null } | undefined;
+    inspect.close();
+
+    expect(row?.context_status).toBe("generated");
   });
 
   it("starts capsule indexing from the graph surface", async () => {
@@ -1381,6 +1580,30 @@ describe("local-knowledge handlers", () => {
     expect(body.health.staleReasons.some((reason) => /embedding model/i.test(reason))).toBe(true);
   });
 
+  it("reports vectorCompatible=false when gateway config is missing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      { ...depsFor(tmp), config: undefined, configPresent: false },
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      readonly health: {
+        readonly vectorCompatible: boolean;
+        readonly staleReasons: readonly string[];
+      };
+    };
+    expect(body.health.vectorCompatible).toBe(false);
+    expect(body.health.staleReasons.some((reason) => /gateway configuration/i.test(reason))).toBe(
+      true,
+    );
+  });
+
   it("reports vectorCompatible=false when the configured model is present but explicitly chat-only", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -1531,6 +1754,42 @@ describe("local-knowledge handlers", () => {
         };
       };
       expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(768);
+    });
+
+    it("passes shared gateway egress to embedding probes when the provider has no override", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+      const egress = { httpsProxy: "http://proxy.example:8080", noProxy: ["localhost"] };
+      const config: GatewayConfig = { ...gatewayConfig("text-embedding-3-small"), egress };
+      const seen: OpenAIEmbeddingRequest[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsFor(tmp, config),
+        localKnowledgeEmbeddingRequest: vi.fn(
+          (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+            seen.push(request);
+            return Promise.resolve({
+              ok: true as const,
+              value: {
+                vector: Float32Array.from(
+                  { length: embeddingDimensionsForTestModel(request.modelId) },
+                  (_, index) => index / 1000,
+                ),
+                modelId: request.modelId,
+              },
+            });
+          },
+        ),
+      };
+
+      const result = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Egress Bound" }),
+        deps,
+      );
+
+      expect(result.status, JSON.stringify(result.body)).toBe(201);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((request) => request.egress === egress)).toBe(true);
+      deps.store.close();
     });
 
     it("marks new capsules incompatible when the configured embedding gateway changes", async () => {
@@ -1701,7 +1960,13 @@ describe("local-knowledge handlers", () => {
     );
 
     expect(result.status).toBe(201);
-    expect(seenModelIds).toEqual([unhealthyModelId, healthyModelId]);
+    expect(seenModelIds[0]).toBe(unhealthyModelId);
+    expect(seenModelIds.slice(1)).toEqual([
+      healthyModelId,
+      healthyModelId,
+      healthyModelId,
+      healthyModelId,
+    ]);
     const body = result.body as {
       readonly capsule: {
         readonly embeddingModelIdentity: {

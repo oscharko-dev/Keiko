@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_FILTERS, MemoryFilters } from "./MemoryFilters";
 import type { MemoryFilterState } from "./MemoryFilters";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,6 +45,22 @@ describe("MemoryFilters — landmark groups", () => {
   it('sensitivity group has aria-label "Filter by Sensitivity"', () => {
     renderFilters();
     expect(screen.getByRole("group", { name: "Filter by Sensitivity" })).toBeInTheDocument();
+  });
+
+  it("renders filter labels in German when the locale is German", () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      render(
+        <I18nProvider>
+          <MemoryFilters filters={EMPTY_FILTERS} onChange={vi.fn()} />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("group", { name: "Nach Bereich filtern" })).toBeInTheDocument();
+      expect(screen.getByRole("searchbox", { name: "Suchen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Vorgeschlagen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
   });
 });
 

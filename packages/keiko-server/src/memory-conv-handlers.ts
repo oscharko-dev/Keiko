@@ -69,7 +69,6 @@ import {
   semanticRetrievalGateForText,
   type ConversationRetrievalSignals,
 } from "./memory-retrieval-signals.js";
-import { reinforcementAccessIds } from "./memory-reinforcement.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -178,6 +177,7 @@ export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
     },
     listOutgoingEdges: (memoryId) => vault.listOutgoingEdges(memoryId),
     listIncomingEdges: (memoryId) => vault.listIncomingEdges(memoryId),
+    listEdgesForMemories: (memoryIds) => vault.listEdgesForMemories(memoryIds),
   };
 }
 
@@ -289,9 +289,9 @@ function buildRetrievalRequest(
   return req;
 }
 
-// Builds the embedding + reinforcement signals, runs scoped retrieval, and records the reinforcement
-// reflex — the same pipeline the chat path uses. Extracted so the route handler stays a thin
-// parse/dispatch/audit shell.
+// Builds the embedding + reinforcement signals and runs scoped retrieval — the same ranking pipeline
+// the chat path uses. This retrieval-only BFF route intentionally does not bump access counters
+// because it has no downstream assistant-use signal.
 async function retrieveConversationMemory(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -317,11 +317,6 @@ async function retrieveConversationMemory(
     buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
     port,
   );
-  // Reinforcement reflex (#204, O-P1): every recall is an access, same as the chat path.
-  const accessedIds = reinforcementAccessIds(result.included);
-  if (accessedIds.length > 0) {
-    vault.recordAccess(accessedIds, Date.now());
-  }
   return result;
 }
 

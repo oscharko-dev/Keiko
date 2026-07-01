@@ -43,7 +43,7 @@ import {
   conversationFusionMode,
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
-import { reinforcementAccessIds } from "./memory-reinforcement.js";
+import { reinforcementAccessIdsForAssistantUse } from "./memory-reinforcement.js";
 import {
   extractCandidatesFromUserText,
   type CaptureContext,
@@ -113,6 +113,8 @@ const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
+const MAX_PENDING_SALIENCE_CAPTURES = 32;
+let pendingSalienceCaptures = 0;
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -679,24 +681,23 @@ function toMemoryResult(
 
 // Process-lifetime rate-limit cursor for autonomous maintenance (#204, O-V4). One loopback server =
 // one cursor, so the >=6h interval is honoured across chat turns. Module-scoped (not on deps) so it
-// is never shared across test fixtures; auto-maintenance is opt-in (env), so tests that do not set
-// the flag never advance it.
+// is never shared across test fixtures. Auto-maintenance is on by default and can be disabled with
+// KEIKO_MEMORY_AUTO_MAINTAIN=0.
 const memoryMaintenanceCursor: AutoMaintenanceState = {};
 
-// Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. Opt-in
-// via env (default off so existing behaviour is unchanged); short-circuits on the cursor almost
-// every turn and never throws into the chat path.
+// Opportunistic, bounded, rate-limited (#204, O-V4) maintenance fired once memory is in use. The
+// pass short-circuits on the cursor almost every turn and never throws into the chat path.
 function maybeRunChatAutoMaintenance(deps: UiHandlerDeps, vault: MemoryVaultStore): void {
   maybeRunAutoMaintenance(vault, deps.evidenceStore, memoryMaintenanceCursor, {
     nowMs: Date.now(),
-    enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN === "1",
+    enabled: deps.env.KEIKO_MEMORY_AUTO_MAINTAIN !== "0",
   });
 }
 
 // Build the embedding/strength/diversity signals and run scoped retrieval — the shared pipeline the
 // BFF route also uses (#204, O-F2/O-F3/O-F4/O-P1). semanticById is gated on the secondary-model
 // egress check; all signals are passed only when present so a fresh vault ranks byte-identically, and
-// the fusion mode is env-opt-in (default weighted-sum).
+// conversation recall defaults to RRF unless KEIKO_MEMORY_FUSION=weighted-sum is set.
 async function retrieveChatMemory(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -761,13 +762,6 @@ export async function buildMemoryResult(
     budgetTokens,
     nowMs,
   );
-  // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
-  // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled
-  // memories strengthen over time. Guarded above (vault is defined here).
-  const includedIds = reinforcementAccessIds(retrieval.included);
-  if (includedIds.length > 0) {
-    vault.recordAccess(includedIds, Date.now());
-  }
   // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
   // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
   // free-running background loop.
@@ -775,6 +769,19 @@ export async function buildMemoryResult(
   const result = toMemoryResult(retrieval);
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
+}
+
+export function recordConversationMemoryUse(
+  deps: UiHandlerDeps,
+  memory: ConversationMemoryResultWire,
+  assistantText: string,
+): void {
+  const vault = deps.memoryVault;
+  if (vault === undefined || memory.context.memories.length === 0) return;
+  const accessedIds = reinforcementAccessIdsForAssistantUse(memory.context.memories, assistantText);
+  if (accessedIds.length > 0) {
+    vault.recordAccess(accessedIds, Date.now());
+  }
 }
 
 function buildCaptureContext(input: ConversationMemoryRuntimeContext): CaptureContext {
@@ -862,9 +869,51 @@ async function captureMemoryActions(
   return actions;
 }
 
-// Merges the regex intent capture (synchronous) with model-assisted salience capture (async).
-// Regex runs FIRST so its inserts are part of the vault state the salience extractor reads for
-// dedup. Salience reuses the same `memory.enabled` gate; when memory is off, both paths no-op.
+function logSalienceCaptureFailure(surface: string, error: unknown, deps: UiHandlerDeps): void {
+  const raw = error instanceof Error ? error.message : String(error);
+  // eslint-disable-next-line no-console
+  console.error(`${surface} salience capture failed`, redact(raw, currentRedactionSecrets(deps)));
+}
+
+function logSalienceCaptureDropped(surface: string): void {
+  // eslint-disable-next-line no-console
+  console.error(
+    `${surface} salience capture skipped: background queue full (${String(
+      pendingSalienceCaptures,
+    )}/${String(MAX_PENDING_SALIENCE_CAPTURES)})`,
+  );
+}
+
+function scheduleMemorySalienceCapture(
+  deps: UiHandlerDeps,
+  request: { readonly content: string; readonly memory: { readonly enabled: boolean } | undefined },
+  context: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+  assistantText: string,
+  surface: string,
+): void {
+  if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
+    return;
+  }
+  if (pendingSalienceCaptures >= MAX_PENDING_SALIENCE_CAPTURES) {
+    logSalienceCaptureDropped(surface);
+    return;
+  }
+  pendingSalienceCaptures += 1;
+  setImmediate(() => {
+    void captureSalientFromTurn(deps, request, context, modelId, assistantText)
+      .catch((error: unknown) => {
+        logSalienceCaptureFailure(surface, error, deps);
+      })
+      .finally(() => {
+        pendingSalienceCaptures -= 1;
+      });
+  });
+}
+
+// Returns deterministic local/regex captures immediately and schedules model-assisted salience
+// off the response path. Regex runs before scheduling so its inserts are present when the
+// background salience extractor later performs dedup.
 export async function collectMemoryActions(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -876,14 +925,8 @@ export async function collectMemoryActions(
     return [];
   }
   const regexActions = await captureMemoryActions(request, deps, memoryContext);
-  const salientActions = await captureSalientFromTurn(
-    deps,
-    request,
-    memoryContext,
-    modelId,
-    assistantText,
-  );
-  return [...regexActions, ...salientActions];
+  scheduleMemorySalienceCapture(deps, request, memoryContext, modelId, assistantText, "desktop");
+  return regexActions;
 }
 
 // On the first turn of a freshly-created chat (still bearing the default title), adopt the user's
@@ -1041,6 +1084,7 @@ async function finalizeBufferedTurn(
   // browser, mirroring the grounded-QA path which already applies deps.redactor here.
   const redactedContent = deps.redactor(result.response.content) as string;
   const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
+  recordConversationMemoryUse(deps, memory, redactedContent);
   const memoryActions = await collectMemoryActions(
     deps,
     request,
@@ -1324,27 +1368,39 @@ async function collectVoiceTurnLocalMemoryActions(
   return actions;
 }
 
-function voiceTurnSalienceTexts(request: VoiceTurnAppendRequest): {
+interface VoiceTurnSaliencePair {
   readonly userText: string;
   readonly assistantText: string;
-} {
-  const userText = request.messages
-    .filter((message) => message.role === "user")
-    .map((message) => message.content)
-    .join("\n")
-    .trim();
-  const assistantText = request.messages
-    .filter((message) => message.role === "assistant")
-    .map((message) => message.content)
-    .join("\n")
-    .trim();
-  return { userText, assistantText };
 }
 
-function logVoiceSalienceCaptureFailure(error: unknown, deps: UiHandlerDeps): void {
-  const raw = error instanceof Error ? error.message : String(error);
-  // eslint-disable-next-line no-console
-  console.error("voice salience capture failed", redact(raw, currentRedactionSecrets(deps)));
+function pushVoiceTurnSaliencePair(
+  pairs: VoiceTurnSaliencePair[],
+  userParts: readonly string[],
+  assistantParts: readonly string[],
+): void {
+  const userText = userParts.join("\n").trim();
+  if (userText.length === 0) return;
+  pairs.push({
+    userText,
+    assistantText: assistantParts.join("\n").trim(),
+  });
+}
+
+function voiceTurnSaliencePairs(request: VoiceTurnAppendRequest): readonly VoiceTurnSaliencePair[] {
+  const pairs: VoiceTurnSaliencePair[] = [];
+  let userParts: string[] = [];
+  let assistantParts: string[] = [];
+  for (const message of request.messages) {
+    if (message.role === "user") {
+      pushVoiceTurnSaliencePair(pairs, userParts, assistantParts);
+      userParts = [message.content];
+      assistantParts = [];
+    } else if (userParts.length > 0) {
+      assistantParts.push(message.content);
+    }
+  }
+  pushVoiceTurnSaliencePair(pairs, userParts, assistantParts);
+  return pairs;
 }
 
 function scheduleVoiceTurnSalienceCapture(
@@ -1356,22 +1412,19 @@ function scheduleVoiceTurnSalienceCapture(
   if (context === undefined || request.memory?.enabled !== true || deps.memoryVault === undefined) {
     return;
   }
-  const { userText, assistantText } = voiceTurnSalienceTexts(request);
-  if (userText.length === 0) {
-    return;
+  for (const pair of voiceTurnSaliencePairs(request)) {
+    scheduleMemorySalienceCapture(
+      deps,
+      {
+        content: pair.userText,
+        memory: request.memory,
+      },
+      context,
+      modelId,
+      pair.assistantText,
+      "voice",
+    );
   }
-  void captureSalientFromTurn(
-    deps,
-    {
-      content: userText,
-      memory: request.memory,
-    },
-    context,
-    modelId,
-    assistantText,
-  ).catch((error: unknown) => {
-    logVoiceSalienceCaptureFailure(error, deps);
-  });
 }
 
 export async function buildVoiceTurnMemoryResult(

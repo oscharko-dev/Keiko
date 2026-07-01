@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PdfCitationPreviewOpenResponse } from "@oscharko-dev/keiko-contracts";
 import { fetchPdfCitationPreviewStatus, openPdfCitationPreviewSession } from "@/lib/api";
 import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@/lib/types";
-import { showPdfCitationPreviewResult } from "../widgets/cards/pdf-citation-preview-session";
+import {
+  showPdfCitationPreviewFailure,
+  showPdfCitationPreviewResult,
+} from "../widgets/cards/pdf-citation-preview-session";
 import { usePdfCitationPreviewController } from "./usePdfCitationPreview";
 
 vi.mock("@/lib/api", () => ({
@@ -12,6 +15,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 vi.mock("../widgets/cards/pdf-citation-preview-session", () => ({
+  showPdfCitationPreviewFailure: vi.fn(() => "pdf-window-failure"),
   showPdfCitationPreviewResult: vi.fn(() => "pdf-window-1"),
 }));
 
@@ -438,6 +442,121 @@ describe("usePdfCitationPreviewController", () => {
         },
       }),
     );
+  });
+
+  it("drops a stale open result after the rendered answer changes", async () => {
+    const firstCitation = citation("[1]", "stable-1");
+    const secondCitation = citation("[2]", "stable-2");
+    const firstAnswer = answer([firstCitation]);
+    const secondAnswer: GroundedAnswer = {
+      ...answer([secondCitation]),
+      assistantMessageId: "msg-b",
+      content: "Answer [2].",
+    };
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+      ],
+    });
+    let resolveOpen: (response: PdfCitationPreviewOpenResponse) => void = () => undefined;
+    vi.mocked(openPdfCitationPreviewSession).mockReturnValue(
+      new Promise((resolve) => {
+        resolveOpen = resolve;
+      }),
+    );
+
+    const windows = {
+      add: vi.fn(),
+      focus: vi.fn(),
+      update: vi.fn(),
+    };
+    const { result, rerender } = renderHook(
+      ({ groundedAnswer }: { readonly groundedAnswer: GroundedAnswer }) =>
+        usePdfCitationPreviewController({
+          answer: groundedAnswer,
+          chatId: "chat-1",
+          windowId: "chat-window-1",
+          windows,
+        }),
+      { initialProps: { groundedAnswer: firstAnswer } },
+    );
+
+    await waitFor(() => {
+      expect(result.current?.forMarker("[1]")?.state).toBe("available");
+    });
+
+    let pendingOpen: Promise<string | null>;
+    await act(async () => {
+      pendingOpen = result.current!.openCitation(firstCitation, "inline-marker");
+    });
+    rerender({ groundedAnswer: secondAnswer });
+
+    let openResult: string | null = "unexpected";
+    await act(async () => {
+      resolveOpen(activeResponse());
+      openResult = await pendingOpen!;
+    });
+
+    expect(openResult).toBeNull();
+    expect(showPdfCitationPreviewResult).not.toHaveBeenCalled();
+    expect(showPdfCitationPreviewFailure).not.toHaveBeenCalled();
+  });
+
+  it("routes rejected opens to a failure shell without seeding a loaded page", async () => {
+    const citations = [citation("[1]", "stable-1")];
+    const groundedAnswer = answer(citations);
+    const rejected = {
+      outcome: "rejected" as const,
+      state: "recoverable" as const,
+      reason: "preview-source-missing" as const,
+      display: {
+        documentLabel: "policy.pdf",
+        pageNumber: 3,
+        anchorQuality: "page-only" as const,
+      },
+    };
+    vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+      citations: [
+        {
+          stableId: "stable-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+        },
+      ],
+    });
+    vi.mocked(openPdfCitationPreviewSession).mockResolvedValue(rejected);
+
+    const windows = {
+      add: vi.fn(),
+      focus: vi.fn(),
+      update: vi.fn(),
+    };
+    const { result } = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: groundedAnswer,
+        chatId: "chat-1",
+        windows,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(result.current?.forMarker("[1]")?.state).toBe("available");
+    });
+
+    await act(async () => {
+      await result.current!.openCitation(citations[0]!, "citation-chip");
+    });
+
+    expect(showPdfCitationPreviewResult).not.toHaveBeenCalled();
+    expect(showPdfCitationPreviewFailure).toHaveBeenCalledWith(windows, rejected);
   });
 
   it("omits blocked same-document citations from the local sibling context", async () => {

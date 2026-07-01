@@ -25,6 +25,7 @@ import {
   CAPSULE_OUTPUT_MODES,
   CAPSULE_RETRIEVAL_EFFORTS,
   CONNECTOR_NODE_KINDS,
+  EMBEDDING_VECTOR_NORMALIZATIONS,
   EMBEDDING_VECTOR_METRICS,
   KNOWLEDGE_SOURCE_SCOPE_KINDS,
 } from "./local-knowledge.js";
@@ -172,6 +173,7 @@ function pushBadEnum(
   }
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity
 export function validateEmbeddingModelIdentity(
   input: unknown,
 ): LocalKnowledgeValidation<EmbeddingModelIdentity> {
@@ -196,6 +198,31 @@ export function validateEmbeddingModelIdentity(
   );
   if (input.modelRevision !== undefined && !isNonEmptyTrimmedString(input.modelRevision)) {
     errors.push("embeddingModelIdentity.modelRevision must be a non-empty string when set");
+  }
+  if (input.normalization !== undefined) {
+    pushBadEnum(
+      errors,
+      "embeddingModelIdentity.normalization",
+      input.normalization,
+      EMBEDDING_VECTOR_NORMALIZATIONS,
+    );
+  }
+  if (
+    input.instructionVersion !== undefined &&
+    !isNonEmptyTrimmedString(input.instructionVersion)
+  ) {
+    errors.push("embeddingModelIdentity.instructionVersion must be a non-empty string when set");
+  }
+  if (
+    input.embeddingSpaceFingerprint !== undefined &&
+    !isNonEmptyTrimmedString(input.embeddingSpaceFingerprint)
+  ) {
+    errors.push(
+      "embeddingModelIdentity.embeddingSpaceFingerprint must be a non-empty string when set",
+    );
+  }
+  if (input.dimensionsParam !== undefined && !isFinitePositiveInteger(input.dimensionsParam)) {
+    errors.push("embeddingModelIdentity.dimensionsParam must be a positive integer when set");
   }
   if (errors.length > 0) {
     return { ok: false, errors };

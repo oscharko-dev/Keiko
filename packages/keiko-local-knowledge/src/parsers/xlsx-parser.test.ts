@@ -135,15 +135,47 @@ describe("xlsxParser", () => {
     expect(result.parser.parserId).toBe("xlsx");
     expect(result.parser.dependencyVersions).toEqual([{ packageName: "yauzl", version: "3.4.0" }]);
     expect(result.diagnostics).toEqual([]);
-    expect(result.units).toHaveLength(2);
-    expect(result.units[1]).toMatchObject({
+    expect(result.units).toHaveLength(1);
+    expect(result.units[0]).toMatchObject({
       kind: "csv-row",
       tableName: "Controls",
       rowIndex: 1,
     });
     expect("normalizedText" in result ? result.normalizedText : undefined).toContain(
-      "Controls!2: A=Control-17 | B=Encrypt backups | C=Q4 & audit",
+      "Controls!2: Key=Control-17 | Value=Encrypt backups | Column C=Q4 & audit",
     );
+  });
+
+  it("formats styled date serials instead of indexing raw Excel serial numbers", async () => {
+    const result = await xlsxParser.parseAsync(
+      selectionFromBytes(
+        workbookZip([
+          {
+            name: "xl/styles.xml",
+            content: '<styleSheet><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
+          },
+          {
+            name: "xl/sharedStrings.xml",
+            content: "<sst><si><t>Name</t></si><si><t>Due</t></si><si><t>Renewal</t></si></sst>",
+          },
+          {
+            name: "xl/worksheets/sheet1.xml",
+            content: [
+              "<worksheet><sheetData>",
+              '<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row>',
+              '<row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2" s="1"><v>45292</v></c></row>',
+              "</sheetData></worksheet>",
+            ].join(""),
+          },
+        ]),
+        { extension: "xlsx" },
+      ),
+      buildParserOptions(),
+    );
+
+    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    expect(normalizedText).toContain("Name=Renewal | Due=2024-01-01");
+    expect(normalizedText).not.toContain("45292");
   });
 
   it("drops incomplete raw XML tags from shared-string fallback text", async () => {

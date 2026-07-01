@@ -15,23 +15,28 @@ import type {
   CitationReference,
   EmbeddingModelIdentity,
   EmbeddingVectorMetric,
+  EmbeddingVectorNormalization,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
-import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
+import {
+  assertCompatibleEmbeddingIdentity,
+  l2NormalizeVector,
+  verifyEmbeddingCapability,
+  type OpenAIEmbeddingAdapter,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import type { ComposedRetrievalScope } from "../composition.js";
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
-import { RetrievalError } from "./types.js";
+import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
+import { lexicalQueryTerms } from "./lexical-normalization.js";
+import { RetrievalError, type QueryTransformer, type RetrievalDiagnostics } from "./types.js";
 
-const SEARCH_EXCERPT_MAX_CHARS = 1_600;
-const SEARCH_CONTEXT_BEFORE_CHARS = 420;
-const LEXICAL_RECALL_EXCERPT_CHARS = 900;
 const LEXICAL_RECALL_MAX_TERMS = 12;
 const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
 const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
@@ -95,6 +100,8 @@ export interface SearchOptions {
   readonly minScore?: number;
   readonly signal?: AbortSignal;
   readonly strategy?: "auto" | "balanced" | "exact" | "broad";
+  readonly queryTransformer?: QueryTransformer;
+  readonly queryTransformTimeoutMs?: number;
 }
 
 interface QueryProfile {
@@ -102,10 +109,6 @@ interface QueryProfile {
   readonly tokens: readonly string[];
   readonly exactTerms: readonly string[];
   readonly lexicalRecallTerms: readonly string[];
-  readonly lexicalWeight: number;
-  readonly phraseWeight: number;
-  readonly metadataWeight: number;
-  readonly contextBeforeChars: number;
   readonly documentDiversityPenalty: number;
   readonly sectionDiversityPenalty: number;
 }
@@ -127,16 +130,43 @@ interface VectorRow {
   readonly source_id: string;
   readonly document_id: string;
   readonly embedding: Uint8Array;
+  readonly embedding_model_provider: string;
+  readonly embedding_model_id: string;
+  readonly embedding_model_revision: string | null;
+  readonly embedding_normalization: string | null;
+  readonly embedding_instruction_version: string | null;
+  readonly embedding_space_fingerprint: string | null;
+  readonly embedding_dimensions_param: number | null;
   readonly vector_dimensions: number;
   readonly vector_metric: string;
+  readonly created_at: number;
+}
+
+interface DecodedVectorRow extends Omit<VectorRow, "embedding"> {
+  readonly vector: Float32Array;
+}
+
+interface VectorCacheStampRow {
+  readonly n: number;
+  readonly max_created_at: number | null;
 }
 
 const SELECT_VECTORS_FOR_CAPSULE_SQL = [
   "SELECT chunk_id, capsule_id, source_id, document_id, embedding,",
-  "  vector_dimensions, vector_metric",
+  "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
+  "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
+  "  embedding_dimensions_param, vector_dimensions, vector_metric, created_at",
   "FROM vectors",
   "WHERE capsule_id = :c",
 ].join(" ");
+
+const SELECT_VECTOR_CACHE_STAMP_SQL = [
+  "SELECT COUNT(*) AS n, MAX(created_at) AS max_created_at",
+  "FROM vectors",
+  "WHERE capsule_id = :c",
+].join(" ");
+
+const DECODED_VECTOR_CACHE = new WeakMap<KnowledgeStore, Map<string, readonly DecodedVectorRow[]>>();
 
 function readVectorsForCapsule(
   store: KnowledgeStore,
@@ -157,6 +187,58 @@ function readVectorsForCapsule(
   return store._internal.db
     .prepare(`${SELECT_VECTORS_FOR_CAPSULE_SQL}${sourceClause}`)
     .all(params) as unknown as readonly VectorRow[];
+}
+
+function vectorCacheStamp(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): VectorCacheStampRow {
+  return store._internal.db
+    .prepare(SELECT_VECTOR_CACHE_STAMP_SQL)
+    .get({ c: String(capsuleId) }) as unknown as VectorCacheStampRow;
+}
+
+function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly DecodedVectorRow[]> {
+  const cached = DECODED_VECTOR_CACHE.get(store);
+  if (cached !== undefined) return cached;
+  const created = new Map<string, readonly DecodedVectorRow[]>();
+  DECODED_VECTOR_CACHE.set(store, created);
+  return created;
+}
+
+function decodeCacheKey(
+  capsule: KnowledgeCapsule,
+  stamp: VectorCacheStampRow,
+): string {
+  return [
+    String(capsule.id),
+    identityKey(capsule.embeddingModelIdentity),
+    String(stamp.n),
+    String(stamp.max_created_at ?? 0),
+  ].join("|");
+}
+
+function readDecodedVectorsForCapsule(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+): readonly DecodedVectorRow[] {
+  if (sourceFilter?.length === 0) return [];
+  const stamp = vectorCacheStamp(store, capsule.id);
+  if (stamp.n === 0) return [];
+  const cache = decodeCacheForStore(store);
+  const key = decodeCacheKey(capsule, stamp);
+  let rows = cache.get(key);
+  if (rows === undefined) {
+    rows = readVectorsForCapsule(store, capsule.id).map((row) => ({
+      ...row,
+      vector: normalizeVectorForIdentity(
+        decodeEmbedding(row, store._internal.contentCipher),
+        capsule.embeddingModelIdentity,
+      ),
+    }));
+    cache.set(key, rows);
+  }
+  if (sourceFilter === undefined) return rows;
+  const allowed = new Set(sourceFilter.map(String));
+  return rows.filter((row) => allowed.has(row.source_id));
 }
 
 // ─── Citation row reader ─────────────────────────────────────────────────────
@@ -193,15 +275,17 @@ function readCitationRows(
     "  COALESCE(pu.page_number, (",
     "    SELECT p.page_number FROM pages p",
     "    WHERE p.capsule_id = c.capsule_id AND p.document_id = c.document_id",
-    "      AND p.character_start <= COALESCE(c.character_start, pu.character_start)",
-    "      AND p.character_end >= COALESCE(c.character_end, pu.character_end)",
+    "      AND p.character_end > p.character_start",
+    "      AND p.character_start <= COALESCE(c.character_end, pu.character_end)",
+    "      AND p.character_end >= COALESCE(c.character_start, pu.character_start)",
     "    ORDER BY p.page_number ASC LIMIT 1",
     "  )) AS page_number,",
     "  COALESCE(pu.page_label, (",
     "    SELECT p.page_label FROM pages p",
     "    WHERE p.capsule_id = c.capsule_id AND p.document_id = c.document_id",
-    "      AND p.character_start <= COALESCE(c.character_start, pu.character_start)",
-    "      AND p.character_end >= COALESCE(c.character_end, pu.character_end)",
+    "      AND p.character_end > p.character_start",
+    "      AND p.character_start <= COALESCE(c.character_end, pu.character_end)",
+    "      AND p.character_end >= COALESCE(c.character_start, pu.character_start)",
     "    ORDER BY p.page_number ASC LIMIT 1",
     "  )) AS page_label,",
     "  COALESCE(pu.section_path_json, pu.heading_path_json) AS section_path_json,",
@@ -237,6 +321,17 @@ function decodeEmbedding(row: VectorRow, cipher: StoreContentCipher): Float32Arr
   }
   const copy = new Uint8Array(embedding); // detach from sqlite row buffer / decrypted envelope
   return new Float32Array(copy.buffer, copy.byteOffset, row.vector_dimensions);
+}
+
+function shouldL2Normalize(identity: EmbeddingModelIdentity): boolean {
+  return identity.normalization === undefined || identity.normalization === "l2";
+}
+
+function normalizeVectorForIdentity(
+  vector: Float32Array,
+  identity: EmbeddingModelIdentity,
+): Float32Array {
+  return shouldL2Normalize(identity) ? l2NormalizeVector(vector) : new Float32Array(vector);
 }
 
 // `noUncheckedIndexedAccess` widens `Float32Array[i]` to `number | undefined`; the loop
@@ -302,12 +397,46 @@ interface EmbeddedQuery {
 function identityKey(identity: EmbeddingModelIdentity): string {
   // modelRevision intentionally excluded — two capsules sharing structural identity
   // tuple share an embedding even if one has been re-validated with a new revision.
+  // Hardening fields are included because normalization, instruction shaping, and
+  // embedding-space fingerprint define whether vectors can be compared safely.
   return [
     identity.provider,
     identity.modelId,
     String(identity.vectorDimensions),
     identity.vectorMetric,
+    identity.normalization ?? "legacy",
+    identity.instructionVersion ?? "legacy",
+    identity.embeddingSpaceFingerprint ?? "unverified",
+    String(identity.dimensionsParam ?? ""),
   ].join("|");
+}
+
+function queryEmbeddingCacheKey(identity: EmbeddingModelIdentity, query: string): string {
+  return `${identityKey(identity)}\u0000${query}`;
+}
+
+function queryOutcomeIdentity(
+  stored: EmbeddingModelIdentity,
+  dimensions: number,
+  modelId: string,
+  modelRevision: string | undefined,
+): EmbeddingModelIdentity {
+  const revision = modelRevision ?? (modelId === stored.modelId ? undefined : modelId);
+  return {
+    provider: stored.provider,
+    modelId: stored.modelId,
+    vectorDimensions: dimensions,
+    vectorMetric: stored.vectorMetric,
+    ...(revision !== undefined ? { modelRevision: revision } : {}),
+    ...(stored.normalization !== undefined ? { normalization: stored.normalization } : {}),
+    ...(stored.instructionVersion !== undefined
+      ? { instructionVersion: stored.instructionVersion }
+      : {}),
+    ...(stored.embeddingSpaceFingerprint !== undefined
+      ? { embeddingSpaceFingerprint: stored.embeddingSpaceFingerprint }
+      : {}),
+    ...(stored.dimensionsParam !== undefined ? { dimensionsParam: stored.dimensionsParam } : {}),
+  };
 }
 
 async function embedQueryFor(
@@ -323,7 +452,8 @@ async function embedQueryFor(
       ? { apiKeyHeaderName: adapter.apiKeyHeaderName }
       : {}),
     modelId: identity.modelId,
-    input: text,
+    input: shapeEmbeddingQuery(identity, text),
+    ...(identity.dimensionsParam !== undefined ? { dimensions: identity.dimensionsParam } : {}),
     ...(signal !== undefined ? { signal } : {}),
   });
   if (!outcome.ok) {
@@ -332,7 +462,23 @@ async function embedQueryFor(
       `embedding adapter returned ${outcome.kind}`,
     );
   }
-  return { vector: outcome.value.vector, dimensions: outcome.value.vector.length };
+  const current = queryOutcomeIdentity(
+    identity,
+    outcome.value.vector.length,
+    outcome.value.modelId,
+    outcome.value.modelRevision,
+  );
+  const compatibility = assertCompatibleEmbeddingIdentity(identity, current);
+  if (!compatibility.ok) {
+    return new RetrievalError(
+      "INCOMPATIBLE_EMBEDDING_IDENTITY",
+      "embedding model identity changed — existing capsule vectors require re-indexing",
+    );
+  }
+  return {
+    vector: normalizeVectorForIdentity(outcome.value.vector, identity),
+    dimensions: outcome.value.vector.length,
+  };
 }
 
 // ─── Citation builder ────────────────────────────────────────────────────────
@@ -378,84 +524,124 @@ function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationRe
   };
 }
 
-// ─── Per-capsule candidate selection ─────────────────────────────────────────
-// Scores every vector row for one capsule, then truncates to the per-capsule top-K. We
-// do not merge across capsules until all per-capsule top-Ks are collected so a single
-// dense capsule cannot starve the merge of evidence from a smaller capsule.
-interface ScoredCandidate {
+// ─── Candidate selection + fusion ────────────────────────────────────────────
+// Dense and lexical rankings stay separate until reciprocal-rank fusion. Dense scores remain
+// vector-space scores; BM25 scores remain SQLite FTS scores where lower is better. The final
+// `score` exposed on references is the RRF score, not an additive cosine/BM25 blend.
+interface DenseCandidate {
   readonly chunkId: string;
   readonly capsuleId: KnowledgeCapsuleId;
   readonly score: number;
 }
 
+interface CapsuleScoreResult {
+  readonly candidates: readonly DenseCandidate[];
+  readonly sawDimensionCompatible: boolean;
+  readonly sawIdentityIncompatible: boolean;
+}
+
+interface LexicalCandidate {
+  readonly chunkId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly bm25Score: number;
+}
+
+interface FusedCandidate {
+  readonly chunkId: string;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly score: number;
+  readonly provenance: "dense" | "lexical" | "both";
+  readonly denseRank?: number;
+  readonly denseScore?: number;
+  readonly lexicalRank?: number;
+  readonly lexicalBm25Score?: number;
+}
+
+const RRF_K = 60;
+const LEXICAL_CANDIDATE_LIMIT = 100;
+const QUERY_TRANSFORM_MAX_VARIANTS = 4;
+const QUERY_TRANSFORM_TIMEOUT_MS = 750;
+
+function vectorMetricFromRow(value: string): EmbeddingVectorMetric | undefined {
+  if (value === "cosine" || value === "dot" || value === "euclidean") return value;
+  return undefined;
+}
+
+function normalizationFromRow(value: string | null): EmbeddingVectorNormalization | undefined {
+  if (value === "l2" || value === "none" || value === "unknown") return value;
+  return undefined;
+}
+
+function identityFromVectorRow(row: DecodedVectorRow): EmbeddingModelIdentity | undefined {
+  const vectorMetric = vectorMetricFromRow(row.vector_metric);
+  if (vectorMetric === undefined) return undefined;
+  const normalization = normalizationFromRow(row.embedding_normalization);
+  return {
+    provider: row.embedding_model_provider,
+    modelId: row.embedding_model_id,
+    vectorDimensions: row.vector_dimensions,
+    vectorMetric,
+    ...(row.embedding_model_revision !== null
+      ? { modelRevision: row.embedding_model_revision }
+      : {}),
+    ...(normalization !== undefined ? { normalization } : {}),
+    ...(row.embedding_instruction_version !== null
+      ? { instructionVersion: row.embedding_instruction_version }
+      : {}),
+    ...(row.embedding_space_fingerprint !== null
+      ? { embeddingSpaceFingerprint: row.embedding_space_fingerprint }
+      : {}),
+    ...(row.embedding_dimensions_param !== null
+      ? { dimensionsParam: row.embedding_dimensions_param }
+      : {}),
+  };
+}
+
 function scoreCapsuleVectors(
-  rows: readonly VectorRow[],
+  rows: readonly DecodedVectorRow[],
   capsule: KnowledgeCapsule,
   queryVector: Float32Array,
   candidateLimit: number,
   minScore: number | undefined,
-  cipher: StoreContentCipher,
-): readonly ScoredCandidate[] {
+): CapsuleScoreResult {
   const metric = capsule.embeddingModelIdentity.vectorMetric;
-  const scored: ScoredCandidate[] = [];
+  const scored: DenseCandidate[] = [];
+  let sawDimensionCompatible = false;
+  let sawIdentityIncompatible = false;
   for (const row of rows) {
     // Belt-and-braces: the SQL filter already restricts to `capsule_id = capsule.id`, but
     // we re-assert at decode time so an arbitrary store-bypass cannot leak a row.
     if (row.capsule_id !== String(capsule.id)) continue;
+    const rowIdentity = identityFromVectorRow(row);
+    if (
+      rowIdentity === undefined ||
+      !assertCompatibleEmbeddingIdentity(capsule.embeddingModelIdentity, rowIdentity).ok
+    ) {
+      sawIdentityIncompatible = true;
+      continue;
+    }
     if (row.vector_dimensions !== queryVector.length) continue;
-    const vector = decodeEmbedding(row, cipher);
-    const score = scoreFor(metric, queryVector, vector);
+    sawDimensionCompatible = true;
+    const score = scoreFor(metric, queryVector, row.vector);
     if (minScore !== undefined && score < minScore) continue;
     scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, score });
   }
   scored.sort(scoreDesc);
-  return scored.slice(0, candidateLimit);
+  return {
+    candidates: scored.slice(0, candidateLimit),
+    sawDimensionCompatible,
+    sawIdentityIncompatible,
+  };
 }
 
-interface LexicalDocumentRow {
-  readonly document_id: string;
-  readonly source_id: string;
-  readonly safe_display_name: string | null;
-  readonly normalized_text: string;
-}
-
-interface LexicalChunkRow {
+interface LexicalIndexCandidateRow {
   readonly chunk_id: string;
   readonly capsule_id: string;
+  readonly bm25_score: number;
 }
 
-interface LexicalHit {
-  readonly position: number;
-  readonly searchText: string;
-}
-
-function lexicalRecallLimit(topK: number, profile: QueryProfile): number {
-  if (profile.exactTerms.some(isStrongLexicalRecallTerm)) return 1;
-  const multiplier = profile.strategy === "exact" ? 16 : profile.strategy === "broad" ? 8 : 10;
-  const cap = profile.strategy === "exact" ? topK + 144 : topK + 96;
-  return Math.max(topK, Math.min(topK * multiplier, cap));
-}
-
-function lexicalBaseScore(profile: QueryProfile): number {
-  if (profile.strategy === "exact") return 0.88;
-  if (profile.strategy === "broad") return 0.68;
-  return 0.78;
-}
-
-function lexicalCandidateScore(searchText: string, profile: QueryProfile): number {
-  if (profile.lexicalRecallTerms.length === 0) return 0;
-  let termHits = 0;
-  for (const term of profile.lexicalRecallTerms) {
-    if (searchText.includes(term)) termHits += 1;
-  }
-  let exactHits = 0;
-  for (const term of profile.exactTerms) {
-    if (searchText.includes(term)) exactHits += 1;
-  }
-  const coverage = termHits / profile.lexicalRecallTerms.length;
-  return (
-    lexicalBaseScore(profile) + Math.min(0.24, coverage * 0.24) + Math.min(0.16, exactHits * 0.04)
-  );
+interface LexicalIndexCountRow {
+  readonly n: number;
 }
 
 function sourceFilterClause(
@@ -481,186 +667,186 @@ function sourceParams(
   return params;
 }
 
-function lexicalDocumentSql(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
-  return [
-    "SELECT d.id AS document_id, d.source_id, d.safe_display_name, dt.normalized_text",
-    "FROM documents AS d",
-    "JOIN document_texts AS dt ON dt.capsule_id = d.capsule_id AND dt.document_id = d.id",
-    `WHERE d.capsule_id = :capsule_id${sourceFilterClause(sourceFilter, "d.")}`,
-    "ORDER BY d.safe_display_name ASC, d.id ASC",
-  ].join(" ");
-}
-
-function readLexicalDocuments(
+function countLexicalRowsForCapsuleScope(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
-): readonly LexicalDocumentRow[] {
-  const rows = store._internal.db.prepare(lexicalDocumentSql(sourceFilter)).all({
-    capsule_id: String(capsuleId),
-    ...sourceParams(sourceFilter),
-  }) as unknown as readonly LexicalDocumentRow[];
-  // Decrypt the joined document_texts text at the store boundary before the lexical scan runs over it.
-  // This join only matches small documents (large documents store text in document_text_windows, not
-  // document_texts), so the per-row decrypt stays within the small-document memory bound.
-  const cipher = store._internal.contentCipher;
-  if (!cipher.isEncrypted) return rows;
-  return rows.map((row) => ({ ...row, normalized_text: cipher.openText(row.normalized_text) }));
+): number {
+  const row = store._internal.db
+    .prepare(
+      [
+        "SELECT COUNT(*) AS n",
+        "FROM chunk_lexical_index AS li",
+        `WHERE li.capsule_id = :capsule_id${sourceFilterClause(sourceFilter, "li.")}`,
+      ].join(" "),
+    )
+    .get({ capsule_id: String(capsuleId), ...sourceParams(sourceFilter) }) as
+    LexicalIndexCountRow | undefined;
+  return typeof row?.n === "number" ? row.n : 0;
 }
 
-function lexicalChunkSql(
-  sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  mode: "contains" | "nearest",
-): string {
-  const positionStart = "COALESCE(c.character_start, pu.character_start, 0)";
-  const positionEnd =
-    "COALESCE(c.character_end, pu.character_end, COALESCE(c.character_start, pu.character_start, 0) + 1)";
-  const predicate =
-    mode === "contains" ? `AND ${positionStart} <= :position AND ${positionEnd} >= :position` : "";
-  const order =
-    mode === "contains"
-      ? "ORDER BY c.order_index ASC, c.id ASC"
-      : `ORDER BY ABS(${positionStart} - :position) ASC, c.order_index ASC, c.id ASC`;
+function lexicalFtsSql(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
   return [
-    "SELECT c.id AS chunk_id, c.capsule_id AS capsule_id",
-    "FROM chunks AS c",
-    "JOIN vectors AS v ON v.capsule_id = c.capsule_id AND v.chunk_id = c.id",
-    "LEFT JOIN parsed_units AS pu ON pu.capsule_id = c.capsule_id AND pu.id = c.parsed_unit_id",
-    `WHERE c.capsule_id = :capsule_id AND c.document_id = :document_id${sourceFilterClause(
+    "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id,",
+    "  bm25(chunk_lexical_fts) AS bm25_score",
+    "FROM chunk_lexical_fts",
+    "JOIN chunk_lexical_index AS li ON li.rowid = chunk_lexical_fts.rowid",
+    `WHERE chunk_lexical_fts MATCH :match AND li.capsule_id = :capsule_id${sourceFilterClause(
       sourceFilter,
-      "c.",
+      "li.",
     )}`,
-    predicate,
-    order,
-    "LIMIT 3",
+    "ORDER BY bm25_score ASC, li.chunk_id ASC",
+    "LIMIT :limit",
   ].join(" ");
 }
 
-function chunkRowsForHit(
+function escapeFtsPhrase(value: string): string {
+  return `"${value.replace(/"/gu, '""')}"`;
+}
+
+function buildFtsMatchQuery(profile: QueryProfile): string | undefined {
+  const terms = profile.lexicalRecallTerms.slice(0, LEXICAL_RECALL_MAX_TERMS);
+  if (terms.length === 0) return undefined;
+  const operator = profile.strategy === "broad" ? " OR " : " AND ";
+  return terms.map(escapeFtsPhrase).join(operator);
+}
+
+function readFtsCandidatesForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  documentId: string,
-  position: number,
-): readonly LexicalChunkRow[] {
-  const params = {
-    capsule_id: String(capsuleId),
-    document_id: documentId,
-    position,
-    ...sourceParams(sourceFilter),
-  };
-  const contained = store._internal.db
-    .prepare(lexicalChunkSql(sourceFilter, "contains"))
-    .all(params) as unknown as readonly LexicalChunkRow[];
-  if (contained.length > 0) return contained;
-  return store._internal.db
-    .prepare(lexicalChunkSql(sourceFilter, "nearest"))
-    .all(params) as unknown as readonly LexicalChunkRow[];
-}
-
-function lexicalSearchExcerpt(text: string, position: number, profile: QueryProfile): string {
-  const start = Math.max(0, position - profile.contextBeforeChars);
-  const end = Math.min(text.length, position + LEXICAL_RECALL_EXCERPT_CHARS);
-  return text.slice(start, end).toLowerCase();
-}
-
-function lexicalHitsForDocument(
-  doc: LexicalDocumentRow,
-  profile: QueryProfile,
+  matchQuery: string,
   limit: number,
-): readonly LexicalHit[] {
-  const hits: LexicalHit[] = [];
-  const seenBuckets = new Set<number>();
-  const text = doc.normalized_text.toLowerCase();
-  const metadata = normaliseForSearch(doc.safe_display_name ?? "");
-  for (const term of profile.lexicalRecallTerms) {
-    let position = text.indexOf(term);
-    if (position < 0 && metadata.includes(term)) position = 0;
-    if (position < 0) continue;
-    const bucket = Math.floor(position / Math.max(1, LEXICAL_RECALL_EXCERPT_CHARS));
-    if (seenBuckets.has(bucket)) continue;
-    seenBuckets.add(bucket);
-    hits.push({ position, searchText: lexicalSearchExcerpt(text, position, profile) });
-    if (hits.length >= limit) break;
-  }
-  return hits;
+): readonly LexicalCandidate[] {
+  const rows = store._internal.db.prepare(lexicalFtsSql(sourceFilter)).all({
+    capsule_id: String(capsuleId),
+    match: matchQuery,
+    limit,
+    ...sourceParams(sourceFilter),
+  }) as unknown as readonly LexicalIndexCandidateRow[];
+  return rows.map((row) => ({
+    chunkId: row.chunk_id,
+    capsuleId: row.capsule_id as KnowledgeCapsuleId,
+    bm25Score: row.bm25_score,
+  }));
 }
 
-function lexicalRecallCandidatesForCapsule(
+function exactLexicalSql(
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  exactTerms: readonly string[],
+): string {
+  const exactClause =
+    exactTerms.length === 0
+      ? "0"
+      : exactTerms.map((_, i) => `instr(lower(li.exact_text), :exact${String(i)}) > 0`).join(" OR ");
+  return [
+    "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id, 0 AS bm25_score",
+    "FROM chunk_lexical_index AS li",
+    `WHERE li.capsule_id = :capsule_id${sourceFilterClause(
+      sourceFilter,
+      "li.",
+    )} AND (${exactClause})`,
+    "ORDER BY li.chunk_id ASC",
+    "LIMIT :limit",
+  ].join(" ");
+}
+
+function readExactLexicalCandidatesForCapsule(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  exactTerms: readonly string[],
+  limit: number,
+): readonly LexicalCandidate[] {
+  if (exactTerms.length === 0) return [];
+  const exactParams = Object.fromEntries(
+    exactTerms.map((term, i) => [`exact${String(i)}`, term.toLocaleLowerCase("und")]),
+  );
+  const rows = store._internal.db.prepare(exactLexicalSql(sourceFilter, exactTerms)).all({
+    capsule_id: String(capsuleId),
+    limit,
+    ...sourceParams(sourceFilter),
+    ...exactParams,
+  }) as unknown as readonly LexicalIndexCandidateRow[];
+  return rows.map((row) => ({
+    chunkId: row.chunk_id,
+    capsuleId: row.capsule_id as KnowledgeCapsuleId,
+    bm25Score: row.bm25_score,
+  }));
+}
+
+interface LexicalCollection {
+  readonly candidates: readonly LexicalCandidate[];
+  readonly indexedRowCount: number;
+  readonly queryError: boolean;
+}
+
+function lexicalCandidateLimit(topK: number): number {
+  return Math.max(topK, Math.min(LEXICAL_CANDIDATE_LIMIT, topK * 10));
+}
+
+function collectLexicalCandidatesForCapsule(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
   profile: QueryProfile,
-  topK: number,
-): readonly ScoredCandidate[] {
-  if (profile.lexicalRecallTerms.length === 0) return [];
-  const limit = lexicalRecallLimit(topK, profile);
-  const out: ScoredCandidate[] = [];
-  for (const doc of readLexicalDocuments(store, capsule.id, sourceFilter)) {
-    const remaining = Math.max(0, limit - out.length);
-    if (remaining === 0) break;
-    const hits = lexicalHitsForDocument(doc, profile, remaining);
-    for (const hit of hits) {
-      for (const row of chunkRowsForHit(
-        store,
-        capsule.id,
-        sourceFilter,
-        doc.document_id,
-        hit.position,
-      )) {
-        out.push({
-          chunkId: row.chunk_id,
-          capsuleId: capsule.id,
-          score: lexicalCandidateScore(hit.searchText, profile),
-        });
-        if (out.length >= limit) break;
-      }
-      if (out.length >= limit) break;
+  limit: number,
+): { readonly candidates: readonly LexicalCandidate[]; readonly indexedRowCount: number } {
+  const indexedRowCount = countLexicalRowsForCapsuleScope(store, capsule.id, sourceFilter);
+  if (indexedRowCount === 0) return { candidates: [], indexedRowCount };
+  const byKey = new Map<string, LexicalCandidate>();
+  const matchQuery = buildFtsMatchQuery(profile);
+  if (matchQuery !== undefined) {
+    for (const candidate of readFtsCandidatesForCapsule(
+      store,
+      capsule.id,
+      sourceFilter,
+      matchQuery,
+      limit,
+    )) {
+      byKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, candidate);
     }
   }
-  return out.filter((candidate) => candidate.score > 0).sort(scoreDesc);
-}
-
-function mergeCandidates(
-  candidates: readonly ScoredCandidate[],
-  lexicalCandidates: readonly ScoredCandidate[],
-): readonly ScoredCandidate[] {
-  if (lexicalCandidates.length === 0) return candidates;
-  const byKey = new Map<string, ScoredCandidate>();
-  for (const candidate of candidates) {
-    byKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, candidate);
-  }
-  for (const candidate of lexicalCandidates) {
+  for (const candidate of readExactLexicalCandidatesForCapsule(
+    store,
+    capsule.id,
+    sourceFilter,
+    profile.exactTerms.filter(isStrongLexicalRecallTerm),
+    limit,
+  )) {
     const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
-    const existing = byKey.get(key);
-    if (existing === undefined || candidate.score > existing.score) {
-      byKey.set(key, candidate);
-    }
+    if (!byKey.has(key)) byKey.set(key, candidate);
   }
-  return [...byKey.values()];
+  return { candidates: [...byKey.values()].slice(0, limit), indexedRowCount };
 }
 
-function collectLexicalRecallCandidates(
+function collectLexicalCandidates(
   store: KnowledgeStore,
   capsules: readonly KnowledgeCapsule[],
   scope: RetrievalScopeInput,
   profile: QueryProfile,
   topK: number,
-): readonly ScoredCandidate[] {
-  if (profile.lexicalRecallTerms.length === 0) return [];
-  const out: ScoredCandidate[] = [];
-  for (const capsule of capsules) {
-    out.push(
-      ...lexicalRecallCandidatesForCapsule(
+): LexicalCollection {
+  const limit = lexicalCandidateLimit(topK);
+  const out: LexicalCandidate[] = [];
+  let indexedRowCount = 0;
+  try {
+    for (const capsule of capsules) {
+      const collected = collectLexicalCandidatesForCapsule(
         store,
         capsule,
         sourceFilterForCapsule(scope.sourceFilter, capsule),
         profile,
-        topK,
-      ),
-    );
+        limit,
+      );
+      indexedRowCount += collected.indexedRowCount;
+      out.push(...collected.candidates);
+      if (out.length >= limit) break;
+    }
+  } catch {
+    return { candidates: [], indexedRowCount, queryError: true };
   }
-  return out;
+  return { candidates: out.slice(0, limit), indexedRowCount, queryError: false };
 }
 
 function oversampleTopK(topK: number, profile: QueryProfile): number {
@@ -669,21 +855,211 @@ function oversampleTopK(topK: number, profile: QueryProfile): number {
   return Math.max(topK, Math.min(topK * multiplier, cap));
 }
 
-function scoreDesc(a: ScoredCandidate, b: ScoredCandidate): number {
+function scoreDesc(
+  a: { readonly score: number; readonly chunkId: string },
+  b: { readonly score: number; readonly chunkId: string },
+): number {
   if (b.score !== a.score) return b.score - a.score;
   // Stable tiebreak by chunkId so reordering of equal-score rows is deterministic across
   // platforms — important for the snapshot tests in #200.
   return a.chunkId.localeCompare(b.chunkId);
 }
 
+function bm25Asc(a: LexicalCandidate, b: LexicalCandidate): number {
+  if (a.bm25Score !== b.bm25Score) return a.bm25Score - b.bm25Score;
+  return a.chunkId.localeCompare(b.chunkId);
+}
+
+function provenanceRank(candidate: FusedCandidate): number {
+  if (candidate.provenance === "both") return 0;
+  if (candidate.provenance === "lexical") return 1;
+  return 2;
+}
+
+function fusedScoreDesc(a: FusedCandidate, b: FusedCandidate): number {
+  if (b.score !== a.score) return b.score - a.score;
+  const provenance = provenanceRank(a) - provenanceRank(b);
+  if (provenance !== 0) return provenance;
+  return a.chunkId.localeCompare(b.chunkId);
+}
+
+function rrf(rank: number): number {
+  return 1 / (RRF_K + rank);
+}
+
+function upsertFusedCandidate(
+  byKey: Map<string, FusedCandidate>,
+  key: string,
+  patch: Partial<FusedCandidate> & Pick<FusedCandidate, "chunkId" | "capsuleId">,
+  increment: number,
+): void {
+  const existing = byKey.get(key);
+  if (existing === undefined) {
+    byKey.set(key, {
+      chunkId: patch.chunkId,
+      capsuleId: patch.capsuleId,
+      score: increment,
+      provenance: patch.denseRank === undefined ? "lexical" : "dense",
+      ...(patch.denseRank !== undefined ? { denseRank: patch.denseRank } : {}),
+      ...(patch.denseScore !== undefined ? { denseScore: patch.denseScore } : {}),
+      ...(patch.lexicalRank !== undefined ? { lexicalRank: patch.lexicalRank } : {}),
+      ...(patch.lexicalBm25Score !== undefined
+        ? { lexicalBm25Score: patch.lexicalBm25Score }
+        : {}),
+    });
+    return;
+  }
+  byKey.set(key, {
+    ...existing,
+    ...patch,
+    score: existing.score + increment,
+    provenance: "both",
+  });
+}
+
+function fuseCandidates(
+  denseCandidates: readonly DenseCandidate[],
+  lexicalCandidates: readonly LexicalCandidate[],
+  limit: number,
+): readonly FusedCandidate[] {
+  const byKey = new Map<string, FusedCandidate>();
+  const rankedDense = [...dedupeDenseCandidates(denseCandidates)].sort(scoreDesc);
+  rankedDense.forEach((candidate, index) => {
+    const rank = index + 1;
+    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    upsertFusedCandidate(
+      byKey,
+      key,
+      {
+        chunkId: candidate.chunkId,
+        capsuleId: candidate.capsuleId,
+        denseRank: rank,
+        denseScore: candidate.score,
+      },
+      rrf(rank),
+    );
+  });
+  const rankedLexical = [...dedupeLexicalCandidates(lexicalCandidates)].sort(bm25Asc);
+  rankedLexical.forEach((candidate, index) => {
+    const rank = index + 1;
+    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    upsertFusedCandidate(
+      byKey,
+      key,
+      {
+        chunkId: candidate.chunkId,
+        capsuleId: candidate.capsuleId,
+        lexicalRank: rank,
+        lexicalBm25Score: candidate.bm25Score,
+      },
+      rrf(rank),
+    );
+  });
+  return [...byKey.values()].sort(fusedScoreDesc).slice(0, limit);
+}
+
+function dedupeDenseCandidates(candidates: readonly DenseCandidate[]): readonly DenseCandidate[] {
+  const byKey = new Map<string, DenseCandidate>();
+  for (const candidate of candidates) {
+    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const existing = byKey.get(key);
+    if (existing === undefined || candidate.score > existing.score) byKey.set(key, candidate);
+  }
+  return [...byKey.values()];
+}
+
+function dedupeLexicalCandidates(
+  candidates: readonly LexicalCandidate[],
+): readonly LexicalCandidate[] {
+  const byKey = new Map<string, LexicalCandidate>();
+  for (const candidate of candidates) {
+    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const existing = byKey.get(key);
+    if (existing === undefined || candidate.bm25Score < existing.bm25Score) {
+      byKey.set(key, candidate);
+    }
+  }
+  return [...byKey.values()];
+}
+
+function uniqueQueries(queries: readonly string[]): readonly string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const query of queries) {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) continue;
+    const key = normaliseForSearch(trimmed);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+  return out;
+}
+
+async function withQueryTransformTimeout(
+  promise: Promise<readonly string[]>,
+  timeoutMs: number,
+): Promise<readonly string[] | undefined> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => {
+          resolve(undefined);
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return undefined;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function searchQueriesFor(
+  query: string,
+  profile: QueryProfile,
+  options: SearchOptions,
+): Promise<readonly string[]> {
+  if (profile.strategy !== "broad" || options.queryTransformer === undefined) return [query];
+  const variants = await withQueryTransformTimeout(
+    options.queryTransformer.rewrite({
+      query,
+      strategy: "broad",
+      maxVariants: QUERY_TRANSFORM_MAX_VARIANTS,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    }),
+    options.queryTransformTimeoutMs ?? QUERY_TRANSFORM_TIMEOUT_MS,
+  );
+  if (variants === undefined) return [query];
+  return uniqueQueries([query, ...variants]).slice(0, QUERY_TRANSFORM_MAX_VARIANTS);
+}
+
+function mergeLexicalCollections(collections: readonly LexicalCollection[]): LexicalCollection {
+  let indexedRowCount = 0;
+  let queryError = false;
+  const candidates: LexicalCandidate[] = [];
+  for (const collection of collections) {
+    indexedRowCount = Math.max(indexedRowCount, collection.indexedRowCount);
+    queryError ||= collection.queryError;
+    candidates.push(...collection.candidates);
+  }
+  return {
+    candidates: dedupeLexicalCandidates(candidates),
+    indexedRowCount,
+    queryError,
+  };
+}
+
 // ─── Main entry point ────────────────────────────────────────────────────────
-// `searchVectorsForScope` is intentionally a single linear pass:
+// `searchVectorsForScope` keeps the retrieval legs separate until fusion:
 //   1. Resolve every in-scope capsule (skip ids that no longer exist).
 //   2. Embed the query once per distinct identity tuple.
-//   3. Per capsule: read its vectors, score, take per-capsule top-K.
-//   4. Merge candidates, sort by score desc, take global top-K.
-//   5. Read citation metadata for the surviving candidates.
-//   6. Compose `RetrievalReference[]`.
+//   3. Per capsule: read vectors, dense-score, and keep dense candidates.
+//   4. Query the SQLite FTS5/BM25 lexical index independently.
+//   5. Fuse dense rank + lexical BM25 rank with RRF.
+//   6. Read citation metadata for the surviving fused candidates.
 //
 // Returns either the ranked references or a structured failure reason — never throws on
 // expected paths (embedding failure, dim mismatch). Throws `RetrievalError` only on
@@ -698,15 +1074,17 @@ export interface SearchOutcome {
   // candidates kept the result non-empty. Observability signal only — does not
   // change which references are returned.
   readonly embeddingDegraded?: true;
+  readonly diagnostics: RetrievalDiagnostics;
 }
 
 // Tracks the accumulated state of a single search pass. Hoisted out of the entry function
 // so the orchestrator stays under the cyclomatic-complexity budget (the per-capsule loop
 // has 4 distinct branches; bundling them into one function pushes it past the lint cap).
 interface SearchState {
-  readonly candidates: ScoredCandidate[];
+  readonly candidates: DenseCandidate[];
   anyVectorSeen: boolean;
   anyDimensionCompatible: boolean;
+  anyIdentityIncompatible: boolean;
   embeddingFailed: boolean;
 }
 
@@ -715,10 +1093,49 @@ function emptyState(): SearchState {
     candidates: [],
     anyVectorSeen: false,
     anyDimensionCompatible: false,
+    anyIdentityIncompatible: false,
     embeddingFailed: false,
   };
 }
 
+type IdentityPreflightResult = "ok" | "incompatible" | "failed";
+
+async function ensureIdentityPreflight(
+  adapter: OpenAIEmbeddingAdapter,
+  identity: EmbeddingModelIdentity,
+  signal: AbortSignal | undefined,
+  cache: Map<string, IdentityPreflightResult>,
+): Promise<IdentityPreflightResult> {
+  if (identity.embeddingSpaceFingerprint === undefined) return "ok";
+  const key = identityKey(identity);
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const checked = await verifyEmbeddingCapability(adapter, {
+    modelId: identity.modelId,
+    provider: identity.provider,
+    vectorMetric: identity.vectorMetric,
+    expectedDimensions: identity.vectorDimensions,
+    ...(identity.dimensionsParam !== undefined ? { dimensionsParam: identity.dimensionsParam } : {}),
+    ...(identity.normalization !== undefined ? { normalization: identity.normalization } : {}),
+    ...(identity.instructionVersion !== undefined
+      ? { instructionVersion: identity.instructionVersion }
+      : {}),
+    includeSpaceFingerprint: true,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  let result: IdentityPreflightResult;
+  if (!checked.ok) {
+    result = checked.reason === "dimension-mismatch" ? "incompatible" : "failed";
+  } else {
+    result = assertCompatibleEmbeddingIdentity(identity, checked.identity).ok
+      ? "ok"
+      : "incompatible";
+  }
+  cache.set(key, result);
+  return result;
+}
+
+// eslint-disable-next-line max-lines-per-function
 async function processCapsule(
   store: KnowledgeStore,
   embeddingAdapter: OpenAIEmbeddingAdapter,
@@ -728,11 +1145,27 @@ async function processCapsule(
   options: SearchOptions,
   profile: QueryProfile,
   cache: Map<string, EmbeddedQuery>,
+  preflightCache: Map<string, IdentityPreflightResult>,
   state: SearchState,
 ): Promise<void> {
-  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter);
+  const rows = readDecodedVectorsForCapsule(store, capsule, sourceFilter);
   if (rows.length === 0) return;
   state.anyVectorSeen = true;
+
+  const preflight = await ensureIdentityPreflight(
+    embeddingAdapter,
+    capsule.embeddingModelIdentity,
+    options.signal,
+    preflightCache,
+  );
+  if (preflight === "incompatible") {
+    state.anyIdentityIncompatible = true;
+    return;
+  }
+  if (preflight === "failed") {
+    state.embeddingFailed = true;
+    return;
+  }
 
   const embedded = await ensureQueryEmbedded(
     embeddingAdapter,
@@ -741,6 +1174,14 @@ async function processCapsule(
     options.signal,
     cache,
   );
+  if (embedded instanceof RetrievalError) {
+    if (embedded.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
+      state.anyIdentityIncompatible = true;
+    } else {
+      state.embeddingFailed = true;
+    }
+    return;
+  }
   if (embedded === undefined) {
     state.embeddingFailed = true;
     return;
@@ -748,18 +1189,19 @@ async function processCapsule(
   if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
     // Adapter returned a dim that doesn't match the capsule's pinned identity — same
     // failure surface as #192's `INCOMPATIBLE_EMBEDDING_IDENTITY`. Skip this capsule.
+    state.anyIdentityIncompatible = true;
     return;
   }
-  state.anyDimensionCompatible = true;
-  const candidates = scoreCapsuleVectors(
+  const scored = scoreCapsuleVectors(
     rows,
     capsule,
     embedded.vector,
     oversampleTopK(options.topK, profile),
     options.minScore,
-    store._internal.contentCipher,
   );
-  state.candidates.push(...candidates);
+  if (scored.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
+  if (scored.sawDimensionCompatible) state.anyDimensionCompatible = true;
+  state.candidates.push(...scored.candidates);
 }
 
 async function ensureQueryEmbedded(
@@ -768,12 +1210,12 @@ async function ensureQueryEmbedded(
   query: string,
   signal: AbortSignal | undefined,
   cache: Map<string, EmbeddedQuery>,
-): Promise<EmbeddedQuery | undefined> {
-  const key = identityKey(identity);
+): Promise<EmbeddedQuery | RetrievalError | undefined> {
+  const key = queryEmbeddingCacheKey(identity, query);
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
   const result = await embedQueryFor(adapter, identity, query, signal);
-  if (result instanceof RetrievalError) return undefined;
+  if (result instanceof RetrievalError) return result;
   cache.set(key, result);
   return result;
 }
@@ -785,28 +1227,59 @@ type EmptyReason =
   "no-vectors" | "incompatible-embedding-identity" | "below-min-score" | "embedding-failed";
 
 type CandidateSelection =
-  | { readonly ok: true; readonly top: readonly ScoredCandidate[] }
+  | { readonly ok: true; readonly top: readonly FusedCandidate[] }
   | { readonly ok: false; readonly reason: EmptyReason };
 
 function selectTopCandidates(
   state: SearchState,
-  options: SearchOptions,
-  profile: QueryProfile,
-  candidates: readonly ScoredCandidate[] = state.candidates,
+  candidates: readonly FusedCandidate[],
 ): CandidateSelection {
-  if (!state.anyVectorSeen) return { ok: false, reason: "no-vectors" };
+  if (state.anyIdentityIncompatible) {
+    return { ok: false, reason: "incompatible-embedding-identity" };
+  }
+  if (!state.anyVectorSeen && candidates.length === 0) {
+    return { ok: false, reason: "no-vectors" };
+  }
   if (state.embeddingFailed && candidates.length === 0) {
     return { ok: false, reason: "embedding-failed" };
   }
-  if (!state.anyDimensionCompatible) {
+  if (state.anyVectorSeen && !state.anyDimensionCompatible && !state.embeddingFailed) {
     return { ok: false, reason: "incompatible-embedding-identity" };
   }
-  const sorted = [...candidates].sort(scoreDesc);
-  const top = sorted.slice(0, oversampleTopK(options.topK, profile));
-  if (top.length === 0) return { ok: false, reason: "below-min-score" };
-  return { ok: true, top };
+  if (candidates.length === 0) return { ok: false, reason: "below-min-score" };
+  return { ok: true, top: candidates };
 }
 
+function retrievalDiagnostics(
+  state: SearchState,
+  lexical: LexicalCollection,
+  fused: readonly FusedCandidate[],
+): RetrievalDiagnostics {
+  const lexicalIndex = lexical.queryError
+    ? "query-error"
+    : lexical.indexedRowCount === 0
+      ? "missing"
+      : "available";
+  const hasDense = state.candidates.length > 0;
+  const hasLexical = lexical.candidates.length > 0;
+  const mode =
+    state.embeddingFailed && hasLexical
+      ? "lexical-degraded"
+      : hasDense && hasLexical
+        ? "hybrid"
+        : hasLexical
+          ? "lexical-only"
+          : "dense-only";
+  return {
+    mode,
+    denseCandidateCount: state.candidates.length,
+    lexicalCandidateCount: lexical.candidates.length,
+    fusedCandidateCount: fused.length,
+    lexicalIndex,
+  };
+}
+
+// eslint-disable-next-line max-lines-per-function
 export async function searchVectorsForScope(
   store: KnowledgeStore,
   embeddingAdapter: OpenAIEmbeddingAdapter,
@@ -815,42 +1288,61 @@ export async function searchVectorsForScope(
   options: SearchOptions,
 ): Promise<SearchOutcome> {
   const capsules = loadCapsules(store, scope.capsuleIds);
-  if (capsules.length === 0) return { references: [], noEvidenceReason: "no-vectors" };
+  if (capsules.length === 0) {
+    return {
+      references: [],
+      noEvidenceReason: "no-vectors",
+      diagnostics: {
+        mode: "dense-only",
+        denseCandidateCount: 0,
+        lexicalCandidateCount: 0,
+        fusedCandidateCount: 0,
+        lexicalIndex: "missing",
+      },
+    };
+  }
 
   const profile = profileQuery(query, options.strategy);
+  const searchQueries = await searchQueriesFor(query, profile, options);
   const cache = new Map<string, EmbeddedQuery>();
+  const preflightCache = new Map<string, IdentityPreflightResult>();
   const state = emptyState();
-  for (const capsule of capsules) {
-    await processCapsule(
-      store,
-      embeddingAdapter,
-      capsule,
-      sourceFilterForCapsule(scope.sourceFilter, capsule),
-      query,
-      options,
-      profile,
-      cache,
-      state,
+  const lexicalCollections: LexicalCollection[] = [];
+  for (const searchQuery of searchQueries) {
+    const variantProfile = profileQuery(searchQuery, profile.strategy);
+    for (const capsule of capsules) {
+      await processCapsule(
+        store,
+        embeddingAdapter,
+        capsule,
+        sourceFilterForCapsule(scope.sourceFilter, capsule),
+        searchQuery,
+        options,
+        variantProfile,
+        cache,
+        preflightCache,
+        state,
+      );
+    }
+    lexicalCollections.push(
+      collectLexicalCandidates(store, capsules, scope, variantProfile, options.topK),
     );
   }
-  // GRD-002 / GRD-024: `minScore` is a DENSE relevance floor. Lexical recall is a recall booster
-  // whose candidates carry a lexical base score (0.68–0.88) unrelated to vector similarity, so
-  // they would bypass the floor (a ~0-cosine chunk that merely shares a query token could surface
-  // above a 0.9 floor). When a caller sets `minScore`, suppress lexical recall so only
-  // vector candidates that already passed the cosine floor (scoreCapsuleVectors) survive — and so
-  // the `below-min-score` no-evidence reason becomes reachable when none do. The default path
-  // (no `minScore`) keeps hybrid lexical recall unchanged.
-  const lexicalCandidates =
-    state.anyDimensionCompatible && options.minScore === undefined
-      ? collectLexicalRecallCandidates(store, capsules, scope, profile, options.topK)
-      : [];
-  const candidates = mergeCandidates(state.candidates, lexicalCandidates);
-  const selection = selectTopCandidates(state, options, profile, candidates);
-  if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
+  const lexical = mergeLexicalCollections(lexicalCollections);
+  const fused = fuseCandidates(
+    state.candidates,
+    lexical.candidates,
+    oversampleTopK(options.topK, profile),
+  );
+  const diagnostics = retrievalDiagnostics(state, lexical, fused);
+  const selection = selectTopCandidates(state, fused);
+  if (!selection.ok) {
+    return { references: [], noEvidenceReason: selection.reason, diagnostics };
+  }
   const refs = buildReferences(store, selection.top, options.topK, profile);
   return state.embeddingFailed
-    ? { references: refs, embeddingDegraded: true }
-    : { references: refs };
+    ? { references: refs, embeddingDegraded: true, diagnostics }
+    : { references: refs, diagnostics };
 }
 
 function sourceFilterForCapsule(
@@ -876,12 +1368,16 @@ function loadCapsules(
 
 function buildReferences(
   store: KnowledgeStore,
-  candidates: readonly ScoredCandidate[],
+  candidates: readonly FusedCandidate[],
   limit: number,
   profile: QueryProfile,
 ): readonly RetrievalReference[] {
+  const orderByKey = new Map<string, number>();
+  candidates.forEach((candidate, index) => {
+    orderByKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, index);
+  });
   // Group surviving candidates by capsule so we can issue one citation-read per capsule.
-  const byCapsule = new Map<string, ScoredCandidate[]>();
+  const byCapsule = new Map<string, FusedCandidate[]>();
   for (const candidate of candidates) {
     const key = String(candidate.capsuleId);
     const bucket = byCapsule.get(key);
@@ -921,19 +1417,25 @@ function buildReferences(
     refs.push({
       chunkId: citation.chunkId,
       capsuleId: candidate.capsuleId,
-      score:
-        candidate.score +
-        lexicalMetadataBonus(citation, profile) +
-        lexicalContentBonus(store, candidate.capsuleId, citation, profile),
+      score: candidate.score,
       citation,
     });
   }
-  refs.sort(referenceScoreDesc);
-  return diversifyReferences(refs, limit, profile);
+  refs.sort((a, b) => referenceScoreDesc(a, b, orderByKey));
+  return diversifyReferences(refs, limit, profile, orderByKey);
 }
 
-function referenceScoreDesc(a: RetrievalReference, b: RetrievalReference): number {
+function referenceScoreDesc(
+  a: RetrievalReference,
+  b: RetrievalReference,
+  orderByKey?: ReadonlyMap<string, number>,
+): number {
   if (b.score !== a.score) return b.score - a.score;
+  if (orderByKey !== undefined) {
+    const aOrder = orderByKey.get(`${String(a.capsuleId)}|${String(a.chunkId)}`) ?? 0;
+    const bOrder = orderByKey.get(`${String(b.capsuleId)}|${String(b.chunkId)}`) ?? 0;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+  }
   return String(a.chunkId).localeCompare(String(b.chunkId));
 }
 
@@ -941,16 +1443,17 @@ function diversifyReferences(
   references: readonly RetrievalReference[],
   limit: number,
   profile: QueryProfile,
+  orderByKey: ReadonlyMap<string, number>,
 ): readonly RetrievalReference[] {
   if (references.length <= limit) return references;
   const remaining = [...references];
   const selected: RetrievalReference[] = [];
   while (remaining.length > 0 && selected.length < limit) {
-    const pick = pickNextReference(remaining, selected, profile);
+    const pick = pickNextReference(remaining, selected, profile, orderByKey);
     selected.push(pick.reference);
     remaining.splice(pick.index, 1);
   }
-  selected.sort(referenceScoreDesc);
+  selected.sort((a, b) => referenceScoreDesc(a, b, orderByKey));
   return selected;
 }
 
@@ -958,12 +1461,13 @@ function pickNextReference(
   remaining: readonly RetrievalReference[],
   selected: readonly RetrievalReference[],
   profile: QueryProfile,
+  orderByKey: ReadonlyMap<string, number>,
 ): { readonly reference: RetrievalReference; readonly index: number } {
   let bestIndex = 0;
   let best = withDiversityScore(remaining[0], selected, profile);
   for (let i = 1; i < remaining.length; i += 1) {
     const candidate = withDiversityScore(remaining[i], selected, profile);
-    if (referenceScoreDesc(candidate, best) < 0) {
+    if (referenceScoreDesc(candidate, best, orderByKey) < 0) {
       best = candidate;
       bestIndex = i;
     }
@@ -1008,120 +1512,6 @@ function referenceSectionKey(reference: RetrievalReference): string {
   return path === undefined ? "" : `${String(reference.citation.documentId)}:${path}`;
 }
 
-function lexicalMetadataBonus(citation: CitationReference, profile: QueryProfile): number {
-  if (profile.tokens.length === 0) return 0;
-  const haystack = tokenise(
-    [
-      citation.safeDisplayName,
-      citation.pageLabel,
-      ...(citation.sectionPath ?? []),
-      citation.jsonPointer,
-      citation.tableName,
-      citation.rowIndex === undefined ? undefined : String(citation.rowIndex),
-      String(citation.pageNumber ?? ""),
-    ]
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join(" "),
-  );
-  if (haystack.length === 0) return 0;
-
-  const haystackSet = new Set(haystack);
-  const hits = countTokenHits(profile.tokens, haystackSet);
-  if (hits === 0) return 0;
-  return (hits / profile.tokens.length) * profile.metadataWeight;
-}
-
-function lexicalContentBonus(
-  store: KnowledgeStore,
-  capsuleId: KnowledgeCapsuleId,
-  citation: CitationReference,
-  profile: QueryProfile,
-): number {
-  if (profile.tokens.length === 0) return 0;
-  const excerpt = readCitationSearchExcerpt(
-    store,
-    capsuleId,
-    citation,
-    SEARCH_EXCERPT_MAX_CHARS,
-    profile.contextBeforeChars,
-  );
-  if (excerpt.length === 0) return 0;
-  const excerptTokens = tokenise(excerpt);
-  if (excerptTokens.length === 0) return 0;
-
-  const normalisedExcerpt = normaliseForSearch(excerpt);
-  const tokenCoverage =
-    countTokenHits(profile.tokens, new Set(excerptTokens)) / profile.tokens.length;
-  const phraseHits = countAdjacentPhraseHits(profile.tokens, normalisedExcerpt);
-  const exactHits = countExactTermHits(profile.exactTerms, normalisedExcerpt);
-  return (
-    Math.min(0.24, tokenCoverage * profile.lexicalWeight) +
-    Math.min(0.16, phraseHits * profile.phraseWeight) +
-    Math.min(0.18, exactHits * 0.06)
-  );
-}
-
-interface DocumentTextRow {
-  readonly normalized_text?: string;
-}
-
-function readCitationSearchExcerpt(
-  store: KnowledgeStore,
-  capsuleId: KnowledgeCapsuleId,
-  citation: CitationReference,
-  maxChars: number,
-  beforeChars: number,
-): string {
-  const row = store._internal.db
-    .prepare(
-      "SELECT normalized_text FROM document_texts WHERE capsule_id = :capsule_id AND document_id = :document_id",
-    )
-    .get({
-      capsule_id: String(capsuleId),
-      document_id: String(citation.documentId),
-    }) as DocumentTextRow | undefined;
-  const stored = row?.normalized_text;
-  const text =
-    typeof stored === "string" ? store._internal.contentCipher.openText(stored) : undefined;
-  if (typeof text !== "string" || text.length === 0) return "";
-  const focusStart = Math.max(0, Math.min(text.length, citation.characterStart ?? 0));
-  const focusEnd = Math.max(
-    focusStart,
-    Math.min(text.length, citation.characterEnd ?? focusStart + maxChars),
-  );
-  const start = Math.max(0, focusStart - beforeChars);
-  const afterBudget = Math.max(0, maxChars - (focusStart - start));
-  const end = Math.min(text.length, focusEnd + afterBudget);
-  return text.slice(start, end).trim();
-}
-
-function countTokenHits(tokens: readonly string[], haystack: ReadonlySet<string>): number {
-  let hits = 0;
-  for (const token of tokens) {
-    if (haystack.has(token)) hits += 1;
-  }
-  return hits;
-}
-
-function countAdjacentPhraseHits(tokens: readonly string[], normalisedHaystack: string): number {
-  let hits = 0;
-  for (let i = 0; i < tokens.length - 1; i += 1) {
-    const first = tokens[i];
-    const second = tokens[i + 1];
-    if (first === undefined || second === undefined) continue;
-    if (normalisedHaystack.includes(`${first} ${second}`)) hits += 1;
-  }
-  return hits;
-}
-
-function countExactTermHits(terms: readonly string[], normalisedHaystack: string): number {
-  let hits = 0;
-  for (const term of terms) {
-    if (normalisedHaystack.includes(term)) hits += 1;
-  }
-  return hits;
-}
-
 function profileQuery(
   query: string,
   requested: SearchOptions["strategy"] | undefined,
@@ -1152,12 +1542,8 @@ function exactQueryProfile(tokens: readonly string[], exactTerms: readonly strin
     tokens,
     exactTerms,
     lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
-    lexicalWeight: 0.22,
-    phraseWeight: 0.06,
-    metadataWeight: 0.16,
-    contextBeforeChars: SEARCH_CONTEXT_BEFORE_CHARS * 2,
-    documentDiversityPenalty: 0.018,
-    sectionDiversityPenalty: 0.01,
+    documentDiversityPenalty: 0.0018,
+    sectionDiversityPenalty: 0.001,
   };
 }
 
@@ -1167,12 +1553,8 @@ function broadQueryProfile(tokens: readonly string[], exactTerms: readonly strin
     tokens,
     exactTerms,
     lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
-    lexicalWeight: 0.16,
-    phraseWeight: 0.04,
-    metadataWeight: 0.1,
-    contextBeforeChars: SEARCH_CONTEXT_BEFORE_CHARS,
-    documentDiversityPenalty: 0.085,
-    sectionDiversityPenalty: 0.035,
+    documentDiversityPenalty: 0.003,
+    sectionDiversityPenalty: 0.0015,
   };
 }
 
@@ -1185,12 +1567,8 @@ function balancedQueryProfile(
     tokens,
     exactTerms,
     lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
-    lexicalWeight: 0.18,
-    phraseWeight: 0.045,
-    metadataWeight: 0.12,
-    contextBeforeChars: SEARCH_CONTEXT_BEFORE_CHARS,
-    documentDiversityPenalty: 0.045,
-    sectionDiversityPenalty: 0.02,
+    documentDiversityPenalty: 0.002,
+    sectionDiversityPenalty: 0.001,
   };
 }
 
@@ -1240,7 +1618,10 @@ function buildLexicalRecallTerms(
   exactTerms: readonly string[],
 ): readonly string[] {
   const tokenTerms = tokens.filter((token) => token.length >= LEXICAL_RECALL_MIN_TOKEN_LENGTH);
-  return uniqueTokens([...exactTerms, ...tokenTerms]).slice(0, LEXICAL_RECALL_MAX_TERMS);
+  return uniqueTokens(lexicalQueryTerms([...exactTerms, ...tokenTerms])).slice(
+    0,
+    LEXICAL_RECALL_MAX_TERMS,
+  );
 }
 
 function tokenise(value: string): readonly string[] {
@@ -1250,9 +1631,5 @@ function tokenise(value: string): readonly string[] {
 }
 
 function normaliseForSearch(value: string): string {
-  return value
-    .normalize("NFKD")
-    .replace(/\p{Mark}+/gu, "")
-    .toLowerCase()
-    .replace(/ß/gu, "ss");
+  return value.normalize("NFC").toLocaleLowerCase("und");
 }

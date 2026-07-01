@@ -12,6 +12,7 @@ import type {
   MemoryConversationId,
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   MemoryUserId,
   MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
@@ -108,6 +109,10 @@ function userId(value: string): MemoryUserId {
 
 function workspaceId(value: string): MemoryWorkspaceId {
   return value as MemoryWorkspaceId;
+}
+
+function reviewerId(value: string): MemoryReviewerId {
+  return value as MemoryReviewerId;
 }
 
 function makeMemory(id: string, body: string, overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -357,7 +362,11 @@ describe("memory handlers", () => {
     );
 
     const result = await handleEditMemory(
-      makeCtx("/api/memory/memory-edit-1", { body: "New body for embedding" }, { id: "memory-edit-1" }),
+      makeCtx(
+        "/api/memory/memory-edit-1",
+        { body: "New body for embedding" },
+        { id: "memory-edit-1" },
+      ),
       makeDeps({
         memoryVault: vault,
         config: embeddingConfig(),
@@ -385,13 +394,16 @@ describe("memory handlers", () => {
       metric: "cosine",
       vector: Float32Array.from([1, 1, 1]),
     });
-    const embeddingRequest = vi.fn(
-      (): Promise<OpenAIEmbeddingOutcome> =>
-        Promise.resolve({ ok: false, kind: "transport" }),
+    const embeddingRequest = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve({ ok: false, kind: "transport" }),
     );
 
     const result = await handleEditMemory(
-      makeCtx("/api/memory/memory-edit-2", { body: "Body whose embed fails" }, { id: "memory-edit-2" }),
+      makeCtx(
+        "/api/memory/memory-edit-2",
+        { body: "Body whose embed fails" },
+        { id: "memory-edit-2" },
+      ),
       makeDeps({
         memoryVault: vault,
         config: embeddingConfig(),
@@ -524,7 +536,13 @@ describe("memory handlers", () => {
         { acknowledged: true, reason: "user removed stale package-manager preference" },
         { id: "memory-forget-1" },
       ),
-      makeDeps({ memoryVault: vault }),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("operator-a"),
+          authorizedScopes: () => [{ kind: "global" }],
+        },
+      }),
     );
 
     expect(result.status).toBe(200);
@@ -533,7 +551,7 @@ describe("memory handlers", () => {
     expect(tombstones).toHaveLength(1);
     expect(tombstones[0]?.memoryId).toBe(memoryId("memory-forget-1"));
     expect(tombstones[0]?.reason).toBe("user removed stale package-manager preference");
-    expect(tombstones[0]?.reviewerId).toBe("memoriaviva-ui");
+    expect(tombstones[0]?.reviewerId).toBe("operator-a");
     expect(tombstones[0]?.originalStatus).toBe("accepted");
     expect(JSON.stringify(tombstones)).not.toContain("PRIVATE-BODY-FORGET-FINGERPRINT");
   });
@@ -587,6 +605,80 @@ describe("memory handlers", () => {
     expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
   });
 
+  it("rejects by-id forgets when the caller is not authorized for the memory scope", async () => {
+    const vault = makeVault();
+    const restrictedScope = {
+      kind: "workspace" as const,
+      workspaceId: workspaceId("ws-restricted"),
+    };
+    vault.insertMemory(
+      makeMemory("memory-forget-out-of-scope", "must remain in restricted scope", {
+        scope: restrictedScope,
+      }),
+    );
+
+    const result = await handleForgetMemory(
+      makeCtx(
+        "/api/memory/memory-forget-out-of-scope/forget",
+        { acknowledged: true, reason: "caller attempts cross-scope forget" },
+        { id: "memory-forget-out-of-scope" },
+      ),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("operator-a"),
+          authorizedScopes: () => [
+            { kind: "workspace", workspaceId: workspaceId("ws-authorized") },
+          ],
+        },
+      }),
+    );
+
+    expect(result.status).toBe(403);
+    expect(asJson(result).error).toEqual(
+      expect.objectContaining({ code: "MEMORY_SCOPE_FORBIDDEN" }),
+    );
+    expect(vault.getMemory(memoryId("memory-forget-out-of-scope"))).toBeDefined();
+    expect(vault.listTombstonesByScope(restrictedScope)).toEqual([]);
+  });
+
+  it("rejects scoped forget selectors outside the caller authorization", async () => {
+    const vault = makeVault();
+    const restrictedScope = {
+      kind: "workspace" as const,
+      workspaceId: workspaceId("ws-restricted"),
+    };
+    vault.insertMemory(
+      makeMemory("memory-selector-out-of-scope", "must remain in restricted scope", {
+        scope: restrictedScope,
+      }),
+    );
+
+    const result = await handleForgetMemories(
+      makeCtx("/api/memory/forget", {
+        acknowledged: true,
+        selector: { kind: "by-scope", scope: restrictedScope },
+        reason: "caller attempts cross-scope selector forget",
+      }),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("operator-a"),
+          authorizedScopes: () => [
+            { kind: "workspace", workspaceId: workspaceId("ws-authorized") },
+          ],
+        },
+      }),
+    );
+
+    expect(result.status).toBe(403);
+    expect(asJson(result).error).toEqual(
+      expect.objectContaining({ code: "MEMORY_SCOPE_FORBIDDEN" }),
+    );
+    expect(vault.getMemory(memoryId("memory-selector-out-of-scope"))).toBeDefined();
+    expect(vault.listTombstonesByScope(restrictedScope)).toEqual([]);
+  });
+
   it("deletes a memory through the governed tombstone path, not a hard-delete bypass", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-delete-1", "DELETE-BODY-FINGERPRINT"));
@@ -608,7 +700,7 @@ describe("memory handlers", () => {
       expect.objectContaining({
         memoryId: memoryId("memory-delete-1"),
         reason: "operator requested delete",
-        reviewerId: "memoriaviva-ui",
+        reviewerId: "local-operator",
         originalStatus: "accepted",
       }),
     );

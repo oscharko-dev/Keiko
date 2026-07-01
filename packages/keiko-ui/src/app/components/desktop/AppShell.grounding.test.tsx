@@ -47,6 +47,7 @@ const mocks = vi.hoisted(() => ({
     rightRailRendered: false,
   },
   fetchConfig: vi.fn(),
+  fetchStartupUpdatePreflight: vi.fn(),
   updateChatConnectedScopes: vi.fn(),
   updateChatLocalKnowledgeScopes: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
@@ -58,6 +59,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/api", () => ({
   fetchConfig: mocks.fetchConfig,
+  fetchStartupUpdatePreflight: mocks.fetchStartupUpdatePreflight,
   updateChatConnectedScopes: mocks.updateChatConnectedScopes,
   updateChatLocalKnowledgeScopes: mocks.updateChatLocalKnowledgeScopes,
 }));
@@ -290,6 +292,24 @@ describe("AppShell grounding connections", () => {
       configPresent: false,
       effectiveGroundingLimits: DEFAULT_GROUNDING_LIMITS,
     });
+    mocks.fetchStartupUpdatePreflight.mockResolvedValue({
+      schemaVersion: 1,
+      checkedAt: "2026-06-30T12:00:00.000Z",
+      currentVersion: "0.2.11",
+      targetVersion: "0.2.11",
+      updateAvailable: false,
+      status: "current",
+      availabilityState: "current",
+      severity: "none",
+      registryStatus: "ok",
+      releaseMetadataStatus: "not-needed",
+      userActionRequired: false,
+      affectedStateStores: [],
+      blockers: [],
+      manualUpdateRequired: false,
+      oneClickEligible: false,
+      warnings: [],
+    });
     const activeChat = chat();
     mocks.state.session = {
       chats: [activeChat],
@@ -498,7 +518,8 @@ describe("AppShell grounding connections", () => {
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
-      { readonly dispatch?: (commandId: string) => void } | undefined;
+      | { readonly dispatch?: (commandId: string) => void }
+      | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");

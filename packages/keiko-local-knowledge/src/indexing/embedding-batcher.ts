@@ -26,6 +26,7 @@ import type {
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingSuccess,
 } from "@oscharko-dev/keiko-model-gateway";
+import { EMBEDDING_NORMALIZATION, l2NormalizeVector } from "@oscharko-dev/keiko-model-gateway";
 
 import { composeVectorRecord, insertVectorRow } from "./vector-persist.js";
 import {
@@ -36,6 +37,7 @@ import {
 } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 import { chunkDedupeKey } from "../chunking/chunker.js";
+import { defaultTokenEstimator } from "../chunking/token-estimator.js";
 
 // ─── Concurrency primitive ───────────────────────────────────────────────────
 // Hand-rolled bounded-concurrency runner. Avoids pulling in `p-limit` (the local-knowledge
@@ -85,6 +87,9 @@ async function embedSingleChunkWithModel(
       : {}),
     modelId: pinnedIdentity.modelId,
     input: chunk.text,
+    ...(pinnedIdentity.dimensionsParam !== undefined
+      ? { dimensions: pinnedIdentity.dimensionsParam }
+      : {}),
     ...(signal !== undefined ? { signal } : {}),
   });
 }
@@ -177,6 +182,8 @@ async function embedChunkWithRetry(
 // JSON cap (96 × 3072 float32 ≈ 4.4 MB) and inside provider per-request token limits.
 const BATCH_ITEM_CAP = 96;
 const BATCH_CHAR_CAP = 120_000;
+const QWEN3_EMBEDDING_INPUT_TOKEN_CAP = 32_000;
+const BATCH_TOKEN_CAP = 30_000;
 
 function groupIntoBatches(
   requests: readonly UniqueChunkRequest[],
@@ -184,18 +191,24 @@ function groupIntoBatches(
   const batches: UniqueChunkRequest[][] = [];
   let current: UniqueChunkRequest[] = [];
   let currentChars = 0;
+  let currentTokens = 0;
   for (const request of requests) {
     const len = request.representative.text.length;
+    const tokens = defaultTokenEstimator(request.representative.text);
     if (
       current.length > 0 &&
-      (current.length >= BATCH_ITEM_CAP || currentChars + len > BATCH_CHAR_CAP)
+      (current.length >= BATCH_ITEM_CAP ||
+        currentChars + len > BATCH_CHAR_CAP ||
+        currentTokens + tokens > BATCH_TOKEN_CAP)
     ) {
       batches.push(current);
       current = [];
       currentChars = 0;
+      currentTokens = 0;
     }
     current.push(request);
     currentChars += len;
+    currentTokens += Math.min(tokens, QWEN3_EMBEDDING_INPUT_TOKEN_CAP);
   }
   if (current.length > 0) batches.push(current);
   return batches;
@@ -226,6 +239,9 @@ async function embedArrayBatchWithRetry(
       : {}),
     modelId: options.pinnedIdentity.modelId,
     inputs,
+    ...(options.pinnedIdentity.dimensionsParam !== undefined
+      ? { dimensions: options.pinnedIdentity.dimensionsParam }
+      : {}),
     ...(options.signal !== undefined ? { signal: options.signal } : {}),
   };
   const retry = resolveRetry(options.retry);
@@ -303,6 +319,7 @@ async function embedUniqueBatch(
 }
 
 // ─── Identity verification ───────────────────────────────────────────────────
+// eslint-disable-next-line complexity
 function identityFromAdapter(
   pinned: EmbeddingModelIdentity,
   success: OpenAIEmbeddingSuccess,
@@ -324,6 +341,14 @@ function identityFromAdapter(
     vectorDimensions: success.vector.length,
     vectorMetric: pinned.vectorMetric,
     ...(modelRevision !== undefined ? { modelRevision } : {}),
+    normalization: pinned.normalization ?? EMBEDDING_NORMALIZATION,
+    ...(pinned.instructionVersion !== undefined
+      ? { instructionVersion: pinned.instructionVersion }
+      : {}),
+    ...(pinned.embeddingSpaceFingerprint !== undefined
+      ? { embeddingSpaceFingerprint: pinned.embeddingSpaceFingerprint }
+      : {}),
+    ...(pinned.dimensionsParam !== undefined ? { dimensionsParam: pinned.dimensionsParam } : {}),
   };
 }
 
@@ -331,10 +356,17 @@ function identityFromAdapter(
 // The schema column is BLOB; SQLite expects a Uint8Array. We copy the underlying
 // ArrayBuffer rather than aliasing it (Float32Array views can share buffers) so the
 // persisted row is a stable copy not affected by any later vector reuse.
-function floatToBytes(vector: Float32Array): Uint8Array {
+export function floatToBytes(vector: Float32Array): Uint8Array {
   return new Uint8Array(
     vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength),
   );
+}
+
+function persistedVectorForIdentity(
+  vector: Float32Array,
+  identity: EmbeddingModelIdentity,
+): Float32Array {
+  return identity.normalization === "l2" ? l2NormalizeVector(vector) : new Float32Array(vector);
 }
 
 // ─── Per-chunk outcome envelope ──────────────────────────────────────────────
@@ -488,8 +520,8 @@ function persistOutcomes(
         sourceId: out.chunk.sourceId,
         documentId: out.chunk.documentId,
         chunkId: out.chunk.id,
-        embedding: floatToBytes(out.success.vector),
         identity: observed,
+        embedding: floatToBytes(persistedVectorForIdentity(out.success.vector, observed)),
         storageReference: idSource(),
         createdAt: now(),
       };

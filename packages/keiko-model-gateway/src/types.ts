@@ -84,6 +84,15 @@ export interface ModelProviderConfig {
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
 }
 
+export interface RerankerConfig {
+  readonly modelId: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName?: string | undefined;
+  readonly timeoutMs: number;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
+}
+
 export interface OutboundHttpEgressConfig {
   readonly httpProxy?: string | undefined;
   readonly httpsProxy?: string | undefined;
@@ -106,6 +115,7 @@ export interface GatewayConfig {
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
+  readonly reranker?: RerankerConfig | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly figma?: FigmaConnectorConfig | undefined;
 }

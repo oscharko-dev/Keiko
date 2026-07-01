@@ -160,6 +160,42 @@ describe("htmlParser", () => {
     expect(paths).toEqual([["Top"], ["Top", "Sub"], ["Top2"]]);
   });
 
+  it("projects HTML table rows with header/cell semantics", () => {
+    const html =
+      "<main><h1>Inventory</h1><table><tr><th>Name</th><th>Preis</th></tr><tr><td>A</td><td>42</td></tr></table></main>";
+    const result = htmlParser.parse(
+      selectionFromText(html, { extension: "html" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const text = (result as InternalParserResult).normalizedText ?? "";
+    expect(text).toContain("Table: Name=A | Preis=42");
+    const tableBlock = result.units.find((unit) => {
+      if (unit.kind !== "html-block") return false;
+      return text.slice(unit.characterStart, unit.characterEnd).includes("Name=A");
+    });
+    expect(tableBlock).toMatchObject({ kind: "html-block", headingPath: ["Inventory"] });
+  });
+
+  it("prefers main content and skips nav/footer/cookie boilerplate", () => {
+    const html = [
+      "<body>",
+      "<nav>Home Pricing Legal</nav>",
+      '<div class="cookie-banner">Accept cookies</div>',
+      "<main><h1>Policy</h1><p>Main retention is 90 days.</p></main>",
+      "<footer>Footer legal links</footer>",
+      "</body>",
+    ].join("");
+    const result = htmlParser.parse(
+      selectionFromText(html, { extension: "html" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const text = (result as InternalParserResult).normalizedText ?? "";
+    expect(text).toContain("Main retention is 90 days.");
+    expect(text).not.toContain("Accept cookies");
+    expect(text).not.toContain("Footer legal links");
+    expect(text).not.toContain("Home Pricing Legal");
+  });
+
   it("strips a UTF-8 BOM before scanning", () => {
     const bytes = new Uint8Array([0xef, 0xbb, 0xbf, ...encode("<h1>Title</h1>body")]);
     const result = htmlParser.parse(

@@ -18,8 +18,19 @@ function gatewayConfig(modelId = "test-chat-model"): GatewayConfig {
         maxRetries: 0,
         retryBaseDelayMs: 0,
       },
+      {
+        modelId: "text-embedding-3-small",
+        baseUrl: "https://llm-gateway.internal/v1",
+        apiKey: "secret-token",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 0,
+      },
     ],
-    capabilities: [createDefaultChatCapability(modelId)],
+    capabilities: [
+      createDefaultChatCapability(modelId),
+      embeddingCapability("text-embedding-3-small"),
+    ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
   };
 }
@@ -93,6 +104,10 @@ function chatPayload(content: string): unknown {
   return { choices: [{ message: { role: "assistant", content } }] };
 }
 
+function embeddingPayload(vector: readonly number[] = [3, 4]): unknown {
+  return { data: [{ embedding: vector }], model: "text-embedding-3-small" };
+}
+
 function requestBodyAt(fetchImpl: typeof fetch, index: number): Record<string, unknown> {
   const call = vi.mocked(fetchImpl).mock.calls[index];
   const init = call?.[1];
@@ -125,7 +140,8 @@ function fetchForDefaultSuccess(): typeof fetch {
         ],
       }),
     )
-    .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}'))) as typeof fetch;
+    .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}')))
+    .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
 }
 
 afterEach(() => {
@@ -230,21 +246,57 @@ describe("gateway readiness route", () => {
       streaming: true,
       toolCalling: true,
       structuredOutput: true,
+      embedding: true,
+      embeddingDimensions: 2,
+      embeddingNorm: 1,
     });
     expect(report.probes.map((probe) => [probe.name, probe.status])).toEqual([
       ["chat", "passed"],
       ["streaming", "passed"],
       ["tool_calling", "passed"],
       ["json_schema", "passed"],
+      ["embedding", "passed"],
     ]);
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain("secret-token");
     expect(serialized).not.toContain("llm-gateway.internal");
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       const body = requestBodyAt(fetchImpl, index);
       expect(body).not.toHaveProperty("temperature");
       expect(body).not.toHaveProperty("max_tokens");
     }
+    deps.store.close();
+  });
+
+  it("checks the optional reranker when requested", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] })) as
+      typeof fetch;
+    const config: GatewayConfig = {
+      ...gatewayConfig(),
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.internal/v1",
+        apiKey: "reranker-secret",
+        timeoutMs: 10_000,
+      },
+    };
+    const deps = depsWith(config, fetchImpl);
+    const report = await runGatewayReadiness({ options: { probes: ["reranker"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("ready");
+    expect(report.verifiedCapabilities.reranker).toBe(true);
+    expect(report.probes).toEqual([
+      expect.objectContaining({ name: "chat", status: "passed" }),
+      expect.objectContaining({ name: "reranker", status: "passed" }),
+    ]);
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain("reranker-secret");
+    expect(serialized).not.toContain("reranker.internal");
     deps.store.close();
   });
 

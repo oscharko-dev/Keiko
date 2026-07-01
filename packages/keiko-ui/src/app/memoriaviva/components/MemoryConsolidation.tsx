@@ -15,6 +15,7 @@ import {
   type StartMemoryConsolidationInput,
 } from "@/lib/memory-api";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
+import { useI18n, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -27,9 +28,13 @@ const DEFAULT_SETTINGS: StartMemoryConsolidationInput = {
   maxRecordsPerRun: 1_000,
 };
 
-/* "1 review items" → "1 review item" (uiux-fix F034, C372) */
-function plural(count: number, singular: string): string {
-  return `${count.toString()} ${count === 1 ? singular : `${singular}s`}`;
+function countLabel(
+  t: I18nTranslate,
+  count: number,
+  singularKey: Parameters<I18nTranslate>[0],
+  pluralKey: Parameters<I18nTranslate>[0],
+): string {
+  return `${count.toString()} ${t(count === 1 ? singularKey : pluralKey)}`;
 }
 
 function isTerminalState(state: MemoryConsolidationJob["state"]): boolean {
@@ -101,22 +106,30 @@ function MemoryIdList({
 function ReviewAction({
   item,
   onOpenDetail,
+  t,
 }: {
   readonly item: MemoryConsolidationReviewItem;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
+  readonly t: I18nTranslate;
 }): ReactNode {
-  if (item.proposedAction === undefined) return <>No automatic action proposed.</>;
+  if (item.proposedAction === undefined) {
+    return <>{t("memoria.consolidation.noAutomaticAction")}</>;
+  }
   if (item.proposedAction.kind === "merge") {
     return (
       <>
-        Merge into <MemoryIdLink id={item.proposedAction.winner} onOpenDetail={onOpenDetail} />;
-        replace <MemoryIdList ids={item.proposedAction.losers} onOpenDetail={onOpenDetail} />.
+        {t("memoria.consolidation.mergeInto")}{" "}
+        <MemoryIdLink id={item.proposedAction.winner} onOpenDetail={onOpenDetail} />;{" "}
+        {t("memoria.consolidation.replace")}{" "}
+        <MemoryIdList ids={item.proposedAction.losers} onOpenDetail={onOpenDetail} />.
       </>
     );
   }
   return (
     <>
-      Supersede <MemoryIdLink id={item.proposedAction.older} onOpenDetail={onOpenDetail} /> with{" "}
+      {t("memoria.consolidation.supersede")}{" "}
+      <MemoryIdLink id={item.proposedAction.older} onOpenDetail={onOpenDetail} />{" "}
+      {t("memoria.consolidation.with")}{" "}
       <MemoryIdLink id={item.proposedAction.newer} onOpenDetail={onOpenDetail} />.
     </>
   );
@@ -138,37 +151,61 @@ function StaleFlagEntry({
 
 function SummaryStatusNotice({
   result,
+  t,
 }: {
   readonly result: MemoryConsolidationResult;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (result.summaryStatus.kind === "not-configured") {
     if (result.summaryStatus.updatesProposed > 0) {
       return (
         <p style={{ margin: 0, color: "var(--fg-muted)" }}>
-          Model-assisted summaries were not configured; deterministic union fallback proposed{" "}
-          {plural(result.summaryStatus.updatesProposed, "body update")} for review.
+          {t("memoria.consolidation.summary.notConfiguredWithUpdates", {
+            count: countLabel(
+              t,
+              result.summaryStatus.updatesProposed,
+              "memoria.consolidation.bodyUpdate.one",
+              "memoria.consolidation.bodyUpdate.many",
+            ),
+          })}
         </p>
       );
     }
     return (
       <p style={{ margin: 0, color: "var(--fg-muted)" }}>
-        Model-assisted summaries were not configured for this run; no body updates were proposed.
+        {t("memoria.consolidation.summary.notConfiguredNone")}
       </p>
     );
   }
   if (result.summaryStatus.updatesProposed === 0) {
     return (
       <p style={{ margin: 0, color: "var(--fg-muted)" }}>
-        Model-assisted summaries were configured; no merge clusters needed body updates.
+        {t("memoria.consolidation.summary.configuredNone")}
       </p>
     );
   }
+  const suffix =
+    result.summaryStatus.fallbacksUsed > 0
+      ? t("memoria.consolidation.summary.fallbackSuffix", {
+          count: countLabel(
+            t,
+            result.summaryStatus.fallbacksUsed,
+            "memoria.consolidation.fallback.one",
+            "memoria.consolidation.fallback.many",
+          ),
+        })
+      : ".";
   return (
     <p style={{ margin: 0, color: "var(--fg-muted)" }}>
-      Model-assisted summaries proposed {plural(result.summaryStatus.updatesProposed, "body update")}
-      {result.summaryStatus.fallbacksUsed > 0
-        ? `; ${plural(result.summaryStatus.fallbacksUsed, "fallback")} preserved source text.`
-        : "."}
+      {t("memoria.consolidation.summary.configuredWithUpdates", {
+        count: countLabel(
+          t,
+          result.summaryStatus.updatesProposed,
+          "memoria.consolidation.bodyUpdate.one",
+          "memoria.consolidation.bodyUpdate.many",
+        ),
+        suffix,
+      })}
     </p>
   );
 }
@@ -278,6 +315,7 @@ export function MemoryConsolidation({
   onBack,
   onOpenDetail,
 }: MemoryConsolidationProps): ReactNode {
+  const { t } = useI18n();
   const [settings, setSettings] = useState<StartMemoryConsolidationInput>(DEFAULT_SETTINGS);
   const [jobRecord, setJobRecord] = useState<MemoryConsolidationJobEnvelope | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -376,28 +414,27 @@ export function MemoryConsolidation({
           className="mc-consolidation-heading"
           style={{ display: "grid", gap: "var(--space-2)" }}
         >
-          <h1 className="lk-title">MemoriaViva Consolidation</h1>
+          <h1 className="lk-title">{t("memoria.consolidation.title")}</h1>
           <p style={{ margin: 0, color: "var(--fg-muted)" }}>
-            Start a bounded consolidation job, inspect its output, and cancel it while it is still
-            queued or running.
+            {t("memoria.consolidation.description")}
           </p>
         </div>
         {onBack !== undefined ? (
           <button
             type="button"
             className="lk-btn lk-btn-ghost lk-btn-lg"
-            aria-label="Back to MemoriaViva"
+            aria-label={t("memoria.backToMemoria")}
             onClick={onBack}
           >
-            Back
+            {t("memoria.back")}
           </button>
         ) : (
           <Link
             href="/memoriaviva"
             className="lk-btn lk-btn-ghost lk-btn-lg"
-            aria-label="Back to MemoriaViva"
+            aria-label={t("memoria.backToMemoria")}
           >
-            Back
+            {t("memoria.back")}
           </Link>
         )}
       </header>
@@ -406,7 +443,7 @@ export function MemoryConsolidation({
           result cards below the fold were unreachable without it. */}
       <div className="mc-consolidation-scroll">
         <section
-          aria-label="Consolidation settings"
+          aria-label={t("memoria.consolidation.settings")}
           style={{
             display: "grid",
             gap: 16,
@@ -425,61 +462,61 @@ export function MemoryConsolidation({
               }}
             >
               <SettingsField
-                label="Jaccard threshold"
+                label={t("memoria.consolidation.jaccardThreshold")}
                 name="jaccardThreshold"
                 value={settings.jaccardThreshold}
                 min={0}
                 max={1}
                 step={0.01}
                 disabled={submitting || hasActiveRun}
-                help="Similarity floor for near-duplicate detection."
+                help={t("memoria.consolidation.help.jaccard")}
                 onChange={updateSetting}
               />
               <SettingsField
-                label="Stale confidence threshold"
+                label={t("memoria.consolidation.staleConfidenceThreshold")}
                 name="staleConfidenceThreshold"
                 value={settings.staleConfidenceThreshold}
                 min={0}
                 max={1}
                 step={0.01}
                 disabled={submitting || hasActiveRun}
-                help="Memories at or below this confidence are flagged stale."
+                help={t("memoria.consolidation.help.staleConfidence")}
                 onChange={updateSetting}
               />
               {/* Days, not raw milliseconds — the ms arithmetic moved into the
                   onChange conversion (uiux-fix F034, C150) */}
               <SettingsField
-                label="Max age (days)"
+                label={t("memoria.consolidation.maxAgeDays")}
                 name="maxAgeMs"
                 value={settings.maxAgeMs / DAY_MS}
                 min={0}
                 step={1}
                 disabled={submitting || hasActiveRun}
-                help="Memories older than this are checked for staleness."
+                help={t("memoria.consolidation.help.maxAge")}
                 onChange={(fieldName, fieldValue) => {
                   updateSetting(fieldName, fieldValue * DAY_MS);
                 }}
               />
               <SettingsField
-                label="Max clusters per run"
+                label={t("memoria.consolidation.maxClustersPerRun")}
                 name="maxClustersPerRun"
                 value={settings.maxClustersPerRun}
                 min={0}
                 max={1000}
                 step={1}
                 disabled={submitting || hasActiveRun}
-                help="Hard bound on duplicate clusters inspected in one run."
+                help={t("memoria.consolidation.help.maxClusters")}
                 onChange={updateSetting}
               />
               <SettingsField
-                label="Max records per run"
+                label={t("memoria.consolidation.maxRecordsPerRun")}
                 name="maxRecordsPerRun"
                 value={settings.maxRecordsPerRun}
                 min={0}
                 max={1000}
                 step={1}
                 disabled={submitting || hasActiveRun}
-                help="Hard bound on accepted records admitted to one scan."
+                help={t("memoria.consolidation.help.maxRecords")}
                 onChange={updateSetting}
               />
             </div>
@@ -500,7 +537,9 @@ export function MemoryConsolidation({
                 aria-disabled={submitting || hasActiveRun}
                 aria-busy={submitting}
               >
-                {submitting ? "Starting…" : "Start consolidation"}
+                {submitting
+                  ? t("memoria.consolidation.starting")
+                  : t("memoria.consolidation.start")}
               </button>
               <button
                 type="button"
@@ -513,7 +552,9 @@ export function MemoryConsolidation({
                   }
                 }}
               >
-                {refreshing ? "Refreshing…" : "Refresh status"}
+                {refreshing
+                  ? t("memoria.consolidation.refreshing")
+                  : t("memoria.consolidation.refreshStatus")}
               </button>
               {canCancel ? (
                 <button
@@ -525,7 +566,9 @@ export function MemoryConsolidation({
                     void handleCancel();
                   }}
                 >
-                  {canceling ? "Canceling…" : "Cancel job"}
+                  {canceling
+                    ? t("memoria.consolidation.canceling")
+                    : t("memoria.consolidation.cancelJob")}
                 </button>
               ) : null}
             </div>
@@ -533,7 +576,7 @@ export function MemoryConsolidation({
         </section>
 
         <section
-          aria-label="Consolidation job status"
+          aria-label={t("memoria.consolidation.jobStatus")}
           style={{
             display: "grid",
             gap: 16,
@@ -544,7 +587,9 @@ export function MemoryConsolidation({
           }}
         >
           {activeJob === null ? (
-            <p style={{ margin: 0, color: "var(--fg-muted)" }}>No consolidation job started yet.</p>
+            <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+              {t("memoria.consolidation.noJob")}
+            </p>
           ) : (
             <>
               <div
@@ -555,7 +600,9 @@ export function MemoryConsolidation({
                 }}
               >
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>State</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.state")}
+                  </div>
                   <div
                     role="status"
                     aria-live="polite"
@@ -566,40 +613,56 @@ export function MemoryConsolidation({
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Job ID</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.jobId")}
+                  </div>
                   <div style={{ wordBreak: "break-all" }}>{activeJob.id}</div>
                 </div>
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Started</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.started")}
+                  </div>
                   <div>{formatDateTime(activeJob.startedAt)}</div>
                 </div>
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Completed</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.completed")}
+                  </div>
                   <div>{formatDateTime(activeJob.completedAt)}</div>
                 </div>
                 {/* tabular-nums on the numeric stats — app pattern for number
                     surfaces (uiux-fix F034, C241); Elapsed human-readable (C150) */}
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Clusters inspected</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.clustersInspected")}
+                  </div>
                   <div style={{ fontVariantNumeric: "tabular-nums" }}>
                     {activeJob.result?.clustersInspected ?? 0}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Elapsed</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.elapsed")}
+                  </div>
                   <div style={{ fontVariantNumeric: "tabular-nums" }}>
                     {formatElapsed(activeJob.result?.elapsedMs ?? 0)}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Records inspected</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.recordsInspected")}
+                  </div>
                   <div style={{ fontVariantNumeric: "tabular-nums" }}>
                     {activeJob.result?.recordsInspected ?? 0}
-                    {activeJob.result?.truncated === true ? " (truncated)" : ""}
+                    {activeJob.result?.truncated === true
+                      ? t("memoria.consolidation.truncated")
+                      : ""}
                   </div>
                 </div>
                 <div>
-                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>Memories loaded</div>
+                  <div style={{ color: "var(--fg-muted)", fontSize: 12 }}>
+                    {t("memoria.consolidation.memoriesLoaded")}
+                  </div>
                   <div style={{ fontVariantNumeric: "tabular-nums" }}>
                     {jobRecord?.memoryCount ?? 0}
                   </div>
@@ -621,21 +684,41 @@ export function MemoryConsolidation({
               {summary !== null ? (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-5)" }}>
                   <span className="mc-badge mc-badge-default">
-                    {plural(summary.reviewCount, "review item")}
+                    {countLabel(
+                      t,
+                      summary.reviewCount,
+                      "memoria.consolidation.reviewItem.one",
+                      "memoria.consolidation.reviewItem.many",
+                    )}
                   </span>
                   <span className="mc-badge mc-badge-default">
-                    {plural(summary.staleCount, "stale flag")}
+                    {countLabel(
+                      t,
+                      summary.staleCount,
+                      "memoria.consolidation.staleFlag.one",
+                      "memoria.consolidation.staleFlag.many",
+                    )}
                   </span>
                   <span className="mc-badge mc-badge-default">
-                    {plural(summary.edgeCount, "proposed edge")}
+                    {countLabel(
+                      t,
+                      summary.edgeCount,
+                      "memoria.consolidation.proposedEdge.one",
+                      "memoria.consolidation.proposedEdge.many",
+                    )}
                   </span>
                   <span className="mc-badge mc-badge-default">
-                    {plural(summary.updateCount, "proposed body update")}
+                    {countLabel(
+                      t,
+                      summary.updateCount,
+                      "memoria.consolidation.bodyUpdate.one",
+                      "memoria.consolidation.bodyUpdate.many",
+                    )}
                   </span>
                 </div>
               ) : null}
               {activeJob.result !== undefined ? (
-                <SummaryStatusNotice result={activeJob.result} />
+                <SummaryStatusNotice result={activeJob.result} t={t} />
               ) : null}
             </>
           )}
@@ -643,7 +726,7 @@ export function MemoryConsolidation({
 
         {activeJob?.result !== undefined ? (
           <section
-            aria-label="Consolidation results"
+            aria-label={t("memoria.consolidation.results")}
             aria-live="polite"
             aria-atomic="false"
             style={{
@@ -665,10 +748,12 @@ export function MemoryConsolidation({
               {/* lk-section-head: UA-default h2 (24px) outranked the 20px page
                   title (uiux-fix F034, C241) */}
               <h2 className="lk-section-head" style={{ margin: 0 }}>
-                Review items
+                {t("memoria.consolidation.reviewItems")}
               </h2>
               {activeJob.result.reviewItems.length === 0 ? (
-                <p style={{ margin: 0, color: "var(--fg-muted)" }}>No review items returned.</p>
+                <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+                  {t("memoria.consolidation.noReviewItems")}
+                </p>
               ) : (
                 <ul
                   style={{
@@ -688,7 +773,7 @@ export function MemoryConsolidation({
                         <MemoryIdList ids={item.relatedMemoryIds} onOpenDetail={onOpenDetail} />
                       </span>
                       <span style={{ color: "var(--fg-muted)" }}>
-                        <ReviewAction item={item} onOpenDetail={onOpenDetail} />
+                        <ReviewAction item={item} onOpenDetail={onOpenDetail} t={t} />
                       </span>
                     </li>
                   ))}
@@ -707,10 +792,12 @@ export function MemoryConsolidation({
               }}
             >
               <h2 className="lk-section-head" style={{ margin: 0 }}>
-                Stale flags
+                {t("memoria.consolidation.staleFlags")}
               </h2>
               {activeJob.result.staleFlags.length === 0 ? (
-                <p style={{ margin: 0, color: "var(--fg-muted)" }}>No stale flags returned.</p>
+                <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+                  {t("memoria.consolidation.noStaleFlags")}
+                </p>
               ) : (
                 <ul
                   style={{
@@ -741,10 +828,12 @@ export function MemoryConsolidation({
               }}
             >
               <h2 className="lk-section-head" style={{ margin: 0 }}>
-                Proposed edges
+                {t("memoria.consolidation.proposedEdges")}
               </h2>
               {activeJob.result.edgesProposed.length === 0 ? (
-                <p style={{ margin: 0, color: "var(--fg-muted)" }}>No edges proposed.</p>
+                <p style={{ margin: 0, color: "var(--fg-muted)" }}>
+                  {t("memoria.consolidation.noEdges")}
+                </p>
               ) : (
                 <ul
                   style={{

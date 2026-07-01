@@ -76,6 +76,145 @@ export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from 
 // ─── Workflow descriptor ────────────────────────────────────────────────────────
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./workflow-descriptor.js";
 
+// ─── Governed release impact (Issue #1690) ─────────────────────────────────────
+export type {
+  ReleaseImpactBreakingException,
+  ReleaseImpactCatalog,
+  ReleaseImpactCategory,
+  ReleaseImpactEntry,
+  ReleaseImpactPriority,
+  ReleaseImpactPublishGate,
+  ReleaseImpactRemediation,
+  ReleaseImpactReview,
+  ReleaseImpactStateImpact,
+  ReleaseImpactUserVisibleChange,
+} from "./release-impact.js";
+export {
+  RELEASE_IMPACT_CATEGORIES,
+  RELEASE_IMPACT_PRIORITIES,
+  RELEASE_IMPACT_PUBLISH_GATES,
+  RELEASE_IMPACT_REMEDIATIONS,
+  RELEASE_IMPACT_SCHEMA_VERSION,
+} from "./release-impact.js";
+
+// ─── Update availability / preflight (Issue #1692) ─────────────────────────────
+export type {
+  UpdatePreflightBlocker,
+  UpdatePreflightBlockerCode,
+  UpdatePreflightImpactEntry,
+  UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNotes,
+  UpdatePreflightRegistryStatus,
+  UpdatePreflightReleaseMetadataStatus,
+  UpdatePreflightReleaseSource,
+  UpdatePreflightReleaseSummary,
+  UpdatePreflightReport,
+  UpdatePreflightSeverity,
+  UpdatePreflightStatus,
+} from "./update-preflight.js";
+export {
+  UPDATE_PREFLIGHT_BLOCKER_CODES,
+  UPDATE_PREFLIGHT_REGISTRY_STATUSES,
+  UPDATE_PREFLIGHT_RELEASE_METADATA_STATUSES,
+  UPDATE_PREFLIGHT_RELEASE_SOURCES,
+  UPDATE_PREFLIGHT_SCHEMA_VERSION,
+  UPDATE_PREFLIGHT_SEVERITIES,
+  UPDATE_PREFLIGHT_STATUSES,
+} from "./update-preflight.js";
+
+// ─── Governed update session runner (Issue #1693) ─────────────────────────────
+export type {
+  UpdateCommandPreview,
+  UpdateInstallMode,
+  UpdateInstallModeStatus,
+  UpdateInstallPackageManager,
+  UpdateMutationPolicy,
+  UpdatePolicySource,
+  UpdateRestartVerificationRequest,
+  UpdateRestartVerificationRequestParse,
+  UpdateRestartVerificationRequestParseFail,
+  UpdateRestartVerificationRequestParseOk,
+  UpdateSession,
+  UpdateSessionFailureReason,
+  UpdateSessionLogPreview,
+  UpdateSessionPhase,
+  UpdateSessionStartRequest,
+  UpdateSessionStartRequestParse,
+  UpdateSessionStartRequestParseFail,
+  UpdateSessionStartRequestParseOk,
+  UpdateSessionStatus,
+  UpdateUnsupportedReason,
+} from "./update-session.js";
+export {
+  parseUpdateRestartVerificationRequest,
+  parseUpdateSessionStartRequest,
+  UPDATE_INSTALL_MODE_STATUSES,
+  UPDATE_INSTALL_PACKAGE_MANAGERS,
+  UPDATE_SESSION_FAILURE_REASONS,
+  UPDATE_SESSION_PHASES,
+  UPDATE_SESSION_SCHEMA_VERSION,
+  UPDATE_UNSUPPORTED_REASONS,
+} from "./update-session.js";
+
+// ─── Governed update local state and recovery (Issue #1694) ─────────────────────
+export type {
+  UpdateCompatibilityScan,
+  UpdateHealthState,
+  UpdateRecoverySnapshot,
+  UpdateRecoverySnapshotEntry,
+  UpdateReleaseImpactInput,
+  UpdateRemediationActionState,
+  UpdateRemediationStatus,
+  UpdateRuntimeAuditEvent,
+  UpdateRuntimeEventType,
+  UpdateRuntimeWarningCode,
+  UpdateRuntimeState,
+  UpdateStateStore,
+  UpdateStoreHealth,
+} from "./update-local-state.js";
+export {
+  UPDATE_HEALTH_LABELS,
+  UPDATE_HEALTH_STATES,
+  UPDATE_LOCAL_STATE_SCHEMA_VERSION,
+  UPDATE_REMEDIATION_STATUSES,
+  UPDATE_RUNTIME_EVENT_TYPES,
+  UPDATE_RUNTIME_WARNING_CODES,
+  UPDATE_STATE_STORES,
+} from "./update-local-state.js";
+
+// ─── Governed update remediation actions (Issue #1695) ────────────────────────
+export type {
+  UpdateRemediationAction,
+  UpdateRemediationActionKind,
+  UpdateRemediationActionRequest,
+  UpdateRemediationActionRequestParse,
+  UpdateRemediationActionRequestParseFail,
+  UpdateRemediationActionRequestParseOk,
+  UpdateRemediationActionStatus,
+  UpdateRemediationAffectedFeature,
+  UpdateRemediationDecision,
+  UpdateRemediationFeatureState,
+  UpdateRemediationOverallStatus,
+  UpdateRemediationScopeCounts,
+  UpdateRemediationStatusReport,
+  UpdateRemediationStatusRequest,
+  UpdateRemediationStatusRequestParse,
+  UpdateRemediationStatusRequestParseFail,
+  UpdateRemediationStatusRequestParseOk,
+} from "./update-remediation.js";
+export {
+  isUpdateRemediationStatus,
+  isUpdateStateStore,
+  parseUpdateRemediationActionRequest,
+  parseUpdateRemediationStatusRequest,
+  UPDATE_REMEDIATION_ACTION_KINDS,
+  UPDATE_REMEDIATION_ACTION_STATUSES,
+  UPDATE_REMEDIATION_DECISIONS,
+  UPDATE_REMEDIATION_FEATURE_STATES,
+  UPDATE_REMEDIATION_OVERALL_STATUSES,
+  UPDATE_REMEDIATION_SCHEMA_VERSION,
+} from "./update-remediation.js";
+
 // ─── Workspace ──────────────────────────────────────────────────────────────────
 export type {
   WorkspaceLanguage,
@@ -1284,6 +1423,7 @@ export type {
   ChunkId,
   VectorId,
   EmbeddingVectorMetric,
+  EmbeddingVectorNormalization,
   EmbeddingModelIdentity,
   ParserDependencyVersion,
   ParserIdentity,
@@ -1454,6 +1594,7 @@ export {
   PDF_CITATION_PREVIEW_ORIGINS,
   PDF_CITATION_PREVIEW_REASON_CODES,
   PDF_CITATION_PREVIEW_STATUS_STATES,
+  normalizePdfCitationPreviewMarkerIndex,
   pdfCitationPreviewAnchorQuality,
   pdfCitationPreviewFailureState,
 } from "./local-knowledge-preview.js";

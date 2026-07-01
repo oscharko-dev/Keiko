@@ -183,6 +183,7 @@ const RUNTIME_STATE_LABEL: Readonly<Record<RuntimeStateCategory, string>> = {
   "local-knowledge": "Local Knowledge store",
   evidence: "Evidence store",
   "quality-intelligence": "Quality Intelligence store",
+  "update-recovery": "update recovery state",
 };
 
 interface LoosePermFinding {

@@ -134,6 +134,7 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
     deleteCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     refreshCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     repairCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
+    reembedCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     startIndexingImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     fetchCapsuleDetailImpl: vi.fn().mockResolvedValue(progressDetail()),
     ...overrides,
@@ -765,6 +766,43 @@ describe("CapsuleActions — repair action", () => {
 
     await waitFor(() => {
       expect(repairCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
+    });
+    expect(onActionComplete).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full re-embed action
+// ---------------------------------------------------------------------------
+
+describe("CapsuleActions — full re-embed action", () => {
+  it("shows the current-model re-index button only when vectors are incompatible", () => {
+    const { rerender } = render(<CapsuleActions {...defaultProps()} />);
+    expect(
+      screen.queryByRole("button", { name: /current embedding model/i }),
+    ).not.toBeInTheDocument();
+
+    rerender(<CapsuleActions {...defaultProps({ vectorCompatible: false })} />);
+    expect(screen.getByRole("button", { name: /current embedding model/i })).toBeInTheDocument();
+  });
+
+  it("calls reembedCapsuleImpl when confirmed", async () => {
+    const user = userEvent.setup();
+    const reembedCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
+    const onActionComplete = vi.fn();
+    render(
+      <CapsuleActions
+        {...defaultProps({ reembedCapsuleImpl, onActionComplete, vectorCompatible: false })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /current embedding model/i }));
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /re-index/i }));
+
+    await waitFor(() => {
+      expect(reembedCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
     expect(onActionComplete).toHaveBeenCalledOnce();
   });

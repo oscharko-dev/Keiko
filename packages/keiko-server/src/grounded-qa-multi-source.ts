@@ -369,6 +369,54 @@ function withMultiSourcePromptExcerptByteLimit(
   }));
 }
 
+function bestPackScore(pack: ConnectedContextPack): number {
+  let best = 0.01;
+  for (const file of pack.files) {
+    for (const excerpt of file.excerpts) {
+      best = Math.max(best, excerpt.atom.score);
+    }
+  }
+  return best;
+}
+
+function packExcerptCount(pack: ConnectedContextPack): number {
+  return pack.files.reduce((count, file) => count + file.excerpts.length, 0);
+}
+
+function sourceBudgetBytes(
+  totalBytes: number,
+  index: number,
+  weights: readonly number[],
+): number {
+  const equalPool = totalBytes * 0.35;
+  const weightedPool = totalBytes - equalPool;
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  const equal = equalPool / weights.length;
+  const weighted = weightSum <= 0 ? 0 : (weightedPool * (weights[index] ?? 0)) / weightSum;
+  return Math.floor(equal + weighted);
+}
+
+function withMultiSourcePromptExcerptTotalBudget(
+  labeledPacks: readonly LabeledPack[],
+  totalExcerptBytes: number,
+): readonly LabeledPack[] {
+  if (totalExcerptBytes <= 0 || labeledPacks.length === 0) {
+    return withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
+  }
+  const weights = labeledPacks.map((entry) => bestPackScore(entry.pack));
+  return labeledPacks.map((entry, index) => {
+    const excerptCount = packExcerptCount(entry.pack);
+    const perExcerpt =
+      excerptCount === 0
+        ? 0
+        : Math.floor(sourceBudgetBytes(totalExcerptBytes, index, weights) / excerptCount);
+    return {
+      ...entry,
+      pack: withPromptExcerptByteLimit(entry.pack, perExcerpt),
+    };
+  });
+}
+
 function budgetedMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
@@ -394,17 +442,17 @@ function budgetedMultiSourceGatewayMessages(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
-  while (maxExcerptBytes >= 0) {
+  let totalExcerptBytes = Math.max(0, limit - overheadBytes);
+  while (totalExcerptBytes >= 0) {
     messages = buildRawMultiSourceGatewayMessages(
       question,
-      withMultiSourcePromptExcerptByteLimit(labeledPacks, maxExcerptBytes),
+      withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes),
       redactor,
     );
-    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
+    if (promptByteLength(messages) <= limit || totalExcerptBytes === 0) {
       return messages;
     }
-    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
+    totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
   }
   return buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor);
 }

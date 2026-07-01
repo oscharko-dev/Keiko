@@ -7,7 +7,7 @@
 //   2. Reads bytes via WorkspaceFs.readFileBytes (the boundary-checked byte-read path).
 //   3. Computes the content hash (SHA-256 hex) over the raw bytes.
 //   4. Detects the incremental fast-path: if a documents row with the same id already has
-//      this content_hash AND status="extracted"/"unsupported", we skip the parse entirely
+//      this content_hash AND status="extracted"/"extracted-image"/"unsupported", we skip the parse entirely
 //      and leave last_extracted_at untouched.
 //   5. Resolves a parser through the registry; rejects an oversized file BEFORE we hand it
 //      to the parser (the OVERSIZED_FILE diagnostic is the same code parsers emit).
@@ -17,13 +17,18 @@
 import { createHash } from "node:crypto";
 
 import type {
+  CoverageQuality,
   DocumentId,
   DocumentRecord,
   ExtractionCapabilityAvailability,
+  ExtractionPhase,
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceScope,
+  LargeDocumentExtractionStrategy,
   LargeDocumentResourcePolicy,
+  PageRecord,
+  ParsedUnit,
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -31,8 +36,9 @@ import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeScopePath,
+  largeDocumentPolicyFingerprint,
 } from "@oscharko-dev/keiko-contracts";
-import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 import type {
@@ -55,6 +61,11 @@ import {
 } from "../parsers/index.js";
 import { DEFAULT_CHUNKING_STRATEGY_KEY } from "../chunking/types.js";
 import {
+  MAX_PDF_DOCUMENT_BLOB_BYTES,
+  PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+  persistPdfDocumentBlobInTransaction,
+} from "../document-blob-store.js";
+import {
   extractDocumentProgressive,
   selectProgressiveExtractor,
   type ProgressiveExtractContext,
@@ -62,6 +73,8 @@ import {
 import type { InternalParserResult } from "../parsers/types.js";
 import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
+import { getCapsule } from "../capsule-lifecycle.js";
+import { upsertExtractionCheckpoint } from "../indexing/checkpoint-persist.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -74,6 +87,7 @@ import {
   insertSectionRow,
   readExistingDocumentRow,
 } from "./persist.js";
+import { decodeUtf8 } from "../parsers/_internal.js";
 import {
   documentIdFor,
   type DiscoveredFile,
@@ -356,6 +370,7 @@ function buildDocumentRecord(input: {
   readonly mediaType: string;
   readonly contentHash: string;
   readonly parserResult: ParserResult;
+  readonly sizeBytes?: number;
   readonly status: DocumentRecord["status"];
 }): DocumentRecord {
   return {
@@ -363,7 +378,7 @@ function buildDocumentRecord(input: {
     capsuleId: input.params.capsuleId,
     sourceId: input.params.source.id,
     documentPath: input.params.file.relativePath,
-    sizeBytes: input.params.file.sizeBytes,
+    sizeBytes: input.sizeBytes ?? input.params.file.sizeBytes,
     mediaType: input.mediaType,
     contentHash: input.contentHash,
     parser: input.parserResult.parser,
@@ -373,6 +388,64 @@ function buildDocumentRecord(input: {
   };
 }
 
+function standardExtractionCoverage(
+  status: DocumentRecord["status"],
+  parserResult: InternalParserResult,
+): CoverageQuality {
+  if (parserResult.diagnostics.some((diagnostic) => diagnostic.code === "UNIT_LIMIT_REACHED")) {
+    return "partial";
+  }
+  if (status === "extracted") return "complete";
+  if (status === "extracted-image") return "none";
+  return "none";
+}
+
+function standardExtractionPhase(status: DocumentRecord["status"]): ExtractionPhase {
+  return status === "failed" ? "failed" : "extracted";
+}
+
+function standardExtractionStrategy(): LargeDocumentExtractionStrategy {
+  return "standard-buffer";
+}
+
+function persistStandardExtractionCheckpoint(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  document: DocumentRecord,
+  parserResult: InternalParserResult,
+): void {
+  const capsule = getCapsule(deps.store, params.capsuleId);
+  if (capsule === undefined) return;
+  const now = document.lastExtractedAt;
+  upsertExtractionCheckpoint(deps.store._internal.db, {
+    capsuleId: params.capsuleId,
+    documentId: document.id,
+    jobId: deps.largeDocumentJobId ?? "extract",
+    strategy: standardExtractionStrategy(),
+    phase: standardExtractionPhase(document.status),
+    pageCursor: parserResult.pages.length,
+    sectionCursor: parserResult.sections.length,
+    objectCursor: parserResult.units.length,
+    extractedTextBytes: Buffer.byteLength(parserResult.normalizedText ?? "", "utf8"),
+    chunkCursor: 0,
+    embeddedChunkCursor: 0,
+    retryCount: 0,
+    coverage: standardExtractionCoverage(document.status, parserResult),
+    fingerprint: {
+      sourceContentHash: document.contentHash,
+      parserVersion: `${document.parser.parserId}@${document.parser.parserVersion}`,
+      policyFingerprint: largeDocumentPolicyFingerprint(
+        deps.largeDocumentPolicy ?? DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+      ),
+      chunkingStrategyVersion: deps.chunkingStrategyVersion ?? DEFAULT_CHUNKING_STRATEGY_KEY,
+      embeddingIdentity: capsule.embeddingModelIdentity,
+    },
+    terminalDiagnostics: parserResult.diagnostics,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 function persistDocumentAndDependents(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -380,6 +453,7 @@ function persistDocumentAndDependents(
   document: DocumentRecord,
   parserResult: InternalParserResult,
   now: () => number,
+  pdfBlobBytes?: Uint8Array,
 ): void {
   const db = deps.store._internal.db;
   db.exec("BEGIN");
@@ -398,7 +472,19 @@ function persistDocumentAndDependents(
       status: document.status,
       safeDisplayName: document.safeDisplayName,
     });
+    if (pdfBlobBytes !== undefined) {
+      persistPdfDocumentBlobInTransaction(deps.store, {
+        capsuleId: params.capsuleId,
+        sourceId: String(params.source.id),
+        documentId,
+        contentHash: document.contentHash,
+        byteLength: document.sizeBytes,
+        mediaType: document.mediaType,
+        bytes: pdfBlobBytes,
+      });
+    }
     persistDependentRows(deps, params.capsuleId, documentId, parserResult, now);
+    persistStandardExtractionCheckpoint(deps, params, document, parserResult);
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");
@@ -623,11 +709,11 @@ function validateRequestedTarget(
   }
 }
 
-function validateResolvedTarget(
+function statResolvedTarget(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   target: ResolvedTarget,
-): DiscoveryError | undefined {
+): WorkspaceStat | DiscoveryError {
   try {
     const realStat = deps.fs.stat(target.absolutePath);
     if (!realStat.isFile) {
@@ -637,12 +723,7 @@ function validateResolvedTarget(
         relativePath: params.file.relativePath,
       };
     }
-    if (realStat.hardLinkCount === undefined || realStat.hardLinkCount <= 1) return undefined;
-    return {
-      code: "READ_FAILED",
-      message: "selected file is not eligible for extraction",
-      relativePath: params.file.relativePath,
-    };
+    return realStat;
   } catch {
     return {
       code: "STAT_FAILED",
@@ -650,6 +731,15 @@ function validateResolvedTarget(
       relativePath: params.file.relativePath,
     };
   }
+}
+
+function validateResolvedTarget(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  target: ResolvedTarget,
+): DiscoveryError | undefined {
+  const resolvedStat = statResolvedTarget(deps, params, target);
+  return "code" in resolvedStat ? resolvedStat : undefined;
 }
 
 async function readBytes(
@@ -693,7 +783,12 @@ function readUnchangedFastPath(
   if (existing.content_hash !== contentHash) return undefined;
   // Skip only terminal-good states. A `pending` row is an interrupted progressive extraction
   // (Issue #1286) and `failed` should be retried; both must re-extract rather than be skipped.
-  if (existing.status !== "extracted" && existing.status !== "unsupported") return undefined;
+  if (
+    existing.status !== "extracted" &&
+    existing.status !== "extracted-image" &&
+    existing.status !== "unsupported"
+  )
+    return undefined;
   const document: DocumentRecord = {
     id: documentId,
     capsuleId: params.capsuleId,
@@ -804,11 +899,11 @@ async function hashProgressiveSource(source: ProgressiveExtractionSource): Promi
   }
   const hash = createHash("sha256");
   for (let offset = 0; offset < source.totalBytes; offset += PROGRESSIVE_HASH_CHUNK_BYTES) {
-    const bytes = await source.readWindow(
-      offset,
-      Math.min(PROGRESSIVE_HASH_CHUNK_BYTES, source.totalBytes - offset),
-    );
-    if (bytes.byteLength === 0) break;
+    const length = Math.min(PROGRESSIVE_HASH_CHUNK_BYTES, source.totalBytes - offset);
+    const bytes = await source.readWindow(offset, length);
+    if (bytes.byteLength !== length) {
+      throw new Error("progressive source returned a short read while hashing");
+    }
     hash.update(bytes);
   }
   return hash.digest("hex");
@@ -871,9 +966,18 @@ function firstParserFailureDiagnostic(result: ParserResult): ParserDiagnostic | 
   );
 }
 
-function statusForResult(result: ParserResult): DocumentRecord["status"] {
+function hasExtractedText(result: InternalParserResult): boolean {
+  return result.normalizedText !== undefined && result.normalizedText.length > 0;
+}
+
+function isImageOnlyPdfResult(result: InternalParserResult): boolean {
+  return result.parser.parserId === "pdf" && result.pages.length > 0 && !hasExtractedText(result);
+}
+
+function statusForResult(result: InternalParserResult): DocumentRecord["status"] {
   if (isUnsupportedResult(result)) return "unsupported";
   if (firstParserFailureDiagnostic(result) !== undefined) return "failed";
+  if (isImageOnlyPdfResult(result)) return "extracted-image";
   return "extracted";
 }
 
@@ -904,8 +1008,7 @@ function parserFailureOutcome(
 const SOURCE_TEXT_PARSER_IDS: ReadonlySet<string> = new Set(["text", "json", "csv", "html"]);
 
 function decodeUtf8ForStorage(bytes: Uint8Array): string {
-  const raw = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  return raw.length > 0 && raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  return decodeUtf8(bytes).text;
 }
 
 function normalizedTextForPersistence(
@@ -963,12 +1066,169 @@ async function runParserForPersistence(
   return withPersistedNormalizedText(result, bytes);
 }
 
+function pdfNeedsOcrResult(
+  result: InternalParserResult,
+  documentId: DocumentId,
+): InternalParserResult {
+  return {
+    ...result,
+    units: [{ kind: "unsupported-media", documentId, reason: "pdf-ocr-not-configured" }],
+    diagnostics: [
+      ...result.diagnostics,
+      {
+        severity: "info",
+        code: "UNSUPPORTED_FORMAT",
+        message: "pdf has no extractable text layer and OCR is not configured",
+        documentId,
+      },
+    ],
+  };
+}
+
+function findOcrParser(registry: ParserRegistry): AsyncParserAdapter | undefined {
+  return registry.list().find((adapter): adapter is AsyncParserAdapter => {
+    return adapter.capability.parserId === "ocr-pipeline" && hasAsyncParse(adapter);
+  });
+}
+
+function unsupportedMediaUnit(documentId: DocumentId, reason: string): ParsedUnit {
+  return { kind: "unsupported-media", documentId, reason };
+}
+
+function ocrEmptyResult(
+  pdfResult: InternalParserResult,
+  documentId: DocumentId,
+  parser: ParserResult["parser"],
+  options: ParserOptions,
+  diagnostics: readonly ParserDiagnostic[],
+): InternalParserResult {
+  return {
+    documentId,
+    parser,
+    pages: pdfResult.pages,
+    sections: [],
+    units: [unsupportedMediaUnit(documentId, "pdf-ocr-empty")],
+    diagnostics: [
+      ...diagnostics,
+      {
+        severity: "info",
+        code: "UNSUPPORTED_FORMAT",
+        message: "OCR produced no extractable text for image-only PDF",
+        documentId,
+      },
+    ],
+    extractedAt: options.now(),
+  };
+}
+
+function appendOcrPage(
+  pages: PageRecord[],
+  units: ParsedUnit[],
+  parts: string[],
+  documentId: DocumentId,
+  sourcePage: PageRecord,
+  text: string,
+  cursor: number,
+): number {
+  let nextCursor = cursor;
+  if (text.length > 0 && parts.length > 0) {
+    parts.push("\n\n");
+    nextCursor += 2;
+  }
+  const start = nextCursor;
+  if (text.length > 0) {
+    parts.push(text);
+    nextCursor += text.length;
+  }
+  const pageLabel = sourcePage.pageLabel ?? String(sourcePage.pageNumber);
+  const page: PageRecord = {
+    documentId,
+    pageNumber: sourcePage.pageNumber,
+    pageLabel,
+    characterStart: start,
+    characterEnd: nextCursor,
+  };
+  pages.push(page);
+  units.push({
+    kind: "page",
+    documentId,
+    pageNumber: sourcePage.pageNumber,
+    pageLabel,
+    characterStart: start,
+    characterEnd: nextCursor,
+  });
+  return nextCursor;
+}
+
+async function runOcrForImageOnlyPdf(
+  deps: ExtractDocumentDeps,
+  documentId: DocumentId,
+  params: ExtractDocumentParams,
+  bytes: Uint8Array,
+  options: ParserOptions,
+  pdfResult: InternalParserResult,
+): Promise<InternalParserResult> {
+  const ocrParser = findOcrParser(deps.parserRegistry);
+  if (ocrParser === undefined) return pdfNeedsOcrResult(pdfResult, documentId);
+  const diagnostics: ParserDiagnostic[] = [...pdfResult.diagnostics];
+  const pages: PageRecord[] = [];
+  const units: ParsedUnit[] = [];
+  const parts: string[] = [];
+  let cursor = 0;
+  let parser = pdfResult.parser;
+  for (const page of pdfResult.pages) {
+    const input: ParserSelectionInput = {
+      documentId,
+      bytes,
+      extension: extensionOf(params.file.relativePath),
+      mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
+      pageNumber: page.pageNumber,
+    };
+    const result = (await ocrParser.parseAsync(input, options)) as InternalParserResult;
+    parser = result.parser;
+    diagnostics.push(...result.diagnostics);
+    const text = result.normalizedText?.trim() ?? "";
+    if (text.length === 0) {
+      cursor = appendOcrPage(pages, units, parts, documentId, page, "", cursor);
+      continue;
+    }
+    cursor = appendOcrPage(pages, units, parts, documentId, page, text, cursor);
+  }
+  const normalizedText = parts.join("");
+  if (normalizedText.length === 0) {
+    return ocrEmptyResult(pdfResult, documentId, parser, options, diagnostics);
+  }
+  return {
+    documentId,
+    parser,
+    pages,
+    sections: [],
+    units,
+    diagnostics,
+    extractedAt: options.now(),
+    normalizedText,
+  };
+}
+
+async function applyImageOnlyPdfOcrIfNeeded(
+  deps: ExtractDocumentDeps,
+  documentId: DocumentId,
+  params: ExtractDocumentParams,
+  bytes: Uint8Array,
+  options: ParserOptions,
+  result: InternalParserResult,
+): Promise<InternalParserResult> {
+  if (!isImageOnlyPdfResult(result)) return result;
+  return runOcrForImageOnlyPdf(deps, documentId, params, bytes, options, result);
+}
+
 function persistExtractedDocument(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
   documentId: DocumentId,
   document: DocumentRecord,
   parserResult: InternalParserResult,
+  pdfBlobBytes?: Uint8Array,
 ): void {
   persistDocumentAndDependents(
     deps,
@@ -977,7 +1237,24 @@ function persistExtractedDocument(
     document,
     parserResult,
     deps.store._internal.now,
+    pdfBlobBytes,
   );
+}
+
+function pdfBlobBytesForPersistence(
+  document: DocumentRecord,
+  status: DocumentRecord["status"],
+  bytes: Uint8Array | undefined,
+): Uint8Array | undefined {
+  if (status !== "extracted" && status !== "extracted-image") return undefined;
+  if (document.mediaType !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) return undefined;
+  return bytes;
+}
+
+function pdfBlobCandidateBytes(mediaType: string, bytes: Uint8Array): Uint8Array | undefined {
+  if (mediaType !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) return undefined;
+  if (bytes.byteLength > MAX_PDF_DOCUMENT_BLOB_BYTES) return undefined;
+  return bytes.slice();
 }
 
 async function readBoundedDocumentBytes(
@@ -987,12 +1264,23 @@ async function readBoundedDocumentBytes(
   target: ResolvedTarget,
   options: ParserOptions,
 ): Promise<Uint8Array | ExtractionResult> {
+  const resolvedStat = statResolvedTarget(deps, params, target);
+  if ("code" in resolvedStat) {
+    return buildFailureResult(deps, params, documentId, resolvedStat);
+  }
   const bytes = await readBytes(deps, params, target, options.maxBytes + 1);
   if (!(bytes instanceof Uint8Array)) {
     return buildFailureResult(deps, params, documentId, bytes);
   }
   if (bytes.byteLength > options.maxBytes) {
     return buildOversizedFailure(deps, params, documentId, options, bytes.byteLength);
+  }
+  if (bytes.byteLength !== resolvedStat.size) {
+    return buildFailureResult(deps, params, documentId, {
+      code: "READ_FAILED",
+      message: "readFileBytes returned fewer bytes than the resolved file size",
+      relativePath: params.file.relativePath,
+    });
   }
   return bytes;
 }
@@ -1060,9 +1348,20 @@ async function parseAndPersistDocument(
   contentHash: string,
   options: ParserOptions,
 ): Promise<ExtractionResult> {
+  const mediaType = mediaTypeFor(extensionOf(params.file.relativePath));
+  const rawByteLength = bytes.byteLength;
+  const pdfBlobCandidate = pdfBlobCandidateBytes(mediaType, bytes);
   let parserResult: InternalParserResult;
   try {
     parserResult = await runParserForPersistence(deps, documentId, params, bytes, options);
+    parserResult = await applyImageOnlyPdfOcrIfNeeded(
+      deps,
+      documentId,
+      params,
+      bytes,
+      options,
+      parserResult,
+    );
   } catch {
     return buildFailureResult(deps, params, documentId, {
       code: "PARSER_FAILED",
@@ -1075,12 +1374,20 @@ async function parseAndPersistDocument(
   const document = buildDocumentRecord({
     documentId,
     params,
-    mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
+    mediaType,
     contentHash,
     parserResult: redactedParserResult,
+    sizeBytes: rawByteLength,
     status,
   });
-  persistExtractedDocument(deps, params, documentId, document, redactedParserResult);
+  persistExtractedDocument(
+    deps,
+    params,
+    documentId,
+    document,
+    redactedParserResult,
+    pdfBlobBytesForPersistence(document, status, pdfBlobCandidate),
+  );
   return parserExtractionResult(params, document, redactedParserResult, status);
 }
 

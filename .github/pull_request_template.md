@@ -41,6 +41,20 @@ Refs #<issue_number>
 - [ ] Documentation or repository hygiene
 - [ ] No user-facing behavior change
 
+## Update Impact
+
+- [ ] Not release-impacting.
+- [ ] Release-impact catalog or issue metadata updated.
+- Release-note category: `critical-security | update-notes | state-or-compatibility-changes | new-additions | improvements | fixes | ui-polish | internal-only`.
+- Priority: `critical | high | normal | low | internal`.
+- User-visible change:
+- Release-note bullet:
+- Supported-from versions:
+- Affected state stores:
+- User action required and remediation:
+- Internal-only rationale, if applicable:
+- Release-owner review evidence:
+
 ## Verification
 
 Required:
@@ -69,7 +83,7 @@ Select only what applies:
 - [ ] Security-sensitive change reviewed for trust boundaries, secrets, external calls, and generated artifacts.
 - [ ] Supply-chain or package-surface change verified with package, license, lockfile, SBOM, or npm dry-run checks.
 - [ ] Documentation or Markdown change verified by the repository link check or a targeted local equivalent.
-- [ ] Release-impacting change verified with `pnpm run release:check` or an explicit rationale.
+- [ ] Release-impacting change verified with `npm run check:release-impact` or an explicit rationale.
 - [ ] Not applicable items are explained below.
 
 Not applicable rationale:

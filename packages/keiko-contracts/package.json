@@ -70,6 +70,10 @@
     "./task-workspace": {
       "types": "./dist/task-workspace.d.ts",
       "import": "./dist/task-workspace.js"
+    },
+    "./release-impact": {
+      "types": "./dist/release-impact.d.ts",
+      "import": "./dist/release-impact.js"
     }
   },
   "scripts": {

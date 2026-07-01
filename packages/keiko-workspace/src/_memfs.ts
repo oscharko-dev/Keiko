@@ -1,4 +1,4 @@
-import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import type { WorkspaceDirEntry, WorkspaceFileReader, WorkspaceFs, WorkspaceStat } from "./fs.js";
 
 // Minimal in-memory WorkspaceFs over a flat path->content map. Directories are implied by
 // path prefixes. Keys are relative POSIX paths under a single absolute root. No symlinks.
@@ -78,6 +78,29 @@ function memReadFileRange(
   return Promise.resolve(encoded.subarray(start, Math.min(encoded.length, start + cap)));
 }
 
+function memOpenFileReader(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+): Promise<WorkspaceFileReader> {
+  if (key === undefined) {
+    return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
+  }
+  let closed = false;
+  return Promise.resolve({
+    readRange: (startByte: number, length: number): Promise<Uint8Array> => {
+      if (closed) {
+        return Promise.reject(new Error(`EBADF: ${absolutePath}`));
+      }
+      return memReadFileRange(files, key, absolutePath, startByte, length);
+    },
+    close: (): Promise<void> => {
+      closed = true;
+      return Promise.resolve();
+    },
+  });
+}
+
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const findKey = (absolutePath: string): string | undefined =>
     Object.keys(files).find((key) => toAbs(root, key) === absolutePath);
@@ -116,5 +139,7 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
     ): Promise<Uint8Array> => {
       return memReadFileRange(files, findKey(absolutePath), absolutePath, startByte, length);
     },
+    openFileReader: (absolutePath: string): Promise<WorkspaceFileReader> =>
+      memOpenFileReader(files, findKey(absolutePath), absolutePath),
   };
 }

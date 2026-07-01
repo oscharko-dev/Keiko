@@ -50,6 +50,11 @@ type PreviewAuditEvent = Extract<
   }
 >;
 
+type PreviewDocumentAccessAuditEvent = Extract<
+  CapsuleAuditEvent,
+  { readonly kind: "citation-preview-document-accessed" }
+>;
+
 export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEventSink): void {
   sink.emit(event);
 }
@@ -134,6 +139,21 @@ function previewDetails(event: PreviewAuditEvent): Record<string, unknown> {
   };
 }
 
+function previewDocumentAccessDetails(
+  event: PreviewDocumentAccessAuditEvent,
+): Record<string, unknown> {
+  return {
+    documentId: event.documentId,
+    sourceKind: event.sourceKind,
+    outcome: event.outcome,
+    ...("byteStart" in event && "byteEnd" in event
+      ? { byteRange: { start: event.byteStart, end: event.byteEnd } }
+      : {}),
+    ...("byteCount" in event ? { byteCount: event.byteCount } : {}),
+    ...("reasonCode" in event ? { reasonCode: event.reasonCode } : {}),
+  };
+}
+
 function isSourceOnlyAuditEvent(event: CapsuleAuditEvent): event is SourceOnlyAuditEvent {
   return (
     event.kind === "indexing-job-started" ||
@@ -163,6 +183,9 @@ function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | 
   }
   if (isPreviewAuditEvent(event)) {
     return previewDetails(event);
+  }
+  if (event.kind === "citation-preview-document-accessed") {
+    return previewDocumentAccessDetails(event);
   }
   return null;
 }

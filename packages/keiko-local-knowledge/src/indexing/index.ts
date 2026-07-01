@@ -7,6 +7,16 @@ export { runIndexingJob } from "./orchestrator.js";
 
 export { embedChunkBatch } from "./embedding-batcher.js";
 
+export {
+  CONTEXTUAL_RETRIEVAL_DISABLED_KEY,
+  CONTEXTUAL_RETRIEVAL_PROMPT_VERSION,
+  buildContextualRetrievalMessages,
+  contextualRetrievalStrategyKey,
+  type ContextualRetrievalChatGateway,
+  type ContextualRetrievalOptions,
+  type ContextualRetrievalStatus,
+} from "./contextual-retrieval.js";
+
 export { findResumableJob } from "./job-resume.js";
 
 // Bounded large-document ingestion checkpoints + resume (Epic #1160, Issue #1286).

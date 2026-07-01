@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `1`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `18`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 14 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 18 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -52,6 +52,10 @@ CREATE TABLE capsules (
   embedding_model_provider TEXT NOT NULL,
   embedding_model_id TEXT NOT NULL,
   embedding_model_revision TEXT,
+  embedding_normalization TEXT,
+  embedding_instruction_version TEXT,
+  embedding_space_fingerprint TEXT,
+  embedding_dimensions_param INTEGER,
   vector_dimensions INTEGER NOT NULL,
   vector_metric TEXT NOT NULL,
   lifecycle_state TEXT NOT NULL,
@@ -126,7 +130,7 @@ CREATE TABLE capsule_set_members (
 // source is required to live in the same capsule as the document. UNIQUE (capsule_id, id)
 // exposes the same composite for downstream tables (chunks, vectors, pages, sections,
 // parsed_units, parser_diagnostics) to lock document_id to capsule_id.
-const CREATE_DOCUMENTS = `
+const CREATE_DOCUMENTS_V14 = `
 CREATE TABLE documents (
   id TEXT PRIMARY KEY NOT NULL,
   capsule_id TEXT NOT NULL,
@@ -145,6 +149,49 @@ CREATE TABLE documents (
   UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
+
+const CREATE_DOCUMENTS = `
+CREATE TABLE documents (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_path TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  media_type TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  parser_id TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  last_extracted_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  safe_display_name TEXT NOT NULL,
+  blob_ref TEXT,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+const CREATE_DOCUMENT_BLOBS = `
+CREATE TABLE document_blobs (
+  capsule_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  media_type TEXT NOT NULL,
+  storage_kind TEXT NOT NULL CHECK (storage_kind IN ('plaintext', 'sealed')),
+  seal_version TEXT,
+  blob_bytes BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  created_source_id TEXT NOT NULL,
+  created_document_id TEXT NOT NULL,
+  PRIMARY KEY (capsule_id, content_hash),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, created_source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, created_document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX =
+  "CREATE INDEX idx_document_blobs_created_document ON document_blobs(capsule_id, created_document_id);";
 
 const CREATE_DOCUMENT_TEXTS = `
 CREATE TABLE document_texts (
@@ -237,6 +284,11 @@ CREATE TABLE chunks (
   chunking_strategy_version TEXT,
   character_start INTEGER,
   character_end INTEGER,
+  contextual_retrieval_key TEXT,
+  context_prefix TEXT,
+  augmented_text TEXT,
+  context_status TEXT,
+  context_updated_at INTEGER,
   FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
@@ -244,6 +296,10 @@ CREATE TABLE chunks (
   UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
+
+// `context_prefix` and `augmented_text` are reconstructive retrieval-index content and are sealed
+// by the Local Knowledge runtime when content encryption is enabled. Character offsets and
+// safe_excerpt_hash continue to point at the original source slice used for citations/previews.
 
 const CREATE_CHUNKS_V1 = `
 CREATE TABLE chunks (
@@ -263,6 +319,69 @@ CREATE TABLE chunks (
 ) STRICT;
 `.trim();
 
+// chunk_lexical_index + chunk_lexical_fts — index-time lexical retrieval for hybrid RAG.
+//
+// The normal table keeps lineage columns and FK cascades; the FTS5 table is an external-content
+// projection synchronized by triggers below. `text`/`exact_text` are intentionally plaintext even
+// when the store encrypts document_texts/vectors: SQLite FTS5 cannot index sealed randomized
+// envelopes. This is the narrow plaintext exception for retrieval indexing; it stores only bounded
+// chunk text already used as retrievable evidence, and lifecycle cascades remove it with the chunk.
+const CREATE_CHUNK_LEXICAL_INDEX = `
+CREATE TABLE chunk_lexical_index (
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  exact_text TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (capsule_id, chunk_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, chunk_id) REFERENCES chunks(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_CHUNK_LEXICAL_FTS = `
+CREATE VIRTUAL TABLE chunk_lexical_fts USING fts5(
+  text,
+  exact_text,
+  content='chunk_lexical_index',
+  content_rowid='rowid',
+  tokenize='unicode61 remove_diacritics 0'
+);
+`.trim();
+
+const CREATE_CHUNK_LEXICAL_INDEX_AI = `
+CREATE TRIGGER chunk_lexical_index_ai AFTER INSERT ON chunk_lexical_index BEGIN
+  INSERT INTO chunk_lexical_fts(rowid, text, exact_text)
+  VALUES (new.rowid, new.text, new.exact_text);
+END;
+`.trim();
+
+const CREATE_CHUNK_LEXICAL_INDEX_AD = `
+CREATE TRIGGER chunk_lexical_index_ad AFTER DELETE ON chunk_lexical_index BEGIN
+  INSERT INTO chunk_lexical_fts(chunk_lexical_fts, rowid, text, exact_text)
+  VALUES ('delete', old.rowid, old.text, old.exact_text);
+END;
+`.trim();
+
+const CREATE_CHUNK_LEXICAL_INDEX_AU = `
+CREATE TRIGGER chunk_lexical_index_au AFTER UPDATE ON chunk_lexical_index BEGIN
+  INSERT INTO chunk_lexical_fts(chunk_lexical_fts, rowid, text, exact_text)
+  VALUES ('delete', old.rowid, old.text, old.exact_text);
+  INSERT INTO chunk_lexical_fts(rowid, text, exact_text)
+  VALUES (new.rowid, new.text, new.exact_text);
+END;
+`.trim();
+
+const CREATE_CHUNK_LEXICAL_CAPSULE_SOURCE_INDEX =
+  "CREATE INDEX idx_chunk_lexical_capsule_source ON chunk_lexical_index(capsule_id, source_id);";
+
+const CREATE_CHUNK_LEXICAL_CAPSULE_DOCUMENT_INDEX =
+  "CREATE INDEX idx_chunk_lexical_capsule_document ON chunk_lexical_index(capsule_id, document_id);";
+
 const CREATE_VECTORS = `
 CREATE TABLE vectors (
   id TEXT PRIMARY KEY NOT NULL,
@@ -274,6 +393,10 @@ CREATE TABLE vectors (
   embedding_model_provider TEXT NOT NULL,
   embedding_model_id TEXT NOT NULL,
   embedding_model_revision TEXT,
+  embedding_normalization TEXT,
+  embedding_instruction_version TEXT,
+  embedding_space_fingerprint TEXT,
+  embedding_dimensions_param INTEGER,
   vector_dimensions INTEGER NOT NULL,
   vector_metric TEXT NOT NULL,
   storage_reference TEXT NOT NULL,
@@ -365,7 +488,8 @@ CREATE TABLE capsule_audit_events (
       'model-context-sent',
       'citation-preview-authorized',
       'citation-preview-recoverable',
-      'citation-preview-blocked'
+      'citation-preview-blocked',
+      'citation-preview-document-accessed'
     )
   ),
   source_id TEXT,
@@ -419,6 +543,21 @@ CREATE TABLE capsule_audit_events_v14 (
 
 const COPY_CAPSULE_AUDIT_EVENTS_TO_V14 = `
 INSERT INTO capsule_audit_events_v14 (
+  id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+)
+SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+FROM capsule_audit_events;
+`.trim();
+
+const CREATE_CAPSULE_AUDIT_EVENTS_V15 = CREATE_CAPSULE_AUDIT_EVENTS.replace(
+  "capsule_audit_events",
+  "capsule_audit_events_v15",
+);
+
+const COPY_CAPSULE_AUDIT_EVENTS_TO_V15 = `
+INSERT INTO capsule_audit_events_v15 (
   id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
   deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
 )
@@ -510,11 +649,17 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULE_SOURCES,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
+  CREATE_DOCUMENT_BLOBS,
   CREATE_DOCUMENT_TEXTS,
   CREATE_PAGES,
   CREATE_SECTIONS,
   CREATE_PARSED_UNITS,
   CREATE_CHUNKS,
+  CREATE_CHUNK_LEXICAL_INDEX,
+  CREATE_CHUNK_LEXICAL_FTS,
+  CREATE_CHUNK_LEXICAL_INDEX_AI,
+  CREATE_CHUNK_LEXICAL_INDEX_AD,
+  CREATE_CHUNK_LEXICAL_INDEX_AU,
   CREATE_VECTORS,
   CREATE_PARSER_DIAGNOSTICS,
   CREATE_INDEXING_JOBS,
@@ -538,6 +683,8 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_documents_content_hash ON documents(capsule_id, content_hash);",
   "CREATE INDEX idx_documents_capsule_last_extracted ON documents(capsule_id, last_extracted_at);",
   "CREATE INDEX idx_chunks_capsule_document_order ON chunks(capsule_id, document_id, order_index);",
+  CREATE_CHUNK_LEXICAL_CAPSULE_SOURCE_INDEX,
+  CREATE_CHUNK_LEXICAL_CAPSULE_DOCUMENT_INDEX,
   "CREATE INDEX idx_vectors_capsule ON vectors(capsule_id);",
   "CREATE INDEX idx_vectors_capsule_source ON vectors(capsule_id, source_id);",
   "CREATE INDEX idx_vectors_capsule_document ON vectors(capsule_id, document_id);",
@@ -553,6 +700,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX,
   CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
   CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX,
+  CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX,
 ] as const;
 
 // Runtime deletion primitive (#193 uses this inside a transaction). The cascade chain in
@@ -573,17 +721,39 @@ export interface KnowledgeCapsuleMigration {
 // forward-only semantics we split v2 out as a *delta*: existing v1 databases run only the
 // new CREATE TABLE + CREATE INDEX. Fresh installs apply v1 followed by v2 and end at the
 // same on-disk shape. Each `up` entry stays a single complete statement.
+const CREATE_CAPSULES_V17 = CREATE_CAPSULES.replace(
+  [
+    "  embedding_normalization TEXT,",
+    "  embedding_instruction_version TEXT,",
+    "  embedding_space_fingerprint TEXT,",
+    "  embedding_dimensions_param INTEGER,",
+    "",
+  ].join("\n"),
+  "",
+);
+
+const CREATE_VECTORS_V17 = CREATE_VECTORS.replace(
+  [
+    "  embedding_normalization TEXT,",
+    "  embedding_instruction_version TEXT,",
+    "  embedding_space_fingerprint TEXT,",
+    "  embedding_dimensions_param INTEGER,",
+    "",
+  ].join("\n"),
+  "",
+);
+
 const V1_DDL_WITHOUT_V2: readonly string[] = [
   PRAGMA_FOREIGN_KEYS,
-  CREATE_CAPSULES,
+  CREATE_CAPSULES_V17,
   CREATE_CAPSULE_SOURCES_V1,
   CREATE_CAPSULE_SET_MEMBERS,
-  CREATE_DOCUMENTS,
+  CREATE_DOCUMENTS_V14,
   CREATE_PAGES,
   CREATE_SECTIONS_V1,
   CREATE_PARSED_UNITS,
   CREATE_CHUNKS_V1,
-  CREATE_VECTORS,
+  CREATE_VECTORS_V17,
   CREATE_PARSER_DIAGNOSTICS,
   CREATE_INDEXING_JOBS,
   CREATE_SCHEMA_META,
@@ -794,6 +964,62 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
     ],
   },
+  {
+    version: 15,
+    reason:
+      "Persist content-addressed PDF preview blobs and metadata-only byte-delivery audit events.",
+    up: [
+      "ALTER TABLE documents ADD COLUMN blob_ref TEXT;",
+      CREATE_DOCUMENT_BLOBS,
+      CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX,
+      CREATE_CAPSULE_AUDIT_EVENTS_V15,
+      COPY_CAPSULE_AUDIT_EVENTS_TO_V15,
+      "DROP TABLE capsule_audit_events;",
+      "ALTER TABLE capsule_audit_events_v15 RENAME TO capsule_audit_events;",
+      CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+    ],
+  },
+  {
+    version: 16,
+    reason:
+      "Persist SQLite FTS5/BM25 chunk lexical index for true dense+lexical hybrid retrieval with RRF fusion.",
+    up: [
+      CREATE_CHUNK_LEXICAL_INDEX,
+      CREATE_CHUNK_LEXICAL_FTS,
+      CREATE_CHUNK_LEXICAL_INDEX_AI,
+      CREATE_CHUNK_LEXICAL_INDEX_AD,
+      CREATE_CHUNK_LEXICAL_INDEX_AU,
+      CREATE_CHUNK_LEXICAL_CAPSULE_SOURCE_INDEX,
+      CREATE_CHUNK_LEXICAL_CAPSULE_DOCUMENT_INDEX,
+    ],
+  },
+  {
+    version: 17,
+    reason:
+      "Persist encrypted contextual-retrieval chunk prefixes and augmented/indexed text while preserving original citation offsets.",
+    up: [
+      "ALTER TABLE chunks ADD COLUMN contextual_retrieval_key TEXT;",
+      "ALTER TABLE chunks ADD COLUMN context_prefix TEXT;",
+      "ALTER TABLE chunks ADD COLUMN augmented_text TEXT;",
+      "ALTER TABLE chunks ADD COLUMN context_status TEXT;",
+      "ALTER TABLE chunks ADD COLUMN context_updated_at INTEGER;",
+    ],
+  },
+  {
+    version: 18,
+    reason:
+      "Persist hardened embedding identity fields for normalization, instruction version, dimensions parameter, and embedding-space fingerprint.",
+    up: [
+      "ALTER TABLE capsules ADD COLUMN embedding_normalization TEXT;",
+      "ALTER TABLE capsules ADD COLUMN embedding_instruction_version TEXT;",
+      "ALTER TABLE capsules ADD COLUMN embedding_space_fingerprint TEXT;",
+      "ALTER TABLE capsules ADD COLUMN embedding_dimensions_param INTEGER;",
+      "ALTER TABLE vectors ADD COLUMN embedding_normalization TEXT;",
+      "ALTER TABLE vectors ADD COLUMN embedding_instruction_version TEXT;",
+      "ALTER TABLE vectors ADD COLUMN embedding_space_fingerprint TEXT;",
+      "ALTER TABLE vectors ADD COLUMN embedding_dimensions_param INTEGER;",
+    ],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -826,6 +1052,9 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "capsule_audit_events",
   "extraction_checkpoints",
   "document_text_windows",
+  "document_blobs",
+  "chunk_lexical_index",
+  "chunk_lexical_fts",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
@@ -840,6 +1069,8 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_documents_content_hash",
   "idx_documents_capsule_last_extracted",
   "idx_chunks_capsule_document_order",
+  "idx_chunk_lexical_capsule_source",
+  "idx_chunk_lexical_capsule_document",
   "idx_vectors_capsule",
   "idx_vectors_capsule_source",
   "idx_vectors_capsule_document",
@@ -855,4 +1086,5 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_extraction_checkpoints_capsule_phase",
   "idx_extraction_checkpoints_job",
   "idx_document_text_windows_span",
+  "idx_document_blobs_created_document",
 ] as const;

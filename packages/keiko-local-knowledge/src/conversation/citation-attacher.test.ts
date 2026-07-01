@@ -112,4 +112,32 @@ describe("attachCitationsToAnswer", () => {
     expect(result.citations).toHaveLength(1);
     expect(result.citations[0]?.index).toBe(1);
   });
+
+  it("keeps a marker when the claim sentence overlaps the cited excerpt", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer(
+      "The SOC2 control requires quarterly access reviews [1].",
+      refs,
+      {
+        excerptForReference: () =>
+          "SOC2 control AC-3 requires quarterly access reviews by the platform owner.",
+      },
+    );
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.reference.chunkId).toBe("ch-a");
+  });
+
+  it("drops a marker when the answer claim has no significant overlap with the excerpt", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer(
+      "The SOC2 control requires quarterly access reviews [1].",
+      refs,
+      {
+        excerptForReference: () =>
+          "The deployment guide documents database backup schedules and storage retention.",
+      },
+    );
+    expect(result.text).toBe("The SOC2 control requires quarterly access reviews [1].");
+    expect(result.citations).toEqual([]);
+  });
 });

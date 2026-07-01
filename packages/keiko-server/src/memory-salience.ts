@@ -57,6 +57,8 @@ function scopeLabel(scope: MemoryScope): string {
 
 // Bounds the dedup corpus so the Jaccard loop stays cheap even for a large vault.
 const MAX_EXISTING_BODIES = 200;
+const SALIENCE_MODEL_ENV = "KEIKO_MEMORY_SALIENCE_MODEL_ID";
+const SALIENCE_DEFAULT_SEED = 204;
 
 const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
   type: "json_schema",
@@ -127,6 +129,7 @@ function buildCallModel(
     return null;
   }
   const responseFormat = salienceResponseFormatFor(deps, modelId);
+  const seed = salienceSeedFor(deps, modelId);
   return async (system: string, user: string): Promise<string> => {
     const response = await model.call(
       {
@@ -137,11 +140,17 @@ function buildCallModel(
         ],
         stream: false,
         ...(responseFormat !== undefined ? { responseFormat } : {}),
+        ...(seed !== undefined ? { seed } : {}),
       },
       new AbortController().signal,
     );
     return response.content;
   };
+}
+
+function configuredSalienceModelId(deps: UiHandlerDeps, chatModelId: string): string {
+  const configured = deps.env[SALIENCE_MODEL_ENV]?.trim();
+  return configured === undefined || configured.length === 0 ? chatModelId : configured;
 }
 
 function salienceResponseFormatFor(
@@ -152,6 +161,13 @@ function salienceResponseFormatFor(
   if (config === undefined) return undefined;
   const capability = findConfiguredCapability(config, modelId);
   return capability?.supportsResponseFormat === true ? SALIENCE_RESPONSE_FORMAT : undefined;
+}
+
+function salienceSeedFor(deps: UiHandlerDeps, modelId: string): number | undefined {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return undefined;
+  const capability = findConfiguredCapability(config, modelId);
+  return capability?.supportsSeeding === true ? SALIENCE_DEFAULT_SEED : undefined;
 }
 
 function logSalienceDiagnostic(
@@ -234,7 +250,8 @@ async function extractTurnSalienceOutcomes(
   modelId: string,
   assistantText: string,
 ): Promise<readonly CaptureOutcome[] | null> {
-  const callModel = buildCallModel(deps, modelId);
+  const salienceModelId = configuredSalienceModelId(deps, modelId);
+  const callModel = buildCallModel(deps, salienceModelId);
   if (callModel === null) return null;
   const policy = memoryCapturePolicyForDeps(deps);
   if (memoryTextSecretEgressRejectionReason(request.content, policy) !== null) return null;
@@ -252,7 +269,7 @@ async function extractTurnSalienceOutcomes(
       newMemoryId: () => randomUUID() as MemoryId,
       newProposalId: () => randomUUID() as MemoryProposalId,
       onDiagnostic: (diagnostic) => {
-        logSalienceDiagnostic(diagnostic, deps, modelId);
+        logSalienceDiagnostic(diagnostic, deps, salienceModelId);
       },
     },
   );

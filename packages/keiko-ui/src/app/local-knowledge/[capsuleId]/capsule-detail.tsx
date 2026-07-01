@@ -914,6 +914,7 @@ export function CapsuleDetail({
         capsuleDisplayName={data.capsule.displayName}
         sourceCount={data.sources.length}
         lifecycleState={data.capsule.lifecycleState}
+        vectorCompatible={data.health.vectorCompatible}
         onActionComplete={reload}
         onDeleted={handleDeleted}
       />

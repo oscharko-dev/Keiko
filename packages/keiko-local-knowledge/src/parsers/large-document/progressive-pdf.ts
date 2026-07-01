@@ -9,7 +9,8 @@
 //
 // No-text-layer pages degrade gracefully: when an injected OCR capability is available, the
 // page's OCR text is indexed with page provenance; otherwise a content-free partial-coverage
-// quality warning is recorded and the page is skipped. Missing OCR never fails the job.
+// quality warning is recorded and an empty PageRecord is still emitted. Missing OCR never fails
+// the job.
 
 import type {
   DocumentId,
@@ -169,6 +170,18 @@ interface PdfDriveState {
   windowIndex: number;
 }
 
+async function pageLabelsFor(doc: PdfDocumentLike): Promise<readonly (string | null)[]> {
+  try {
+    return (await doc.getPageLabels?.()) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function pageLabelFor(labels: readonly (string | null)[], pageNumber: number): string | undefined {
+  return labels[pageNumber - 1] ?? undefined;
+}
+
 async function extractPdfWindow(
   doc: PdfDocumentLike,
   firstPage: number,
@@ -177,6 +190,7 @@ async function extractPdfWindow(
   ctx: PdfExtractContext,
   parserOptions: ParserOptions,
   startedAt: number,
+  pageLabels: readonly (string | null)[],
 ): Promise<ProgressiveExtractionWindow> {
   const builder = new WindowTextBuilder(ctx.documentId, state.cursor, state.anyPageEmitted);
   const diagnostics: ParserDiagnostic[] = [];
@@ -192,10 +206,8 @@ async function extractPdfWindow(
     );
     state.scannedObjects = outcome.scannedObjects;
     diagnostics.push(...outcome.diagnostics);
-    if (outcome.text !== undefined && outcome.text.length > 0) {
-      builder.addPage(pageNumber, outcome.text);
-      state.emittedUnits += 1;
-    }
+    builder.addPage(pageNumber, outcome.text ?? "", pageLabelFor(pageLabels, pageNumber));
+    state.emittedUnits += 1;
   }
   state.cursor = builder.nextCursor;
   state.anyPageEmitted = builder.hasEmittedAnyPage;
@@ -221,6 +233,7 @@ async function* pdfExtractWindows(
 ): AsyncIterable<ProgressiveExtractionWindow> {
   const parserOptions = parserOptionsFromPolicy(options);
   const doc = await loadDocument(source);
+  const pageLabels = await pageLabelsFor(doc);
   const resumeFromPage = options.resumeFromPage ?? 0;
   const windowPages = Math.max(1, options.policy.extractionWindowPages);
   const startedAt = options.now();
@@ -234,7 +247,16 @@ async function* pdfExtractWindows(
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;
     const lastPage = Math.min(firstPage + windowPages - 1, doc.numPages);
-    yield extractPdfWindow(doc, firstPage, lastPage, state, ctx, parserOptions, startedAt);
+    yield extractPdfWindow(
+      doc,
+      firstPage,
+      lastPage,
+      state,
+      ctx,
+      parserOptions,
+      startedAt,
+      pageLabels,
+    );
   }
 }
 

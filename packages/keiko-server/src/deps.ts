@@ -33,7 +33,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import {
@@ -46,14 +46,32 @@ import {
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
+import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
+import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
+import {
+  createUpdateRemediationManager,
+  type UpdateRemediationManager,
+} from "./update-remediation.js";
+import {
+  createLocalKnowledgeRemediationPort,
+  type LocalKnowledgeRemediationPort,
+} from "./local-knowledge-remediation.js";
 import {
   createContainerRunnerManager,
   type ContainerRunnerManager,
 } from "./runtime/containerRunner.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryReviewerId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
 import { createBffMemoryVault } from "./memory-handlers.js";
-import { createMemoryAuditHandler } from "./memory-audit-handler.js";
+import {
+  createMemoryAuditDeleteCommitHandler,
+  createMemoryAuditHandler,
+} from "./memory-audit-handler.js";
 import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
@@ -65,6 +83,8 @@ import type {
   OpenAIEmbeddingRequest,
   RealtimeNegotiationOutcome,
   RealtimeNegotiationRequest,
+  RerankOutcome,
+  LiteLLMRerankRequest,
   SpeechToTextOutcome,
   SpeechToTextRequest,
   TextToSpeechOutcome,
@@ -112,7 +132,10 @@ import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.j
 import type { GitRouteOptions } from "./gitRoutes.js";
 import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
 import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
-import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
+import type {
+  ContextualRetrievalChatGateway,
+  KnowledgeStoreKeyProvider,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
   enforceQiRetentionAtStartup,
@@ -130,6 +153,11 @@ export type Redactor = (value: unknown) => unknown;
 // directly, only through the harness/workflow entry points the port feeds.
 export type ModelPortFactory = (modelId: string) => ModelPort | undefined;
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
+
+export interface MemoryAuthorizationContext {
+  readonly reviewerId: MemoryReviewerId;
+  readonly authorizedScopes: () => readonly MemoryScope[];
+}
 
 export interface RuntimeGatewayConfig {
   readonly storagePath: string;
@@ -183,6 +211,15 @@ export interface UiHandlerDeps {
   // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
+  // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
+  // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
+  readonly updateSession?: UpdateSessionManager | undefined;
+  // Issue #1694 — content-free update compatibility, recovery snapshot, and audit state. Optional so
+  // tests can inject a deterministic store; production wiring resolves KEIKO_STATE_DIR.
+  readonly updateLocalState?: UpdateLocalStateManager | undefined;
+  // Issue #1695 — in-app update remediation action/status orchestration. Optional so legacy route
+  // fixtures stay minimal; production composes it over updateLocalState and Local Knowledge.
+  readonly updateRemediation?: UpdateRemediationManager | undefined;
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. Optional so
   // existing tests that do not exercise /api/containers/* keep their fixtures unchanged; production
   // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
@@ -193,6 +230,10 @@ export interface UiHandlerDeps {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  // Server-authoritative identity and scope bounds for privacy-critical MemoriaViva mutations.
+  // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
+  // deployments must inject the authenticated principal's reviewer id and authorized scopes.
+  readonly memoryAuthorization?: MemoryAuthorizationContext | undefined;
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
@@ -235,6 +276,15 @@ export interface UiHandlerDeps {
   // batch path when they also provide a batch stub, so existing scalar-stub tests are unchanged.
   readonly localKnowledgeEmbeddingBatchRequest?:
     ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined;
+  // RAG audit 2026-06: opt-in Anthropic-style Contextual Retrieval for Local Knowledge indexing.
+  // Production builds this over the configured Gateway; tests inject a deterministic chat gateway
+  // so the normal indexing route can prove contextual text reaches embedding/FTS without network IO.
+  readonly localKnowledgeContextualRetrievalChatGateway?:
+    ContextualRetrievalChatGateway | undefined;
+  // Work Package 2 — optional LiteLLM/Cohere-compatible reranker seam. Production leaves this
+  // undefined and uses requestLiteLLMRerank with config.reranker; tests inject deterministic
+  // structural outcomes without touching global fetch.
+  readonly rerankRequest?: ((request: LiteLLMRerankRequest) => Promise<RerankOutcome>) | undefined;
   // Issue #539 (Epic #532) — relationship engine handler deps. Optional so legacy tests
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
   // wiring composes a sqlite-backed RelationshipStore inside buildUiHandlerDeps.
@@ -328,6 +378,12 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional injected governed update local-state manager (tests); production resolves it from
+  // KEIKO_STATE_DIR or <cwd>/.keiko without importing the CLI package.
+  readonly updateLocalState?: UpdateLocalStateManager | undefined;
+  // Optional injected governed update remediation manager (tests); production composes one over
+  // updateLocalState and the Local Knowledge reindex port.
+  readonly updateRemediation?: UpdateRemediationManager | undefined;
   // Optional injected task-workspace provisioning service (tests); production composes one over the
   // sqlite WorkspaceInstanceStore + node worktree adapter when a node store is built.
   readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
@@ -789,6 +845,29 @@ function buildCommandRunner(options: {
   });
 }
 
+function buildUpdateSession(options: {
+  readonly env: EnvSource;
+  readonly liveRedactor: Redactor;
+}): UpdateSessionManager {
+  return createUpdateSessionManager({
+    processEnv: options.env,
+    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
+function resolveUpdateStateDir(env: EnvSource): string {
+  const value = env.KEIKO_STATE_DIR ?? ".keiko";
+  return isAbsolute(value) ? value : resolve(process.cwd(), value);
+}
+
+function buildUpdateLocalState(env: EnvSource): UpdateLocalStateManager {
+  return createUpdateLocalStateManager({ stateDir: resolveUpdateStateDir(env) });
+}
+
 // Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
 // command runner so its content-free run audit inherits the identical secret-shape scrubbing. The
 // active engine probe and the frozen-argv container run both compose the single runCommand boundary.
@@ -833,12 +912,19 @@ function buildMemoryVault(
   evidenceStore: EvidenceStore,
   env: EnvSource,
 ): MemoryVaultStore {
+  const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
   return createBffMemoryVault(
     redactString,
     // #214 — wire every successful vault mutation into the audit ledger. The handler
     // shares the same redactString closure as the live-payload redactor so audit
     // summaries inherit the same secret-shape scrubbing as wire traffic.
-    createMemoryAuditHandler({ evidenceStore, redactString }),
+    (event) => {
+      if (event.kind === "memory:deleted" || event.kind === "memory:tombstoned") {
+        return;
+      }
+      postCommitAudit(event);
+    },
+    createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
     env,
   );
 }
@@ -849,6 +935,16 @@ function buildMemoryVault(
 // otherwise. The constant matches the empty-but-non-zero-length contract of `scope()` so
 // every route resolves a workspaceId instead of returning 403.
 const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
+const DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID = "local-operator" as MemoryReviewerId;
+
+function buildLoopbackMemoryAuthorization(
+  memoryVault: MemoryVaultStore,
+): MemoryAuthorizationContext {
+  return {
+    reviewerId: DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID,
+    authorizedScopes: () => memoryVault.listMemoryScopes(),
+  };
+}
 
 function resolveLoopbackWorkspaceId(env: EnvSource): string {
   const explicit = env.KEIKO_WORKSPACE_ID;
@@ -1111,43 +1207,97 @@ function seedInitialProject(
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
+  readonly updateSession: UpdateSessionManager;
+  readonly updateLocalState: UpdateLocalStateManager;
+  readonly updateRemediation: UpdateRemediationManager;
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
+  readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
-function buildPeripherals(
-  options: BuildHandlerDepsOptions,
-  uiStore: UiStore,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  liveRedactor: Redactor,
-): PeripheralManagers {
+function buildLocalKnowledgeRemediation(options: {
+  readonly runtimeStateDir: string;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly keyProvider: KnowledgeStoreKeyProvider;
+}): LocalKnowledgeRemediationPort {
+  return createLocalKnowledgeRemediationPort({
+    runtimeStateDir: options.runtimeStateDir,
+    currentConfig: () => options.runtimeConfig.current(),
+    keyProvider: options.keyProvider,
+  });
+}
+
+function buildUpdateRemediation(options: {
+  readonly injected: UpdateRemediationManager | undefined;
+  readonly updateLocalState: UpdateLocalStateManager;
+  readonly runtimeStateDir: string;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+}): UpdateRemediationManager {
+  if (options.injected !== undefined) return options.injected;
+  return createUpdateRemediationManager({
+    localState: options.updateLocalState,
+    localKnowledge: buildLocalKnowledgeRemediation({
+      runtimeStateDir: options.runtimeStateDir,
+      runtimeConfig: options.runtimeConfig,
+      keyProvider: options.localKnowledgeKeyProvider,
+    }),
+  });
+}
+
+interface BuildPeripheralsArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly uiStore: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly runtimeStateDir: string;
+}
+
+function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
+  const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
+  const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   return {
     terminal: buildTerminalManager({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     commandRunner: buildCommandRunner({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
+    }),
+    updateSession: buildUpdateSession({
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
+    }),
+    updateLocalState,
+    updateRemediation: buildUpdateRemediation({
+      injected: args.options.updateRemediation,
+      updateLocalState,
+      runtimeStateDir: args.runtimeStateDir,
+      runtimeConfig: args.runtimeConfig,
+      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     }),
     containerRunner: buildContainerRunner({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     browser: buildBrowserManager({
-      evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
-      evidenceStore,
-      redactor: liveRedactor,
+      evidenceDir: resolveEvidenceDir(args.options.evidenceDir, args.options.env),
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
     }),
-    memoryVault: buildMemoryVault(redactString, evidenceStore, options.env),
+    memoryVault,
+    memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
 }
 
@@ -1384,9 +1534,24 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
   };
 }
 
+function reconcileNodeStoreAtStartup(
+  options: BuildHandlerDepsOptions,
+  bundle: PersistenceBundle,
+): void {
+  if (options.store !== undefined) return;
+  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
+}
+
+function gatewayConfigFields(
+  config: GatewayConfig | undefined,
+  configPresent: boolean,
+): Pick<UiHandlerDeps, "config" | "configPresent"> {
+  return { config, configPresent };
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
-  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
-  const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
+  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env),
+    runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
   const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
   const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
     options,
@@ -1398,14 +1563,12 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
+  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({ env: options.env });
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
-  // Issue #447: run a best-effort startup reconciliation only on the real bootstrap path (no injected
-  // store), so test fixtures stay deterministic and trigger reconcile() explicitly when they need it.
-  if (options.store === undefined) reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
+  reconcileNodeStoreAtStartup(options, bundle);
   return {
-    config,
-    configPresent,
+    ...gatewayConfigFields(config, configPresent),
     evidenceStore,
     evidenceDir: resolvedEvidenceDir,
     env: options.env,
@@ -1421,11 +1584,20 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
-    localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
+    localKnowledgeKeyProvider,
     contextProfile: defaultContextProfile(runtimeConfig.current(), contextProfileForModel),
     contextProfileForModel,
-    ...buildPeripherals(options, bundle.uiStore, evidenceStore, redactString, liveRedactor),
-    consolidationJobs: createConsolidationJobRegistry(),
+    ...buildPeripherals({
+      options,
+      uiStore: bundle.uiStore,
+      evidenceStore,
+      redactString,
+      liveRedactor,
+      runtimeConfig,
+      localKnowledgeKeyProvider,
+      runtimeStateDir: dirname(resolvedUiDbPath),
+    }),
+    consolidationJobs: createConsolidationJobRegistry({ evidenceStore }),
     ...optionalPersistenceServices(bundle),
   };
 }

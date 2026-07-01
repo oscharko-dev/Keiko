@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -20,6 +21,7 @@ import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
   updateCapsuleState,
+  writePdfDocumentBlob,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 
@@ -38,10 +40,15 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 
 let tmp: string;
 let store: UiStore;
+const PDF_BYTES = Buffer.from("%PDF-1.4\n1 0 obj<<>>\nendobj\ntrailer<<>>\n%%EOF\n", "utf8");
 
 function must<T>(value: T | undefined): T {
   if (value === undefined) throw new Error("expected a defined value");
   return value;
+}
+
+function sha256Hex(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 beforeEach(() => {
@@ -161,12 +168,29 @@ async function seedPreviewFixture(): Promise<{
     capsuleId: "cap-preview",
     sourceId: "src-preview",
   });
+  const contentHash = sha256Hex(PDF_BYTES);
   updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
   knowledgeStore._internal.db
     .prepare(
-      "UPDATE documents SET media_type = 'application/pdf', content_hash = 'hash-preview', safe_display_name = 'policy.pdf', status = 'extracted' WHERE capsule_id = :capsuleId AND id = :documentId",
+      "UPDATE documents SET media_type = 'application/pdf', content_hash = :contentHash, safe_display_name = 'policy.pdf', status = 'extracted', size_bytes = :sizeBytes WHERE capsule_id = :capsuleId AND id = :documentId",
     )
-    .run({ capsuleId: String(seeded.capsuleId), documentId: String(seeded.documentId) });
+    .run({
+      contentHash,
+      sizeBytes: PDF_BYTES.byteLength,
+      capsuleId: String(seeded.capsuleId),
+      documentId: String(seeded.documentId),
+    });
+  expect(
+    writePdfDocumentBlob(knowledgeStore, {
+      capsuleId: seeded.capsuleId,
+      sourceId: seeded.sourceId,
+      documentId: seeded.documentId,
+      contentHash,
+      byteLength: PDF_BYTES.byteLength,
+      mediaType: "application/pdf",
+      bytes: PDF_BYTES,
+    }).kind,
+  ).toBe("stored");
   const reference = makeReference(
     seeded.capsuleId,
     seeded.sourceId,
@@ -221,6 +245,22 @@ async function seedPreviewFixture(): Promise<{
     capsuleId: seeded.capsuleId,
     previewCitation: must(previewCitations[0]),
   };
+}
+
+function removePreviewBlob(fixture: Awaited<ReturnType<typeof seedPreviewFixture>>): void {
+  const knowledgeStore = openKnowledgeStore({
+    dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+  });
+  try {
+    knowledgeStore._internal.db
+      .prepare("UPDATE documents SET blob_ref = NULL WHERE capsule_id = :capsuleId")
+      .run({ capsuleId: String(fixture.capsuleId) });
+    knowledgeStore._internal.db
+      .prepare("DELETE FROM document_blobs WHERE capsule_id = :capsuleId")
+      .run({ capsuleId: String(fixture.capsuleId) });
+  } finally {
+    knowledgeStore.close();
+  }
 }
 
 function insertDuplicatePreviewChunk(
@@ -299,12 +339,29 @@ async function seedDuplicatePreviewFixture(): Promise<{
     capsuleId: "cap-preview",
     sourceId: "src-preview",
   });
+  const contentHash = sha256Hex(PDF_BYTES);
   updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
   knowledgeStore._internal.db
     .prepare(
-      "UPDATE documents SET media_type = 'application/pdf', content_hash = 'hash-preview', safe_display_name = 'policy.pdf', status = 'extracted' WHERE capsule_id = :capsuleId AND id = :documentId",
+      "UPDATE documents SET media_type = 'application/pdf', content_hash = :contentHash, safe_display_name = 'policy.pdf', status = 'extracted', size_bytes = :sizeBytes WHERE capsule_id = :capsuleId AND id = :documentId",
     )
-    .run({ capsuleId: String(seeded.capsuleId), documentId: String(seeded.documentId) });
+    .run({
+      contentHash,
+      sizeBytes: PDF_BYTES.byteLength,
+      capsuleId: String(seeded.capsuleId),
+      documentId: String(seeded.documentId),
+    });
+  expect(
+    writePdfDocumentBlob(knowledgeStore, {
+      capsuleId: seeded.capsuleId,
+      sourceId: seeded.sourceId,
+      documentId: seeded.documentId,
+      contentHash,
+      byteLength: PDF_BYTES.byteLength,
+      mediaType: "application/pdf",
+      bytes: PDF_BYTES,
+    }).kind,
+  ).toBe("stored");
   const references = [
     makeReference(
       seeded.capsuleId,
@@ -380,6 +437,36 @@ describe("local-knowledge preview handlers", () => {
     expect(normalizePreviewMarkerIndex("1")).toBe(1);
     expect(normalizePreviewMarkerIndex("［1］")).toBe(1);
     expect(normalizePreviewMarkerIndex("【1】")).toBe(1);
+    expect(normalizePreviewMarkerIndex("[1】")).toBeUndefined();
+    expect(normalizePreviewMarkerIndex("【1]")).toBeUndefined();
+  });
+
+  it("builds stable preview ids from canonical marker indexes", async () => {
+    const fixture = await seedPreviewFixture();
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    try {
+      const reference = makeReference(
+        fixture.previewCitation.lineage.capsuleId,
+        fixture.previewCitation.lineage.sourceId,
+        fixture.previewCitation.lineage.documentId,
+        fixture.previewCitation.lineage.chunkId,
+        "policy.pdf",
+      );
+      const alternate = buildStoredPreviewCitations(knowledgeStore, [
+        {
+          marker: "1",
+          sourceLabel: "Preview Capsule / Source src-preview",
+          reference,
+        },
+      ]);
+
+      expect(alternate[0]?.stableId).toBe(fixture.previewCitation.stableId);
+      expect(alternate[0]?.markerIndex).toBe(1);
+    } finally {
+      knowledgeStore.close();
+    }
   });
 
   it("returns available status for a persisted PDF citation without emitting audit rows", async () => {
@@ -411,6 +498,126 @@ describe("local-knowledge preview handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual([]);
   });
 
+  it("keeps status available when a legacy stored chunk id re-anchors by span", async () => {
+    const fixture = await seedPreviewFixture();
+    const message = store.findMessageById(fixture.assistantMessageId);
+    if (message?.groundedAnswer === undefined) {
+      throw new Error("expected grounded answer");
+    }
+    store.attachGroundedAnswer(fixture.assistantMessageId, message.groundedAnswer, [
+      {
+        ...fixture.previewCitation,
+        lineage: {
+          ...fixture.previewCitation.lineage,
+          chunkId: "doc-preview#unit-before-reindex#c0" as ChunkId,
+        },
+      },
+    ]);
+
+    const result = await handleGetPdfCitationPreviewStatus(
+      ctx("/api/local-knowledge/citation-preview/status", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      citations: [
+        {
+          stableId: fixture.previewCitation.stableId,
+          state: "available",
+          display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+        },
+      ],
+    });
+  });
+
+  it("does not report available status when neither blob nor filesystem source exists", async () => {
+    const fixture = await seedPreviewFixture();
+    removePreviewBlob(fixture);
+
+    const result = await handleGetPdfCitationPreviewStatus(
+      ctx("/api/local-knowledge/citation-preview/status", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      citations: [
+        {
+          stableId: fixture.previewCitation.stableId,
+          state: "recoverable",
+          reason: "source-needs-rebind",
+        },
+      ],
+    });
+    expect(auditKinds(fixture.capsuleId)).toEqual([]);
+  });
+
+  it("returns visible status rows when stored preview metadata is missing", async () => {
+    const fixture = await seedPreviewFixture();
+    const message = store.findMessageById(fixture.assistantMessageId);
+    if (message?.groundedAnswer === undefined) {
+      throw new Error("expected grounded answer");
+    }
+    store.attachGroundedAnswer(fixture.assistantMessageId, message.groundedAnswer);
+
+    const result = await handleGetPdfCitationPreviewStatus(
+      ctx("/api/local-knowledge/citation-preview/status", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      citations: [
+        {
+          stableId: "answer-citation-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "recoverable",
+          reason: "preview-metadata-missing",
+        },
+      ],
+    });
+  });
+
+  it("returns a typed status row when message context lookup fails and citation identity is supplied", async () => {
+    const result = await handleGetPdfCitationPreviewStatus(
+      ctx("/api/local-knowledge/citation-preview/status", {
+        chatId: "missing-chat",
+        assistantMessageId: "missing-assistant",
+        marker: "[1]",
+        stableId: "answer-citation-1",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      citations: [
+        {
+          stableId: "answer-citation-1",
+          marker: "[1]",
+          markerIndex: 1,
+          state: "blocked",
+          reason: "assistant-message-not-found",
+        },
+      ],
+    });
+  });
+
   it("authorizes a persisted PDF citation and records an authorization audit event", async () => {
     const fixture = await seedPreviewFixture();
 
@@ -419,7 +626,7 @@ describe("local-knowledge preview handlers", () => {
         chatId: fixture.chatId,
         assistantMessageId: fixture.assistantMessageId,
         marker: "[1]",
-        stableId: "answer-stable-drifted",
+        stableId: fixture.previewCitation.stableId,
       }),
       deps(),
     );
@@ -433,7 +640,57 @@ describe("local-knowledge preview handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
   });
 
-  it("authorizes a unique marker when the UI citation id drifted", async () => {
+  it("allows extracted-image PDFs to remain preview-authorizable", async () => {
+    const fixture = await seedPreviewFixture();
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    knowledgeStore._internal.db
+      .prepare("UPDATE documents SET status = 'extracted-image' WHERE capsule_id = :capsuleId")
+      .run({ capsuleId: String(fixture.capsuleId) });
+    knowledgeStore.close();
+
+    const result = await handleAuthorizePdfCitationPreview(
+      ctx("/api/local-knowledge/citation-preview/authorize", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      outcome: "authorized",
+      display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+    });
+  });
+
+  it("rejects authorization when neither blob nor filesystem source exists", async () => {
+    const fixture = await seedPreviewFixture();
+    removePreviewBlob(fixture);
+
+    const result = await handleAuthorizePdfCitationPreview(
+      ctx("/api/local-knowledge/citation-preview/authorize", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: fixture.previewCitation.stableId,
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      outcome: "rejected",
+      state: "recoverable",
+      reason: "source-needs-rebind",
+    });
+    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-recoverable"]);
+  });
+
+  it("rejects a unique marker when an explicit stableId mismatches", async () => {
     const fixture = await seedPreviewFixture();
 
     const result = await handleAuthorizePdfCitationPreview(
@@ -448,10 +705,38 @@ describe("local-knowledge preview handlers", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      outcome: "authorized",
-      display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+      outcome: "rejected",
+      state: "blocked",
+      reason: "stable-id-mismatch",
     });
-    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
+    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-blocked"]);
+  });
+
+  it("returns a visible status row when selection fails by stableId mismatch", async () => {
+    const fixture = await seedPreviewFixture();
+
+    const result = await handleGetPdfCitationPreviewStatus(
+      ctx("/api/local-knowledge/citation-preview/status", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+        stableId: "wrong-stable-id",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      citations: [
+        {
+          stableId: fixture.previewCitation.stableId,
+          marker: "[1]",
+          markerIndex: 1,
+          state: "blocked",
+          reason: "stable-id-mismatch",
+        },
+      ],
+    });
   });
 
   it("deduplicates repeated identical preview citations before authorizing", async () => {
@@ -506,8 +791,38 @@ describe("local-knowledge preview handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-blocked"]);
   });
 
+  it("authorizes when the current document hash drifts but the cited blob is retained", async () => {
+    const fixture = await seedPreviewFixture();
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    knowledgeStore._internal.db
+      .prepare(
+        "UPDATE documents SET content_hash = 'hash-drifted', blob_ref = NULL WHERE capsule_id = :capsuleId",
+      )
+      .run({ capsuleId: String(fixture.capsuleId) });
+    knowledgeStore.close();
+
+    const result = await handleAuthorizePdfCitationPreview(
+      ctx("/api/local-knowledge/citation-preview/authorize", {
+        chatId: fixture.chatId,
+        assistantMessageId: fixture.assistantMessageId,
+        marker: "[1]",
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      outcome: "authorized",
+      display: { documentLabel: "policy.pdf", pageNumber: 7, anchorQuality: "approximate" },
+    });
+    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-authorized"]);
+  });
+
   it("returns recoverable when the document content hash drifts and records a recoverable audit event", async () => {
     const fixture = await seedPreviewFixture();
+    removePreviewBlob(fixture);
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
     });
@@ -536,6 +851,7 @@ describe("local-knowledge preview handlers", () => {
 
   it("blocks non-PDF preview attempts and records a blocked audit event", async () => {
     const fixture = await seedPreviewFixture();
+    removePreviewBlob(fixture);
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
     });

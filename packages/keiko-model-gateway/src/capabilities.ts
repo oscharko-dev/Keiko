@@ -116,7 +116,7 @@ export function listCapabilities(): readonly ModelCapability[] {
 // embedding model name that predates the `text-embedding-*` convention.
 // ReDoS-safe: no nested quantifiers, linear worst-case.
 export const EMBEDDING_ID_PATTERN =
-  /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
+  /(?:^|[-_/. ])(?:(?:text-)?embed(?:ding)?s?|bge|e5|gte|nomic|mxbai|jina|instructor)(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
 
 export function isLikelyEmbeddingModelId(id: string): boolean {
   return EMBEDDING_ID_PATTERN.test(id);

@@ -6,6 +6,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryEdge, MemoryEdgeId, MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
+import { cachedPrepare } from "./statements.js";
 
 interface EdgeRow {
   readonly id: string;
@@ -56,7 +57,7 @@ export function insertEdgeRow(
 ): void {
   const provenanceSummary =
     edge.provenanceSummary === undefined ? null : cipher.sealString(edge.provenanceSummary);
-  db.prepare(INSERT_SQL).run(
+  cachedPrepare(db, INSERT_SQL).run(
     edge.id,
     edge.schemaVersion,
     edge.fromMemoryId,
@@ -73,7 +74,7 @@ export function listOutgoingEdgeRows(
   memoryId: MemoryId,
   cipher: MemoryContentCipher,
 ): readonly MemoryEdge[] {
-  const rows = db.prepare(LIST_OUT_SQL).all(memoryId) as unknown as readonly EdgeRow[];
+  const rows = cachedPrepare(db, LIST_OUT_SQL).all(memoryId) as unknown as readonly EdgeRow[];
   return rows.map((row) => rowToEdge(row, cipher));
 }
 
@@ -82,7 +83,7 @@ export function listIncomingEdgeRows(
   memoryId: MemoryId,
   cipher: MemoryContentCipher,
 ): readonly MemoryEdge[] {
-  const rows = db.prepare(LIST_IN_SQL).all(memoryId) as unknown as readonly EdgeRow[];
+  const rows = cachedPrepare(db, LIST_IN_SQL).all(memoryId) as unknown as readonly EdgeRow[];
   return rows.map((row) => rowToEdge(row, cipher));
 }
 
@@ -99,13 +100,12 @@ export function listEdgeRowsForMemoryIds(
   for (let i = 0; i < uniqueIds.length; i += BULK_EDGE_CHUNK_SIZE) {
     const chunk = uniqueIds.slice(i, i + BULK_EDGE_CHUNK_SIZE);
     const placeholders = chunk.map(() => "?").join(",");
-    const rows = db
-      .prepare(
-        `SELECT * FROM memory_edges
+    const rows = cachedPrepare(
+      db,
+      `SELECT * FROM memory_edges
          WHERE from_memory_id IN (${placeholders}) OR to_memory_id IN (${placeholders})
          ORDER BY created_at ASC`,
-      )
-      .all(...chunk, ...chunk) as unknown as readonly EdgeRow[];
+    ).all(...chunk, ...chunk) as unknown as readonly EdgeRow[];
     for (const row of rows) {
       const edge = rowToEdge(row, cipher);
       if (idSet.has(edge.fromMemoryId)) {
@@ -120,6 +120,6 @@ export function listEdgeRowsForMemoryIds(
 }
 
 export function deleteEdgeRow(db: DatabaseSync, edgeId: MemoryEdgeId): boolean {
-  const info = db.prepare(DELETE_SQL).run(edgeId);
+  const info = cachedPrepare(db, DELETE_SQL).run(edgeId);
   return info.changes > 0;
 }

@@ -53,6 +53,13 @@ function createVault(): { dir: string; vault: MemoryVaultStore } {
   };
 }
 
+function listAllMemories(
+  vault: MemoryVaultStore,
+  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
+}
+
 function readAuditEvents(store: EvidenceStore, nowMs: number): readonly Record<string, unknown>[] {
   const raw = store.get(auditRunIdFor(nowMs));
   return raw === undefined ? [] : (JSON.parse(raw) as readonly Record<string, unknown>[]);
@@ -254,9 +261,9 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-success",
     });
 
-    const proposed = vault
-      .listMemories({ includeExpired: true })
-      .find((record) => record.status === "proposed");
+    const proposed = listAllMemories(vault, { includeExpired: true }).find(
+      (record) => record.status === "proposed",
+    );
     expect(proposed).toBeDefined();
     expect(proposed?.body).toBe("the test runner is vitest");
     expect(proposed?.scope).toEqual({ kind: "project", projectId: "/repo" });
@@ -294,9 +301,9 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-correction",
     });
 
-    const proposed = vault
-      .listMemories({ includeExpired: true })
-      .find((record) => record.status === "proposed");
+    const proposed = listAllMemories(vault, { includeExpired: true }).find(
+      (record) => record.status === "proposed",
+    );
     expect(proposed).toBeDefined();
     expect(proposed?.body).toBe("the private support email is developer@example.com");
     expect(proposed?.provenance.sensitivity).toBe("confidential");
@@ -332,7 +339,7 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-success",
     });
 
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
     vault.close();
   });
 });

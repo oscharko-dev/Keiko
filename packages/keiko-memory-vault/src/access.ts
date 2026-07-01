@@ -8,6 +8,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import { cachedPrepare } from "./statements.js";
 
 export interface MemoryAccessStat {
   readonly lastAccessedAt: number;
@@ -58,7 +59,7 @@ interface AccessRow {
 
 export function recordAccessRows(db: DatabaseSync, ids: readonly MemoryId[], nowMs: number): void {
   if (ids.length === 0) return;
-  const stmt = db.prepare(UPSERT_SQL);
+  const stmt = cachedPrepare(db, UPSERT_SQL);
   for (const id of ids) {
     stmt.run(id, nowMs);
   }
@@ -78,7 +79,7 @@ export function recordOutcomeRows(
 ): void {
   if (ids.length === 0) return;
   const clamped = clampUtility(utility);
-  const stmt = db.prepare(RECORD_OUTCOME_SQL);
+  const stmt = cachedPrepare(db, RECORD_OUTCOME_SQL);
   for (const id of ids) {
     stmt.run(id, nowMs, clamped);
   }
@@ -102,12 +103,12 @@ export function getAccessStatsRows(
   ids?: readonly MemoryId[],
 ): ReadonlyMap<MemoryId, MemoryAccessStat> {
   if (ids === undefined) {
-    const rows = db.prepare(SELECT_ALL_SQL).all() as unknown as readonly AccessRow[];
+    const rows = cachedPrepare(db, SELECT_ALL_SQL).all() as unknown as readonly AccessRow[];
     return rowsToMap(rows);
   }
   if (ids.length === 0) return new Map();
   const placeholders = ids.map(() => "?").join(",");
   const sql = `${SELECT_ALL_SQL} WHERE memory_id IN (${placeholders})`;
-  const rows = db.prepare(sql).all(...ids) as unknown as readonly AccessRow[];
+  const rows = cachedPrepare(db, sql).all(...ids) as unknown as readonly AccessRow[];
   return rowsToMap(rows);
 }
