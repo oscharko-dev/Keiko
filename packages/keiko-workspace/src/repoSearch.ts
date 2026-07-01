@@ -103,7 +103,7 @@ export interface SearchResult {
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics | undefined;
   readonly coverage: ContextCoverageDiagnostics;
-  readonly workspaceIndex: WorkspaceIndexPreparationReport | undefined;
+  readonly workspaceIndex?: WorkspaceIndexPreparationReport | undefined;
 }
 
 export interface ReadExcerptRequest {
