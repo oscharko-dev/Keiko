@@ -45,7 +45,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
-    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -54,7 +53,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
-    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -152,8 +150,14 @@ describe("ChatHistoryPanel", () => {
     await user.click(screen.getByRole("button", { name: /restore/i }));
 
     await waitFor(() => expect(updateChat).toHaveBeenCalledWith("chat-1", { status: "open" }));
-    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute("aria-selected", "false");
-    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /active/i })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+    expect(screen.getByRole("tab", { name: /deleted/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("renames a chat through the PATCH helper", async () => {

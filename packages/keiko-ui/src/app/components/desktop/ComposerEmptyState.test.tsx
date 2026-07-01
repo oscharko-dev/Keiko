@@ -81,7 +81,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
-    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -90,7 +89,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
-    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -420,7 +418,10 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
     await user.tab();
     // Next is a button (attach), then mode button, then model picker.
     let iterations = 0;
-    while (document.activeElement?.getAttribute("aria-label") !== "Models" && iterations < 10) {
+    while (
+      document.activeElement?.getAttribute("aria-label") !== "Models" &&
+      iterations < 10
+    ) {
       await user.tab();
       iterations++;
     }

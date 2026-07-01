@@ -54,7 +54,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
-    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -63,7 +62,6 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
-    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -138,89 +136,6 @@ async function chooseComboboxOption(
 }
 
 describe("ChatWindow cancel button", () => {
-  it("renders regenerate on the latest ungrounded assistant response", async () => {
-    const regenerateMessage = vi.fn().mockResolvedValue(undefined);
-    const user = userEvent.setup();
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        messages: [
-          {
-            id: "u1",
-            chatId: "chat-1",
-            role: "user",
-            content: "hello",
-            timestamp: 1,
-            runId: undefined,
-            workflowId: undefined,
-            workflowStatus: undefined,
-            shortResult: undefined,
-            taskType: undefined,
-          },
-          {
-            id: "a1",
-            chatId: "chat-1",
-            role: "assistant",
-            content: "answer",
-            timestamp: 2,
-            runId: undefined,
-            workflowId: undefined,
-            workflowStatus: undefined,
-            shortResult: undefined,
-            taskType: undefined,
-          },
-        ],
-        regenerateMessage,
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: /regenerate response/i }));
-    expect(regenerateMessage).toHaveBeenCalledWith("a1");
-  });
-
-  it("keeps cancel reachable while regeneration is in flight", async () => {
-    const cancelSend = vi.fn();
-    const user = userEvent.setup();
-    renderWindow(
-      makeSession({
-        activeChat: makeChat(),
-        sending: true,
-        sendStatus: "contacting",
-        regeneratingMessageId: "a1",
-        cancelSend,
-        messages: [
-          {
-            id: "u1",
-            chatId: "chat-1",
-            role: "user",
-            content: "hello",
-            timestamp: 1,
-            runId: undefined,
-            workflowId: undefined,
-            workflowStatus: undefined,
-            shortResult: undefined,
-            taskType: undefined,
-          },
-          {
-            id: "a1",
-            chatId: "chat-1",
-            role: "assistant",
-            content: "answer",
-            timestamp: 2,
-            runId: undefined,
-            workflowId: undefined,
-            workflowStatus: undefined,
-            shortResult: undefined,
-            taskType: undefined,
-          },
-        ],
-      }),
-    );
-
-    await user.click(screen.getByRole("button", { name: /cancel regeneration/i }));
-    expect(cancelSend).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps connected resource details out of the chat header", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
@@ -991,7 +906,9 @@ describe("ChatWindow compact responsive controls (#1216)", () => {
       </ChatSessionProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Launch workflow" })).toHaveClass("cmp-mode-compact");
+    expect(screen.getByRole("button", { name: "Launch workflow" })).toHaveClass(
+      "cmp-mode-compact",
+    );
     expect(container.querySelector(".cmp-model")).toHaveClass("cmp-model-compact");
   });
 
@@ -1259,7 +1176,6 @@ describe("ChatWindow memory controls", () => {
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
     await user.click(screen.getByRole("button", { name: /review forget/i }));
-    await user.type(screen.getByLabelText(/type forget/i), "FORGET");
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => expect(forgetMemoryAction).toHaveBeenCalledWith("mem-forget-1"));
   });
@@ -1291,7 +1207,6 @@ describe("ChatWindow memory controls", () => {
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
     await user.click(screen.getByRole("button", { name: /review forget/i }));
-    await user.type(screen.getByLabelText(/type forget/i), "FORGET");
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
