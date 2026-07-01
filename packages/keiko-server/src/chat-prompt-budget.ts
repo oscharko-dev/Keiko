@@ -1,8 +1,4 @@
-import {
-  estimateTokens,
-  estimateTokensForSegments,
-  type ContextProfile,
-} from "@oscharko-dev/keiko-contracts";
+import { estimateTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
@@ -53,7 +49,6 @@ interface PromptAssemblyInput {
   readonly totalDocumentEntries: number;
   readonly redactionSecrets: readonly string[];
   readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
-  readonly allocatedHistoryTokens?: number | undefined;
 }
 
 interface PromptLaneSelection {
@@ -61,7 +56,6 @@ interface PromptLaneSelection {
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly diagnostics: ContextAssemblyDiagnostics;
-  readonly historyBudget?: number | undefined;
 }
 
 function renderMemoryContextText(
@@ -209,8 +203,6 @@ function selectPromptLanes(input: {
   });
   const memoryIncluded = includedLaneIds(allocation.lanes, "working-memory");
   const documentIncluded = includedLaneIds(allocation.lanes, "repo-evidence");
-  const historyLane = allocation.lanes.find((lane) => lane.laneId === "history-summary");
-  const systemTokens = estimateTokens(CONVERSATION_SYSTEM_PROMPT);
   return {
     memoryEntries: input.memoryEntries.filter((_, index) =>
       memoryIncluded.has(memoryLaneItemId(index)),
@@ -222,8 +214,6 @@ function selectPromptLanes(input: {
       documentIncluded.has(documentLaneItemId(index)),
     ),
     diagnostics: allocation.diagnostics,
-    historyBudget:
-      historyLane === undefined ? undefined : systemTokens + historyLane.estimatedTokens,
   };
 }
 
@@ -241,11 +231,7 @@ function assembleGatewayPromptCandidate(
   if (latestTurnTokens > input.profile.effectiveInputBudget) {
     return undefined;
   }
-  const remainingInputBudget = input.profile.effectiveInputBudget - latestTurnTokens;
-  const historyBudget =
-    input.allocatedHistoryTokens === undefined
-      ? remainingInputBudget
-      : Math.min(remainingInputBudget, input.allocatedHistoryTokens);
+  const historyBudget = input.profile.effectiveInputBudget - latestTurnTokens;
   const historyOutcome = conversationForGatewayWithCompaction(input.historyPrefix, {
     contextProfile: input.profile,
     effectiveInputBudget: historyBudget,
@@ -314,7 +300,6 @@ export function selectGatewayPromptAssembly(input: {
     compactionContextText: selection.compactionContextText,
     documentContext: selection.documentContext,
     allocatorDiagnostics: selection.diagnostics,
-    allocatedHistoryTokens: selection.historyBudget,
   });
 }
 
