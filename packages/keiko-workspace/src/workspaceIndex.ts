@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { realpathSync } from "node:fs";
+import { constants as fsConstants, lstatSync, realpathSync } from "node:fs";
 import {
   chmod,
+  type FileHandle,
   lstat,
   mkdir,
-  readFile,
+  open,
   readdir,
   rename,
   rm,
@@ -526,12 +527,36 @@ export function buildWorkspaceIndexScopeKey(
 
 interface FileWorkspaceIndexStoreConfig {
   readonly runtimeDir: string;
-  readonly runtimeDirRealPath: string | undefined;
+  readonly runtimeDirIdentity: RuntimeDirIdentity | undefined;
   readonly workspaceRoot: string | undefined;
   readonly allowWorkspaceLocalRuntimeDir: boolean;
   readonly maxSnapshotBytes: number;
   readonly maxSnapshots: number;
   readonly maxSnapshotEntries: number;
+}
+
+interface RuntimeDirIdentity {
+  readonly realPath: string;
+  readonly dev: number | undefined;
+  readonly ino: number | undefined;
+}
+
+function runtimeDirIdentity(realPath: string, stat: { readonly dev?: number; readonly ino?: number }): RuntimeDirIdentity {
+  return {
+    realPath,
+    dev: typeof stat.dev === "number" ? stat.dev : undefined,
+    ino: typeof stat.ino === "number" ? stat.ino : undefined,
+  };
+}
+
+function sameRuntimeDirIdentity(a: RuntimeDirIdentity, b: RuntimeDirIdentity): boolean {
+  if (a.realPath !== b.realPath) {
+    return false;
+  }
+  if (a.dev === undefined || a.ino === undefined || b.dev === undefined || b.ino === undefined) {
+    return true;
+  }
+  return a.dev === b.dev && a.ino === b.ino;
 }
 
 function resolvedRuntimeDirRealPath(
@@ -554,20 +579,38 @@ function resolvedRuntimeDirRealPath(
   }
 }
 
-async function runtimeDirRealPathIfSafe(
+function resolvedRuntimeDirIdentity(
   runtimeDir: string,
   workspaceRoot: string | undefined,
   allowWorkspaceLocalRuntimeDir: boolean,
-): Promise<string | undefined> {
+): RuntimeDirIdentity | undefined {
+  try {
+    const dirStat = lstatSync(runtimeDir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+      return undefined;
+    }
+    const realPath = resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
+    return realPath === undefined ? undefined : runtimeDirIdentity(realPath, dirStat);
+  } catch {
+    return undefined;
+  }
+}
+
+async function runtimeDirIdentityIfSafe(
+  runtimeDir: string,
+  workspaceRoot: string | undefined,
+  allowWorkspaceLocalRuntimeDir: boolean,
+): Promise<RuntimeDirIdentity | undefined> {
   try {
     const dirStat = await lstat(runtimeDir);
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
       return undefined;
     }
+    const realPath = resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
+    return realPath === undefined ? undefined : runtimeDirIdentity(realPath, dirStat);
   } catch {
     return undefined;
   }
-  return resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
 }
 
 function normalizeLimit(value: number | undefined, fallback: number): number {
@@ -627,7 +670,7 @@ function fileWorkspaceIndexStoreConfig(
   const workspaceRoot = options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot);
   return {
     runtimeDir,
-    runtimeDirRealPath: resolvedRuntimeDirRealPath(
+    runtimeDirIdentity: resolvedRuntimeDirIdentity(
       runtimeDir,
       workspaceRoot,
       options.allowWorkspaceLocalRuntimeDir === true,
@@ -717,21 +760,42 @@ async function safeReadSnapshotFile(
   path: string,
   maxSnapshotBytes: number,
 ): Promise<string | undefined> {
-  let fileStat;
+  let handle: FileHandle | undefined;
   try {
-    fileStat = await lstat(path);
+    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const fileStat = await handle.stat();
+    if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
+      return undefined;
+    }
+    const raw = await readSnapshotHandleWithinLimit(handle, maxSnapshotBytes);
+    return raw === undefined ? undefined : raw.toString("utf8");
   } catch {
     return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
-  if (!fileStat.isFile() || fileStat.isSymbolicLink() || fileStat.size > maxSnapshotBytes) {
-    return undefined;
+}
+
+async function readSnapshotHandleWithinLimit(
+  handle: FileHandle,
+  maxSnapshotBytes: number,
+): Promise<Buffer | undefined> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  while (totalBytes <= maxSnapshotBytes) {
+    const readLimit = Math.min(64 * 1024, maxSnapshotBytes + 1 - totalBytes);
+    const buffer = Buffer.allocUnsafe(readLimit);
+    const { bytesRead } = await handle.read(buffer, 0, readLimit);
+    if (bytesRead === 0) {
+      return Buffer.concat(chunks, totalBytes);
+    }
+    totalBytes += bytesRead;
+    if (totalBytes > maxSnapshotBytes) {
+      return undefined;
+    }
+    chunks.push(buffer.subarray(0, bytesRead));
   }
-  try {
-    const raw = await readFile(path, "utf8");
-    return Buffer.byteLength(raw, "utf8") > maxSnapshotBytes ? undefined : raw;
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
 function parseStoredSnapshot(
@@ -789,9 +853,9 @@ async function atomicWriteSnapshotFile(path: string, tempPath: string, content: 
 type RuntimeDirGuard = () => Promise<string | undefined>;
 
 function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDirGuard {
-  let expectedRuntimeDirRealPath = config.runtimeDirRealPath;
+  let expectedRuntimeDirIdentity = config.runtimeDirIdentity;
   return async (): Promise<string | undefined> => {
-    const current = await runtimeDirRealPathIfSafe(
+    const current = await runtimeDirIdentityIfSafe(
       config.runtimeDir,
       config.workspaceRoot,
       config.allowWorkspaceLocalRuntimeDir,
@@ -799,11 +863,11 @@ function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDi
     if (current === undefined) {
       return undefined;
     }
-    if (expectedRuntimeDirRealPath === undefined) {
-      expectedRuntimeDirRealPath = current;
-      return current;
+    if (expectedRuntimeDirIdentity === undefined) {
+      expectedRuntimeDirIdentity = current;
+      return current.realPath;
     }
-    return current === expectedRuntimeDirRealPath ? current : undefined;
+    return sameRuntimeDirIdentity(expectedRuntimeDirIdentity, current) ? current.realPath : undefined;
   };
 }
 

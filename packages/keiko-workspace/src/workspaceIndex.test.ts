@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import { nodeWorkspaceFs, type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./fs.js";
 import {
   DEFAULT_SEARCH_LIMITS,
   searchText,
@@ -532,6 +532,74 @@ describe("workspaceIndex", () => {
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["docs/readme.md", "src/a.ts"]);
     expect(tracked.counters.readFileUtf8).toBe(1);
     expect(tracked.counters.readFileBytes).toBe(1);
+  });
+
+  it("aggregates stale diagnostics across multiple directory deltas", async () => {
+    const tracked = createTrackedFs({
+      "docs/a.md": "needle in docs\n",
+      "src/a.ts": "export const alpha = 'needle';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    tracked.writeFile("docs/b.md", "needle in new docs\n");
+    tracked.writeFile("src/b.ts", "export const beta = 'needle';\n");
+    tracked.resetCounters();
+
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath).sort()).toEqual([
+      "docs/a.md",
+      "docs/b.md",
+      "src/a.ts",
+      "src/b.ts",
+    ]);
+    expect(result.workspaceIndex).toMatchObject({
+      reusedRecords: 2,
+      staleRecords: 2,
+    });
+    expect(tracked.counters.readFileUtf8).toBe(2);
+    expect(tracked.counters.readFileBytes).toBe(2);
+  });
+
+  it("does not fingerprint selected directories that resolve to denied real paths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const workspaceRoot = tempRuntimeDir();
+    try {
+      mkdirSync(join(workspaceRoot, ".keiko"), { recursive: true });
+      writeFileSync(join(workspaceRoot, ".keiko", "secret.txt"), "needle\n", "utf8");
+      symlinkSync(join(workspaceRoot, ".keiko"), join(workspaceRoot, "safe-link"), "dir");
+      const currentScope: SearchScope = {
+        workspace: { ...workspace(), root: workspaceRoot },
+        scopeId: "scope-1",
+        relativePaths: ["safe-link"],
+      };
+      const index = createWorkspaceIndex();
+
+      const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+        fs: nodeWorkspaceFs,
+        nowMs: FIXED_NOW,
+        workspaceIndex: index,
+      });
+      const snapshot = await snapshotFor(index, currentScope);
+
+      expect(result.atoms).toEqual([]);
+      expect(snapshot?.discovery.directories.map((dir) => dir.scopePath) ?? []).toEqual([]);
+    } finally {
+      removeRuntimeDir(workspaceRoot);
+    }
   });
 
   it("rebuilds same-size changed records when precise metadata changes", async () => {
@@ -1096,6 +1164,24 @@ describe("workspaceIndex", () => {
     }
   });
 
+  it("treats a runtime directory recreated at the same path as cache loss", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const originalStore = createFileWorkspaceIndexStore({ runtimeDir });
+      await originalStore.saveSnapshot("safe-key", sampleSnapshot("needle"));
+
+      removeRuntimeDir(runtimeDir);
+      mkdirSync(runtimeDir, { recursive: true });
+      const replacementStore = createFileWorkspaceIndexStore({ runtimeDir });
+      await replacementStore.saveSnapshot("safe-key", sampleSnapshot("poison"));
+
+      await expect(originalStore.loadSnapshot("safe-key")).resolves.toBeUndefined();
+      await expect(replacementStore.loadSnapshot("safe-key")).resolves.toBeDefined();
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
   it("prunes orphaned temp snapshots under the configured snapshot cap", async () => {
     const runtimeDir = tempRuntimeDir();
     try {
@@ -1161,17 +1247,25 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("does not write or load an oversize file-backed snapshot at the store layer", async () => {
+  it("does not write or load oversize file-backed snapshots at the store layer", async () => {
     const runtimeDir = tempRuntimeDir();
     try {
-      const store = createFileWorkspaceIndexStore({
+      const writer = createFileWorkspaceIndexStore({ runtimeDir });
+      await writer.saveSnapshot("oversize-key", sampleSnapshot("needle ".repeat(64)));
+      expect(runtimeFiles(runtimeDir)).toHaveLength(1);
+
+      const cappedReader = createFileWorkspaceIndexStore({
         runtimeDir,
         maxSnapshotBytes: 64,
       });
-      await store.saveSnapshot("oversize-key", sampleSnapshot("needle ".repeat(64)));
+      await expect(cappedReader.loadSnapshot("oversize-key")).resolves.toBeUndefined();
 
-      expect(runtimeFiles(runtimeDir)).toEqual([]);
-      await expect(store.loadSnapshot("oversize-key")).resolves.toBeUndefined();
+      const cappedWriter = createFileWorkspaceIndexStore({
+        runtimeDir,
+        maxSnapshotBytes: 64,
+      });
+      await cappedWriter.saveSnapshot("too-large-key", sampleSnapshot("needle ".repeat(64)));
+      expect(runtimeFiles(runtimeDir)).toHaveLength(1);
     } finally {
       removeRuntimeDir(runtimeDir);
     }

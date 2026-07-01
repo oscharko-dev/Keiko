@@ -423,11 +423,22 @@ function selectedDirectoryPath(
   if (!isValidScopePath(normalized, { mustBeRelative: true }) || isDenied(normalized)) {
     return undefined;
   }
+  const absolutePath = resolveWithinWorkspace(workspaceRoot, normalized);
+  let contained;
   try {
-    const stat = fs.stat(resolveWithinWorkspace(workspaceRoot, normalized));
-    return stat.isDirectory ? normalized : parentDirectoryPath(normalized);
+    contained = containedRealPathInfo(fs, workspaceRoot, absolutePath);
   } catch {
-    return parentDirectoryPath(normalized);
+    return undefined;
+  }
+  const realScopePath = normalizeScopePath(contained.realRelative);
+  if (isDenied(realScopePath)) {
+    return undefined;
+  }
+  try {
+    const stat = fs.stat(contained.path);
+    return stat.isDirectory ? realScopePath : parentDirectoryPath(realScopePath);
+  } catch {
+    return parentDirectoryPath(realScopePath);
   }
 }
 
@@ -726,6 +737,22 @@ function emptyWorkspaceIndexPreparationReport(): WorkspaceIndexPreparationReport
   };
 }
 
+function addWorkspaceIndexPreparationReport(
+  a: WorkspaceIndexPreparationReport,
+  b: WorkspaceIndexPreparationReport,
+): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: a.discoveredEntries + b.discoveredEntries,
+    retainedEntries: a.retainedEntries + b.retainedEntries,
+    indexedRecords: a.indexedRecords + b.indexedRecords,
+    reusedRecords: a.reusedRecords + b.reusedRecords,
+    staleRecords: a.staleRecords + b.staleRecords,
+    skippedEntries: a.skippedEntries + b.skippedEntries,
+    deletedEntries: a.deletedEntries + b.deletedEntries,
+    droppedRecords: a.droppedRecords + b.droppedRecords,
+  };
+}
+
 async function loadWorkspaceIndexSnapshot(
   workspaceIndex: WorkspaceIndex,
   scope: SearchScope,
@@ -816,7 +843,7 @@ function applyWorkspaceIndexDeltas(
   for (const delta of deltas) {
     const applied = applyWorkspaceIndexDelta(delta, state, inputs);
     removedEntries += applied.removedEntries;
-    affectedReport = applied.affectedReport;
+    affectedReport = addWorkspaceIndexPreparationReport(affectedReport, applied.affectedReport);
   }
   const report = reconciledWorkspaceIndexReport({
     discoveryByPath: state.discoveryByPath,
