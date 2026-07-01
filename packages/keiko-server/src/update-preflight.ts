@@ -1069,6 +1069,7 @@ export function createUpdatePreflightService(
 }
 
 function serviceFor(deps: UiHandlerDeps): UpdatePreflightService {
+  if (deps.updatePreflight !== undefined) return deps.updatePreflight;
   const existing = perDepsServices.get(deps);
   if (existing !== undefined) return existing;
   const created = createUpdatePreflightService();

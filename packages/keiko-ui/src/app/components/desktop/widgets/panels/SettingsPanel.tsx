@@ -1030,14 +1030,6 @@ export function SettingsPanel({
 
   return (
     <div className="set">
-      <div className="set-hero">
-        <Icons.settings size={18} />
-        <span className="set-title">{t("settings.title")}</span>
-        <span className="set-onprem" title={t("settings.selfHostedTitle")}>
-          <span className="dot" style={{ background: "var(--accent)" }} />{" "}
-          {t("settings.selfHosted")}
-        </span>
-      </div>
       <div className="set-tabs">
         {(["models", "general", "security"] as readonly Tab[]).map((id) => (
           <button
@@ -1069,12 +1061,21 @@ export function SettingsPanel({
                 <div className="set-sec-t">{t("settings.models.gatewayTitle")}</div>
                 <div className="set-sec-d">{t("settings.models.gatewayDescription")}</div>
               </div>
-              <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
-                <Icons.plus size={14} />
-                {gatewayConfigured
-                  ? t("settings.models.updateCredentials")
-                  : t("settings.models.connectGateway")}
-              </button>
+              <div className="set-sec-actions">
+                <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
+                  <Icons.plus size={14} />
+                  {gatewayConfigured
+                    ? t("settings.models.updateCredentials")
+                    : t("settings.models.connectGateway")}
+                </button>
+                <span
+                  className="set-onprem set-onprem-gateway"
+                  title={t("settings.selfHostedTitle")}
+                >
+                  <span className="dot" style={{ background: "var(--accent)" }} />{" "}
+                  {t("settings.selfHosted")}
+                </span>
+              </div>
             </div>
 
             <div className="ml-row">

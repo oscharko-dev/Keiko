@@ -251,7 +251,9 @@ describe("SettingsPanel Updates entry point (Issue #1696)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review updates" }));
 
     expect(openUpdatesWindow).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Review package updates, state impact, restart needs, patch notes, and remediation before installing.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Check for Keiko updates and install them when available."),
+    ).toBeInTheDocument();
   });
 });
 
@@ -280,6 +282,18 @@ describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 A
 });
 
 describe("SettingsPanel gateway summary semantics", () => {
+  it("places the self-hosted badge with the model gateway actions instead of a duplicate Settings hero", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const { container } = render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument();
+    });
+
+    expect(container.querySelector(".set-hero")).toBeNull();
+    expect(screen.getByText("Self-hosted").closest(".set-sec-actions")).toBeTruthy();
+  });
+
   it("distinguishes a configured gateway with zero models from setup-required state", async () => {
     primeFetches([]);
     render(<SettingsPanel />);
@@ -500,7 +514,7 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     expect(window.localStorage.getItem("keiko.locale")).toBe("de");
     expect(document.documentElement.lang).toBe("de");
     expect(document.documentElement.dataset.locale).toBe("de");
-    expect(screen.getByText("Einstellungen")).toBeInTheDocument();
+    expect(screen.getByText("Sprache")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allgemein" })).toHaveAttribute(
       "aria-pressed",
       "true",

@@ -59,6 +59,7 @@ interface WorkspaceProps {
   readonly wsRef: RefObject<HTMLDivElement>;
   readonly openPalette: () => void;
   readonly palette?: ReactNode;
+  readonly children?: ReactNode;
 }
 
 export const KNOWLEDGE_CONNECTOR_NODE_SIZE = { w: 260, h: 220 } as const;
@@ -312,7 +313,13 @@ function useZoomActive(zoom: number): boolean {
   return active;
 }
 
-export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
+export function Workspace({
+  ws,
+  wsRef,
+  openPalette,
+  palette,
+  children,
+}: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
@@ -853,6 +860,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       </button>
 
       {hasMaximizedWindow ? null : (palette ?? null)}
+      {children}
     </main>
   );
   /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */

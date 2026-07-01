@@ -18,6 +18,38 @@ type NoticeState =
   | { readonly status: "ready"; readonly report: UpdatePreflightReport }
   | { readonly status: "dismissed" };
 
+const DISMISSED_NOTICE_KEY_PREFIX = "keiko.updateStartupNotice.dismissed.";
+
+function dismissalFingerprint(report: UpdatePreflightReport): string {
+  return [
+    report.currentVersion,
+    report.targetVersion ?? "no-target",
+    report.checkedAt,
+    report.status,
+    report.severity,
+  ].join("|");
+}
+
+function dismissalStorageKey(report: UpdatePreflightReport): string {
+  return `${DISMISSED_NOTICE_KEY_PREFIX}${dismissalFingerprint(report)}`;
+}
+
+function isDismissed(report: UpdatePreflightReport): boolean {
+  try {
+    return window.localStorage.getItem(dismissalStorageKey(report)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function persistDismissal(report: UpdatePreflightReport): void {
+  try {
+    window.localStorage.setItem(dismissalStorageKey(report), "1");
+  } catch {
+    // Dismissal persistence is a convenience only; keep the update path usable if storage is blocked.
+  }
+}
+
 export function UpdateStartupNotice({
   ready,
   openUpdates,
@@ -32,6 +64,10 @@ export function UpdateStartupNotice({
     fetchReport()
       .then((report) => {
         if (cancelled || !hasStartupUpdateSignal(report)) return;
+        if (isDismissed(report)) {
+          setState({ status: "dismissed" });
+          return;
+        }
         setState({ status: "ready", report });
       })
       .catch(() => undefined);
@@ -57,9 +93,7 @@ export function UpdateStartupNotice({
         {critical ? <Icons.info size={17} /> : <Icons.activity size={17} />}
       </span>
       <div className="update-notice-body">
-        <strong>
-          {critical ? t("updates.notice.criticalTitle") : t("updates.notice.title")}
-        </strong>
+        <strong>{critical ? t("updates.notice.criticalTitle") : t("updates.notice.title")}</strong>
         <span>{t("updates.notice.body", { version: targetVersion })}</span>
       </div>
       <div className="update-notice-actions">
@@ -67,6 +101,7 @@ export function UpdateStartupNotice({
           type="button"
           className="update-notice-primary"
           onClick={() => {
+            persistDismissal(state.report);
             openUpdates();
             setState({ status: "dismissed" });
           }}
@@ -76,7 +111,10 @@ export function UpdateStartupNotice({
         <button
           type="button"
           className="update-notice-dismiss"
-          onClick={() => setState({ status: "dismissed" })}
+          onClick={() => {
+            persistDismissal(state.report);
+            setState({ status: "dismissed" });
+          }}
         >
           {t("updates.notice.notNow")}
         </button>
