@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import type { DocumentId, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
-import { chunkParsedUnit } from "./chunker.js";
+import { chunkParsedUnit, chunkingStrategyKey } from "./chunker.js";
+import {
+  CONSERVATIVE_TOKENIZER_ID,
+  QWEN3_SENTENCEPIECE_TOKENIZER_ID,
+  type LocalKnowledgeTokenizer,
+} from "./types.js";
 
 const DOC_ID = "doc-1" as DocumentId;
 
@@ -30,6 +35,19 @@ function sha256Hex(text: string): string {
 }
 
 describe("chunkParsedUnit — pure", () => {
+  it("includes the active tokenizer identity in the strategy key", () => {
+    const qwenTokenizer: LocalKnowledgeTokenizer = {
+      identity: QWEN3_SENTENCEPIECE_TOKENIZER_ID,
+      kind: "tokenizer",
+      countTokens: (text) => text.length,
+    };
+
+    expect(chunkingStrategyKey(undefined)).toContain(`tokenizer=${CONSERVATIVE_TOKENIZER_ID}`);
+    expect(chunkingStrategyKey({ tokenizer: qwenTokenizer })).toContain(
+      `tokenizer=${QWEN3_SENTENCEPIECE_TOKENIZER_ID}`,
+    );
+  });
+
   it("emits exactly one chunk for a unit smaller than maxTokens", () => {
     const text = "Hello world.";
     const unit = pageUnit(0, text.length);

@@ -9,6 +9,7 @@ import {
   getCapsule,
   listCapsules,
   updateCapsuleEmbeddingModelIdentity,
+  updateCapsuleDetails,
   updateCapsuleState,
 } from "./capsule-lifecycle.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
@@ -45,6 +46,14 @@ describe("createCapsule + getCapsule", () => {
       sourceRoutingInstructions: "always go through alpha",
       alwaysQuery: true,
       tags: ["x", "y"],
+      contextualRetrieval: {
+        enabled: true,
+        modelId: "context-chat",
+        promptVersion: "contextual-retrieval-v1",
+        strict: true,
+        maxContextChars: 512,
+        documentContextMaxChars: 16_000,
+      },
     });
     const created = createCapsule(store, input);
     expect(created.id).toBe(input.id);
@@ -54,6 +63,7 @@ describe("createCapsule + getCapsule", () => {
     expect(created.sourceIds).toStrictEqual([]);
     expect(created.sourceRoutingInstructions).toBe("always go through alpha");
     expect(created.alwaysQuery).toBe(true);
+    expect(created.contextualRetrieval).toStrictEqual(input.contextualRetrieval);
     expect(created.retrievalEffort).toBe(input.retrievalEffort);
     expect(created.outputMode).toBe(input.outputMode);
     expect(created.answerGroundingPolicy).toBe(input.answerGroundingPolicy);
@@ -72,12 +82,63 @@ describe("createCapsule + getCapsule", () => {
     expect("description" in created).toBe(false);
     expect("sourceRoutingInstructions" in created).toBe(false);
     expect("alwaysQuery" in created).toBe(false);
+    expect("contextualRetrieval" in created).toBe(false);
     expect("modelRevision" in created.embeddingModelIdentity).toBe(false);
   });
 
   it("rejects duplicate capsule id with a typed error", () => {
     createCapsule(store, sampleCapsuleInput());
     expect(() => createCapsule(store, sampleCapsuleInput())).toThrow(KnowledgeStoreError);
+  });
+});
+
+describe("updateCapsuleDetails", () => {
+  it("persists contextual retrieval settings and marks a ready capsule stale", () => {
+    let t = 100;
+    Object.defineProperty(store._internal, "now", { value: (): number => t, configurable: true });
+    const created = createCapsule(store, sampleCapsuleInput({ lifecycleState: "ready" }));
+    t = 250;
+
+    const updated = updateCapsuleDetails(store, created.id, {
+      contextualRetrieval: {
+        enabled: true,
+        modelId: "context-chat",
+        strict: false,
+        maxContextChars: 480,
+        documentContextMaxChars: 12_000,
+      },
+    });
+
+    expect(updated.contextualRetrieval).toStrictEqual({
+      enabled: true,
+      modelId: "context-chat",
+      strict: false,
+      maxContextChars: 480,
+      documentContextMaxChars: 12_000,
+    });
+    expect(updated.lifecycleState).toBe("stale");
+    expect(updated.updatedAt).toBe(250);
+    expect(getCapsule(store, created.id)?.contextualRetrieval).toStrictEqual(
+      updated.contextualRetrieval,
+    );
+  });
+
+  it("persists explicit contextual retrieval disabled settings", () => {
+    const created = createCapsule(
+      store,
+      sampleCapsuleInput({
+        contextualRetrieval: {
+          enabled: true,
+          modelId: "context-chat",
+        },
+      }),
+    );
+
+    const updated = updateCapsuleDetails(store, created.id, {
+      contextualRetrieval: { enabled: false },
+    });
+
+    expect(updated.contextualRetrieval).toStrictEqual({ enabled: false });
   });
 });
 

@@ -56,7 +56,13 @@ import {
   deleteChunksForDocument,
   hasStaleChunksForDocument,
 } from "../chunking/chunker-persist.js";
-import { chunkingStrategyKey, type ChunkingOptions } from "../chunking/index.js";
+import {
+  chunkingStrategyKey,
+  loadOptionalQwen3SentencePieceTokenizer,
+  resolveChunkingOptions,
+  type ChunkingOptions,
+  type LocalKnowledgeTokenizer,
+} from "../chunking/index.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions } from "../discovery/index.js";
@@ -69,6 +75,7 @@ import {
 } from "../discovery/persist.js";
 import type { ExtractionEvent, ExtractionResult } from "../discovery/types.js";
 import { listCapsuleSources } from "../source-lifecycle.js";
+import { LEXICAL_ANALYZER_KEY } from "../retrieval/lexical-normalization.js";
 import {
   BoundedIndexingCancelledError,
   BoundedIndexingPolicyError,
@@ -156,12 +163,16 @@ function resolvedDiscoveryOptions(state: RunState): DiscoveryOptions {
   return signal === undefined ? base : { ...base, signal };
 }
 
-function chunkingOptionsForState(state: RunState): ChunkingOptions | undefined {
-  const indexingTextStrategyKey = contextualRetrievalStrategyKey(state.options.contextualRetrieval);
-  if (state.options.chunkingOptions === undefined && state.options.contextualRetrieval?.enabled !== true) {
-    return undefined;
-  }
-  return { ...(state.options.chunkingOptions ?? {}), indexingTextStrategyKey };
+function chunkingOptionsForState(state: RunState): ChunkingOptions {
+  const indexingTextStrategyKey = [
+    contextualRetrievalStrategyKey(state.options.contextualRetrieval),
+    `lexical-analyzer=${LEXICAL_ANALYZER_KEY}`,
+  ].join("|");
+  return {
+    ...(state.options.chunkingOptions ?? {}),
+    tokenizer: state.tokenizer,
+    indexingTextStrategyKey,
+  };
 }
 
 // ─── Source resolution ────────────────────────────────────────────────────────
@@ -200,6 +211,7 @@ interface RunState {
   readonly concurrency: number;
   readonly now: () => number;
   readonly idSource: () => string;
+  readonly tokenizer: LocalKnowledgeTokenizer;
   readonly startedAt: number;
   readonly sourcesById: ReadonlyMap<string, KnowledgeSource>;
   totalDocuments: number;
@@ -614,6 +626,7 @@ async function embedDocumentChunks(
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
       now: state.now,
       idSource: state.idSource,
+      tokenizer: state.tokenizer,
     });
     vectorCount += result.vectors.length;
     errors.push(...result.errors);
@@ -1130,6 +1143,7 @@ function boundedEmbedDeps(
     concurrency: state.concurrency,
     now: state.now,
     idSource: state.idSource,
+    tokenizer: state.tokenizer,
     policy: boundedPolicy(state),
     ...(state.options.contextualRetrieval !== undefined
       ? { contextualRetrieval: state.options.contextualRetrieval }
@@ -1700,6 +1714,7 @@ function buildInitialState(
   sources: readonly KnowledgeSource[],
   jobId: string,
   startedAt: number,
+  tokenizer: LocalKnowledgeTokenizer,
 ): RunState {
   const sourcesById = new Map<string, KnowledgeSource>();
   for (const source of sources) sourcesById.set(String(source.id), source);
@@ -1711,6 +1726,7 @@ function buildInitialState(
     concurrency: clampConcurrency(options.concurrency),
     now: options.now ?? options.store._internal.now,
     idSource: options.idSource ?? ((): string => randomUUID()),
+    tokenizer,
     startedAt,
     sourcesById,
     totalDocuments: 0,
@@ -1842,6 +1858,17 @@ function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): I
   return emit(state, event);
 }
 
+async function resolveIndexingTokenizer(options: IndexingOptions): Promise<LocalKnowledgeTokenizer> {
+  if (
+    options.chunkingOptions?.tokenizer !== undefined ||
+    options.chunkingOptions?.tokenEstimator !== undefined
+  ) {
+    return resolveChunkingOptions(options.chunkingOptions).tokenizer;
+  }
+  const loaded = await loadOptionalQwen3SentencePieceTokenizer();
+  return loaded.tokenizer;
+}
+
 async function* runSourcesWithProgress(
   state: RunState,
   sources: readonly KnowledgeSource[],
@@ -1864,7 +1891,8 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   const startedAt = (options.now ?? options.store._internal.now)();
   const idSource = options.idSource ?? ((): string => randomUUID());
   const jobId = idSource();
-  const state = buildInitialState(options, capsule, sources, jobId, startedAt);
+  const tokenizer = await resolveIndexingTokenizer(options);
+  const state = buildInitialState(options, capsule, sources, jobId, startedAt, tokenizer);
   persistStartedJob(state, sources);
   yield emitJobStarted(state, sources);
 

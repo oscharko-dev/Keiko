@@ -6,6 +6,8 @@
 import { describe, it, expect } from "vitest";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   CAPSULE_LIFECYCLE_STATES,
   CAPSULE_OUTPUT_MODES,
   CAPSULE_RETRIEVAL_EFFORTS,
@@ -42,6 +44,7 @@ import type {
 import {
   isSafeDisplaySummary,
   validateCapsuleSet,
+  validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
   validateConnectorGraphState,
   validateEmbeddingModelIdentity,
@@ -199,6 +202,7 @@ describe("frozen-constant arrays", () => {
       "repair-failed",
       "resume",
       "full-reembed",
+      "full-rebuild",
     ]);
   });
 });
@@ -550,6 +554,22 @@ describe("validateKnowledgeCapsule", () => {
     expect(validateKnowledgeCapsule(happyCapsule()).ok).toBe(true);
   });
 
+  it("accepts typed contextual retrieval settings", () => {
+    const capsule = {
+      ...happyCapsule(),
+      contextualRetrieval: {
+        enabled: true,
+        modelId: "context-chat",
+        promptVersion: "contextual-retrieval-v1",
+        strict: true,
+        maxContextChars: 480,
+        documentContextMaxChars: 12_000,
+      },
+    };
+    expect(validateKnowledgeCapsule(capsule).ok).toBe(true);
+    expect(validateCapsuleContextualRetrievalSettings(capsule.contextualRetrieval).ok).toBe(true);
+  });
+
   it("rejects empty displayName", () => {
     expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "   " }).ok).toBe(false);
   });
@@ -641,6 +661,32 @@ describe("validateKnowledgeCapsule", () => {
       validateKnowledgeCapsule({
         ...happyCapsule(),
         metadata: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`k${String(i)}`, "v"])),
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects invalid contextual retrieval settings", () => {
+    expect(validateCapsuleContextualRetrievalSettings({ enabled: "yes" }).ok).toBe(false);
+    expect(
+      validateKnowledgeCapsule({
+        ...happyCapsule(),
+        contextualRetrieval: {
+          enabled: true,
+          modelId: "unsafe\x00model",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCapsuleContextualRetrievalSettings({
+        enabled: true,
+        maxContextChars: CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX + 1,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCapsuleContextualRetrievalSettings({
+        enabled: true,
+        documentContextMaxChars:
+          CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX + 1,
       }).ok,
     ).toBe(false);
   });
@@ -1050,10 +1096,10 @@ describe("CapsuleReindexRequest", () => {
   it("type-pins the shared reindex request shape", () => {
     const req: CapsuleReindexRequest = {
       capsuleId: cap("c-1"),
-      mode: "full-reembed",
+      mode: "full-rebuild",
       force: true,
     };
-    expect(req.mode).toBe("full-reembed");
+    expect(req.mode).toBe("full-rebuild");
   });
 });
 

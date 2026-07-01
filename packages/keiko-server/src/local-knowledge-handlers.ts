@@ -8,10 +8,14 @@ import {
   composeCapsules,
   CompositionError,
   createSqliteAuditSink,
+  contextualRetrievalStrategyKey,
   type ContextualRetrievalOptions,
   createDefaultParserRegistry,
   createCapsule,
+  createOcrAdapterFromEnv,
+  createProgressivePdfExtractor,
   deleteCapsule,
+  discoverExtractionCapabilities,
   getCapsule,
   listCapsuleSets,
   listCapsuleSources,
@@ -26,13 +30,18 @@ import {
   updateCapsuleDetails,
   updateCapsuleState,
   type CapsuleDetailsPatch,
+  type OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
+  CapsuleContextualRetrievalSettings,
+  CapsuleContextualRetrievalHealth,
+  CapsuleEmbeddingCompatibility,
   CapsuleLargeDocumentHealth,
   CapsuleReindexMode,
   DocumentId,
   EmbeddingModelIdentity,
+  ExtractionCapabilityAvailability,
   IndexingJobRecord,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
@@ -45,12 +54,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
+import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
-  DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeDisplaySummary,
   isSafeQualityWarning,
+  validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
@@ -96,6 +106,24 @@ class BodyTooLargeError extends Error {
     super("body too large");
     this.name = "BodyTooLargeError";
   }
+}
+
+interface MutableContextualRetrievalOptions {
+  enabled: true;
+  chatGateway?: NonNullable<ContextualRetrievalOptions["chatGateway"]>;
+  modelId?: string;
+  promptVersion?: string;
+  maxContextChars?: number;
+  documentContextMaxChars?: number;
+  strict?: true;
+}
+
+interface ResolvedContextualRetrievalOptionFields {
+  readonly chatGateway?: NonNullable<ContextualRetrievalOptions["chatGateway"]>;
+  readonly modelId?: string;
+  readonly maxContextChars?: number;
+  readonly documentContextMaxChars?: number;
+  readonly strict: boolean;
 }
 
 function badRequest(code: string, message: string): RouteResult {
@@ -491,36 +519,167 @@ async function rebindCapsuleEmbeddingIdentityForForceReembed(
   return { ok: true, resolved: { capsule: rebound, provider } };
 }
 
-function embeddingCompatibilityReason(
+function providerPublicIdentity(provider: ModelProviderConfig | undefined): string | undefined {
+  return provider === undefined ? undefined : embeddingProviderIdentity(provider);
+}
+
+function currentEmbeddingProvider(
   config: GatewayConfig | undefined,
+): ModelProviderConfig | undefined {
+  if (config === undefined) return undefined;
+  const modelId = selectConfiguredModel(config, { kind: "embedding" });
+  if (modelId === undefined) return undefined;
+  return configuredEmbeddingProvider(config, modelId);
+}
+
+function baseEmbeddingCompatibilityFields(
   capsule: KnowledgeCapsule,
-): string | undefined {
+  provider?: ModelProviderConfig,
+): Pick<
+  CapsuleEmbeddingCompatibility,
+  | "pinnedModelId"
+  | "pinnedProvider"
+  | "pinnedVectorDimensions"
+  | "pinnedVectorMetric"
+  | "currentModelId"
+  | "currentProvider"
+> {
+  const currentProvider = providerPublicIdentity(provider);
+  return {
+    pinnedModelId: capsule.embeddingModelIdentity.modelId,
+    pinnedProvider: capsule.embeddingModelIdentity.provider,
+    pinnedVectorDimensions: capsule.embeddingModelIdentity.vectorDimensions,
+    pinnedVectorMetric: capsule.embeddingModelIdentity.vectorMetric,
+    ...(provider !== undefined ? { currentModelId: provider.modelId } : {}),
+    ...(currentProvider !== undefined ? { currentProvider } : {}),
+  };
+}
+
+const EMBEDDING_GATEWAY_MISSING_MESSAGE =
+  "No embedding gateway configuration is loaded. Configure an embedding model, then run a full re-embed.";
+const EMBEDDING_NO_CURRENT_MODEL_MESSAGE =
+  "No embedding-capable model is currently configured. Configure one before indexing this capsule.";
+const EMBEDDING_PINNED_MODEL_MISSING_MESSAGE =
+  "The capsule is pinned to a different embedding model than the current Gateway configuration. Run full re-embed for the current model.";
+const EMBEDDING_MODEL_NOT_EMBEDDING_MESSAGE =
+  "The pinned model is configured, but it is not available as an embedding model.";
+const EMBEDDING_GATEWAY_CHANGED_MESSAGE =
+  "The configured embedding gateway endpoint changed for this capsule. Run full re-embed for the current model.";
+const EMBEDDING_COMPATIBLE_MESSAGE = "The pinned embedding model is configured for embeddings.";
+
+function embeddingCompatibilityResult(
+  capsule: KnowledgeCapsule,
+  provider: ModelProviderConfig | undefined,
+  status: CapsuleEmbeddingCompatibility["status"],
+  reason: CapsuleEmbeddingCompatibility["reason"],
+  message: string,
+): CapsuleEmbeddingCompatibility {
+  return {
+    ...baseEmbeddingCompatibilityFields(capsule, provider),
+    status,
+    reason,
+    message,
+  };
+}
+
+function embeddingCompatibilityForPinnedProvider(
+  config: GatewayConfig,
+  capsule: KnowledgeCapsule,
+  pinnedProvider: ModelProviderConfig,
+  currentProvider: ModelProviderConfig | undefined,
+): CapsuleEmbeddingCompatibility {
+  if (!isConfiguredEmbeddingModel(config, pinnedProvider.modelId)) {
+    return embeddingCompatibilityResult(
+      capsule,
+      currentProvider ?? pinnedProvider,
+      "incompatible",
+      "configured-model-not-embedding",
+      EMBEDDING_MODEL_NOT_EMBEDDING_MESSAGE,
+    );
+  }
+  if (
+    !storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, pinnedProvider)
+  ) {
+    return embeddingCompatibilityResult(
+      capsule,
+      pinnedProvider,
+      "incompatible",
+      "gateway-provider-mismatch",
+      EMBEDDING_GATEWAY_CHANGED_MESSAGE,
+    );
+  }
+  return embeddingCompatibilityResult(
+    capsule,
+    pinnedProvider,
+    "compatible",
+    "current-model-matches-pinned",
+    EMBEDDING_COMPATIBLE_MESSAGE,
+  );
+}
+
+function embeddingCompatibilityForConfiguredProviders(
+  config: GatewayConfig,
+  capsule: KnowledgeCapsule,
+  pinnedProvider: ModelProviderConfig | undefined,
+  currentProvider: ModelProviderConfig | undefined,
+): CapsuleEmbeddingCompatibility {
+  if (currentProvider === undefined && pinnedProvider === undefined) {
+    return embeddingCompatibilityResult(
+      capsule,
+      undefined,
+      "unknown",
+      "no-current-embedding-model",
+      EMBEDDING_NO_CURRENT_MODEL_MESSAGE,
+    );
+  }
+  if (pinnedProvider === undefined) {
+    return embeddingCompatibilityResult(
+      capsule,
+      currentProvider,
+      "incompatible",
+      "pinned-model-not-configured",
+      EMBEDDING_PINNED_MODEL_MISSING_MESSAGE,
+    );
+  }
+  return embeddingCompatibilityForPinnedProvider(config, capsule, pinnedProvider, currentProvider);
+}
+
+function embeddingCompatibility(
+  deps: UiHandlerDeps,
+  capsule: KnowledgeCapsule,
+): CapsuleEmbeddingCompatibility {
+  const config = currentGatewayConfig(deps);
   if (config === undefined) {
-    return "No embedding gateway configuration is available for this capsule.";
+    return embeddingCompatibilityResult(
+      capsule,
+      undefined,
+      "unknown",
+      "gateway-config-missing",
+      EMBEDDING_GATEWAY_MISSING_MESSAGE,
+    );
   }
-  const modelId = capsule.embeddingModelIdentity.modelId;
-  if (!config.providers.some((entry) => entry.modelId === modelId)) {
-    return "The configured embedding model no longer matches this capsule.";
-  }
-  const provider = configuredEmbeddingProvider(config, modelId);
-  if (provider === undefined) {
-    return "The configured model for this capsule cannot serve embeddings.";
-  }
-  if (!storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, provider)) {
-    return "The configured embedding gateway no longer matches this capsule.";
-  }
-  return undefined;
+  const pinnedProvider = config.providers.find(
+    (entry) => entry.modelId === capsule.embeddingModelIdentity.modelId,
+  );
+  return embeddingCompatibilityForConfiguredProviders(
+    config,
+    capsule,
+    pinnedProvider,
+    currentEmbeddingProvider(config),
+  );
 }
 
 function vectorCompatibility(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
-): { readonly vectorCompatible: boolean; readonly staleReasons: readonly string[] } {
-  const config = currentGatewayConfig(deps);
+): {
+  readonly embeddingCompatibility: CapsuleEmbeddingCompatibility;
+  readonly vectorCompatible: boolean;
+  readonly staleReasons: readonly string[];
+} {
+  const compatibility = embeddingCompatibility(deps, capsule);
   const reasons: string[] = [];
-  const provider = configuredProviderForCapsule(deps, capsule);
-  const embeddingReason = embeddingCompatibilityReason(config, capsule);
-  if (embeddingReason !== undefined) reasons.push(embeddingReason);
+  if (compatibility.status !== "compatible") reasons.push(compatibility.message);
   if (capsule.lifecycleState === "stale") {
     reasons.push("The capsule is marked stale and should be refreshed.");
   }
@@ -528,9 +687,191 @@ function vectorCompatibility(
     reasons.push("The last indexing run ended with errors.");
   }
   return {
-    vectorCompatible: provider !== undefined,
+    embeddingCompatibility: compatibility,
+    vectorCompatible: compatibility.status === "compatible",
     staleReasons: reasons,
   };
+}
+
+function countStaleContextualRetrievalChunks(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  options: ContextualRetrievalOptions | undefined,
+): number {
+  const prefix = `${contextualRetrievalStrategyKey(options)}|chunk=`;
+  const row = store._internal.db
+    .prepare(
+      [
+        "SELECT COUNT(*) AS n FROM chunks",
+        "WHERE capsule_id = :c",
+        "  AND (contextual_retrieval_key IS NULL",
+        "    OR substr(contextual_retrieval_key, 1, :prefix_len) <> :prefix)",
+      ].join(" "),
+    )
+    .get({
+      c: String(capsule.id),
+      prefix,
+      prefix_len: prefix.length,
+    }) as { readonly n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+function countContextualRetrievalChunksByStatus(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  status: string,
+): number {
+  const row = store._internal.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM chunks WHERE capsule_id = :c AND context_status = :status",
+    )
+    .get({ c: String(capsule.id), status }) as { readonly n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+function contextualRetrievalSettingsForHealth(
+  deps: UiHandlerDeps,
+  capsule: KnowledgeCapsule,
+): {
+  readonly settings?: CapsuleContextualRetrievalSettings;
+  readonly source: CapsuleContextualRetrievalHealth["source"];
+} {
+  if (capsule.contextualRetrieval !== undefined) {
+    return { settings: capsule.contextualRetrieval, source: "capsule" };
+  }
+  const envSettings = envContextualRetrievalSettings(deps);
+  if (envSettings !== undefined) {
+    return { settings: envSettings, source: "env" };
+  }
+  return { source: "default" };
+}
+
+function contextualRetrievalHealthStatus(input: {
+  readonly enabled: boolean;
+  readonly strict: boolean;
+  readonly unavailable: boolean;
+  readonly rebuildRequired: boolean;
+}): CapsuleContextualRetrievalHealth["status"] {
+  if (input.unavailable) return input.strict ? "unavailable" : "degraded";
+  if (input.rebuildRequired) return "rebuild-required";
+  return input.enabled ? "ready" : "disabled";
+}
+
+function contextualRetrievalHealthMessage(
+  status: CapsuleContextualRetrievalHealth["status"],
+): string {
+  if (status === "unavailable") {
+    return "Contextual retrieval is enabled in strict mode, but the configured context model is not available.";
+  }
+  if (status === "degraded") {
+    return "Contextual retrieval is enabled, but the context model is unavailable; indexing falls back to raw chunk text.";
+  }
+  if (status === "rebuild-required") {
+    return "Contextual retrieval settings changed. Run full rebuild / rechunk to rebuild retrieval text.";
+  }
+  if (status === "ready") return "Contextual retrieval is enabled for the next indexing run.";
+  return "Contextual retrieval is disabled.";
+}
+
+function resolvedContextualRetrievalOptions(
+  deps: UiHandlerDeps,
+  settings: CapsuleContextualRetrievalSettings | undefined,
+): ContextualRetrievalOptions | undefined {
+  return settings === undefined
+    ? undefined
+    : localKnowledgeContextualRetrievalOptionsForSettings(deps, settings);
+}
+
+function contextualRetrievalHealthCounts(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  source: CapsuleContextualRetrievalHealth["source"],
+  options: ContextualRetrievalOptions | undefined,
+): Pick<CapsuleContextualRetrievalHealth, "staleChunkCount" | "degradedChunkCount"> {
+  return {
+    staleChunkCount:
+      source === "default" ? 0 : countStaleContextualRetrievalChunks(store, capsule, options),
+    degradedChunkCount: countContextualRetrievalChunksByStatus(store, capsule, "degraded"),
+  };
+}
+
+function contextualRetrievalHealthOptionFields(
+  options: ContextualRetrievalOptions | undefined,
+): Pick<
+  CapsuleContextualRetrievalHealth,
+  "modelId" | "maxContextChars" | "documentContextMaxChars"
+> {
+  return {
+    ...(options?.modelId !== undefined ? { modelId: options.modelId } : {}),
+    ...(options?.maxContextChars !== undefined ? { maxContextChars: options.maxContextChars } : {}),
+    ...(options?.documentContextMaxChars !== undefined
+      ? { documentContextMaxChars: options.documentContextMaxChars }
+      : {}),
+  };
+}
+
+function contextualRetrievalHealth(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+): CapsuleContextualRetrievalHealth {
+  const { settings, source } = contextualRetrievalSettingsForHealth(deps, capsule);
+  const options = resolvedContextualRetrievalOptions(deps, settings);
+  const enabled = settings?.enabled === true;
+  const strict = settings === undefined ? false : contextualRetrievalStrict(deps, settings);
+  const { staleChunkCount, degradedChunkCount } = contextualRetrievalHealthCounts(
+    store,
+    capsule,
+    source,
+    options,
+  );
+  const unavailable = enabled && options?.chatGateway === undefined;
+  const rebuildRequired = staleChunkCount > 0;
+  const status = contextualRetrievalHealthStatus({
+    enabled,
+    strict,
+    unavailable,
+    rebuildRequired,
+  });
+  return {
+    enabled,
+    source,
+    status,
+    strict,
+    rebuildRequired,
+    staleChunkCount,
+    degradedChunkCount,
+    ...contextualRetrievalHealthOptionFields(options),
+    message: contextualRetrievalHealthMessage(status),
+  };
+}
+
+function contextualRetrievalHealthReasons(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+): readonly string[] {
+  if (
+    capsule.contextualRetrieval === undefined &&
+    !envFlagEnabled(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL)
+  ) {
+    return [];
+  }
+  const options = localKnowledgeContextualRetrievalOptions(deps, capsule);
+  const reasons: string[] = [];
+  if (options?.enabled === true && options.chatGateway === undefined) {
+    reasons.push(
+      options.strict === true
+        ? "Contextual retrieval is enabled in strict mode, but the configured context model is not available as a chat model. Indexing will fail until the model is configured."
+        : "Contextual retrieval is enabled, but the configured context model is not available as a chat model. Indexing will fall back to raw chunk text.",
+    );
+  }
+  if (countStaleContextualRetrievalChunks(store, capsule, options) > 0) {
+    reasons.push(
+      "Contextual retrieval settings changed. Run full rebuild / rechunk to rebuild retrieval text.",
+    );
+  }
+  return reasons;
 }
 
 interface SourceStatsRow {
@@ -856,6 +1197,7 @@ function buildLargeDocumentHealth(
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
   policy: LargeDocumentResourcePolicy,
+  capabilities: ExtractionCapabilityAvailability,
 ): CapsuleLargeDocumentHealth {
   const progress: LargeDocumentJobProgress[] = listExtractionCheckpoints(
     store._internal.db,
@@ -865,12 +1207,35 @@ function buildLargeDocumentHealth(
   );
   return {
     resourcePolicy: policy,
-    capabilities: DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
+    capabilities,
     progress,
     resumableDocuments: listResumableDocuments(store, capsule.id),
     partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
     qualityWarnings: loadQualityWarnings(store, capsule.id),
   };
+}
+
+function localKnowledgeOcrAdapter(deps: UiHandlerDeps): OcrAdapter {
+  return deps.localKnowledgeOcrAdapter ?? createOcrAdapterFromEnv(deps.env, {
+    runner: runLocalTesseractCommand,
+  });
+}
+
+async function localKnowledgeExtractionCapabilitiesFor(
+  adapter: OcrAdapter,
+): Promise<ExtractionCapabilityAvailability> {
+  return discoverExtractionCapabilities({ ocr: adapter });
+}
+
+function localKnowledgeProgressiveExtractors(
+  adapter: OcrAdapter,
+  capabilities: ExtractionCapabilityAvailability,
+): readonly ReturnType<typeof createProgressivePdfExtractor>[] {
+  return [
+    createProgressivePdfExtractor({
+      ocr: { status: capabilities.ocr, ocrPage: adapter.ocrPage },
+    }),
+  ];
 }
 
 function buildCapsuleHealth(
@@ -886,6 +1251,8 @@ function buildCapsuleHealth(
   const skippedDocuments = countDocumentStatus(store, capsule.id, "skipped");
   const unsupportedDocuments = countDocumentStatus(store, capsule.id, "unsupported");
   const compatibility = vectorCompatibility(deps, capsule);
+  const contextualHealth = contextualRetrievalHealth(deps, store, capsule);
+  const contextualReasons = contextualRetrievalHealthReasons(deps, store, capsule);
   const indexedAt = lastIndexedAt(store, capsule.id);
   const unsupportedGuidance =
     unsupportedDocuments > 0 ? loadUnsupportedGuidance(store, capsule.id) : [];
@@ -900,6 +1267,7 @@ function buildCapsuleHealth(
     ...(indexedAt !== undefined ? { lastIndexedAt: indexedAt } : {}),
     embeddingIdentity: capsule.embeddingModelIdentity,
     vectorCompatible: compatibility.vectorCompatible,
+    embeddingCompatibility: compatibility.embeddingCompatibility,
     failedDocuments,
     skippedDocuments,
     unsupportedDocuments,
@@ -909,7 +1277,8 @@ function buildCapsuleHealth(
             "Some documents were skipped because this build cannot extract them yet. Review the health diagnostics for the affected formats and next steps.",
           ]
         : unsupportedGuidance,
-    staleReasons: compatibility.staleReasons,
+    staleReasons: [...compatibility.staleReasons, ...contextualReasons],
+    contextualRetrieval: contextualHealth,
     partialCoverageDocuments: countPartialCoverageDocuments(store, capsule.id),
     qualityWarnings: loadQualityWarnings(store, capsule.id),
     resumableDocuments: listResumableDocuments(store, capsule.id).length,
@@ -1025,18 +1394,24 @@ function actionResponse(capsuleId: string): RouteResult {
 // F4 (Epic #189): the response shape for both GET /capsules/:id and POST /capsules
 // includes truncation metadata so a future UI can prompt the user to refine their
 // view when the persisted history grew past the per-response cap.
-function buildCapsuleResponseBody(
+async function buildCapsuleResponseBody(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
   dbPath: string,
   capsule: KnowledgeCapsule,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const diagnostics = loadParserDiagnostics(store, capsule.id);
   const jobs = loadIndexingJobs(store, capsule.id);
+  const capabilities = await localKnowledgeExtractionCapabilitiesFor(localKnowledgeOcrAdapter(deps));
   return {
     capsule,
     health: buildCapsuleHealth(deps, store, dbPath, capsule),
-    largeDocumentHealth: buildLargeDocumentHealth(store, capsule, resolveLargeDocumentPolicy()),
+    largeDocumentHealth: buildLargeDocumentHealth(
+      store,
+      capsule,
+      resolveLargeDocumentPolicy(),
+      capabilities,
+    ),
     sources: loadSourceStats(store, capsule.id),
     parserDiagnostics: diagnostics.items,
     parserDiagnosticsTotal: diagnostics.total,
@@ -1284,6 +1659,10 @@ function disconnectCapsuleSources(
   updateCapsuleState(store, capsuleId, "draft");
 }
 
+function isForceReindexMode(mode: CapsuleReindexMode | undefined): boolean {
+  return mode === "full-reembed" || mode === "full-rebuild";
+}
+
 // LK-001 (Epic #189): job-cancelled is a distinct terminal kind. Callers must surface it
 // as 409, not 200, so the UI never reads a cancelled run as a successful one.
 type IndexingTerminal =
@@ -1371,39 +1750,149 @@ function envPositiveInt(value: string | undefined): number | undefined {
 function resolveContextualRetrievalModelId(
   deps: UiHandlerDeps,
   config: GatewayConfig | undefined,
+  requestedModelId?: string,
 ): string | undefined {
-  const configured = deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MODEL_ID?.trim();
+  const configured = requestedModelId ?? deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MODEL_ID?.trim();
   if (configured !== undefined && configured.length > 0) {
-    if (config === undefined) return undefined;
-    return findConfiguredCapability(config, configured)?.kind === "chat" ? configured : undefined;
+    return configured;
   }
   return config === undefined ? undefined : selectConfiguredModel(config, { kind: "chat" });
 }
 
-function localKnowledgeContextualRetrievalOptions(
+function contextModelCanChat(
+  config: GatewayConfig | undefined,
+  modelId: string | undefined,
+): boolean {
+  if (config === undefined || modelId === undefined) return false;
+  return findConfiguredCapability(config, modelId)?.kind === "chat";
+}
+
+function envContextualRetrievalSettings(
   deps: UiHandlerDeps,
-): ContextualRetrievalOptions | undefined {
+): CapsuleContextualRetrievalSettings | undefined {
   if (!envFlagEnabled(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL)) {
     return undefined;
   }
-  const config = currentGatewayConfig(deps);
-  const modelId = resolveContextualRetrievalModelId(deps, config);
-  const maxContextChars = envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MAX_CHARS);
-  const documentContextMaxChars = envPositiveInt(
-    deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_DOCUMENT_MAX_CHARS,
-  );
-  const gateway =
-    modelId === undefined || config === undefined
-      ? undefined
-      : deps.localKnowledgeContextualRetrievalChatGateway ?? new Gateway(config);
   return {
     enabled: true,
-    ...(gateway !== undefined ? { chatGateway: gateway } : {}),
-    ...(modelId !== undefined ? { modelId } : {}),
     ...(envFlagEnabled(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_STRICT) ? { strict: true } : {}),
-    ...(maxContextChars !== undefined ? { maxContextChars } : {}),
-    ...(documentContextMaxChars !== undefined ? { documentContextMaxChars } : {}),
   };
+}
+
+function contextualRetrievalChatGateway(
+  deps: UiHandlerDeps,
+  config: GatewayConfig | undefined,
+  modelId: string | undefined,
+): NonNullable<ContextualRetrievalOptions["chatGateway"]> | undefined {
+  if (config === undefined || modelId === undefined || !contextModelCanChat(config, modelId)) {
+    return undefined;
+  }
+  return deps.localKnowledgeContextualRetrievalChatGateway ?? new Gateway(config);
+}
+
+function contextualRetrievalMaxContextChars(
+  deps: UiHandlerDeps,
+  settings: CapsuleContextualRetrievalSettings,
+): number | undefined {
+  return (
+    settings.maxContextChars ?? envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MAX_CHARS)
+  );
+}
+
+function contextualRetrievalDocumentContextMaxChars(
+  deps: UiHandlerDeps,
+  settings: CapsuleContextualRetrievalSettings,
+): number | undefined {
+  return (
+    settings.documentContextMaxChars ??
+    envPositiveInt(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_DOCUMENT_MAX_CHARS)
+  );
+}
+
+function contextualRetrievalStrict(
+  deps: UiHandlerDeps,
+  settings: CapsuleContextualRetrievalSettings,
+): boolean {
+  return settings.strict ?? envFlagEnabled(deps.env.KEIKO_LOCAL_KNOWLEDGE_CONTEXT_STRICT);
+}
+
+function applyContextualRetrievalOptionFields(
+  options: MutableContextualRetrievalOptions,
+  settings: CapsuleContextualRetrievalSettings,
+  resolved: ResolvedContextualRetrievalOptionFields,
+): void {
+  if (resolved.chatGateway !== undefined) {
+    options.chatGateway = resolved.chatGateway;
+  }
+  if (resolved.modelId !== undefined) {
+    options.modelId = resolved.modelId;
+  }
+  if (settings.promptVersion !== undefined) {
+    options.promptVersion = settings.promptVersion;
+  }
+  if (resolved.strict) {
+    options.strict = true;
+  }
+  if (resolved.maxContextChars !== undefined) {
+    options.maxContextChars = resolved.maxContextChars;
+  }
+  if (resolved.documentContextMaxChars !== undefined) {
+    options.documentContextMaxChars = resolved.documentContextMaxChars;
+  }
+}
+
+function resolveContextualRetrievalOptionFields(
+  deps: UiHandlerDeps,
+  settings: CapsuleContextualRetrievalSettings,
+  config: GatewayConfig | undefined,
+  modelId: string | undefined,
+): ResolvedContextualRetrievalOptionFields {
+  const resolved: {
+    chatGateway?: NonNullable<ContextualRetrievalOptions["chatGateway"]>;
+    modelId?: string;
+    maxContextChars?: number;
+    documentContextMaxChars?: number;
+    strict: boolean;
+  } = { strict: contextualRetrievalStrict(deps, settings) };
+  const chatGateway = contextualRetrievalChatGateway(deps, config, modelId);
+  const maxContextChars = contextualRetrievalMaxContextChars(deps, settings);
+  const documentContextMaxChars = contextualRetrievalDocumentContextMaxChars(deps, settings);
+  if (modelId !== undefined) {
+    resolved.modelId = modelId;
+  }
+  if (chatGateway !== undefined) {
+    resolved.chatGateway = chatGateway;
+  }
+  if (maxContextChars !== undefined) {
+    resolved.maxContextChars = maxContextChars;
+  }
+  if (documentContextMaxChars !== undefined) {
+    resolved.documentContextMaxChars = documentContextMaxChars;
+  }
+  return resolved;
+}
+
+function localKnowledgeContextualRetrievalOptionsForSettings(
+  deps: UiHandlerDeps,
+  settings: CapsuleContextualRetrievalSettings,
+): ContextualRetrievalOptions | undefined {
+  if (!settings.enabled) return undefined;
+  const config = currentGatewayConfig(deps);
+  const modelId = resolveContextualRetrievalModelId(deps, config, settings.modelId);
+  const options: MutableContextualRetrievalOptions = { enabled: true };
+  const resolved = resolveContextualRetrievalOptionFields(deps, settings, config, modelId);
+  applyContextualRetrievalOptionFields(options, settings, resolved);
+  return options;
+}
+
+function localKnowledgeContextualRetrievalOptions(
+  deps: UiHandlerDeps,
+  capsule: KnowledgeCapsule,
+): ContextualRetrievalOptions | undefined {
+  const settings = capsule.contextualRetrieval ?? envContextualRetrievalSettings(deps);
+  return settings === undefined
+    ? undefined
+    : localKnowledgeContextualRetrievalOptionsForSettings(deps, settings);
 }
 
 function buildIndexingOptions(
@@ -1413,15 +1902,17 @@ function buildIndexingOptions(
   adapter: OpenAIEmbeddingAdapter,
   options: RunCapsuleIndexingJobOptions,
   sourceSelection: IndexingSourceSelection,
+  ocrAdapter: OcrAdapter,
+  extractionCapabilities: ExtractionCapabilityAvailability,
   signal: AbortSignal,
 ): Parameters<typeof runIndexingJob>[0] {
-  const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps);
+  const contextualRetrieval = localKnowledgeContextualRetrievalOptions(deps, capsule);
   return {
     capsuleId: capsule.id,
     ...(sourceSelection.shouldRun && sourceSelection.sourceIds !== undefined
       ? { sourceIds: sourceSelection.sourceIds }
       : {}),
-    parserRegistry: createDefaultParserRegistry(),
+    parserRegistry: createDefaultParserRegistry({ ocrAdapter }),
     workspaceFs: nodeWorkspaceFs,
     embeddingAdapter: adapter,
     auditSink: createSqliteAuditSink(store),
@@ -1429,6 +1920,8 @@ function buildIndexingOptions(
     force: options.force,
     ...(contextualRetrieval !== undefined ? { contextualRetrieval } : {}),
     largeDocumentPolicy: resolveLargeDocumentPolicy(),
+    extractionCapabilities,
+    progressiveExtractors: localKnowledgeProgressiveExtractors(ocrAdapter, extractionCapabilities),
     ...(options.mode === "resume" ? { resume: true } : {}),
     signal,
   };
@@ -1475,6 +1968,8 @@ async function runCapsuleIndexingJob(
   if (!sourceSelection.shouldRun) {
     return undefined;
   }
+  const ocrAdapter = localKnowledgeOcrAdapter(deps);
+  const extractionCapabilities = await localKnowledgeExtractionCapabilitiesFor(ocrAdapter);
   const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   try {
     return await consumeCapsuleIndexingEvents(
@@ -1487,6 +1982,8 @@ async function runCapsuleIndexingJob(
           adapter,
           options,
           sourceSelection,
+          ocrAdapter,
+          extractionCapabilities,
           controller.signal,
         ),
       ),
@@ -1660,31 +2157,69 @@ export async function handleCreateLocalKnowledgeCapsuleSet(
 // Metadata persistence requires a schema migration and is intentionally NOT supported here yet;
 // a metadata-bearing patch is rejected with a clear 400 rather than silently dropped.
 
+function parseContextualRetrievalPatch(value: unknown): CapsuleContextualRetrievalSettings {
+  const validation = validateCapsuleContextualRetrievalSettings(value);
+  if (!validation.ok) {
+    throw new InvalidRequest(validation.errors.join(" "));
+  }
+  return validation.value;
+}
+
+function parseDisplayNamePatch(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new InvalidRequest('Field "displayName" must be a non-empty string when provided.');
+  }
+  return requireSafeDisplayText("displayName", value);
+}
+
+function parseDescriptionPatch(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new InvalidRequest('Field "description" must be a string when provided.');
+  }
+  const trimmed = value.trim();
+  if (!isSafeDisplaySummary(trimmed)) {
+    throw new InvalidRequest('Field "description" must be browser-safe when provided.');
+  }
+  return trimmed;
+}
+
+function patchHasFields(patch: CapsuleDetailsPatch): boolean {
+  return (
+    patch.displayName !== undefined ||
+    patch.description !== undefined ||
+    patch.contextualRetrieval !== undefined
+  );
+}
+
 function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsPatch {
   if (body.metadata !== undefined) {
     throw new InvalidRequest(
-      "Capsule metadata updates are not yet supported; update displayName or description.",
+      [
+        "Capsule metadata updates are not yet supported;",
+        "update displayName, description, or contextualRetrieval.",
+      ].join(" "),
     );
   }
-  const patch: { displayName?: string; description?: string } = {};
-  if (body.displayName !== undefined) {
-    if (typeof body.displayName !== "string") {
-      throw new InvalidRequest('Field "displayName" must be a non-empty string when provided.');
-    }
-    patch.displayName = requireSafeDisplayText("displayName", body.displayName);
+  const patch: {
+    displayName?: string;
+    description?: string;
+    contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  } = {};
+  const displayName = parseDisplayNamePatch(body.displayName);
+  const description = parseDescriptionPatch(body.description);
+  if (displayName !== undefined) {
+    patch.displayName = displayName;
   }
-  if (body.description !== undefined) {
-    if (typeof body.description !== "string") {
-      throw new InvalidRequest('Field "description" must be a string when provided.');
-    }
-    const trimmed = body.description.trim();
-    if (!isSafeDisplaySummary(trimmed)) {
-      throw new InvalidRequest('Field "description" must be browser-safe when provided.');
-    }
-    patch.description = trimmed;
+  if (description !== undefined) {
+    patch.description = description;
   }
-  if (patch.displayName === undefined && patch.description === undefined) {
-    throw new InvalidRequest("Patch must include displayName or description.");
+  if (body.contextualRetrieval !== undefined) {
+    patch.contextualRetrieval = parseContextualRetrievalPatch(body.contextualRetrieval);
+  }
+  if (!patchHasFields(patch)) {
+    throw new InvalidRequest("Patch must include displayName, description, or contextualRetrieval.");
   }
   return patch;
 }
@@ -1701,7 +2236,7 @@ export async function handleUpdateLocalKnowledgeCapsule(
       const capsule = updateCapsuleDetails(env.store, capsuleId, patch);
       return {
         status: 200,
-        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
+        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
       };
     } finally {
       env.close();
@@ -1740,7 +2275,7 @@ export async function handleCreateLocalKnowledgeCapsule(
       );
       return {
         status: 201,
-        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
+        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
       };
     } finally {
       env.close();
@@ -1752,7 +2287,7 @@ export async function handleGetLocalKnowledgeCapsule(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runHandler(() => {
+  return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
     const env = openStoreForDeps(deps);
     try {
@@ -1762,7 +2297,7 @@ export async function handleGetLocalKnowledgeCapsule(
       }
       return {
         status: 200,
-        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
+        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
       };
     } finally {
       env.close();
@@ -1944,7 +2479,7 @@ export async function handleConnectLocalKnowledgeCapsule(
       if (alreadyConnected) {
         return {
           status: 200,
-          body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
+          body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
         };
       }
       addSourceToCapsule(
@@ -1961,7 +2496,7 @@ export async function handleConnectLocalKnowledgeCapsule(
       const updated = getCapsule(env.store, capsule.id) ?? capsule;
       return {
         status: 201,
-        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, updated),
+        body: await buildCapsuleResponseBody(deps, env.store, env.dbPath, updated),
       };
     } finally {
       env.close();
@@ -2021,8 +2556,7 @@ export async function handleReindexLocalKnowledgeCapsule(
       throw new InvalidRequest(reindexRequest.errors.join(" "));
     }
     const mode = reindexRequest.value.mode;
-    const force =
-      reindexRequest.value.mode === "full-reembed" || (reindexRequest.value.force ?? false);
+    const force = isForceReindexMode(mode) || (reindexRequest.value.force ?? false);
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);

@@ -36,6 +36,7 @@ import { addSourceToCapsule } from "../source-lifecycle.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { folderScope, memoryFs } from "../discovery/test-support.js";
 import { documentIdFor } from "../discovery/types.js";
+import { LEXICAL_ANALYZER_KEY } from "../retrieval/lexical-normalization.js";
 
 import { runIndexingJob } from "./orchestrator.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
@@ -471,6 +472,18 @@ describe("runIndexingJob — happy path", () => {
       expect(completed.result.processedDocuments).toBe(3);
       expect(completed.result.vectorsPersisted).toBe(vectorCount);
     }
+  });
+
+  it("persists the lexical analyzer key in the chunking strategy key", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const row = fixture.store._internal.db
+      .prepare(
+        "SELECT chunking_strategy_version FROM chunks WHERE capsule_id = :capsule_id LIMIT 1",
+      )
+      .get({ capsule_id: String(fixture.capsuleId) }) as
+      | { readonly chunking_strategy_version: string | null }
+      | undefined;
+    expect(row?.chunking_strategy_version).toContain(`lexical-analyzer=${LEXICAL_ANALYZER_KEY}`);
   });
 
   it("persists an indexing_jobs row in `succeeded` state", async () => {
@@ -959,6 +972,35 @@ describe("runIndexingJob — force", () => {
     // Force should NOT leave stale rows from the first pass.
     const secondVectorCount = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
     expect(secondVectorCount).toBe(firstVectorCount);
+  });
+
+  it("invalidates ready vector-index state when force=true replaces vectors", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    fixture.store._internal.db
+      .prepare(
+        [
+          "INSERT INTO vector_index_state (",
+          "  capsule_id, provider, index_name, vector_dimensions, vector_metric,",
+          "  embedding_identity_key, vector_count, vector_max_created_at, status, updated_at",
+          ") VALUES (",
+          "  :capsule_id, 'sqlite-vec', 'keiko_lk_vec_1536_cosine', 1536, 'cosine',",
+          "  'openai|text-embedding-3-small|1536|cosine|legacy|legacy|unverified|', 1, 1000,",
+          "  'ready', 1000",
+          ")",
+        ].join(" "),
+      )
+      .run({ capsule_id: String(fixture.capsuleId) });
+    const before = fixture.store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM vector_index_state WHERE capsule_id = :capsule_id")
+      .get({ capsule_id: String(fixture.capsuleId) }) as { readonly n: number };
+    expect(before.n).toBe(1);
+
+    await drain(runIndexingJob(buildOptions(fixture, { force: true })));
+
+    const after = fixture.store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM vector_index_state WHERE capsule_id = :capsule_id")
+      .get({ capsule_id: String(fixture.capsuleId) }) as { readonly n: number };
+    expect(after.n).toBe(0);
   });
 
   it("preserves other source vectors when force=true is scoped to one source", async () => {

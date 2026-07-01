@@ -121,4 +121,16 @@ describe("createDefaultParserRegistry", () => {
     if (resolution.kind !== "matched") throw new Error("unreachable");
     expect(resolution.adapter.capability.parserId).toBe("xlsx");
   });
+
+  it("registers OCR only when an adapter is provided", () => {
+    const withoutOcr = parsers.createDefaultParserRegistry();
+    const withOcr = parsers.createDefaultParserRegistry({ ocrAdapter: parsers.nullOcrAdapter });
+
+    expect(withoutOcr.list().some((adapter) => adapter.capability.parserId === "ocr-pipeline")).toBe(
+      false,
+    );
+    expect(withOcr.list().some((adapter) => adapter.capability.parserId === "ocr-pipeline")).toBe(
+      true,
+    );
+  });
 });

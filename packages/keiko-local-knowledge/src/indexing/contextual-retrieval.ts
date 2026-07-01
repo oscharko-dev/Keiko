@@ -64,6 +64,16 @@ function modelKey(options: ContextualRetrievalOptions | undefined): string {
   return options?.modelId ?? "unconfigured";
 }
 
+function maxContextKey(options: ContextualRetrievalOptions | undefined): string {
+  return String(clampPositiveInteger(options?.maxContextChars, DEFAULT_MAX_CONTEXT_CHARS));
+}
+
+function documentContextKey(options: ContextualRetrievalOptions | undefined): string {
+  return String(
+    clampPositiveInteger(options?.documentContextMaxChars, DEFAULT_DOCUMENT_CONTEXT_CHARS),
+  );
+}
+
 export function contextualRetrievalStrategyKey(
   options: ContextualRetrievalOptions | undefined,
 ): string {
@@ -72,6 +82,9 @@ export function contextualRetrievalStrategyKey(
     "indexed-text=contextual-v1",
     `prompt=${promptVersion(options)}`,
     `model=${modelKey(options)}`,
+    `maxContextChars=${maxContextKey(options)}`,
+    `documentContextMaxChars=${documentContextKey(options)}`,
+    `strict=${options.strict === true ? "true" : "false"}`,
   ].join("|");
 }
 
