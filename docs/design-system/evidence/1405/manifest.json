@@ -1,0 +1,23 @@
+{
+  "issue": "#1405",
+  "harness": "playwright.issue-1405-human-loop.config.ts",
+  "productCss": "packages/keiko-ui/src/app/globals.css",
+  "generatedAt": "2026-07-01T21:15:36.130Z",
+  "artifacts": [
+    "human-loop-1405.png",
+    "manifest.json"
+  ],
+  "assertions": {
+    "permissionScopeRowsRendered": true,
+    "sensitiveActionUsesTypedConfirm": true,
+    "regenerateAnnouncesBusyState": true,
+    "focusVisibleRingResolved": true,
+    "nonColourAuthorityEncoding": true
+  },
+  "resolved": {
+    "permitBorderColor": "oklch(0.78 0.13 75 / 0.4)",
+    "dangerBorderColor": "oklch(0.68 0.16 25 / 0.45)",
+    "focusedOutlineStyle": "solid",
+    "focusedOutlineWidth": "2px"
+  }
+}
