@@ -338,32 +338,40 @@ describe("UpdateWindow", () => {
     expect(screen.queryByText("Keiko is up to date")).toBeNull();
   });
 
-  it("enables remediation after the package update has been installed", async () => {
-    const api = apiFor({
-      report: preflight({
+  it("uses the completed session target for post-install remediation when the report is current", async () => {
+    const { targetVersion: omittedTargetVersion, ...currentReport } = preflight({
+      currentVersion: "0.2.10",
+      updateAvailable: false,
+      status: "current",
+      availabilityState: "current",
+      severity: "none",
+      userActionRequired: true,
+      impact: {
+        entries: [],
+        releaseNoteBullets: ["Local Knowledge needs a follow-up."],
+        affectedStateStores: ["local-knowledge"],
+        stateImpact: [
+          {
+            store: "local-knowledge",
+            description: "Local knowledge must be reindexed after this update.",
+            remediation: "local-knowledge-reindex-required",
+            userActionRequired: true,
+          },
+        ],
         userActionRequired: true,
-        impact: {
-          entries: [],
-          releaseNoteBullets: ["Local Knowledge needs a follow-up."],
-          affectedStateStores: ["local-knowledge"],
-          stateImpact: [
-            {
-              store: "local-knowledge",
-              description: "Local knowledge must be reindexed after this update.",
-              remediation: "local-knowledge-reindex-required",
-              userActionRequired: true,
-            },
-          ],
-          userActionRequired: true,
-          remediations: ["local-knowledge-reindex-required"],
-        },
-      }),
+        remediations: ["local-knowledge-reindex-required"],
+      },
+    });
+    expect(omittedTargetVersion).toBe("0.2.10");
+    const api = apiFor({
+      report: currentReport,
       status: sessionStatus({
-        activeSession: session({
-          phase: "restart-required",
-          restartRequired: true,
+        lastSession: session({
+          phase: "succeeded",
+          restartRequired: false,
           cancelable: false,
-          message: "Restart Keiko to complete the update.",
+          retryable: false,
+          message: "Update complete.",
         }),
       }),
       remediation: remediation({
@@ -400,6 +408,7 @@ describe("UpdateWindow", () => {
     render(<UpdateWindow api={api} />);
 
     expect(await screen.findByText("Follow-up action")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Update installed" })).toBeInTheDocument();
     expect(screen.queryByText("Follow-up after install")).toBeNull();
     expect(screen.getByText("Local Knowledge Reindex")).toBeInTheDocument();
     expect(screen.getByText("Vectors need reindexing.")).toBeInTheDocument();
@@ -633,7 +642,7 @@ describe("UpdateWindow", () => {
     expect(button).toHaveAttribute("aria-describedby", help.id);
   });
 
-  it("uses installed-state copy and reports no newer update after a manual check", async () => {
+  it("uses installed-state copy and preserves patch notes after a targetless current check", async () => {
     const installedStatus = sessionStatus({
       lastSession: session({
         phase: "succeeded",
@@ -643,14 +652,21 @@ describe("UpdateWindow", () => {
         message: "Update complete.",
       }),
     });
-    const currentReport = preflight({
+    const {
+      targetVersion: omittedTargetVersion,
+      patchNotes: omittedPatchNotes,
+      release: omittedRelease,
+      ...currentReport
+    } = preflight({
       currentVersion: "0.2.10",
-      targetVersion: "0.2.10",
       updateAvailable: false,
       status: "current",
       availabilityState: "current",
       severity: "none",
     });
+    expect(omittedTargetVersion).toBe("0.2.10");
+    expect(omittedPatchNotes).toBeDefined();
+    expect(omittedRelease).toBeUndefined();
     const api = {
       ...apiFor({ status: installedStatus }),
       checkPreflight: vi.fn(async () => currentReport),
@@ -723,7 +739,7 @@ describe("UpdateWindow", () => {
     expect(progress).not.toHaveAttribute("aria-valuenow");
   });
 
-  it("disables restart verification when no report target is available", async () => {
+  it("uses the displayed session target for restart verification when the report target is missing", async () => {
     const { targetVersion: omittedTargetVersion, ...reportWithoutTarget } = preflight();
     expect(omittedTargetVersion).toBe("0.2.10");
     const api = apiFor({
@@ -741,8 +757,10 @@ describe("UpdateWindow", () => {
     render(<UpdateWindow api={api} />);
 
     const button = await screen.findByRole("button", { name: "Verify restart" });
-    expect(button).toBeDisabled();
+    expect(button).toBeEnabled();
     fireEvent.click(button);
-    expect(api.verifyRestart).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(api.verifyRestart).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
+    });
   });
 });

@@ -764,7 +764,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
     titleRef.current?.focus();
   }, [state.status]);
 
-  const targetVersion = state.status === "ready" ? state.report.targetVersion : undefined;
+  const reportTargetVersion = state.status === "ready" ? state.report.targetVersion : undefined;
+  const actionTargetVersion = visibleSession?.targetVersion ?? reportTargetVersion;
   const releaseImpact = useMemo(
     () => (state.status === "ready" ? impactInput(state.report) : undefined),
     [state],
@@ -839,20 +840,24 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           busy={busy}
           onCheck={() => void refresh(true)}
           onStart={() => {
-            if (targetVersion !== undefined) {
-              void runAndRefresh("starting", () => api.startSession({ targetVersion }));
+            if (reportTargetVersion !== undefined) {
+              void runAndRefresh("starting", () =>
+                api.startSession({ targetVersion: reportTargetVersion }),
+              );
             }
           }}
           onRetry={() => void runAndRefresh("retrying", api.retrySession)}
           onCancel={() => void runAndRefresh("cancelling", api.cancelSession)}
           onVerifyRestart={() => {
-            if (targetVersion !== undefined) {
-              void runAndRefresh("restart", () => api.verifyRestart({ targetVersion }));
+            if (actionTargetVersion !== undefined) {
+              void runAndRefresh("restart", () =>
+                api.verifyRestart({ targetVersion: actionTargetVersion }),
+              );
             }
           }}
           onShowManualInstructions={() => setManualInstructionsOpen((open) => !open)}
           manualInstructionsOpen={manualInstructionsOpen}
-          canVerifyRestart={targetVersion !== undefined}
+          canVerifyRestart={actionTargetVersion !== undefined}
         />
       </div>
       {checkFeedback !== undefined ? (
@@ -877,10 +882,11 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           remediation={remediation}
           busy={busy}
           onAction={(action, decision) => {
+            if (actionTargetVersion === undefined) return;
             void runAndRefresh("remediation", () =>
               api.runRemediationAction({
                 actionId: action.actionId,
-                targetVersion,
+                targetVersion: actionTargetVersion,
                 impact: releaseImpact,
                 decision,
               }),
