@@ -25,6 +25,20 @@ describe("classifyRetrievalIntent", () => {
     );
   });
 
+  it.each([
+    "Why does the React build fail?",
+    "Why is the Vitest test failing?",
+    "Why does checkout dataflow break after the API call?",
+  ])("prioritizes diagnostic intent over project metadata terms: %s", (text) => {
+    expect(classifyRetrievalIntent(text).intent).toBe("diagnostic-search");
+  });
+
+  it("keeps high-precision framework inventory questions as project metadata", () => {
+    expect(classifyRetrievalIntent("Which React version does this project use?").intent).toBe(
+      "project-metadata",
+    );
+  });
+
   it("keeps identifier questions targeted even when they mention the repository", () => {
     expect(classifyRetrievalIntent("How is ZodConfigSchema used in this repository?").intent).toBe(
       "targeted-code-search",

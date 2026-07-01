@@ -457,8 +457,75 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
   return value.slice(0, low);
 }
 
+function positiveInteger(value: number): number | undefined {
+  const n = Math.floor(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+export function groundedPromptInputTokensForCapability(
+  capability: ModelCapability | undefined,
+): number | undefined {
+  if (capability?.kind !== "chat") return undefined;
+  const contextWindow = positiveInteger(capability.contextWindow);
+  if (contextWindow === undefined) return undefined;
+  const outputReserve = positiveInteger(capability.maxOutputTokens) ?? 0;
+  return outputReserve < contextWindow ? contextWindow - outputReserve : contextWindow;
+}
+
+export interface GroundedGatewayPromptOptions {
+  readonly modelInputTokensMax?: number | undefined;
+}
+
+function withPromptModelInputBudget(
+  pack: ConnectedContextPack,
+  modelInputTokensMax: number | undefined,
+): ConnectedContextPack {
+  const effective = modelInputTokensMax === undefined ? undefined : positiveInteger(modelInputTokensMax);
+  if (effective === undefined || effective === pack.budget.modelInputTokensMax) return pack;
+  return { ...pack, budget: { ...pack.budget, modelInputTokensMax: effective } };
+}
+
 function packExcerptCount(pack: ConnectedContextPack): number {
   return pack.files.reduce((count, file) => count + file.excerpts.length, 0);
+}
+
+const PROMPT_PROVENANCE_PRIORITY: Record<EvidenceAtom["provenance"]["kind"], number> = {
+  "model-rerank": 7,
+  structural: 6,
+  "excerpt-read": 5,
+  "lexical-search": 4,
+  "document-extract": 4,
+  "git-history": 3,
+  "file-listing": 2,
+};
+
+interface PromptExcerptRef {
+  readonly key: string;
+  readonly score: number;
+  readonly provenancePriority: number;
+  readonly sequence: number;
+  readonly contentBytes: number;
+}
+
+function promptExcerptRefs(pack: ConnectedContextPack): readonly PromptExcerptRef[] {
+  const refs: PromptExcerptRef[] = [];
+  let sequence = 0;
+  pack.files.forEach((file, fileIndex) => {
+    file.excerpts.forEach((excerpt, excerptIndex) => {
+      refs.push({
+        key: `${String(fileIndex)}:${String(excerptIndex)}`,
+        score: Number.isFinite(excerpt.atom.score) ? excerpt.atom.score : 0,
+        provenancePriority: PROMPT_PROVENANCE_PRIORITY[excerpt.atom.provenance.kind],
+        sequence,
+        contentBytes: Buffer.byteLength(excerpt.content, "utf8"),
+      });
+      sequence += 1;
+    });
+  });
+  return refs.sort(
+    (a, b) =>
+      b.score - a.score || b.provenancePriority - a.provenancePriority || a.sequence - b.sequence,
+  );
 }
 
 export function withPromptExcerptByteLimit(
@@ -477,6 +544,32 @@ export function withPromptExcerptByteLimit(
   };
 }
 
+export function withPromptExcerptBudget(
+  pack: ConnectedContextPack,
+  totalExcerptBytes: number,
+): ConnectedContextPack {
+  let remaining = Math.max(0, Math.floor(totalExcerptBytes));
+  const allocations = new Map<string, number>();
+  for (const ref of promptExcerptRefs(pack)) {
+    const bytes = Math.min(ref.contentBytes, remaining);
+    allocations.set(ref.key, bytes);
+    remaining -= bytes;
+  }
+  return {
+    ...pack,
+    files: pack.files.map((file, fileIndex) => ({
+      ...file,
+      excerpts: file.excerpts.map((excerpt, excerptIndex) => ({
+        ...excerpt,
+        content: clampUtf8Bytes(
+          excerpt.content,
+          allocations.get(`${String(fileIndex)}:${String(excerptIndex)}`) ?? 0,
+        ),
+      })),
+    })),
+  };
+}
+
 function promptBudgetedMessages(
   question: string,
   pack: ConnectedContextPack,
@@ -486,14 +579,16 @@ function promptBudgetedMessages(
     pack: ConnectedContextPack,
     redactor: Redactor,
   ) => readonly GatewayChatMessage[],
+  options: GroundedGatewayPromptOptions = {},
 ): readonly GatewayChatMessage[] {
-  const limit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax);
-  let messages = build(question, pack, redactor);
+  const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
+  const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
+  let messages = build(question, budgetedPack, redactor);
   if (limit === 0 || promptByteLength(messages) <= limit) return messages;
-  const excerptCount = packExcerptCount(pack);
+  const excerptCount = packExcerptCount(budgetedPack);
   if (excerptCount === 0) return messages;
 
-  const emptyPack = withPromptExcerptByteLimit(pack, 0);
+  const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
   const overheadBytes = promptByteLength(emptyMessages);
   // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
@@ -504,13 +599,13 @@ function promptBudgetedMessages(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
-  while (maxExcerptBytes >= 0) {
-    messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
-    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
+  let excerptBudgetBytes = Math.max(0, limit - overheadBytes);
+  while (excerptBudgetBytes >= 0) {
+    messages = build(question, withPromptExcerptBudget(budgetedPack, excerptBudgetBytes), redactor);
+    if (promptByteLength(messages) <= limit || excerptBudgetBytes === 0) {
       return messages;
     }
-    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
+    excerptBudgetBytes = Math.max(0, Math.floor(excerptBudgetBytes * 0.8));
   }
   return emptyMessages;
 }
@@ -634,8 +729,15 @@ export function buildGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
+  options?: GroundedGatewayPromptOptions,
 ): readonly GatewayChatMessage[] {
-  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages);
+  return promptBudgetedMessages(
+    question,
+    pack,
+    redactor,
+    buildRawGroundedGatewayMessages,
+    options,
+  );
 }
 
 function createGatewayAnswerer(
@@ -643,14 +745,17 @@ function createGatewayAnswerer(
   modelId: string,
   redactor: Redactor,
   signal: AbortSignal,
+  modelInputTokensMax: number | undefined,
 ): GroundedAnswerer {
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
+      const promptOptions =
+        modelInputTokensMax === undefined ? undefined : { modelInputTokensMax };
       const response = await model.call(
         {
           modelId,
-          messages: buildGroundedGatewayMessages(question, pack, redactor),
+          messages: buildGroundedGatewayMessages(question, pack, redactor, promptOptions),
           stream: false,
         },
         signal,
@@ -677,10 +782,11 @@ function defaultRunner(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     const nowMs = Date.now;
     return runGroundedExploration(input, {
-      answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal),
+      answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
