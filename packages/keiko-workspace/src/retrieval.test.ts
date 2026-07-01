@@ -54,10 +54,36 @@ describe("lexicalRetrievalStrategy", () => {
     ]);
   });
 
-  it("is deterministic across calls", () => {
+  it("reorders the same candidates for materially different tasks", () => {
+    const input = files(
+      "README.md",
+      "config/payments-url.yaml",
+      "src/payments/PaymentService.ts",
+      "tests/payments/PaymentService.test.ts",
+    );
+    const sourceFirst = lexicalRetrievalStrategy
+      .rank(input, "Where is PaymentService implemented?")
+      .map((r) => r.file.relativePath);
+    const configFirst = lexicalRetrievalStrategy
+      .rank(input, "Where is the payments url configured?")
+      .map((r) => r.file.relativePath);
+    expect(sourceFirst[0]).toBe("src/payments/PaymentService.ts");
+    expect(configFirst[0]).toBe("config/payments-url.yaml");
+    expect(sourceFirst).not.toEqual(configFirst);
+  });
+
+  it("lets query relevance outrank static selection buckets", () => {
+    const ranked = lexicalRetrievalStrategy.rank(
+      files("README.md", "package.json", "src/payments/refundPayment.ts"),
+      "Where is refundPayment implemented?",
+    );
+    expect(ranked[0]?.file.relativePath).toBe("src/payments/refundPayment.ts");
+  });
+
+  it("is deterministic across calls for the same task", () => {
     const input = files("b.ts", "a.ts", "c.ts");
     expect(lexicalRetrievalStrategy.rank(input, "task")).toEqual(
-      lexicalRetrievalStrategy.rank(input, "other"),
+      lexicalRetrievalStrategy.rank(input, "task"),
     );
   });
 

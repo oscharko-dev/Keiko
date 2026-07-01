@@ -108,6 +108,52 @@ const CASES = [
     expectedLinePattern: /class\s+PaymentService/iu,
   },
   {
+    id: "same-candidates-api-client",
+    category: "query-aware-ranking",
+    intent: "targeted-code-search",
+    query: "Where is ApiClient timeout handling implemented?",
+    files: {
+      "docs/auth-debugging.md": "ApiClient and TokenValidator are both part of auth debugging.\n",
+      "src/auth/ApiClient.ts":
+        "export class ApiClient {\n  timeoutMs = 5000;\n  handleTimeout(): void {}\n}\n",
+      "src/auth/TokenValidator.ts":
+        "export class TokenValidator {\n  rejectExpiredJwt(): boolean { return true; }\n}\n",
+    },
+    expectedTop: "src/auth/ApiClient.ts",
+    relevantPaths: ["src/auth/ApiClient.ts"],
+    expectedLinePattern: /ApiClient|timeout/iu,
+  },
+  {
+    id: "same-candidates-token-validator",
+    category: "query-aware-ranking",
+    intent: "targeted-code-search",
+    query: "Where does TokenValidator reject expired JWTs?",
+    files: {
+      "docs/auth-debugging.md": "ApiClient and TokenValidator are both part of auth debugging.\n",
+      "src/auth/ApiClient.ts":
+        "export class ApiClient {\n  timeoutMs = 5000;\n  handleTimeout(): void {}\n}\n",
+      "src/auth/TokenValidator.ts":
+        "export class TokenValidator {\n  rejectExpiredJwt(): boolean { return true; }\n}\n",
+    },
+    expectedTop: "src/auth/TokenValidator.ts",
+    relevantPaths: ["src/auth/TokenValidator.ts"],
+    expectedLinePattern: /TokenValidator|rejectExpiredJwt/iu,
+  },
+  {
+    id: "short-identifier-api-id-url",
+    category: "query-aware-ranking",
+    intent: "targeted-code-search",
+    query: "Which API id url constant is defined in source?",
+    files: {
+      "docs/api.md": "The API id url constant is discussed in this document.\n",
+      "src/http/ApiIdUrlMapper.ts":
+        'export const API_ID_URL = "/api/id";\nexport function mapApiIdUrl(): string { return API_ID_URL; }\n',
+    },
+    expectedTop: "src/http/ApiIdUrlMapper.ts",
+    relevantPaths: ["src/http/ApiIdUrlMapper.ts"],
+    expectedLinePattern: /API_ID_URL|mapApiIdUrl/u,
+  },
+  {
     id: "stacktrace-source-location",
     category: "diagnostic-search",
     intent: "diagnostic-search",

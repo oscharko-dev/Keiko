@@ -255,6 +255,51 @@ const CASES: readonly BenchCase[] = [
     expectLinePattern: /class\s+PaymentService/iu,
   },
   {
+    id: "same-candidates-api-client",
+    category: "query-aware-ranking",
+    files: {
+      "docs/auth-debugging.md":
+        "ApiClient and TokenValidator are both part of auth debugging.\n",
+      "src/auth/ApiClient.ts":
+        "export class ApiClient {\n  timeoutMs = 5000;\n  handleTimeout(): void {}\n}\n",
+      "src/auth/TokenValidator.ts":
+        "export class TokenValidator {\n  rejectExpiredJwt(): boolean { return true; }\n}\n",
+    },
+    query: "Where is ApiClient timeout handling implemented?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/ApiClient.ts",
+    expectLinePattern: /ApiClient|timeout/iu,
+  },
+  {
+    id: "same-candidates-token-validator",
+    category: "query-aware-ranking",
+    files: {
+      "docs/auth-debugging.md":
+        "ApiClient and TokenValidator are both part of auth debugging.\n",
+      "src/auth/ApiClient.ts":
+        "export class ApiClient {\n  timeoutMs = 5000;\n  handleTimeout(): void {}\n}\n",
+      "src/auth/TokenValidator.ts":
+        "export class TokenValidator {\n  rejectExpiredJwt(): boolean { return true; }\n}\n",
+    },
+    query: "Where does TokenValidator reject expired JWTs?",
+    intent: "targeted-code-search",
+    expectTop: "src/auth/TokenValidator.ts",
+    expectLinePattern: /TokenValidator|rejectExpiredJwt/iu,
+  },
+  {
+    id: "short-identifier-api-id-url",
+    category: "query-aware-ranking",
+    files: {
+      "docs/api.md": "The API id url constant is discussed in this document.\n",
+      "src/http/ApiIdUrlMapper.ts":
+        'export const API_ID_URL = "/api/id";\nexport function mapApiIdUrl(): string { return API_ID_URL; }\n',
+    },
+    query: "Which API id url constant is defined in source?",
+    intent: "targeted-code-search",
+    expectTop: "src/http/ApiIdUrlMapper.ts",
+    expectLinePattern: /API_ID_URL|mapApiIdUrl/u,
+  },
+  {
     id: "stacktrace-source-location",
     category: "diagnostic-search",
     files: {
