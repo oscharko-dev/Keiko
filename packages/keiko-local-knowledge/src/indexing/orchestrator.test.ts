@@ -49,7 +49,6 @@ import type { IndexingEvent, IndexingOptions } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 
 const ROOT = "/srv/orchestrator";
-const PDF_PARSE_TIMEOUT_MS = 15_000;
 
 type FixtureFiles = Record<string, string | Uint8Array>;
 
