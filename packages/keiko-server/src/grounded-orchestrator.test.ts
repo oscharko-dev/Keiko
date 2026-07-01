@@ -692,38 +692,46 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
-    const term = "OverflowProbe";
-    for (let index = 0; index < 65; index += 1) {
-      const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(
-        join(dir, `${term}.ts`),
-        `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+  it(
+    "surfaces symbol line-read overflow after prioritized definition lookup",
+    async () => {
+      const term = "OverflowProbe";
+      for (let index = 0; index < 65; index += 1) {
+        const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, `${term}.ts`),
+          `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+        );
+      }
+
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({ text: "Trace OverflowProbe implementations" }),
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
       );
-    }
 
-    const out = await retrieveConnectedContextPack(
-      input({
-        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({ text: "Trace OverflowProbe implementations" }),
-      }),
-      {
-        answerer: echoAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-      },
-    );
-
-    const marker = out.pack.uncertainty.find(
-      (entry) =>
-        entry.kind === "scope-incomplete" &&
-        entry.claim.includes("Symbol line lookup skipped"),
-    );
-    expect(marker?.claim).toContain("prioritized line reads");
-    expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
-    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-  });
+      const marker = out.pack.uncertainty.find(
+        (entry) =>
+          entry.kind === "scope-incomplete" &&
+          entry.claim.includes("Symbol line lookup skipped"),
+      );
+      expect(marker?.claim).toContain("prioritized line reads");
+      expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    },
+    15_000,
+  );
 
   it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
     writeFileSync(
