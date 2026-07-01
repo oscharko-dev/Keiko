@@ -113,6 +113,7 @@ function buildContext(
     counters: newCounters(),
     ...(deps.shaperPort === undefined ? {} : { shaperPort: deps.shaperPort }),
     shapedObservations: [],
+    compactedToolMessages: new Map(),
     messages: [...plan.messages],
     lastResponse: undefined,
     patchDiff: undefined,

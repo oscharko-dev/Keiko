@@ -12,7 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
-import { CONTEXT_LANE_IDS, type ContextLaneId } from "@oscharko-dev/keiko-contracts";
+import {
+  CONTEXT_LANE_IDS,
+  DEFAULT_CONTEXT_PROFILE,
+  maxUtf8BytesForTokenBudget,
+  type ContextLaneId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
@@ -40,12 +45,14 @@ import {
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
 import { RepoSearchUnsupportedFileError } from "@oscharko-dev/keiko-workspace";
+import { ContextOverflowError } from "@oscharko-dev/keiko-model-gateway";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -84,7 +91,7 @@ function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   };
 }
 
-function recordingDeps(puts: PutCall[]): UiHandlerDeps {
+function recordingDeps(puts: PutCall[], overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   const env: Record<string, string> = {};
   return {
     config: undefined,
@@ -104,6 +111,7 @@ function recordingDeps(puts: PutCall[]): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    ...overrides,
   };
 }
 
@@ -308,9 +316,29 @@ describe("buildMultiSourceGatewayMessages", () => {
       ],
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual((512 + 512) * 4);
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(
+      maxUtf8BytesForTokenBudget(512 + 512),
+    );
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
+  });
+
+  it("throws ContextOverflowError when a 0-byte combined prompt budget cannot fit framing overhead", () => {
+    const baseA = scopePack("src/a.ts", 0.3, "low");
+    const baseB = scopePack("src/b.ts", 0.9, "high");
+    const packA = { ...baseA, budget: { ...baseA.budget, modelInputTokensMax: 0 } };
+    const packB = { ...baseB, budget: { ...baseB.budget, modelInputTokensMax: 0 } };
+
+    expect(() =>
+      buildMultiSourceGatewayMessages(
+        "explain both",
+        [
+          { label: "api", pack: packA },
+          { label: "web", pack: packB },
+        ],
+        buildRedactor({}, undefined),
+      ),
+    ).toThrow(ContextOverflowError);
   });
 });
 
@@ -452,6 +480,48 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(body.error.message).toBe("Connected source is not readable.");
     expect(answererCalled).toBe(false);
     expect(store.listMessages(chatId)).toEqual([]);
+  });
+
+  it("emits merged contextSummary from the active model profile resolver when the singleton profile is absent", async () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/a.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("api"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/b.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("web"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const packs = new Map<string, ConnectedContextPack>([
+      [
+        "src/a.ts",
+        attachContextBudgetDiagnostics(scopePack("src/a.ts", 0.3, "low"), DEFAULT_CONTEXT_PROFILE),
+      ],
+      [
+        "src/b.ts",
+        attachContextBudgetDiagnostics(scopePack("src/b.ts", 0.9, "high"), DEFAULT_CONTEXT_PROFILE),
+      ],
+    ]);
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain both", modelId: CHAT_MODEL })),
+      recordingDeps([], {
+        contextProfile: undefined,
+        contextProfileForModel: () => DEFAULT_CONTEXT_PROFILE,
+      }),
+      undefined,
+      seam(packPerScope(packs), constAnswerer("merged answer", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    expect(
+      asConnectedAnswer(result.body as GroundedAnswer).contextPack.contextSummary,
+    ).toBeDefined();
   });
 
   it("fail-soft: one inaccessible folder is skipped, healthy sources still answer (GRD-006)", async () => {
