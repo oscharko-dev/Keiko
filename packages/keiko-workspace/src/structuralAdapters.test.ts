@@ -5,12 +5,14 @@ import { memFs } from "./_memfs.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import {
   createDefaultStructuralRegistry,
+  createEcosystemStructureAdapters,
   runStructuralAdapters,
   type StructuralAdapter,
   type StructuralAdapterRegistry,
 } from "./structuralAdapters.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchLimits, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
+import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
 
 const MEM_ROOT = "/ws";
 const FIXED_NOW = (): number => 1_700_000_000_000;
@@ -71,12 +73,67 @@ function throwingAdapter(name: string, err: Error): StructuralAdapter {
   };
 }
 
+function ecosystemFixture(id: "java" | "go", extractorName: string): Ecosystem {
+  const ecosystem = ECOSYSTEMS.find((entry) => entry.id === id);
+  if (ecosystem === undefined) {
+    throw new Error(`missing ${id} ecosystem fixture`);
+  }
+  return {
+    ...ecosystem,
+    structure: {
+      packageBoundary: {
+        manifestNames: id === "java" ? ["pom.xml"] : ["go.mod"],
+        manifestSuffixes: [],
+        sourceRootSegments: id === "java" ? ["src/main/java"] : ["cmd"],
+      },
+      extractor: {
+        name: extractorName,
+        extract: ({ ecosystem: entry, query }) =>
+          Promise.resolve([
+            fakeAtom(`${entry.id}/${query.text}.structure`, `${entry.id}-${extractorName}`),
+          ]),
+      },
+    },
+  };
+}
+
 describe("createDefaultStructuralRegistry", () => {
   it("contains the three v1 adapters in expected order", () => {
     const registry = createDefaultStructuralRegistry();
     expect(registry.adapters.map((a) => a.name)).toEqual([
       "test-source-pairing",
       "import-graph",
+      "git-history",
+    ]);
+  });
+
+  it("does not add ecosystem structure adapters when no extractor is registered", () => {
+    expect(createEcosystemStructureAdapters()).toEqual([]);
+    expect(createDefaultStructuralRegistry().adapters.map((adapter) => adapter.name)).toEqual([
+      "test-source-pairing",
+      "import-graph",
+      "git-history",
+    ]);
+  });
+
+  it("discovers extractor-capable ecosystems in registry order", () => {
+    const plainEcosystem = ECOSYSTEMS.find((ecosystem) => ecosystem.id === "kotlin");
+    if (plainEcosystem === undefined) {
+      throw new Error("missing Kotlin ecosystem fixture");
+    }
+    const registry = createDefaultStructuralRegistry({
+      ecosystems: [
+        ecosystemFixture("java", "packages"),
+        plainEcosystem,
+        ecosystemFixture("go", "modules"),
+      ],
+    });
+
+    expect(registry.adapters.map((adapter) => adapter.name)).toEqual([
+      "test-source-pairing",
+      "import-graph",
+      "ecosystem-structure:java:packages",
+      "ecosystem-structure:go:modules",
       "git-history",
     ]);
   });
@@ -220,5 +277,42 @@ describe("runStructuralAdapters", () => {
       nowMs: FIXED_NOW,
     });
     expect(result2.atoms.length).toBe(2);
+  });
+
+  it("invokes registered ecosystem extractors as ordinary structural adapters", async () => {
+    const { scope, fs } = makeScope();
+    const registry: StructuralAdapterRegistry = {
+      adapters: createEcosystemStructureAdapters([
+        {
+          ...ecosystemFixture("java", "packages"),
+          structure: {
+            extractor: {
+              name: "packages",
+              isAvailable: ({ scope: searchScope }) =>
+                searchScope.workspace.root === MEM_ROOT,
+              extract: ({ ecosystem, query }) =>
+                Promise.resolve([
+                  fakeAtom(`src/main/java/${ecosystem.id}/${query.text}.java`, "java-packages"),
+                ]),
+            },
+          },
+        },
+      ]),
+    };
+
+    const result = await runStructuralAdapters(
+      registry,
+      scope,
+      nlq("PaymentService"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+
+    expect(result.unavailable).toEqual([]);
+    expect(result.errored).toEqual([]);
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual([
+      "src/main/java/java/PaymentService.java",
+    ]);
   });
 });

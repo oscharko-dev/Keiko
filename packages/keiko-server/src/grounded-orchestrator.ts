@@ -49,6 +49,7 @@ import {
   DEFAULT_SEARCH_LIMITS,
   FileTooLargeError,
   RepoSearchUnsupportedFileError,
+  createEcosystemStructureAdapters,
   detectWorkspaceAt,
   findFiles,
   gitHistoryAdapter,
@@ -494,7 +495,13 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
   // downstream ranking signals whenever a workspace-root query plans both rings.
   const registry: StructuralAdapterRegistry =
     ring.kind === "structural"
-      ? { adapters: [testSourcePairingAdapter, importGraphAdapter] }
+      ? {
+          adapters: [
+            testSourcePairingAdapter,
+            importGraphAdapter,
+            ...createEcosystemStructureAdapters(),
+          ],
+        }
       : { adapters: [gitHistoryAdapter] };
   const queries =
     ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
