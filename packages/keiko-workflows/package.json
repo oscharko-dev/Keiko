@@ -10,6 +10,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./context-budget": {
+      "types": "./dist/context-budget/index.d.ts",
+      "import": "./dist/context-budget/index.js"
     }
   },
   "scripts": {

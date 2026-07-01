@@ -200,7 +200,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(outcome.compaction).toBeDefined();
     expect(first?.role).toBe("system");
     expect(second?.role).toBe("user");
-    expect(second?.content).toContain("Automated summary");
+    expect(second?.content).toContain("Automated structured summary");
     expect(outcome.messages[0]).toEqual(plain[0]);
     expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
     expect(

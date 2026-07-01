@@ -463,7 +463,7 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0]?.messages[1]?.content).toContain("Automated summary");
+    expect(seenRequests[0]?.messages[1]?.content).toContain("Automated structured summary");
     expect(seenRequests[0]?.messages[1]?.content).not.toContain(NON_PATTERN_SECRET);
   });
 
