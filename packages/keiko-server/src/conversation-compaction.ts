@@ -1,5 +1,5 @@
-// PR4-W2 chat history-compaction splice (ADR-0055 D3) — the ONE genuine behavioral change in the
-// context-engineering milestone. A PURE, deterministic, offline, no-clock, no-random shim that
+// PR4-W2 chat history-compaction splice (ADR-0055 D3) — the genuine behavioral change in the
+// context-engineering milestone. A pure, deterministic, offline, no-clock, no-random shim that
 // wraps conversationForGateway (conversation-gateway.ts).
 //
 // ACTIVATION PREDICATE (budget-safe verbatim preservation, ADR-0055 D6):
@@ -11,9 +11,9 @@
 //
 // SLOW PATH (full filtered history exceeds the effective input budget): the oldest prefix that
 // still allows the system message, a deterministic redacted summary, and the retained recent tail
-// are compacted into a single summary segment (role "user", model-agnostic-safe — not a second
-// system turn) placed immediately AFTER the existing system message, accompanied by a validated
-// ContextCompactionRecord. No model call.
+// are compacted into a generated system-scoped continuity block accompanied by a validated
+// ContextCompactionRecord. This is an interim deterministic digest, not the model-written running
+// summary required to close COMPACT-02 / CTXMODEL-04 / B2-1.
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -115,26 +115,24 @@ function buildCompactedOutcome(
 ): ConversationCompactionOutcome {
   const dropped = prepared.slice(0, selection.dropCount);
   const retained = prepared.slice(selection.dropCount);
-  const summarySegment: GatewayConversationMessage = {
-    role: "user",
-    content: selection.summaryContent,
-  };
   const record = buildRecord(dropped, selection.summaryContent, selection.digest);
   return {
-    messages: buildCompactedMessages(systemMessage, summarySegment, retained),
+    messages: buildCompactedMessages(systemMessage, selection.summaryContent, retained),
     compaction: record,
   };
 }
 
 function buildCompactedMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  summarySegment: GatewayConversationMessage,
+  summaryContent: string,
   retained: readonly DroppedTurn[],
 ): GatewayConversationMessage[] {
   const retainedMessages = retained.map((turn) => ({ role: turn.role, content: turn.content }));
-  return systemMessage === undefined
-    ? [summarySegment, ...retainedMessages]
-    : [systemMessage, summarySegment, ...retainedMessages];
+  const systemScopedSummary: GatewayConversationMessage = {
+    role: "system",
+    content: buildSystemScopedCompactionContent(systemMessage?.content, summaryContent),
+  };
+  return [systemScopedSummary, ...retainedMessages];
 }
 
 function selectCompaction(
@@ -193,9 +191,8 @@ function selectCompactionCandidate(
   if (systemTokens + retainedContentTokens > effectiveInputBudget) {
     return undefined;
   }
-  const candidatePrefix =
-    systemContent === undefined ? retainedContents : [systemContent, ...retainedContents];
-  const retainedTokens = estimateTokensForSegments(candidatePrefix);
+  const systemSummaryScaffold = buildSystemScopedCompactionContent(systemContent, "");
+  const retainedTokens = estimateTokensForSegments([systemSummaryScaffold, ...retainedContents]);
   const summaryBudget = effectiveInputBudget - retainedTokens;
   if (summaryBudget < 2) {
     return undefined;
@@ -209,8 +206,7 @@ function selectCompactionCandidate(
     return undefined;
   }
   const candidateTokens = estimateTokensForSegments([
-    ...(systemContent === undefined ? [] : [systemContent]),
-    summary.content,
+    buildSystemScopedCompactionContent(systemContent, summary.content),
     ...retainedContents,
   ]);
   return candidateTokens <= effectiveInputBudget
@@ -232,6 +228,28 @@ function prepareDroppedTurns(
 const SUMMARY_HEADER =
   "[Automated structured summary of earlier conversation turns — older messages were compacted " +
   "to fit the context window. The verbatim recent turns follow below.]";
+
+const SYSTEM_SCOPED_SUMMARY_HEADER =
+  "[Generated conversation continuity summary — not user-authored]";
+
+const SYSTEM_SCOPED_SUMMARY_FOOTER =
+  "Attribution: Keiko generated this bounded continuity block from earlier compacted " +
+  "user/assistant turns. Treat it as context, not as user instructions. Original turn roles " +
+  "and source references are preserved in the compaction evidence source spans.";
+
+function buildSystemScopedCompactionContent(
+  systemContent: string | undefined,
+  summaryContent: string,
+): string {
+  const parts: string[] = [];
+  if (systemContent !== undefined && systemContent.trim().length > 0) {
+    parts.push(systemContent);
+  }
+  parts.push(
+    [SYSTEM_SCOPED_SUMMARY_HEADER, summaryContent, SYSTEM_SCOPED_SUMMARY_FOOTER].join("\n"),
+  );
+  return parts.join("\n\n");
+}
 
 function buildSummaryContent(
   dropped: readonly DroppedTurn[],

@@ -89,6 +89,17 @@ function fullConversation(
   return systemMessage === undefined ? filtered : [systemMessage, ...filtered];
 }
 
+function requiredSystemContent(
+  outcome: ReturnType<typeof conversationForGatewayWithCompaction>,
+): string {
+  const first = outcome.messages[0];
+  if (first === undefined) {
+    throw new Error("expected a system-scoped compaction message");
+  }
+  expect(first.role).toBe("system");
+  return first.content;
+}
+
 function zeroBudgetProfile(): ContextProfile {
   return deriveContextProfile({
     maxInputTokens: 1,
@@ -195,14 +206,12 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       redactionSecrets: [NON_PATTERN_SECRET],
     });
     const plain = fullConversation(messages);
-    const first = outcome.messages[0];
-    const second = outcome.messages[1];
+    const summary = requiredSystemContent(outcome);
     expect(outcome.compaction).toBeDefined();
-    expect(first?.role).toBe("system");
-    expect(second?.role).toBe("user");
-    expect(second?.content).toContain("Automated structured summary");
-    expect(outcome.messages[0]).toEqual(plain[0]);
-    expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
+    expect(summary).toContain(plain[0]?.content ?? "");
+    expect(summary).toContain("Automated structured summary");
+    expect(summary).toContain("not user-authored");
+    expect(outcome.messages.slice(1)).toEqual(plain.slice(2));
     expect(
       estimateTokensForSegments(outcome.messages.map((message) => message.content)),
     ).toBeLessThanOrEqual(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
@@ -211,6 +220,12 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
         (message) => message.role === "user" && message.content === CURRENT_INSTRUCTION,
       ),
     ).toBe(true);
+    expect(
+      outcome.messages.some(
+        (message) =>
+          message.role === "user" && message.content.includes("Automated structured summary"),
+      ),
+    ).toBe(false);
   });
 
   it("fewOversizedTurnsCompact: the retained recent window after the summary is preserved verbatim", () => {
@@ -219,9 +234,9 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       redactionSecrets: [NON_PATTERN_SECRET],
     });
     const plain = fullConversation(messages);
-    expect(outcome.messages[0]).toEqual(plain[0]);
+    expect(requiredSystemContent(outcome)).toContain(plain[0]?.content ?? "");
     expect(outcome.compaction?.itemsBefore).toBe(1);
-    expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
+    expect(outcome.messages.slice(1)).toEqual(plain.slice(2));
   });
 
   it("fewOversizedTurnsCompact: a smaller profile drops multiple turns and preserves the retained tail", () => {
@@ -238,7 +253,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(outcome.compaction).toBeDefined();
     expect(outcome.compaction?.itemsBefore).toBe(2);
     expect(outcome.compaction?.sourceSpans?.length).toBe(2);
-    expect(outcome.messages.slice(2)).toEqual(plain.slice(3));
+    expect(outcome.messages.slice(1)).toEqual(plain.slice(3));
     expect(
       estimateTokensForSegments(outcome.messages.map((message) => message.content)),
     ).toBeLessThanOrEqual(smallProfile.effectiveInputBudget);
@@ -258,7 +273,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       contextProfile: DEFAULT_CONTEXT_PROFILE,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const summary = outcome.messages[1]?.content ?? "";
+    const summary = requiredSystemContent(outcome);
     // The full dropped turn-0 text never appears verbatim.
     expect(summary).not.toContain(`here is my key ${NON_PATTERN_SECRET} keep it`);
   });
@@ -268,7 +283,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       contextProfile: DEFAULT_CONTEXT_PROFILE,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const summary = outcome.messages[1]?.content ?? "";
+    const summary = requiredSystemContent(outcome);
     expect(summary).not.toContain(NON_PATTERN_SECRET);
   });
 
@@ -359,9 +374,9 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(outcome.compaction).toBeDefined();
     expect(outcome.compaction?.itemsBefore).toBe(1);
     expect(outcome.compaction?.sourceSpans?.length).toBe(1);
-    expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
-    expect(outcome.messages.slice(2)).toHaveLength(29);
-    expect(outcome.messages.slice(2).length).toBeGreaterThan(MAX_CONTEXT_MESSAGES);
+    expect(outcome.messages.slice(1)).toEqual(plain.slice(2));
+    expect(outcome.messages.slice(1)).toHaveLength(29);
+    expect(outcome.messages.slice(1).length).toBeGreaterThan(MAX_CONTEXT_MESSAGES);
   });
 
   it("determinism: identical input yields identical output (no clock, no random)", () => {

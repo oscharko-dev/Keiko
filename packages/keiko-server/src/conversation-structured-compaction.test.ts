@@ -62,21 +62,21 @@ function requiredCompaction(
   return record;
 }
 
-function requiredMessageContent(
+function requiredSystemContent(
   outcome: ReturnType<typeof conversationForGatewayWithCompaction>,
-  index: number,
 ): string {
-  const message = outcome.messages[index];
+  const message = outcome.messages[0];
   if (message === undefined) {
-    throw new Error(`expected message at index ${String(index)}`);
+    throw new Error("expected system-scoped compaction message");
   }
+  expect(message.role).toBe("system");
   return message.content;
 }
 
 describe("conversationForGatewayWithCompaction — structured continuity summaries", () => {
   it("retains durable facts, decisions, constraints, questions, files, symbols, and references", () => {
     const outcome = compactStructuredHistory();
-    const summary = requiredMessageContent(outcome, 1);
+    const summary = requiredSystemContent(outcome);
     const record = requiredCompaction(outcome);
     const facts = (record.preservedFacts ?? []).map((fact) => fact.statement);
     expect(summary).toContain("Decisions:");

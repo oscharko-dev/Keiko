@@ -470,8 +470,16 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     expect(seenRequests).toHaveLength(1);
-    expect(seenRequests[0]?.messages[1]?.content).toContain("Automated structured summary");
-    expect(seenRequests[0]?.messages[1]?.content).not.toContain(NON_PATTERN_SECRET);
+    expect(seenRequests[0]?.messages[0]?.role).toBe("system");
+    expect(seenRequests[0]?.messages[0]?.content).toContain("Automated structured summary");
+    expect(seenRequests[0]?.messages[0]?.content).toContain("not user-authored");
+    expect(seenRequests[0]?.messages[0]?.content).not.toContain(NON_PATTERN_SECRET);
+    expect(
+      seenRequests[0]?.messages.some(
+        (message) =>
+          message.role === "user" && message.content.includes("Automated structured summary"),
+      ),
+    ).toBe(false);
   });
 
   it("appends realtime voice turns without calling the chat model", async () => {
