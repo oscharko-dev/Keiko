@@ -22,6 +22,7 @@ import {
 } from "../parsers/index.js";
 import type {
   AsyncParserAdapter,
+  OcrAdapter,
   ParserAdapter,
   ParserOptions,
   ParserRegistry,
@@ -349,7 +350,7 @@ describe("extractDocument — normalized binary text", () => {
       .get({ c: capsuleId, d: result.outcome.document.id }) as
       { readonly normalized_text?: string } | undefined;
     expect(row?.normalized_text).toContain(
-      "Controls!2: A=Control-17 | B=Encrypt backups | C=Q4 & audit",
+      "Controls!2: Key=Control-17 | Value=Encrypt backups | Column C=Q4 & audit",
     );
     const unitRows = store._internal.db
       .prepare(
@@ -369,7 +370,7 @@ describe("extractDocument — normalized binary text", () => {
 });
 
 describe("extractDocument — unsupported OCR and scanned inputs", () => {
-  it("marks a scanned PDF without a text layer as extracted-image with preview bytes", async () => {
+  it("marks a scanned PDF without a text layer as unsupported when OCR is not configured", async () => {
     const fs = memoryFs(ROOT, [{ relativePath: "scan.pdf", content: PDF_NO_TEXT_LAYER }]);
     const registry = createDefaultParserRegistry();
     const result = await extractDocument(
@@ -382,12 +383,57 @@ describe("extractDocument — unsupported OCR and scanned inputs", () => {
     );
     expect(result.outcome.kind).toBe("persisted");
     if (result.outcome.kind !== "persisted") return;
-    expect(result.outcome.document.status).toBe("extracted-image");
+    expect(result.outcome.document.status).toBe("unsupported");
     expect(result.outcome.document.parser.parserId).toBe("pdf");
     expect(count("pages")).toBe(1);
     expect(count("document_texts")).toBe(0);
-    const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
-    expect(blob.kind).toBe("ok");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "UNSUPPORTED_FORMAT", severity: "info" }),
+    );
+  });
+
+  it("routes scanned PDFs through registered OCR and persists recognized text", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "scan.pdf", content: PDF_NO_TEXT_LAYER }]);
+    const adapter: OcrAdapter = {
+      kind: "ocr",
+      ocrPage: (input) =>
+        Promise.resolve({
+          ok: true,
+          text: `OCR page ${String(input.pageNumber)}`,
+          confidence: 0.92,
+        }),
+    };
+    let registry = createDefaultParserRegistry();
+    registry = registerParser(registry, createOcrPipelineParser(adapter));
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "scan.pdf", sizeBytes: PDF_NO_TEXT_LAYER.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted");
+    expect(result.outcome.document.parser.parserId).toBe("ocr-pipeline");
+    const textRow = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | { readonly normalized_text?: string }
+      | undefined;
+    expect(textRow?.normalized_text).toBe("OCR page 1");
+    const units = store._internal.db
+      .prepare(
+        "SELECT kind, page_number FROM parsed_units WHERE capsule_id = :c AND document_id = :d ORDER BY id ASC",
+      )
+      .all({ c: capsuleId, d: result.outcome.document.id }) as unknown as readonly {
+      readonly kind: string;
+      readonly page_number: number | null;
+    }[];
+    expect(units).toContainEqual({ kind: "page", page_number: 1 });
   });
 
   it("marks OCR-pipeline fallback results as unsupported instead of extracted", async () => {

@@ -451,10 +451,10 @@ Environment variables override file config. Each variable maps to the matching f
 | --------------------------------------------- | -------------------------- | ------- | ------------ |
 | `KEIKO_GROUNDING_MAX_CONNECTED_SOURCES`       | `maxConnectedSources`      | 16      | 64           |
 | `KEIKO_GROUNDING_MAX_LOCAL_KNOWLEDGE_SOURCES` | `maxLocalKnowledgeSources` | 16      | 64           |
-| `KEIKO_GROUNDING_MAX_PROMPT_REFERENCES`       | `maxPromptReferences`      | 8       | 64           |
+| `KEIKO_GROUNDING_MAX_PROMPT_REFERENCES`       | `maxPromptReferences`      | 16      | 64           |
 | `KEIKO_GROUNDING_MAX_EXCERPT_CHARS`           | `maxExcerptChars`          | 900     | 20 000       |
 | `KEIKO_GROUNDING_REFERENCE_BUDGET`            | `referenceBudget`          | 10      | 256          |
-| `KEIKO_GROUNDING_HYBRID_MAX_CANDIDATES`       | `hybridMaxCandidates`      | 24      | 256          |
+| `KEIKO_GROUNDING_HYBRID_MAX_CANDIDATES`       | `hybridMaxCandidates`      | 100     | 256          |
 | `KEIKO_GROUNDING_HYBRID_MAX_EXCERPT_BYTES`    | `hybridMaxExcerptBytes`    | 131 072 | 524 288      |
 
 `maxConnectedSources` bounds the number of folder/file scope entries per chat. `maxLocalKnowledgeSources` bounds the number of Knowledge Capsule or Capsule Set bindings per chat.
@@ -462,6 +462,54 @@ Environment variables override file config. Each variable maps to the matching f
 On top of the per-list bounds, a single combined cap of `max(maxConnectedSources, maxLocalKnowledgeSources)` — default 16 — applies across all connected source kinds together (folders, files, repositories, and knowledge connectors). This combined cap is enforced everywhere a source is connected: a Chat PATCH that would exceed it is rejected with HTTP 400, the workspace connect gesture shows a visible "source limit reached" notice instead of binding, and Quality Intelligence drops over-cap run sources with a coverage notice. Workspace connection edges are drawn only after the chat binding is accepted; unavailable sources or failed persistence show a concise connection notice and do not leave a dangling visual edge. Chats that already exceed the cap (rows written under a higher prior operator config) may keep or shrink their existing sources but cannot grow; at ask time only the first 16 sources per kind are explored and the rest surface as skipped-source notices.
 
 The effective limits at runtime are visible via `GET /api/config` as `effectiveGroundingLimits`.
+
+### Optional RAG reranker
+
+Local Knowledge and hybrid grounded answers can use an optional Cohere-compatible cross-encoder
+reranker after the broad retrieval/RRF candidate pass and before prompt assembly. The intended
+deployment is a self-hosted LiteLLM-compatible gateway exposing `/v1/rerank`, for example a
+Qwen3-reranker model served behind Infinity or vLLM and fronted by LiteLLM.
+
+Add a top-level `reranker` block to `keiko.config.json`:
+
+```json
+{
+  "providers": [{ "...": "..." }],
+  "reranker": {
+    "modelId": "qwen3-reranker",
+    "baseUrl": "https://litellm.internal.example/v1",
+    "apiKeySecretRef": "model-gateway:reranker",
+    "apiKeyHeaderName": "authorization",
+    "timeoutMs": 30000
+  }
+}
+```
+
+Keiko sends this request shape to `${baseUrl}/rerank`:
+
+```json
+{
+  "model": "qwen3-reranker",
+  "query": "user question",
+  "documents": ["retrieved excerpt", "retrieved excerpt"],
+  "top_n": 16
+}
+```
+
+Environment variables override the file block:
+
+| Variable                                | Purpose                                |
+| --------------------------------------- | -------------------------------------- |
+| `KEIKO_RERANKER_MODEL_ID`               | Reranker model/deployment id.          |
+| `KEIKO_RERANKER_BASE_URL`               | LiteLLM-compatible `/v1` base URL.     |
+| `KEIKO_RERANKER_API_KEY`                | Reranker gateway token.                |
+| `KEIKO_RERANKER_API_KEY_HEADER_NAME`    | Credential header name.                |
+| `KEIKO_RERANKER_TIMEOUT_MS`             | Per-rerank request timeout.            |
+
+When the block is missing, the request times out, the endpoint returns an unsupported response, or
+the model endpoint is unavailable, grounded answers fall back to the existing retrieval order and
+expose content-free diagnostics (`disabled`, `unavailable`, `invalid-response`, or `applied`).
+Queries, excerpts, endpoint URLs, provider payloads, and credentials are not returned in diagnostics.
 
 ### Figma snapshot connector
 

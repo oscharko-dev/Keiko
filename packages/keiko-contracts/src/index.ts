@@ -1421,6 +1421,7 @@ export type {
   ChunkId,
   VectorId,
   EmbeddingVectorMetric,
+  EmbeddingVectorNormalization,
   EmbeddingModelIdentity,
   ParserDependencyVersion,
   ParserIdentity,

@@ -220,12 +220,13 @@ export const INDEXING_JOB_STATUSES: readonly IndexingJobStatus[] = [
 // where the source, parser, policy, chunking strategy, and embedding identity remain
 // compatible; incompatible checkpoints are refused and that document restarts cleanly
 // (Epic #1160, Issue #1286).
-export type CapsuleReindexMode = "changed-files" | "repair-failed" | "resume";
+export type CapsuleReindexMode = "changed-files" | "repair-failed" | "resume" | "full-reembed";
 
 export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
   "changed-files",
   "repair-failed",
   "resume",
+  "full-reembed",
 ] as const;
 
 export interface CapsuleReindexRequest {

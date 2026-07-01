@@ -2,9 +2,12 @@
 // (Issue #1322, Epic #1319; ADR-0047). Resolves a 32-byte AES-256-GCM key once at store-open and
 // binds it into a `StoreContentCipher` that the row layer threads through every read/write of the
 // reconstructive content columns (document_texts.normalized_text,
-// document_text_windows.normalized_text, vectors.embedding, sections.section_path_json, and
-// parsed_units path JSON). The key NEVER appears in an error message, event, or persisted row; only
-// sealed envelopes touch SQLite.
+// document_text_windows.normalized_text, chunks.context_prefix, chunks.augmented_text,
+// vectors.embedding, sections.section_path_json, and parsed_units path JSON). The key NEVER appears
+// in an error message, event, or persisted row; only sealed envelopes touch those encrypted content
+// columns. The FTS5 chunk lexical index is the
+// intentional exception: SQLite cannot search sealed randomized envelopes, so
+// chunk_lexical_index.text/exact_text stay plaintext as the bounded retrieval index.
 //
 // Mirrors keiko-memory-vault's MemoryContentCipher (ADR-0035): crypto knowledge lives only here, so
 // retrieval/parsing/UI layers stay crypto-free and just call seal*/open* at the column boundary.

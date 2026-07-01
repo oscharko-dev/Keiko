@@ -386,8 +386,9 @@ describe("chunkDocument", () => {
       .get({ c: fixture.seeded.capsuleId, d: fixture.seeded.documentId }) as {
       readonly chunking_strategy_version: string | null;
     };
-    expect(row.chunking_strategy_version).toContain("issue-195-v2");
-    expect(row.chunking_strategy_version).toContain("max=400");
+    expect(row.chunking_strategy_version).toContain("boundary-v2");
+    expect(row.chunking_strategy_version).toContain("max=512");
+    expect(row.chunking_strategy_version).toContain("overlap=50");
   });
 
   it("re-chunks when effective chunking options change", () => {

@@ -4,7 +4,7 @@
 
 import type { IncomingMessage } from "node:http";
 import { realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -16,6 +16,7 @@ import {
   isProjectAvailable,
   validateProjectPath,
   type Chat,
+  type ChatMessage,
   type ChatConnectedScope,
   type ChatLocalKnowledgeScope,
   type ChatRole,
@@ -26,6 +27,13 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+import {
+  openKnowledgeStore,
+  resolveKnowledgeStorePath,
+  type KnowledgeStore,
+} from "@oscharko-dev/keiko-local-knowledge";
+import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
+import { refreshGroundedAnswerIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import { pathIsDenied } from "./files-deny.js";
 import {
   clearGroundedContextIndexesForConversation,
@@ -957,6 +965,56 @@ export function handleDeleteChat(ctx: RouteContext, deps: UiHandlerDeps): RouteR
 // Route 21 — GET /api/chats/messages?chatId=...
 // ──────────────────────────────────────────────────────────────────────────
 
+function hasLocalKnowledgeLifecycle(message: ChatMessage): boolean {
+  const answer = message.groundedAnswer;
+  if (answer?.groundingKind === "local-knowledge") {
+    return answer.contextPack.indexLifecycle !== undefined;
+  }
+  if (answer?.groundingKind === "hybrid") {
+    return answer.contextPack.knowledge.indexLifecycle !== undefined;
+  }
+  return false;
+}
+
+function openLocalKnowledgeStoreForProjection(deps: UiHandlerDeps): {
+  readonly store: KnowledgeStore;
+  readonly close: () => void;
+} {
+  const root = dirname(deps.uiDbPath ?? resolve(process.cwd(), "keiko-ui.db"));
+  const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
+  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
+  const store =
+    protection === undefined
+      ? openKnowledgeStore({ dbPath })
+      : openKnowledgeStore({ dbPath, protection });
+  return {
+    store,
+    close: (): void => {
+      store.close();
+    },
+  };
+}
+
+function projectMessagesWithCurrentLocalKnowledgeLifecycle(
+  deps: UiHandlerDeps,
+  messages: readonly ChatMessage[],
+): readonly ChatMessage[] {
+  if (!messages.some(hasLocalKnowledgeLifecycle)) return messages;
+  const env = openLocalKnowledgeStoreForProjection(deps);
+  try {
+    return messages.map((message) =>
+      message.groundedAnswer === undefined
+        ? message
+        : {
+            ...message,
+            groundedAnswer: refreshGroundedAnswerIndexLifecycle(env.store, message.groundedAnswer),
+          },
+    );
+  } finally {
+    env.close();
+  }
+}
+
 export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const chatId = requireQuery(ctx, "chatId");
@@ -973,7 +1031,10 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
     const messages = deps.store
       .listMessages(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
-    return { status: 200, body: { messages } };
+    return {
+      status: 200,
+      body: { messages: projectMessagesWithCurrentLocalKnowledgeLifecycle(deps, messages) },
+    };
   });
 }
 

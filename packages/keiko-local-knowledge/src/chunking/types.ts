@@ -5,9 +5,9 @@
 // at retrieval time via parsed_unit → document → bytes.
 //
 // `tokenEstimator` is injected so future tokenizer upgrades (#196, #199) can swap in a
-// real tokenizer (e.g. tiktoken) without rewiring callers. The default estimator in
-// `token-estimator.ts` is intentionally crude (~4 chars per token) — see that file's
-// header for the documented limitation.
+// real tokenizer (e.g. a Qwen/SentencePiece binding) without rewiring callers. The default
+// estimator in `token-estimator.ts` is a calibrated deterministic estimate, not a real
+// tokenizer — see that file's header for the documented limitation.
 
 import type {
   ChunkId,
@@ -27,18 +27,23 @@ export interface ChunkingOptions {
   readonly overlapTokens?: number;
   readonly maxChunks?: number;
   readonly tokenEstimator?: TokenEstimator;
+  // Internal stale-index salt threaded by the indexing orchestrator. Contextual retrieval
+  // changes the text sent to embeddings/FTS without changing original citation offsets, so
+  // its prompt/model/version key must still participate in the chunk/vector freshness key.
+  readonly indexingTextStrategyKey?: string;
 }
 
 // Defaults documented inline so a caller passing `{}` gets predictable behaviour.
-export const DEFAULT_MAX_TOKENS = 400;
+export const DEFAULT_MAX_TOKENS = 512;
 export const DEFAULT_MIN_TOKENS = 64;
-export const DEFAULT_OVERLAP_TOKENS = 32;
+export const DEFAULT_OVERLAP_TOKENS = 50;
 export const DEFAULT_MAX_CHUNKS = 50_000;
 export const MAX_CHUNK_TOKENS = 2_048;
 export const MAX_OVERLAP_TOKENS = 1_024;
-export const CHUNKING_STRATEGY_VERSION = "issue-195-v2" as const;
+export const CHUNKING_STRATEGY_VERSION = "boundary-v2" as const;
+export const DEFAULT_INDEXING_TEXT_STRATEGY_KEY = "indexed-text=raw-v1" as const;
 export const DEFAULT_CHUNKING_STRATEGY_KEY =
-  `${CHUNKING_STRATEGY_VERSION}|max=${String(DEFAULT_MAX_TOKENS)}|min=${String(DEFAULT_MIN_TOKENS)}|overlap=${String(DEFAULT_OVERLAP_TOKENS)}|limit=${String(DEFAULT_MAX_CHUNKS)}|estimator=default` as const;
+  `${CHUNKING_STRATEGY_VERSION}|max=${String(DEFAULT_MAX_TOKENS)}|min=${String(DEFAULT_MIN_TOKENS)}|overlap=${String(DEFAULT_OVERLAP_TOKENS)}|limit=${String(DEFAULT_MAX_CHUNKS)}|estimator=default|${DEFAULT_INDEXING_TEXT_STRATEGY_KEY}` as const;
 
 export interface ResolvedChunkingOptions {
   readonly maxTokens: number;

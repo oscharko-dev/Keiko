@@ -27,6 +27,8 @@ import type {
   KnowledgeSourceScope,
   LargeDocumentExtractionStrategy,
   LargeDocumentResourcePolicy,
+  PageRecord,
+  ParsedUnit,
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -85,6 +87,7 @@ import {
   insertSectionRow,
   readExistingDocumentRow,
 } from "./persist.js";
+import { decodeUtf8 } from "../parsers/_internal.js";
 import {
   documentIdFor,
   type DiscoveredFile,
@@ -1005,8 +1008,7 @@ function parserFailureOutcome(
 const SOURCE_TEXT_PARSER_IDS: ReadonlySet<string> = new Set(["text", "json", "csv", "html"]);
 
 function decodeUtf8ForStorage(bytes: Uint8Array): string {
-  const raw = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  return raw.length > 0 && raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  return decodeUtf8(bytes).text;
 }
 
 function normalizedTextForPersistence(
@@ -1062,6 +1064,162 @@ async function runParserForPersistence(
 ): Promise<InternalParserResult> {
   const result = await runParser(deps, documentId, params, bytes, options);
   return withPersistedNormalizedText(result, bytes);
+}
+
+function pdfNeedsOcrResult(
+  result: InternalParserResult,
+  documentId: DocumentId,
+): InternalParserResult {
+  return {
+    ...result,
+    units: [{ kind: "unsupported-media", documentId, reason: "pdf-ocr-not-configured" }],
+    diagnostics: [
+      ...result.diagnostics,
+      {
+        severity: "info",
+        code: "UNSUPPORTED_FORMAT",
+        message: "pdf has no extractable text layer and OCR is not configured",
+        documentId,
+      },
+    ],
+  };
+}
+
+function findOcrParser(registry: ParserRegistry): AsyncParserAdapter | undefined {
+  return registry.list().find((adapter): adapter is AsyncParserAdapter => {
+    return adapter.capability.parserId === "ocr-pipeline" && hasAsyncParse(adapter);
+  });
+}
+
+function unsupportedMediaUnit(documentId: DocumentId, reason: string): ParsedUnit {
+  return { kind: "unsupported-media", documentId, reason };
+}
+
+function ocrEmptyResult(
+  pdfResult: InternalParserResult,
+  documentId: DocumentId,
+  parser: ParserResult["parser"],
+  options: ParserOptions,
+  diagnostics: readonly ParserDiagnostic[],
+): InternalParserResult {
+  return {
+    documentId,
+    parser,
+    pages: pdfResult.pages,
+    sections: [],
+    units: [unsupportedMediaUnit(documentId, "pdf-ocr-empty")],
+    diagnostics: [
+      ...diagnostics,
+      {
+        severity: "info",
+        code: "UNSUPPORTED_FORMAT",
+        message: "OCR produced no extractable text for image-only PDF",
+        documentId,
+      },
+    ],
+    extractedAt: options.now(),
+  };
+}
+
+function appendOcrPage(
+  pages: PageRecord[],
+  units: ParsedUnit[],
+  parts: string[],
+  documentId: DocumentId,
+  sourcePage: PageRecord,
+  text: string,
+  cursor: number,
+): number {
+  let nextCursor = cursor;
+  if (text.length > 0 && parts.length > 0) {
+    parts.push("\n\n");
+    nextCursor += 2;
+  }
+  const start = nextCursor;
+  if (text.length > 0) {
+    parts.push(text);
+    nextCursor += text.length;
+  }
+  const pageLabel = sourcePage.pageLabel ?? String(sourcePage.pageNumber);
+  const page: PageRecord = {
+    documentId,
+    pageNumber: sourcePage.pageNumber,
+    pageLabel,
+    characterStart: start,
+    characterEnd: nextCursor,
+  };
+  pages.push(page);
+  units.push({
+    kind: "page",
+    documentId,
+    pageNumber: sourcePage.pageNumber,
+    pageLabel,
+    characterStart: start,
+    characterEnd: nextCursor,
+  });
+  return nextCursor;
+}
+
+async function runOcrForImageOnlyPdf(
+  deps: ExtractDocumentDeps,
+  documentId: DocumentId,
+  params: ExtractDocumentParams,
+  bytes: Uint8Array,
+  options: ParserOptions,
+  pdfResult: InternalParserResult,
+): Promise<InternalParserResult> {
+  const ocrParser = findOcrParser(deps.parserRegistry);
+  if (ocrParser === undefined) return pdfNeedsOcrResult(pdfResult, documentId);
+  const diagnostics: ParserDiagnostic[] = [...pdfResult.diagnostics];
+  const pages: PageRecord[] = [];
+  const units: ParsedUnit[] = [];
+  const parts: string[] = [];
+  let cursor = 0;
+  let parser = pdfResult.parser;
+  for (const page of pdfResult.pages) {
+    const input: ParserSelectionInput = {
+      documentId,
+      bytes,
+      extension: extensionOf(params.file.relativePath),
+      mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
+      pageNumber: page.pageNumber,
+    };
+    const result = (await ocrParser.parseAsync(input, options)) as InternalParserResult;
+    parser = result.parser;
+    diagnostics.push(...result.diagnostics);
+    const text = result.normalizedText?.trim() ?? "";
+    if (text.length === 0) {
+      cursor = appendOcrPage(pages, units, parts, documentId, page, "", cursor);
+      continue;
+    }
+    cursor = appendOcrPage(pages, units, parts, documentId, page, text, cursor);
+  }
+  const normalizedText = parts.join("");
+  if (normalizedText.length === 0) {
+    return ocrEmptyResult(pdfResult, documentId, parser, options, diagnostics);
+  }
+  return {
+    documentId,
+    parser,
+    pages,
+    sections: [],
+    units,
+    diagnostics,
+    extractedAt: options.now(),
+    normalizedText,
+  };
+}
+
+async function applyImageOnlyPdfOcrIfNeeded(
+  deps: ExtractDocumentDeps,
+  documentId: DocumentId,
+  params: ExtractDocumentParams,
+  bytes: Uint8Array,
+  options: ParserOptions,
+  result: InternalParserResult,
+): Promise<InternalParserResult> {
+  if (!isImageOnlyPdfResult(result)) return result;
+  return runOcrForImageOnlyPdf(deps, documentId, params, bytes, options, result);
 }
 
 function persistExtractedDocument(
@@ -1196,6 +1354,14 @@ async function parseAndPersistDocument(
   let parserResult: InternalParserResult;
   try {
     parserResult = await runParserForPersistence(deps, documentId, params, bytes, options);
+    parserResult = await applyImageOnlyPdfOcrIfNeeded(
+      deps,
+      documentId,
+      params,
+      bytes,
+      options,
+      parserResult,
+    );
   } catch {
     return buildFailureResult(deps, params, documentId, {
       code: "PARSER_FAILED",

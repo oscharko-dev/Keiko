@@ -16,7 +16,12 @@ import {
   oversizeDiagnostic,
   shouldStop,
 } from "./_internal.js";
-import type { ParserAdapter, ParserOptions, ParserSelectionInput } from "./types.js";
+import type {
+  InternalParserResult,
+  ParserAdapter,
+  ParserOptions,
+  ParserSelectionInput,
+} from "./types.js";
 
 const PARSER_ID = "text";
 const PARSER_VERSION = "1";
@@ -98,18 +103,42 @@ interface MarkdownHeading {
   readonly characterStart: number;
 }
 
+interface MarkdownLine {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
 function scanHeadings(text: string): readonly MarkdownHeading[] {
   const out: MarkdownHeading[] = [];
-  let cursor = 0;
-  while (cursor < text.length) {
-    const newline = text.indexOf("\n", cursor);
-    const lineEnd = newline === -1 ? text.length : newline;
-    const line = text.slice(cursor, lineEnd);
+  let inFence = false;
+  let pendingSetext: MarkdownLine | undefined;
+  for (const lineInfo of markdownLines(text)) {
+    const line = lineInfo.text;
+    if (isFenceLine(line)) {
+      inFence = !inFence;
+      pendingSetext = undefined;
+      continue;
+    }
+    if (inFence) continue;
+    const setext = matchSetextUnderline(line);
+    if (setext !== null && pendingSetext !== undefined) {
+      out.push({
+        level: setext,
+        text: pendingSetext.text.trim(),
+        characterStart: pendingSetext.start,
+      });
+      pendingSetext = undefined;
+      continue;
+    }
     const heading = matchAtxHeading(line);
     if (heading !== null) {
-      out.push({ ...heading, characterStart: cursor });
+      out.push({ ...heading, characterStart: lineInfo.start });
+      pendingSetext = undefined;
+      continue;
     }
-    cursor = lineEnd + 1;
+    pendingSetext =
+      line.trim().length > 0 && !isMarkdownTableSeparator(line) ? lineInfo : undefined;
   }
   return out;
 }
@@ -150,6 +179,49 @@ function matchAtxHeading(line: string): { readonly level: number; readonly text:
   const textEnd = trimAtxTrailing(line, textStart);
   if (textEnd <= textStart) return null;
   return { level, text: line.slice(textStart, textEnd) };
+}
+
+function markdownLines(text: string): readonly MarkdownLine[] {
+  const lines: MarkdownLine[] = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const newline = text.indexOf("\n", cursor);
+    const lineEnd = newline === -1 ? text.length : newline;
+    lines.push({ text: text.slice(cursor, lineEnd), start: cursor, end: lineEnd });
+    cursor = lineEnd + 1;
+  }
+  return lines;
+}
+
+function isFenceLine(line: string): boolean {
+  const trimmed = line.trimStart();
+  const indent = line.length - trimmed.length;
+  if (indent > 3) return false;
+  return trimmed.startsWith("```") || trimmed.startsWith("~~~");
+}
+
+function matchSetextUnderline(line: string): 1 | 2 | null {
+  const trimmed = line.trim();
+  if (/^=+\s*$/u.test(trimmed)) return 1;
+  if (/^-+\s*$/u.test(trimmed) && trimmed.length >= 3) return 2;
+  return null;
+}
+
+function splitMarkdownTableRow(line: string): readonly string[] {
+  const trimmed = line.trim();
+  const body =
+    trimmed.startsWith("|") && trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed;
+  return body.split("|").map((part) => part.trim());
+}
+
+function isMarkdownTableSeparator(line: string): boolean {
+  if (!line.includes("|")) return false;
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
+}
+
+function isMarkdownTableHeader(line: string, nextLine: string | undefined): boolean {
+  return line.includes("|") && nextLine !== undefined && isMarkdownTableSeparator(nextLine);
 }
 
 interface MarkdownEmission {
@@ -213,6 +285,56 @@ function emitMarkdownSections(
   return { units, diagnostics };
 }
 
+// eslint-disable-next-line complexity
+function emitMarkdownTableRows(
+  text: string,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+  initialUnitCount: number,
+): MarkdownEmission {
+  const units: ParsedUnit[] = [];
+  const diagnostics: ParserDiagnostic[] = [];
+  const lines = markdownLines(text);
+  let inFence = false;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line === undefined) break;
+    if (isFenceLine(line.text)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (!isMarkdownTableHeader(line.text, lines[i + 1]?.text)) continue;
+    const tableName = "markdown-table";
+    let rowIndex = 0;
+    i += 2;
+    while (i < lines.length) {
+      const row = lines[i];
+      if (row === undefined || !row.text.includes("|") || row.text.trim().length === 0) {
+        i -= 1;
+        break;
+      }
+      const limit = shouldStop(startedAt, options, initialUnitCount + units.length);
+      if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
+        diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+        return { units, diagnostics };
+      }
+      units.push({
+        kind: "csv-row",
+        documentId: input.documentId,
+        tableName,
+        rowIndex,
+        characterStart: row.start,
+        characterEnd: row.end,
+      });
+      rowIndex += 1;
+      i += 1;
+    }
+  }
+  return { units, diagnostics };
+}
+
 function emitPlainSection(
   text: string,
   input: ParserSelectionInput,
@@ -257,12 +379,18 @@ export const textParser: ParserAdapter = Object.freeze({
     const emission = isMarkdown(input)
       ? emitMarkdownSections(decoded.text, input, options, startedAt)
       : emitPlainSection(decoded.text, input, options, startedAt);
-    return emptyResult(
-      textParser.capability,
-      input.documentId,
-      options,
-      emission.diagnostics,
-      emission.units,
-    );
+    const tableEmission = isMarkdown(input)
+      ? emitMarkdownTableRows(decoded.text, input, options, startedAt, emission.units.length)
+      : { units: [], diagnostics: [] };
+    return {
+      ...emptyResult(
+        textParser.capability,
+        input.documentId,
+        options,
+        [...emission.diagnostics, ...tableEmission.diagnostics],
+        [...emission.units, ...tableEmission.units],
+      ),
+      normalizedText: decoded.text,
+    } satisfies InternalParserResult;
   },
 });

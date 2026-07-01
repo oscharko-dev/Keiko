@@ -39,6 +39,7 @@ export type {
   OutboundHttpEgressConfig,
   ProviderAdapter,
   ResponseFormat,
+  RerankerConfig,
   StreamDelta,
   StreamEvent,
   ToolDefinition,
@@ -98,6 +99,7 @@ export {
   type EnvSource,
   type SafeGatewayConfig,
   type SafeProviderConfig,
+  type SafeRerankerConfig,
 } from "./config.js";
 
 export { Gateway, type GatewayDeps } from "./gateway.js";
@@ -162,10 +164,17 @@ export {
 } from "./realtime-voice-adapter.js";
 
 export {
+  EMBEDDING_INSTRUCTION_VERSION,
+  EMBEDDING_NORMALIZATION,
   assertCompatibleEmbeddingIdentity,
+  embeddingIdentityHardeningStatus,
+  embeddingSpaceFingerprintForVectors,
+  l2NormalizeVector,
+  vectorL2Norm,
   verifyEmbeddingCapability,
   type EmbeddingCapabilityCheck,
   type EmbeddingFailureReason,
+  type EmbeddingIdentityHardeningStatus,
   type EmbeddingIdentityWarning,
   type EmbeddingProbeOptions,
   type OpenAIEmbeddingAdapter,
@@ -181,6 +190,16 @@ export {
   type OpenAIEmbeddingRequest,
   type OpenAIEmbeddingSuccess,
 } from "./openai-embedding-adapter.js";
+
+export {
+  requestLiteLLMRerank,
+  type LiteLLMRerankRequest,
+  type RerankErrorKind,
+  type RerankOutcome,
+  type RerankRequest,
+  type RerankResult,
+  type RerankSuccess,
+} from "./rerank-adapter.js";
 
 export { redact } from "@oscharko-dev/keiko-security";
 
