@@ -113,14 +113,22 @@ export {
   isEcosystemLockfile,
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
+  ecosystemPackageBoundary,
+  ecosystemStructureProfiles,
   workspaceLanguageForEcosystem,
   workspaceLanguageForPath,
 } from "./ecosystems.js";
 export type {
   Ecosystem,
   EcosystemId,
+  EcosystemPackageBoundary,
   EcosystemPattern,
   EcosystemPhrase,
+  EcosystemStructureAvailabilityContext,
+  EcosystemStructureCapability,
+  EcosystemStructureExtractor,
+  EcosystemStructureExtractorContext,
+  EcosystemStructureProfile,
   EcosystemVersionDeclaration,
 } from "./ecosystems.js";
 export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
@@ -140,8 +148,13 @@ export type {
   StructuralAdapter,
   StructuralAdapterDeps,
   StructuralAdapterRegistry,
+  StructuralAdapterRegistryOptions,
 } from "./structuralAdapters.js";
-export { createDefaultStructuralRegistry, runStructuralAdapters } from "./structuralAdapters.js";
+export {
+  createDefaultStructuralRegistry,
+  createEcosystemStructureAdapters,
+  runStructuralAdapters,
+} from "./structuralAdapters.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";

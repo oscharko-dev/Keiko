@@ -11,6 +11,7 @@ import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import { testSourcePairingAdapter } from "./testSourcePairing.js";
 import { importGraphAdapter } from "./importGraph.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
+import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -37,6 +38,10 @@ export interface StructuralAdapterRegistry {
   readonly adapters: readonly StructuralAdapter[];
 }
 
+export interface StructuralAdapterRegistryOptions {
+  readonly ecosystems?: readonly Ecosystem[];
+}
+
 export interface AdapterError {
   readonly name: string;
   readonly message: string;
@@ -51,9 +56,40 @@ export interface RunAllResult {
 
 // ─── Default registry ─────────────────────────────────────────────────────────
 
-export function createDefaultStructuralRegistry(): StructuralAdapterRegistry {
+function createEcosystemStructureAdapter(ecosystem: Ecosystem): StructuralAdapter | undefined {
+  const extractor = ecosystem.structure?.extractor;
+  if (extractor === undefined) {
+    return undefined;
+  }
   return {
-    adapters: [testSourcePairingAdapter, importGraphAdapter, gitHistoryAdapter],
+    name: `ecosystem-structure:${ecosystem.id}:${extractor.name}`,
+    isAvailable: (scope, fs): Promise<boolean> =>
+      Promise.resolve(
+        extractor.isAvailable?.({ ecosystem, scope, fs }) ?? true,
+      ).catch(() => false),
+    lookup: (scope, query, limits, fs, deps): Promise<readonly EvidenceAtom[]> =>
+      extractor.extract(
+        deps === undefined
+          ? { ecosystem, scope, query, limits, fs }
+          : { ecosystem, scope, query, limits, fs, deps },
+      ),
+  };
+}
+
+export function createEcosystemStructureAdapters(
+  ecosystems: readonly Ecosystem[] = ECOSYSTEMS,
+): readonly StructuralAdapter[] {
+  return ecosystems
+    .map((ecosystem) => createEcosystemStructureAdapter(ecosystem))
+    .filter((adapter): adapter is StructuralAdapter => adapter !== undefined);
+}
+
+export function createDefaultStructuralRegistry(
+  options: StructuralAdapterRegistryOptions = {},
+): StructuralAdapterRegistry {
+  const ecosystemAdapters = createEcosystemStructureAdapters(options.ecosystems ?? ECOSYSTEMS);
+  return {
+    adapters: [testSourcePairingAdapter, importGraphAdapter, ...ecosystemAdapters, gitHistoryAdapter],
   };
 }
 

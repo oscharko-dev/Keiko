@@ -24,6 +24,9 @@
 //   * GENERATED MARKERS are WHOLE-SEGMENT or ANCHORED-SUFFIX only — never a bare substring — so a
 //     hand-authored `src/builder.ts` is not mistaken for a `build/` artifact.
 
+import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { WorkspaceFs } from "./fs.js";
+import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { WorkspaceLanguage } from "./types.js";
 
 export type EcosystemId =
@@ -64,6 +67,52 @@ export interface EcosystemVersionDeclaration {
   readonly example: string;
 }
 
+export interface EcosystemPackageBoundary {
+  readonly manifestNames: readonly string[];
+  readonly manifestSuffixes: readonly string[];
+  readonly sourceRootSegments: readonly string[];
+}
+
+export interface EcosystemStructureAvailabilityContext {
+  readonly ecosystem: Ecosystem;
+  readonly scope: SearchScope;
+  readonly fs: WorkspaceFs;
+}
+
+export interface EcosystemStructureExtractorContext
+  extends EcosystemStructureAvailabilityContext {
+  readonly query: RetrievalQuery;
+  readonly limits: SearchLimits;
+  readonly deps?: {
+    readonly nowMs?: () => number;
+  };
+}
+
+export interface EcosystemStructureExtractor {
+  readonly name: string;
+  readonly isAvailable?: (
+    context: EcosystemStructureAvailabilityContext,
+  ) => boolean | Promise<boolean>;
+  readonly extract: (
+    context: EcosystemStructureExtractorContext,
+  ) => Promise<readonly EvidenceAtom[]>;
+}
+
+export interface EcosystemStructureCapability {
+  readonly packageBoundary?: EcosystemPackageBoundary;
+  readonly extractor?: EcosystemStructureExtractor;
+}
+
+export interface EcosystemStructureProfile {
+  readonly ecosystem: EcosystemId;
+  readonly label: string;
+  readonly sourceExtensions: readonly string[];
+  readonly manifestNames: readonly string[];
+  readonly manifestSuffixes: readonly string[];
+  readonly sourceRootSegments: readonly string[];
+  readonly extractorName: string | undefined;
+}
+
 export interface Ecosystem {
   readonly id: EcosystemId;
   readonly label: string;
@@ -95,6 +144,7 @@ export interface Ecosystem {
   readonly contentTokens: readonly string[];
   readonly versionDeclarations: readonly EcosystemVersionDeclaration[];
   readonly buildCommands: readonly string[];
+  readonly structure?: EcosystemStructureCapability;
 }
 
 // ─── The registry ──────────────────────────────────────────────────────────────
@@ -1211,6 +1261,33 @@ export function workspaceLanguageForPath(scopePath: string): WorkspaceLanguage |
     return undefined;
   }
   return WORKSPACE_LANGUAGE_BY_SOURCE_EXTENSION.get(name.slice(dot + 1));
+}
+
+export function ecosystemPackageBoundary(ecosystem: Ecosystem): EcosystemPackageBoundary {
+  return (
+    ecosystem.structure?.packageBoundary ?? {
+      manifestNames: ecosystem.manifestNames,
+      manifestSuffixes: ecosystem.manifestSuffixes,
+      sourceRootSegments: [],
+    }
+  );
+}
+
+export function ecosystemStructureProfiles(
+  ecosystems: readonly Ecosystem[] = ECOSYSTEMS,
+): readonly EcosystemStructureProfile[] {
+  return ecosystems.map((ecosystem) => {
+    const boundary = ecosystemPackageBoundary(ecosystem);
+    return {
+      ecosystem: ecosystem.id,
+      label: ecosystem.label,
+      sourceExtensions: ecosystem.sourceExtensions,
+      manifestNames: boundary.manifestNames,
+      manifestSuffixes: boundary.manifestSuffixes,
+      sourceRootSegments: boundary.sourceRootSegments,
+      extractorName: ecosystem.structure?.extractor?.name,
+    };
+  });
 }
 
 // True for a generated/vendored artifact, detected by WHOLE path segment or ANCHORED basename
