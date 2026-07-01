@@ -34,10 +34,10 @@
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
-        "reviewedAt": "2026-06-30",
+        "reviewedAt": "2026-07-01",
         "humanApproved": true,
-        "approvalReference": "issue:#1690",
-        "rationale": "Initial stable baseline entry required by ADR-0099 and issue #1690; final publish use remains gated by maintainer review."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Initial stable baseline entry required by ADR-0099 and issue #1690; release-owner approval is recorded in PR review #4606286126."
       }
     },
     {
@@ -73,10 +73,10 @@
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
-        "reviewedAt": "2026-06-30",
+        "reviewedAt": "2026-07-01",
         "humanApproved": true,
-        "approvalReference": "issue:#1691",
-        "rationale": "Release publishing now renders GitHub Release notes from reviewed release-impact metadata; final publish use remains gated by maintainer review."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Release publishing now renders GitHub Release notes from reviewed release-impact metadata; release-owner approval is recorded in PR review #4606286126."
       }
     },
     {
@@ -112,10 +112,10 @@
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
-        "reviewedAt": "2026-06-30",
+        "reviewedAt": "2026-07-01",
         "humanApproved": true,
-        "approvalReference": "issue:#1692",
-        "rationale": "The backend update availability/preflight service exposes reviewed public update metadata while all execution remains gated by later updater slices."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "The backend update availability/preflight service exposes reviewed public update metadata while all execution remains gated by later updater slices; release-owner approval is recorded in PR review #4606286126."
       }
     },
     {
@@ -151,10 +151,10 @@
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
-        "reviewedAt": "2026-06-30",
+        "reviewedAt": "2026-07-01",
         "humanApproved": true,
-        "approvalReference": "issue:#1698",
-        "rationale": "Final epic verification records the end-to-end governed update experience delivered across issues #1693 through #1697; final publish use remains gated by maintainer review."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Final epic verification records the end-to-end governed update experience delivered across issues #1693 through #1697; release-owner approval is recorded in PR review #4606286126."
       }
     }
   ]

@@ -325,13 +325,15 @@ describe("release-impact governance", () => {
   });
 
   it("requires external approval references on the publish path", () => {
-    const publish = releasePublish(["--tag", "latest", "--dry-run", "--skip-github-release"]);
+    const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
+      validateReleaseImpactCatalog(catalog([entry()]), rootManifest()),
+    );
 
-    expect(publish.status).toBe(1);
-    expect(`${publish.stdout}\n${publish.stderr}`).toContain(
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
       "approvalReference must use github-pr-review:<owner>/<repo>#<pr>#<review> for publish",
     );
-  }, 20_000);
+  });
 
   it("rejects publish approval references outside the current repository", () => {
     const result = withEnv("KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE", "1", () =>
