@@ -1,4 +1,8 @@
-import { estimateTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  estimateTokens,
+  estimateTokensForSegments,
+  type ContextProfile,
+} from "@oscharko-dev/keiko-contracts";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
@@ -12,6 +16,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";
+import { usableGatewayMessages } from "./conversation-gateway.js";
 import {
   CONVERSATION_SYSTEM_PROMPT,
   composeConversationPrompt,
@@ -48,6 +53,7 @@ interface PromptAssemblyInput {
   readonly totalDocumentEntries: number;
   readonly redactionSecrets: readonly string[];
   readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
+  readonly allocatedHistoryTokens?: number | undefined;
 }
 
 interface PromptLaneSelection {
@@ -55,6 +61,7 @@ interface PromptLaneSelection {
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly diagnostics: ContextAssemblyDiagnostics;
+  readonly historyBudget?: number | undefined;
 }
 
 function renderMemoryContextText(
@@ -133,8 +140,18 @@ function documentLaneItems(
   }));
 }
 
+function historyLaneItems(historyPrefix: readonly ChatMessage[]): ContextLaneInput["items"] {
+  const usable = usableGatewayMessages(historyPrefix);
+  return usable.map((message, index) => ({
+    id: `history-${String(index).padStart(4, "0")}`,
+    text: message.content,
+    score: index + 1,
+  }));
+}
+
 function buildPromptAllocatorLanes(input: {
   readonly request: PromptAssemblyInput["request"];
+  readonly historyPrefix: readonly ChatMessage[];
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
@@ -170,12 +187,17 @@ function buildPromptAllocatorLanes(input: {
       laneId: "repo-evidence",
       items: documentLaneItems(input.documentContext),
     },
+    {
+      laneId: "history-summary",
+      items: historyLaneItems(input.historyPrefix),
+    },
   ];
 }
 
 function selectPromptLanes(input: {
   readonly profile: ContextProfile;
   readonly request: PromptAssemblyInput["request"];
+  readonly historyPrefix: readonly ChatMessage[];
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
@@ -187,6 +209,8 @@ function selectPromptLanes(input: {
   });
   const memoryIncluded = includedLaneIds(allocation.lanes, "working-memory");
   const documentIncluded = includedLaneIds(allocation.lanes, "repo-evidence");
+  const historyLane = allocation.lanes.find((lane) => lane.laneId === "history-summary");
+  const systemTokens = estimateTokens(CONVERSATION_SYSTEM_PROMPT);
   return {
     memoryEntries: input.memoryEntries.filter((_, index) =>
       memoryIncluded.has(memoryLaneItemId(index)),
@@ -198,6 +222,8 @@ function selectPromptLanes(input: {
       documentIncluded.has(documentLaneItemId(index)),
     ),
     diagnostics: allocation.diagnostics,
+    historyBudget:
+      historyLane === undefined ? undefined : systemTokens + historyLane.estimatedTokens,
   };
 }
 
@@ -215,7 +241,11 @@ function assembleGatewayPromptCandidate(
   if (latestTurnTokens > input.profile.effectiveInputBudget) {
     return undefined;
   }
-  const historyBudget = input.profile.effectiveInputBudget - latestTurnTokens;
+  const remainingInputBudget = input.profile.effectiveInputBudget - latestTurnTokens;
+  const historyBudget =
+    input.allocatedHistoryTokens === undefined
+      ? remainingInputBudget
+      : Math.min(remainingInputBudget, input.allocatedHistoryTokens);
   const historyOutcome = conversationForGatewayWithCompaction(input.historyPrefix, {
     contextProfile: input.profile,
     effectiveInputBudget: historyBudget,
@@ -273,6 +303,7 @@ export function selectGatewayPromptAssembly(input: {
   const selection = selectPromptLanes({
     profile: input.profile,
     request: input.request,
+    historyPrefix: input.historyPrefix,
     memoryEntries: input.memoryEntries,
     compactionContextText: input.compactionContextText,
     documentContext: input.documentContext,
@@ -283,6 +314,7 @@ export function selectGatewayPromptAssembly(input: {
     compactionContextText: selection.compactionContextText,
     documentContext: selection.documentContext,
     allocatorDiagnostics: selection.diagnostics,
+    allocatedHistoryTokens: selection.historyBudget,
   });
 }
 
