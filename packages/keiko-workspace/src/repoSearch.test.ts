@@ -156,6 +156,32 @@ describe("searchText (memFs)", () => {
     expect(result.atoms.map((a) => a.lineRange?.startLine)).toEqual([1, 3]);
   });
 
+  it("expands a matched line to the enclosing function window when available", async () => {
+    const { scope, fs } = memScope({
+      "src/payment.ts":
+        "import { audit } from './audit';\n" +
+        "\n" +
+        "export function reconcilePayment(): string {\n" +
+        "  const status = 'pending';\n" +
+        "  if (status === 'pending') {\n" +
+        "    return audit(status);\n" +
+        "  }\n" +
+        "  return 'done';\n" +
+        "}\n" +
+        "\n" +
+        "export function unrelated(): string {\n" +
+        "  return 'ok';\n" +
+        "}\n",
+    });
+    const result = await searchText(scope, nlq("pending"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms).toHaveLength(1);
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 3, endLine: 9 });
+    expect(result.coverage.matchesReturned).toBe(1);
+  });
+
   it("scores natural-language as tokensHit/tokensTotal", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "hello there friend\n" });
     const both = await searchText(scope, nlq("hello there"), DEFAULT_SEARCH_LIMITS, {

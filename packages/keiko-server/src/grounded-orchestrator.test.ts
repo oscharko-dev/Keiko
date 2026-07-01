@@ -692,6 +692,40 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
+    for (const term of ["AlphaProbe", "BetaProbe", "GammaProbe"]) {
+      for (let index = 0; index < 33; index += 1) {
+        const dir = join(ROOT, "packages", `${term.toLowerCase()}-${index.toString()}`, "src");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(
+          join(dir, `${term}.ts`),
+          `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+        );
+      }
+    }
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Trace AlphaProbe BetaProbe GammaProbe implementations" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" &&
+        entry.claim.includes("Symbol line lookup skipped"),
+    );
+    expect(marker?.claim).toContain("prioritized line reads");
+    expect(out.pack.files.some((file) => file.scopePath.endsWith("/AlphaProbe.ts"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
     writeFileSync(
       join(ROOT, "package.json"),
@@ -716,6 +750,35 @@ describe("runGroundedExploration", () => {
     const totalLockfileBytes =
       lockfile?.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0) ?? 0;
     expect(totalLockfileBytes).toBeLessThanOrEqual(8192);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("adds truncation evidence when a selected code window exceeds excerpt bytes", async () => {
+    const body = Array.from(
+      { length: 100 },
+      (_, index) => `  const line${index.toString()} = "needle ${"x".repeat(180)}";`,
+    ).join("\n");
+    writeFileSync(join(ROOT, "src/large-trace.ts"), `export function LargeTrace() {\n${body}\n}\n`);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "directory", relativePaths: ["src"], explicitConnection: true }),
+        query: happyQuery({ text: "Inspect the needle handling in LargeTrace" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" &&
+        entry.claim.includes("excerpt byte limit truncated") &&
+        entry.claim.includes("src/large-trace.ts"),
+    );
+    expect(marker).toBeDefined();
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
