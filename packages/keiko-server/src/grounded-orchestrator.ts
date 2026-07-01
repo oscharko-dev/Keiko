@@ -54,6 +54,7 @@ import {
   gitHistoryAdapter,
   importGraphAdapter,
   isCanonicalMetadataFile,
+  isEcosystemSourceFile,
   isDenied,
   readExcerpt,
   resolveWithinWorkspace,
@@ -703,18 +704,7 @@ const REPOSITORY_OVERVIEW_FILENAMES = [
 ] as const;
 const WORKSPACE_PACKAGE_DIRS = ["packages", "apps", "services", "libs"] as const;
 const MAX_WORKSPACE_MANIFESTS = 24;
-const SYMBOL_FILE_EXTENSIONS = [
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mts",
-  "cts",
-  "mjs",
-  "cjs",
-  "vue",
-] as const;
-const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
+const EXTRA_SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(["vue"]);
 // Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
 // on a large customer repo can never trigger an unbounded number of full-file reads even if many
 // files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
@@ -1156,7 +1146,7 @@ function scopePathExtension(scopePath: string): string {
 export function isSymbolDefinitionPath(scopePath: string, term: string): boolean {
   const extension = scopePathExtension(scopePath);
   return (
-    SYMBOL_FILE_EXTENSION_SET.has(extension) &&
+    (isEcosystemSourceFile(scopePath) || EXTRA_SYMBOL_FILE_EXTENSION_SET.has(extension)) &&
     scopePath.toLowerCase().endsWith(`${term.toLowerCase()}.${extension}`)
   );
 }
@@ -1198,13 +1188,10 @@ function symbolCoverageIncomplete(
 
 function symbolDefinitionPriority(scopePath: string, term: string): number {
   const loweredPath = scopePath.toLowerCase();
-  const loweredTerm = term.toLowerCase();
   return (
     1 +
     (loweredPath.includes(`/src/`) || loweredPath.startsWith("src/") ? 0.4 : 0) +
-    (loweredPath.endsWith(`/${loweredTerm}.ts`) || loweredPath.endsWith(`/${loweredTerm}.tsx`)
-      ? 0.2
-      : 0) -
+    (isSymbolDefinitionPath(scopePath, term) ? 0.2 : 0) -
     (/(^|\/)(test|tests|spec|specs|__tests__)\//u.test(loweredPath) ? 0.3 : 0)
   );
 }

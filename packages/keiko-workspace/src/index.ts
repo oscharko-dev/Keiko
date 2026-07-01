@@ -29,6 +29,7 @@ export {
   DEFAULT_DISCOVERY_OPTIONS,
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
+  WORKSPACE_LANGUAGES,
 } from "./types.js";
 
 export {
@@ -112,6 +113,8 @@ export {
   isEcosystemLockfile,
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
+  workspaceLanguageForEcosystem,
+  workspaceLanguageForPath,
 } from "./ecosystems.js";
 export type {
   Ecosystem,

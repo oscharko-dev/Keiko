@@ -3,16 +3,31 @@
 // module is wrapped in a single try/catch at this IO boundary (ADR-0005). No clock, no RNG.
 
 import { dirname, join, relative, resolve } from "node:path";
+import { WORKSPACE_LANGUAGES } from "./types.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { WorkspaceNotFoundError } from "./errors.js";
 import { isDenied } from "./ignore.js";
 import { assertContainedRealPath } from "./realpath.js";
 import type { TestFramework, WorkspaceInfo, WorkspaceLanguage } from "./types.js";
+import {
+  CANONICAL_MANIFEST_BASENAMES,
+  isCanonicalMetadataFile,
+  workspaceLanguageForPath,
+} from "./ecosystems.js";
+import { discoverFiles } from "./discovery.js";
 
-const MARKERS = [".git", "package.json"] as const;
+const MARKERS: readonly string[] = [".git", ...CANONICAL_MANIFEST_BASENAMES];
+const LANGUAGE_DISCOVERY = { maxDepth: 8, maxFiles: 2_000, applyGitignore: true } as const;
 
 function isRoot(dir: string, fs: WorkspaceFs): boolean {
-  return MARKERS.some((marker) => fs.exists(join(dir, marker)));
+  if (MARKERS.some((marker) => fs.exists(join(dir, marker)))) {
+    return true;
+  }
+  try {
+    return fs.readDir(dir).some((entry) => entry.isFile && isCanonicalMetadataFile(entry.name));
+  } catch {
+    return false;
+  }
 }
 
 function findRoot(startDir: string, fs: WorkspaceFs): string {
@@ -139,13 +154,50 @@ function detectDirs(
   return candidates.filter((dir) => isExistingDir(join(root, dir), fs));
 }
 
-function detectLanguages(root: string, fs: WorkspaceFs): readonly WorkspaceLanguage[] {
-  const languages: WorkspaceLanguage[] = [];
-  if (fs.exists(join(root, "tsconfig.json"))) {
-    languages.push("typescript");
+function discoveryWorkspace(
+  root: string,
+  meta: PackageMeta,
+  sourceDirs: readonly string[],
+  testDirs: readonly string[],
+  ignoreLines: readonly string[],
+): WorkspaceInfo {
+  return {
+    root,
+    name: meta.name,
+    version: meta.version,
+    testFramework: meta.testFramework,
+    sourceDirs,
+    testDirs,
+    languages: [],
+    ignoreLines,
+  };
+}
+
+function detectLanguages(
+  root: string,
+  fs: WorkspaceFs,
+  meta: PackageMeta,
+  sourceDirs: readonly string[],
+  testDirs: readonly string[],
+  ignoreLines: readonly string[],
+): readonly WorkspaceLanguage[] {
+  const languages = new Set<WorkspaceLanguage>();
+  try {
+    const workspace = discoveryWorkspace(root, meta, sourceDirs, testDirs, ignoreLines);
+    const files = discoverFiles(workspace, LANGUAGE_DISCOVERY, fs);
+    for (const file of files) {
+      const language = workspaceLanguageForPath(file.relativePath);
+      if (language !== undefined) {
+        languages.add(language);
+      }
+    }
+  } catch {
+    // Detection is advisory metadata. Preserve the previous safe fallback if the bounded scan fails.
   }
-  languages.push("javascript");
-  return languages;
+  if (languages.size === 0) {
+    languages.add("javascript");
+  }
+  return WORKSPACE_LANGUAGES.filter((language) => languages.has(language));
 }
 
 // Build workspace metadata treating `root` as THE workspace root — no walk-up, never throws
@@ -155,15 +207,18 @@ function detectLanguages(root: string, fs: WorkspaceFs): readonly WorkspaceLangu
 export function detectWorkspaceAt(root: string, fs: WorkspaceFs = nodeWorkspaceFs): WorkspaceInfo {
   const resolved = resolve(root);
   const meta = readPackageMeta(resolved, fs);
+  const sourceDirs = detectDirs(resolved, fs, ["src"]);
+  const testDirs = detectDirs(resolved, fs, ["tests", "test", "__tests__"]);
+  const ignoreLines = readIgnoreLines(resolved, fs);
   return {
     root: resolved,
     name: meta.name,
     version: meta.version,
     testFramework: meta.testFramework,
-    sourceDirs: detectDirs(resolved, fs, ["src"]),
-    testDirs: detectDirs(resolved, fs, ["tests", "test", "__tests__"]),
-    languages: detectLanguages(resolved, fs),
-    ignoreLines: readIgnoreLines(resolved, fs),
+    sourceDirs,
+    testDirs,
+    languages: detectLanguages(resolved, fs, meta, sourceDirs, testDirs, ignoreLines),
+    ignoreLines,
   };
 }
 

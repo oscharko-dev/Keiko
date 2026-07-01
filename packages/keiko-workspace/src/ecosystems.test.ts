@@ -12,6 +12,7 @@ import {
   isEcosystemLockfile,
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
+  workspaceLanguageForPath,
 } from "./ecosystems.js";
 import { DEFAULT_DENY_PATTERNS, isDenied } from "./ignore.js";
 
@@ -79,6 +80,24 @@ describe("ecosystems registry — source files", () => {
   it("does not classify docs or manifests as source", () => {
     expect(isEcosystemSourceFile("README.md")).toBe(false);
     expect(isEcosystemSourceFile("pom.xml")).toBe(false);
+  });
+
+  it.each([
+    ["pom.xml", "java"],
+    ["src/main/java/A.java", "java"],
+    ["build.gradle.kts", "kotlin"],
+    ["src/App.kt", "kotlin"],
+    ["pyproject.toml", "python"],
+    ["app/service.py", "python"],
+    ["go.mod", "go"],
+    ["cmd/main.go", "go"],
+    ["Cargo.toml", "rust"],
+    ["src/lib.rs", "rust"],
+    ["src/Controller.cs", "csharp"],
+    ["src/index.ts", "typescript"],
+    ["src/index.js", "javascript"],
+  ] as const)("maps %s to WorkspaceLanguage %s", (path, language) => {
+    expect(workspaceLanguageForPath(path)).toBe(language);
   });
 });
 
