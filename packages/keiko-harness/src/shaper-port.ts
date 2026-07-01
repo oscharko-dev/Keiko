@@ -3,19 +3,19 @@
 // concrete shaper (shapeCommandObservation et al.) lives in keiko-workflows and is injected as
 // this port by the production wiring tier (keiko-cli / keiko-sdk / keiko-server), which already
 // depends on keiko-workflows. The harness depends only on keiko-contracts for the observation
-// type. When no port is injected (every existing caller), the executor never shapes — the run is
-// byte-identical to today (D6 unchanged-guarantee).
+// type. When no port is injected, the executor never shapes and keeps the existing fail-closed
+// context-size behavior.
 //
 // The port is content-agnostic: it receives the completed ToolCallResult plus the originating
 // call's name/id/arguments and returns a ContextToolObservation or undefined (no shape for this
 // tool type). It MUST be pure and total — it never throws and performs no IO. The shaped
-// observation is attached ONLY to the keiko-internal ToolCallResult / accumulator; it is NEVER
-// serialized into the model-facing role:tool ChatMessage content (which stays result.output).
+// observation is attached to the keiko-internal ToolCallResult / accumulator; the executor renders a
+// compact role:tool message from it only when raw output would exceed the live context budget.
 
 import type { ContextToolObservation, ToolCallResult } from "@oscharko-dev/keiko-contracts";
 
 export interface HarnessShaperInput {
-  // The completed result whose `output` is the byte-identical model-facing string.
+  // The completed result whose `output` remains the preferred model-facing string when it fits.
   readonly result: ToolCallResult;
   // The tool that produced the result (e.g. "run_command").
   readonly toolName: string;

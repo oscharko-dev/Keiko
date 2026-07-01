@@ -15,5 +15,11 @@ export { DEFAULT_CONTEXT_BUDGET } from "./defaults.js";
 export type { BuildCompactionInput, CompactionDigest } from "./compaction.js";
 export { buildCompactionRecords } from "./compaction.js";
 
+export type {
+  StructuredCompactionDigestInput,
+  StructuredCompactionEntry,
+} from "./structured-digest.js";
+export { buildStructuredCompactionDigest } from "./structured-digest.js";
+
 export type { RehydrationResult } from "./rehydration.js";
 export { rehydrateProvenanceRef, rehydrateHandle } from "./rehydration.js";

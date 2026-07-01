@@ -12,7 +12,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ToolError } from "@oscharko-dev/keiko-tools";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import type { ToolCallResult } from "@oscharko-dev/keiko-contracts";
+import type { ContextToolObservation, ToolCallResult } from "@oscharko-dev/keiko-contracts";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import type { ToolCallMetadata } from "./ports.js";
@@ -157,10 +157,8 @@ function emitToolMetadata(
 
 // ADR-0055 D4 (PR4-W3): additively attach a shaped observation to the completed ToolCallResult via
 // the optional injected port, accumulating it on ctx.shapedObservations. The port is pure/total; a
-// returned undefined means "no shape for this tool type" and leaves `result` untouched. The
-// enriched result's `shapedObservation` is keiko-internal — it is NEVER read for the role:tool
-// ChatMessage content (which stays result.output) and is NOT part of contextBytes. No-op when no
-// port is injected (every existing caller), preserving byte-identical behavior.
+// returned undefined means "no shape for this tool type" and leaves `result` untouched. No-op when
+// no port is injected (every existing caller), preserving byte-identical behavior.
 function enrichWithObservation(
   ctx: RunContext,
   call: NormalizedToolCall,
@@ -180,6 +178,141 @@ function enrichWithObservation(
   }
   ctx.shapedObservations.push(observation);
   return { ...result, shapedObservation: observation };
+}
+
+interface ToolMessageCandidate {
+  readonly raw: ChatMessage;
+  readonly compact?: ChatMessage | undefined;
+}
+
+function compactObservationContent(observation: ContextToolObservation): string {
+  const laneId = "rehydration" in observation ? observation.rehydration?.laneId : undefined;
+  return JSON.stringify(
+    {
+      kind: "keiko.compactedToolObservation",
+      summary:
+        "Raw tool output exceeded the live harness context budget; this bounded observation preserves failure facts and rehydration metadata.",
+      laneId: laneId ?? "tool-observations",
+      observation,
+    },
+    null,
+    2,
+  );
+}
+
+function toolMessageCandidate(result: ToolCallResult): ToolMessageCandidate {
+  const raw: ChatMessage = { role: "tool", content: result.output, toolCallId: result.toolCallId };
+  if (result.shapedObservation === undefined) {
+    return { raw };
+  }
+  return {
+    raw,
+    compact: {
+      role: "tool",
+      content: compactObservationContent(result.shapedObservation),
+      toolCallId: result.toolCallId,
+    },
+  };
+}
+
+interface CompactMessagesResult {
+  readonly messages: ChatMessage[];
+  readonly changed: boolean;
+}
+
+interface ToolMessageState {
+  readonly messages: readonly ChatMessage[];
+  readonly results: readonly ChatMessage[];
+  readonly prefix: readonly ChatMessage[];
+  readonly changed: boolean;
+}
+
+interface ToolMessageSelection {
+  readonly messages: readonly ChatMessage[];
+  readonly results: readonly ChatMessage[];
+  readonly message: ChatMessage;
+}
+
+function compactToolMessages(
+  messages: readonly ChatMessage[],
+  compacted: ReadonlyMap<string, ChatMessage>,
+): CompactMessagesResult {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.role !== "tool" || message.toolCallId === undefined) {
+      return message;
+    }
+    const compact = compacted.get(message.toolCallId);
+    if (compact === undefined || compact.content === message.content) {
+      return message;
+    }
+    changed = true;
+    return compact;
+  });
+  return { messages: next, changed };
+}
+
+function unchangedToolMessageState(
+  ctx: RunContext,
+  results: readonly ChatMessage[],
+): ToolMessageState {
+  return {
+    messages: ctx.messages,
+    results,
+    prefix: [...ctx.messages, ...results],
+    changed: false,
+  };
+}
+
+function compactedToolMessageState(
+  ctx: RunContext,
+  results: readonly ChatMessage[],
+): ToolMessageState {
+  const messages = compactToolMessages(ctx.messages, ctx.compactedToolMessages);
+  const compactedResults = compactToolMessages(results, ctx.compactedToolMessages);
+  return {
+    messages: messages.messages,
+    results: compactedResults.messages,
+    prefix: [...messages.messages, ...compactedResults.messages],
+    changed: messages.changed || compactedResults.changed,
+  };
+}
+
+function selectIfFits(
+  ctx: RunContext,
+  state: ToolMessageState,
+  message: ChatMessage,
+): ToolMessageSelection | undefined {
+  const bytes = contextBytes([...state.prefix, message]);
+  if (bytes > ctx.limits.maxContextBytes) {
+    return undefined;
+  }
+  return { messages: state.messages, results: state.results, message };
+}
+
+function selectToolMessage(
+  ctx: RunContext,
+  results: readonly ChatMessage[],
+  candidate: ToolMessageCandidate,
+): ToolMessageSelection | StateStep {
+  const rawState = unchangedToolMessageState(ctx, results);
+  const raw = selectIfFits(ctx, rawState, candidate.raw);
+  if (raw !== undefined) {
+    return raw;
+  }
+  const rawBytes = contextBytes([...rawState.prefix, candidate.raw]);
+  const compactedState = compactedToolMessageState(ctx, results);
+  const rawAfterPriorCompaction = selectIfFits(ctx, compactedState, candidate.raw);
+  if (compactedState.changed && rawAfterPriorCompaction !== undefined) {
+    return rawAfterPriorCompaction;
+  }
+  if (candidate.compact !== undefined) {
+    const compact = selectIfFits(ctx, compactedState, candidate.compact);
+    if (compact !== undefined) {
+      return compact;
+    }
+  }
+  return toolOutputBudgetExceeded(ctx, rawBytes);
 }
 
 function abortStep(ctx: RunContext, reason: string): StateStep {
@@ -202,14 +335,20 @@ function toolOutputBudgetExceeded(ctx: RunContext, bytes: number): StateStep {
   return { to: "limit-exceeded", reason: "maxContextBytes exceeded after tool output" };
 }
 
-function isStateStep(value: ChatMessage | StateStep): value is StateStep {
+function isStateStep(value: ToolMessageCandidate | StateStep): value is StateStep {
   return "to" in value;
+}
+
+function isSelectedToolMessage(
+  value: ToolMessageSelection | StateStep,
+): value is ToolMessageSelection {
+  return "message" in value;
 }
 
 async function runOneTool(
   ctx: RunContext,
   call: NormalizedToolCall,
-): Promise<ChatMessage | StateStep> {
+): Promise<ToolMessageCandidate | StateStep> {
   ctx.counters.toolCalls += 1;
   ctx.emitter.emit({ type: "tool:call:started", toolName: call.name, toolCallId: call.id });
   try {
@@ -229,11 +368,12 @@ async function runOneTool(
       durationMs: result.durationMs,
     });
     emitToolMetadata(ctx, result.metadata, result.durationMs);
-    // Additive shaped-observation attach (ADR-0055 D4). The enriched result carries the
-    // observation on a keiko-internal field; the model-facing message below still uses
-    // result.output verbatim — content and contextBytes are unaffected.
-    enrichWithObservation(ctx, call, result);
-    return { role: "tool", content: result.output, toolCallId: call.id };
+    const enriched = enrichWithObservation(ctx, call, result);
+    const candidate = toolMessageCandidate(enriched);
+    if (candidate.compact !== undefined) {
+      ctx.compactedToolMessages.set(call.id, candidate.compact);
+    }
+    return candidate;
   } catch (error) {
     const message = error instanceof Error ? error.message : "tool execution failed";
     ctx.emitter.emit({
@@ -253,7 +393,7 @@ async function runOneTool(
 
 export async function handleToolCall(ctx: RunContext): Promise<StateStep> {
   const calls = ctx.lastResponse?.toolCalls ?? [];
-  const results: ChatMessage[] = [];
+  let results: ChatMessage[] = [];
   for (const call of calls) {
     if (ctx.signal.aborted) {
       return abortStep(ctx, "abort detected before tool call");
@@ -268,11 +408,12 @@ export async function handleToolCall(ctx: RunContext): Promise<StateStep> {
     if (isStateStep(result)) {
       return result;
     }
-    const bytes = contextBytes([...ctx.messages, ...results, result]);
-    if (bytes > ctx.limits.maxContextBytes) {
-      return toolOutputBudgetExceeded(ctx, bytes);
+    const selected = selectToolMessage(ctx, results, result);
+    if (!isSelectedToolMessage(selected)) {
+      return selected;
     }
-    results.push(result);
+    ctx.messages = [...selected.messages];
+    results = [...selected.results, selected.message];
   }
   ctx.messages = [...ctx.messages, ...results];
   return { to: "model-call", reason: "tool results fed back to model" };

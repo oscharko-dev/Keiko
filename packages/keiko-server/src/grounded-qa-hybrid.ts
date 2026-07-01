@@ -146,6 +146,7 @@ export interface HybridGroundedAskCtx {
   readonly chat: Chat;
   readonly content: string;
   readonly modelId: string;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly signal: AbortSignal;
   readonly folderRetriever?: FolderRetriever;
@@ -777,7 +778,7 @@ function persistFolderEvidence(
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput(ctx.deps, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -990,7 +991,9 @@ function assembleHybridAnswer(
   );
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
-  const summary = folderSummary(sources.folders, redactor, ctx.deps);
+  const summary = folderSummary(sources.folders, redactor, {
+    contextProfile: ctx.contextProfile,
+  });
   return {
     groundingKind: "hybrid",
     ...ids,
