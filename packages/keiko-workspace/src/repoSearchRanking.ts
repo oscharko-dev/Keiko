@@ -12,6 +12,34 @@ export interface PathLexicalSignals {
   readonly substringBoost: number;
 }
 
+type PathBoostSignal =
+  | "exactPathBoost"
+  | "basenameBoost"
+  | "segmentBoost"
+  | "tokenBoost"
+  | "substringBoost";
+
+interface LexicalPathContext {
+  readonly path: string;
+  readonly name: string;
+  readonly segments: readonly string[];
+  readonly pathTerms: ReadonlySet<string>;
+}
+
+interface PathTermMatch {
+  readonly signal: PathBoostSignal;
+  readonly boost: number;
+}
+
+interface MutablePathLexicalSignals {
+  matchedTerms: number;
+  exactPathBoost: number;
+  basenameBoost: number;
+  segmentBoost: number;
+  tokenBoost: number;
+  substringBoost: number;
+}
+
 function basename(scopePath: string): string {
   const index = scopePath.lastIndexOf("/");
   return index >= 0 ? scopePath.slice(index + 1) : scopePath;
@@ -31,6 +59,65 @@ function termWeight(term: string): number {
   return term.length <= 3 ? 4 : Math.min(term.length, 12);
 }
 
+function emptyPathSignals(): PathLexicalSignals {
+  return {
+    score: 0,
+    matchedTerms: 0,
+    coverageBonus: 0,
+    exactPathBoost: 0,
+    basenameBoost: 0,
+    segmentBoost: 0,
+    tokenBoost: 0,
+    substringBoost: 0,
+  };
+}
+
+function pathContext(scopePath: string): LexicalPathContext {
+  const path = normalizedPath(scopePath);
+  return {
+    path,
+    name: basename(path),
+    segments: pathSegments(path),
+    pathTerms: new Set(expandedQueryTerms(scopePath, false)),
+  };
+}
+
+function emptyMutableSignals(): MutablePathLexicalSignals {
+  return {
+    matchedTerms: 0,
+    exactPathBoost: 0,
+    basenameBoost: 0,
+    segmentBoost: 0,
+    tokenBoost: 0,
+    substringBoost: 0,
+  };
+}
+
+function pathTermMatch(context: LexicalPathContext, term: string): PathTermMatch | undefined {
+  const weight = termWeight(term);
+  if (context.path === term || context.path.endsWith(`/${term}`)) {
+    return { signal: "exactPathBoost", boost: 36 + weight };
+  }
+  if (context.name === term || context.name.startsWith(`${term}.`)) {
+    return { signal: "basenameBoost", boost: 26 + weight };
+  }
+  if (context.segments.includes(term)) {
+    return { signal: "segmentBoost", boost: 18 + weight };
+  }
+  if (context.pathTerms.has(term)) {
+    return { signal: "tokenBoost", boost: 14 + weight };
+  }
+  if (context.path.includes(term)) {
+    return { signal: "substringBoost", boost: 8 + Math.min(weight, 8) };
+  }
+  return undefined;
+}
+
+function addPathTermMatch(signals: MutablePathLexicalSignals, match: PathTermMatch): void {
+  signals[match.signal] += match.boost;
+  signals.matchedTerms += 1;
+}
+
 export function queryRankingTerms(task: string | undefined): readonly string[] {
   if (task === undefined || task.trim().length === 0) {
     return [];
@@ -43,70 +130,32 @@ export function lexicalPathSignals(
   queryTerms: readonly string[],
 ): PathLexicalSignals {
   if (queryTerms.length === 0) {
-    return {
-      score: 0,
-      matchedTerms: 0,
-      coverageBonus: 0,
-      exactPathBoost: 0,
-      basenameBoost: 0,
-      segmentBoost: 0,
-      tokenBoost: 0,
-      substringBoost: 0,
-    };
+    return emptyPathSignals();
   }
-  const path = normalizedPath(scopePath);
-  const name = basename(path);
-  const segments = pathSegments(path);
-  const pathTerms = new Set(expandedQueryTerms(scopePath, false));
-  let matchedTerms = 0;
-  let exactPathBoost = 0;
-  let basenameBoost = 0;
-  let segmentBoost = 0;
-  let tokenBoost = 0;
-  let substringBoost = 0;
+  const context = pathContext(scopePath);
+  const signals = emptyMutableSignals();
   for (const term of queryTerms) {
-    const weight = termWeight(term);
-    if (path === term || path.endsWith(`/${term}`)) {
-      exactPathBoost += 36 + weight;
-      matchedTerms += 1;
-      continue;
-    }
-    if (name === term || name.startsWith(`${term}.`)) {
-      basenameBoost += 26 + weight;
-      matchedTerms += 1;
-      continue;
-    }
-    if (segments.includes(term)) {
-      segmentBoost += 18 + weight;
-      matchedTerms += 1;
-      continue;
-    }
-    if (pathTerms.has(term)) {
-      tokenBoost += 14 + weight;
-      matchedTerms += 1;
-      continue;
-    }
-    if (path.includes(term)) {
-      substringBoost += 8 + Math.min(weight, 8);
-      matchedTerms += 1;
-    }
+    const match = pathTermMatch(context, term);
+    if (match !== undefined) addPathTermMatch(signals, match);
   }
   const coverageBonus =
-    matchedTerms === 0 ? 0 : Math.round((matchedTerms / queryTerms.length) * 24);
+    signals.matchedTerms === 0
+      ? 0
+      : Math.round((signals.matchedTerms / queryTerms.length) * 24);
   return {
     score:
-      exactPathBoost +
-      basenameBoost +
-      segmentBoost +
-      tokenBoost +
-      substringBoost +
+      signals.exactPathBoost +
+      signals.basenameBoost +
+      signals.segmentBoost +
+      signals.tokenBoost +
+      signals.substringBoost +
       coverageBonus,
-    matchedTerms,
+    matchedTerms: signals.matchedTerms,
     coverageBonus,
-    exactPathBoost,
-    basenameBoost,
-    segmentBoost,
-    tokenBoost,
-    substringBoost,
+    exactPathBoost: signals.exactPathBoost,
+    basenameBoost: signals.basenameBoost,
+    segmentBoost: signals.segmentBoost,
+    tokenBoost: signals.tokenBoost,
+    substringBoost: signals.substringBoost,
   };
 }
