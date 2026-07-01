@@ -94,22 +94,14 @@ The streaming caret and the confidence signal are presentation-only additions ov
 already produces (`sendStatus === "streaming"`, `hypothesis.confidence`); a non-level confidence string
 keeps its plain key/value row (behaviour-preserving).
 
-## Issue #1405 live authority wiring
+## Deferred — authority-bearing live wiring
 
-Issue #1405 wires the previously token-backed authority primitives into bounded product surfaces
-without widening BFF authority. Browser evidence and the acceptance ledger live under
-[`docs/design-system/evidence/1405/`](evidence/1405/README.md).
-
-| Surface                         | Live behaviour                                                                    | Authority boundary                                                                       | Evidence                                                               |
-| ------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Agent permission request        | `AgentGateCard` renders `.ai-permit` scope rows and approve/reject buttons.       | The card only resumes an already queued action; it does not mint new BFF routes.         | `AgentGateCard.test.tsx`; `human-loop-1405.spec.ts`                    |
-| Sensitive memory forget action  | Chat memory forget uses `.ai-danger` and requires typing `FORGET` before send.    | The existing memory-forget API still requires `userAcknowledgedDestructive: true`.       | `ChatWindow.test.tsx`; `memory-handlers.ts`; `human-loop-1405.spec.ts` |
-| Chat regenerate latest response | Latest ungrounded assistant turn exposes `.ai-controls`; in-flight state cancels. | The BFF replays through Model Gateway, preserves message id, and rejects grounded chats. | `desktop-chat-handlers.test.ts`; `api.test.ts`; `ChatWindow.test.tsx`  |
-
-Regeneration is intentionally limited to the latest ungrounded assistant turn. Grounded answers keep
-their citations and evidence immutable; callers receive `NOT_APPLIABLE` instead of silently dropping
-grounding context. Sensitive/destructive operations remain explicit human actions and continue to use
-the existing server-side acknowledgement boundaries.
+`.ai-permit` (permission request), `.ai-danger` (sensitive-action confirm), and a chat-level
+regenerate control ship as reviewable, token-backed primitives (rendered in the
+[evidence](evidence/1296/README.md) in all 7 modes) but are **not** wired into live agent flows. Doing
+so would change model-routing / permission / tool-authority surfaces, which the issue Stop Conditions
+forbid without a separate issue. Keiko deliberately keeps apply/exec behind its existing gated
+surfaces; these primitives are available for that future, authority-scoped work.
 
 See also: [fidelity-matrix](fidelity-matrix.md), [token-component-reuse-map](token-component-reuse-map.md),
 [light-mode-deviation-register](light-mode-deviation-register.md), [ADR-0049](../adr/ADR-0049-design-system-fidelity-gates.md).

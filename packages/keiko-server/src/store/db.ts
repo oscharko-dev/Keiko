@@ -41,7 +41,6 @@ import {
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
   listMessagesLimited as sqlListMessagesLimited,
-  replaceAssistantMessageContent as sqlReplaceAssistantMessageContent,
   updateMessage as sqlUpdateMessage,
 } from "./messages.js";
 import { validateProjectPath } from "./validation.js";
@@ -196,8 +195,6 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       createMessageBatch(db, options, messages),
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),
-    replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
-      sqlReplaceAssistantMessageContent(db, id, content, timestamp),
     close: (): void => {
       db.close();
     },
