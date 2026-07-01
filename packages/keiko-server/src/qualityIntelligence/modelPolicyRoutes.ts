@@ -31,6 +31,11 @@ import {
   resolveQiModelPolicy,
   validateQiModelPolicy,
 } from "./modelSelection.js";
+import {
+  buildJudgePrompt,
+  buildQiJudgeResponseFormat,
+  tryParseJudgeVerdict,
+} from "./judgePort.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";
@@ -235,6 +240,8 @@ function preflightMessage(category: QualityIntelligenceModelPreflightErrorCatego
       return "The model gateway could not be reached.";
     case "provider-http":
       return "The model provider returned an HTTP error.";
+    case "schema":
+      return "The model answered, but not with the required Quality Intelligence judge schema.";
     case "unavailable":
       return "No compatible model is available for this stage.";
   }
@@ -244,40 +251,36 @@ function preflightMessage(category: QualityIntelligenceModelPreflightErrorCatego
 function requestForPreflight(
   stage: "generate" | "judge",
   modelId: string,
-  capability: ModelCapability,
+  _capability: ModelCapability,
 ): GatewayRequest {
-  const wantsResponseFormat = stage === "judge" && capability.supportsResponseFormat === true;
+  if (stage === "judge") {
+    return {
+      modelId,
+      messages: buildJudgePrompt(
+        "Titel: Pflichtfeld Betrag ist leer\nSchritte: Betrag leer lassen\nErwartetes Ergebnis: Validierungsfehler wird angezeigt.",
+        [
+          {
+            atomId: "preflight-atom-1",
+            text: "Wenn das Pflichtfeld Betrag leer ist, muss das System eine Validierungsmeldung anzeigen.",
+          },
+        ],
+      ),
+      stream: false,
+      responseFormat: buildQiJudgeResponseFormat(),
+    };
+  }
   return {
     modelId,
     messages: [
       {
         role: "system",
-        content:
-          stage === "judge"
-            ? "Return a compact JSON object that says whether the test case is acceptable."
-            : "Answer with the word ok.",
+        content: "Answer with the word ok.",
       },
       {
         role: "user",
-        content:
-          stage === "judge"
-            ? "Evaluate this synthetic one-line test case: verify that a required field is rejected when empty."
-            : "Quality Intelligence preflight.",
+        content: "Quality Intelligence preflight.",
       },
     ],
-    ...(wantsResponseFormat
-      ? {
-          responseFormat: {
-            type: "json_schema" as const,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              required: ["ok"],
-              properties: { ok: { type: "boolean" } },
-            },
-          },
-        }
-      : {}),
   };
 }
 
@@ -305,7 +308,18 @@ async function preflightStage(
     };
   }
   try {
-    await new Gateway(deps.config).chat(requestForPreflight(stage, modelId, capability));
+    const response = await new Gateway(deps.config).chat(
+      requestForPreflight(stage, modelId, capability),
+    );
+    if (stage === "judge" && tryParseJudgeVerdict(response.content) === null) {
+      return {
+        stage,
+        modelId,
+        status: "failed",
+        category: "schema",
+        message: preflightMessage("schema"),
+      };
+    }
     return { stage, modelId, status: "passed" };
   } catch (error) {
     const category = classifyPreflightError(error);
@@ -410,6 +424,18 @@ export async function handlePutQiModelPolicy(
       400,
       "QI_BAD_MODEL_POLICY",
       "The selected Quality Intelligence model policy is invalid.",
+    );
+  }
+  try {
+    await buildQiModelRoutingForRun(deps, { modelPolicy: policy });
+  } catch (error) {
+    if (error instanceof QiModelPolicyError) {
+      return errorResult(400, error.code, error.message);
+    }
+    return errorResult(
+      500,
+      "QI_PREFLIGHT_FAILED",
+      "The Quality Intelligence model preflight failed.",
     );
   }
   const saved = { ...policy, updatedAt: new Date().toISOString() };

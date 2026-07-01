@@ -355,16 +355,29 @@ describe("OpenAiAdapter.call", () => {
       {
         ...REQUEST,
         tools: [{ name: "search", description: "find", parameters: { type: "object" } }],
-        responseFormat: { type: "json_schema", schema: { type: "object" } },
+        responseFormat: {
+          type: "json_schema",
+          name: "test_schema",
+          strict: true,
+          schema: { type: "object" },
+        },
       },
       CONFIG,
     );
     const body = sentBody as {
       tools: { type: string; function: { name: string } }[];
-      response_format: { type: string };
+      response_format: {
+        type: string;
+        json_schema: { name?: string; strict?: boolean; schema?: unknown };
+      };
     };
     expect(body.tools[0]?.function.name).toBe("search");
     expect(body.response_format.type).toBe("json_schema");
+    expect(body.response_format.json_schema).toMatchObject({
+      name: "test_schema",
+      strict: true,
+      schema: { type: "object" },
+    });
   });
 
   it("serialises a seed when the gateway request provides one", async () => {
@@ -380,11 +393,41 @@ describe("OpenAiAdapter.call", () => {
     expect((sentBody as { seed?: number }).seed).toBe(13);
   });
 
+  it("serialises deterministic sampling parameters without dropping temperature zero", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { content: "deterministic" }, finish_reason: "stop" }],
+        }),
+      );
+    });
+    await adapter.call({ ...REQUEST, temperature: 0, topP: 1 }, CONFIG);
+    expect((sentBody as { temperature?: number; top_p?: number }).temperature).toBe(0);
+    expect((sentBody as { temperature?: number; top_p?: number }).top_p).toBe(1);
+  });
+
+  it("rejects invalid sampling parameters before sending the provider request", async () => {
+    let called = false;
+    const adapter = adapterWith(() => {
+      called = true;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "never" }, finish_reason: "stop" }] }),
+      );
+    });
+    await expect(adapter.call({ ...REQUEST, temperature: -1 }, CONFIG)).rejects.toBeInstanceOf(
+      RangeError,
+    );
+    expect(called).toBe(false);
+  });
+
   // Issue #763 (Epic #761): determinism parameters must NOT leak into the provider payload when the
   // gateway request does not carry them. A regression that always spreads `{ seed: 0 }` (or a
   // response_format) would send an unrequested deterministic seed to every call and falsely record
   // reproducibility. Assert the keys are absent, not merely undefined.
-  it("omits seed and response_format from the request body when the gateway request provides neither", async () => {
+  it("omits optional model parameters from the request body when the gateway request provides none", async () => {
     let sentBody: unknown;
     const adapter = adapterWith((_url, init) => {
       const raw = init?.body;
@@ -397,6 +440,8 @@ describe("OpenAiAdapter.call", () => {
     const body = sentBody as Record<string, unknown>;
     expect("seed" in body).toBe(false);
     expect("response_format" in body).toBe(false);
+    expect("temperature" in body).toBe(false);
+    expect("top_p" in body).toBe(false);
   });
 
   it("normalises assistant text-part arrays from OpenAI-compatible providers", async () => {

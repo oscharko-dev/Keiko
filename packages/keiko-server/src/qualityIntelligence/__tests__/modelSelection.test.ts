@@ -34,6 +34,7 @@ function capability(id: string, overrides: Partial<ModelCapability> = {}): Model
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    supportsResponseFormat: true,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: true,
@@ -230,6 +231,44 @@ describe("Quality Intelligence model policy defaults", () => {
     });
   });
 
+  it("rejects judge models that advertise structured output without response_format enforcement", () => {
+    const deps = depsWith(
+      configWith([capability("loose-json", { supportsResponseFormat: false })]),
+    );
+
+    expect(
+      validateQiModelPolicy(deps, {
+        policyVersion: 1,
+        testDesignModelId: "loose-json",
+        judgeModelId: "loose-json",
+      }),
+    ).toEqual({
+      ok: false,
+      issues: [
+        {
+          field: "judgeModelId",
+          code: "model-not-response-format",
+          message: "The selected judge model cannot enforce response_format JSON schema output.",
+        },
+      ],
+    });
+  });
+
+  it("prefers a different judge model when another enforced judge is available", () => {
+    const deps = depsWith(
+      configWith([
+        capability("generation-json", { supportsResponseFormat: true, costClass: "low" }),
+        capability("judge-json", { supportsResponseFormat: true, costClass: "medium" }),
+      ]),
+    );
+
+    expect(recommendQiModelPolicy(deps)).toEqual({
+      policyVersion: 1,
+      testDesignModelId: "generation-json",
+      judgeModelId: "judge-json",
+    });
+  });
+
   it("repairs stale persisted policies to recommended defaults", () => {
     const deps = depsWith(configWith([capability("current-json", { structuredOutput: true })]));
 
@@ -406,6 +445,24 @@ describe("selectModelForQiCapability (qi:judge-logic)", () => {
       ]),
     );
     expect(selectModelForQiCapability(deps, "qi:judge-logic")).toBe("low-structured");
+  });
+
+  it("skips structured-output models that cannot enforce response_format", () => {
+    const deps = depsWith(
+      configWith([
+        capability("loose-structured", {
+          structuredOutput: true,
+          supportsResponseFormat: false,
+          costClass: "low",
+        }),
+        capability("enforced-structured", {
+          structuredOutput: true,
+          supportsResponseFormat: true,
+          costClass: "high",
+        }),
+      ]),
+    );
+    expect(selectModelForQiCapability(deps, "qi:judge-logic")).toBe("enforced-structured");
   });
 
   it("throws QI_CAPABILITY_UNAVAILABLE when only chat-only models exist (judge needs structured output)", () => {

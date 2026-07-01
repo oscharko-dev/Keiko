@@ -22,6 +22,7 @@ import {
   reCheckQiRun,
   regenerateStaleQiRun,
   reviewQiRun,
+  QI_RUN_SSE_BUFFER_LIMIT_CHARS,
   startQiRun,
 } from "./quality-intelligence-api.js";
 
@@ -70,6 +71,41 @@ function makeStreamResponse(frames: readonly Frame[]): {
   } as unknown as Response;
 
   return { response, calls, read };
+}
+
+function makeRawStreamResponse(chunks: readonly string[]): {
+  response: Response;
+  calls: string[];
+} {
+  const calls: string[] = [];
+  let i = 0;
+  const encoder = new TextEncoder();
+  const reader = {
+    read: vi.fn(async () => {
+      if (i < chunks.length) {
+        return { done: false, value: encoder.encode(chunks[i++]) };
+      }
+      return { done: true, value: undefined };
+    }),
+    cancel: vi.fn(async () => {
+      calls.push("cancel");
+    }),
+    releaseLock: vi.fn(() => {
+      calls.push("releaseLock");
+    }),
+    closed: Promise.resolve(undefined),
+  } as unknown as ReadableStreamDefaultReader<Uint8Array>;
+
+  const response = {
+    ok: true,
+    status: 200,
+    headers: {
+      get: (h: string) => (h.toLowerCase() === "content-type" ? "text/event-stream" : null),
+    },
+    body: { getReader: () => reader } as unknown as ReadableStream<Uint8Array>,
+  } as unknown as Response;
+
+  return { response, calls };
 }
 
 const ACCEPTED: Frame = {
@@ -168,6 +204,25 @@ describe("startQiRun — stream lifecycle", () => {
 
     // The finally block must still cancel the body stream even when read() threw.
     expect(calls).toContain("cancel");
+  });
+
+  it("fails closed when the SSE buffer grows without a completed line", async () => {
+    const { response, calls } = makeRawStreamResponse([
+      "x".repeat(QI_RUN_SSE_BUFFER_LIMIT_CHARS + 1),
+    ]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
+
+    await expect(
+      startQiRun(
+        { sources: [], profileId: "regression-default" },
+        new AbortController().signal,
+        () => {},
+      ),
+    ).rejects.toMatchObject({
+      code: "QI_STREAM_BUFFER_OVERFLOW",
+      status: 200,
+    });
+    expect(calls).toEqual(["cancel", "releaseLock"]);
   });
 
   it("throws typed errors for JSON pre-stream failures and missing stream bodies", async () => {

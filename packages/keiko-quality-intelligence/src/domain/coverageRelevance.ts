@@ -155,10 +155,10 @@ const deriveCoverageMapIdString = (
  * trust every confidence value lies in [0, 1] and every mapping cites at
  * least one candidate.
  *
- * Atoms whose structural score is 0 (no candidate cites them and no step
- * mentions them) are omitted from the returned mappings — including a zero-
- * confidence mapping would violate the contract invariant (every mapping
- * must cite at least one candidate).
+ * Atoms with no candidate citation are omitted from the returned mappings — including a zero-
+ * confidence mapping would violate the contract invariant (every mapping must cite at least one
+ * candidate). This function intentionally does not infer coverage from free-text step mentions; the
+ * confidence is based only on explicit `derivedFromAtomIds` provenance and citing-test focus.
  */
 export const buildCoverageMap = (
   input: BuildCoverageMapInput,

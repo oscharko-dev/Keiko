@@ -114,6 +114,25 @@ describe("validateQualityIntelligenceEvidenceManifest", () => {
     expect(validateQualityIntelligenceEvidenceManifest(onlySeedUsed).ok).toBe(true);
   });
 
+  it("accepts count-only quality diagnostics", () => {
+    const withDiagnostics = {
+      ...buildValidManifest(),
+      qualityDiagnostics: {
+        judgedCandidates: 2,
+        strongCandidates: 1,
+        weakCandidates: 1,
+        needsReviewCandidates: 1,
+        unjudgedCandidates: 0,
+        budgetSkippedCandidates: 0,
+        judgeErrorCandidates: 0,
+        judgeParseFailedCandidates: 0,
+        judgePromptTooLargeCandidates: 0,
+        judgeIsSelfModel: true,
+      },
+    };
+    expect(validateQualityIntelligenceEvidenceManifest(withDiagnostics).ok).toBe(true);
+  });
+
   it("rejects an invalid status enum", () => {
     const bad = { ...buildValidManifest(), status: "exploded" };
     const result = validateQualityIntelligenceEvidenceManifest(bad);

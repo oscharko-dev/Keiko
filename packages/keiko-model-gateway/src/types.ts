@@ -28,6 +28,9 @@ export type {
   ToolDefinition,
   ResponseFormat,
   GatewayRequest,
+  GatewaySamplingParameterIssue,
+  GatewaySamplingParameterName,
+  GatewaySamplingParameters,
   NormalizedToolCall,
   UsageMetadata,
   NormalizedResponse,
@@ -44,11 +47,18 @@ export type {
 } from "@oscharko-dev/keiko-contracts";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  GATEWAY_TEMPERATURE_RANGE,
+  GATEWAY_TOP_P_RANGE,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  isValidGatewayTemperature,
+  isValidGatewayTopP,
   isConfiguredVoiceProvider,
   describeVoiceProviderAvailability,
   listVoicePersonas,
+  validateGatewaySamplingParameters,
 } from "@oscharko-dev/keiko-contracts";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────

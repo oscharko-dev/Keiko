@@ -43,6 +43,7 @@ type FetchCapsulesFn = NonNullable<RunLauncherProps["fetchCapsulesImpl"]>;
 type FetchCapsuleSetsFn = NonNullable<RunLauncherProps["fetchCapsuleSetsImpl"]>;
 type FetchProjectsFn = NonNullable<RunLauncherProps["fetchProjectsImpl"]>;
 type FetchFilesTreeFn = NonNullable<RunLauncherProps["fetchFilesTreeImpl"]>;
+type CancelQiRunFn = NonNullable<RunLauncherProps["cancelImpl"]>;
 
 const DONE_FRAME: QualityIntelligenceRunStreamMessage = {
   type: "done",
@@ -118,6 +119,43 @@ function makeStallingFake(): {
   const startImpl = vi.fn(
     async (_request: Parameters<StartQiRunFn>[0], signal: AbortSignal): Promise<void> => {
       captured = signal;
+      await new Promise<void>((res) => {
+        resolve = res;
+      });
+    },
+  ) as unknown as StartQiRunFn;
+
+  return {
+    startImpl,
+    capturedSignal: () => captured,
+    resolveStall: () => {
+      resolve();
+    },
+  };
+}
+
+function makeAcceptedStallingFake(runId: string): {
+  startImpl: StartQiRunFn;
+  capturedSignal: () => AbortSignal | undefined;
+  resolveStall: () => void;
+} {
+  let resolve!: () => void;
+  let captured: AbortSignal | undefined;
+
+  const startImpl = vi.fn(
+    async (
+      _request: Parameters<StartQiRunFn>[0],
+      signal: AbortSignal,
+      onMessage: Parameters<StartQiRunFn>[2],
+    ): Promise<void> => {
+      captured = signal;
+      onMessage({
+        type: "accepted",
+        runId,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      });
       await new Promise<void>((res) => {
         resolve = res;
       });
@@ -865,6 +903,31 @@ describe("RunLauncher — cancel behaviour", () => {
     });
   });
 
+  it("calls the server cancel endpoint with the accepted run id", async () => {
+    const user = userEvent.setup();
+    const { startImpl, capturedSignal, resolveStall } = makeAcceptedStallingFake("qi-run-active-1");
+    const cancelImpl = vi.fn().mockResolvedValue(undefined) as unknown as CancelQiRunFn;
+    render(<RunLauncher startImpl={startImpl} cancelImpl={cancelImpl} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Cancel this run");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+
+    expect(capturedSignal()?.aborted).toBe(true);
+    await waitFor(() => {
+      expect(cancelImpl).toHaveBeenCalledWith("qi-run-active-1");
+    });
+
+    act(() => {
+      resolveStall();
+    });
+  });
+
   // Regression guard for the #270 "cancel-misclassified-as-failed" bug (pr-reviewer M3): a
   // user-initiated cancel must NOT surface an error banner and must restore the Generate button.
   it("does not show an error and restores Generate after the user cancels", async () => {
@@ -979,6 +1042,39 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     expect(onRunCompleted).not.toHaveBeenCalled();
   });
 
+  it("does not splice raw English model errors into the failed-run message", async () => {
+    const user = userEvent.setup();
+    const onRunCompleted = vi.fn();
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-term-raw-reason",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      {
+        type: "done",
+        runId: "run-term-raw-reason",
+        status: "failed",
+        totals: { candidates: 0, findings: 0, exports: 0 },
+        reasonSummary: "qi-error: litellm.BadRequestError: invalid_request_error from model",
+      },
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-error")).toHaveTextContent(/Technische Fehlerdetails/i);
+    });
+    expect(screen.getByTestId("qi-launch-error")).not.toHaveTextContent(/litellm/i);
+    expect(screen.getByTestId("qi-launch-error")).not.toHaveTextContent(/BadRequestError/i);
+    expect(screen.getByTestId("qi-launch-error")).not.toHaveTextContent(/invalid_request_error/i);
+    expect(onRunCompleted).not.toHaveBeenCalled();
+  });
+
   it("does NOT open a run card or show an error when the run completes with status cancelled", async () => {
     const onRunCompleted = await runToTerminal("cancelled");
     await waitFor(() => {
@@ -1021,6 +1117,41 @@ describe("RunLauncher — terminal status gating (pr-reviewer M2)", () => {
     expect(screen.queryByTestId("qi-launch-error")).not.toBeInTheDocument();
     // The run still produced baseline test cases, so the result card opens for the run.
     expect(onRunCompleted).toHaveBeenCalledWith("run-degraded", expect.anything());
+  });
+
+  it("does not splice raw English model errors into degraded-run notices", async () => {
+    const user = userEvent.setup();
+    const onRunCompleted = vi.fn();
+    const { startImpl, done } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-degraded-raw",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 1,
+        atomCount: 1,
+      },
+      {
+        type: "done",
+        runId: "run-degraded-raw",
+        status: "succeeded",
+        totals: { candidates: 2, findings: 0, exports: 0 },
+        reasonSummary: "qi-safe-error: OpenAI API returned invalid JSON",
+        degraded: true,
+      },
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={onRunCompleted} />);
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Some requirements");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await done;
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-launch-degraded")).toHaveTextContent(
+        /Technische Fehlerdetails/i,
+      );
+    });
+    expect(screen.getByTestId("qi-launch-degraded")).not.toHaveTextContent(/OpenAI API/i);
+    expect(screen.getByTestId("qi-launch-degraded")).not.toHaveTextContent(/invalid JSON/i);
+    expect(onRunCompleted).toHaveBeenCalledWith("run-degraded-raw", expect.anything());
   });
 });
 

@@ -20,6 +20,8 @@ export const TEST_QUALITY_JUDGE_RESPONSE_SCHEMA: Readonly<Record<string, unknown
   properties: {
     dimensions: {
       type: "array",
+      minItems: TEST_QUALITY_RUBRIC_DIMENSIONS.length,
+      maxItems: TEST_QUALITY_RUBRIC_DIMENSIONS.length,
       items: {
         type: "object",
         additionalProperties: false,

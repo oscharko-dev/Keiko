@@ -37,6 +37,7 @@ import {
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
 import {
   fetchQiModelPolicy,
+  cancelQiRun,
   preflightQiModelPolicy,
   saveQiModelPolicy,
   startQiRun,
@@ -67,6 +68,7 @@ type FetchFilesTreeFn = typeof fetchFilesTree;
 type FetchQiModelPolicyFn = typeof fetchQiModelPolicy;
 type SaveQiModelPolicyFn = typeof saveQiModelPolicy;
 type PreflightQiModelPolicyFn = typeof preflightQiModelPolicy;
+type CancelQiRunFn = typeof cancelQiRun;
 
 type QiPreflightUiStatus = "working" | "checking" | "failed" | "unavailable" | "passed";
 
@@ -117,6 +119,10 @@ const INITIAL_PROGRESS: Progress = {
 // thrown `error` frame). Without this the launcher would clear the spinner and surface nothing.
 const QI_RUN_FAILED_MESSAGE =
   "Der Lauf wurde nicht erfolgreich abgeschlossen. Passe die Quelle an und versuche es erneut.";
+const QI_MODEL_SCHEMA_VIOLATION_MESSAGE =
+  "Modellausgabe entsprach nicht dem erwarteten Testfall-Schema";
+const QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE =
+  "Technische Fehlerdetails wurden nicht in die Nutzeransicht übernommen";
 
 // Shown on a SUCCEEDED-but-degraded run: model generation failed, so Keiko delivered deterministic
 // baseline test cases from the evidence. The user must be told the output is not model-backed so a
@@ -135,12 +141,10 @@ function degradedMessageFromReason(reasonSummary: string | null | undefined): st
   if (reasonSummary === "qi-error: QI_PROMPT_TOO_LARGE") {
     return `${base} (Quellkontext für das Modell zu groß)`;
   }
-  const detail = reasonSummary.startsWith("qi-error: ")
-    ? reasonSummary.slice("qi-error: ".length)
-    : reasonSummary.startsWith("qi-safe-error: ")
-      ? reasonSummary.slice("qi-safe-error: ".length)
-      : reasonSummary;
-  return `${base} (${detail})`;
+  if (reasonSummary === "qi-error: QI_MODEL_SCHEMA_VIOLATION") {
+    return `${base} (${QI_MODEL_SCHEMA_VIOLATION_MESSAGE})`;
+  }
+  return `${base} (${QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE})`;
 }
 
 function failureMessageFromReason(reasonSummary: string | null | undefined): string {
@@ -162,13 +166,10 @@ function failureMessageFromReason(reasonSummary: string | null | undefined): str
   if (reasonSummary === "qi-error: QI_PROMPT_TOO_LARGE") {
     return "Der zusammengestellte Quellkontext ist für das Modell zu groß. Reduziere die Quelle und versuche es erneut.";
   }
-  if (reasonSummary.startsWith("qi-error: ")) {
-    return `${QI_RUN_FAILED_MESSAGE} (${reasonSummary.slice("qi-error: ".length)})`;
+  if (reasonSummary === "qi-error: QI_MODEL_SCHEMA_VIOLATION") {
+    return `${QI_RUN_FAILED_MESSAGE} (${QI_MODEL_SCHEMA_VIOLATION_MESSAGE})`;
   }
-  if (reasonSummary.startsWith("qi-safe-error: ")) {
-    return `${QI_RUN_FAILED_MESSAGE} (${reasonSummary.slice("qi-safe-error: ".length)})`;
-  }
-  return `${QI_RUN_FAILED_MESSAGE} (${reasonSummary})`;
+  return `${QI_RUN_FAILED_MESSAGE} (${QI_UNKNOWN_TECHNICAL_DETAIL_MESSAGE})`;
 }
 
 // Screen-reader announcement for the always-mounted progress live region (a11y M-01). The visible
@@ -246,6 +247,7 @@ export interface RunLauncherProps {
     | ((runId: string, recheckableSources: readonly QualityIntelligenceInlineSource[]) => void)
     | undefined;
   readonly startImpl?: typeof startQiRun;
+  readonly cancelImpl?: CancelQiRunFn;
   readonly fetchQiModelPolicyImpl?: FetchQiModelPolicyFn;
   readonly saveQiModelPolicyImpl?: SaveQiModelPolicyFn;
   readonly preflightQiModelPolicyImpl?: PreflightQiModelPolicyFn;
@@ -396,6 +398,7 @@ function preflightStatusLabel(status: QiPreflightUiStatus): string {
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
+  cancelImpl = cancelQiRun,
   fetchQiModelPolicyImpl = fetchQiModelPolicy,
   saveQiModelPolicyImpl = saveQiModelPolicy,
   preflightQiModelPolicyImpl = preflightQiModelPolicy,
@@ -439,6 +442,7 @@ export function RunLauncher({
   const [error, setError] = useState<string | null>(null);
   const [degradedNotice, setDegradedNotice] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const completedRunIdRef = useRef<string | null>(null);
   const failureReasonRef = useRef<string | null>(null);
   // Synchronous double-submit guard: handleStart's `running` check reads a React state closure, so
@@ -569,6 +573,9 @@ export function RunLauncher({
   );
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
+    if (msg.type === "accepted") {
+      activeRunIdRef.current = msg.runId;
+    }
     if (
       msg.type === "event" &&
       (msg.kind === "stage:failed" || msg.kind === "run:failed") &&
@@ -593,8 +600,12 @@ export function RunLauncher({
         setError(failureMessageFromReason(msg.reasonSummary ?? failureReasonRef.current));
       }
       // "cancelled" is a user action — no error, no card.
+      activeRunIdRef.current = null;
     }
-    if (msg.type === "error") setError(formatCodedError(msg.code, msg.message));
+    if (msg.type === "error") {
+      activeRunIdRef.current = null;
+      setError(formatCodedError(msg.code, msg.message));
+    }
     setProgress((prev) => reduceProgress(prev, msg));
   }, []);
 
@@ -743,6 +754,7 @@ export function RunLauncher({
     setError(null);
     setDegradedNotice(null);
     setProgress(INITIAL_PROGRESS);
+    activeRunIdRef.current = null;
     completedRunIdRef.current = null;
     failureReasonRef.current = null;
     const controller = new AbortController();
@@ -783,6 +795,7 @@ export function RunLauncher({
     } finally {
       setRunning(false);
       abortRef.current = null;
+      activeRunIdRef.current = null;
       isStartingRef.current = false;
     }
   }, [
@@ -802,8 +815,15 @@ export function RunLauncher({
   ]);
 
   const handleCancel = useCallback((): void => {
+    const runId = activeRunIdRef.current;
     abortRef.current?.abort();
-  }, []);
+    if (runId !== null) {
+      activeRunIdRef.current = null;
+      void cancelImpl(runId).catch(() => {
+        /* local abort already stopped the stream; stale server-side cancel errors are non-fatal */
+      });
+    }
+  }, [cancelImpl]);
 
   function renderWorkflowBar(): ReactNode {
     const controlsDisabled = running || modelPolicyLoading || modelPolicySaving;

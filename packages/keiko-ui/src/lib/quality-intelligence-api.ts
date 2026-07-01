@@ -24,6 +24,8 @@ import type {
 
 import { ApiError } from "./api";
 
+export const QI_RUN_SSE_BUFFER_LIMIT_CHARS = 256 * 1024;
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
@@ -132,6 +134,13 @@ export async function startQiRun(
       const read = await reader.read();
       if (read.done) break;
       buffer += decoder.decode(read.value, { stream: true });
+      if (buffer.length > QI_RUN_SSE_BUFFER_LIMIT_CHARS) {
+        throw new ApiError(
+          "QI_STREAM_BUFFER_OVERFLOW",
+          "The Quality Intelligence progress stream exceeded the client buffer limit.",
+          res.status,
+        );
+      }
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
       for (const raw of lines) {
