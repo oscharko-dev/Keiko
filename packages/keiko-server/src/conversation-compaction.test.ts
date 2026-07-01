@@ -13,6 +13,7 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfile,
   estimateTokensForSegments,
+  type ContextProfile,
   validateContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -57,7 +58,7 @@ function budgetPressureHistory(): ChatMessage[] {
   ];
 }
 
-function zeroBudgetProfile() {
+function zeroBudgetProfile(): ContextProfile {
   return deriveContextProfile({
     maxInputTokens: 1,
     reservedOutputTokens: 1,

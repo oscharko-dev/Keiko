@@ -505,6 +505,49 @@ function hasSystemThenSummary(messages) {
   return messages[0]?.role === "system" && messages[1]?.role === "user";
 }
 
+function hasExactLatestUserInstruction(messages, instruction) {
+  const latest = messages.at(-1);
+  return latest?.role === "user" && latest.content === instruction;
+}
+
+function hasNoLiteral(messages, literal) {
+  return !someContentIncludes(messages, literal);
+}
+
+function hasValidCompactionRecord(compaction) {
+  return compaction !== undefined && validateContextCompactionRecord(compaction).ok;
+}
+
+function retainedTailMatches(outcomeMessages, plainMessages, itemsBefore) {
+  return deepEqual(outcomeMessages.slice(2), plainMessages.slice(1 + itemsBefore));
+}
+
+function evaluatePressureCompactionContent(outcome, plain, fixtures) {
+  const { messages, compaction } = outcome;
+  if (!hasValidCompactionRecord(compaction)) {
+    return false;
+  }
+  if (!hasSystemThenSummary(messages)) {
+    return false;
+  }
+  if (!retainedTailMatches(messages, plain, compaction.itemsBefore)) {
+    return false;
+  }
+  if (!hasExactLatestUserInstruction(messages, fixtures.currentInstruction)) {
+    return false;
+  }
+  if (!hasExactLatestUserInstruction(plain, fixtures.currentInstruction)) {
+    return false;
+  }
+  if (!hasNoLiteral(messages, fixtures.earlySecret)) {
+    return false;
+  }
+  return (
+    hasNoLiteral(messages, fixtures.droppedDurableInstruction) &&
+    hasNoLiteral(messages, fixtures.droppedDurableMarker)
+  );
+}
+
 // chatLongSessionCompaction (required true): the full budget-pressure invariant set over the
 // oversized fixture. (1) a validated ContextCompactionRecord is present; (2) messages[0] stays the
 // system message and messages[1] is the role:"user" summary segment; (3) the LATEST user
@@ -513,27 +556,7 @@ function hasSystemThenSummary(messages) {
 // `plain` is conversationForGateway(pressureHistory) — the un-compacted projection used only to
 // check the current instruction and redaction facts, not tail preservation.
 export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
-  const { messages, compaction } = outcome;
-  if (compaction === undefined || !validateContextCompactionRecord(compaction).ok) {
-    return false;
-  }
-  if (!hasSystemThenSummary(messages)) {
-    return false;
-  }
-  const expectedTail = plain.slice(1 + compaction.itemsBefore);
-  const actualTail = messages.slice(2);
-  if (!deepEqual(actualTail, expectedTail)) {
-    return false;
-  }
-  const currentPreserved =
-    messages.at(-1)?.role === "user" && messages.at(-1)?.content === fixtures.currentInstruction;
-  const secretRedacted = !someContentIncludes(messages, fixtures.earlySecret);
-  const durableDigested =
-    !someContentIncludes(messages, fixtures.droppedDurableInstruction) &&
-    !someContentIncludes(messages, fixtures.droppedDurableMarker);
-  const plainKeptCurrent =
-    plain.at(-1)?.role === "user" && plain.at(-1)?.content === fixtures.currentInstruction;
-  return currentPreserved && plainKeptCurrent && secretRedacted && durableDigested;
+  return evaluatePressureCompactionContent(outcome, plain, fixtures);
 }
 
 // chatCurrentInstructionPreserved (required true): the milestone headline — the latest user message
@@ -810,40 +833,11 @@ export function buildSummary(
   const determinism = evaluateSummaryDeterminism(scenarios);
   const metrics = aggregateScenarioMetrics(determinism.perScenario);
   const rehydration = aggregateRehydrationMetrics(rehydrations);
-  const p50 = percentile(latencySamples, 50);
-  const p95 = percentile(latencySamples, 95);
-  const chatP50 = percentile(chatLatencySamples, 50);
-  const chatP95 = percentile(chatLatencySamples, 95);
   return {
     schemaVersion: "1",
-    measured: {
-      ...metrics,
-      determinism: determinism.byteStable,
-      rehydrationReadiness: rehydration.rehydrationReadiness,
-      compactionPreservation: rehydration.compactionPreservation,
-      invalidationDetected: rehydration.invalidationDetected,
-      excludedRepoFiles: rehydration.excludedRepoFiles,
-      toolObservationShapingFidelity: shaping.fidelity,
-      shapingRedactionClean: shaping.shapingRedactionClean,
-      shapingInjectionFlagged: shaping.shapingInjectionFlagged,
-      chatLongSessionCompaction: chat.chatLongSessionCompaction,
-      chatManyShortBudgetSafeUnchanged: chat.chatManyShortBudgetSafeUnchanged,
-      chatCurrentInstructionPreserved: chat.chatCurrentInstructionPreserved,
-      chatShortSessionByteIdentical: chat.chatShortSessionByteIdentical,
-      chatNoProfileUnchanged: chat.chatNoProfileUnchanged,
-    },
-    latency: {
-      p50Ms: p50,
-      p95Ms: p95,
-      iterations: LATENCY_ITERATIONS,
-      note: "the ONLY nondeterministic measurement; gated by a generous soft ceiling",
-    },
-    chatLatency: {
-      p50Ms: chatP50,
-      p95Ms: chatP95,
-      iterations: CHAT_LATENCY_ITERATIONS,
-      note: "real chat-compaction slow-path latency, measured separately from allocator latency",
-    },
+    measured: buildMeasuredSummary(metrics, determinism.byteStable, rehydration, shaping, chat),
+    latency: buildLatencySummary(latencySamples),
+    chatLatency: buildChatLatencySummary(chatLatencySamples),
     perScenario: determinism.perScenario.map((s) => ({
       id: s.id,
       criticalRecall: s.criticalRecall,
@@ -851,6 +845,43 @@ export function buildSummary(
       injectionIsolationRate: s.injectionIsolationRate,
       estimatedTokensByLane: s.estimatedTokensByLane,
     })),
+  };
+}
+
+function buildMeasuredSummary(metrics, determinism, rehydration, shaping, chat) {
+  return {
+    ...metrics,
+    determinism,
+    rehydrationReadiness: rehydration.rehydrationReadiness,
+    compactionPreservation: rehydration.compactionPreservation,
+    invalidationDetected: rehydration.invalidationDetected,
+    excludedRepoFiles: rehydration.excludedRepoFiles,
+    toolObservationShapingFidelity: shaping.fidelity,
+    shapingRedactionClean: shaping.shapingRedactionClean,
+    shapingInjectionFlagged: shaping.shapingInjectionFlagged,
+    chatLongSessionCompaction: chat.chatLongSessionCompaction,
+    chatManyShortBudgetSafeUnchanged: chat.chatManyShortBudgetSafeUnchanged,
+    chatCurrentInstructionPreserved: chat.chatCurrentInstructionPreserved,
+    chatShortSessionByteIdentical: chat.chatShortSessionByteIdentical,
+    chatNoProfileUnchanged: chat.chatNoProfileUnchanged,
+  };
+}
+
+function buildLatencySummary(latencySamples) {
+  return {
+    p50Ms: percentile(latencySamples, 50),
+    p95Ms: percentile(latencySamples, 95),
+    iterations: LATENCY_ITERATIONS,
+    note: "the ONLY nondeterministic measurement; gated by a generous soft ceiling",
+  };
+}
+
+function buildChatLatencySummary(chatLatencySamples) {
+  return {
+    p50Ms: percentile(chatLatencySamples, 50),
+    p95Ms: percentile(chatLatencySamples, 95),
+    iterations: CHAT_LATENCY_ITERATIONS,
+    note: "real chat-compaction slow-path latency, measured separately from allocator latency",
   };
 }
 
