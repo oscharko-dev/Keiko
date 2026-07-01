@@ -192,7 +192,7 @@ function createBrowserRealtimeAudioSink(): RealtimeAudioSink {
   };
 }
 
-export type RealtimeVoicePhase = "idle" | "requesting" | "negotiating" | "connected" | "error";
+export type RealtimeVoicePhase = "idle" | "requesting" | "negotiating" | "connected" | "ready" | "error";
 
 // Why the realtime connection could not start or was lost. Combines transport and control errors.
 export type RealtimeVoiceErrorReason =
@@ -207,23 +207,31 @@ interface RealtimeVoiceState {
   readonly phase: RealtimeVoicePhase;
   readonly errorReason: RealtimeVoiceErrorReason | undefined;
   readonly errorMessage: string | undefined;
+  readonly rtcConnected: boolean;
+  readonly dataChannelOpen: boolean;
+  readonly sessionUpdated: boolean;
 }
 
 const INITIAL_STATE: RealtimeVoiceState = {
   phase: "idle",
   errorReason: undefined,
   errorMessage: undefined,
+  rtcConnected: false,
+  dataChannelOpen: false,
+  sessionUpdated: false,
 };
 
 type RealtimeVoiceAction =
   | { readonly type: "requesting" }
   | { readonly type: "negotiating" }
   | { readonly type: "connected" }
+  | { readonly type: "dataChannelOpen" }
+  | { readonly type: "sessionUpdated" }
   | { readonly type: "error"; readonly reason: RealtimeVoiceErrorReason; readonly message: string }
   | { readonly type: "reset" };
 
 function realtimeVoiceReducer(
-  _state: RealtimeVoiceState,
+  state: RealtimeVoiceState,
   action: RealtimeVoiceAction,
 ): RealtimeVoiceState {
   switch (action.type) {
@@ -231,8 +239,22 @@ function realtimeVoiceReducer(
       return { ...INITIAL_STATE, phase: "requesting" };
     case "negotiating":
       return { ...INITIAL_STATE, phase: "negotiating" };
-    case "connected":
-      return { ...INITIAL_STATE, phase: "connected" };
+    case "connected": {
+      const next = { ...state, rtcConnected: true };
+      if (next.phase !== "connected" && next.phase !== "ready" && next.phase !== "negotiating") {
+         // ignore late connected if errored
+         return state;
+      }
+      return { ...next, phase: next.rtcConnected && next.dataChannelOpen && next.sessionUpdated ? "ready" : "connected" };
+    }
+    case "dataChannelOpen": {
+      const next = { ...state, dataChannelOpen: true };
+      return { ...next, phase: next.rtcConnected && next.dataChannelOpen && next.sessionUpdated ? "ready" : state.phase };
+    }
+    case "sessionUpdated": {
+      const next = { ...state, sessionUpdated: true };
+      return { ...next, phase: next.rtcConnected && next.dataChannelOpen && next.sessionUpdated ? "ready" : state.phase };
+    }
     case "error":
       return {
         ...INITIAL_STATE,
@@ -1424,12 +1446,12 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         });
 
         const answerSdp = await control.negotiate(session.offerSdp);
-        if (!mountedRef.current) {
+        if (!mountedRef.current || abortController.signal.aborted) {
           session.close();
           return;
         }
         await session.applyAnswer(answerSdp);
-        if (!mountedRef.current) {
+        if (!mountedRef.current || abortController.signal.aborted) {
           session.close();
           return;
         }

@@ -438,6 +438,18 @@ async function decodeSuccess(response: Response): Promise<RealtimeNegotiationOut
 export async function requestRealtimeNegotiation(
   request: RealtimeNegotiationRequest,
 ): Promise<RealtimeNegotiationOutcome> {
+  if (request.realtimeAuthMode !== "ephemeral-session") {
+    // A direct SDP request (e.g. api-key mode) cannot initialize session configuration (instructions,
+    // tools, persona). If the request relies on these to function (a Dialogue profile or Grounding),
+    // it must be rejected outright rather than silently dropping its configuration.
+    if (
+      (request.instructions !== undefined && request.instructions.length > 0) ||
+      (request.tools !== undefined && request.tools.length > 0) ||
+      (request.voiceId !== undefined && request.voiceId.length > 0)
+    ) {
+      return { ok: false, kind: "unsupported-model" };
+    }
+  }
   const built = buildRequest(request);
   const dispatched =
     request.realtimeAuthMode === "ephemeral-session"

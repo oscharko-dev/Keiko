@@ -69,6 +69,7 @@ export type ParsedRealtimeVoiceEvent =
       readonly status?: "completed" | "cancelled" | "failed" | "incomplete" | undefined;
     }
   | { readonly kind: "response-cancelled"; readonly responseId?: string | undefined }
+  | { readonly kind: "session-updated" }
   | { readonly kind: "error"; readonly message: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

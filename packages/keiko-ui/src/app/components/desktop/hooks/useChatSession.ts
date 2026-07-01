@@ -1511,7 +1511,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   const appendVoiceTurn = useCallback(
-    async (messages: readonly AppendDesktopChatVoiceTurnMessage[]): Promise<void> => {
+    async (messages: readonly AppendDesktopChatVoiceTurnMessage[], groundedAnswer?: GroundedAnswer): Promise<void> => {
       const chat = state.activeChat;
       if (chat === undefined || messages.length === 0) {
         return;
@@ -1590,8 +1590,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         if (previous.activeChat?.id !== chat.id) {
           return previous;
         }
-        const existingIds = new Set(previous.messages.map((message) => message.id));
-        const appended = result.messages.filter((message) => !existingIds.has(message.id));
         return {
           ...previous,
           activeChat: result.chat,
@@ -1599,7 +1597,6 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             result.chat,
             ...previous.chats.filter((existing) => existing.id !== result.chat.id),
           ]),
-          messages: [...previous.messages, ...appended],
         };
       });
       return result.toolOutput;

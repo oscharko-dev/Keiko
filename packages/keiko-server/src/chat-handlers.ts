@@ -25,6 +25,7 @@ import {
 import type {
   ConversationMemoryActionWire,
   ConversationMemoryResultWire,
+  GroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   MemoryAuditEvent,
@@ -1510,6 +1511,14 @@ export async function handleAppendDesktopVoiceTurn(
   if (isRouteResult(memoryContext)) return memoryContext;
   try {
     const created = persistVoiceTurnMessages(deps, request);
+    
+    if (request.groundedAnswer !== undefined) {
+      const assistant = created.find((m) => m.role === "assistant");
+      if (assistant !== undefined) {
+        deps.store.attachGroundedAnswer(assistant.id, request.groundedAnswer);
+      }
+    }
+
     const updatedChat = updateChatAfterVoiceTurn(deps, request, chat, created);
     const memory = await buildVoiceTurnMemoryResult(deps, request, updatedChat, memoryContext);
     return {
