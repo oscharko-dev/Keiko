@@ -65,6 +65,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -73,6 +74,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -219,7 +221,12 @@ describe("FilesWidget", () => {
     const onOpenFile = vi.fn();
 
     render(
-      <FilesWidget root="/repo space" openFilesDirectly activeFilePath="" onOpenFile={onOpenFile} />,
+      <FilesWidget
+        root="/repo space"
+        openFilesDirectly
+        activeFilePath=""
+        onOpenFile={onOpenFile}
+      />,
     );
 
     await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));

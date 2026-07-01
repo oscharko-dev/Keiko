@@ -501,6 +501,69 @@ describe("updateMessage (issue #66)", () => {
   });
 });
 
+describe("replaceAssistantMessageContent (issue #1405)", () => {
+  it("updates only assistant content while preserving the message id", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "stale answer",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const updated = store.replaceAssistantMessageContent(assistant.id, "replacement answer", 20);
+
+    expect(updated).toMatchObject({
+      id: assistant.id,
+      chatId,
+      role: "assistant",
+      content: "replacement answer",
+      timestamp: 20,
+    });
+    expect(store.findMessageById(assistant.id)?.content).toBe("replacement answer");
+  });
+
+  it("does not rewrite user turns through the regenerate update primitive", () => {
+    const user = store.createMessage({
+      chatId,
+      role: "user",
+      content: "original question",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.replaceAssistantMessageContent(user.id, "replacement", 20)).toThrow(
+      UiStoreError,
+    );
+    expect(store.findMessageById(user.id)?.content).toBe("original question");
+  });
+
+  it("rejects empty replacement content", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "answer",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.replaceAssistantMessageContent(assistant.id, "", 20)).toThrow(UiStoreError);
+    expect(store.findMessageById(assistant.id)?.content).toBe("answer");
+  });
+});
+
 describe("findMessageById", () => {
   it("returns the row when id matches", () => {
     const created = store.createMessage({

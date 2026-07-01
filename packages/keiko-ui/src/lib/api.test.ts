@@ -11,6 +11,7 @@ import {
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  regenerateDesktopChat,
   requestEditorCompletion,
   requestEditorDiagnostics,
   requestEditorFormatting,
@@ -738,6 +739,51 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
 
     expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(handlers.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe("regenerateDesktopChat", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the assistant turn id to the regenerate route with CSRF and an abort signal", async () => {
+    const controller = new AbortController();
+    const response = { chat: { id: "chat-1" }, messages: [{ id: "a1", role: "assistant" }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateDesktopChat(
+      {
+        chatId: "chat-1",
+        projectPath: "/repo",
+        assistantMessageId: "a1",
+        modelId: "example-chat-model",
+        memory: { enabled: false },
+      },
+      controller.signal,
+    );
+
+    expect(result).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/desktop/chat/regenerate",
+      expect.objectContaining({
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({
+          chatId: "chat-1",
+          projectPath: "/repo",
+          assistantMessageId: "a1",
+          modelId: "example-chat-model",
+          memory: { enabled: false },
+        }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
   });
 });
 

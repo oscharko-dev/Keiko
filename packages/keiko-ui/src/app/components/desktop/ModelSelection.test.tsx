@@ -76,6 +76,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -84,6 +85,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -437,9 +439,7 @@ describe("ChatWindow mini composer (AC #2)", () => {
       true, // mini=true
     );
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent(
-      "inherited-model",
-    );
+    expect(screen.getByRole("combobox", { name: "Models" })).toHaveTextContent("inherited-model");
   });
 
   it("renders the no-model alert in mini mode when noEligibleModels is true", () => {
