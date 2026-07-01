@@ -1,11 +1,10 @@
-// PR4-W2 hard gates (ADR-0055 D3 / D6). These pin the unchanged-guarantee:
-//  - noProfileUnchanged: > MAX_CONTEXT_MESSAGES history with NO profile -> shim returns exactly
-//    conversationForGateway(messages) (deep-equal), and buildGatewayMessages output is unchanged.
-//  - shortSessionByteIdentical: EXACTLY MAX_CONTEXT_MESSAGES messages WITH profile -> fast path.
-//  - manyShortTurnsStayVerbatim: count > MAX_CONTEXT_MESSAGES but budget-safe history remains
-//    byte-identical to conversationForGateway(messages).
-//  - fewOversizedTurnsCompact: a small below-24 history whose assembled token cost exceeds the
-//    effective input budget triggers deterministic compaction before assembly.
+// PR4-W2 hard gates (ADR-0055 D3 / D6). These pin the budget-aware semantics:
+//  - profile-backed many short turns above the legacy 24-turn threshold stay verbatim when they
+//    fit the effective budget and do NOT equal the sliced legacy projection.
+//  - undefined-profile many short turns use the DEFAULT_CONTEXT_PROFILE fallback and stay verbatim
+//    when they fit the effective budget.
+//  - oversized histories compact deterministically, keep the newest filtered turn verbatim, and
+//    preserve the retained tail.
 //  - determinism: same input -> same output (no clock / no random).
 
 import { describe, expect, it } from "vitest";
@@ -18,7 +17,11 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
-import { conversationForGateway, MAX_CONTEXT_MESSAGES } from "./chat-handlers.js";
+import {
+  conversationForGateway,
+  MAX_CONTEXT_MESSAGES,
+  usableGatewayMessages,
+} from "./chat-handlers.js";
 import type { ChatMessage } from "./store/index.js";
 
 const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
@@ -58,12 +61,32 @@ function budgetPressureHistory(): ChatMessage[] {
   ];
 }
 
+function singleDropHistory(): ChatMessage[] {
+  const huge = "x".repeat(420_000);
+  return [
+    msg("user", `here is my key ${NON_PATTERN_SECRET} keep it ${huge}`, 0),
+    msg("assistant", "assistant reply", 1),
+    msg("user", CURRENT_INSTRUCTION, 2),
+  ];
+}
+
 function latestTurnOverflowHistory(): ChatMessage[] {
   const huge = "x".repeat(80_000);
   return [
     msg("user", `earlier note ${NON_PATTERN_SECRET} ${huge}`, 0),
     msg("user", `latest instruction ${huge}`, 1),
   ];
+}
+
+function fullConversation(
+  messages: readonly ChatMessage[],
+): ReturnType<typeof conversationForGateway> {
+  const systemMessage = conversationForGateway(messages)[0];
+  const filtered = usableGatewayMessages(messages).map((turn) => ({
+    role: turn.role,
+    content: turn.content,
+  }));
+  return systemMessage === undefined ? filtered : [systemMessage, ...filtered];
 }
 
 function zeroBudgetProfile(): ContextProfile {
@@ -75,18 +98,22 @@ function zeroBudgetProfile(): ContextProfile {
 }
 
 describe("conversationForGatewayWithCompaction — fast path (unchanged guarantee)", () => {
-  it("noProfileUnchanged: >24 messages with no profile returns conversationForGateway verbatim", () => {
+  it("profile-backed many short turns stay verbatim above the legacy 24-turn threshold", () => {
+    const messages = history(40);
+    const outcome = conversationForGatewayWithCompaction(messages, {
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+    });
+    expect(outcome.compaction).toBeUndefined();
+    expect(outcome.messages).toEqual(fullConversation(messages));
+    expect(outcome.messages).not.toEqual(conversationForGateway(messages));
+  });
+
+  it("undefined-profile many short turns use the fallback budget path and stay verbatim", () => {
     const messages = history(40);
     const outcome = conversationForGatewayWithCompaction(messages, { contextProfile: undefined });
     expect(outcome.compaction).toBeUndefined();
-    expect(outcome.messages).toEqual(conversationForGateway(messages));
-  });
-
-  it("noProfileUnchanged: omitting opts entirely is also the verbatim fast path", () => {
-    const messages = history(40);
-    const outcome = conversationForGatewayWithCompaction(messages);
-    expect(outcome.compaction).toBeUndefined();
-    expect(outcome.messages).toEqual(conversationForGateway(messages));
+    expect(outcome.messages).toEqual(fullConversation(messages));
+    expect(outcome.messages).not.toEqual(conversationForGateway(messages));
   });
 
   it("shortSessionByteIdentical: exactly MAX_CONTEXT_MESSAGES with profile is the fast path", () => {
@@ -113,7 +140,7 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
     expect(outcome.compaction).toBeUndefined();
-    expect(outcome.messages).toEqual(conversationForGateway(messages));
+    expect(outcome.messages).toEqual(fullConversation(messages));
   });
 
   it("zero-budget history fails closed without a zero-item summary record", () => {
@@ -146,23 +173,44 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
     expect(outcome.compaction).toBeUndefined();
-    expect(outcome.messages).toEqual(conversationForGateway(messages));
+    expect(outcome.messages).toEqual(fullConversation(messages));
+    expect(outcome.messages).not.toEqual(conversationForGateway(messages));
   });
 });
 
 describe("conversationForGatewayWithCompaction — slow path (compaction)", () => {
-  const messages = budgetPressureHistory();
+  const messages = singleDropHistory();
+  const multiDropMessages = budgetPressureHistory();
+  function longTailMessages(): ChatMessage[] {
+    const huge = "x".repeat(250_000);
+    const turns = history(30);
+    turns[0] = msg("user", `opening pressure ${NON_PATTERN_SECRET} ${huge}`, 0);
+    turns[1] = msg("assistant", `assistant pressure ${huge}`, 1);
+    return turns;
+  }
 
-  it("fewOversizedTurnsCompact: keeps the system message first and inserts a user-role summary second", () => {
+  it("undefined-profile oversized history compacts instead of raw slicing and keeps the latest user turn exact", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
-      contextProfile: DEFAULT_CONTEXT_PROFILE,
+      contextProfile: undefined,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
+    const plain = fullConversation(messages);
     const first = outcome.messages[0];
     const second = outcome.messages[1];
+    expect(outcome.compaction).toBeDefined();
     expect(first?.role).toBe("system");
     expect(second?.role).toBe("user");
     expect(second?.content).toContain("Automated summary");
+    expect(outcome.messages[0]).toEqual(plain[0]);
+    expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
+    expect(
+      estimateTokensForSegments(outcome.messages.map((message) => message.content)),
+    ).toBeLessThanOrEqual(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
+    expect(
+      outcome.messages.some(
+        (message) => message.role === "user" && message.content === CURRENT_INSTRUCTION,
+      ),
+    ).toBe(true);
   });
 
   it("fewOversizedTurnsCompact: the retained recent window after the summary is preserved verbatim", () => {
@@ -170,7 +218,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       contextProfile: DEFAULT_CONTEXT_PROFILE,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const plain = conversationForGateway(messages);
+    const plain = fullConversation(messages);
     expect(outcome.messages[0]).toEqual(plain[0]);
     expect(outcome.compaction?.itemsBefore).toBe(1);
     expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
@@ -182,11 +230,12 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
       reservedOutputTokens: 0,
       safetyMarginTokens: 0,
     });
-    const outcome = conversationForGatewayWithCompaction(messages, {
+    const outcome = conversationForGatewayWithCompaction(multiDropMessages, {
       contextProfile: smallProfile,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const plain = conversationForGateway(messages);
+    const plain = fullConversation(multiDropMessages);
+    expect(outcome.compaction).toBeDefined();
     expect(outcome.compaction?.itemsBefore).toBe(2);
     expect(outcome.compaction?.sourceSpans?.length).toBe(2);
     expect(outcome.messages.slice(2)).toEqual(plain.slice(3));
@@ -230,16 +279,17 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     });
     expect(outcome.compaction).toBeDefined();
     expect(validateContextCompactionRecord(outcome.compaction).ok).toBe(true);
+    expect(outcome.compaction?.sourceSpans?.length).toBe(outcome.compaction?.itemsBefore);
     expect(outcome.compaction?.reason).toContain("budget");
   });
 
-  it("fewOversizedTurnsCompact: record itemsBefore equals the dropped count and itemsAfter is 0", () => {
+  it("fewOversizedTurnsCompact: record itemsBefore equals the dropped count and itemsAfter is 1", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
     expect(outcome.compaction?.itemsBefore).toBe(1);
-    expect(outcome.compaction?.itemsAfter).toBe(0);
+    expect(outcome.compaction?.itemsAfter).toBe(1);
     expect(outcome.compaction?.sourceSpans?.length).toBe(1);
   });
 
@@ -265,12 +315,43 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     ).toBeLessThanOrEqual(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
   });
 
-  it("determinism: identical input yields identical output (no clock, no random)", () => {
-    const a = conversationForGatewayWithCompaction(budgetPressureHistory(), {
+  it("tight budget also respects the final assembled token count after the minimal safe drop", () => {
+    const tightProfile = deriveContextProfile({
+      maxInputTokens: 1_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const outcome = conversationForGatewayWithCompaction(messages, {
+      contextProfile: tightProfile,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    expect(outcome.compaction).toBeDefined();
+    expect(outcome.compaction?.itemsBefore).toBe(1);
+    expect(
+      estimateTokensForSegments(outcome.messages.map((message) => message.content)),
+    ).toBeLessThanOrEqual(tightProfile.effectiveInputBudget);
+  });
+
+  it("drops only the minimum oldest prefix needed when more than 24 recent turns still fit", () => {
+    const outcome = conversationForGatewayWithCompaction(longTailMessages(), {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
-    const b = conversationForGatewayWithCompaction(budgetPressureHistory(), {
+    const plain = fullConversation(longTailMessages());
+    expect(outcome.compaction).toBeDefined();
+    expect(outcome.compaction?.itemsBefore).toBe(1);
+    expect(outcome.compaction?.sourceSpans?.length).toBe(1);
+    expect(outcome.messages.slice(2)).toEqual(plain.slice(2));
+    expect(outcome.messages.slice(2)).toHaveLength(29);
+    expect(outcome.messages.slice(2).length).toBeGreaterThan(MAX_CONTEXT_MESSAGES);
+  });
+
+  it("determinism: identical input yields identical output (no clock, no random)", () => {
+    const a = conversationForGatewayWithCompaction(singleDropHistory(), {
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    const b = conversationForGatewayWithCompaction(singleDropHistory(), {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
       redactionSecrets: [NON_PATTERN_SECRET],
     });
