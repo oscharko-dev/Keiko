@@ -94,7 +94,11 @@ import {
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
-import { selectGatewayPromptAssembly, type GatewayPromptAssembly } from "./chat-prompt-budget.js";
+import {
+  buildChatCompactionContextText,
+  selectGatewayPromptAssembly,
+  type GatewayPromptAssembly,
+} from "./chat-prompt-budget.js";
 import { usableGatewayMessages } from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 export {
@@ -931,6 +935,7 @@ export function buildGatewayAssembly(
     },
     profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
     memoryEntries: memory.context.memories,
+    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
     documentContext: request.documentContext,
     redactionSecrets: currentRedactionSecrets(deps),
   });

@@ -101,6 +101,15 @@ function bufferedModel(content: string): ModelPort {
   };
 }
 
+function capturingBufferedModel(content: string, calls: GatewayRequest[]): ModelPort {
+  return {
+    call(request: GatewayRequest): Promise<NormalizedResponse> {
+      calls.push(request);
+      return Promise.resolve(normalizedResponse(content));
+    },
+  };
+}
+
 function streamingModel(content: string): ModelPort {
   return {
     call(): Promise<NormalizedResponse> {
@@ -195,6 +204,29 @@ function seedOversizedHistory(chatId: string): number {
       chatId,
       role: i % 2 === 0 ? "user" : "assistant",
       content: i === 0 ? `leak ${SECRET} in turn 0 ${huge}` : `turn ${String(i)} content ${huge}`,
+      timestamp: seedBaseTimestamp + i,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+  }
+  return count;
+}
+
+function seedStructuredOversizedHistory(chatId: string): number {
+  const seedBaseTimestamp = 1_700_000_100_000;
+  const huge = "x".repeat(150_000);
+  const count = 3;
+  for (let i = 0; i < count; i += 1) {
+    store.createMessage({
+      chatId,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content:
+        i === 0
+          ? `Fact: retained compliance decision\nAssumption: old branch still exists\nDecision: persist compaction evidence\nConstraint: re-verify repo-derived facts\n${huge}`
+          : `turn ${String(i)} content ${huge}`,
       timestamp: seedBaseTimestamp + i,
       runId: undefined,
       workflowId: undefined,
@@ -327,5 +359,25 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
         .map((m) => m.role)
         .slice(-2),
     ).toEqual(["user", "assistant"]);
+  });
+
+  it("later turns resurface persisted pinned facts from prior compaction evidence", async () => {
+    const chatId = seedChat();
+    seedStructuredOversizedHistory(chatId);
+    const evidenceStore = createInMemoryEvidenceStore();
+    await sendBuffered(deps(bufferedModel("first answer"), evidenceStore, true), chatId);
+
+    const calls: GatewayRequest[] = [];
+    await sendBuffered(
+      deps(capturingBufferedModel("second answer", calls), evidenceStore, true),
+      chatId,
+    );
+
+    const prompt = calls[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt).toContain("# Persisted compaction context");
+    expect(prompt).toContain("retained compliance decision");
+    expect(prompt).toContain("persist compaction evidence");
+    expect(prompt).toContain("Assumptions (not facts)");
+    expect(prompt).toContain("re-verify");
   });
 });

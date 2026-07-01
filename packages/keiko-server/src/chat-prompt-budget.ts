@@ -11,6 +11,8 @@ import {
   type ConversationCompactionOutcome,
 } from "./conversation-compaction.js";
 import { buildPromptAssemblyDiagnostics } from "./chat-prompt-budget-diagnostics.js";
+import { buildChatCompactionResurfacingContext } from "./chat-compaction-resurfacing.js";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 
 export type { GatewayConversationMessage } from "./conversation-gateway.js";
 
@@ -30,6 +32,7 @@ interface PromptAssemblyInput {
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly totalMemoryEntries: number;
+  readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
   readonly redactionSecrets: readonly string[];
@@ -37,13 +40,23 @@ interface PromptAssemblyInput {
 
 function renderMemoryContextText(
   memories: readonly ConversationMemoryContextEntryWire[],
+  compactionContextText: string | undefined,
 ): string | undefined {
-  if (memories.length === 0) {
+  if (memories.length === 0 && compactionContextText === undefined) {
     return undefined;
   }
-  const lines = ["# Relevant memories"];
-  for (const memory of memories) {
-    lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
+  const lines: string[] = [];
+  if (memories.length > 0) {
+    lines.push("# Relevant memories");
+    for (const memory of memories) {
+      lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
+    }
+  }
+  if (compactionContextText !== undefined) {
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(compactionContextText);
   }
   return lines.join("\n");
 }
@@ -51,7 +64,7 @@ function renderMemoryContextText(
 function assembleGatewayPromptCandidate(
   input: PromptAssemblyInput,
 ): GatewayPromptAssembly | undefined {
-  const memoryText = renderMemoryContextText(input.memoryEntries);
+  const memoryText = renderMemoryContextText(input.memoryEntries, input.compactionContextText);
   const latestTurn = composeConversationPrompt(
     input.request.content,
     input.documentContext,
@@ -112,6 +125,7 @@ export function selectGatewayPromptAssembly(input: {
   };
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly redactionSecrets: readonly string[];
 }): GatewayPromptAssembly | undefined {
@@ -122,6 +136,7 @@ export function selectGatewayPromptAssembly(input: {
     profile: input.profile,
     totalMemoryEntries: input.memoryEntries.length,
     totalDocumentEntries: input.documentContext.length,
+    compactionContextText: input.compactionContextText,
     redactionSecrets: input.redactionSecrets,
   };
   const selectedMemoryCount = selectPrefixCount(
@@ -147,4 +162,11 @@ export function selectGatewayPromptAssembly(input: {
     memoryEntries: input.memoryEntries.slice(0, selectedMemoryCount),
     documentContext: input.documentContext.slice(0, selectedDocumentCount),
   });
+}
+
+export function buildChatCompactionContextText(
+  evidenceStore: EvidenceStore,
+  chatId: string,
+): string | undefined {
+  return buildChatCompactionResurfacingContext(evidenceStore, chatId);
 }
