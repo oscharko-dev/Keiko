@@ -682,19 +682,25 @@ function ManualCommandRow({ command }: { readonly command: ManualCommand }): Rea
     <div className="upd-command-row">
       <div className="upd-command-copy">
         <strong>{command.label}</strong>
-        <code>{command.command}</code>
+        <div className="upd-command-line">
+          <code>{command.command}</code>
+          <button
+            type="button"
+            className="upd-command-copy-btn"
+            aria-label={t("updates.manual.copyCommand", { label: command.label })}
+            title={copied ? t("updates.manual.copied") : t("chat.copy.short")}
+            data-copied={copied ? "true" : "false"}
+            data-failed={failed ? "true" : "false"}
+            onClick={handleCopy}
+          >
+            {copied ? (
+              <Icons.check size={15} aria-hidden="true" />
+            ) : (
+              <Icons.copy size={15} aria-hidden="true" />
+            )}
+          </button>
+        </div>
       </div>
-      <button
-        type="button"
-        className="upd-secondary-btn upd-command-copy-btn"
-        aria-label={t("updates.manual.copyCommand", { label: command.label })}
-        data-copied={copied ? "true" : "false"}
-        data-failed={failed ? "true" : "false"}
-        onClick={handleCopy}
-      >
-        <Icons.copy size={15} aria-hidden="true" />
-        {copied ? t("updates.manual.copied") : t("chat.copy.short")}
-      </button>
       <span className="upd-copy-status" role="status">
         {copied ? t("updates.manual.copiedStatus") : failed ? t("chat.copy.failedStatus") : ""}
       </span>

@@ -276,7 +276,11 @@ describe("UpdateWindow", () => {
       screen.getByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.10"),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Copy npm global install command" }));
+    const npmCopyButton = screen.getByRole("button", {
+      name: "Copy npm global install command",
+    });
+    expect(npmCopyButton).toHaveTextContent("");
+    fireEvent.click(npmCopyButton);
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(
         "npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10",
