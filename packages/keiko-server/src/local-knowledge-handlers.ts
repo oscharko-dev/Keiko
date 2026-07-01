@@ -523,10 +523,7 @@ function providerPublicIdentity(provider: ModelProviderConfig | undefined): stri
   return provider === undefined ? undefined : embeddingProviderIdentity(provider);
 }
 
-function currentEmbeddingProvider(
-  config: GatewayConfig | undefined,
-): ModelProviderConfig | undefined {
-  if (config === undefined) return undefined;
+function currentEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | undefined {
   const modelId = selectConfiguredModel(config, { kind: "embedding" });
   if (modelId === undefined) return undefined;
   return configuredEmbeddingProvider(config, modelId);
