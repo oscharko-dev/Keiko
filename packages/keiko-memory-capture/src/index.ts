@@ -14,6 +14,8 @@ export type {
   SalienceDiagnostic,
   SalienceDeps,
   SalienceInput,
+  SalienceModelMessage,
+  SalienceModelMessageRole,
   WorkflowOutcomeInput,
 } from "./types.js";
 export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
