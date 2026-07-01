@@ -715,17 +715,18 @@ const SYMBOL_FILE_EXTENSIONS = [
   "vue",
 ] as const;
 const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
-const SYMBOL_FILE_SEARCH_LIMITS = {
-  maxFilesScanned: 10_000,
-  maxMatchesReturned: 32,
-  maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
-  elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
-} as const;
-const SYMBOL_LINE_SCAN_BYTES_MAX = 2_097_152;
 // Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
 // on a large customer repo can never trigger an unbounded number of full-file reads even if many
 // files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
 const MAX_SYMBOL_LINE_READS = 64;
+const SYMBOL_FILE_MATCHES_MAX = 96;
+const SYMBOL_FILE_SEARCH_LIMITS = {
+  maxFilesScanned: 10_000,
+  maxMatchesReturned: SYMBOL_FILE_MATCHES_MAX,
+  maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+  elapsedMsMax: DEFAULT_SEARCH_LIMITS.elapsedMsMax,
+} as const;
+const SYMBOL_LINE_SCAN_BYTES_MAX = 2_097_152;
 const LOCKFILE_NAMES = new Set([
   "package-lock.json",
   "pnpm-lock.yaml",
@@ -1034,7 +1035,7 @@ function symbolFileQuery(input: OrchestratorInput, pattern: string): RetrievalQu
     kind: "file-pattern",
     text: pattern,
     caseSensitive: false,
-    maxResults: 32,
+    maxResults: SYMBOL_FILE_MATCHES_MAX,
     emittedAtMs: input.query.emittedAtMs,
   };
 }

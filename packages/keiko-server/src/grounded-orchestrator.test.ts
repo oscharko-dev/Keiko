@@ -693,21 +693,20 @@ describe("runGroundedExploration", () => {
   });
 
   it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
-    for (const term of ["AlphaProbe", "BetaProbe", "GammaProbe"]) {
-      for (let index = 0; index < 33; index += 1) {
-        const dir = join(ROOT, "packages", `${term.toLowerCase()}-${index.toString()}`, "src");
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(
-          join(dir, `${term}.ts`),
-          `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
-        );
-      }
+    const term = "OverflowProbe";
+    for (let index = 0; index < 65; index += 1) {
+      const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, `${term}.ts`),
+        `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+      );
     }
 
     const out = await retrieveConnectedContextPack(
       input({
         scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
-        query: happyQuery({ text: "Trace AlphaProbe BetaProbe GammaProbe implementations" }),
+        query: happyQuery({ text: "Trace OverflowProbe implementations" }),
       }),
       {
         answerer: echoAnswerer,
@@ -722,7 +721,7 @@ describe("runGroundedExploration", () => {
         entry.claim.includes("Symbol line lookup skipped"),
     );
     expect(marker?.claim).toContain("prioritized line reads");
-    expect(out.pack.files.some((file) => file.scopePath.endsWith("/AlphaProbe.ts"))).toBe(true);
+    expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
