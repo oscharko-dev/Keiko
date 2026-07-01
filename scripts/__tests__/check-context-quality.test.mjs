@@ -45,6 +45,14 @@ import {
   buildToolObservationFixtures,
 } from "../lib/context-quality-corpus.mjs";
 
+function fullGatewayProjection(messages) {
+  const system = conversationForGateway(messages)[0];
+  const filtered = messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .map((message) => ({ role: message.role, content: message.content }));
+  return system === undefined ? filtered : [system, ...filtered];
+}
+
 // A strict budget mirroring the committed thresholds; a passing summary must clear all of them.
 const STRICT_BUDGET = {
   maxBudgetOverflowRate: 0,
@@ -754,11 +762,14 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
   it("evaluateManyShortBudgetSafeUnchanged is true above the threshold when budget-safe, false when divergent", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
-    const plain = conversationForGateway(f.long);
-    expect(evaluateManyShortBudgetSafeUnchanged(outcome, plain)).toBe(true);
-    const divergent = [...plain.slice(0, -1), { ...plain[plain.length - 1], content: "changed" }];
+    const expected = fullGatewayProjection(f.long);
+    expect(evaluateManyShortBudgetSafeUnchanged(outcome, expected)).toBe(true);
+    const divergent = [
+      ...expected.slice(0, -1),
+      { ...expected[expected.length - 1], content: "changed" },
+    ];
     expect(evaluateManyShortBudgetSafeUnchanged(outcome, divergent)).toBe(false);
-    expect(evaluateManyShortBudgetSafeUnchanged({ ...outcome, compaction: {} }, plain)).toBe(
+    expect(evaluateManyShortBudgetSafeUnchanged({ ...outcome, compaction: {} }, expected)).toBe(
       false,
     );
   });
@@ -766,9 +777,9 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
   it("evaluateNoProfileUnchanged is true with no profile, false when a record appears", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.long);
-    const plain = conversationForGateway(f.long);
-    expect(evaluateNoProfileUnchanged(outcome, plain)).toBe(true);
-    expect(evaluateNoProfileUnchanged({ ...outcome, compaction: {} }, plain)).toBe(false);
+    const expected = fullGatewayProjection(f.long);
+    expect(evaluateNoProfileUnchanged(outcome, expected)).toBe(true);
+    expect(evaluateNoProfileUnchanged({ ...outcome, compaction: {} }, expected)).toBe(false);
   });
 
   it("evaluateChatCompaction returns all five hard booleans true on the real fixtures", () => {
