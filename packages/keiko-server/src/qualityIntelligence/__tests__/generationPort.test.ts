@@ -703,9 +703,13 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     });
     const port = createPort(deps, "rf-model");
     const result = await port.generate(args());
-    expect(calls[0]?.request.responseFormat?.type).toBe("json_schema");
-    expect(calls[0]?.request.responseFormat?.name).toBe("quality_intelligence_test_design");
-    expect(calls[0]?.request.responseFormat?.strict).toBe(true);
+    const responseFormat = calls[0]?.request.responseFormat;
+    expect(responseFormat?.type).toBe("json_schema");
+    if (responseFormat?.type !== "json_schema") {
+      throw new Error("expected json_schema response format");
+    }
+    expect(responseFormat.name).toBe("quality_intelligence_test_design");
+    expect(responseFormat.strict).toBe(true);
     expect(calls[0]?.request.temperature).toBe(0);
     expect(calls[0]?.request.topP).toBe(1);
     expect(result.modelParameters?.temperature).toBe(0);
