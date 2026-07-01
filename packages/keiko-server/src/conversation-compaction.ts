@@ -3,18 +3,20 @@
 // wraps conversationForGateway (chat-handlers.ts).
 //
 // ACTIVATION PREDICATE (the unchanged-guarantee, ADR-0055 D6):
-//   opts.contextProfile === undefined  ||  filtered.length <= MAX_CONTEXT_MESSAGES
+//   opts.contextProfile === undefined  ||  assembledGatewayTokens <= opts.contextProfile.effectiveInputBudget
 // When true, this returns the EXACT return value of conversationForGateway(messages) — no copy,
 // no spread, no transform — so short sessions and no-profile callers are byte-identical to today.
 //
-// SLOW PATH (profile present AND > MAX_CONTEXT_MESSAGES filtered turns): the older turns that the
-// existing slice HARD-DROPS are folded into a single deterministic, REDACTED, byte-bounded summary
-// segment (role "user", model-agnostic-safe — not a second system turn) placed immediately AFTER
-// the existing system message, accompanied by a validated ContextCompactionRecord. No model call.
+// SLOW PATH (profile present AND assembled tokens exceed the effective input budget): the older
+// turns that would otherwise overrun the budget are folded into a single deterministic, REDACTED,
+// byte-bounded summary segment (role "user", model-agnostic-safe — not a second system turn)
+// placed immediately AFTER the existing system message, accompanied by a validated
+// ContextCompactionRecord. No model call.
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   estimateTokens,
+  estimateTokensForSegments,
   validateContextCompactionRecord,
   type ContextCompactionRecord,
   type ContextProfile,
@@ -57,29 +59,55 @@ export function conversationForGatewayWithCompaction(
   opts: ConversationCompactionOptions = {},
 ): ConversationCompactionOutcome {
   const filtered = usableGatewayMessages(messages);
-  if (opts.contextProfile === undefined || filtered.length <= MAX_CONTEXT_MESSAGES) {
-    return { messages: conversationForGateway(messages) };
+  const gatewayMessages = conversationForGateway(messages);
+  if (opts.contextProfile === undefined) {
+    return { messages: gatewayMessages };
   }
-  return buildCompactedOutcome(messages, filtered);
+  const assembledTokens = estimateTokensForSegments(gatewayMessages.map((message) => message.content));
+  if (assembledTokens <= opts.contextProfile.effectiveInputBudget) {
+    return { messages: gatewayMessages };
+  }
+  return buildCompactedOutcome(filtered, gatewayMessages[0], opts.contextProfile.effectiveInputBudget);
 }
 
 function buildCompactedOutcome(
-  messages: readonly ChatMessage[],
   filtered: readonly { role: "user" | "assistant"; content: string }[],
+  systemMessage: GatewayConversationMessage | undefined,
+  effectiveInputBudget: number,
 ): ConversationCompactionOutcome {
-  const dropped = toDroppedTurns(filtered.slice(0, filtered.length - MAX_CONTEXT_MESSAGES));
+  const dropCount = selectDropCount(filtered, systemMessage, effectiveInputBudget);
+  const dropped = toDroppedTurns(filtered.slice(0, dropCount));
+  const retained = filtered.slice(dropCount);
   const summaryContent = buildSummaryContent(dropped);
   const summarySegment: GatewayConversationMessage = { role: "user", content: summaryContent };
   const record = buildRecord(dropped, summaryContent);
-  const gatewayMessages = conversationForGateway(messages);
-  const [systemMessage, ...recentMessages] = gatewayMessages;
   return {
-    messages:
-      systemMessage === undefined
-        ? [summarySegment]
-        : [systemMessage, summarySegment, ...recentMessages],
+    messages: systemMessage === undefined ? [summarySegment, ...retained] : [systemMessage, summarySegment, ...retained],
     compaction: record,
   };
+}
+
+function selectDropCount(
+  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  systemMessage: GatewayConversationMessage | undefined,
+  effectiveInputBudget: number,
+): number {
+  const initialDropCount =
+    filtered.length > MAX_CONTEXT_MESSAGES ? filtered.length - MAX_CONTEXT_MESSAGES : 1;
+  let dropCount = Math.min(Math.max(1, initialDropCount), filtered.length);
+  while (dropCount <= filtered.length) {
+    const dropped = toDroppedTurns(filtered.slice(0, dropCount));
+    const summaryContent = buildSummaryContent(dropped);
+    const retained = filtered.slice(dropCount);
+    if (assembledTokens(systemMessage, summaryContent, retained) <= effectiveInputBudget) {
+      return dropCount;
+    }
+    if (dropCount === filtered.length) {
+      return dropCount;
+    }
+    dropCount += 1;
+  }
+  return filtered.length;
 }
 
 function toDroppedTurns(
@@ -131,15 +159,27 @@ function sourceSpansFor(dropped: readonly DroppedTurn[]): ContextProvenanceRef[]
   return dropped.map((turn) => ({ kind: "message", stableId: turn.stableId }));
 }
 
+function assembledTokens(
+  systemMessage: GatewayConversationMessage | undefined,
+  summaryContent: string,
+  retained: readonly { role: "user" | "assistant"; content: string }[],
+): number {
+  const segments =
+    systemMessage === undefined
+      ? [summaryContent, ...retained.map((turn) => turn.content)]
+      : [systemMessage.content, summaryContent, ...retained.map((turn) => turn.content)];
+  return estimateTokensForSegments(segments);
+}
+
 function buildRecord(
   dropped: readonly DroppedTurn[],
   summaryContent: string,
 ): ContextCompactionRecord {
-  const tokensBefore = dropped.reduce((sum, turn) => sum + estimateTokens(turn.content), 0);
+  const tokensBefore = estimateTokensForSegments(dropped.map((turn) => turn.content));
   const record: ContextCompactionRecord = {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     laneId: "history-summary",
-    reason: "history-window",
+    reason: "exceeded effective input budget",
     itemsBefore: dropped.length,
     itemsAfter: 0,
     tokensBefore,

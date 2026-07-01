@@ -2,10 +2,10 @@
 //  - noProfileUnchanged: > MAX_CONTEXT_MESSAGES history with NO profile -> shim returns exactly
 //    conversationForGateway(messages) (deep-equal), and buildGatewayMessages output is unchanged.
 //  - shortSessionByteIdentical: EXACTLY MAX_CONTEXT_MESSAGES messages WITH profile -> fast path.
-//  - longSessionCompaction: 30-message history WITH profile -> the system message remains first,
-//    a redacted user-role summary segment follows it, and the verbatim recent window follows that;
-//    dropped content is not present verbatim; a dropped secret is redacted; the compaction record
-//    validates; the latest user turn is preserved exactly.
+//  - manyShortTurnsStayVerbatim: count > MAX_CONTEXT_MESSAGES but budget-safe history remains
+//    byte-identical to conversationForGateway(messages).
+//  - fewOversizedTurnsCompact: a small below-24 history whose assembled token cost exceeds the
+//    effective input budget triggers deterministic compaction before assembly.
 //  - determinism: same input -> same output (no clock / no random).
 
 import { describe, expect, it } from "vitest";
@@ -16,6 +16,8 @@ import {
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import { conversationForGateway, MAX_CONTEXT_MESSAGES } from "./chat-handlers.js";
 import type { ChatMessage } from "./store/index.js";
+
+const SECRET = "sk-test-ABCDEF0123456789ABCDEF0123456789";
 
 function msg(role: ChatMessage["role"], content: string, index: number): ChatMessage {
   return {
@@ -40,6 +42,15 @@ function history(count: number): ChatMessage[] {
     out.push(msg(role, `${role} turn ${String(i)}`, i));
   }
   return out;
+}
+
+function oversizedHistory(): ChatMessage[] {
+  const huge = "x".repeat(150_000);
+  return [
+    msg("user", `here is my key ${SECRET} keep it ${huge}`, 0),
+    msg("assistant", `assistant reply ${huge}`, 1),
+    msg("user", `latest question ${huge}`, 2),
+  ];
 }
 
 describe("conversationForGatewayWithCompaction — fast path (unchanged guarantee)", () => {
@@ -74,20 +85,21 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
     expect(outcome.compaction).toBeUndefined();
     expect(outcome.messages).toEqual(conversationForGateway(messages));
   });
+
+  it("manyShortTurnsStayVerbatim: count above MAX_CONTEXT_MESSAGES still stays byte-identical when under budget", () => {
+    const messages = history(30);
+    const outcome = conversationForGatewayWithCompaction(messages, {
+      contextProfile: DEFAULT_CONTEXT_PROFILE,
+    });
+    expect(outcome.compaction).toBeUndefined();
+    expect(outcome.messages).toEqual(conversationForGateway(messages));
+  });
 });
 
 describe("conversationForGatewayWithCompaction — slow path (compaction)", () => {
-  const SECRET = "sk-test-ABCDEF0123456789ABCDEF0123456789";
+  const messages = oversizedHistory();
 
-  function longHistoryWithSecret(): ChatMessage[] {
-    const messages = history(30);
-    // Plant a secret in an OLD turn (index 0) that will be dropped.
-    messages[0] = msg("user", `here is my key ${SECRET} keep it`, 0);
-    return messages;
-  }
-
-  it("longSessionCompaction: keeps the system message first and inserts a user-role summary second", () => {
-    const messages = longHistoryWithSecret();
+  it("fewOversizedTurnsCompact: keeps the system message first and inserts a user-role summary second", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
@@ -98,17 +110,18 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(second?.content).toContain("Automated summary");
   });
 
-  it("longSessionCompaction: the recent user/assistant window after the system message is preserved verbatim", () => {
-    const messages = longHistoryWithSecret();
+  it("fewOversizedTurnsCompact: the retained recent window after the summary is preserved verbatim", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
     expect(outcome.messages[0]).toEqual(conversationForGateway(messages)[0]);
-    expect(outcome.messages.slice(2)).toEqual(conversationForGateway(messages).slice(1));
+    expect(outcome.messages.slice(2)).toEqual(messages.slice(1).map((message) => ({
+      role: message.role,
+      content: message.content,
+    })));
   });
 
-  it("longSessionCompaction: the current (latest) user turn is preserved exactly", () => {
-    const messages = longHistoryWithSecret();
+  it("fewOversizedTurnsCompact: the current (latest) user turn is preserved exactly", () => {
     const latestUser = [...messages].reverse().find((m) => m.role === "user");
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
@@ -119,8 +132,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(present).toBe(true);
   });
 
-  it("longSessionCompaction: dropped content is NOT present verbatim", () => {
-    const messages = longHistoryWithSecret();
+  it("fewOversizedTurnsCompact: dropped content is NOT present verbatim", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
@@ -129,8 +141,7 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(summary).not.toContain(`here is my key ${SECRET} keep it`);
   });
 
-  it("longSessionCompaction: a secret in a dropped message is redacted in the summary", () => {
-    const messages = longHistoryWithSecret();
+  it("fewOversizedTurnsCompact: a secret in a dropped message is redacted in the summary", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
@@ -138,27 +149,25 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(summary).not.toContain(SECRET);
   });
 
-  it("longSessionCompaction: the compaction record validates", () => {
-    const messages = longHistoryWithSecret();
+  it("fewOversizedTurnsCompact: the compaction record validates", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
     expect(outcome.compaction).toBeDefined();
     expect(validateContextCompactionRecord(outcome.compaction).ok).toBe(true);
+    expect(outcome.compaction?.reason).toContain("budget");
   });
 
-  it("longSessionCompaction: record itemsBefore equals the dropped count and itemsAfter is 0", () => {
-    const messages = history(30);
+  it("fewOversizedTurnsCompact: record itemsBefore equals the dropped count and itemsAfter is 0", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
-    expect(outcome.compaction?.itemsBefore).toBe(30 - MAX_CONTEXT_MESSAGES);
+    expect(outcome.compaction?.itemsBefore).toBe(1);
     expect(outcome.compaction?.itemsAfter).toBe(0);
-    expect(outcome.compaction?.sourceSpans?.length).toBe(30 - MAX_CONTEXT_MESSAGES);
+    expect(outcome.compaction?.sourceSpans?.length).toBe(1);
   });
 
-  it("longSessionCompaction: every source span is a message ref with a deterministic stableId", () => {
-    const messages = history(30);
+  it("fewOversizedTurnsCompact: every source span is a message ref with a deterministic stableId", () => {
     const outcome = conversationForGatewayWithCompaction(messages, {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
@@ -170,10 +179,10 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
   });
 
   it("determinism: identical input yields identical output (no clock, no random)", () => {
-    const a = conversationForGatewayWithCompaction(history(30), {
+    const a = conversationForGatewayWithCompaction(oversizedHistory(), {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
-    const b = conversationForGatewayWithCompaction(history(30), {
+    const b = conversationForGatewayWithCompaction(oversizedHistory(), {
       contextProfile: DEFAULT_CONTEXT_PROFILE,
     });
     expect(a).toEqual(b);

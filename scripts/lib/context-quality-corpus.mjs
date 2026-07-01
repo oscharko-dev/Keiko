@@ -748,8 +748,8 @@ function mkChatMessage(index, role, content) {
 }
 
 // Builds a user/assistant history of exactly `count` turns. Index 0 is a USER turn carrying the
-// early secret + durable instruction (dropped once count > 24). The FINAL turn is a USER turn
-// carrying the current instruction. Intermediate turns alternate user/assistant with inert bodies.
+// early secret + durable instruction. The FINAL turn is a USER turn carrying the current
+// instruction. Intermediate turns alternate user/assistant with inert bodies.
 function buildHistory(count) {
   const messages = [];
   for (let i = 0; i < count; i += 1) {
@@ -773,14 +773,31 @@ function buildHistory(count) {
   return messages;
 }
 
+function buildPressureHistory() {
+  const oversized = "O".repeat(150_000);
+  return [
+    mkChatMessage(
+      0,
+      "user",
+      `Credential ${CHAT_EARLY_SECRET} authorizes the refund sandbox. ${CHAT_DROPPED_PREAMBLE}${CHAT_DROPPED_DURABLE_INSTR}${oversized}`,
+    ),
+    mkChatMessage(1, "assistant", `Turn 1: oversized refund progress note. ${oversized}`),
+    mkChatMessage(2, "user", `${CHAT_CURRENT_INSTRUCTION} ${oversized}`),
+  ];
+}
+
 // The deterministic chat-history fixture set the W4 gate drives through the real compaction splice.
-//   • long  — 30 turns: > MAX_CONTEXT_MESSAGES (24) so the slow path fires; 6 turns drop.
-//   • short — exactly 24 turns: AT the threshold, so the fast path returns the verbatim projection.
-//   • tiny  — 8 turns: well below the threshold (sub-24 byte-identity coverage).
+//   • long     — 30 short turns: budget-safe even though it exceeds MAX_CONTEXT_MESSAGES, so the
+//                fast path must remain byte-identical with profile present.
+//   • pressure — 3 oversized turns: the first turn and the summary-only history exceed the token
+//                budget, so the slow path fires before model assembly.
+//   • short    — exactly 24 turns: AT the threshold, so the fast path returns the verbatim projection.
+//   • tiny     — 8 turns: well below the threshold (sub-24 byte-identity coverage).
 // Frozen so a consumer cannot mutate shared fixture state between metric phases.
 export function buildChatHistoryFixtures() {
   return Object.freeze({
     long: buildHistory(30),
+    pressure: buildPressureHistory(),
     short: buildHistory(24),
     tiny: buildHistory(8),
     currentInstruction: CHAT_CURRENT_INSTRUCTION,

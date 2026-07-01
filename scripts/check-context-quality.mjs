@@ -503,14 +503,13 @@ function hasSystemThenSummary(messages) {
   return messages[0]?.role === "system" && messages[1]?.role === "user";
 }
 
-// chatLongSessionCompaction (required true): the full long-session invariant set over the 30-msg
-// fixture. (1) a validated ContextCompactionRecord is present; (2) messages[0] stays the system
-// message and messages[1] is the role:"user" summary segment; (3) the LATEST user instruction
-// survives VERBATIM; (4) the most-recent MAX_CONTEXT_MESSAGES turns are preserved (the spliced tail
-// after system+summary deep-equals the plain conversationForGateway projection without its system
-// message); (5) the dropped early secret is NOT present verbatim; (6) the dropped durable
-// instruction's raw text + distinctive marker are NOT present verbatim (digested).
-// `plain` is conversationForGateway(longHistory) — the verbatim recent-window projection.
+// chatLongSessionCompaction (required true): the full budget-pressure invariant set over the
+// oversized fixture. (1) a validated ContextCompactionRecord is present; (2) messages[0] stays the
+// system message and messages[1] is the role:"user" summary segment; (3) the LATEST user
+// instruction survives VERBATIM; (4) the dropped early secret is NOT present verbatim; (5) the
+// dropped durable instruction's raw text + distinctive marker are NOT present verbatim (digested).
+// `plain` is conversationForGateway(pressureHistory) — the un-compacted projection used only to
+// check the current instruction and redaction facts, not tail preservation.
 export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
   const { messages, compaction } = outcome;
   if (compaction === undefined || !validateContextCompactionRecord(compaction).ok) {
@@ -519,13 +518,13 @@ export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
   if (!hasSystemThenSummary(messages)) {
     return false;
   }
-  const tailPreserved = deepEqual(messages.slice(2), plain.slice(1));
   const currentPreserved = someContentIncludes(messages, fixtures.currentInstruction);
   const secretRedacted = !someContentIncludes(messages, fixtures.earlySecret);
   const durableDigested =
     !someContentIncludes(messages, fixtures.droppedDurableInstruction) &&
     !someContentIncludes(messages, fixtures.droppedDurableMarker);
-  return tailPreserved && currentPreserved && secretRedacted && durableDigested;
+  const plainKeptCurrent = someContentIncludes(plain, fixtures.currentInstruction);
+  return currentPreserved && plainKeptCurrent && secretRedacted && durableDigested;
 }
 
 // chatCurrentInstructionPreserved (required true): the milestone headline — the latest user message
@@ -542,6 +541,13 @@ export function evaluateShortSessionByteIdentical(outcome, plain) {
   return outcome.compaction === undefined && deepEqual(outcome.messages, plain);
 }
 
+// chatManyShortBudgetSafeUnchanged (required true): a session above MAX_CONTEXT_MESSAGES but still
+// under the effective budget WITH a profile must stay byte-identical and carry NO compaction
+// record. `plain` is conversationForGateway(manyShortHistory).
+export function evaluateManyShortBudgetSafeUnchanged(outcome, plain) {
+  return outcome.compaction === undefined && deepEqual(outcome.messages, plain);
+}
+
 // chatNoProfileUnchanged (required true): the 30-msg history with NO profile must be byte-identical
 // to the plain projection and carry NO compaction record (the no-profile guard). `plain` is
 // conversationForGateway(longHistory).
@@ -549,19 +555,29 @@ export function evaluateNoProfileUnchanged(outcome, plain) {
   return outcome.compaction === undefined && deepEqual(outcome.messages, plain);
 }
 
-// Drives the REAL splice over the chat fixtures and returns the four measured hard booleans. The
+// Drives the REAL splice over the chat fixtures and returns the five measured hard booleans. The
 // splice is deterministic (no clock/random), so this is reproducible. Internal message bodies (which
 // carry the secret + markers) are never returned — only the boolean verdicts.
 export function evaluateChatCompaction(fixtures) {
   const profile = { contextProfile: DEFAULT_CONTEXT_PROFILE };
+  const pressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, profile);
+  const pressurePlain = conversationForGateway(fixtures.pressure);
   const longOutcome = conversationForGatewayWithCompaction(fixtures.long, profile);
   const longPlain = conversationForGateway(fixtures.long);
   const shortOutcome = conversationForGatewayWithCompaction(fixtures.short, profile);
   const shortPlain = conversationForGateway(fixtures.short);
   const noProfileOutcome = conversationForGatewayWithCompaction(fixtures.long);
   return {
-    chatLongSessionCompaction: evaluateLongSessionCompaction(longOutcome, longPlain, fixtures),
-    chatCurrentInstructionPreserved: evaluateCurrentInstructionPreserved(longOutcome, fixtures),
+    chatLongSessionCompaction: evaluateLongSessionCompaction(
+      pressureOutcome,
+      pressurePlain,
+      fixtures,
+    ),
+    chatManyShortBudgetSafeUnchanged: evaluateManyShortBudgetSafeUnchanged(
+      longOutcome,
+      longPlain,
+    ),
+    chatCurrentInstructionPreserved: evaluateCurrentInstructionPreserved(pressureOutcome, fixtures),
     chatShortSessionByteIdentical: evaluateShortSessionByteIdentical(shortOutcome, shortPlain),
     chatNoProfileUnchanged: evaluateNoProfileUnchanged(noProfileOutcome, longPlain),
   };
@@ -775,6 +791,7 @@ export function buildSummary(scenarios, latencySamples, rehydrations, shaping, c
       shapingRedactionClean: shaping.shapingRedactionClean,
       shapingInjectionFlagged: shaping.shapingInjectionFlagged,
       chatLongSessionCompaction: chat.chatLongSessionCompaction,
+      chatManyShortBudgetSafeUnchanged: chat.chatManyShortBudgetSafeUnchanged,
       chatCurrentInstructionPreserved: chat.chatCurrentInstructionPreserved,
       chatShortSessionByteIdentical: chat.chatShortSessionByteIdentical,
       chatNoProfileUnchanged: chat.chatNoProfileUnchanged,
@@ -903,6 +920,12 @@ const BUDGET_CHECKS = [
     kind: "flag",
   },
   {
+    metric: "chatManyShortBudgetSafeUnchanged",
+    observed: (s) => s.measured.chatManyShortBudgetSafeUnchanged,
+    threshold: (b) => b.requireChatManyShortBudgetSafeUnchanged,
+    kind: "flag",
+  },
+  {
     metric: "chatCurrentInstructionPreserved",
     observed: (s) => s.measured.chatCurrentInstructionPreserved,
     threshold: (b) => b.requireChatCurrentInstructionPreserved,
@@ -997,6 +1020,8 @@ function logSummary(onLog, summary, vacuity) {
   onLog(
     `context-quality measured (PR4 load-bearing chat-compaction splice): long-session-compaction=${String(
       m.chatLongSessionCompaction,
+    )} many-short-budget-safe-unchanged=${String(
+      m.chatManyShortBudgetSafeUnchanged,
     )} current-instruction-preserved=${String(
       m.chatCurrentInstructionPreserved,
     )} short-session-byte-identical=${String(

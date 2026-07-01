@@ -26,6 +26,7 @@ import {
   evaluateLongSessionCompaction,
   evaluateNoProfileUnchanged,
   evaluateNonVacuousRehydration,
+  evaluateManyShortBudgetSafeUnchanged,
   evaluatePathFree,
   evaluateRedactionCorrectness,
   evaluateRehydrationReadiness,
@@ -63,6 +64,7 @@ const STRICT_BUDGET = {
   requireShapingRedactionClean: true,
   requireShapingInjectionFlagged: true,
   requireChatLongSessionCompaction: true,
+  requireChatManyShortBudgetSafeUnchanged: true,
   requireChatCurrentInstructionPreserved: true,
   requireChatShortSessionByteIdentical: true,
   requireChatNoProfileUnchanged: true,
@@ -91,6 +93,7 @@ function passingSummary() {
       shapingRedactionClean: true,
       shapingInjectionFlagged: true,
       chatLongSessionCompaction: true,
+      chatManyShortBudgetSafeUnchanged: true,
       chatCurrentInstructionPreserved: true,
       chatShortSessionByteIdentical: true,
       chatNoProfileUnchanged: true,
@@ -435,6 +438,10 @@ describe("evaluateContextQualityBudget", () => {
       ["shapingInjectionFlagged", (s) => (s.measured.shapingInjectionFlagged = false)],
       ["chatLongSessionCompaction", (s) => (s.measured.chatLongSessionCompaction = false)],
       [
+        "chatManyShortBudgetSafeUnchanged",
+        (s) => (s.measured.chatManyShortBudgetSafeUnchanged = false),
+      ],
+      [
         "chatCurrentInstructionPreserved",
         (s) => (s.measured.chatCurrentInstructionPreserved = false),
       ],
@@ -600,14 +607,15 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
   it("builds long/short/tiny histories with the documented turn counts", () => {
     const f = buildChatHistoryFixtures();
     expect(f.long.length).toBe(30);
+    expect(f.pressure.length).toBe(3);
     expect(f.short.length).toBe(24);
     expect(f.tiny.length).toBe(8);
   });
 
-  it("the long history drops >= 2 turns beyond the 24-message window", () => {
+  it("the long history is budget-safe even though it exceeds the 24-message window", () => {
     const f = buildChatHistoryFixtures();
-    // Every long-history turn is a user/assistant turn, so the dropped prefix is length - 24.
-    expect(f.long.length - 24).toBeGreaterThanOrEqual(2);
+    expect(f.long.length - 24).toBeGreaterThan(0);
+    expect(f.long[f.long.length - 1].content).toBe(f.currentInstruction);
   });
 
   it("carries the latest-instruction marker on the FINAL turn (a user turn)", () => {
@@ -619,13 +627,14 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
 
   it("embeds the secret in an EARLY (dropped) turn that the window evicts", () => {
     const f = buildChatHistoryFixtures();
-    const dropped = f.long.slice(0, f.long.length - 24);
-    expect(dropped.length).toBeGreaterThanOrEqual(2);
+    const dropped = f.pressure.slice(0, 1);
+    expect(dropped.length).toBe(1);
     expect(dropped[0].content).toContain(f.earlySecret);
     expect(dropped[0].content).toMatch(/sk-live/u);
-    // The distinctive durable marker also lives in that dropped turn (digested, not kept whole).
+    // The distinctive durable marker also lives in that dropped turn, but the compacted summary
+    // must digest it rather than carry the raw string verbatim.
     expect(dropped[0].content).toContain(f.droppedDurableMarker);
-    // None of the KEPT (last 24) turns carry the secret.
+    // None of the KEPT turns in the budget-safe long fixture carry the secret.
     const kept = f.long.slice(f.long.length - 24);
     expect(kept.some((m) => m.content.includes(f.earlySecret))).toBe(false);
   });
@@ -643,17 +652,17 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
 describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
   const PROFILE = { contextProfile: DEFAULT_CONTEXT_PROFILE };
 
-  it("evaluateLongSessionCompaction is true on the real long-session splice", () => {
+  it("evaluateLongSessionCompaction is true on the real budget-pressure splice", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
-    const plain = conversationForGateway(f.long);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const plain = conversationForGateway(f.pressure);
     expect(evaluateLongSessionCompaction(outcome, plain, f)).toBe(true);
   });
 
   it("evaluateLongSessionCompaction is false when the current instruction is dropped (mutation guard)", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
-    const plain = conversationForGateway(f.long);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const plain = conversationForGateway(f.pressure);
     // Strip the latest user instruction from every spliced message.
     const tampered = {
       ...outcome,
@@ -667,8 +676,8 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
 
   it("evaluateLongSessionCompaction is false when the dropped secret survives verbatim (mutation guard)", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
-    const plain = conversationForGateway(f.long);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const plain = conversationForGateway(f.pressure);
     const system = outcome.messages[0];
     const summary = outcome.messages[1];
     const leaked = {
@@ -684,16 +693,16 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
 
   it("evaluateLongSessionCompaction is false when the summary segment is missing (mutation guard)", () => {
     const f = buildChatHistoryFixtures();
-    const plain = conversationForGateway(f.long);
-    // No summary head + no record: the long-session invariant must fail.
+    const plain = conversationForGateway(f.pressure);
+    // No summary head + no record: the budget-pressure invariant must fail.
     const stripped = { messages: plain, compaction: undefined };
     expect(evaluateLongSessionCompaction(stripped, plain, f)).toBe(false);
   });
 
   it("evaluateLongSessionCompaction is false when the summary is placed before the system message", () => {
     const f = buildChatHistoryFixtures();
-    const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
-    const plain = conversationForGateway(f.long);
+    const outcome = conversationForGatewayWithCompaction(f.pressure, PROFILE);
+    const plain = conversationForGateway(f.pressure);
     const reordered = {
       ...outcome,
       messages: [outcome.messages[1], outcome.messages[0], ...outcome.messages.slice(2)],
@@ -727,6 +736,18 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
     expect(evaluateShortSessionByteIdentical({ ...outcome, compaction: {} }, plain)).toBe(false);
   });
 
+  it("evaluateManyShortBudgetSafeUnchanged is true above the threshold when budget-safe, false when divergent", () => {
+    const f = buildChatHistoryFixtures();
+    const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
+    const plain = conversationForGateway(f.long);
+    expect(evaluateManyShortBudgetSafeUnchanged(outcome, plain)).toBe(true);
+    const divergent = [...plain.slice(0, -1), { ...plain[plain.length - 1], content: "changed" }];
+    expect(evaluateManyShortBudgetSafeUnchanged(outcome, divergent)).toBe(false);
+    expect(evaluateManyShortBudgetSafeUnchanged({ ...outcome, compaction: {} }, plain)).toBe(
+      false,
+    );
+  });
+
   it("evaluateNoProfileUnchanged is true with no profile, false when a record appears", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.long);
@@ -735,10 +756,11 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
     expect(evaluateNoProfileUnchanged({ ...outcome, compaction: {} }, plain)).toBe(false);
   });
 
-  it("evaluateChatCompaction returns all four hard booleans true on the real fixtures", () => {
+  it("evaluateChatCompaction returns all five hard booleans true on the real fixtures", () => {
     const r = evaluateChatCompaction(buildChatHistoryFixtures());
     expect(r).toEqual({
       chatLongSessionCompaction: true,
+      chatManyShortBudgetSafeUnchanged: true,
       chatCurrentInstructionPreserved: true,
       chatShortSessionByteIdentical: true,
       chatNoProfileUnchanged: true,
