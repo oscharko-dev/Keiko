@@ -17,6 +17,7 @@ export interface OpenAIEmbeddingRequest {
   readonly apiKeyHeaderName?: string;
   readonly modelId: string;
   readonly input: string;
+  readonly dimensions?: number;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
@@ -41,6 +42,7 @@ export interface OpenAIEmbeddingBatchRequest {
   readonly apiKeyHeaderName?: string;
   readonly modelId: string;
   readonly inputs: readonly string[];
+  readonly dimensions?: number;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
@@ -206,6 +208,7 @@ function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
     model: request.modelId,
     input: request.input,
     encoding_format: "float",
+    ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =
@@ -299,6 +302,7 @@ function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
     model: request.modelId,
     input: request.inputs,
     encoding_format: "float",
+    ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =

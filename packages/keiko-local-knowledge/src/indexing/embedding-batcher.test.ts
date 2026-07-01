@@ -164,6 +164,40 @@ describe("embedChunkBatch — happy path", () => {
     expect(result.errors).toEqual([]);
     expect(countVectorsForCapsule(fixture.store._internal.db, fixture.seeded.capsuleId)).toBe(0);
   });
+
+  it("sends raw document chunk text without a Qwen3 query instruction prefix", async () => {
+    const qwenIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "Qwen3-Embedding-8B",
+    };
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, qwenIdentity.vectorDimensions),
+            modelId: qwenIdentity.modelId,
+          },
+        };
+      },
+    });
+    const first = fixture.chunks[0];
+    if (first === undefined) throw new Error("fixture produced no chunks");
+    const rawText = "Document chunk that must remain raw for indexing.";
+
+    await embedChunkBatch([{ ...first, text: rawText }], {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: qwenIdentity,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+    });
+
+    expect(inputs).toEqual([rawText]);
+  });
 });
 
 describe("embedChunkBatch — identity gate", () => {
@@ -623,5 +657,34 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
     expect(batchCallSizes.reduce((a, b) => a + b, 0)).toBe(chunks.length);
     expect(result.vectors).toHaveLength(chunks.length);
     cleanup();
+  });
+
+  it("splits token-dense batches before the Qwen3 32K-class token budget is exceeded", async () => {
+    const { store, cleanup, seeded, chunks: seededChunks } = buildFixture("dense ".repeat(40_000));
+    const chunks: ChunkToEmbed[] = seededChunks.slice(0, 40).map((chunk, i) => ({
+      ...chunk,
+      text: `dense-${String(i)}-${"漢".repeat(1_000)}`,
+    }));
+    const { adapter, batchCallSizes } = batchAdapter();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(chunks.length);
+      expect(batchCallSizes.length).toBeGreaterThan(1);
+      expect(batchCallSizes.reduce((sum, n) => sum + n, 0)).toBe(chunks.length);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        chunks.length,
+      );
+    } finally {
+      cleanup();
+    }
   });
 });

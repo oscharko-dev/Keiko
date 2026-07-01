@@ -23,21 +23,49 @@ import { assembleGroundedContext } from "../retrieval/context-pack-assembler.js"
 import { runLocalKnowledgeRetrieval } from "../retrieval/retrieval-runner.js";
 import type { RetrievalDependencies } from "../retrieval/retrieval-runner.js";
 
-import { attachCitationsToAnswer } from "./citation-attacher.js";
+import {
+  attachCitationsToAnswer,
+  type AttachCitationsResult,
+  type CitationFaithfulnessOptions,
+} from "./citation-attacher.js";
 import type {
   AnswerGenerator,
   ConversationGroundedAnswer,
   ConversationGroundedQuery,
+  ReferenceReranker,
 } from "./types.js";
 
 export interface GroundedAnswerDependencies {
   readonly retrieval: RetrievalDependencies;
   readonly answerGenerator: AnswerGenerator;
+  readonly referenceReranker?: ReferenceReranker | undefined;
+  readonly citationFaithfulness?: CitationFaithfulnessOptions | undefined;
   // Caller-supplied cancellation. Propagates to both retrieval (the embedding call) and
   // the answer generator (the model call) so a single abort cancels the whole pipeline.
   readonly signal?: AbortSignal;
 }
 
+const NO_EVIDENCE_REPAIR_SKIP_PATTERNS: readonly RegExp[] = [
+  /\bno\s+evidence\s+(?:found|available|in|within)\b/iu,
+  /\binsufficient\s+evidence\b/iu,
+  /\bnot\s+enough\s+evidence\b/iu,
+  /\bkeine\s+evidenz\b/iu,
+  /\bkeine\s+(?:belege|hinweise)\b/iu,
+  /\bnicht\s+genug\s+(?:evidenz|belege|hinweise)\b/iu,
+];
+
+function shouldRepairMissingCitations(
+  answerText: string,
+  references: readonly unknown[],
+  attached: AttachCitationsResult,
+): boolean {
+  if (references.length === 0 || attached.citations.length > 0) return false;
+  const compact = answerText.replace(/\s+/g, " ").trim();
+  if (compact.length === 0 || compact.length > 240) return true;
+  return !NO_EVIDENCE_REPAIR_SKIP_PATTERNS.some((pattern) => pattern.test(compact));
+}
+
+// eslint-disable-next-line max-lines-per-function, complexity
 export async function runGroundedAnswer(
   deps: GroundedAnswerDependencies,
   query: ConversationGroundedQuery,
@@ -46,6 +74,9 @@ export async function runGroundedAnswer(
     {
       store: deps.retrieval.store,
       embeddingAdapter: deps.retrieval.embeddingAdapter,
+      ...(deps.retrieval.queryTransformer !== undefined
+        ? { queryTransformer: deps.retrieval.queryTransformer }
+        : {}),
       ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     },
     {
@@ -54,12 +85,12 @@ export async function runGroundedAnswer(
       ...(query.capsuleSetId !== undefined ? { capsuleSetId: query.capsuleSetId } : {}),
       ...(query.topK !== undefined ? { topK: query.topK } : {}),
       ...(query.minScore !== undefined ? { minScore: query.minScore } : {}),
+      ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
     },
   );
 
-  const pack = assembleGroundedContext(retrieval.references);
-
   if (retrieval.noEvidence) {
+    const pack = assembleGroundedContext(retrieval.references);
     return {
       answer: "",
       references: retrieval.references,
@@ -70,19 +101,41 @@ export async function runGroundedAnswer(
     };
   }
 
-  const answerText = await deps.answerGenerator.generate({
+  const reranked =
+    deps.referenceReranker === undefined
+      ? undefined
+      : await deps.referenceReranker.rerank({
+          query,
+          references: retrieval.references,
+          ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+        });
+  const references = reranked?.references ?? retrieval.references;
+  const pack = assembleGroundedContext(references);
+  const answerInput = {
     query,
     pack,
-    references: retrieval.references,
+    references,
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-  });
+  };
+  const answerText = await deps.answerGenerator.generate(answerInput);
 
-  const attached = attachCitationsToAnswer(answerText, retrieval.references);
+  let attached = attachCitationsToAnswer(answerText, references, deps.citationFaithfulness);
+  if (
+    deps.signal?.aborted !== true &&
+    shouldRepairMissingCitations(answerText, references, attached)
+  ) {
+    const repairedText = await deps.answerGenerator.generate({
+      ...answerInput,
+      citationRepair: true,
+    });
+    attached = attachCitationsToAnswer(repairedText, references, deps.citationFaithfulness);
+  }
   return {
     answer: attached.text,
-    references: retrieval.references,
+    references,
     citations: attached.citations,
     pack,
     noEvidence: false,
+    ...(reranked?.diagnostics === undefined ? {} : { reranker: reranked.diagnostics }),
   };
 }

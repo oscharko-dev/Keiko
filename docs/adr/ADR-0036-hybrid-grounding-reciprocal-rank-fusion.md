@@ -23,11 +23,11 @@ The hybrid merge as it stands assigns each side its own independent, never-recon
 - **Folder side**: the full `DEFAULT_EXPLORATION_BUDGET` (excerptBytesMax = 131 072 bytes), split
   only by the number of connected folders. A single folder can inject up to 131 KB of evidence.
 - **Connector side**: each connector independently receives a flat
-  `topK = MAX_PROMPT_REFERENCES = 8` slots × `MAX_EXCERPT_CHARS = 900` characters ≈ 7.2 KB per
+  `topK = MAX_PROMPT_REFERENCES = 16` slots × `MAX_EXCERPT_CHARS = 900` characters ≈ 14.4 KB per
   connector.
 
 These two budgets are structurally incommensurable and are concatenated folder-first. In any
-mixed chat the folder side can contribute up to ~18× more bytes per source than the connector side.
+mixed chat the folder side can contribute up to ~9× more bytes per source than the connector side.
 A user who connects a single folder alongside a large-document connector (the canonical knowledge-
 worker scenario) will find connector evidence structurally drowned out regardless of relevance.
 

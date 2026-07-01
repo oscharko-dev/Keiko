@@ -33,11 +33,14 @@ const DEPENDENCY_VERSIONS = Object.freeze([
 ]);
 const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCUMENT_XML_ENTRY = "word/document.xml";
+const FOOTNOTES_XML_ENTRY = "word/footnotes.xml";
 const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
 const MAX_DOCUMENT_XML_INFLATE_RATIO = 100;
 const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
 const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
+const TABLE_ROW_PATTERN = /<w:tr\b[\s\S]*?<\/w:tr>/gi;
+const TABLE_CELL_PATTERN = /<w:tc\b[\s\S]*?<\/w:tc>/gi;
 
 interface ZipFileLike {
   readonly readEntry: () => void;
@@ -197,19 +200,38 @@ function readEntryText(
   });
 }
 
-function readDocumentXmlFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promise<string> {
+interface DocxXmlParts {
+  readonly documentXml: string;
+  readonly footnotesXml?: string;
+}
+
+function isDocxXmlEntry(name: string): boolean {
+  return name === DOCUMENT_XML_ENTRY || name === FOOTNOTES_XML_ENTRY;
+}
+
+// eslint-disable-next-line max-lines-per-function
+function readDocxXmlPartsFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promise<DocxXmlParts> {
+  // eslint-disable-next-line max-lines-per-function
   return new Promise((resolve, reject) => {
+    const parts: { documentXml?: string; footnotesXml?: string } = {};
     let settled = false;
 
-    const resolveOnce = (value: string): void => {
+    const resolveOnce = (): void => {
       if (settled) {
+        return;
+      }
+      if (parts.documentXml === undefined) {
+        rejectOnce(new Error("docx missing word/document.xml"));
         return;
       }
       settled = true;
       zip.removeListener("entry", onEntry);
       zip.removeListener("end", onEnd);
       zip.removeListener("error", onError);
-      resolve(value);
+      resolve({
+        documentXml: parts.documentXml,
+        ...(parts.footnotesXml ? { footnotesXml: parts.footnotesXml } : {}),
+      });
     };
 
     const rejectOnce = (error: Error): void => {
@@ -224,7 +246,7 @@ function readDocumentXmlFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promis
     };
 
     const onEnd = (): void => {
-      rejectOnce(new Error("docx missing word/document.xml"));
+      resolveOnce();
     };
 
     const onError = (error: unknown): void => {
@@ -232,13 +254,18 @@ function readDocumentXmlFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promis
     };
 
     const handleEntry = async (entry: yauzl.Entry): Promise<void> => {
-      if (entry.fileName !== DOCUMENT_XML_ENTRY) {
+      if (!isDocxXmlEntry(entry.fileName)) {
         zip.readEntry();
         return;
       }
       try {
         const xml = await readEntryText(zip as yauzl.ZipFile, entry, limits);
-        resolveOnce(xml);
+        if (entry.fileName === DOCUMENT_XML_ENTRY) {
+          parts.documentXml = xml;
+        } else {
+          parts.footnotesXml = xml;
+        }
+        zip.readEntry();
       } catch (error) {
         rejectOnce(toError(error, "failed to read docx entry"));
       }
@@ -255,10 +282,10 @@ function readDocumentXmlFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promis
   });
 }
 
-async function readDocumentXml(bytes: Uint8Array, maxInputBytes: number): Promise<string> {
+async function readDocxXmlParts(bytes: Uint8Array, maxInputBytes: number): Promise<DocxXmlParts> {
   const zip = (await openZip(bytes)) as ZipFileLike;
   try {
-    return await readDocumentXmlFromZip(zip, {
+    return await readDocxXmlPartsFromZip(zip, {
       maxInflatedEntryBytes: maxInflatedEntryBytes(maxInputBytes),
       maxInflateRatio: MAX_DOCUMENT_XML_INFLATE_RATIO,
     });
@@ -304,6 +331,10 @@ function headingLevelOf(paragraphXml: string): number | undefined {
   return match?.[1] === undefined ? undefined : Number(match[1]);
 }
 
+function isListParagraph(paragraphXml: string): boolean {
+  return /<w:numPr\b/i.test(paragraphXml);
+}
+
 function paragraphText(paragraphXml: string): string {
   const withBreaks = paragraphXml
     .replaceAll(/<w:tab\s*\/>/gi, "\t")
@@ -315,8 +346,96 @@ function paragraphText(paragraphXml: string): string {
   return parts.join("").trim();
 }
 
+function parseParagraphXml(paragraphXml: string): Paragraph | undefined {
+  const text = paragraphText(paragraphXml);
+  if (text.length === 0) return undefined;
+  const headingLevel = headingLevelOf(paragraphXml);
+  const projected =
+    headingLevel === undefined && isListParagraph(paragraphXml) ? `- ${text}` : text;
+  return headingLevel === undefined ? { text: projected } : { text: projected, headingLevel };
+}
+
+function bodyXml(xml: string): string {
+  return /<w:body\b[^>]*>([\s\S]*?)<\/w:body>/iu.exec(xml)?.[1] ?? xml;
+}
+
+function normalizeTableHeaders(cells: readonly string[]): readonly string[] {
+  const seen = new Map<string, number>();
+  return cells.map((cell, index) => {
+    const base = cell.trim().length > 0 ? cell.trim() : `Column ${String(index + 1)}`;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return count === 0 ? base : `${base} ${String(count + 1)}`;
+  });
+}
+
+function cellText(cellXml: string): string {
+  return Array.from(cellXml.matchAll(PARAGRAPH_PATTERN))
+    .map((match) => paragraphText(match[0]))
+    .filter((part) => part.length > 0)
+    .join(" ")
+    .trim();
+}
+
+function tableRows(tableXml: string): readonly Paragraph[] {
+  const rows = Array.from(tableXml.matchAll(TABLE_ROW_PATTERN)).map((rowMatch) =>
+    Array.from(rowMatch[0].matchAll(TABLE_CELL_PATTERN)).map((cellMatch) => cellText(cellMatch[0])),
+  );
+  if (rows.length === 0) return [];
+  const headerIsSchema =
+    rows.length > 1 && (rows[0] ?? []).some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell));
+  const headers = headerIsSchema ? normalizeTableHeaders(rows[0] ?? []) : [];
+  const dataRows = headerIsSchema ? rows.slice(1) : rows;
+  return dataRows
+    .map((cells, index) => {
+      const labels = headers.length > 0 ? headers : normalizeTableHeaders([]);
+      const projected = cells
+        .map(
+          (cell, cellIndex) =>
+            `${labels[cellIndex] ?? `Column ${String(cellIndex + 1)}`}=${cell}`,
+        )
+        .join(" | ");
+      return { text: `Table row ${String(index + 1)}: ${projected}` };
+    })
+    .filter((paragraph) => paragraph.text.trim().length > 0);
+}
+
+function parseDocumentBlocks(xml: string): readonly Paragraph[] {
+  const body = bodyXml(xml);
+  const blocks: Paragraph[] = [];
+  const blockPattern = /<w:(p|tbl)\b[\s\S]*?<\/w:\1>/gi;
+  for (const match of body.matchAll(blockPattern)) {
+    const blockXml = match[0];
+    if (blockXml.startsWith("<w:tbl")) {
+      blocks.push(...tableRows(blockXml));
+      continue;
+    }
+    const paragraph = parseParagraphXml(blockXml);
+    if (paragraph !== undefined) blocks.push(paragraph);
+  }
+  return blocks;
+}
+
+function parseFootnotes(xml: string | undefined): readonly Paragraph[] {
+  if (xml === undefined) return [];
+  const out: Paragraph[] = [];
+  for (const match of xml.matchAll(/<w:footnote\b[^>]*>[\s\S]*?<\/w:footnote>/gi)) {
+    const footnoteXml = match[0];
+    const tag = /^<w:footnote\b[^>]*>/iu.exec(footnoteXml)?.[0] ?? "";
+    const id = /w:id="([^"]+)"/iu.exec(tag)?.[1];
+    if (id === "-1" || id === "0") continue;
+    const text = Array.from(footnoteXml.matchAll(PARAGRAPH_PATTERN))
+      .map((paragraph) => paragraphText(paragraph[0]))
+      .filter((part) => part.length > 0)
+      .join(" ");
+    if (text.length > 0) out.push({ text: `Footnote ${id ?? "?"}: ${text}` });
+  }
+  return out;
+}
+
 function parseParagraphs(
   xml: string,
+  footnotesXml: string | undefined,
   input: ParserSelectionInput,
   options: ParserOptions,
   startedAt: number,
@@ -324,7 +443,8 @@ function parseParagraphs(
   const out: Paragraph[] = [];
   const diagnostics: ParserDiagnostic[] = [];
   let scannedParagraphs = 0;
-  for (const match of xml.matchAll(PARAGRAPH_PATTERN)) {
+  const paragraphs = [...parseDocumentBlocks(xml), ...parseFootnotes(footnotesXml)];
+  for (const paragraph of paragraphs) {
     if (scannedParagraphs >= options.maxObjectsPerDocument) {
       diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
       break;
@@ -336,11 +456,7 @@ function parseParagraphs(
       break;
     }
     scannedParagraphs += 1;
-    const paragraphXml = match[0];
-    const text = paragraphText(paragraphXml);
-    if (text.length === 0) continue;
-    const headingLevel = headingLevelOf(paragraphXml);
-    out.push(headingLevel === undefined ? { text } : { text, headingLevel });
+    out.push(paragraph);
   }
   return { paragraphs: out, diagnostics };
 }
@@ -607,6 +723,7 @@ function docxParseResult(
   };
 }
 
+// eslint-disable-next-line max-lines-per-function
 async function asyncParse(
   capability: ParserCapability,
   input: ParserSelectionInput,
@@ -623,14 +740,20 @@ async function asyncParse(
 
   const startedAt = options.now();
   try {
-    const xml = await readDocumentXml(input.bytes, options.maxBytes);
+    const xmlParts = await readDocxXmlParts(input.bytes, options.maxBytes);
     const limit = shouldStop(startedAt, options, 0);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       return emptyResult(capability, input.documentId, options, [
         diagnostic(limit.code, limit.message, input.documentId, "info"),
       ]);
     }
-    const parsed = parseParagraphs(xml, input, options, startedAt);
+    const parsed = parseParagraphs(
+      xmlParts.documentXml,
+      xmlParts.footnotesXml,
+      input,
+      options,
+      startedAt,
+    );
     if (parsed.paragraphs.length === 0) {
       if (parsed.diagnostics.length > 0) {
         return emptyResult(capability, input.documentId, options, parsed.diagnostics);

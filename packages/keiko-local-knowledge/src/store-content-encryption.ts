@@ -73,8 +73,13 @@ interface TextTarget {
 const LEGACY_TEXT_TARGETS: readonly TextTarget[] = [
   { table: "document_texts", column: "normalized_text" },
   { table: "document_text_windows", column: "normalized_text" },
+  { table: "chunks", column: "context_prefix" },
+  { table: "chunks", column: "augmented_text" },
 ];
 
+// Deliberately excludes chunk_lexical_index.text/exact_text. That table is the FTS5/BM25 search
+// projection; SQLite cannot MATCH sealed randomized envelopes, so the schema owns that narrow
+// plaintext retrieval-index exception while source-of-truth extracted text remains sealed here.
 const PATH_TEXT_TARGETS: readonly TextTarget[] = [
   { table: "sections", column: "section_path_json" },
   { table: "parsed_units", column: "section_path_json" },

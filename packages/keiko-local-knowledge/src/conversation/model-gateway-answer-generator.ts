@@ -85,7 +85,12 @@ export class ModelGatewayAnswerGenerator implements AnswerGenerator {
       // the policy disallows. Refuse the gateway call rather than leak refs.
       throw new AnswerGroundingRejectedError();
     }
-    const messages = buildPromptMessages(input.query.text, input.pack, this.redactCitationMetadata);
+    const messages = buildPromptMessages(
+      input.query.text,
+      input.pack,
+      this.redactCitationMetadata,
+      input.citationRepair === true,
+    );
     const request: GatewayRequest = {
       modelId: this.modelId,
       messages,
@@ -110,19 +115,25 @@ export function buildPromptMessages(
   question: string,
   pack: LocalKnowledgeGroundedContextPack,
   redactCitationMetadata: CitationMetadataRedactor = (value): string => value,
+  citationRepair = false,
 ): readonly ChatMessage[] {
   const citationsBlock = renderCitations(pack, redactCitationMetadata);
+  const repairInstruction = citationRepair
+    ? "\n\nThe previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence must include at least one matching [n] marker from the supplied citations. Do not invent citations."
+    : "";
   return [
     {
       role: "system",
       content:
-        "You answer questions strictly from the supplied citations. Cite each claim " +
+        "You answer questions strictly from the supplied citations. Respond in the same " +
+        "language as the user's question. If the question language is ambiguous, mirror " +
+        "the dominant language of the cited evidence. Cite each claim " +
         "with the matching [n] marker. If the citations do not contain the answer, " +
-        "reply 'No evidence found in the supplied citations.'",
+        "state that no evidence was found in that same language.",
     },
     {
       role: "user",
-      content: `Question: ${question}\nContext (${String(pack.counts.totalReferences)} citations):\n${citationsBlock}\nAnswer with citations only.`,
+      content: `Question: ${question}\nContext (${String(pack.counts.totalReferences)} citations):\n${citationsBlock}\nAnswer with citations only.${repairInstruction}`,
     },
   ];
 }

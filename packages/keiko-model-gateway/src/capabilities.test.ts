@@ -263,6 +263,20 @@ describe("isLikelyEmbeddingModelId — positive cases", () => {
     expect(isLikelyEmbeddingModelId("nomic-embed-text")).toBe(true);
   });
 
+  it("matches common open-weight embedding model families", () => {
+    for (const id of [
+      "bge-m3",
+      "multilingual-e5-large",
+      "gte-large",
+      "nomic-embed-text",
+      "mxbai-embed-large",
+      "jina-embeddings",
+      "instructor-xl",
+    ]) {
+      expect(isLikelyEmbeddingModelId(id), id).toBe(true);
+    }
+  });
+
   it("matches 'model/embed' (slash boundary)", () => {
     expect(isLikelyEmbeddingModelId("model/embed")).toBe(true);
   });

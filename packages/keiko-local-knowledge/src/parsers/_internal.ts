@@ -140,6 +140,42 @@ function decodeUtf16(bytes: Uint8Array): DecodedText | undefined {
   return { text: stripped, bomBytes: 2 };
 }
 
+// eslint-disable-next-line complexity
+function utf16CodecForNulPattern(bytes: Uint8Array): "utf-16le" | "utf-16be" | undefined {
+  if (bytes.byteLength < 8) return undefined;
+  const sampleLength = Math.min(bytes.byteLength, 4096);
+  let evenNuls = 0;
+  let oddNuls = 0;
+  let evenTotal = 0;
+  let oddTotal = 0;
+  for (let i = 0; i < sampleLength; i += 1) {
+    if (i % 2 === 0) {
+      evenTotal += 1;
+      if (bytes[i] === 0x00) evenNuls += 1;
+    } else {
+      oddTotal += 1;
+      if (bytes[i] === 0x00) oddNuls += 1;
+    }
+  }
+  const evenRatio = evenTotal === 0 ? 0 : evenNuls / evenTotal;
+  const oddRatio = oddTotal === 0 ? 0 : oddNuls / oddTotal;
+  if (oddRatio >= 0.3 && evenRatio <= 0.05) return "utf-16le";
+  if (evenRatio >= 0.3 && oddRatio <= 0.05) return "utf-16be";
+  return undefined;
+}
+
+function decodeUtf16WithoutBom(bytes: Uint8Array): DecodedText | undefined {
+  const codec = utf16CodecForNulPattern(bytes);
+  if (codec === undefined) return undefined;
+  const text = new TextDecoder(codec, { fatal: false }).decode(bytes);
+  const stripped = text.length > 0 && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  return { text: stripped, bomBytes: 0 };
+}
+
+function hasUtf8Bom(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
+}
+
 // GRD-027: decode an XML numeric character reference body (the part between `&#` and `;`),
 // e.g. "8217" (decimal) or "xE9" / "x2019" (hex). Returns undefined for malformed or
 // out-of-range references (incl. surrogates) so the caller leaves the literal text intact —
@@ -179,10 +215,16 @@ export function decodeXmlEntities(value: string): string {
 export function decodeUtf8(bytes: Uint8Array): DecodedText {
   const utf16 = decodeUtf16(bytes);
   if (utf16 !== undefined) return utf16;
-  const decoder = new TextDecoder("utf-8", { fatal: false });
-  const raw = decoder.decode(bytes);
-  if (raw.length > 0 && raw.charCodeAt(0) === 0xfeff) {
-    return { text: raw.slice(1), bomBytes: 3 };
+  const utf16WithoutBom = decodeUtf16WithoutBom(bytes);
+  if (utf16WithoutBom !== undefined) return utf16WithoutBom;
+  try {
+    const raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (raw.length > 0 && raw.charCodeAt(0) === 0xfeff) {
+      return { text: raw.slice(1), bomBytes: hasUtf8Bom(bytes) ? 3 : 0 };
+    }
+    return { text: raw, bomBytes: 0 };
+  } catch {
+    const raw = new TextDecoder("windows-1252", { fatal: false }).decode(bytes);
+    return { text: raw, bomBytes: 0 };
   }
-  return { text: raw, bomBytes: 0 };
 }

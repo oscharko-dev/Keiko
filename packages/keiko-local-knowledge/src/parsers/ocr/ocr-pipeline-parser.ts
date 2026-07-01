@@ -12,6 +12,7 @@ import type { ParsedUnit, ParserResult } from "@oscharko-dev/keiko-contracts";
 
 import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "../_internal.js";
 import type {
+  InternalParserResult,
   ParserAdapter,
   ParserCapability,
   ParserOptions,
@@ -101,12 +102,13 @@ function pageNumberForInput(input: ParserSelectionInput): number {
     : 1;
 }
 
+// eslint-disable-next-line max-lines-per-function
 function resultFromOcrOutcome(
   ocrResult: OcrPageResult,
   cap: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
-): ParserResult {
+): InternalParserResult {
   if (!ocrResult.ok) {
     const reason =
       ocrResult.reason === "ocr-not-configured"
@@ -127,14 +129,34 @@ function resultFromOcrOutcome(
       [{ kind: "unsupported-media", documentId: input.documentId, reason }],
     );
   }
+  const text = ocrResult.text.trim();
+  if (text.length === 0) {
+    return emptyResult(
+      cap,
+      input.documentId,
+      options,
+      [
+        diagnostic(
+          "UNSUPPORTED_FORMAT",
+          `ocr produced no extractable text for page ${String(pageNumberForInput(input))}`,
+          input.documentId,
+          "info",
+        ),
+      ],
+      [{ kind: "unsupported-media", documentId: input.documentId, reason: "ocr-empty-text" }],
+    );
+  }
   const pageUnit: ParsedUnit = {
     kind: "page",
     documentId: input.documentId,
     pageNumber: pageNumberForInput(input),
     characterStart: 0,
-    characterEnd: ocrResult.text.length,
+    characterEnd: text.length,
   };
-  return emptyResult(cap, input.documentId, options, [], [pageUnit]);
+  return {
+    ...emptyResult(cap, input.documentId, options, [], [pageUnit]),
+    normalizedText: text,
+  };
 }
 
 function buildSyncParse(cap: ParserCapability) {
