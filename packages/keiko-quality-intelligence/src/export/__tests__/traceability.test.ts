@@ -292,22 +292,22 @@ describe("T1: embedded newline in title/excerpt renders as single physical line"
 // ---------------------------------------------------------------------------
 // T2 — backslash+pipe smuggling (CWE-20, mutation-blind in prior suite)
 // ---------------------------------------------------------------------------
-// mdCell must escape backslash BEFORE pipe. A value "a\|b" must render as
-// "a\\\|b" (escaped backslash + escaped pipe). If the order is swapped
+// mdCell must escape backslash BEFORE pipe. A value "a\|b" must render with
+// every backslash escaped before the pipe delimiter is escaped. If the order is swapped
 // (pipe-first) the backslash introduced for the pipe is itself consumed by the
 // subsequent backslash-escape, yielding "a\\\\|b" — an unescaped pipe.
 
 describe("T2: mdCell backslash-first ordering for backslash adjacent to pipe", () => {
-  it("atomId with backslash adjacent to pipe renders safe form a\\\\\\|b in Markdown", () => {
+  it("atomId with backslash adjacent to pipe renders a fully escaped safe form in Markdown", () => {
     // JS string "a\\|b" is the two-character sequence: a, \, |, b
     const out = adaptToTraceabilityMarkdown([row("a\\|b", ["tc-1"])]);
-    // Expected: escaped backslash (\\) then escaped pipe (\|) → "a\\\|b" in the output string
-    expect(out).toContain("a\\\\\\|b");
+    // Expected: all literal backslashes are escaped, then the pipe delimiter is escaped.
+    expect(out).toContain("a\\\\\\\\\\|b");
   });
 
   it("excerpt with backslash adjacent to pipe renders safe form in Markdown", () => {
     const r = row("atom-1", ["tc-1"], { requirementExcerptRedacted: "check\\|fail" });
     const out = adaptToTraceabilityMarkdown([r]);
-    expect(out).toContain("check\\\\\\|fail");
+    expect(out).toContain("check\\\\\\\\\\|fail");
   });
 });

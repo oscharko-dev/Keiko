@@ -41,6 +41,18 @@ const LINK_OPEN = /(?<!!)\[([^\]]*)\]\(/gu;
 const AUTOLINK = /<((?:https?|mailto):[^>\s]+)>/giu;
 const HTML_TAG = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?>/gu;
 
+function escapeHtmlTagMarkdownSyntax(tag: string): string {
+  let escaped = "";
+  for (const char of tag) {
+    if (char === "\\" || char === "<" || char === ">") {
+      escaped += `\\${char}`;
+    } else {
+      escaped += char;
+    }
+  }
+  return escaped;
+}
+
 /**
  * Escape active Markdown syntax that can still exist after a field has been folded to one line.
  * The literal text remains readable, but external Markdown viewers cannot turn it into links,
@@ -58,5 +70,5 @@ export function escapeMarkdownActiveSyntax(value: string): string {
     )
     .replace(LINK_OPEN, (_match: string, inner: string): string => `\\[${inner}\\](`)
     .replace(AUTOLINK, (_match: string, inner: string): string => `\\<${inner}\\>`)
-    .replace(HTML_TAG, (tag: string): string => tag.replace(/</gu, "\\<").replace(/>/gu, "\\>"));
+    .replace(HTML_TAG, escapeHtmlTagMarkdownSyntax);
 }
