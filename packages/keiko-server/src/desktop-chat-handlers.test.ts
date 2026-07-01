@@ -25,7 +25,7 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -151,6 +151,11 @@ function deps(
     configPresent: true,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
+    contextProfile: deriveContextProfile({
+      maxInputTokens: 1_000_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    }),
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => model,

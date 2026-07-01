@@ -58,6 +58,14 @@ function budgetPressureHistory(): ChatMessage[] {
   ];
 }
 
+function latestTurnOverflowHistory(): ChatMessage[] {
+  const huge = "x".repeat(80_000);
+  return [
+    msg("user", `earlier note ${NON_PATTERN_SECRET} ${huge}`, 0),
+    msg("user", `latest instruction ${huge}`, 1),
+  ];
+}
+
 function zeroBudgetProfile(): ContextProfile {
   return deriveContextProfile({
     maxInputTokens: 1,
@@ -113,6 +121,21 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
     expect(() =>
       conversationForGatewayWithCompaction(messages, {
         contextProfile: zeroBudgetProfile(),
+      }),
+    ).toThrow(ContextOverflowError);
+  });
+
+  it("fails closed when only dropping the newest turn would make the prompt fit", () => {
+    const messages = latestTurnOverflowHistory();
+    const tightProfile = deriveContextProfile({
+      maxInputTokens: 1_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    expect(() =>
+      conversationForGatewayWithCompaction(messages, {
+        contextProfile: tightProfile,
+        redactionSecrets: [NON_PATTERN_SECRET],
       }),
     ).toThrow(ContextOverflowError);
   });

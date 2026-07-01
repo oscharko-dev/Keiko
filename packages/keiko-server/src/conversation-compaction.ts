@@ -16,7 +16,6 @@
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   estimateTokens,
-  maxUtf8BytesForTokenBudget,
   stripUnsafeFormatChars,
   validateContextCompactionRecord,
   type ContextCompactionRecord,
@@ -119,29 +118,53 @@ function selectCompaction(
   if (remainingForSummary < 2) {
     return undefined;
   }
+  const tokenPrefix = buildTokenPrefix(prepared);
+  const maxDropCount = prepared.length - 1;
+  if (maxDropCount < 1) {
+    return undefined;
+  }
+  const initialDropCount =
+    prepared.length > MAX_CONTEXT_MESSAGES ? prepared.length - MAX_CONTEXT_MESSAGES : 1;
+  for (
+    let dropCount = Math.min(Math.max(1, initialDropCount), maxDropCount);
+    dropCount <= maxDropCount;
+    dropCount += 1
+  ) {
+    const selection = selectCompactionCandidate(
+      prepared,
+      tokenPrefix,
+      dropCount,
+      remainingForSummary,
+    );
+    if (selection !== undefined) {
+      return selection;
+    }
+  }
+  return undefined;
+}
+
+function buildTokenPrefix(prepared: readonly DroppedTurn[]): number[] {
   const tokenPrefix: number[] = [0];
   for (const turn of prepared) {
     const previousTotal = tokenPrefix[tokenPrefix.length - 1] ?? 0;
     tokenPrefix.push(previousTotal + turn.contentTokens);
   }
-  const initialDropCount =
-    prepared.length > MAX_CONTEXT_MESSAGES ? prepared.length - MAX_CONTEXT_MESSAGES : 1;
-  for (
-    let dropCount = Math.min(Math.max(1, initialDropCount), prepared.length);
-    dropCount <= prepared.length;
-    dropCount += 1
-  ) {
-    const retainedTokens = (tokenPrefix[prepared.length] ?? 0) - (tokenPrefix[dropCount] ?? 0);
-    const summaryBudget = remainingForSummary - retainedTokens;
-    if (summaryBudget < 2) {
-      continue;
-    }
-    const summaryContent = buildSummaryContent(prepared.slice(0, dropCount), summaryBudget);
-    if (estimateTokens(summaryContent) <= summaryBudget) {
-      return { dropCount, summaryContent };
-    }
+  return tokenPrefix;
+}
+
+function selectCompactionCandidate(
+  prepared: readonly DroppedTurn[],
+  tokenPrefix: readonly number[],
+  dropCount: number,
+  remainingForSummary: number,
+): { readonly dropCount: number; readonly summaryContent: string } | undefined {
+  const retainedTokens = (tokenPrefix[prepared.length] ?? 0) - (tokenPrefix[dropCount] ?? 0);
+  const summaryBudget = remainingForSummary - retainedTokens;
+  if (summaryBudget < 2) {
+    return undefined;
   }
-  return undefined;
+  const summaryContent = buildSummaryContent(prepared.slice(0, dropCount), summaryBudget);
+  return estimateTokens(summaryContent) <= summaryBudget ? { dropCount, summaryContent } : undefined;
 }
 
 function prepareDroppedTurns(
@@ -204,15 +227,20 @@ function buildSummaryContent(dropped: readonly DroppedTurn[], summaryTokenBudget
   }
   let summary = lines.join("\n");
   if (estimateTokens(summary) > summaryTokenBudget) {
-    const byteLimit = maxUtf8BytesForTokenBudget(summaryTokenBudget);
-    if (byteLimit === 0) {
-      return "";
-    }
-    summary = new TextDecoder("utf-8", { fatal: false })
-      .decode(new TextEncoder().encode(summary).slice(0, byteLimit))
-      .trimEnd();
+    summary = trimSummaryToTokenBudget(summary, summaryTokenBudget);
   }
   return summary;
+}
+
+function trimSummaryToTokenBudget(summary: string, summaryTokenBudget: number): string {
+  if (summaryTokenBudget <= 2) {
+    return "";
+  }
+  let trimmed = summary;
+  while (trimmed.length > 0 && estimateTokens(trimmed) > summaryTokenBudget) {
+    trimmed = trimmed.slice(0, -1).trimEnd();
+  }
+  return trimmed;
 }
 
 function sourceSpansFor(dropped: readonly DroppedTurn[]): ContextProvenanceRef[] {
