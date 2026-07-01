@@ -49,6 +49,7 @@ vi.mock("next/navigation", () => ({
 
 afterEach(() => {
   mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
+  vi.unstubAllGlobals();
 });
 
 // ---------------------------------------------------------------------------
@@ -338,6 +339,43 @@ describe("CapsuleDetail — sources section", () => {
     await waitFor(() => {
       expect(screen.getByText("No sources attached to this capsule.")).toBeInTheDocument();
     });
+  });
+
+  it("submits a source root rebind and reloads capsule detail", async () => {
+    const user = userEvent.setup();
+    const reloaded: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      capsule: { ...FULL_DETAIL.capsule, lifecycleState: "stale" },
+      sources: [
+        {
+          ...FULL_DETAIL.sources[0]!,
+          scope: { kind: "folder", rootPath: "/tmp/project-docs-new", recursive: true },
+        },
+      ],
+    };
+    const fetchDetail = vi.fn().mockResolvedValueOnce(FULL_DETAIL).mockResolvedValueOnce(reloaded);
+    const fetchMock = vi.fn(() => Promise.resolve(new Response(JSON.stringify(reloaded))));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CapsuleDetail fetchDetailImpl={fetchDetail} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Project Docs")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Rebind" }));
+    const input = screen.getByLabelText("Replacement folder root");
+    await user.clear(input);
+    await user.type(input, "/tmp/project-docs-new");
+    await user.click(screen.getByRole("button", { name: "Save root" }));
+
+    await waitFor(() => expect(fetchDetail).toHaveBeenCalledTimes(2));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap-test-1/sources/src-1/root",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ rootPath: "/tmp/project-docs-new" }),
+      }),
+    );
   });
 });
 
