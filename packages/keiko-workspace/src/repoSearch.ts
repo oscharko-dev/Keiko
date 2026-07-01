@@ -48,6 +48,17 @@ import {
   type SearchHints,
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
+import {
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
+  prepareWorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
+  type PreparedWorkspaceIndexEntry,
+  type WorkspaceIndex,
+  type WorkspaceIndexDiscoverySnapshot,
+  type WorkspaceIndexDiscoveredFile,
+  type WorkspaceIndexRecord,
+} from "./workspaceIndex.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -108,6 +119,7 @@ interface FacadeDeps {
   readonly nowMs?: () => number;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
+  readonly workspaceIndex?: WorkspaceIndex | undefined;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -318,6 +330,137 @@ function buildSearchTextRunner(
   };
 }
 
+interface SearchWorkspaceIndexSession {
+  readonly candidateSet: CandidateSet;
+  readonly preparedEntries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>;
+  readonly recordByPath: Map<string, WorkspaceIndexRecord>;
+  readonly discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>;
+  readonly persist: () => Promise<void>;
+}
+
+function discoveredFileSnapshot(
+  scopePath: string,
+  sizeBytes: number,
+  mtimeMs: number | undefined,
+): WorkspaceIndexDiscoveredFile {
+  return {
+    scopePath,
+    sizeBytes,
+    ...(mtimeMs !== undefined ? { mtimeMs: Math.trunc(mtimeMs) } : {}),
+  };
+}
+
+function candidateSetDiscoverySnapshot(
+  candidateSet: CandidateSet,
+  discoveryFiles: readonly WorkspaceIndexDiscoveredFile[],
+): WorkspaceIndexDiscoverySnapshot {
+  return {
+    files: discoveryFiles,
+    filesDiscovered: candidateSet.diagnostics.filesDiscovered,
+    ignoredByDiscovery: candidateSet.diagnostics.ignoredByDiscovery,
+    deniedByDiscovery: candidateSet.diagnostics.deniedByDiscovery,
+    depthPrunedByDiscovery: candidateSet.diagnostics.depthPrunedByDiscovery,
+    truncated: candidateSet.truncated,
+  };
+}
+
+function workspaceIndexPolicyShape(runner: SearchTextRunner): {
+  readonly policyMode: SearchTextRunner["policy"]["mode"];
+  readonly applyGitignore: boolean;
+  readonly omitLowValueWorkspaceFiles: boolean;
+} {
+  return {
+    policyMode: runner.policy.mode,
+    applyGitignore: runner.policy.applyGitignore,
+    omitLowValueWorkspaceFiles: runner.policy.omitLowValueWorkspaceFiles,
+  };
+}
+
+function workspaceIndexScopeKey(
+  scope: SearchScope,
+  runner: SearchTextRunner,
+): ReturnType<typeof buildWorkspaceIndexScopeKey> {
+  return buildWorkspaceIndexScopeKey(
+    scope,
+    workspaceIndexPolicyShape(runner),
+    runner.limits.maxBytesPerFileScanned,
+  );
+}
+
+function seedWorkspaceIndexCaches(
+  prepared: ReturnType<typeof prepareWorkspaceIndexSnapshot> | undefined,
+  candidateSet: CandidateSet,
+): Pick<
+  SearchWorkspaceIndexSession,
+  "preparedEntries" | "recordByPath" | "discoveryByPath"
+> {
+  const preparedEntries = new Map<string, PreparedWorkspaceIndexEntry>();
+  const recordByPath = new Map<string, WorkspaceIndexRecord>();
+  const discoveryByPath = new Map<string, WorkspaceIndexDiscoveredFile>();
+  if (prepared === undefined) {
+    for (const file of candidateSet.files) {
+      discoveryByPath.set(
+        file.relativePath,
+        discoveredFileSnapshot(file.relativePath, file.sizeBytes, undefined),
+      );
+    }
+    return { preparedEntries, recordByPath, discoveryByPath };
+  }
+  for (const entry of prepared.entries) {
+    preparedEntries.set(entry.scopePath, entry);
+    discoveryByPath.set(
+      entry.scopePath,
+      discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs),
+    );
+    if (entry.record !== undefined) {
+      recordByPath.set(entry.scopePath, entry.record);
+    }
+  }
+  return { preparedEntries, recordByPath, discoveryByPath };
+}
+
+function persistWorkspaceIndexSession(
+  workspaceIndex: WorkspaceIndex,
+  scope: SearchScope,
+  runner: SearchTextRunner,
+  session: Omit<SearchWorkspaceIndexSession, "persist">,
+): () => Promise<void> {
+  const scopeKey = workspaceIndexScopeKey(scope, runner);
+  return async (): Promise<void> => {
+    await workspaceIndex.saveSnapshot(
+      scopeKey,
+      buildWorkspaceIndexSnapshot({
+        scope,
+        policy: workspaceIndexPolicyShape(runner),
+        maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
+        discovery: candidateSetDiscoverySnapshot(session.candidateSet, [...session.discoveryByPath.values()]),
+        records: session.recordByPath.values(),
+      }),
+    );
+  };
+}
+
+async function buildSearchWorkspaceIndexSession(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  workspaceIndex: WorkspaceIndex,
+): Promise<SearchWorkspaceIndexSession> {
+  const snapshot = await workspaceIndex.loadSnapshot(workspaceIndexScopeKey(scope, runner));
+  const prepared =
+    snapshot === undefined ? undefined : prepareWorkspaceIndexSnapshot(snapshot, scope.workspace, runner.fs);
+  const candidateSet =
+    prepared === undefined
+      ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
+      : workspaceIndexCandidateSet(prepared, query, runner.policy);
+  const session: Omit<SearchWorkspaceIndexSession, "persist"> = {
+    candidateSet,
+    ...seedWorkspaceIndexCaches(prepared, candidateSet),
+  };
+  return { ...session, persist: persistWorkspaceIndexSession(workspaceIndex, scope, runner, session) };
+}
+
 async function runScanLoop(
   runner: SearchTextRunner,
   candidateSet: CandidateSet,
@@ -377,43 +520,82 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
   };
 }
 
-export async function searchText(
-  scope: SearchScope,
-  query: RetrievalQuery,
-  limits: SearchLimits = DEFAULT_SEARCH_LIMITS,
-  deps: FacadeDeps = {},
-): Promise<SearchResult> {
-  assertWorkspaceRoot(scope.workspace);
-  assertQuery(query);
-  if (query.kind === "file-pattern") {
-    throw new RepoSearchInvalidQueryError("searchText does not accept file-pattern queries");
-  }
-  const fs = deps.fs ?? nodeWorkspaceFs;
-  const nowMs = deps.nowMs ?? Date.now;
-  const runner = buildSearchTextRunner(scope, query, limits, {
-    fs,
-    nowMs,
+function buildSearchTextDeps(
+  deps: FacadeDeps,
+): Required<Pick<FacadeDeps, "fs" | "nowMs">> & Pick<FacadeDeps, "searchHints" | "signal"> {
+  return {
+    fs: deps.fs ?? nodeWorkspaceFs,
+    nowMs: deps.nowMs ?? Date.now,
     ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-  });
-  if (isAborted(deps.signal)) {
-    return abortedSearchResult(elapsed(runner), limits);
+  };
+}
+
+function searchTextRunner(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  deps: FacadeDeps,
+): SearchTextRunner {
+  return buildSearchTextRunner(scope, query, limits, buildSearchTextDeps(deps));
+}
+
+function candidateSetForSearch(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  runner: SearchTextRunner,
+  session: SearchWorkspaceIndexSession | undefined,
+): CandidateSet {
+  return session?.candidateSet ?? gatherCandidates(scope, query, limits, runner.fs, runner.policy);
+}
+
+function indexedSearchRunner(
+  runner: SearchTextRunner,
+  session: SearchWorkspaceIndexSession | undefined,
+): SearchTextRunner {
+  if (session === undefined) {
+    return runner;
   }
-  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, runner.policy);
-  if (isAborted(deps.signal)) {
-    return abortedSearchResult(elapsed(runner), limits, candidateSet.diagnostics, candidateSet.truncated);
-  }
-  const atoms: EvidenceAtom[] = [];
-  const candidates: CandidateFile[] = [];
+  return {
+    ...runner,
+    workspaceIndex: {
+      entries: session.preparedEntries,
+      onRecord: (record: WorkspaceIndexRecord): void => {
+        session.recordByPath.set(record.scopePath, record);
+        session.discoveryByPath.set(
+          record.scopePath,
+          discoveredFileSnapshot(record.scopePath, record.sizeBytes, record.mtimeMs),
+        );
+      },
+    },
+  };
+}
+
+function searchRunState(candidateSet: CandidateSet): {
+  readonly state: RunState;
+  readonly truncationReasons: Set<ContextCoverageTruncationReason>;
+} {
   const truncationReasons = new Set<ContextCoverageTruncationReason>();
-  // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
-  const state: RunState = {
-    filesScanned: 0,
-    matchesReturned: 0,
-    truncated: candidateSet.truncated,
+  return {
+    state: {
+      filesScanned: 0,
+      matchesReturned: 0,
+      truncated: candidateSet.truncated,
+      truncationReasons,
+    },
     truncationReasons,
   };
-  await runScanLoop(runner, candidateSet, state, atoms, candidates);
+}
+
+function completedSearchTextResult(
+  runner: SearchTextRunner,
+  candidateSet: CandidateSet,
+  state: RunState,
+  atoms: readonly EvidenceAtom[],
+  candidates: readonly CandidateFile[],
+  truncationReasons: ReadonlySet<ContextCoverageTruncationReason>,
+): SearchResult {
   return completedSearchResult({
     atoms,
     candidates,
@@ -426,6 +608,58 @@ export async function searchText(
     candidateTruncated: candidateSet.truncated,
     truncationReasons,
   });
+}
+
+async function persistSearchTextSession(
+  session: SearchWorkspaceIndexSession | undefined,
+): Promise<void> {
+  if (session !== undefined) {
+    await session.persist();
+  }
+}
+
+export async function searchText(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits = DEFAULT_SEARCH_LIMITS,
+  deps: FacadeDeps = {},
+): Promise<SearchResult> {
+  assertWorkspaceRoot(scope.workspace);
+  assertQuery(query);
+  if (query.kind === "file-pattern") {
+    throw new RepoSearchInvalidQueryError("searchText does not accept file-pattern queries");
+  }
+  const runner = searchTextRunner(scope, query, limits, deps);
+  if (isAborted(deps.signal)) {
+    return abortedSearchResult(elapsed(runner), limits);
+  }
+  const workspaceIndexSession =
+    deps.workspaceIndex === undefined
+      ? undefined
+      : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
+  const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
+  const candidateSet = candidateSetForSearch(scope, query, limits, runner, workspaceIndexSession);
+  if (isAborted(deps.signal)) {
+    return abortedSearchResult(
+      elapsed(searchRunner),
+      limits,
+      candidateSet.diagnostics,
+      candidateSet.truncated,
+    );
+  }
+  const atoms: EvidenceAtom[] = [];
+  const candidates: CandidateFile[] = [];
+  const { state, truncationReasons } = searchRunState(candidateSet);
+  await runScanLoop(searchRunner, candidateSet, state, atoms, candidates);
+  await persistSearchTextSession(workspaceIndexSession);
+  return completedSearchTextResult(
+    searchRunner,
+    candidateSet,
+    state,
+    atoms,
+    candidates,
+    truncationReasons,
+  );
 }
 
 interface FindFilesContext {

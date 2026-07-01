@@ -37,6 +37,10 @@ import {
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import type {
+  PreparedWorkspaceIndexEntry,
+  WorkspaceIndexRecord,
+} from "./workspaceIndex.js";
 
 const BINARY_PROBE_BYTES = 512;
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -294,6 +298,12 @@ export interface SearchTextRunner {
   readonly fingerprint: string;
   readonly policy: SearchPolicy;
   readonly query: RetrievalQuery;
+  readonly workspaceIndex?:
+    | {
+        readonly entries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>;
+        readonly onRecord: (record: WorkspaceIndexRecord) => void;
+      }
+    | undefined;
 }
 
 export interface RunState {
@@ -362,27 +372,100 @@ export function isIoError(err: unknown): boolean {
   return typeof code === "string";
 }
 
+function currentRecordMetadata(
+  runner: SearchTextRunner,
+  scopePath: string,
+  absolutePath: string,
+  fallbackSizeBytes: number,
+): WorkspaceIndexRecord {
+  const stat = safeStat(runner, absolutePath);
+  return {
+    scopePath,
+    sizeBytes: stat?.size ?? fallbackSizeBytes,
+    ...(stat?.mtimeMs !== undefined ? { mtimeMs: Math.trunc(stat.mtimeMs) } : {}),
+    kind: "binary",
+  };
+}
+
+function safeStat(runner: SearchTextRunner, absolutePath: string): ReturnType<WorkspaceFs["stat"]> | undefined {
+  try {
+    return runner.fs.stat(absolutePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function cachedRecord(
+  runner: SearchTextRunner,
+  relativePath: string,
+): WorkspaceIndexRecord | undefined {
+  const entry = runner.workspaceIndex?.entries.get(relativePath);
+  return entry?.stale === false ? entry.record : undefined;
+}
+
+function recordCandidateOmission(
+  candidates: CandidateFile[],
+  relativePath: string,
+  omitted: CandidateOmissionReason,
+): void {
+  candidates.push(buildCandidate(relativePath, omitted));
+}
+
+function persistWorkspaceIndexRecord(
+  runner: SearchTextRunner,
+  record:
+    | { readonly kind: "binary" | "size-exceeded"; readonly scopePath: string; readonly absolutePath: string; readonly sizeBytes: number }
+    | { readonly kind: "text"; readonly scopePath: string; readonly absolutePath: string; readonly sizeBytes: number; readonly content: string },
+): void {
+  const metadata = currentRecordMetadata(runner, record.scopePath, record.absolutePath, record.sizeBytes);
+  if (record.kind === "text") {
+    runner.workspaceIndex?.onRecord({ ...metadata, kind: "text", content: record.content });
+    return;
+  }
+  runner.workspaceIndex?.onRecord({ ...metadata, kind: record.kind });
+}
+
 function readForScan(
   runner: SearchTextRunner,
   relativePath: string,
+  absolutePath: string | undefined,
+  sizeBytes: number,
   candidates: CandidateFile[],
 ): string | undefined {
   try {
-    return readWorkspaceFile(
+    const text = readWorkspaceFile(
       runner.scope.workspace,
       relativePath,
       { maxBytes: runner.limits.maxBytesPerFileScanned },
       runner.fs,
     ).text;
+    if (absolutePath !== undefined) {
+      persistWorkspaceIndexRecord(runner, {
+        kind: "text",
+        scopePath: relativePath,
+        absolutePath,
+        sizeBytes,
+        content: text,
+      });
+    }
+    return text;
   } catch (err) {
     if (err instanceof FileTooLargeError) {
-      candidates.push(buildCandidate(relativePath, "size-exceeded"));
+      if (absolutePath !== undefined) {
+        persistWorkspaceIndexRecord(runner, {
+          kind: "size-exceeded",
+          scopePath: relativePath,
+          absolutePath,
+          sizeBytes,
+        });
+      }
+      recordCandidateOmission(candidates, relativePath, "size-exceeded");
       return undefined;
     }
     // TOCTOU: permissions or availability may change between discovery and read.
     // A single unreadable file must degrade to a skip, not crash the whole scan.
     if (isIoError(err)) {
-      candidates.push(buildCandidate(relativePath, "tool-unavailable"));
+      recordCandidateOmission(candidates, relativePath, "tool-unavailable");
       return undefined;
     }
     throw err;
@@ -426,6 +509,14 @@ function scanLines(
   emitBestLines(runner, relativePath, state, atoms, collectBestLines(runner, text, state));
 }
 
+function abortScanFile(runner: SearchTextRunner, state: RunState): boolean {
+  if (!isRunnerAborted(runner)) {
+    return false;
+  }
+  markTruncated(state, "aborted");
+  return true;
+}
+
 function filePolicyOmission(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -461,6 +552,78 @@ async function binaryOmission(
   }
 }
 
+function scanCachedText(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  atoms: EvidenceAtom[],
+  cached: WorkspaceIndexRecord,
+): boolean {
+  if (cached.kind === "binary" || cached.kind === "size-exceeded") {
+    return false;
+  }
+  if (abortScanFile(runner, state)) {
+    return true;
+  }
+  state.filesScanned += 1;
+  const cachedContent = cached.content ?? "";
+  if (!shouldScoreContent(runner.query, cachedContent, runner.policy)) {
+    return true;
+  }
+  scanLines(runner, file.relativePath, cachedContent, state, atoms);
+  return true;
+}
+
+function handleCachedRecord(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  atoms: EvidenceAtom[],
+  candidates: CandidateFile[],
+): boolean {
+  const cached = cachedRecord(runner, file.relativePath);
+  if (cached === undefined) {
+    return false;
+  }
+  if (cached.kind === "binary" || cached.kind === "size-exceeded") {
+    recordCandidateOmission(candidates, file.relativePath, cached.kind);
+    return true;
+  }
+  return scanCachedText(runner, file, state, atoms, cached);
+}
+
+async function handleLiveRecord(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  atoms: EvidenceAtom[],
+  candidates: CandidateFile[],
+  absolutePath: string | undefined,
+): Promise<void> {
+  const binary = absolutePath === undefined ? "binary" : await binaryOmission(runner, file, absolutePath);
+  if (binary !== undefined) {
+    if (binary === "binary" && absolutePath !== undefined) {
+      persistWorkspaceIndexRecord(runner, {
+        kind: "binary",
+        scopePath: file.relativePath,
+        absolutePath,
+        sizeBytes: file.sizeBytes,
+      });
+    }
+    recordCandidateOmission(candidates, file.relativePath, binary);
+    return;
+  }
+  if (abortScanFile(runner, state)) {
+    return;
+  }
+  state.filesScanned += 1;
+  const text = readForScan(runner, file.relativePath, absolutePath, file.sizeBytes, candidates);
+  if (text === undefined || !shouldScoreContent(runner.query, text, runner.policy)) {
+    return;
+  }
+  scanLines(runner, file.relativePath, text, state, atoms);
+}
+
 export async function scanFile(
   runner: SearchTextRunner,
   file: DiscoveredFile,
@@ -468,29 +631,16 @@ export async function scanFile(
   atoms: EvidenceAtom[],
   candidates: CandidateFile[],
 ): Promise<void> {
-  if (isRunnerAborted(runner)) {
-    markTruncated(state, "aborted");
+  if (abortScanFile(runner, state)) {
     return;
   }
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
-    candidates.push(buildCandidate(file.relativePath, policy.omitted));
+    recordCandidateOmission(candidates, file.relativePath, policy.omitted);
     return;
   }
-  const binary =
-    policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
-  if (binary !== undefined) {
-    candidates.push(buildCandidate(file.relativePath, binary));
+  if (handleCachedRecord(runner, file, state, atoms, candidates)) {
     return;
   }
-  if (isRunnerAborted(runner)) {
-    markTruncated(state, "aborted");
-    return;
-  }
-  state.filesScanned += 1;
-  const text = readForScan(runner, file.relativePath, candidates);
-  if (text === undefined || !shouldScoreContent(runner.query, text, runner.policy)) {
-    return;
-  }
-  scanLines(runner, file.relativePath, text, state, atoms);
+  await handleLiveRecord(runner, file, state, atoms, candidates, policy.path);
 }
