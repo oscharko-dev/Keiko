@@ -15,6 +15,7 @@ import {
   fetchModels,
   fetchProjects,
   patchChatMessage,
+  regenerateDesktopChat,
   sendDesktopChat,
   sendDesktopChatStream,
   startGroundedWorkflowHandoff,
@@ -315,6 +316,7 @@ export interface UseChatSessionResult {
   // keiko-issue66). UI surfaces use this to render the right wait message and
   // to gate cancellation.
   sendStatus: SendStatus;
+  regeneratingMessageId: string | undefined;
   error: string | undefined;
   clearError?: (() => void) | undefined;
   setDraft: (value: string) => void;
@@ -326,6 +328,7 @@ export interface UseChatSessionResult {
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
   sendMessage: () => Promise<void>;
+  regenerateMessage: (assistantMessageId: string) => Promise<void>;
   // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
   // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
   // preserves the user message so the user can retry without retyping.
@@ -560,6 +563,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const [loading, setLoading] = useState(true);
   // Issue #152 — lifecycle is the source of truth; `sending` is derived.
   const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
+  const [regeneratingMessageId, setRegeneratingMessageId] = useState<string | undefined>();
   const sending = isInFlight(sendStatus);
   // Mirror sendStatus in a ref so concurrent sendMessage calls observe the
   // current value synchronously without waiting for the next render — this is
@@ -1426,6 +1430,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     if (!isInFlight(sendStatusRef.current)) return;
     sendControllerRef.current?.abort();
     sendControllerRef.current = null;
+    setRegeneratingMessageId(undefined);
     updateSendStatus("cancelled");
   }, [updateSendStatus]);
 
@@ -1557,6 +1562,76 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     clearPendingAttachments,
     updateSendStatus,
   ]);
+
+  const regenerateMessage = useCallback(
+    async (assistantMessageId: string): Promise<void> => {
+      if (isInFlight(sendStatusRef.current)) return;
+      const chat = state.activeChat;
+      const project = state.activeProject;
+      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      if (chat === undefined || project === undefined || modelId === undefined) return;
+      updateSendStatus("queued");
+      setRegeneratingMessageId(assistantMessageId);
+      setError(undefined);
+      setLatestGrounded(undefined);
+      setLatestMemory(undefined);
+      const controller = new AbortController();
+      sendControllerRef.current = controller;
+      try {
+        updateSendStatus("contacting");
+        const result = await regenerateDesktopChat(
+          {
+            chatId: chat.id,
+            projectPath: project.path,
+            assistantMessageId,
+            modelId,
+            memory: buildMemoryRequest(chat, project),
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) {
+          updateSendStatus("cancelled");
+          return;
+        }
+        const replacement = result.messages.find((message) => message.id === assistantMessageId);
+        setState((previous) => ({
+          ...previous,
+          activeChat: result.chat,
+          chats: sortChats([
+            result.chat,
+            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
+          ]),
+          messages:
+            replacement === undefined
+              ? previous.messages
+              : previous.messages.map((message) =>
+                  message.id === assistantMessageId ? replacement : message,
+                ),
+        }));
+        notifyChatUpsert(result.chat);
+        setLatestMemory(result.memory);
+        updateSendStatus("completed");
+      } catch (caught) {
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          updateSendStatus("cancelled");
+          return;
+        }
+        setError(errorMessage(caught));
+        updateSendStatus("failed");
+      } finally {
+        sendControllerRef.current = null;
+        setRegeneratingMessageId(undefined);
+      }
+    },
+    [
+      state.activeChat,
+      state.activeProject,
+      state.selectedModel,
+      state.models,
+      buildMemoryRequest,
+      updateSendStatus,
+    ],
+  );
 
   // Issue #151 / AC#4 — clear the in-memory history for the next prompt
   // without deleting the conversation row. The chat row stays in `chats`;
@@ -1780,6 +1855,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     loading,
     sending,
     sendStatus,
+    regeneratingMessageId,
     error,
     clearError,
     setDraft,
@@ -1789,6 +1865,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     openChat,
     addProject,
     sendMessage,
+    regenerateMessage,
     cancelSend,
     replaceChat,
     latestGrounded,

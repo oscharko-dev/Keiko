@@ -621,6 +621,25 @@ export async function sendDesktopChat(
   });
 }
 
+export interface RegenerateDesktopChatInput {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly assistantMessageId: string;
+  readonly modelId?: string;
+  readonly memory?: ConversationMemoryRequestWire;
+}
+
+export async function regenerateDesktopChat(
+  input: RegenerateDesktopChatInput,
+  signal?: AbortSignal,
+): Promise<DesktopChatSendResponse> {
+  return fetchJson("/api/desktop/chat/regenerate", {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal: signal ?? null,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Desktop chat SSE streaming — Issue #152 Layer 3
 // ---------------------------------------------------------------------------

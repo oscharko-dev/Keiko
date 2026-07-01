@@ -323,6 +323,14 @@ export interface SendDesktopChatRequest {
   readonly memory: ParsedConversationMemoryRequest | undefined;
 }
 
+interface RegenerateDesktopChatRequest {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly assistantMessageId: string;
+  readonly modelId: string | undefined;
+  readonly memory: ParsedConversationMemoryRequest | undefined;
+}
+
 interface ParsedConversationMemoryRequest {
   readonly enabled: boolean;
   readonly budgetTokens?: number;
@@ -553,6 +561,30 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     modelId: typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined,
     documentContext: parseDocumentContext(body.documentContext),
     attachments: parseAttachments(body.attachments),
+    memory,
+  };
+}
+
+function regenerateRequestFromBody(
+  body: Record<string, unknown>,
+): RegenerateDesktopChatRequest | RouteResult {
+  const chatId = typeof body.chatId === "string" ? body.chatId : "";
+  const projectPath = typeof body.projectPath === "string" ? body.projectPath : "";
+  const assistantMessageId =
+    typeof body.assistantMessageId === "string" ? body.assistantMessageId : "";
+  if (chatId.length === 0 || projectPath.length === 0 || assistantMessageId.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "chatId, projectPath, and assistantMessageId are required."),
+    };
+  }
+  const memory = parseMemoryRequest(body.memory);
+  if (isRouteResult(memory)) return memory;
+  return {
+    chatId,
+    projectPath,
+    assistantMessageId,
+    modelId: typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined,
     memory,
   };
 }
@@ -918,6 +950,106 @@ export function buildGatewayMessages(
   return applyDocumentContextToLatestUserTurn(history, request, memoryText);
 }
 
+function buildRegenerateGatewayMessages(
+  historyBeforeAssistant: readonly ChatMessage[],
+  memoryText: string,
+): GatewayConversationMessage[] {
+  const history = conversationForGateway(historyBeforeAssistant);
+  if (memoryText.length === 0) return history;
+  const latestUser = [...historyBeforeAssistant]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (latestUser === undefined) return history;
+  return applyDocumentContextToLatestUserTurn(
+    history,
+    {
+      chatId: latestUser.chatId,
+      projectPath: "",
+      content: latestUser.content,
+      modelId: undefined,
+      documentContext: [],
+      attachments: [],
+      memory: undefined,
+    },
+    memoryText,
+  );
+}
+
+function abortOnDisconnect(ctx: RouteContext): AbortController {
+  const controller = new AbortController();
+  ctx.res.on("close", () => {
+    controller.abort();
+  });
+  return controller;
+}
+
+function latestRegenerableTurn(
+  messages: readonly ChatMessage[],
+  assistantMessageId: string,
+):
+  | {
+      readonly assistant: ChatMessage;
+      readonly user: ChatMessage;
+      readonly beforeAssistant: readonly ChatMessage[];
+    }
+  | RouteResult {
+  const targetIndex = messages.findIndex((message) => message.id === assistantMessageId);
+  const assistant = messages[targetIndex];
+  if (assistant?.role !== "assistant") {
+    return { status: 404, body: errorBody("NOT_FOUND", "Assistant message not found.") };
+  }
+  const conversational = messages.filter(
+    (message) => message.role === "user" || message.role === "assistant",
+  );
+  if (conversational.at(-1)?.id !== assistant.id) {
+    return {
+      status: 409,
+      body: errorBody("NOT_APPLIABLE", "Only the latest assistant response can be regenerated."),
+    };
+  }
+  const previousUser = [...messages.slice(0, targetIndex)]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (previousUser === undefined) {
+    return {
+      status: 409,
+      body: errorBody("NOT_APPLIABLE", "Assistant response has no user turn to regenerate."),
+    };
+  }
+  return { assistant, user: previousUser, beforeAssistant: messages.slice(0, targetIndex) };
+}
+
+function hasGroundingScope(chat: Chat): boolean {
+  return (
+    chat.connectedScope !== undefined ||
+    (chat.connectedScopes?.length ?? 0) > 0 ||
+    chat.localKnowledgeScope !== undefined ||
+    (chat.localKnowledgeScopes?.length ?? 0) > 0
+  );
+}
+
+function groundedRegenerateResult(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody("NOT_APPLIABLE", "Grounded answers cannot be regenerated from plain chat."),
+  };
+}
+
+function regenerateMemoryRequest(
+  request: RegenerateDesktopChatRequest,
+  turn: { readonly user: ChatMessage },
+): SendDesktopChatRequest {
+  return {
+    chatId: request.chatId,
+    projectPath: request.projectPath,
+    content: turn.user.content,
+    modelId: request.modelId,
+    documentContext: [],
+    attachments: [],
+    memory: request.memory,
+  };
+}
+
 async function persistModelChatTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -1040,6 +1172,19 @@ export interface PreparedDesktopChatSend {
   readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
 }
 
+interface PreparedDesktopChatRegenerate {
+  readonly request: RegenerateDesktopChatRequest;
+  readonly chat: Chat;
+  readonly modelId: string;
+  readonly turn: {
+    readonly assistant: ChatMessage;
+    readonly user: ChatMessage;
+    readonly beforeAssistant: readonly ChatMessage[];
+  };
+  readonly memoryRequest: SendDesktopChatRequest;
+  readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
+}
+
 export async function prepareDesktopChatSend(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1083,4 +1228,83 @@ export async function handleSendDesktopChat(
   if (isRouteResult(prepared)) return prepared;
   const { request, chat, modelId, memoryContext } = prepared;
   return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
+}
+
+async function prepareDesktopChatRegenerate(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<PreparedDesktopChatRegenerate | RouteResult> {
+  const body = await readJsonObject(ctx.req);
+  if (isRouteResult(body)) return body;
+  const request = regenerateRequestFromBody(body);
+  if (isRouteResult(request)) return request;
+  const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
+  if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
+  const chat = findChat(deps, normalizedProjectPath, request.chatId);
+  if (chat === undefined) return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
+  if (hasGroundingScope(chat)) return groundedRegenerateResult();
+  const modelId = request.modelId ?? chat.selectedModel;
+  const invalidModel = invalidChatModelResult(modelId, deps);
+  if (invalidModel !== undefined) return invalidModel;
+  const turn = latestRegenerableTurn(deps.store.listMessages(chat.id), request.assistantMessageId);
+  if (isRouteResult(turn)) return turn;
+  const memoryRequest = regenerateMemoryRequest(request, turn);
+  const memoryContext = resolveDesktopMemoryContext(deps, memoryRequest, normalizedProjectPath);
+  if (isRouteResult(memoryContext)) return memoryContext;
+  return { request, chat, modelId, turn, memoryRequest, memoryContext };
+}
+
+async function persistRegeneratedChatTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: PreparedDesktopChatRegenerate,
+): Promise<RouteResult> {
+  const { request, chat, modelId, turn, memoryRequest, memoryContext } = prepared;
+  const model = deps.modelPortFactory(modelId);
+  if (model === undefined) {
+    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+  }
+  const controller = abortOnDisconnect(ctx);
+  try {
+    const memory =
+      memoryContext === undefined
+        ? emptyMemoryResult(false)
+        : await buildMemoryResult(memoryRequest, deps, memoryContext);
+    const messages = buildRegenerateGatewayMessages(turn.beforeAssistant, memory.context.text);
+    const response = await model.call({ modelId, messages, stream: false }, controller.signal);
+    if (controller.signal.aborted) {
+      return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+    }
+    const redactedContent = deps.redactor(response.content) as string;
+    assertUsableAssistantContent(redactedContent, modelId);
+    const assistantMessage = deps.store.replaceAssistantMessageContent(
+      turn.assistant.id,
+      redactedContent,
+      Date.now(),
+    );
+    const updatedChat = deps.store.updateChat(
+      request.chatId,
+      buildChatPatch(chat, memoryRequest, modelId),
+    );
+    return {
+      status: 200,
+      body: {
+        chat: updatedChat,
+        messages: [assistantMessage],
+        usage: response.usage,
+        memory: { ...memory, actions: [] },
+      },
+    };
+  } catch (error) {
+    return desktopChatErrorResult(error, deps);
+  }
+}
+
+export async function handleRegenerateDesktopChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const prepared = await prepareDesktopChatRegenerate(ctx, deps);
+  if (isRouteResult(prepared)) return prepared;
+  return persistRegeneratedChatTurn(ctx, deps, prepared);
 }

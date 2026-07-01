@@ -20,7 +20,15 @@
 // and a hook-level test pins the API-shape contract (#153 launch action) at the
 // bottom of the file using renderHook + mocked @/lib/api.
 
-import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -202,6 +210,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -210,6 +219,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -438,7 +448,9 @@ describe("WorkflowHandoff — dialog edge cases and grounded input matrix", () =
     const launch = vi
       .fn()
       .mockResolvedValue({ ok: false as const, reason: "request-failed", message: "gateway down" });
-    render(<LaunchWorkflowButton selectedModel={workflowEligibleModel("wf-model")} launch={launch} />);
+    render(
+      <LaunchWorkflowButton selectedModel={workflowEligibleModel("wf-model")} launch={launch} />,
+    );
 
     await user.click(screen.getByRole("button", { name: /launch workflow/i }));
     const dialog = await screen.findByRole("dialog", { name: /launch workflow/i });
@@ -489,7 +501,9 @@ describe("WorkflowHandoff — dialog edge cases and grounded input matrix", () =
       "src/a.ts\nsrc/b.ts",
     );
     await user.type(
-      within(dialog).getByLabelText(/editable paths \(explicit, workspace-relative, one per line\)/i),
+      within(dialog).getByLabelText(
+        /editable paths \(explicit, workspace-relative, one per line\)/i,
+      ),
       "tests/a.test.ts\ntests/b.test.ts",
     );
     await user.type(within(dialog).getByLabelText(/unknowns/i), "Confirm exported API");

@@ -64,6 +64,12 @@ const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER B
 const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
 const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 1`;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
+const SQL_REPLACE_ASSISTANT_CONTENT = `
+  UPDATE chat_messages
+  SET content = ?, timestamp = ?
+  WHERE id = ? AND role = 'assistant'
+  RETURNING ${COLUMNS}
+`;
 const SQL_INSERT = `
 INSERT INTO chat_messages
   (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type)
@@ -208,6 +214,20 @@ export function updateMessage(
     RETURNING ${COLUMNS}
   `;
   const row = db.prepare(sql).get(...args, id) as unknown as MessageRow | undefined;
+  if (row === undefined) throw notFound("Message");
+  return rowToMessage(row);
+}
+
+export function replaceAssistantMessageContent(
+  db: DatabaseSync,
+  id: string,
+  content: string,
+  timestamp: number,
+): ChatMessage {
+  if (content.length === 0) throw invalidRequest("Content is required.");
+  const row = db.prepare(SQL_REPLACE_ASSISTANT_CONTENT).get(content, timestamp, id) as unknown as
+    | MessageRow
+    | undefined;
   if (row === undefined) throw notFound("Message");
   return rowToMessage(row);
 }
