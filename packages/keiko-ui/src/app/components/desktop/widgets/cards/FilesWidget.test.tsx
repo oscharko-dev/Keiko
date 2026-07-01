@@ -186,6 +186,54 @@ describe("FilesWidget", () => {
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
   });
 
+  it("shares identical startup tree and Git status reads across sibling Files windows", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "unavailable",
+      available: false,
+      reason: "not-a-repository",
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+
+    render(
+      <>
+        <FilesWidget root="/repo" />
+        <FilesWidget root="/repo" />
+        <FilesWidget root="/repo" />
+      </>,
+    );
+
+    expect(await screen.findAllByRole("treeitem", { name: /package\.json/i })).toHaveLength(3);
+    expect(fetchFilesTree).toHaveBeenCalledTimes(1);
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+    expect(fetchGitStatus).toHaveBeenCalledTimes(1);
+    expect(fetchGitStatus).toHaveBeenCalledWith("/repo");
+  });
+
   it("shows Git status badges and opens a bounded diff view", async () => {
     vi.mocked(fetchGitStatus).mockResolvedValue({
       schemaVersion: "1",

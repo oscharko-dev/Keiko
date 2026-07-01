@@ -204,22 +204,36 @@ export async function fetchHealth(): Promise<{ status: "ok"; version: string }> 
 // Route 2 — config
 // ---------------------------------------------------------------------------
 
-export async function fetchConfig(): Promise<{
-  config: SafeGatewayConfig | null;
-  configPresent: boolean;
-  effectiveGroundingLimits: GroundingLimits;
-}> {
-  const raw = await fetchJson<{
+interface FetchConfigResponse {
+  readonly config: SafeGatewayConfig | null;
+  readonly configPresent: boolean;
+  readonly effectiveGroundingLimits: GroundingLimits;
+}
+
+let configRequest: Promise<FetchConfigResponse> | undefined;
+
+export function clearConfigCacheForTests(): void {
+  configRequest = undefined;
+}
+
+export async function fetchConfig(): Promise<FetchConfigResponse> {
+  configRequest ??= fetchJson<{
     config: SafeGatewayConfig | null;
     configPresent: boolean;
     effectiveGroundingLimits?: GroundingLimits;
-  }>("/api/config");
-  return {
-    config: raw.config,
-    configPresent: raw.configPresent,
-    effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
-  };
+  }>("/api/config")
+    .then((raw) => ({
+      config: raw.config,
+      configPresent: raw.configPresent,
+      effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
+    }))
+    .finally(() => {
+      configRequest = undefined;
+    });
+  return configRequest;
 }
+
+export type { FetchConfigResponse };
 
 // ---------------------------------------------------------------------------
 // Route 3 — models
@@ -553,16 +567,26 @@ export async function fetchWorkspaceSummary(
 // ADR-0013 — UI-local persistence client (routes 13–22)
 // ---------------------------------------------------------------------------
 
+const PROJECTS_CACHE_TTL_MS = 2_000;
 let projectsRequest: Promise<ProjectsResponse> | undefined;
+let projectsCache: { readonly payload: ProjectsResponse; readonly expiresAt: number } | undefined;
 
 export function clearProjectRequestForTests(): void {
   projectsRequest = undefined;
+  projectsCache = undefined;
 }
 
 export async function fetchProjects(): Promise<ProjectsResponse> {
-  projectsRequest ??= fetchJson<ProjectsResponse>("/api/projects").finally(() => {
-    projectsRequest = undefined;
-  });
+  const now = Date.now();
+  if (projectsCache !== undefined && projectsCache.expiresAt > now) return projectsCache.payload;
+  projectsRequest ??= fetchJson<ProjectsResponse>("/api/projects")
+    .then((payload) => {
+      projectsCache = { payload, expiresAt: Date.now() + PROJECTS_CACHE_TTL_MS };
+      return payload;
+    })
+    .finally(() => {
+      projectsRequest = undefined;
+    });
   return projectsRequest;
 }
 

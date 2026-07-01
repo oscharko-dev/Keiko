@@ -13,6 +13,7 @@ export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "text/event-stream; charset=utf-8",
   "Cache-Control": "no-store",
   Connection: "keep-alive",
+  "X-Accel-Buffering": "no",
 };
 
 // Frames one event as an SSE message. The event is redacted (defense in depth: live events are

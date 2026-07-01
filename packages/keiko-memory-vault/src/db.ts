@@ -11,6 +11,7 @@ import type { MemoryContentCipher } from "./cipher.js";
 export function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec("PRAGMA busy_timeout = 5000");
   return db;
 }
 
@@ -68,6 +69,7 @@ export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher):
   let db = preparedDatabase(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA synchronous = NORMAL");
     runMigrations(db, cipher);
   } catch {
     // SQLite's close() on a WAL-enabled handle may checkpoint and unlink -wal/-shm,
@@ -80,6 +82,7 @@ export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher):
     quarantineCorruptDb(dbPath, { hadWal, hadShm });
     db = preparedDatabase(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
+    db.exec("PRAGMA synchronous = NORMAL");
     runMigrations(db, cipher);
   }
   chmodIfPresent(dbPath, 0o600);

@@ -20,6 +20,8 @@ export interface UseSSEResult {
   error: string | null;
 }
 
+const MAX_SSE_EVENTS = 500;
+
 export function useSSE(runId: string | null): UseSSEResult {
   const [events, setEvents] = useState<HarnessEvent[]>([]);
   const [status, setStatus] = useState<SseStatus>("connecting");
@@ -87,7 +89,11 @@ export function useSSE(runId: string | null): UseSSEResult {
         }
 
         lastSeqRef.current = parsed.seq;
-        setEvents((prev) => [...prev, parsed]);
+        setEvents((prev) =>
+          prev.length >= MAX_SSE_EVENTS
+            ? [...prev.slice(-(MAX_SSE_EVENTS - 1)), parsed]
+            : [...prev, parsed],
+        );
 
         // FIX E: TERMINAL_EVENT_TYPES now includes workflow:completed/failed and
         // bug:completed/failed so workflow and bug runs reach terminal state properly.

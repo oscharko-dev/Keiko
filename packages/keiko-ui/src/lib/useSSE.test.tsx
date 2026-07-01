@@ -104,4 +104,20 @@ describe("useSSE", () => {
 
     expect(FakeEventSource.instances).toEqual([]);
   });
+
+  it("caps retained events so long-running streams do not grow unbounded", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const view = renderHook(() => useSSE("run 1"));
+    const source = FakeEventSource.instances[0];
+
+    act(() => {
+      for (let seq = 0; seq < 520; seq += 1) {
+        source?.emit("run:started", event(seq, "run:started"));
+      }
+    });
+
+    await waitFor(() => expect(view.result.current.events).toHaveLength(500));
+    expect(view.result.current.events[0]?.seq).toBe(20);
+    expect(view.result.current.events[499]?.seq).toBe(519);
+  });
 });
