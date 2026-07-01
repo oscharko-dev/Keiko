@@ -1219,7 +1219,15 @@ function buildCoverageArtifacts(
   readonly coverageGapRows: readonly QualityIntelligenceFindingRow[];
 } {
   const atoms = ingestion.ingestedAtoms.map((entry) => entry.atom);
-  const coverageMap = buildCoverageMap({ runId, atoms, candidates: mergedCandidates });
+  const atomTextById = new Map(
+    ingestion.ingestedAtoms.map((entry) => [String(entry.atom.id), entry.canonicalText] as const),
+  );
+  const coverageMap = buildCoverageMap({
+    runId,
+    atoms,
+    candidates: mergedCandidates,
+    atomTextById,
+  });
   const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
   const excerptByAtomId = excerptsByAtomId(ingestion.ingestedAtoms);
   return {

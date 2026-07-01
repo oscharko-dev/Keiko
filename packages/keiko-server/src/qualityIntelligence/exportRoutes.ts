@@ -439,6 +439,10 @@ function selectRows(
   return rows.filter((r) => candidateReviewStateOf(review, r.id) === "approved");
 }
 
+function isDeliverableQualityRow(row: QualityIntelligenceCandidateRow): boolean {
+  return row.status !== "needs-review" && row.qualityVerdict?.verdict !== "weak";
+}
+
 type ExportOutcome =
   | { readonly ok: true; readonly request: ExportRequest }
   | { readonly ok: false; readonly result: RouteResult };
@@ -669,13 +673,17 @@ function serialiseExport(
   const isBinary = adapter === "pdf" || adapter === "zip-bundle";
   const isTms = !isBinary && QualityIntelligence.QUALITY_INTELLIGENCE_TMS_ADAPTERS.has(adapter);
   const approvedOnly = isTms ? true : request.approvedOnly;
-  const rows = selectRows(allRows, approvedOnly, runId, evidenceDir);
+  const rows = selectRows(allRows, approvedOnly, runId, evidenceDir).filter(
+    isDeliverableQualityRow,
+  );
   if (rows.length === 0) {
     return {
       result: errorResult(
         409,
         "QI_NOTHING_TO_EXPORT",
-        approvedOnly ? "No approved candidates to export." : "No candidates to export.",
+        approvedOnly
+          ? "No approved candidates to export."
+          : "No exportable candidates passed the quality gate.",
       ),
     };
   }

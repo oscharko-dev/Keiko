@@ -119,6 +119,38 @@ function makeCandidate(title: string, id = "cand-001"): QI.QualityIntelligenceTe
   };
 }
 
+function weakQualityVerdict(): {
+  readonly verdict: "weak";
+  readonly score: number;
+  readonly dimensions: readonly QI.TestQualityRubricDimension[];
+  readonly overallRationale: string;
+} {
+  return {
+    verdict: "weak",
+    score: 25,
+    dimensions: QualityIntelligence.TEST_QUALITY_RUBRIC_DIMENSIONS.map((name) => ({
+      name,
+      score: 25,
+      rationale: "Insufficient deliverable quality.",
+    })),
+    overallRationale: "Insufficient deliverable quality.",
+  };
+}
+
+function recordSingleCandidateRun(
+  runId: string,
+  candidate: QI.QualityIntelligenceTestCaseCandidate,
+): void {
+  recordQualityIntelligenceRun(runRecordInput(runId), { evidenceDir });
+  recordQualityIntelligenceCandidates({
+    runId,
+    generatedAt: "2026-06-01T10:01:00.000Z",
+    candidates: [candidate],
+    evidenceDir,
+    redact: (v: unknown): unknown => v,
+  });
+}
+
 // ─── Test lifecycle ───────────────────────────────────────────────────────────
 
 let evidenceDir: string;
@@ -607,6 +639,45 @@ describe("handleQiExport — TMS dryRun with approved candidate", () => {
     const body = result.body as { dryRun: boolean; candidateCount: number };
     expect(body.dryRun).toBe(true);
     expect(body.candidateCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("handleQiExport — deliverable quality gate", () => {
+  it("withholds needs-review candidates even when the request asks for all local candidates", async () => {
+    const runId = "run-export-needs-review";
+    recordSingleCandidateRun(runId, {
+      ...makeCandidate("Generated candidate with unverified provenance", "cand-needs-review"),
+      status: "needs-review",
+    });
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
+
+  it("withholds judge-weak candidates from local deliverable exports", async () => {
+    const runId = "run-export-weak-quality";
+    const candidate = {
+      ...makeCandidate("Judge rejected candidate", "cand-weak-quality"),
+      qualityVerdict: weakQualityVerdict(),
+    };
+    recordSingleCandidateRun(runId, candidate);
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
   });
 });
 
