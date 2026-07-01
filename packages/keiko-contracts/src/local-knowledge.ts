@@ -152,6 +152,18 @@ export const CAPSULE_ANSWER_GROUNDING_POLICIES: readonly CapsuleAnswerGroundingP
   "best-effort",
 ] as const;
 
+export const CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX = 4_096 as const;
+export const CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX = 100_000 as const;
+
+export interface CapsuleContextualRetrievalSettings {
+  readonly enabled: boolean;
+  readonly modelId?: string;
+  readonly promptVersion?: string;
+  readonly strict?: boolean;
+  readonly maxContextChars?: number;
+  readonly documentContextMaxChars?: number;
+}
+
 // ─── Knowledge capsule + set ──────────────────────────────────────────────────
 export interface KnowledgeCapsule {
   readonly id: KnowledgeCapsuleId;
@@ -164,6 +176,7 @@ export interface KnowledgeCapsule {
   readonly retrievalEffort: CapsuleRetrievalEffort;
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   // Path relative to the runtime-state directory; never absolute and never containing `..`.
@@ -202,6 +215,7 @@ export const CAPSULE_SET_MAX_MEMBERS = 16 as const;
 export interface UpdateCapsulePatch {
   readonly displayName?: string;
   readonly description?: string;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
   // Back-compat optional — absent means "no change". A metadata map replaces the full
   // metadata on the capsule. Bounded by CAPSULE_METADATA_MAX_KEYS.
   readonly metadata?: Readonly<Record<string, string>>;

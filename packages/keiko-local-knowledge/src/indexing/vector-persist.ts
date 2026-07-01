@@ -25,6 +25,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { KnowledgeStoreError } from "../errors.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
+import { invalidateVectorIndexStateForCapsule } from "./vector-index-state.js";
+
 const INSERT_VECTOR_SQL = [
   "INSERT INTO vectors (",
   "  id, capsule_id, source_id, document_id, chunk_id,",
@@ -132,6 +134,7 @@ export function insertVectorRow(
     storage_reference: row.storageReference,
     created_at: row.createdAt,
   });
+  invalidateVectorIndexStateForCapsule(db, row.capsuleId);
 }
 
 export function deleteVectorsForDocument(
@@ -140,10 +143,12 @@ export function deleteVectorsForDocument(
   documentId: DocumentId,
 ): void {
   db.prepare(DELETE_VECTORS_FOR_DOCUMENT_SQL).run({ c: capsuleId, d: documentId });
+  invalidateVectorIndexStateForCapsule(db, capsuleId);
 }
 
 export function deleteVectorsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): void {
   db.prepare(DELETE_VECTORS_FOR_CAPSULE_SQL).run({ c: capsuleId });
+  invalidateVectorIndexStateForCapsule(db, capsuleId);
 }
 
 interface CountRow {

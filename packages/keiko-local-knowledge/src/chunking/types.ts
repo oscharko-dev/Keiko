@@ -4,10 +4,9 @@
 // text so the row is safe to copy across the trust boundary. Raw text is reconstructable
 // at retrieval time via parsed_unit → document → bytes.
 //
-// `tokenEstimator` is injected so future tokenizer upgrades (#196, #199) can swap in a
-// real tokenizer (e.g. a Qwen/SentencePiece binding) without rewiring callers. The default
-// estimator in `token-estimator.ts` is a calibrated deterministic estimate, not a real
-// tokenizer — see that file's header for the documented limitation.
+// `tokenEstimator` is retained as the narrow test/fallback seam, while `tokenizer` carries
+// the production identity needed for stale-index detection. The default tokenizer in
+// `token-estimator.ts` is a calibrated deterministic estimate, not a real Qwen3 tokenizer.
 
 import type {
   ChunkId,
@@ -18,14 +17,25 @@ import type {
 
 import { KnowledgeStoreError } from "../errors.js";
 
-// Pure, deterministic function: same text → same number. No async, no IO.
+// Pure, deterministic function: same text -> same number. No async, no IO.
 export type TokenEstimator = (text: string) => number;
+
+export type LocalKnowledgeTokenizerKind = "tokenizer" | "estimator";
+
+export interface LocalKnowledgeTokenizer {
+  // Stable, non-sensitive key. This participates in chunkingStrategyKey, so changing it is
+  // reindex-relevant by design.
+  readonly identity: string;
+  readonly kind: LocalKnowledgeTokenizerKind;
+  readonly countTokens: TokenEstimator;
+}
 
 export interface ChunkingOptions {
   readonly maxTokens?: number;
   readonly minTokens?: number;
   readonly overlapTokens?: number;
   readonly maxChunks?: number;
+  readonly tokenizer?: LocalKnowledgeTokenizer;
   readonly tokenEstimator?: TokenEstimator;
   // Internal stale-index salt threaded by the indexing orchestrator. Contextual retrieval
   // changes the text sent to embeddings/FTS without changing original citation offsets, so
@@ -40,16 +50,20 @@ export const DEFAULT_OVERLAP_TOKENS = 50;
 export const DEFAULT_MAX_CHUNKS = 50_000;
 export const MAX_CHUNK_TOKENS = 2_048;
 export const MAX_OVERLAP_TOKENS = 1_024;
-export const CHUNKING_STRATEGY_VERSION = "boundary-v2" as const;
+export const CHUNKING_STRATEGY_VERSION = "boundary-v3" as const;
 export const DEFAULT_INDEXING_TEXT_STRATEGY_KEY = "indexed-text=raw-v1" as const;
+export const CONSERVATIVE_TOKENIZER_ID = "keiko-conservative-estimator-v2" as const;
+export const CUSTOM_TOKEN_ESTIMATOR_ID = "custom-token-estimator-v1" as const;
+export const QWEN3_SENTENCEPIECE_TOKENIZER_ID = "qwen3-sentencepiece-tokenizer-v1" as const;
 export const DEFAULT_CHUNKING_STRATEGY_KEY =
-  `${CHUNKING_STRATEGY_VERSION}|max=${String(DEFAULT_MAX_TOKENS)}|min=${String(DEFAULT_MIN_TOKENS)}|overlap=${String(DEFAULT_OVERLAP_TOKENS)}|limit=${String(DEFAULT_MAX_CHUNKS)}|estimator=default|${DEFAULT_INDEXING_TEXT_STRATEGY_KEY}` as const;
+  `${CHUNKING_STRATEGY_VERSION}|max=${String(DEFAULT_MAX_TOKENS)}|min=${String(DEFAULT_MIN_TOKENS)}|overlap=${String(DEFAULT_OVERLAP_TOKENS)}|limit=${String(DEFAULT_MAX_CHUNKS)}|tokenizer=${CONSERVATIVE_TOKENIZER_ID}|${DEFAULT_INDEXING_TEXT_STRATEGY_KEY}` as const;
 
 export interface ResolvedChunkingOptions {
   readonly maxTokens: number;
   readonly minTokens: number;
   readonly overlapTokens: number;
   readonly maxChunks: number;
+  readonly tokenizer: LocalKnowledgeTokenizer;
   readonly tokenEstimator: TokenEstimator;
 }
 

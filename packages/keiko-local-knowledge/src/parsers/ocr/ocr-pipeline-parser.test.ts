@@ -264,6 +264,25 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
     expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 3 });
   });
 
+  it("passes AbortSignal through to the OCR adapter", async () => {
+    const controller = new AbortController();
+    const seenSignals: (AbortSignal | undefined)[] = [];
+    const parser = createOcrPipelineParser({
+      kind: "ocr",
+      ocrPage: (input) => {
+        seenSignals.push(input.signal);
+        return Promise.resolve({ ok: true, text: "signalled", confidence: 0.8 });
+      },
+    });
+
+    await parser.parseAsync(
+      selectionFromBytes(PNG_MAGIC, { extension: "png" }),
+      buildParserOptions({ signal: controller.signal }),
+    );
+
+    expect(seenSignals).toEqual([controller.signal]);
+  });
+
   it("returns unsupported with a diagnostic for blank OCR text", async () => {
     const parser = createOcrPipelineParser(scriptedAdapter({ ok: true, text: "", confidence: 0 }));
     const result = await parser.parseAsync(
@@ -313,6 +332,17 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — failure r
     const unit = result.units[0];
     if (unit?.kind !== "unsupported-media") throw new Error("expected unsupported-media");
     expect(unit.reason).toBe("ocr-failed:unsupported-input");
+  });
+
+  it("fires unsupported-media with ocr-failed:engine-error for configured engine failures", async () => {
+    const parser = createOcrPipelineParser(scriptedAdapter({ ok: false, reason: "engine-error" }));
+    const result = await parser.parseAsync(
+      selectionFromBytes(PNG_MAGIC, { extension: "png" }),
+      baseOptions(),
+    );
+    const unit = result.units[0];
+    if (unit?.kind !== "unsupported-media") throw new Error("expected unsupported-media");
+    expect(unit.reason).toBe("ocr-failed:engine-error");
   });
 });
 

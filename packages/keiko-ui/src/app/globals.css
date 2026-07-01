@@ -15466,6 +15466,11 @@ html[data-keiko-gateway-setup-open="true"] {
 .lk-btn-danger:hover:not(:disabled) {
   background: color-mix(in oklch, var(--feedback-danger) 14%, var(--surface-inset));
 }
+.lk-btn[data-recommended="true"] {
+  border-color: color-mix(in oklch, var(--feedback-warning) 48%, var(--border-subtle));
+  background: color-mix(in oklch, var(--feedback-warning) 9%, var(--button-secondary-surface));
+  color: var(--text-primary);
+}
 .lk-btn-lg {
   height: 34px;
   padding: 0 16px;
@@ -15999,6 +16004,7 @@ html[data-keiko-gateway-setup-open="true"] {
 .lkd-actions-group {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
   flex-shrink: 0;
 }
 

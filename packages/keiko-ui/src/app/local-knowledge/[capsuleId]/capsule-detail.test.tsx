@@ -92,11 +92,32 @@ const BASE_HEALTH: CapsuleHealth = {
   lastIndexedAt: 1_700_000_100_000,
   embeddingIdentity: BASE_CAPSULE.embeddingModelIdentity,
   vectorCompatible: true,
+  embeddingCompatibility: {
+    status: "compatible",
+    reason: "current-model-matches-pinned",
+    pinnedModelId: "text-embedding-3-small",
+    pinnedProvider: "openai",
+    pinnedVectorDimensions: 1536,
+    pinnedVectorMetric: "cosine",
+    currentModelId: "text-embedding-3-small",
+    currentProvider: "openai-compatible:test",
+    message: "The pinned embedding model is configured for embeddings.",
+  },
   failedDocuments: 0,
   skippedDocuments: 0,
   unsupportedDocuments: 0,
   unsupportedGuidance: [],
   staleReasons: [],
+  contextualRetrieval: {
+    enabled: false,
+    source: "default",
+    status: "disabled",
+    strict: false,
+    rebuildRequired: false,
+    staleChunkCount: 0,
+    degradedChunkCount: 0,
+    message: "Contextual retrieval is disabled.",
+  },
 };
 
 const FULL_DETAIL: CapsuleDetailData = {
@@ -303,6 +324,177 @@ describe("CapsuleDetail — index status section", () => {
 
     expect(screen.getByText("76 / 80")).toBeInTheDocument();
     expect(screen.getByText("0 failed, 4 skipped")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Embedding compatibility section
+// ---------------------------------------------------------------------------
+
+describe("CapsuleDetail — embedding compatibility section", () => {
+  it("renders compatible pinned and current embedding models", async () => {
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Embedding compatibility" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Pinned model")).toBeInTheDocument();
+    expect(screen.getByText("Current embedding model")).toBeInTheDocument();
+    expect(screen.getAllByText("Compatible").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText("The pinned embedding model is configured for embeddings."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders unknown model compatibility when Gateway config is missing", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: {
+        ...BASE_HEALTH,
+        vectorCompatible: false,
+        embeddingCompatibility: {
+          status: "unknown",
+          reason: "gateway-config-missing",
+          pinnedModelId: "text-embedding-3-small",
+          pinnedProvider: "openai",
+          pinnedVectorDimensions: 1536,
+          pinnedVectorMetric: "cosine",
+          message:
+            "No embedding gateway configuration is loaded. Configure an embedding model, then run a full re-embed.",
+        },
+      },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Unknown").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("No embedding provider")).toBeInTheDocument();
+    expect(screen.getByText(/No embedding gateway configuration is loaded/i)).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Contextual retrieval section
+// ---------------------------------------------------------------------------
+
+describe("CapsuleDetail — contextual retrieval section", () => {
+  it("renders disabled contextual retrieval controls and the re-index cost hint by default", async () => {
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { name: "Contextual retrieval" }),
+      ).toBeInTheDocument();
+    });
+
+    expect(
+      screen.getByText(/Adds a context-generation chat call per chunk during indexing/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Run Full rebuild \/ rechunk after saving/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Disabled").length).toBeGreaterThan(0);
+    expect(
+      screen.getByRole("checkbox", { name: /generate retrieval context at index time/i }),
+    ).not.toBeChecked();
+    expect(screen.getByLabelText(/context model id/i)).toBeDisabled();
+  });
+
+  it("saves per-capsule contextual retrieval settings and surfaces the re-index prompt", async () => {
+    const user = userEvent.setup();
+    const fetchDetailImpl = vi.fn().mockResolvedValue(FULL_DETAIL);
+    const updateContextualRetrievalImpl = vi.fn().mockResolvedValue(FULL_DETAIL);
+    render(
+      <CapsuleDetail
+        fetchDetailImpl={fetchDetailImpl}
+        updateContextualRetrievalImpl={updateContextualRetrievalImpl}
+      />,
+    );
+
+    await screen.findByRole("heading", { name: "Contextual retrieval" });
+    await user.click(
+      screen.getByRole("checkbox", { name: /generate retrieval context at index time/i }),
+    );
+    await user.type(screen.getByLabelText(/context model id/i), "context-chat");
+    await user.click(screen.getByRole("checkbox", { name: /fail indexing/i }));
+    await user.type(screen.getByLabelText(/generated context character limit/i), "320");
+    await user.type(screen.getByLabelText(/document context character limit/i), "8000");
+    await user.click(screen.getByRole("button", { name: /save retrieval settings/i }));
+
+    await waitFor(() => {
+      expect(updateContextualRetrievalImpl).toHaveBeenCalledWith(makeCapsuleId("test-1"), {
+        enabled: true,
+        modelId: "context-chat",
+        strict: true,
+        maxContextChars: 320,
+        documentContextMaxChars: 8000,
+      });
+    });
+    expect(
+      screen.getByText("Saved. Full rebuild / rechunk this capsule to apply retrieval text changes."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders stored contextual retrieval settings", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      capsule: {
+        ...BASE_CAPSULE,
+        contextualRetrieval: {
+          enabled: true,
+          modelId: "context-chat",
+          strict: false,
+          maxContextChars: 640,
+          documentContextMaxChars: 16000,
+        },
+      },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await screen.findByRole("heading", { name: "Contextual retrieval" });
+
+    expect(
+      screen.getByRole("checkbox", { name: /generate retrieval context at index time/i }),
+    ).toBeChecked();
+    expect(screen.getByLabelText(/context model id/i)).toHaveValue("context-chat");
+    expect(screen.getByLabelText(/generated context character limit/i)).toHaveValue(640);
+    expect(screen.getByLabelText(/document context character limit/i)).toHaveValue(16000);
+  });
+
+  it("surfaces contextual rebuild-needed health and the rebuild action", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: {
+        ...BASE_HEALTH,
+        contextualRetrieval: {
+          enabled: true,
+          source: "capsule",
+          status: "rebuild-required",
+          strict: false,
+          rebuildRequired: true,
+          staleChunkCount: 7,
+          degradedChunkCount: 1,
+          modelId: "context-chat",
+          maxContextChars: 320,
+          documentContextMaxChars: 8000,
+          message:
+            "Contextual retrieval settings changed. Run full rebuild / rechunk to rebuild retrieval text.",
+        },
+      },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Rebuild required").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByText("7")).toBeInTheDocument();
+    expect(screen.getByText(/1 degraded/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /full rebuild capsule/i })).toHaveAttribute(
+      "data-recommended",
+      "true",
+    );
   });
 });
 
@@ -580,15 +772,21 @@ describe("CapsuleDetail — error state", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleDetail — vectorCompatible=false", () => {
-  it("renders 'No — re-index required' when vectorCompatible is false", async () => {
+  it("renders the incompatible fallback when vectorCompatible is false", async () => {
+    const { embeddingCompatibility: _embeddingCompatibility, ...legacyHealth } = BASE_HEALTH;
+    void _embeddingCompatibility;
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
-      health: { ...BASE_HEALTH, vectorCompatible: false, staleReasons: [] },
+      health: {
+        ...legacyHealth,
+        vectorCompatible: false,
+        staleReasons: [],
+      },
     };
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
 
     await waitFor(() => {
-      expect(screen.getByText("No — re-index required")).toBeInTheDocument();
+      expect(screen.getAllByText(/Incompatible/i).length).toBeGreaterThan(0);
     });
     expect(
       screen.getByRole("button", { name: /current embedding model/i }),

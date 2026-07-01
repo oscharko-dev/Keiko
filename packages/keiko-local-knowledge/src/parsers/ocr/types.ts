@@ -20,7 +20,9 @@ export type OcrPageResult =
       // "timeout"             — the OCR engine did not finish within its deadline.
       // "unsupported-input"   — the input bytes cannot be decoded by this engine (corrupt
       //                         image, unsupported codec, etc.).
-      readonly reason: "ocr-not-configured" | "timeout" | "unsupported-input";
+      // "engine-error"        — an OCR engine was configured but failed before returning a
+      //                         usable result (missing binary, crash, protocol error).
+      readonly reason: "ocr-not-configured" | "timeout" | "unsupported-input" | "engine-error";
     };
 
 // ─── Adapter port ─────────────────────────────────────────────────────────────
@@ -35,5 +37,6 @@ export interface OcrAdapter {
   readonly ocrPage: (input: {
     readonly bytes: Uint8Array;
     readonly pageNumber: number;
+    readonly signal?: AbortSignal;
   }) => Promise<OcrPageResult>;
 }

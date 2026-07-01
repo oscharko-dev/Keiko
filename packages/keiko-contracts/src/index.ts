@@ -1444,6 +1444,7 @@ export type {
   CapsuleRetrievalEffort,
   CapsuleOutputMode,
   CapsuleAnswerGroundingPolicy,
+  CapsuleContextualRetrievalSettings,
   KnowledgeCapsule,
   CapsuleSet,
   ConnectorNodeKind,
@@ -1467,6 +1468,8 @@ export {
   CAPSULE_RETRIEVAL_EFFORTS,
   CAPSULE_OUTPUT_MODES,
   CAPSULE_ANSWER_GROUNDING_POLICIES,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   CONNECTOR_NODE_KINDS,
 } from "./local-knowledge.js";
 export type {
@@ -1489,6 +1492,12 @@ export type {
   CapsuleReindexRequest,
   IndexingJobError,
   IndexingJobRecord,
+  CapsuleEmbeddingCompatibilityStatus,
+  CapsuleEmbeddingCompatibilityReason,
+  CapsuleEmbeddingCompatibility,
+  CapsuleContextualRetrievalHealthSource,
+  CapsuleContextualRetrievalHealthStatus,
+  CapsuleContextualRetrievalHealth,
   CapsuleHealth,
   CapsuleDeleteRequest,
 } from "./local-knowledge-records.js";
@@ -1510,6 +1519,7 @@ export {
   validateEmbeddingModelIdentity,
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
+  validateCapsuleContextualRetrievalSettings,
   validateCapsuleSet,
   validateCapsuleReindexRequest,
   validateConnectorGraphState,

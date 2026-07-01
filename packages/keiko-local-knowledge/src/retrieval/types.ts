@@ -95,6 +95,22 @@ export interface RetrievalDiagnostics {
   readonly lexicalCandidateCount: number;
   readonly fusedCandidateCount: number;
   readonly lexicalIndex: "available" | "missing" | "query-error";
+  readonly vectorIndex: RetrievalVectorIndexDiagnostics;
+}
+
+export interface RetrievalVectorIndexDiagnostics {
+  readonly provider: "brute-force" | "sqlite-vec";
+  readonly status:
+    | "disabled"
+    | "available"
+    | "fallback-unavailable"
+    | "fallback-encrypted-store"
+    | "fallback-unsupported-metric"
+    | "fallback-incompatible-identity"
+    | "fallback-query-error";
+  readonly reason?: string;
+  readonly indexName?: string;
+  readonly vectorCount?: number;
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────

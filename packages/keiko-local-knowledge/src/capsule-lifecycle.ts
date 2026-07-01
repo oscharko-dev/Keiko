@@ -12,6 +12,9 @@
 import {
   DELETE_CAPSULE_SQL,
   type CapsuleAnswerGroundingPolicy,
+  type CapsuleContextualRetrievalSettings,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   type CapsuleLifecycleState,
   type CapsuleOutputMode,
   type CapsuleRetrievalEffort,
@@ -40,6 +43,7 @@ export interface CreateCapsuleInput {
   readonly retrievalEffort: CapsuleRetrievalEffort;
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   readonly storageReference: string;
@@ -55,6 +59,12 @@ interface CapsuleRow {
   readonly retrieval_effort: string;
   readonly output_mode: string;
   readonly answer_grounding_policy: string;
+  readonly contextual_retrieval_enabled: number | null;
+  readonly contextual_retrieval_model_id: string | null;
+  readonly contextual_retrieval_prompt_version: string | null;
+  readonly contextual_retrieval_strict: number | null;
+  readonly contextual_retrieval_max_context_chars: number | null;
+  readonly contextual_retrieval_document_context_max_chars: number | null;
   readonly embedding_model_provider: string;
   readonly embedding_model_id: string;
   readonly embedding_model_revision: string | null;
@@ -78,6 +88,9 @@ const INSERT_CAPSULE_SQL = [
   "INSERT INTO capsules (",
   "  id, display_name, description, tags_json, source_routing_instructions, always_query,",
   "  retrieval_effort, output_mode, answer_grounding_policy,",
+  "  contextual_retrieval_enabled, contextual_retrieval_model_id,",
+  "  contextual_retrieval_prompt_version, contextual_retrieval_strict,",
+  "  contextual_retrieval_max_context_chars, contextual_retrieval_document_context_max_chars,",
   "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
   "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
   "  embedding_dimensions_param,",
@@ -86,6 +99,9 @@ const INSERT_CAPSULE_SQL = [
   ") VALUES (",
   "  :id, :display_name, :description, :tags_json, :source_routing_instructions, :always_query,",
   "  :retrieval_effort, :output_mode, :answer_grounding_policy,",
+  "  :contextual_retrieval_enabled, :contextual_retrieval_model_id,",
+  "  :contextual_retrieval_prompt_version, :contextual_retrieval_strict,",
+  "  :contextual_retrieval_max_context_chars, :contextual_retrieval_document_context_max_chars,",
   "  :embedding_model_provider, :embedding_model_id, :embedding_model_revision,",
   "  :embedding_normalization, :embedding_instruction_version, :embedding_space_fingerprint,",
   "  :embedding_dimensions_param,",
@@ -163,6 +179,33 @@ function assertSafeOptionalDisplayField(field: string, value: string | undefined
   }
 }
 
+function assertPositiveIntegerLimit(field: string, value: number | undefined, max: number): void {
+  if (value === undefined) return;
+  if (!Number.isInteger(value) || value < 1 || value > max) {
+    throw new KnowledgeStoreError(
+      `${field} must be a positive integer no greater than ${String(max)}`,
+    );
+  }
+}
+
+function assertSafeContextualRetrievalSettings(
+  settings: CapsuleContextualRetrievalSettings | undefined,
+): void {
+  if (settings === undefined) return;
+  assertSafeOptionalDisplayField("contextualRetrieval.modelId", settings.modelId);
+  assertSafeOptionalDisplayField("contextualRetrieval.promptVersion", settings.promptVersion);
+  assertPositiveIntegerLimit(
+    "contextualRetrieval.maxContextChars",
+    settings.maxContextChars,
+    CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
+  );
+  assertPositiveIntegerLimit(
+    "contextualRetrieval.documentContextMaxChars",
+    settings.documentContextMaxChars,
+    CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+  );
+}
+
 function assertSafeCreateCapsuleInput(input: CreateCapsuleInput): void {
   assertSafeDisplayField("displayName", input.displayName);
   assertSafeOptionalDisplayField("description", input.description);
@@ -170,6 +213,7 @@ function assertSafeCreateCapsuleInput(input: CreateCapsuleInput): void {
   for (const tag of input.tags) {
     assertSafeDisplayField("tag", tag);
   }
+  assertSafeContextualRetrievalSettings(input.contextualRetrieval);
   if (!isSafeStorageReference(input.storageReference)) {
     throw new KnowledgeStoreError("storageReference must be a safe relative path");
   }
@@ -211,6 +255,34 @@ function buildEmbeddingIdentity(row: CapsuleRow): EmbeddingModelIdentity {
   return identity;
 }
 
+function buildContextualRetrievalSettings(
+  row: CapsuleRow,
+): CapsuleContextualRetrievalSettings | undefined {
+  if (row.contextual_retrieval_enabled === null) return undefined;
+  let settings: CapsuleContextualRetrievalSettings = {
+    enabled: row.contextual_retrieval_enabled === 1,
+  };
+  if (row.contextual_retrieval_model_id !== null) {
+    settings = { ...settings, modelId: row.contextual_retrieval_model_id };
+  }
+  if (row.contextual_retrieval_prompt_version !== null) {
+    settings = { ...settings, promptVersion: row.contextual_retrieval_prompt_version };
+  }
+  if (row.contextual_retrieval_strict !== null) {
+    settings = { ...settings, strict: row.contextual_retrieval_strict === 1 };
+  }
+  if (row.contextual_retrieval_max_context_chars !== null) {
+    settings = { ...settings, maxContextChars: row.contextual_retrieval_max_context_chars };
+  }
+  if (row.contextual_retrieval_document_context_max_chars !== null) {
+    settings = {
+      ...settings,
+      documentContextMaxChars: row.contextual_retrieval_document_context_max_chars,
+    };
+  }
+  return settings;
+}
+
 function rowToCapsule(row: CapsuleRow, sourceIds: readonly KnowledgeSourceId[]): KnowledgeCapsule {
   const base: KnowledgeCapsule = {
     id: row.id as KnowledgeCapsuleId,
@@ -244,6 +316,10 @@ function withOptionalCapsuleFields(base: KnowledgeCapsule, row: CapsuleRow): Kno
   } else if (row.always_query === 0) {
     // alwaysQuery defaults to undefined when stored as 0; we mirror "no" as omitted.
   }
+  const contextualRetrieval = buildContextualRetrievalSettings(row);
+  if (contextualRetrieval !== undefined) {
+    result = { ...result, contextualRetrieval };
+  }
   return result;
 }
 
@@ -265,6 +341,19 @@ export function createCapsule(
     retrieval_effort: input.retrievalEffort,
     output_mode: input.outputMode,
     answer_grounding_policy: input.answerGroundingPolicy,
+    contextual_retrieval_enabled:
+      input.contextualRetrieval === undefined ? null : input.contextualRetrieval.enabled ? 1 : 0,
+    contextual_retrieval_model_id: input.contextualRetrieval?.modelId ?? null,
+    contextual_retrieval_prompt_version: input.contextualRetrieval?.promptVersion ?? null,
+    contextual_retrieval_strict:
+      input.contextualRetrieval?.strict === undefined
+        ? null
+        : input.contextualRetrieval.strict
+          ? 1
+          : 0,
+    contextual_retrieval_max_context_chars: input.contextualRetrieval?.maxContextChars ?? null,
+    contextual_retrieval_document_context_max_chars:
+      input.contextualRetrieval?.documentContextMaxChars ?? null,
     embedding_model_provider: input.embeddingModelIdentity.provider,
     embedding_model_id: input.embeddingModelIdentity.modelId,
     embedding_model_revision: input.embeddingModelIdentity.modelRevision ?? null,
@@ -395,6 +484,51 @@ export function updateCapsuleEmbeddingModelIdentity(
 export interface CapsuleDetailsPatch {
   readonly displayName?: string;
   readonly description?: string;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+}
+
+type CapsuleDetailsUpdateParams = Record<string, string | number | null>;
+
+function strictFlag(value: boolean | undefined): number | null {
+  if (value === undefined) return null;
+  return value ? 1 : 0;
+}
+
+function assignContextualRetrievalSettings(
+  assignments: string[],
+  params: CapsuleDetailsUpdateParams,
+  settings: CapsuleContextualRetrievalSettings,
+): void {
+  assertSafeContextualRetrievalSettings(settings);
+  assignments.push("contextual_retrieval_enabled = :contextual_retrieval_enabled");
+  assignments.push("contextual_retrieval_model_id = :contextual_retrieval_model_id");
+  assignments.push("contextual_retrieval_prompt_version = :contextual_retrieval_prompt_version");
+  assignments.push("contextual_retrieval_strict = :contextual_retrieval_strict");
+  assignments.push(
+    "contextual_retrieval_max_context_chars = :contextual_retrieval_max_context_chars",
+  );
+  assignments.push(
+    "contextual_retrieval_document_context_max_chars = :contextual_retrieval_document_context_max_chars",
+  );
+  params.contextual_retrieval_enabled = settings.enabled ? 1 : 0;
+  params.contextual_retrieval_model_id = settings.modelId ?? null;
+  params.contextual_retrieval_prompt_version = settings.promptVersion ?? null;
+  params.contextual_retrieval_strict = strictFlag(settings.strict);
+  params.contextual_retrieval_max_context_chars = settings.maxContextChars ?? null;
+  params.contextual_retrieval_document_context_max_chars =
+    settings.documentContextMaxChars ?? null;
+}
+
+function markStaleWhenContextualRetrievalChanged(
+  assignments: string[],
+  before: KnowledgeCapsule | undefined,
+  settings: CapsuleContextualRetrievalSettings,
+): void {
+  const previous = JSON.stringify(before?.contextualRetrieval ?? null);
+  if (previous === JSON.stringify(settings)) return;
+  assignments.push(
+    "lifecycle_state = CASE WHEN lifecycle_state = 'ready' THEN 'stale' ELSE lifecycle_state END",
+  );
 }
 
 // Slice 4 (#189): update a capsule's display name / description. The SET clause is built only
@@ -407,7 +541,8 @@ export function updateCapsuleDetails(
   patch: CapsuleDetailsPatch,
 ): KnowledgeCapsule {
   const assignments: string[] = [];
-  const params: Record<string, string | number> = { id, now: store._internal.now() };
+  const params: CapsuleDetailsUpdateParams = { id, now: store._internal.now() };
+  const before = patch.contextualRetrieval === undefined ? undefined : getCapsule(store, id);
   if (patch.displayName !== undefined) {
     assertSafeDisplayField("displayName", patch.displayName);
     assignments.push("display_name = :displayName");
@@ -417,6 +552,10 @@ export function updateCapsuleDetails(
     assertSafeOptionalDisplayField("description", patch.description);
     assignments.push("description = :description");
     params.description = patch.description;
+  }
+  if (patch.contextualRetrieval !== undefined) {
+    assignContextualRetrievalSettings(assignments, params, patch.contextualRetrieval);
+    markStaleWhenContextualRetrievalChanged(assignments, before, patch.contextualRetrieval);
   }
   if (assignments.length === 0) {
     throw new KnowledgeStoreError("updateCapsuleDetails requires at least one field to change.");

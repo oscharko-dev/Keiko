@@ -212,7 +212,30 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     "store-ref-1",
     1000,
   );
+  seedVectorIndexState(db, capsuleId);
   return { capsuleId, sourceId, documentId, parsedUnitId, chunkId, vectorId };
+}
+
+function seedVectorIndexState(db: DatabaseSync, capsuleId: string): void {
+  if (listSqliteMaster(db, "table").includes("vector_index_state")) {
+    db.prepare(
+      `INSERT INTO vector_index_state (
+         capsule_id, provider, index_name, vector_dimensions, vector_metric,
+         embedding_identity_key, vector_count, vector_max_created_at, status, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      "sqlite-vec",
+      "keiko_lk_vec_1536_cosine",
+      1536,
+      "cosine",
+      "openai|text-embedding-3-small|1536|cosine|legacy|legacy|unverified|",
+      1,
+      1000,
+      "ready",
+      1000,
+    );
+  }
 }
 
 function countRows(db: DatabaseSync, table: string): number {
@@ -230,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 19 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(19);
+  it("is the integer 21 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(21);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -291,6 +314,32 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(byName.get("vector_dimensions")?.type).toBe("INTEGER");
       expect(byName.get("vector_dimensions")?.notnull).toBe(1);
       expect(byName.get("vector_metric")?.notnull).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists optional vector-index runtime state without storing duplicate embeddings", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('vector_index_state')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((column) => [column.name ?? "", column]));
+      expect(byName.get("capsule_id")?.notnull).toBe(1);
+      expect(byName.get("provider")?.type).toBe("TEXT");
+      expect(byName.get("index_name")?.type).toBe("TEXT");
+      expect(byName.get("vector_dimensions")?.type).toBe("INTEGER");
+      expect(byName.get("vector_metric")?.type).toBe("TEXT");
+      expect(byName.get("embedding_identity_key")?.type).toBe("TEXT");
+      expect(byName.get("vector_count")?.type).toBe("INTEGER");
+      expect(byName.get("vector_max_created_at")?.type).toBe("INTEGER");
+      expect(byName.get("status")?.type).toBe("TEXT");
+      expect(byName.has("embedding")).toBe(false);
+      const indexes = listSqliteMaster(db, "index");
+      expect(indexes).toContain("idx_vector_index_state_capsule_status");
     } finally {
       db.close();
     }
@@ -363,6 +412,27 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(byName.get("context_status")?.type).toBe("TEXT");
       expect(byName.get("context_updated_at")?.type).toBe("INTEGER");
       expect(byName.get("augmented_text")?.notnull).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists per-capsule contextual retrieval settings", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('capsules')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("contextual_retrieval_enabled")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_model_id")?.type).toBe("TEXT");
+      expect(byName.get("contextual_retrieval_prompt_version")?.type).toBe("TEXT");
+      expect(byName.get("contextual_retrieval_strict")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_max_context_chars")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_document_context_max_chars")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_enabled")?.notnull).toBe(0);
     } finally {
       db.close();
     }
@@ -565,6 +635,7 @@ describe("lineage enforcement", () => {
         "chunks",
         "chunk_lexical_index",
         "vectors",
+        "vector_index_state",
         "parser_diagnostics",
         "indexing_jobs",
       ];
