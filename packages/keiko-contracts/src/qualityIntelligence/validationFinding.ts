@@ -23,6 +23,7 @@ export type QualityIntelligenceValidationFindingKind =
   | "policy-violation"
   | "manual-rejection"
   | "coverage-gap"
+  | "requirement-quality"
   | "test-quality";
 
 export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS: readonly QualityIntelligenceValidationFindingKind[] =
@@ -34,10 +35,23 @@ export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS: readonly QualityInte
     "policy-violation",
     "manual-rejection",
     "coverage-gap",
+    "requirement-quality",
     "test-quality",
   ] as const;
 
 export type QualityIntelligenceSeverity = "critical" | "high" | "medium" | "low";
+
+export type QualityIntelligenceRequirementQualityCategory =
+  "ambiguity" | "non-verifiable" | "open-placeholder" | "compound-requirement" | "weak-modality";
+
+export const QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES: readonly QualityIntelligenceRequirementQualityCategory[] =
+  [
+    "ambiguity",
+    "non-verifiable",
+    "open-placeholder",
+    "compound-requirement",
+    "weak-modality",
+  ] as const;
 
 export const QUALITY_INTELLIGENCE_SEVERITIES: readonly QualityIntelligenceSeverity[] = [
   "critical",
@@ -99,6 +113,12 @@ export interface QualityIntelligenceCoverageGapFinding extends QualityIntelligen
   readonly kind: "coverage-gap";
 }
 
+export interface QualityIntelligenceRequirementQualityFinding extends QualityIntelligenceValidationFindingCommon {
+  readonly kind: "requirement-quality";
+  readonly category: QualityIntelligenceRequirementQualityCategory;
+  readonly confidence: number;
+}
+
 export interface QualityIntelligenceTestQualityFinding extends QualityIntelligenceValidationFindingCommon {
   readonly kind: "test-quality";
 }
@@ -111,4 +131,5 @@ export type QualityIntelligenceValidationFinding =
   | QualityIntelligencePolicyViolationFinding
   | QualityIntelligenceManualRejectionFinding
   | QualityIntelligenceCoverageGapFinding
+  | QualityIntelligenceRequirementQualityFinding
   | QualityIntelligenceTestQualityFinding;

@@ -17,6 +17,7 @@
 // opens. Inline text outside any heading produces a `html-block` with `headingPath: []`.
 
 import {
+  decodeXmlEntities,
   decodeUtf8,
   diagnostic,
   emptyResult,
@@ -77,9 +78,20 @@ interface Tag {
   readonly kind: TagKind;
   readonly start: number; // start of `<`
   readonly end: number; // one past `>`
+  readonly raw: string;
 }
 
 const RAW_TEXT_TAGS: ReadonlySet<string> = new Set(["script", "style", "noscript"]);
+const BOILERPLATE_TAGS: ReadonlySet<string> = new Set(["nav", "footer", "aside"]);
+const BOILERPLATE_HINTS: readonly string[] = [
+  "cookie",
+  "consent",
+  "banner",
+  "navbar",
+  "breadcrumb",
+  "sidebar",
+  "footer",
+];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -124,7 +136,7 @@ function readTagAt(text: string, lt: number): Tag | null {
   if (gt === -1) return null;
   const selfClosing = !isClose && text.charCodeAt(gt - 1) === 0x2f;
   const kind: TagKind = isClose ? "close" : selfClosing ? "self-closing" : "open";
-  return { name, kind, start: lt, end: gt + 1 };
+  return { name, kind, start: lt, end: gt + 1, raw: text.slice(lt, gt + 1) };
 }
 
 type ScanEvent =
@@ -160,6 +172,31 @@ function skipRawText(text: string, textLower: string, tagName: string, from: num
   if (close === -1) return text.length;
   const gt = text.indexOf(">", close);
   return gt === -1 ? text.length : gt + 1;
+}
+
+function skipElement(text: string, textLower: string, tagName: string, from: number): number {
+  return skipRawText(text, textLower, tagName, from);
+}
+
+function isBoilerplateTag(tag: Tag): boolean {
+  if (tag.kind !== "open") return false;
+  if (BOILERPLATE_TAGS.has(tag.name)) return true;
+  const raw = tag.raw.toLowerCase();
+  if (tag.name === "header" && (raw.includes("nav") || raw.includes("banner"))) return true;
+  if (tag.name !== "div" && tag.name !== "section") return false;
+  return BOILERPLATE_HINTS.some((hint) => raw.includes(hint));
+}
+
+function selectMainContent(text: string): string {
+  const lower = text.toLowerCase();
+  const open = lower.indexOf("<main");
+  if (open < 0) return text;
+  const openEnd = text.indexOf(">", open);
+  if (openEnd < 0) return text;
+  const close = lower.indexOf("</main", openEnd + 1);
+  if (close < 0) return text.slice(open);
+  const closeEnd = text.indexOf(">", close);
+  return text.slice(open, closeEnd < 0 ? text.length : closeEnd + 1);
 }
 
 // ─── Heading stack ───────────────────────────────────────────────────────────
@@ -262,6 +299,89 @@ function flushBlock(state: ScanState, end: number): void {
   resetBlock(state);
 }
 
+function pushCleanedBlock(state: ScanState, text: string): void {
+  const cleaned = collapseWhitespace(text);
+  if (cleaned.length === 0) return;
+  const limit = shouldStop(state.startedAt, state.options, state.units.length);
+  if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
+    state.diagnostics.push(diagnostic(limit.code, limit.message, state.input.documentId, "info"));
+    state.stopped = true;
+    return;
+  }
+  if (state.cleanedParts.length > 0) {
+    state.cleanedParts.push("\n");
+    state.cleanedOffset += 1;
+  }
+  const start = state.cleanedOffset;
+  state.cleanedParts.push(cleaned);
+  state.cleanedOffset += cleaned.length;
+  state.units.push({
+    kind: "html-block",
+    documentId: state.input.documentId,
+    headingPath: [...state.heading.stack],
+    characterStart: start,
+    characterEnd: state.cleanedOffset,
+  });
+}
+
+function htmlFragmentText(fragment: string): string {
+  let out = "";
+  let cursor = 0;
+  while (cursor < fragment.length) {
+    const event = nextEvent(fragment, cursor);
+    if (event.kind === "eof") break;
+    if (event.kind === "text") out += fragment.slice(event.start, event.end);
+    cursor = event.next;
+  }
+  return decodeXmlEntities(out).trim();
+}
+
+function tableCells(
+  rowHtml: string,
+): readonly { readonly header: boolean; readonly text: string }[] {
+  const cells: { header: boolean; text: string }[] = [];
+  for (const match of rowHtml.matchAll(/<(td|th)\b[^>]*>([\s\S]*?)<\/\1>/gi)) {
+    cells.push({
+      header: match[1]?.toLowerCase() === "th",
+      text: htmlFragmentText(match[2] ?? ""),
+    });
+  }
+  return cells;
+}
+
+function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
+  const seen = new Map<string, number>();
+  return Array.from({ length: count }, (_, index) => {
+    const raw = headers[index] ?? "";
+    const base = raw.trim().length > 0 ? raw.trim() : `Column ${String(index + 1)}`;
+    const seenCount = seen.get(base) ?? 0;
+    seen.set(base, seenCount + 1);
+    return seenCount === 0 ? base : `${base} ${String(seenCount + 1)}`;
+  });
+}
+
+function appendTableRows(state: ScanState, tableHtml: string): void {
+  const rows = Array.from(tableHtml.matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/gi)).map((match) =>
+    tableCells(match[0]),
+  );
+  if (rows.length === 0) return;
+  const first = rows[0] ?? [];
+  const headerIsSchema =
+    rows.length > 1 && first.some((cell) => cell.header || /[A-Za-z_]/u.test(cell.text));
+  const maxCells = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const headers = headerIsSchema
+    ? normalizeHeaders(first.map((cell) => cell.text), maxCells)
+    : normalizeHeaders([], maxCells);
+  const dataRows = headerIsSchema ? rows.slice(1) : rows;
+  for (const row of dataRows) {
+    if (state.stopped) return;
+    const text = row
+      .map((cell, index) => `${headers[index] ?? `Column ${String(index + 1)}`}=${cell.text}`)
+      .join(" | ");
+    pushCleanedBlock(state, `Table: ${text}`);
+  }
+}
+
 function openBlock(state: ScanState, at: number, hasText: boolean): void {
   if (state.pendingBlockStart === null) {
     state.pendingBlockStart = at;
@@ -307,6 +427,16 @@ function handleTag(state: ScanState, tag: Tag): number {
     flushBlock(state, tag.start);
     return skipRawText(state.text, state.textLower, tag.name, tag.end);
   }
+  if (isBoilerplateTag(tag)) {
+    flushBlock(state, tag.start);
+    return skipElement(state.text, state.textLower, tag.name, tag.end);
+  }
+  if (tag.name === "table" && tag.kind === "open") {
+    flushBlock(state, tag.start);
+    const end = skipElement(state.text, state.textLower, tag.name, tag.end);
+    appendTableRows(state, state.text.slice(tag.start, end));
+    return end;
+  }
   const level = headingLevel(tag.name);
   if (level > 0 && tag.kind === "open") return handleHeadingOpen(state, tag, level);
   if (level > 0 && tag.kind === "close") return handleHeadingClose(state, tag);
@@ -327,7 +457,8 @@ function step(state: ScanState, cursor: number): number {
   return handleTag(state, event.tag);
 }
 
-function emitHtml(text: string, input: ParserSelectionInput, options: ParserOptions): Emission {
+function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserOptions): Emission {
+  const text = selectMainContent(rawText);
   const state: ScanState = {
     text,
     textLower: text.toLowerCase(),

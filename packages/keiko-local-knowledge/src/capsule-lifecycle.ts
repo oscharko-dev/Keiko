@@ -18,6 +18,7 @@ import {
   type CapsuleSetId,
   type EmbeddingModelIdentity,
   type EmbeddingVectorMetric,
+  type EmbeddingVectorNormalization,
   type KnowledgeCapsule,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
@@ -57,6 +58,10 @@ interface CapsuleRow {
   readonly embedding_model_provider: string;
   readonly embedding_model_id: string;
   readonly embedding_model_revision: string | null;
+  readonly embedding_normalization: string | null;
+  readonly embedding_instruction_version: string | null;
+  readonly embedding_space_fingerprint: string | null;
+  readonly embedding_dimensions_param: number | null;
   readonly vector_dimensions: number;
   readonly vector_metric: string;
   readonly lifecycle_state: string;
@@ -74,12 +79,16 @@ const INSERT_CAPSULE_SQL = [
   "  id, display_name, description, tags_json, source_routing_instructions, always_query,",
   "  retrieval_effort, output_mode, answer_grounding_policy,",
   "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
+  "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
+  "  embedding_dimensions_param,",
   "  vector_dimensions, vector_metric, lifecycle_state, storage_reference,",
   "  created_at, updated_at",
   ") VALUES (",
   "  :id, :display_name, :description, :tags_json, :source_routing_instructions, :always_query,",
   "  :retrieval_effort, :output_mode, :answer_grounding_policy,",
   "  :embedding_model_provider, :embedding_model_id, :embedding_model_revision,",
+  "  :embedding_normalization, :embedding_instruction_version, :embedding_space_fingerprint,",
+  "  :embedding_dimensions_param,",
   "  :vector_dimensions, :vector_metric, :lifecycle_state, :storage_reference,",
   "  :created_at, :updated_at",
   ")",
@@ -96,6 +105,10 @@ const UPDATE_EMBEDDING_IDENTITY_SQL = [
   "  embedding_model_provider = :embedding_model_provider,",
   "  embedding_model_id = :embedding_model_id,",
   "  embedding_model_revision = :embedding_model_revision,",
+  "  embedding_normalization = :embedding_normalization,",
+  "  embedding_instruction_version = :embedding_instruction_version,",
+  "  embedding_space_fingerprint = :embedding_space_fingerprint,",
+  "  embedding_dimensions_param = :embedding_dimensions_param,",
   "  vector_dimensions = :vector_dimensions,",
   "  vector_metric = :vector_metric,",
   "  updated_at = :now",
@@ -116,6 +129,7 @@ const DELETE_VERIFICATION_TABLES = [
   "sections",
   "parsed_units",
   "chunks",
+  "chunk_lexical_index",
   "vectors",
   "parser_diagnostics",
   "indexing_jobs",
@@ -170,14 +184,31 @@ function listSourceIdsFor(
 }
 
 function buildEmbeddingIdentity(row: CapsuleRow): EmbeddingModelIdentity {
-  const base: EmbeddingModelIdentity = {
+  let identity: EmbeddingModelIdentity = {
     provider: row.embedding_model_provider,
     modelId: row.embedding_model_id,
     vectorDimensions: row.vector_dimensions,
     vectorMetric: row.vector_metric as EmbeddingVectorMetric,
   };
-  if (row.embedding_model_revision === null) return base;
-  return { ...base, modelRevision: row.embedding_model_revision };
+  if (row.embedding_model_revision !== null) {
+    identity = { ...identity, modelRevision: row.embedding_model_revision };
+  }
+  if (row.embedding_normalization !== null) {
+    identity = {
+      ...identity,
+      normalization: row.embedding_normalization as EmbeddingVectorNormalization,
+    };
+  }
+  if (row.embedding_instruction_version !== null) {
+    identity = { ...identity, instructionVersion: row.embedding_instruction_version };
+  }
+  if (row.embedding_space_fingerprint !== null) {
+    identity = { ...identity, embeddingSpaceFingerprint: row.embedding_space_fingerprint };
+  }
+  if (row.embedding_dimensions_param !== null) {
+    identity = { ...identity, dimensionsParam: row.embedding_dimensions_param };
+  }
+  return identity;
 }
 
 function rowToCapsule(row: CapsuleRow, sourceIds: readonly KnowledgeSourceId[]): KnowledgeCapsule {
@@ -216,6 +247,7 @@ function withOptionalCapsuleFields(base: KnowledgeCapsule, row: CapsuleRow): Kno
   return result;
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity
 export function createCapsule(
   store: KnowledgeStore,
   input: CreateCapsuleInput,
@@ -236,6 +268,10 @@ export function createCapsule(
     embedding_model_provider: input.embeddingModelIdentity.provider,
     embedding_model_id: input.embeddingModelIdentity.modelId,
     embedding_model_revision: input.embeddingModelIdentity.modelRevision ?? null,
+    embedding_normalization: input.embeddingModelIdentity.normalization ?? null,
+    embedding_instruction_version: input.embeddingModelIdentity.instructionVersion ?? null,
+    embedding_space_fingerprint: input.embeddingModelIdentity.embeddingSpaceFingerprint ?? null,
+    embedding_dimensions_param: input.embeddingModelIdentity.dimensionsParam ?? null,
     vector_dimensions: input.embeddingModelIdentity.vectorDimensions,
     vector_metric: input.embeddingModelIdentity.vectorMetric,
     lifecycle_state: input.lifecycleState,
@@ -330,6 +366,10 @@ export function updateCapsuleEmbeddingModelIdentity(
       embedding_model_provider: identity.provider,
       embedding_model_id: identity.modelId,
       embedding_model_revision: identity.modelRevision ?? null,
+      embedding_normalization: identity.normalization ?? null,
+      embedding_instruction_version: identity.instructionVersion ?? null,
+      embedding_space_fingerprint: identity.embeddingSpaceFingerprint ?? null,
+      embedding_dimensions_param: identity.dimensionsParam ?? null,
       vector_dimensions: identity.vectorDimensions,
       vector_metric: identity.vectorMetric,
       now,

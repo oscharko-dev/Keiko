@@ -98,20 +98,6 @@ function configuredProviderForCapsule(
     : undefined;
 }
 
-function embeddingIdentityMatchesCapsuleAlias(
-  stored: EmbeddingModelIdentity,
-  current: EmbeddingModelIdentity,
-): boolean {
-  if (
-    stored.provider !== current.provider ||
-    stored.vectorDimensions !== current.vectorDimensions ||
-    stored.vectorMetric !== current.vectorMetric
-  ) {
-    return false;
-  }
-  return stored.modelId === current.modelId || stored.modelId === current.modelRevision;
-}
-
 async function resolveProviderForCapsule(
   options: CreateLocalKnowledgeRemediationPortOptions,
   store: KnowledgeStore,
@@ -121,7 +107,15 @@ async function resolveProviderForCapsule(
 > {
   const config = options.currentConfig();
   const exact = configuredProviderForCapsule(config, capsule);
-  if (exact !== undefined) return { capsule, provider: exact };
+  if (exact !== undefined) {
+    const identity = await probeProvider(options, exact, capsule);
+    return identity === undefined
+      ? undefined
+      : {
+          capsule: updateCapsuleEmbeddingModelIdentity(store, capsule.id, identity),
+          provider: exact,
+        };
+  }
   if (config === undefined) return undefined;
   for (const provider of config.providers) {
     if (!isEmbeddingProvider(config, provider)) continue;
@@ -131,10 +125,7 @@ async function resolveProviderForCapsule(
       continue;
     }
     const identity = await probeProvider(options, provider, capsule);
-    if (
-      identity !== undefined &&
-      embeddingIdentityMatchesCapsuleAlias(capsule.embeddingModelIdentity, identity)
-    ) {
+    if (identity !== undefined) {
       return {
         capsule: updateCapsuleEmbeddingModelIdentity(store, capsule.id, identity),
         provider,
@@ -154,7 +145,16 @@ async function probeProvider(
       modelId: provider.modelId,
       provider: embeddingProviderIdentity(provider),
       vectorMetric: capsule.embeddingModelIdentity.vectorMetric,
-      expectedDimensions: capsule.embeddingModelIdentity.vectorDimensions,
+      ...(capsule.embeddingModelIdentity.normalization !== undefined
+        ? { normalization: capsule.embeddingModelIdentity.normalization }
+        : {}),
+      ...(capsule.embeddingModelIdentity.instructionVersion !== undefined
+        ? { instructionVersion: capsule.embeddingModelIdentity.instructionVersion }
+        : {}),
+      ...(capsule.embeddingModelIdentity.dimensionsParam !== undefined
+        ? { dimensionsParam: capsule.embeddingModelIdentity.dimensionsParam }
+        : {}),
+      includeSpaceFingerprint: true,
       timeoutMs: provider.timeoutMs,
     });
     return result.ok ? result.identity : undefined;
@@ -167,13 +167,14 @@ function createEmbeddingAdapter(
   options: CreateLocalKnowledgeRemediationPortOptions,
   provider: ModelProviderConfig,
 ): OpenAIEmbeddingAdapter {
+  const egress = provider.egress ?? options.currentConfig()?.egress;
   const providerCreds = {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.apiKeyHeaderName === undefined
       ? {}
       : { apiKeyHeaderName: provider.apiKeyHeaderName }),
-    ...(provider.egress === undefined ? {} : { egress: provider.egress }),
+    ...(egress === undefined ? {} : { egress }),
   };
   const requestImpl = options.embeddingRequest ?? requestOpenAIEmbedding;
   const batchImpl = options.embeddingBatchRequest ?? requestOpenAIEmbeddingBatch;

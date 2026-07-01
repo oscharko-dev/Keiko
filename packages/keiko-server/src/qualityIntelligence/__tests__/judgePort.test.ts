@@ -2,7 +2,7 @@
 //
 // All model calls are intercepted by a fake ModelPort; no network or filesystem access.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayRequest,
   ModelCapability,
@@ -25,6 +25,10 @@ import {
 } from "../judgePort.js";
 
 // ─── Fake infrastructure ────────────────────────────────────────────────────
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -71,6 +75,7 @@ function configWithChatModel(
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    supportsResponseFormat: true,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: true,
@@ -181,6 +186,20 @@ describe("createQiJudgePort — capability gate", () => {
     });
     try {
       createQiJudgePort(deps, "chat-only-judge");
+      expect.fail("should throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiJudgeError);
+      expect((err as QiJudgeError).code).toBe("QI_JUDGE_MODEL_INCOMPATIBLE");
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it("throws QiJudgeError QI_JUDGE_MODEL_INCOMPATIBLE when the model cannot enforce response_format", () => {
+    const { deps, calls } = depsFor("schema-loose-judge", "{}", {
+      config: configWithChatModel("schema-loose-judge", { supportsResponseFormat: false }),
+    });
+    try {
+      createQiJudgePort(deps, "schema-loose-judge");
       expect.fail("should throw");
     } catch (err) {
       expect(err).toBeInstanceOf(QiJudgeError);
@@ -611,7 +630,43 @@ describe("createQiJudgePort.judge — gateway call", () => {
     expect(calls[0]?.request.stream).toBe(false);
   });
 
-  it("passes the AbortSignal to the model.call", async () => {
+  it("sends temperature zero in the gateway request", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1");
+    const verdict = await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    expect(calls[0]?.request.temperature).toBe(0);
+    expect(verdict.modelParameters?.judgeTemperature).toBe(0);
+  });
+
+  it("sends the run seed when the judge model advertises seeding support", async () => {
+    const config = configWithChatModel("seeded-judge", { supportsSeeding: true });
+    const { deps, calls } = depsFor("seeded-judge", VALID_VERDICT_JSON, { config });
+    const port = createQiJudgePort(deps, "seeded-judge", { requestedSeed: 23 });
+    const verdict = await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    expect(calls[0]?.request.seed).toBe(23);
+    expect(verdict.modelParameters?.judgeSeedUsed).toBe(true);
+    expect(verdict.modelParameters?.judgeSeed).toBe(23);
+  });
+
+  it("omits the run seed and reports judgeSeedUsed false when seeding is unsupported", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1", { requestedSeed: 23 });
+    const verdict = await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    expect(calls[0]?.request.seed).toBeUndefined();
+    expect(verdict.modelParameters?.judgeSeedUsed).toBe(false);
+    expect(verdict.modelParameters?.judgeSeed).toBeUndefined();
+  });
+
+  it("passes a composed cancellation signal to the model.call", async () => {
     const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
     const port = createQiJudgePort(deps, "chat-model-1");
     const controller = new AbortController();
@@ -622,7 +677,32 @@ describe("createQiJudgePort.judge — gateway call", () => {
       },
       controller.signal,
     );
-    expect(calls[0]?.signal).toBe(controller.signal);
+    expect(calls[0]?.signal).toBeDefined();
+    expect(calls[0]?.signal).not.toBe(controller.signal);
+    expect(calls[0]?.request.cancellationSignal).toBe(calls[0]?.signal);
+  });
+
+  it("throws QI_JUDGE_MODEL_TIMEOUT when the model call exceeds the QI profile timeout", async () => {
+    vi.useFakeTimers();
+    const hungPort: ModelPort = {
+      // eslint-disable-next-line @typescript-eslint/no-empty-function
+      call: (): Promise<NormalizedResponse> => new Promise<NormalizedResponse>(() => {}),
+    };
+    const { deps } = depsFor("chat-model-1", VALID_VERDICT_JSON, {
+      portFactory: (): ModelPort => hungPort,
+    });
+    const port = createQiJudgePort(deps, "chat-model-1");
+
+    const promise = port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    const expectation = expect(promise).rejects.toMatchObject({
+      code: "QI_JUDGE_MODEL_TIMEOUT",
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expectation;
   });
 
   it("passes source requirement context into the gateway prompt", async () => {
@@ -645,6 +725,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
       sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
     });
     expect(verdict.verdict).toBe("weak");
+    expect(verdict.judgeStatus).toBe("parse-failed");
     expect(verdict.overallRationale).toContain("konnte nicht geparst");
   });
 
@@ -658,6 +739,8 @@ describe("createQiJudgePort.judge — gateway call", () => {
     expect(calls).toHaveLength(0);
     expect(verdict.verdict).toBe("weak");
     expect(verdict.gatewayCallCount).toBe(0);
+    expect(verdict.judgeStatus).toBe("prompt-too-large");
+    expect(verdict.modelParameters?.judgeResponseFormat).toBe("json_schema");
     expect(verdict.overallRationale).toContain("Modellbudget");
   });
 
@@ -688,17 +771,6 @@ describe("createQiJudgePort.judge — gateway call", () => {
     ).rejects.toThrow(expect.objectContaining({ name: "AbortError" }));
   });
 
-  it("omits responseFormat when the model does not advertise structured-output response format", async () => {
-    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
-    const port = createQiJudgePort(deps, "chat-model-1");
-    await port.judge({
-      candidateText: "candidate text",
-      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
-    });
-    // The runtime-discovered default chat capability has supportsResponseFormat unset → prompt-only.
-    expect(calls[0]?.request.responseFormat).toBeUndefined();
-  });
-
   it("pins responseFormat to the judge json_schema when the model supports it", async () => {
     const config = configWithChatModel("rf-model", { supportsResponseFormat: true });
     const { deps, calls } = depsFor("rf-model", VALID_VERDICT_JSON, { config });
@@ -711,6 +783,11 @@ describe("createQiJudgePort.judge — gateway call", () => {
     expect(responseFormat?.type).toBe("json_schema");
     if (responseFormat?.type === "json_schema") {
       expect(responseFormat.schema).toEqual(TEST_QUALITY_JUDGE_RESPONSE_SCHEMA);
+      expect(responseFormat.name).toBe("quality_intelligence_test_quality_judge");
+      expect(responseFormat.strict).toBe(true);
+      expect(responseFormat.schema.properties).toMatchObject({
+        dimensions: { minItems: 4, maxItems: 4 },
+      });
     }
   });
 });

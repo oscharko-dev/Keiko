@@ -50,6 +50,24 @@ describe("buildRequirementExcerpt", () => {
     expect(excerpt).toContain("for S3");
   });
 
+  it("redacts German PII and common token prefixes from requirement excerpts", () => {
+    const githubToken = `ghp_${"A".repeat(36)}`;
+    const excerpt = buildRequirementExcerpt(
+      [
+        "IBAN DE89 3704 0044 0532 0130 00",
+        "Telefon +49 30 1234567",
+        "E-Mail kunde@example.test",
+        `Token ${githubToken}`,
+      ].join(" "),
+    );
+
+    expect(excerpt).toContain("[REDACTED]");
+    expect(excerpt).not.toContain("DE89");
+    expect(excerpt).not.toContain("+49");
+    expect(excerpt).not.toContain("kunde@example.test");
+    expect(excerpt).not.toContain(githubToken);
+  });
+
   it("strips bidi, zero-width, and C0/C1 control code points from the audit-ready excerpt", () => {
     // The excerpt feeds the coverage matrix, gap-finding summaries, and the CSV + Markdown
     // traceability export (the "audit-ready" surfaces of Epic #734). Invisible / bidi / control

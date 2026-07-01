@@ -355,9 +355,9 @@ interface WindowFullRow {
 }
 
 // Reads a bounded, document-relative character span without ever materializing the whole
-// document text. Resolves from `document_texts` when a small file stored a single row, otherwise
-// from the one `document_text_windows` row that contains the span (every chunk lies inside one
-// page → one window). Returns undefined when no text is stored for the document.
+// document text. Resolves from the one `document_text_windows` row that contains the span
+// when a large document has bounded windows, otherwise falls back to `document_texts` for
+// small files. Returns undefined when no text is stored for the document.
 //
 // Plaintext stores slice the span in SQLite via SUBSTR so the whole column never enters JS. Encrypted
 // stores cannot SUBSTR a sealed envelope, so they decrypt exactly one bounded unit — the small-document
@@ -377,26 +377,26 @@ export function readDocumentTextSpan(
   const c = String(capsuleId);
   const d = String(documentId);
   if (!cipher.isEncrypted) {
-    const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
-      SpanRow | undefined;
-    if (single !== undefined) {
-      return single.span ?? "";
-    }
     const windowed = statements(db).selectDocumentTextWindowSpan.get({ c, d, start, end, len }) as
       SpanRow | undefined;
-    return windowed === undefined ? undefined : (windowed.span ?? "");
+    if (windowed !== undefined) {
+      return windowed.span ?? "";
+    }
+    const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
+      SpanRow | undefined;
+    return single === undefined ? undefined : (single.span ?? "");
+  }
+  const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end }) as
+    WindowFullRow | undefined;
+  if (windowed !== undefined) {
+    const offset = start - windowed.character_start;
+    return cipher.openText(windowed.normalized_text).slice(offset, offset + len);
   }
   const single = statements(db).selectDocumentText.get({ c, d }) as DocumentTextRow | undefined;
   if (single !== undefined) {
     return cipher.openText(single.normalized_text).slice(start, start + len);
   }
-  const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end }) as
-    WindowFullRow | undefined;
-  if (windowed === undefined) {
-    return undefined;
-  }
-  const offset = start - windowed.character_start;
-  return cipher.openText(windowed.normalized_text).slice(offset, offset + len);
+  return undefined;
 }
 
 export interface PersistedSourceDocumentRow {

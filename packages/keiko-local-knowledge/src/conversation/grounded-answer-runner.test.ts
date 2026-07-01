@@ -97,6 +97,100 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.answer).toContain("Found");
     expect(result.citations.length).toBeGreaterThan(0);
   });
+
+  it("retries once with citationRepair when the model omits markers", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair" });
+    const calls: AnswerGeneratorInput[] = [];
+    const answers = ["Found the activation detail without a marker.", "Found the detail [1]."];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        calls.push(input);
+        return Promise.resolve(answers[Math.min(calls.length - 1, answers.length - 1)] ?? "");
+      },
+    };
+
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      {
+        conversationId: "conv-repair",
+        capsuleId: seeded.capsuleId,
+        text: "alpha",
+      },
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.citationRepair).toBeUndefined();
+    expect(calls[1]?.citationRepair).toBe(true);
+    expect(result.answer).toBe("Found the detail [1].");
+    expect(result.citations.length).toBeGreaterThan(0);
+  });
+
+  it("does not force citation repair for short no-evidence refusals", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-refusal" });
+    const generator = fakeGenerator("No evidence found in the selected sources.");
+
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      {
+        conversationId: "conv-refusal",
+        capsuleId: seeded.capsuleId,
+        text: "alpha",
+      },
+    );
+
+    expect(generator.calls).toHaveLength(1);
+    expect(result.answer).toBe("No evidence found in the selected sources.");
+    expect(result.citations).toEqual([]);
+  });
+
+  it("applies the optional reference reranker before generation and citation attachment", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-rerank" });
+    const generator = fakeGenerator("Reranked evidence [1].");
+    const seenOriginal: string[][] = [];
+    const result = await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+        referenceReranker: {
+          rerank: (input) => {
+            seenOriginal.push(input.references.map((ref) => String(ref.chunkId)));
+            return Promise.resolve({
+              references: [...input.references].reverse(),
+              diagnostics: {
+                status: "applied",
+                candidateCount: input.references.length,
+                documentCount: input.references.length,
+                keptCount: input.references.length,
+              },
+            });
+          },
+        },
+      },
+      {
+        conversationId: "conv-rerank",
+        capsuleId: seeded.capsuleId,
+        text: "alpha beta",
+        topK: 3,
+      },
+    );
+
+    expect(result.noEvidence).toBe(false);
+    expect(seenOriginal[0]?.length).toBeGreaterThan(1);
+    expect(generator.calls[0]?.references.map((ref) => String(ref.chunkId))).toEqual(
+      [...(seenOriginal[0] ?? [])].reverse(),
+    );
+    expect(result.citations[0]?.reference.chunkId).toBe(result.references[0]?.chunkId);
+    expect(result.reranker?.status).toBe("applied");
+  });
 });
 
 describe("runGroundedAnswer — no-evidence short-circuit", () => {

@@ -1,11 +1,13 @@
 // Acceptance coverage for Local Knowledge content encryption at rest (Issue #1322; ADR-0047).
 //
 // Proves the Acceptance Criteria with raw on-disk / raw-SQLite assertions: a fresh encrypted store
-// writes no plaintext extracted text, section/heading labels, or vector bytes; a legacy plaintext
-// store migrates forward without data loss and leaves no plaintext on disk after VACUUM; a wrong key
-// or a missing key provider fails closed; retrieval / citation excerpts / large-document windowed
-// spans round-trip through the existing APIs; and steady-state seal/open overhead stays within a
-// documented budget.
+// seals the source-of-truth extracted text, contextual chunk prefixes/augmented text,
+// section/heading labels, vectors, and blobs; the FTS5 chunk lexical index remains the explicit
+// plaintext search-index exception; a legacy plaintext
+// store migrates forward without data loss and leaves sealed source columns after VACUUM; a wrong
+// key or a missing key provider fails closed; retrieval / citation excerpts / large-document
+// windowed spans round-trip through the existing APIs; and steady-state seal/open overhead stays
+// within a documented budget.
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,6 +37,8 @@ const FIXTURE_TEXT =
   "STRENG-VERTRAULICH Fachkonzept ZGRZZY-4242 — Kundendaten der Großbank für Zürich.";
 const SECTION_LABEL = "Section ZGRZZY-SECTION-4242";
 const HEADING_LABEL = "Heading ZGRZZY-HEADING-4242";
+const CONTEXT_PREFIX = "Context prefix ZGRZZY-CONTEXT-4242";
+const AUGMENTED_TEXT = `${CONTEXT_PREFIX}\n\nAugmented chunk ZGRZZY-AUGMENTED-4242`;
 const WINDOW_TEXT = "Window text ZGRZZY-WINDOW-4242";
 const KV1_PREFIX_TEXT = "kv1.legacy plaintext prefix ZGRZZY-KV1-4242";
 
@@ -116,15 +120,25 @@ describe("fresh encrypted store", () => {
       seeded.documentId,
       FIXTURE_TEXT,
     );
+    store._internal.db
+      .prepare(
+        "UPDATE chunks SET context_prefix = :prefix, augmented_text = :augmented, context_status = 'generated' WHERE capsule_id = :c",
+      )
+      .run({
+        prefix: store._internal.contentCipher.sealText(CONTEXT_PREFIX),
+        augmented: store._internal.contentCipher.sealText(AUGMENTED_TEXT),
+        c: seeded.capsuleId,
+      });
     store.close();
 
     // Raw-file ("strings") check: the fixture text never appears unencrypted in any store file.
     const bytes = readAllStoreBytes(dbPath);
-    for (const plaintext of [FIXTURE_TEXT, SECTION_LABEL, HEADING_LABEL]) {
+    for (const plaintext of [FIXTURE_TEXT, SECTION_LABEL, HEADING_LABEL, CONTEXT_PREFIX]) {
       expect(bytes.includes(Buffer.from(plaintext, "utf8"))).toBe(false);
     }
 
-    // Raw-SQLite check: every content column is a sealed envelope on disk.
+    // Raw-SQLite check: encrypted source-of-truth content columns are sealed envelopes on disk; the
+    // FTS5 lexical index is intentionally plaintext so SQLite can execute MATCH/BM25.
     const raw = new DatabaseSync(dbPath);
     try {
       const textRow = raw.prepare("SELECT normalized_text FROM document_texts").get() as {
@@ -167,6 +181,21 @@ describe("fresh encrypted store", () => {
         expect(row.embedding.byteLength).toBe(row.vector_dimensions * 4 + 29);
         expect(row.embedding[0]).toBe(0x01);
       }
+
+      const chunkRows = raw.prepare("SELECT context_prefix, augmented_text FROM chunks").all() as {
+        readonly context_prefix: string | null;
+        readonly augmented_text: string | null;
+      }[];
+      expect(chunkRows.some((row) => row.context_prefix?.startsWith("kv1.") === true)).toBe(true);
+      expect(chunkRows.some((row) => row.augmented_text?.startsWith("kv1.") === true)).toBe(true);
+
+      const lexicalRows = raw.prepare("SELECT text, exact_text FROM chunk_lexical_index").all() as {
+        readonly text: string;
+        readonly exact_text: string;
+      }[];
+      expect(lexicalRows.length).toBeGreaterThan(0);
+      expect(lexicalRows.some((row) => row.text.startsWith("kv1."))).toBe(false);
+      expect(lexicalRows.some((row) => row.exact_text.startsWith("kv1."))).toBe(false);
     } finally {
       raw.close();
     }
@@ -337,12 +366,22 @@ describe("legacy plaintext store migration", () => {
       characterEnd: WINDOW_TEXT.length,
       normalizedText: WINDOW_TEXT,
     });
+    plain._internal.db
+      .prepare(
+        "UPDATE chunks SET context_prefix = :prefix, augmented_text = :augmented, context_status = 'generated' WHERE capsule_id = :c",
+      )
+      .run({
+        prefix: CONTEXT_PREFIX,
+        augmented: AUGMENTED_TEXT,
+        c: seeded.capsuleId,
+      });
     plain.close();
     // Sanity: the plaintext fixture really is on disk before migration.
     expect(readAllStoreBytes(dbPath).includes(Buffer.from(FIXTURE_TEXT, "utf8"))).toBe(true);
     expect(readAllStoreBytes(dbPath).includes(Buffer.from(SECTION_LABEL, "utf8"))).toBe(true);
     expect(readAllStoreBytes(dbPath).includes(Buffer.from(HEADING_LABEL, "utf8"))).toBe(true);
     expect(readAllStoreBytes(dbPath).includes(Buffer.from(WINDOW_TEXT, "utf8"))).toBe(true);
+    expect(readAllStoreBytes(dbPath).includes(Buffer.from(CONTEXT_PREFIX, "utf8"))).toBe(true);
 
     // Re-open with a key provider → forward migration seals every content row, then VACUUMs.
     const encrypted = openKnowledgeStore({ dbPath, protection: encryptedProtection(7) });
@@ -381,7 +420,7 @@ describe("legacy plaintext store migration", () => {
 
     // After migration + VACUUM, no plaintext fixture lingers on disk.
     const afterBytes = readAllStoreBytes(dbPath);
-    for (const plaintext of [FIXTURE_TEXT, SECTION_LABEL, HEADING_LABEL, WINDOW_TEXT]) {
+    for (const plaintext of [FIXTURE_TEXT, SECTION_LABEL, HEADING_LABEL, WINDOW_TEXT, CONTEXT_PREFIX]) {
       expect(afterBytes.includes(Buffer.from(plaintext, "utf8"))).toBe(false);
     }
     const raw = new DatabaseSync(dbPath);
@@ -404,6 +443,12 @@ describe("legacy plaintext store migration", () => {
           (row) => row.heading_path_json === null || row.heading_path_json.startsWith("kv1."),
         ),
       ).toBe(true);
+      const chunkRows = raw.prepare("SELECT context_prefix, augmented_text FROM chunks").all() as {
+        readonly context_prefix: string | null;
+        readonly augmented_text: string | null;
+      }[];
+      expect(chunkRows.every((row) => row.context_prefix?.startsWith("kv1.") === true)).toBe(true);
+      expect(chunkRows.every((row) => row.augmented_text?.startsWith("kv1.") === true)).toBe(true);
     } finally {
       raw.close();
     }

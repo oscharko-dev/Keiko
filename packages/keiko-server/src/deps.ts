@@ -24,6 +24,7 @@ import { writeSideFile } from "@oscharko-dev/keiko-evidence";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import { DEFAULT_CONTEXT_PROFILE, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { IncomingMessage } from "node:http";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -77,6 +78,8 @@ import type {
   OpenAIEmbeddingRequest,
   RealtimeNegotiationOutcome,
   RealtimeNegotiationRequest,
+  RerankOutcome,
+  LiteLLMRerankRequest,
   SpeechToTextOutcome,
   SpeechToTextRequest,
   TextToSpeechOutcome,
@@ -124,7 +127,10 @@ import type { RuntimeCapabilityRouteOptions } from "./runtime/capabilityRoutes.j
 import type { GitRouteOptions } from "./gitRoutes.js";
 import { createProviderSecretResolver, type ProviderSecretResolver } from "./credentialVault.js";
 import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js";
-import type { KnowledgeStoreKeyProvider } from "@oscharko-dev/keiko-local-knowledge";
+import type {
+  ContextualRetrievalChatGateway,
+  KnowledgeStoreKeyProvider,
+} from "@oscharko-dev/keiko-local-knowledge";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
   enforceQiRetentionAtStartup,
@@ -147,6 +153,17 @@ export interface MemoryAuthorizationContext {
   readonly reviewerId: MemoryReviewerId;
   readonly authorizedScopes: () => readonly MemoryScope[];
 }
+
+export interface QualityIntelligenceReviewPrincipal {
+  readonly actorId: string;
+  readonly displayLabel: string;
+  readonly source?: string;
+  readonly kind?: "human" | "system";
+}
+
+export type QualityIntelligenceReviewPrincipalResolver = (
+  req: IncomingMessage,
+) => QualityIntelligenceReviewPrincipal;
 
 export interface RuntimeGatewayConfig {
   readonly storagePath: string;
@@ -222,6 +239,10 @@ export interface UiHandlerDeps {
   // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
   // deployments must inject the authenticated principal's reviewer id and authorized scopes.
   readonly memoryAuthorization?: MemoryAuthorizationContext | undefined;
+  // Server-authoritative principal for Quality Intelligence review governance. The browser may send
+  // a display label, but review identity is resolved here (or by the local loopback fallback).
+  readonly qualityIntelligenceReviewPrincipal?:
+    QualityIntelligenceReviewPrincipalResolver | undefined;
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
@@ -264,6 +285,16 @@ export interface UiHandlerDeps {
   // batch path when they also provide a batch stub, so existing scalar-stub tests are unchanged.
   readonly localKnowledgeEmbeddingBatchRequest?:
     ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined;
+  // RAG audit 2026-06: opt-in Anthropic-style Contextual Retrieval for Local Knowledge indexing.
+  // Production builds this over the configured Gateway; tests inject a deterministic chat gateway
+  // so the normal indexing route can prove contextual text reaches embedding/FTS without network IO.
+  readonly localKnowledgeContextualRetrievalChatGateway?:
+    | ContextualRetrievalChatGateway
+    | undefined;
+  // Work Package 2 — optional LiteLLM/Cohere-compatible reranker seam. Production leaves this
+  // undefined and uses requestLiteLLMRerank with config.reranker; tests inject deterministic
+  // structural outcomes without touching global fetch.
+  readonly rerankRequest?: ((request: LiteLLMRerankRequest) => Promise<RerankOutcome>) | undefined;
   // Issue #539 (Epic #532) — relationship engine handler deps. Optional so legacy tests
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
   // wiring composes a sqlite-backed RelationshipStore inside buildUiHandlerDeps.

@@ -10,6 +10,7 @@ import {
   fetchCapsuleDetail,
   fetchCapsules,
   fetchCapsuleSets,
+  reembedCapsuleForCurrentModel,
   refreshCapsuleChangedFiles,
   renameCapsule,
   repairCapsuleFailedFiles,
@@ -58,6 +59,7 @@ describe("local knowledge BFF boundary helpers", () => {
     await deleteCapsule(capsuleId);
     await refreshCapsuleChangedFiles(capsuleId);
     await repairCapsuleFailedFiles(capsuleId);
+    await reembedCapsuleForCurrentModel(capsuleId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules",
@@ -113,6 +115,13 @@ describe("local knowledge BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ capsuleId: "cap 1", mode: "repair-failed" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/reindex",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ capsuleId: "cap 1", mode: "full-reembed", force: true }),
       }),
     );
   });

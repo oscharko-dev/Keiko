@@ -34,6 +34,10 @@ export const SPREADSHEET_FORMULA_LEAD_CHARS: ReadonlySet<string> = new Set<strin
   "\n",
 ]);
 
+export const UTF8_BOM = "\ufeff";
+
+export const EXCEL_CSV_SEPARATOR_HINT = "sep=;\r\n";
+
 // Whitespace code points a spreadsheet import may strip BEFORE formula detection. Several importers
 // (Excel/LibreOffice/Sheets) trim a leading whitespace run, so a cell like " =1+1" or a NBSP/tab-
 // prefixed formula can still evaluate even though its literal first char is not a lead char.
@@ -91,8 +95,13 @@ export function startsWithFormulaLead(value: string): boolean {
  * mitigation applied. Pure — input string yields the same output every time.
  */
 export function encodeSpreadsheetSafeCell(value: string): string {
+  return encodeSpreadsheetSafeCellWithDelimiter(value, ",");
+}
+
+function encodeSpreadsheetSafeCellWithDelimiter(value: string, delimiter: string): string {
   const prefixed = startsWithFormulaLead(value) ? `'${value}` : value;
   const needsQuoting =
+    prefixed.includes(delimiter) ||
     prefixed.includes(",") ||
     prefixed.includes('"') ||
     prefixed.includes("\r") ||
@@ -106,15 +115,78 @@ export function encodeSpreadsheetSafeCell(value: string): string {
 }
 
 /**
- * Encodes a row by joining cell-encoded values with `,` and terminating with
- * `\r\n` (RFC 4180 line ending).
+ * Encodes a row by joining cell-encoded values with the delimiter and terminating
+ * with `\r\n` (RFC 4180 line ending). The default delimiter stays comma so the
+ * pure adapters remain stable; download routes may request semicolon rows for
+ * Excel locales that use comma as decimal separator.
  */
-export function encodeSpreadsheetSafeRow(cells: readonly string[]): string {
+export function encodeSpreadsheetSafeRow(cells: readonly string[], delimiter = ","): string {
   const encoded: string[] = [];
   for (const cell of cells) {
-    encoded.push(encodeSpreadsheetSafeCell(cell));
+    encoded.push(encodeSpreadsheetSafeCellWithDelimiter(cell, delimiter));
   }
-  return `${encoded.join(",")}\r\n`;
+  return `${encoded.join(delimiter)}\r\n`;
+}
+
+// eslint-disable-next-line complexity
+function parseCsvRows(body: string): readonly (readonly string[])[] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body.charAt(i);
+    if (inQuotes) {
+      if (ch === '"') {
+        if (body.charAt(i + 1) === '"') {
+          cell += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && cell.length === 0) {
+      inQuotes = true;
+      continue;
+    }
+    if (ch === ",") {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && body.charAt(i + 1) === "\n") {
+        i += 1;
+      }
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = "";
+      continue;
+    }
+    cell += ch;
+  }
+  if (cell.length > 0 || row.length > 0) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows;
+}
+
+export function convertCsvDelimiter(body: string, delimiter = ";"): string {
+  let converted = "";
+  for (const row of parseCsvRows(body)) {
+    converted += encodeSpreadsheetSafeRow(row, delimiter);
+  }
+  return converted;
+}
+
+export function toExcelFriendlyCsv(body: string): string {
+  return `${UTF8_BOM}${EXCEL_CSV_SEPARATOR_HINT}${convertCsvDelimiter(body, ";")}`;
 }
 
 /**

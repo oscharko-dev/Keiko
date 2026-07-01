@@ -241,6 +241,7 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
     expect(unit.pageNumber).toBe(1);
     expect(unit.characterStart).toBe(0);
     expect(unit.characterEnd).toBe(text.length);
+    expect("normalizedText" in result ? result.normalizedText : undefined).toBe(text);
     expect(result.diagnostics).toEqual([]);
   });
 
@@ -263,7 +264,7 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
     expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 3 });
   });
 
-  it("emits a page unit with characterEnd=0 for blank page text", async () => {
+  it("returns unsupported with a diagnostic for blank OCR text", async () => {
     const parser = createOcrPipelineParser(scriptedAdapter({ ok: true, text: "", confidence: 0 }));
     const result = await parser.parseAsync(
       selectionFromBytes(PNG_MAGIC, { extension: "png" }),
@@ -271,8 +272,10 @@ describe("createOcrPipelineParser — parseAsync (scripted adapter — success)"
     );
     expect(result.units).toHaveLength(1);
     const unit = result.units[0];
-    if (unit?.kind !== "page") throw new Error(`expected page unit`);
-    expect(unit.characterEnd).toBe(0);
+    if (unit?.kind !== "unsupported-media") throw new Error(`expected unsupported-media`);
+    expect(unit.reason).toBe("ocr-empty-text");
+    expect(result.diagnostics[0]).toMatchObject({ code: "UNSUPPORTED_FORMAT", severity: "info" });
+    expect("normalizedText" in result ? result.normalizedText : undefined).toBeUndefined();
   });
 
   it("records the correct documentId on the page unit", async () => {

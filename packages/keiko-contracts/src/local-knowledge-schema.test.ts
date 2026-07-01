@@ -176,6 +176,21 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(chunkId, capsuleId, sourceId, documentId, parsedUnitId, 0, 256, "abc");
   }
+  if (listSqliteMaster(db, "table").includes("chunk_lexical_index")) {
+    db.prepare(
+      `INSERT INTO chunk_lexical_index (
+         capsule_id, source_id, document_id, chunk_id, text, exact_text, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      sourceId,
+      documentId,
+      chunkId,
+      "Überweisung Zahlungsziel BillingService.processPayment_v2",
+      "Überweisung Zahlungsziel BillingService.processPayment_v2",
+      1000,
+    );
+  }
   const embedding = new Uint8Array(1536 * 4);
   db.prepare(
     `INSERT INTO vectors (
@@ -215,8 +230,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 15 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(15);
+  it("is the integer 18 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(18);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -333,6 +348,26 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
     }
   });
 
+  it("persists contextual retrieval and augmented indexed text columns on chunks", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('chunks')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("contextual_retrieval_key")?.type).toBe("TEXT");
+      expect(byName.get("context_prefix")?.type).toBe("TEXT");
+      expect(byName.get("augmented_text")?.type).toBe("TEXT");
+      expect(byName.get("context_status")?.type).toBe("TEXT");
+      expect(byName.get("context_updated_at")?.type).toBe("INTEGER");
+      expect(byName.get("augmented_text")?.notnull).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
   it("persists content-addressed document blobs and nullable document blob references", () => {
     const db = openSchemaDb();
     try {
@@ -357,6 +392,42 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(blobByName.get("storage_kind")?.type).toBe("TEXT");
       const indexes = listSqliteMaster(db, "index");
       expect(indexes).toContain("idx_document_blobs_created_document");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists an external-content FTS5 lexical index with unicode61 diacritics preserved", () => {
+    const db = openSchemaDb();
+    try {
+      const handles = seedFullLineage(db);
+      const ftsRow = db
+        .prepare(
+          [
+            "SELECT li.chunk_id AS chunk_id, bm25(chunk_lexical_fts) AS bm25_score",
+            "FROM chunk_lexical_fts",
+            "JOIN chunk_lexical_index AS li ON li.rowid = chunk_lexical_fts.rowid",
+            "WHERE chunk_lexical_fts MATCH ? AND li.capsule_id = ?",
+            "ORDER BY bm25_score ASC",
+          ].join(" "),
+        )
+        .get('"Überweisung"', handles.capsuleId) as
+        | { readonly chunk_id?: string; readonly bm25_score?: number }
+        | undefined;
+      expect(ftsRow?.chunk_id).toBe(handles.chunkId);
+      expect(typeof ftsRow?.bm25_score).toBe("number");
+
+      const folded = db
+        .prepare(
+          [
+            "SELECT COUNT(*) AS n",
+            "FROM chunk_lexical_fts",
+            "JOIN chunk_lexical_index AS li ON li.rowid = chunk_lexical_fts.rowid",
+            "WHERE chunk_lexical_fts MATCH ? AND li.capsule_id = ?",
+          ].join(" "),
+        )
+        .get('"Uberweisung"', handles.capsuleId) as { readonly n: number };
+      expect(folded.n).toBe(0);
     } finally {
       db.close();
     }
@@ -492,6 +563,7 @@ describe("lineage enforcement", () => {
         "sections",
         "parsed_units",
         "chunks",
+        "chunk_lexical_index",
         "vectors",
         "parser_diagnostics",
         "indexing_jobs",
@@ -715,6 +787,36 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
       expect(countRows(db, "document_blobs")).toBe(0);
       expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v17 on top of a v16 database and preserves existing chunks", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v17 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 17);
+      if (v17 === undefined) {
+        throw new Error("expected v17 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 17) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+
+      for (const stmt of v17.up) db.exec(stmt);
+
+      const row = db
+        .prepare(
+          "SELECT id, augmented_text, context_prefix FROM chunks WHERE capsule_id = ? AND id = ?",
+        )
+        .get(handles.capsuleId, handles.chunkId) as
+        | { readonly id: string; readonly augmented_text: string | null; readonly context_prefix: string | null }
+        | undefined;
+      expect(row?.id).toBe(handles.chunkId);
+      expect(row?.augmented_text).toBeNull();
+      expect(row?.context_prefix).toBeNull();
     } finally {
       db.close();
     }

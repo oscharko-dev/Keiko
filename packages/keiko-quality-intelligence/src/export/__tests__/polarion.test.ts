@@ -77,6 +77,18 @@ describe("adaptToPolarion", () => {
     expect(out).toContain("Step 1 ; Step 2 ; Step 3");
   });
 
+  it("preserves tags and status alongside mapped severity", () => {
+    const c = candidate("tc-1", {
+      riskClass: "compliance",
+      tags: ["smoke", "regression"],
+      status: "accepted",
+    });
+    const out = adaptToPolarion(bundle([c]), [c]);
+    const data = out.split("\r\n")[1]?.split(",") ?? [];
+    expect(data[POLARION_CSV_HEADERS.indexOf("Tags")]).toBe("compliance smoke regression");
+    expect(data[POLARION_CSV_HEADERS.indexOf("Status")]).toBe("accepted");
+  });
+
   it("expectedResults appear in Description (Polarion keeps all expected — none dropped)", () => {
     const c = candidate("tc-1", {
       expectedResults: ["Result A", "Result B", "Result C"],

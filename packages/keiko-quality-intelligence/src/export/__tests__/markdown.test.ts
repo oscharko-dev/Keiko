@@ -10,6 +10,7 @@ import type {
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import { adaptToMarkdown } from "../adapters/markdown.js";
+import { escapeMarkdownActiveSyntax } from "../textSafety.js";
 
 const Q = QualityIntelligence;
 const RUN = Q.asQualityIntelligenceRunId("qi-run-md");
@@ -163,6 +164,57 @@ describe("adaptToMarkdown — export sanitisation", () => {
     const out = adaptToMarkdown(bundle([c]), [c]);
     expect(out).not.toContain("```js");
     expect(out).toContain("\\`\\`\\`js");
+  });
+
+  it("escapes reference-style links so they cannot resolve through a reference definition", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["Open [admin][evil]"],
+      expectedResults: ["[evil]: javascript:alert(1)"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\[admin\\]\\[evil\\]");
+    expect(out).toContain("\\[evil\\]: javascript:alert(1)");
+    expect(out).not.toContain("[admin][evil]");
+    expect(out).not.toContain("[evil]: javascript");
+  });
+
+  it("escapes Markdown autolinks", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["Open <http://evil.example/path>"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\<http://evil.example/path\\>");
+    expect(out).not.toContain("<http://evil.example/path>");
+  });
+
+  it("escapes raw HTML tags", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      expectedResults: ["<script>alert(1)</script>"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\<script\\>alert(1)\\</script\\>");
+    expect(out).not.toContain("<script>");
+  });
+
+  it("escapes angle brackets inside Markdown link text", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["[<script](1)"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("\\[\\<script\\](1)");
+    expect(out).not.toContain("[<script](1)");
+  });
+
+  it("escapes existing backslashes before Markdown-active syntax", () => {
+    expect(escapeMarkdownActiveSyntax("\\")).toBe("\\\\");
+    const escaped = escapeMarkdownActiveSyntax("\\<script>alert(1)</script>");
+    expect(escaped).toContain("\\\\");
+    expect(escaped).toContain("\\<script\\>alert(1)\\</script\\>");
+    expect(escaped).not.toBe("\\<script>alert(1)</script>");
   });
 
   it("stays deterministic with adversarial field content", () => {

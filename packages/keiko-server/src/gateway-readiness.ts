@@ -4,9 +4,13 @@ import {
   DEFAULT_API_KEY_HEADER_NAME,
   isConversationEligibleModel,
   listConfiguredCapabilities,
+  requestLiteLLMRerank,
+  requestOpenAIEmbedding,
+  vectorL2Norm,
   type GatewayConfig,
   type ModelCapability,
   type ModelProviderConfig,
+  type RerankerConfig,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   gatewayFetch,
@@ -29,8 +33,10 @@ const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
   "streaming",
   "tool_calling",
   "json_schema",
+  "embedding",
 ];
 const DEEP_PROBES: readonly GatewayReadinessProbeName[] = [
+  "reranker",
   "reasoning",
   "image_input",
   "document_input",
@@ -44,6 +50,8 @@ const VERIFIED_CAPABILITY_PROBES = [
   ["reasoningOutput", "reasoning"],
   ["imageInput", "image_input"],
   ["documentInput", "document_input"],
+  ["embedding", "embedding"],
+  ["reranker", "reranker"],
 ] as const satisfies readonly (readonly [
   keyof GatewayReadinessReport["verifiedCapabilities"],
   GatewayReadinessProbeName,
@@ -237,6 +245,134 @@ async function providerRequest(
     maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
     egress: provider.egress ?? currentGatewayEgressConfig(deps),
   });
+}
+
+function providerCapability(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+): ModelCapability | undefined {
+  return listConfiguredCapabilities(config).find((capability) => capability.id === provider.modelId);
+}
+
+function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | undefined {
+  return config.providers.find(
+    (provider) => providerCapability(config, provider)?.kind === "embedding",
+  );
+}
+
+function roundedNorm(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
+// eslint-disable-next-line max-lines-per-function, complexity
+async function probeEmbedding(
+  deps: UiHandlerDeps,
+  config: GatewayConfig,
+): Promise<GatewayReadinessProbeResult> {
+  const start = Date.now();
+  const provider = chooseEmbeddingProvider(config);
+  if (provider === undefined) {
+    return skipped("embedding", "No embedding-capable provider is configured.");
+  }
+  try {
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: provider.baseUrl,
+      apiKey: provider.apiKey,
+      ...(provider.apiKeyHeaderName !== undefined
+        ? { apiKeyHeaderName: provider.apiKeyHeaderName }
+        : {}),
+      modelId: provider.modelId,
+      input: "Keiko embedding readiness probe",
+      ...(deps.gatewayReadinessFetch !== undefined
+        ? { fetchImpl: deps.gatewayReadinessFetch }
+        : {}),
+      timeoutMs: provider.timeoutMs,
+      egress: provider.egress ?? currentGatewayEgressConfig(deps),
+    });
+    if (!outcome.ok) {
+      return result(
+        "embedding",
+        outcome.kind === "unsupported-model" ? "unsupported" : "failed",
+        start,
+        `Embedding endpoint could not be verified (${outcome.kind}).`,
+      );
+    }
+    const dimensions = outcome.value.vector.length;
+    const norm = roundedNorm(vectorL2Norm(outcome.value.vector));
+    const passed = dimensions > 0 && norm > 0;
+    return result(
+      "embedding",
+      passed ? "passed" : "failed",
+      start,
+      passed
+        ? `Embedding endpoint returned ${dimensions.toString()} dimensions with L2 norm ${norm.toFixed(4)}.`
+        : "Embedding endpoint returned an empty or zero-norm vector.",
+    );
+  } catch (probeError) {
+    return result(
+      "embedding",
+      "failed",
+      start,
+      "Embedding endpoint could not be verified.",
+      providerWarning(probeError),
+    );
+  }
+}
+
+// eslint-disable-next-line max-lines-per-function, complexity
+async function probeReranker(
+  deps: UiHandlerDeps,
+  reranker: RerankerConfig | undefined,
+): Promise<GatewayReadinessProbeResult> {
+  const start = Date.now();
+  if (reranker === undefined) {
+    return skipped("reranker", "No reranker is configured.");
+  }
+  try {
+    const outcome = await requestLiteLLMRerank({
+      endpoint: reranker.baseUrl,
+      apiKey: reranker.apiKey,
+      ...(reranker.apiKeyHeaderName !== undefined
+        ? { apiKeyHeaderName: reranker.apiKeyHeaderName }
+        : {}),
+      modelId: reranker.modelId,
+      query: "alpha readiness match",
+      documents: ["alpha readiness match", "unrelated beta"],
+      topN: 1,
+      ...(deps.gatewayReadinessFetch !== undefined
+        ? { fetchImpl: deps.gatewayReadinessFetch }
+        : {}),
+      timeoutMs: reranker.timeoutMs,
+      egress: reranker.egress ?? currentGatewayEgressConfig(deps),
+    });
+    if (!outcome.ok) {
+      return result(
+        "reranker",
+        outcome.kind === "unsupported-model" || outcome.kind === "not-configured"
+          ? "unsupported"
+          : "failed",
+        start,
+        `Reranker endpoint could not be verified (${outcome.kind}).`,
+      );
+    }
+    const passed = outcome.value.results[0]?.index === 0;
+    return result(
+      "reranker",
+      passed ? "passed" : "unsupported",
+      start,
+      passed
+        ? "Reranker returned the expected top document for a two-item probe."
+        : "Reranker answered, but did not rank the expected document first.",
+    );
+  } catch (probeError) {
+    return result(
+      "reranker",
+      "failed",
+      start,
+      "Reranker endpoint could not be verified.",
+      providerWarning(probeError),
+    );
+  }
 }
 
 function result(
@@ -827,6 +963,8 @@ async function runProbe(
   if (name === "streaming") return probeStreaming(deps, selection.provider);
   if (name === "tool_calling") return probeToolCalling(deps, selection.provider);
   if (name === "json_schema") return probeJsonSchema(deps, selection.provider);
+  if (name === "embedding") return probeEmbedding(deps, selection.config);
+  if (name === "reranker") return probeReranker(deps, selection.config.reranker);
   if (name === "reasoning") return probeReasoning(deps, selection.provider);
   if (name === "image_input") return probeImageInput(deps, selection.provider);
   if (name === "document_input") return probeDocumentInput(deps, selection.provider);
@@ -841,6 +979,7 @@ function reportStatus(
   return probes.every((probe) => probe.status === "passed") ? "ready" : "partial";
 }
 
+// eslint-disable-next-line complexity
 function verifiedCapabilities(
   probes: readonly GatewayReadinessProbeResult[],
 ): GatewayReadinessReport["verifiedCapabilities"] {
@@ -857,11 +996,30 @@ function verifiedCapabilities(
     tokenMatch === undefined || tokenMatch === null
       ? undefined
       : Number.parseInt(tokenMatch[1] ?? "0", 10);
+  const embedding = probes.find(
+    (probe) => probe.name === "embedding" && probe.status === "passed",
+  );
+  const embeddingMatch = embedding?.evidence.match(
+    /returned (\d+) dimensions with L2 norm ([0-9.]+)/u,
+  );
+  const embeddingDimensions =
+    embeddingMatch === undefined || embeddingMatch === null
+      ? undefined
+      : Number.parseInt(embeddingMatch[1] ?? "0", 10);
+  const embeddingNorm =
+    embeddingMatch === undefined || embeddingMatch === null
+      ? undefined
+      : Number.parseFloat(embeddingMatch[2] ?? "0");
   const verified = Object.fromEntries(
     VERIFIED_CAPABILITY_PROBES.map(([key, probe]) => [key, passed.has(probe) || undefined]),
-  ) as Omit<GatewayReadinessReport["verifiedCapabilities"], "testedContextTokens">;
+  ) as Omit<
+    GatewayReadinessReport["verifiedCapabilities"],
+    "testedContextTokens" | "embeddingDimensions" | "embeddingNorm"
+  >;
   return {
     ...verified,
+    embeddingDimensions,
+    embeddingNorm,
     testedContextTokens,
   };
 }

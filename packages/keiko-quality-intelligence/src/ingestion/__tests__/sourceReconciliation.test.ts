@@ -55,15 +55,15 @@ describe("reconcileSourceGroups", () => {
     expect(prov?.contributingGroupLabels).toEqual(["first", "second"]);
   });
 
-  it("treats same id with different kind as conflict and excludes both", () => {
+  it("treats same id with different kind as distinct identities", () => {
     const repo = env("x", "repository-context");
     const human = env("x", "human-context");
     const result = reconcileSourceGroups([
       { groupLabel: "A", envelopes: [repo] },
       { groupLabel: "B", envelopes: [human] },
     ]);
-    expect(result.envelopes).toEqual([]);
-    expect(result.conflictingEnvelopeIds).toEqual([repo.id]);
+    expect(result.envelopes).toEqual([repo, human]);
+    expect(result.conflictingEnvelopeIds).toEqual([]);
     expect(result.duplicatedAcrossGroups).toEqual([]);
   });
 

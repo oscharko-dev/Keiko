@@ -3,7 +3,7 @@
 // Coverage:
 //   1. JSON recovery robustness — all input shapes the parser must handle
 //   2. Field mapping + validation — skipped / clamped / coerced fields
-//   3. Atom-index resolution — 1-based mapping, fallback, empty-atomIds edge cases
+//   3. Atom-index resolution — 1-based mapping, unverified provenance, empty-atomIds edge cases
 //   4. Determinism and maxCandidates cap
 //   5. Adversarial inputs
 
@@ -20,9 +20,20 @@ import {
   GENERATED_CANDIDATE_TITLE_MAX_CHARS,
 } from "../../generation/candidateBounds.js";
 import {
+  GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID,
+  GENERATED_CANDIDATE_TAG_EVIDENCE_OVER_CITED,
+  GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_AUTOFILLED,
+  GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER,
+  GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED,
+  GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED,
+  GENERATED_CANDIDATE_TAG_RISK_DEFAULTED,
+  MAX_DERIVED_ATOM_IDS_PER_CANDIDATE,
+  MAX_GENERATED_CANDIDATE_OUTPUT_CHARS,
+  MAX_JSON_RECOVERY_ATTEMPTS,
   parseGeneratedCandidates,
   type ParseGeneratedCandidatesInput,
 } from "../../generation/parseGeneratedCandidates.js";
+import { MAX_CANDIDATES_PER_RUN } from "../../hardening/oversizeGuards.js";
 
 type ParseInput = ParseGeneratedCandidatesInput;
 
@@ -264,22 +275,46 @@ describe("parseGeneratedCandidates — field mapping", () => {
     expect(result.skipped).toBe(1);
   });
 
-  it("clamps an invalid priority to the profile default (regressionDefault → P2)", () => {
+  it("defaults an invalid priority to the profile default and marks it for review", () => {
     const raw = wrapInTestCases([validItem({ priority: "P99" })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
       raw,
       baseInput({ profile: regressionDefault }),
     );
     expect(result.candidates[0]?.priority).toBe(regressionDefault.defaultPriority);
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED);
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
-  it("clamps a numeric priority to the profile default", () => {
+  it("defaults a numeric priority to the profile default and marks it for review", () => {
     const raw = wrapInTestCases([validItem({ priority: 42 })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
       raw,
       baseInput({ profile: bankingDefault }),
     );
     expect(result.candidates[0]?.priority).toBe(bankingDefault.defaultPriority);
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED);
+    expect(result.candidates[0]?.status).toBe("needs-review");
+  });
+
+  it("marks missing priority and riskClass defaults as review diagnostics", () => {
+    const noDefaults: Record<string, unknown> = { ...validItem() };
+    delete noDefaults.priority;
+    delete noDefaults.riskClass;
+    const raw = wrapInTestCases([noDefaults]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      raw,
+      baseInput({ profile: regressionDefault }),
+    );
+    expect(result.candidates[0]?.priority).toBe(regressionDefault.defaultPriority);
+    expect(result.candidates[0]?.riskClass).toBe(regressionDefault.defaultRiskClass);
+    expect(result.candidates[0]?.tags).toEqual(
+      expect.arrayContaining([
+        GENERATED_CANDIDATE_TAG_PRIORITY_DEFAULTED,
+        GENERATED_CANDIDATE_TAG_RISK_DEFAULTED,
+      ]),
+    );
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
   it("preserves valid priority P0", () => {
@@ -294,13 +329,15 @@ describe("parseGeneratedCandidates — field mapping", () => {
     expect(result.candidates[0]?.priority).toBe("P3");
   });
 
-  it("clamps an invalid riskClass to the profile default", () => {
+  it("defaults an invalid riskClass to the profile default and marks it for review", () => {
     const raw = wrapInTestCases([validItem({ riskClass: "UNKNOWN" })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
       raw,
       baseInput({ profile: regressionDefault }),
     );
     expect(result.candidates[0]?.riskClass).toBe(regressionDefault.defaultRiskClass);
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_RISK_DEFAULTED);
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
   it("preserves valid riskClass 'safety'", () => {
@@ -370,6 +407,40 @@ describe("parseGeneratedCandidates — field mapping", () => {
     expect(expected.length).toBeGreaterThan(0);
     // Fallback must mention evidence (documented sentinel)
     expect(expected[0]).toMatch(/evidence/i);
+    expect(result.candidates[0]?.tags).toContain(
+      GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_AUTOFILLED,
+    );
+    expect(result.candidates[0]?.tags).toContain(
+      GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER,
+    );
+    expect(result.candidates[0]?.status).toBe("needs-review");
+  });
+
+  it("uses a German fallback expected result for German-language candidates", () => {
+    const noExpected = validItem({
+      title: "Überweisung mit zweiter Freigabe prüfen",
+      steps: ["Prüfe, dass die Zahlung blockiert bleibt."],
+    });
+    delete noExpected.expectedResults;
+    const raw = wrapInTestCases([noExpected]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    const expected = result.candidates[0]?.expectedResults ?? [];
+    expect(expected[0]).toBe("Das Verhalten entspricht der zitierten Evidenz.");
+    expect(expected[0]).not.toMatch(/\bbehaviou?r\b/i);
+  });
+
+  it("marks vague model-supplied expected results as needs-review", () => {
+    const raw = wrapInTestCases([
+      validItem({ expectedResults: ["The behaviour matches the cited evidence."] }),
+    ]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+    expect(result.candidates[0]?.expectedResults).toEqual([
+      "The behaviour matches the cited evidence.",
+    ]);
+    expect(result.candidates[0]?.tags).toContain(
+      GENERATED_CANDIDATE_TAG_EXPECTED_RESULT_PLACEHOLDER,
+    );
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
   it("uses empty tags list when tags key is absent", () => {
@@ -437,20 +508,30 @@ describe("parseGeneratedCandidates — atom-index resolution", () => {
     expect(result.candidates[0]?.derivedFromAtomIds).toContain(ATOM_C);
   });
 
-  it("drops out-of-range index 999 and uses positional fallback", () => {
+  it("drops out-of-range index 999 without synthesizing positional provenance", () => {
     const raw = wrapInTestCases([validItem({ derivedFromEvidenceIndexes: [999] })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    // 999 is out of range → falls back to positional (candidate 0 → atomIds[0])
-    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(1);
-    expect(result.candidates[0]?.derivedFromAtomIds[0]).toBe(ATOM_A);
+    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(0);
+    expect(result.candidates[0]?.tags).toEqual(
+      expect.arrayContaining([
+        GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID,
+        GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED,
+      ]),
+    );
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
-  it("drops index 0 (non-positive, out of 1-based range) and uses fallback", () => {
+  it("drops index 0 (non-positive, out of 1-based range) and marks provenance unverified", () => {
     const raw = wrapInTestCases([validItem({ derivedFromEvidenceIndexes: [0] })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    // atomIds[0 - 1] = atomIds[-1] = undefined → dropped
-    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(1);
-    expect(result.candidates[0]?.derivedFromAtomIds[0]).toBe(ATOM_A);
+    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(0);
+    expect(result.candidates[0]?.tags).toEqual(
+      expect.arrayContaining([
+        GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID,
+        GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED,
+      ]),
+    );
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
   it("deduplicates repeated 1-based indexes — no duplicate atom IDs in result", () => {
@@ -462,31 +543,33 @@ describe("parseGeneratedCandidates — atom-index resolution", () => {
     expect(atomIds).toHaveLength(1);
   });
 
-  it("uses positional fallback when derivedFromEvidenceIndexes key is absent", () => {
+  it("marks provenance unverified when derivedFromEvidenceIndexes key is absent", () => {
     const noIndexes: Record<string, unknown> = { ...validItem() };
     delete noIndexes.derivedFromEvidenceIndexes;
     const raw = wrapInTestCases([noIndexes]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    // Candidate 0 → positional index 0 % 3 = 0 → ATOM_A
-    expect(result.candidates[0]?.derivedFromAtomIds[0]).toBe(ATOM_A);
+    expect(result.candidates[0]?.derivedFromAtomIds).toEqual([]);
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
-  it("uses positional fallback when derivedFromEvidenceIndexes is empty array", () => {
+  it("marks provenance unverified when derivedFromEvidenceIndexes is empty array", () => {
     const raw = wrapInTestCases([validItem({ derivedFromEvidenceIndexes: [] })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(1);
-    expect(result.candidates[0]?.derivedFromAtomIds[0]).toBe(ATOM_A);
+    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(0);
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 
-  it("second candidate uses different positional fallback index (i % len)", () => {
+  it("does not vary unverified provenance by array position", () => {
     const item0 = validItem({ derivedFromEvidenceIndexes: [] });
     const item1 = { ...validItem({ title: "Second test" }), derivedFromEvidenceIndexes: [] };
     const raw = wrapInTestCases([item0, item1]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
-    // Candidate 0: index 0 % 3 = 0 → ATOM_A
-    // Candidate 1: index 1 % 3 = 1 → ATOM_B
-    expect(result.candidates[0]?.derivedFromAtomIds[0]).toBe(ATOM_A);
-    expect(result.candidates[1]?.derivedFromAtomIds[0]).toBe(ATOM_B);
+    expect(result.candidates[0]?.derivedFromAtomIds).toEqual([]);
+    expect(result.candidates[1]?.derivedFromAtomIds).toEqual([]);
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
+    expect(result.candidates[1]?.tags).toContain(GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED);
   });
 
   it("returns empty derivedFromAtomIds when atomIds is empty and no indexes given", () => {
@@ -499,27 +582,52 @@ describe("parseGeneratedCandidates — atom-index resolution", () => {
   });
 
   it("returns empty derivedFromAtomIds when atomIds is empty even with valid index", () => {
-    // Index 1 → atomIds[0] = undefined (atomIds is empty) → dropped → fallback → empty (atomIds empty)
     const raw = wrapInTestCases([validItem({ derivedFromEvidenceIndexes: [1] })]);
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
       raw,
       baseInput({ atomIds: [] }),
     );
     expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(0);
+    expect(result.candidates[0]?.tags).toEqual(
+      expect.arrayContaining([
+        GENERATED_CANDIDATE_TAG_EVIDENCE_INDEX_INVALID,
+        GENERATED_CANDIDATE_TAG_PROVENANCE_UNVERIFIED,
+      ]),
+    );
+  });
+
+  it("caps broad evidence citations and marks over-citing", () => {
+    const manyAtoms = Array.from({ length: MAX_DERIVED_ATOM_IDS_PER_CANDIDATE + 3 }, (_, i) =>
+      QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-cap-${String(i + 1)}`),
+    );
+    const raw = wrapInTestCases([
+      validItem({
+        derivedFromEvidenceIndexes: manyAtoms.map((_atom, i) => i + 1),
+      }),
+    ]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      raw,
+      baseInput({ atomIds: manyAtoms }),
+    );
+    expect(result.candidates[0]?.derivedFromAtomIds).toHaveLength(
+      MAX_DERIVED_ATOM_IDS_PER_CANDIDATE,
+    );
+    expect(result.candidates[0]?.tags).toContain(GENERATED_CANDIDATE_TAG_EVIDENCE_OVER_CITED);
+    expect(result.candidates[0]?.status).toBe("needs-review");
   });
 });
 
 // ─── 4. Determinism and maxCandidates cap ─────────────────────────────────────
 
 describe("parseGeneratedCandidates — determinism and caps", () => {
-  it("same index, title, and cited atoms always produce the same candidate id", () => {
+  it("same content and cited atoms always produce the same candidate id", () => {
     const raw = wrapInTestCases([validItem()]);
     const r1 = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     const r2 = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     expect(r1.candidates[0]?.id).toBe(r2.candidates[0]?.id);
   });
 
-  it("different titles produce different ids for the same cited atoms and index", () => {
+  it("different titles produce different ids for the same cited atoms", () => {
     const r1 = QualityIntelligenceGeneration.parseGeneratedCandidates(
       wrapInTestCases([validItem({ title: "Title Alpha" })]),
       baseInput(),
@@ -531,7 +639,7 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     expect(r1.candidates[0]?.id).not.toBe(r2.candidates[0]?.id);
   });
 
-  it("different runIds produce the same ids for identical title, index, and cited atoms", () => {
+  it("different runIds produce the same ids for identical content and cited atoms", () => {
     const raw = wrapInTestCases([validItem()]);
     const r1 = QualityIntelligenceGeneration.parseGeneratedCandidates(
       raw,
@@ -546,6 +654,94 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     expect(r2.candidates[0]?.runId).toBe(RUN_ID_2);
   });
 
+  it("keeps candidate ids stable when the model output array is reordered", () => {
+    const first = validItem({
+      title: "Stable case A",
+      steps: ["Run stable case A"],
+      expectedResults: ["A stable result is visible."],
+      derivedFromEvidenceIndexes: [1],
+    });
+    const second = validItem({
+      title: "Stable case B",
+      steps: ["Run stable case B"],
+      expectedResults: ["B stable result is visible."],
+      derivedFromEvidenceIndexes: [2],
+    });
+    const original = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([first, second]),
+      baseInput(),
+    );
+    const reordered = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([second, first]),
+      baseInput(),
+    );
+
+    const originalA = original.candidates.find((candidate) => candidate.title === "Stable case A");
+    const reorderedA = reordered.candidates.find(
+      (candidate) => candidate.title === "Stable case A",
+    );
+    expect(originalA?.id).toBe(reorderedA?.id);
+  });
+
+  it("keeps candidate ids stable when an earlier malformed item is skipped", () => {
+    const target = validItem({
+      title: "Stable after skipped item",
+      steps: ["Run the stable target"],
+      expectedResults: ["The stable target result is visible."],
+      derivedFromEvidenceIndexes: [2],
+    });
+    const withSkippedPrefix = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([validItem({ title: "" }), target]),
+      baseInput(),
+    );
+    const withoutSkippedPrefix = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([target]),
+      baseInput(),
+    );
+    expect(withSkippedPrefix.skipped).toBe(1);
+    expect(withSkippedPrefix.candidates[0]?.id).toBe(withoutSkippedPrefix.candidates[0]?.id);
+  });
+
+  it("keeps candidate ids stable when cited evidence indexes are supplied in a different order", () => {
+    const left = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([validItem({ derivedFromEvidenceIndexes: [1, 2] })]),
+      baseInput(),
+    );
+    const right = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([validItem({ derivedFromEvidenceIndexes: [2, 1] })]),
+      baseInput(),
+    );
+    expect(left.candidates[0]?.derivedFromAtomIds).toEqual([ATOM_A, ATOM_B]);
+    expect(right.candidates[0]?.derivedFromAtomIds).toEqual([ATOM_B, ATOM_A]);
+    expect(left.candidates[0]?.id).toBe(right.candidates[0]?.id);
+  });
+
+  it("uses the candidate body digest to distinguish equal title and atoms", () => {
+    const left = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([
+        validItem({
+          title: "Same business title",
+          steps: ["Execute branch A"],
+          expectedResults: ["Branch A result is shown."],
+          derivedFromEvidenceIndexes: [1],
+        }),
+      ]),
+      baseInput(),
+    );
+    const right = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases([
+        validItem({
+          title: "Same business title",
+          steps: ["Execute branch B"],
+          expectedResults: ["Branch B result is shown."],
+          derivedFromEvidenceIndexes: [1],
+        }),
+      ]),
+      baseInput(),
+    );
+    expect(left.candidates[0]?.id).not.toBe(right.candidates[0]?.id);
+  });
+
   it("maxCandidates=0 returns no candidates (boundary)", () => {
     const items = [validItem(), validItem({ title: "Second" }), validItem({ title: "Third" })];
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
@@ -554,6 +750,7 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     );
     expect(result.candidates).toHaveLength(0);
     expect(result.recovered).toBe(true);
+    expect(result.overCapSkipped).toBe(3);
   });
 
   it("maxCandidates=1 admits only the first valid candidate", () => {
@@ -568,6 +765,7 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     );
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]?.title).toBe("First");
+    expect(result.overCapSkipped).toBe(2);
   });
 
   it("stops exactly at maxCandidates=2 boundary (2 of 3 items admitted)", () => {
@@ -582,6 +780,22 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     );
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates.map((c) => c.title)).not.toContain("C");
+    expect(result.overCapSkipped).toBe(1);
+  });
+
+  it("counts only the uninspected tail as overCapSkipped when invalid items precede the cap", () => {
+    const raw = wrapInTestCases([
+      validItem({ title: "" }),
+      validItem({ title: "Accepted" }),
+      validItem({ title: "Over cap" }),
+    ]);
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      raw,
+      baseInput({ maxCandidates: 1 }),
+    );
+    expect(result.candidates.map((candidate) => candidate.title)).toEqual(["Accepted"]);
+    expect(result.skipped).toBe(1);
+    expect(result.overCapSkipped).toBe(1);
   });
 
   it("candidate ids are prefixed with 'qi-candidate-'", () => {
@@ -607,6 +821,19 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
     // regressionDefault.defaultPriority = "P2"
     expect(result.candidates[0]?.priority).toBe("P2");
   });
+
+  it("applies the global generated-candidate hard cap even when maxCandidates is larger", () => {
+    const items = Array.from({ length: MAX_CANDIDATES_PER_RUN + 3 }, (_, i) =>
+      validItem({ title: `Hard capped case ${String(i)}` }),
+    );
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
+      wrapInTestCases(items),
+      baseInput({ maxCandidates: MAX_CANDIDATES_PER_RUN + 3 }),
+    );
+
+    expect(result.candidates).toHaveLength(MAX_CANDIDATES_PER_RUN);
+    expect(result.overCapSkipped).toBe(3);
+  });
 });
 
 // ─── 5. Adversarial inputs ────────────────────────────────────────────────────
@@ -628,6 +855,25 @@ describe("parseGeneratedCandidates — adversarial inputs", () => {
     const raw = JSON.stringify({ something: "else", data: { nested: true } });
     const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
     expect(result.recovered).toBe(true);
+    expect(result.candidates).toHaveLength(0);
+  });
+
+  it("does not keep scanning after the bounded loose-JSON recovery attempt cap", () => {
+    const invalidOpeners = "{".repeat(MAX_JSON_RECOVERY_ATTEMPTS + 1);
+    const raw = `${invalidOpeners}${wrapInTestCases([validItem()])}`;
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+
+    expect(result.recovered).toBe(false);
+    expect(result.candidates).toHaveLength(0);
+  });
+
+  it("rejects oversized raw model output before loose JSON recovery", () => {
+    const raw = `${" ".repeat(MAX_GENERATED_CANDIDATE_OUTPUT_CHARS + 1)}${wrapInTestCases([
+      validItem(),
+    ])}`;
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, baseInput());
+
+    expect(result.recovered).toBe(false);
     expect(result.candidates).toHaveLength(0);
   });
 

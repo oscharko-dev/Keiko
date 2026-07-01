@@ -23,6 +23,7 @@
 // re-deriving one from the other.
 
 import type { CitationReference, RetrievalReference } from "@oscharko-dev/keiko-contracts";
+import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import type { LocalKnowledgeGroundedContextPack } from "../retrieval/context-pack-assembler.js";
 import type { RetrievalNoEvidenceReason, RetrievalQuery } from "../retrieval/types.js";
@@ -38,6 +39,7 @@ export interface ConversationGroundedQuery {
   readonly text: string;
   readonly topK?: number;
   readonly minScore?: number;
+  readonly strategy?: RetrievalQuery["strategy"];
 }
 
 // `noEvidence: true` ⇒ `answer` is the empty string AND `references` is empty AND the
@@ -51,6 +53,7 @@ export interface ConversationGroundedAnswer {
   readonly pack: LocalKnowledgeGroundedContextPack;
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`
@@ -71,6 +74,7 @@ export interface AnswerGeneratorInput {
   readonly query: ConversationGroundedQuery;
   readonly pack: LocalKnowledgeGroundedContextPack;
   readonly references: readonly RetrievalReference[];
+  readonly citationRepair?: boolean | undefined;
   readonly signal?: AbortSignal | undefined;
 }
 
@@ -79,4 +83,22 @@ export interface AnswerGeneratorInput {
 // out-of-bounds markers. Implementations MUST NOT mutate any input.
 export interface AnswerGenerator {
   readonly generate: (input: AnswerGeneratorInput) => Promise<string>;
+}
+
+// Optional pre-answer reranker port. The BFF owns provider configuration; this package only sees
+// already-retrieved references and returns a reordered subset for prompt assembly and citation
+// attachment. Implementations MUST NOT mutate inputs.
+export interface ReferenceRerankerInput {
+  readonly query: ConversationGroundedQuery;
+  readonly references: readonly RetrievalReference[];
+  readonly signal?: AbortSignal | undefined;
+}
+
+export interface ReferenceRerankerResult {
+  readonly references: readonly RetrievalReference[];
+  readonly diagnostics: GroundedRerankerDiagnostics;
+}
+
+export interface ReferenceReranker {
+  readonly rerank: (input: ReferenceRerankerInput) => Promise<ReferenceRerankerResult>;
 }

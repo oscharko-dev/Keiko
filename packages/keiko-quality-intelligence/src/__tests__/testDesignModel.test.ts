@@ -346,6 +346,8 @@ describe("designTestCaseCandidates — export-safe candidate text", () => {
       requirementCandidates: [`${ZW}${ZW}${ZW}`, "Genuine requirement that must hold"],
       riskHints: [],
       priorityHint: "unknown",
+      sourceMode: "body",
+      diagnostics: [],
     };
 
     const candidates = designTestCaseCandidates({

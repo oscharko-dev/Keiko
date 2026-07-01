@@ -39,6 +39,7 @@ function capability(id: string, overrides: Partial<ModelCapability>): ModelCapab
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    supportsResponseFormat: true,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: true,

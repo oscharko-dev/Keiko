@@ -51,24 +51,43 @@ const FORBIDDEN_SUBSTRINGS: readonly string[] = [
   "x-api-key",
 ];
 
+const FORBIDDEN_SECRET_PATTERNS: readonly RegExp[] = [
+  /AKIA[0-9A-Z]{12,}/u,
+  /(?:ghp_|gho_|github_pat_)[A-Za-z0-9_]{20,}/u,
+  /xox[baprs]-[A-Za-z0-9-]{10,}/u,
+  /sk-[A-Za-z0-9]{16,}/u,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/u,
+];
+
 export const containsForbiddenSecretShape = (value: string): boolean => {
   const lower = value.toLowerCase();
   for (const forbidden of FORBIDDEN_SUBSTRINGS) {
     if (lower.includes(forbidden)) return true;
   }
+  for (const pattern of FORBIDDEN_SECRET_PATTERNS) {
+    if (pattern.test(value)) return true;
+  }
   return false;
 };
 
 /**
- * Scan a plain-object payload's string values (one level deep) for credential-shaped
+ * Scan a plain-object payload's string leaves for credential-shaped
  * substrings. Returns true if any value matches. Used by the dry-run routes BEFORE the
  * payload is even processed so a leaky client gets a 400 with a generic message.
  */
+const valueContainsForbiddenSecretShape = (value: unknown, seen: WeakSet<object>): boolean => {
+  if (typeof value === "string") return containsForbiddenSecretShape(value);
+  if (typeof value !== "object" || value === null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => valueContainsForbiddenSecretShape(entry, seen));
+  }
+  return Object.values(value as Readonly<Record<string, unknown>>).some((entry) =>
+    valueContainsForbiddenSecretShape(entry, seen),
+  );
+};
+
 export const payloadContainsForbiddenSecretShape = (
   payload: Readonly<Record<string, unknown>>,
-): boolean => {
-  for (const value of Object.values(payload)) {
-    if (typeof value === "string" && containsForbiddenSecretShape(value)) return true;
-  }
-  return false;
-};
+): boolean => valueContainsForbiddenSecretShape(payload, new WeakSet());

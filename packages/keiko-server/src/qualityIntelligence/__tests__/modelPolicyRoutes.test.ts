@@ -33,6 +33,7 @@ function capability(id: string, overrides: Partial<ModelCapability> = {}): Model
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    supportsResponseFormat: true,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: true,
@@ -88,6 +89,34 @@ function ctx(req: IncomingMessage = reqFromJson({})): RouteContext {
     params: {},
     url: new URL("http://127.0.0.1/api/quality-intelligence/model-policy"),
   };
+}
+
+const VALID_PREFLIGHT_JUDGE_JSON = JSON.stringify({
+  dimensions: [
+    { name: "verifiability", score: 80, rationale: "klar beobachtbar" },
+    { name: "atomicity", score: 80, rationale: "ein Prüfziel" },
+    { name: "determinism", score: 80, rationale: "stabil" },
+    { name: "ac-fidelity", score: 80, rationale: "passt zur Quelle" },
+  ],
+  overallRationale: "valider Preflight",
+});
+
+function stubSuccessfulPreflight(fetchCalls: string[] = []): void {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      const body = typeof init?.body === "string" ? init.body : "";
+      fetchCalls.push(body);
+      const content = body.includes("response_format") ? VALID_PREFLIGHT_JUDGE_JSON : "ok";
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }),
+  );
 }
 
 describe("QI model-policy routes", () => {
@@ -236,6 +265,7 @@ describe("QI model-policy routes", () => {
   });
 
   it("persists a valid policy with an updatedAt timestamp", async () => {
+    stubSuccessfulPreflight();
     const deps = depsWith({
       evidenceDir,
       capabilities: [
@@ -268,7 +298,47 @@ describe("QI model-policy routes", () => {
     expect(stored.updatedAt).toEqual(expect.any(String));
   });
 
+  it("does not persist a PUT policy when model preflight fails", async () => {
+    const deps = depsWith({
+      evidenceDir,
+      capabilities: [
+        capability("generate-chat", { structuredOutput: false }),
+        capability("judge-json", { structuredOutput: true }),
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Response(JSON.stringify({ error: { code: "forbidden", message: "secret-key" } }), {
+            status: 403,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const result = await handlePutQiModelPolicy(
+      ctx(
+        reqFromJson({
+          modelPolicy: {
+            policyVersion: 1,
+            testDesignModelId: "generate-chat",
+            judgeModelId: "judge-json",
+          },
+        }),
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({
+      error: { code: "QI_MODEL_PREFLIGHT_FAILED" },
+    });
+    expect(() => readFileSync(resolveQiPolicyPath(evidenceDir), "utf8")).toThrow();
+  });
+
   it("accepts policy payload aliases and repairs invalid stored JSON without evidenceDir writes", async () => {
+    stubSuccessfulPreflight();
     const deps = depsWith({
       evidenceDir,
       capabilities: [
@@ -366,19 +436,7 @@ describe("QI model-policy routes", () => {
       ],
     });
     const fetchCalls: string[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((_url: string | URL | Request, init?: RequestInit) => {
-        fetchCalls.push(typeof init?.body === "string" ? init.body : "");
-        return new Response(
-          JSON.stringify({
-            choices: [{ message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 1, completion_tokens: 1 },
-          }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
-      }),
-    );
+    stubSuccessfulPreflight(fetchCalls);
 
     const result = await handlePreflightQiModelPolicy(
       ctx(
@@ -406,8 +464,58 @@ describe("QI model-policy routes", () => {
     expect(fetchCalls).toHaveLength(2);
     expect(fetchCalls[0]).not.toContain("response_format");
     expect(fetchCalls[1]).toContain("response_format");
+    expect(fetchCalls[1]).toContain("Du bist ein test-quality judge");
+    expect(fetchCalls[1]).toContain("Pflichtfeld Betrag");
+    expect(fetchCalls[1]).toContain("quality_intelligence_test_quality_judge");
     expect(JSON.stringify(result.body)).not.toContain("provider.invalid");
     expect(JSON.stringify(result.body)).not.toContain("secret-key");
+  });
+
+  it("fails judge preflight when the provider returns only the old ok schema", async () => {
+    const deps = depsWith({
+      evidenceDir,
+      capabilities: [
+        capability("generate-chat", { structuredOutput: false }),
+        capability("judge-json", { supportsResponseFormat: true, structuredOutput: true }),
+      ],
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+        const body = typeof init?.body === "string" ? init.body : "";
+        const content = body.includes("response_format") ? JSON.stringify({ ok: true }) : "ok";
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }),
+    );
+
+    const result = await handlePreflightQiModelPolicy(
+      ctx(
+        reqFromJson({
+          modelPolicy: {
+            policyVersion: 1,
+            testDesignModelId: "generate-chat",
+            judgeModelId: "judge-json",
+          },
+        }),
+      ),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      modelRouting: {
+        preflight: {
+          status: "failed",
+          judge: { status: "failed", category: "schema" },
+        },
+      },
+    });
   });
 
   it("classifies gateway preflight failures into safe categories", async () => {

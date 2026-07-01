@@ -32,9 +32,12 @@ import {
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
   type ConnectedContextPack,
+  type ContextExcerpt,
   type EvidenceAtom,
+  type ExplorationBudget,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -431,14 +434,43 @@ export function promptSafeExcerptText(value: string): string {
   return value.split("```").join("` ` `");
 }
 
-const APPROX_BYTES_PER_TOKEN = 4;
+export function promptBytesPerToken(modelInputTokensMax: number): number {
+  if (modelInputTokensMax >= 64_000) return 3.35;
+  if (modelInputTokensMax >= 32_000) return 3.5;
+  if (modelInputTokensMax >= 16_000) return 3.75;
+  return 4;
+}
 
 export function promptByteLength(messages: readonly GatewayChatMessage[]): number {
   return Buffer.byteLength(messages.map((message) => message.content).join("\n"), "utf8");
 }
 
 export function modelInputPromptByteLimit(modelInputTokensMax: number): number {
-  return Math.max(0, Math.floor(modelInputTokensMax) * APPROX_BYTES_PER_TOKEN);
+  const tokens = Math.max(0, Math.floor(modelInputTokensMax));
+  return Math.floor(tokens * promptBytesPerToken(tokens));
+}
+
+const MAX_GROUNDED_MODEL_INPUT_TOKENS = 96_000;
+
+function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return DEFAULT_EXPLORATION_BUDGET;
+  const capability = findConfiguredCapability(config, modelId);
+  const contextWindow = capability?.contextWindow;
+  if (contextWindow === undefined || contextWindow <= 0) return DEFAULT_EXPLORATION_BUDGET;
+  const inputTokens = Math.max(
+    1_024,
+    Math.min(MAX_GROUNDED_MODEL_INPUT_TOKENS, Math.floor(contextWindow * 0.7)),
+  );
+  const outputTokens = Math.max(
+    512,
+    Math.min(DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax, Math.floor(contextWindow * 0.1)),
+  );
+  return {
+    ...DEFAULT_EXPLORATION_BUDGET,
+    modelInputTokensMax: inputTokens,
+    modelOutputTokensMax: outputTokens,
+  };
 }
 
 function clampUtf8Bytes(value: string, maxBytes: number): string {
@@ -465,15 +497,76 @@ export function withPromptExcerptByteLimit(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
 ): ConnectedContextPack {
+  const excerptCount = packExcerptCount(pack);
+  return withPromptExcerptTotalByteBudget(pack, Math.max(0, maxExcerptBytes) * excerptCount);
+}
+
+interface RankedPromptExcerpt {
+  readonly fileIndex: number;
+  readonly excerptIndex: number;
+  readonly excerpt: ContextExcerpt;
+}
+
+function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPromptExcerpt[] {
+  const ranked: RankedPromptExcerpt[] = [];
+  for (let fileIndex = 0; fileIndex < pack.files.length; fileIndex += 1) {
+    const file = pack.files[fileIndex];
+    if (file === undefined) continue;
+    for (let excerptIndex = 0; excerptIndex < file.excerpts.length; excerptIndex += 1) {
+      const excerpt = file.excerpts[excerptIndex];
+      if (excerpt === undefined) continue;
+      ranked.push({ fileIndex, excerptIndex, excerpt });
+    }
+  }
+  ranked.sort(
+    (a, b) =>
+      b.excerpt.atom.score - a.excerpt.atom.score ||
+      a.fileIndex - b.fileIndex ||
+      a.excerptIndex - b.excerptIndex,
+  );
+  return ranked;
+}
+
+function excerptWithContent(excerpt: ContextExcerpt, content: string): ContextExcerpt {
+  return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
+}
+
+function withPromptExcerptTotalByteBudget(
+  pack: ConnectedContextPack,
+  maxExcerptBytes: number,
+): ConnectedContextPack {
+  if (maxExcerptBytes <= 0) return { ...pack, files: [] };
+  const byFile = new Map<number, ContextExcerpt[]>();
+  let remaining = Math.floor(maxExcerptBytes);
+  for (const ranked of rankedPromptExcerpts(pack)) {
+    if (remaining <= 0) break;
+    const fullBytes = Buffer.byteLength(ranked.excerpt.content, "utf8");
+    if (fullBytes === 0) continue;
+    const content =
+      fullBytes <= remaining
+        ? ranked.excerpt.content
+        : clampUtf8Bytes(ranked.excerpt.content, remaining);
+    if (content.length === 0) break;
+    const bucket = byFile.get(ranked.fileIndex) ?? [];
+    bucket.push(excerptWithContent(ranked.excerpt, content));
+    byFile.set(ranked.fileIndex, bucket);
+    remaining -= Buffer.byteLength(content, "utf8");
+    if (fullBytes > Buffer.byteLength(content, "utf8")) break;
+  }
+  const files = [...byFile.entries()]
+    .sort((a, b) => {
+      const bestA = a[1][0]?.atom.score ?? 0;
+      const bestB = b[1][0]?.atom.score ?? 0;
+      return bestB - bestA || a[0] - b[0];
+    })
+    .map(([fileIndex, excerpts]) => {
+      const file = pack.files[fileIndex];
+      if (file === undefined) throw new ContextOverflowError("Prompt excerpt file missing.");
+      return { ...file, excerpts };
+    });
   return {
     ...pack,
-    files: pack.files.map((file) => ({
-      ...file,
-      excerpts: file.excerpts.map((excerpt) => ({
-        ...excerpt,
-        content: clampUtf8Bytes(excerpt.content, maxExcerptBytes),
-      })),
-    })),
+    files,
   };
 }
 
@@ -679,11 +772,15 @@ function defaultRunner(
   }
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     const nowMs = Date.now;
-    return runGroundedExploration(input, {
+    const budgetedInput =
+      input.budget === undefined
+        ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
+        : input;
+    return runGroundedExploration(budgetedInput, {
       answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal),
       nowMs,
       signal,
-      microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).

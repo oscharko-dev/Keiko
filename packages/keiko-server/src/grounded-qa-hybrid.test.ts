@@ -46,6 +46,7 @@ import {
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { RerankOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
 import { EmbeddingAdapterError, type ConnectorRetrieve } from "./grounded-qa-hybrid.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -352,6 +353,32 @@ function throwingHybridAnswerer() {
     Promise.reject(new Error("hybrid.answer must NOT be called on this path"));
 }
 
+function rerankerGatewayConfig(): NonNullable<UiHandlerDeps["config"]> {
+  return {
+    providers: [],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    reranker: {
+      modelId: "qwen3-reranker",
+      baseUrl: "https://litellm.local/v1",
+      apiKey: "reranker-test-key",
+      timeoutMs: 30_000,
+    },
+  };
+}
+
+function successfulRerank(indices: readonly number[]): RerankOutcome {
+  return {
+    ok: true,
+    value: {
+      modelId: "qwen3-reranker",
+      results: indices.map((index, offset) => ({
+        index,
+        relevanceScore: 1 - offset / 10,
+      })),
+    },
+  };
+}
+
 // ─── Type narrowing helpers ───────────────────────────────────────────────────
 
 function asHybrid(answer: GroundedAnswer): HybridGroundedAnswer {
@@ -463,6 +490,14 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     expect(answer.contextPack.knowledge.referencesUsed).toBeLessThanOrEqual(
       answer.contextPack.knowledge.referenceBudget,
     );
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "disabled",
+      candidateCount: 2,
+      documentCount: 0,
+      keptCount: 2,
+      failureKind: "not-configured",
+    });
+    expect(answer.contextPack.knowledge.reranker?.status).toBe("disabled");
 
     // Messages persisted in the UiStore
     const messages = store.listMessages(chatId);
@@ -689,7 +724,7 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.");
+    expect(answer.content).toBe("No evidence found in the selected connected sources.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -798,7 +833,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.");
+    expect(answer.content).toBe("No evidence found in the selected connected sources.");
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -1344,6 +1379,155 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
+  });
+});
+
+// ─── Case 4c: Configured model reranker over hybrid candidates ────────────────
+
+describe("hybrid model reranker", () => {
+  it("reorders the preliminary candidate pool before prompt and citation assembly", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Rerank Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/rerank.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("rerank-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([["src/rerank.ts", folderPack("src/rerank.ts", 0.5, "rerank-atom")]]);
+    const seenUsers: string[] = [];
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Rerank the evidence?" })),
+      hybridDeps({
+        config: rerankerGatewayConfig(),
+        configPresent: true,
+        rerankRequest: (request) => {
+          expect(request.modelId).toBe("qwen3-reranker");
+          expect(request.topN).toBe(16);
+          expect(request.documents).toHaveLength(2);
+          return Promise.resolve(successfulRerank([1, 0]));
+        },
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: (_system, user) => {
+          seenUsers.push(user);
+          return Promise.resolve("Reranked hybrid answer [1] [2].");
+        },
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations[0]?.marker).toBe(1);
+    expect(answer.knowledgeCitations[0]?.marker).toBe("[2]");
+    expect((seenUsers[0] ?? "").indexOf("[1] ### Folder source")).toBeLessThan(
+      (seenUsers[0] ?? "").indexOf("[2] ### Connector source"),
+    );
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "applied",
+      candidateCount: 2,
+      documentCount: 2,
+      keptCount: 2,
+    });
+  });
+
+  it("falls back to the preliminary order when the configured reranker times out", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Timeout Rerank Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/rerank-timeout.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("rerank-timeout-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/rerank-timeout.ts", folderPack("src/rerank-timeout.ts", 0.5, "rerank-timeout-atom")],
+    ]);
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Timeout fallback?" })),
+      hybridDeps({
+        config: rerankerGatewayConfig(),
+        configPresent: true,
+        rerankRequest: () => Promise.resolve({ ok: false, kind: "timeout" }),
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer("Fallback answer [1] [2]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "unavailable",
+      failureKind: "timeout",
+      candidateCount: 2,
+      documentCount: 2,
+      keptCount: 2,
+    });
+  });
+
+  it("falls back with invalid-response diagnostics when reranker response is unusable", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Invalid Rerank Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/rerank-invalid.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("rerank-invalid-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/rerank-invalid.ts", folderPack("src/rerank-invalid.ts", 0.5, "rerank-invalid-atom")],
+    ]);
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Invalid fallback?" })),
+      hybridDeps({
+        config: rerankerGatewayConfig(),
+        configPresent: true,
+        rerankRequest: () => Promise.resolve({ ok: false, kind: "invalid-response" }),
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer("Invalid fallback answer [1] [2]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "invalid-response",
+      failureKind: "invalid-response",
+      keptCount: 2,
+    });
   });
 });
 

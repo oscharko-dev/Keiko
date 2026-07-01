@@ -57,13 +57,25 @@ interface WorkbookSheet {
 
 interface CellValue {
   readonly column: string;
+  readonly columnIndex: number;
   readonly value: string;
+}
+
+interface SheetRow {
+  readonly sheetName: string;
+  readonly rowNumber: number;
+  readonly cells: readonly CellValue[];
 }
 
 interface RowProjection {
   readonly sheetName: string;
   readonly rowNumber: number;
   readonly text: string;
+}
+
+interface XlsxStyles {
+  readonly cellFormatNumFmtIds: readonly number[];
+  readonly customNumFmts: ReadonlyMap<number, string>;
 }
 
 function isXlsx(input: ParserSelectionInput): boolean {
@@ -138,6 +150,7 @@ function isRelevantEntry(name: string): boolean {
     name === "xl/workbook.xml" ||
     name === "xl/_rels/workbook.xml.rels" ||
     name === "xl/sharedStrings.xml" ||
+    name === "xl/styles.xml" ||
     (name.startsWith(SHEET_ENTRY_PREFIX) && name.endsWith(".xml"))
   );
 }
@@ -381,6 +394,16 @@ function columnName(ref: string | undefined, fallbackIndex: number): string {
   return out;
 }
 
+function columnIndexFromName(column: string): number {
+  let out = 0;
+  for (const ch of column.toUpperCase()) {
+    const code = ch.charCodeAt(0);
+    if (code < 0x41 || code > 0x5a) continue;
+    out = out * 26 + (code - 0x40);
+  }
+  return Math.max(0, out - 1);
+}
+
 function rowNumber(rowTag: string, fallback: number): number {
   const raw = attribute(rowTag, "r");
   if (raw === undefined) return fallback;
@@ -412,21 +435,102 @@ function formulaCellValue(cellXml: string): string {
   return formula === undefined ? "" : `=${decodeXml(formula)}`;
 }
 
-function cellValue(cellXml: string, sharedStrings: readonly string[]): string {
+const BUILT_IN_DATE_NUM_FORMATS: ReadonlySet<number> = new Set([
+  14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 57,
+]);
+
+// eslint-disable-next-line complexity
+function parseStyles(xml: string | undefined): XlsxStyles {
+  if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
+  const customNumFmts = new Map<number, string>();
+  for (const match of xml.matchAll(/<numFmt\b[^>]*>/gi)) {
+    const tag = match[0];
+    const id = Number.parseInt(attribute(tag, "numFmtId") ?? "", 10);
+    const format = attribute(tag, "formatCode");
+    if (Number.isFinite(id) && format !== undefined) customNumFmts.set(id, format);
+  }
+  const cellXfsXml = /<cellXfs\b[^>]*>([\s\S]*?)<\/cellXfs>/iu.exec(xml)?.[1] ?? "";
+  const cellFormatNumFmtIds: number[] = [];
+  for (const match of cellXfsXml.matchAll(/<xf\b[^>]*>/gi)) {
+    const id = Number.parseInt(attribute(match[0], "numFmtId") ?? "0", 10);
+    cellFormatNumFmtIds.push(Number.isFinite(id) ? id : 0);
+  }
+  return { cellFormatNumFmtIds, customNumFmts };
+}
+
+function styleNumFmtId(styleIndex: string | undefined, styles: XlsxStyles): number | undefined {
+  if (styleIndex === undefined) return undefined;
+  const index = Number.parseInt(styleIndex, 10);
+  if (!Number.isFinite(index) || index < 0) return undefined;
+  return styles.cellFormatNumFmtIds[index];
+}
+
+function isDateNumFmt(numFmtId: number | undefined, styles: XlsxStyles): boolean {
+  if (numFmtId === undefined) return false;
+  if (BUILT_IN_DATE_NUM_FORMATS.has(numFmtId)) return true;
+  const custom = styles.customNumFmts.get(numFmtId);
+  if (custom === undefined) return false;
+  const stripped = custom
+    .replaceAll(/"[^"]*"/g, "")
+    .replaceAll(/\[[^\]]*]/g, "")
+    .replaceAll(/\\./g, "");
+  return /[ymdhHs]/.test(stripped);
+}
+
+function pad2(value: number): string {
+  return value.toString().padStart(2, "0");
+}
+
+function excelSerialDate(serial: number): Date {
+  const millis = Math.round(serial * 86_400_000);
+  return new Date(Date.UTC(1899, 11, 30) + millis);
+}
+
+// eslint-disable-next-line complexity
+function formatExcelDate(raw: string, numFmtId: number | undefined, styles: XlsxStyles): string {
+  const serial = Number(raw);
+  if (!Number.isFinite(serial)) return decodeXml(raw);
+  const date = excelSerialDate(serial);
+  const custom = numFmtId === undefined ? undefined : styles.customNumFmts.get(numFmtId);
+  const wantsTime =
+    numFmtId === 18 ||
+    numFmtId === 19 ||
+    numFmtId === 20 ||
+    numFmtId === 21 ||
+    numFmtId === 22 ||
+    numFmtId === 45 ||
+    numFmtId === 46 ||
+    numFmtId === 47 ||
+    (custom !== undefined && /[hHs]/.test(custom));
+  const datePart = `${String(date.getUTCFullYear())}-${pad2(date.getUTCMonth() + 1)}-${pad2(
+    date.getUTCDate(),
+  )}`;
+  if (!wantsTime) return datePart;
+  return `${datePart} ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`;
+}
+
+function cellValue(cellXml: string, sharedStrings: readonly string[], styles: XlsxStyles): string {
   const tag = /^<c\b[^>]*>/iu.exec(cellXml)?.[0] ?? "";
   const type = attribute(tag, "t");
   if (type === "inlineStr") return inlineStringValue(cellXml);
   const raw = /<v\b[^>]*>([\s\S]*?)<\/v>/iu.exec(cellXml)?.[1];
-  if (raw !== undefined) return rawCellValue(type, raw, sharedStrings);
+  if (raw !== undefined) {
+    const numFmtId = styleNumFmtId(attribute(tag, "s"), styles);
+    if (type === undefined && isDateNumFmt(numFmtId, styles)) {
+      return formatExcelDate(raw, numFmtId, styles);
+    }
+    return rawCellValue(type, raw, sharedStrings);
+  }
   return formulaCellValue(cellXml);
 }
 
-function projectSheetRows(
+function readSheetRows(
   sheetName: string,
   xml: string,
   sharedStrings: readonly string[],
-): readonly RowProjection[] {
-  const rows: RowProjection[] = [];
+  styles: XlsxStyles,
+): readonly SheetRow[] {
+  const rows: SheetRow[] = [];
   let fallbackRow = 1;
   for (const rowMatch of xml.matchAll(/<row\b[^>]*>[\s\S]*?<\/row>/gi)) {
     const rowXml = rowMatch[0];
@@ -438,24 +542,63 @@ function projectSheetRows(
     for (const cellMatch of rowXml.matchAll(/<c\b[^>]*>[\s\S]*?<\/c>/gi)) {
       const cellXml = cellMatch[0];
       const cellTag = /^<c\b[^>]*>/iu.exec(cellXml)?.[0] ?? "";
-      const value = cellValue(cellXml, sharedStrings).trim();
+      const column = columnName(attribute(cellTag, "r"), fallbackCol);
+      const value = cellValue(cellXml, sharedStrings, styles).trim();
       if (value.length === 0) {
         fallbackCol += 1;
         continue;
       }
-      cells.push({ column: columnName(attribute(cellTag, "r"), fallbackCol), value });
+      cells.push({ column, columnIndex: columnIndexFromName(column), value });
       fallbackCol += 1;
     }
     if (cells.length === 0) continue;
     rows.push({
       sheetName,
       rowNumber: number,
-      text: `${sheetName}!${String(number)}: ${cells
-        .map((cell) => `${cell.column}=${cell.value}`)
-        .join(" | ")}\n`,
+      cells,
     });
   }
   return rows;
+}
+
+function normalizeHeaderLabel(value: string, fallback: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizeSheetHeaders(headerCells: readonly CellValue[]): ReadonlyMap<number, string> {
+  const headers = new Map<number, string>();
+  const seen = new Map<string, number>();
+  for (const cell of headerCells) {
+    const base = normalizeHeaderLabel(cell.value, `Column ${cell.column}`);
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    headers.set(cell.columnIndex, count === 0 ? base : `${base} ${String(count + 1)}`);
+  }
+  return headers;
+}
+
+function hasPlausibleHeader(rows: readonly SheetRow[]): boolean {
+  if (rows.length < 2) return false;
+  const first = rows[0];
+  if (first === undefined) return false;
+  return first.cells.some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell.value));
+}
+
+function projectSheetRows(rows: readonly SheetRow[]): readonly RowProjection[] {
+  if (rows.length === 0) return [];
+  const headerIsSchema = hasPlausibleHeader(rows);
+  const headers: ReadonlyMap<number, string> = headerIsSchema
+    ? normalizeSheetHeaders(rows[0]?.cells ?? [])
+    : new Map<number, string>();
+  const dataRows = headerIsSchema ? rows.slice(1) : rows;
+  return dataRows.map((row) => ({
+    sheetName: row.sheetName,
+    rowNumber: row.rowNumber,
+    text: `${row.sheetName}!${String(row.rowNumber)}: ${row.cells
+      .map((cell) => `${headers.get(cell.columnIndex) ?? `Column ${cell.column}`}=${cell.value}`)
+      .join(" | ")}\n`,
+  }));
 }
 
 function emitUnits(
@@ -508,6 +651,7 @@ function parseWorkbook(
     return emptyResult(xlsxParser.capability, input.documentId, options, sharedResult.diagnostics);
   }
   const worksheetEntries = entries.filter((entry) => entry.name.startsWith(SHEET_ENTRY_PREFIX));
+  const styles = parseStyles(byName.get("xl/styles.xml"));
   const workbookSheets = parseWorkbookSheets(
     byName.get("xl/workbook.xml"),
     byName.get("xl/_rels/workbook.xml.rels"),
@@ -517,7 +661,7 @@ function parseWorkbook(
   for (const sheet of workbookSheets) {
     const xml = byName.get(sheet.entryName);
     if (xml === undefined) continue;
-    rows.push(...projectSheetRows(sheet.name, xml, sharedResult.strings));
+    rows.push(...projectSheetRows(readSheetRows(sheet.name, xml, sharedResult.strings, styles)));
     if (rows.length > options.maxObjectsPerDocument) {
       return emptyResult(xlsxParser.capability, input.documentId, options, [
         objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument),

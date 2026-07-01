@@ -5,7 +5,9 @@
 import { describe, expect, it } from "vitest";
 import {
   RRF_K,
+  applyModelRerankResults,
   rerankAndSelect,
+  selectTopPromptCandidates,
   type RerankBudget,
   type RerankInput,
   type SelectedCandidate,
@@ -302,5 +304,72 @@ describe("rerankAndSelect — fusedScore calculation", () => {
       const expected = Math.round((1 / (RRF_K + s.engineRank)) * 1e6) / 1e6;
       expect(s.fusedScore).toBe(expected);
     }
+  });
+});
+
+describe("applyModelRerankResults", () => {
+  it("reorders preliminary candidates by provider-returned original indices", () => {
+    const preliminary = rerankAndSelect(
+      [connector("a", 0.9), connector("b", 0.8), connector("c", 0.7)],
+      GENEROUS_BUDGET,
+    );
+
+    const selected = applyModelRerankResults(
+      preliminary,
+      [
+        { index: 2, relevanceScore: 0.95 },
+        { index: 0, relevanceScore: 0.5 },
+      ],
+      2,
+    );
+
+    expect(selected?.map((candidate) => candidate.payload)).toEqual([
+      "connector-payload-c",
+      "connector-payload-a",
+    ]);
+    expect(selected?.map((candidate) => candidate.marker)).toEqual([1, 2]);
+    expect(selected?.map((candidate) => candidate.rerankerScore)).toEqual([0.95, 0.5]);
+  });
+
+  it("uses topN as the final prompt cap, not the preliminary candidate pool cap", () => {
+    const preliminary = rerankAndSelect(
+      Array.from({ length: 20 }, (_, index) =>
+        connector(`c-${String(index)}`, 1 - index * 0.01),
+      ),
+      GENEROUS_BUDGET,
+    );
+
+    const selected = applyModelRerankResults(
+      preliminary,
+      preliminary.map((_candidate, index) => ({ index })).reverse(),
+      8,
+    );
+
+    expect(preliminary).toHaveLength(20);
+    expect(selected).toHaveLength(8);
+    expect(selected?.map((candidate) => candidate.marker)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it("returns undefined for invalid model mappings so callers can fallback", () => {
+    const preliminary = rerankAndSelect([connector("a", 0.9)], GENEROUS_BUDGET);
+
+    expect(applyModelRerankResults(preliminary, [{ index: 99 }], 1)).toBeUndefined();
+    expect(applyModelRerankResults(preliminary, [], 1)).toBeUndefined();
+  });
+});
+
+describe("selectTopPromptCandidates", () => {
+  it("keeps existing order and reassigns markers for disabled reranker fallback", () => {
+    const preliminary = rerankAndSelect(
+      [connector("a", 0.9), connector("b", 0.8), connector("c", 0.7)],
+      GENEROUS_BUDGET,
+    );
+    const selected = selectTopPromptCandidates(preliminary, 2);
+
+    expect(selected.map((candidate) => candidate.payload)).toEqual([
+      "connector-payload-a",
+      "connector-payload-b",
+    ]);
+    expect(selected.map((candidate) => candidate.marker)).toEqual([1, 2]);
   });
 });

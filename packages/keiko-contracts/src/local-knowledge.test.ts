@@ -194,7 +194,12 @@ describe("frozen-constant arrays", () => {
     expect(PARSED_UNIT_KINDS.length).toBeGreaterThan(0);
     expect(INDEXING_JOB_STATUSES.length).toBeGreaterThan(0);
     expect(PARSER_DIAGNOSTIC_SEVERITIES).toEqual(["info", "warning", "error"]);
-    expect(CAPSULE_REINDEX_MODES).toEqual(["changed-files", "repair-failed", "resume"]);
+    expect(CAPSULE_REINDEX_MODES).toEqual([
+      "changed-files",
+      "repair-failed",
+      "resume",
+      "full-reembed",
+    ]);
   });
 });
 
@@ -688,6 +693,16 @@ describe("validateCapsuleReindexRequest", () => {
     ).toBe(true);
   });
 
+  it("accepts full-reembed with force=true", () => {
+    expect(
+      validateCapsuleReindexRequest({
+        capsuleId: "cap-1",
+        mode: "full-reembed",
+        force: true,
+      }).ok,
+    ).toBe(true);
+  });
+
   it("rejects invalid mode, missing capsule id, and non-boolean force", () => {
     expect(validateCapsuleReindexRequest({ capsuleId: "", mode: "changed-files" }).ok).toBe(false);
     expect(validateCapsuleReindexRequest({ capsuleId: "cap-1", mode: "all-files" }).ok).toBe(false);
@@ -1035,10 +1050,10 @@ describe("CapsuleReindexRequest", () => {
   it("type-pins the shared reindex request shape", () => {
     const req: CapsuleReindexRequest = {
       capsuleId: cap("c-1"),
-      mode: "repair-failed",
-      force: false,
+      mode: "full-reembed",
+      force: true,
     };
-    expect(req.mode).toBe("repair-failed");
+    expect(req.mode).toBe("full-reembed");
   });
 });
 

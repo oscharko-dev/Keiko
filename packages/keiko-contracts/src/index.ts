@@ -841,6 +841,9 @@ export type {
   ChatMessageTextContentPart,
   ToolDefinition,
   ResponseFormat,
+  GatewaySamplingParameters,
+  GatewaySamplingParameterName,
+  GatewaySamplingParameterIssue,
   GatewayRequest,
   NormalizedToolCall,
   UsageMetadata,
@@ -858,9 +861,16 @@ export type {
 } from "./gateway.js";
 export {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  GATEWAY_TEMPERATURE_RANGE,
+  GATEWAY_TOP_P_RANGE,
   INFILLING_ALIGNMENTS,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  isValidGatewayTemperature,
+  isValidGatewayTopP,
+  validateGatewaySamplingParameters,
 } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
 export {
@@ -1421,6 +1431,7 @@ export type {
   ChunkId,
   VectorId,
   EmbeddingVectorMetric,
+  EmbeddingVectorNormalization,
   EmbeddingModelIdentity,
   ParserDependencyVersion,
   ParserIdentity,
@@ -1733,6 +1744,7 @@ export type {
   QualityIntelligenceUiCandidate,
   QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceUiDriftMetadata,
+  QualityIntelligenceQualityDiagnostics,
   QualityIntelligenceUiStalenessEntry,
   QualityIntelligenceUiStalenessReport,
   QualityIntelligenceUiRegenerateResult,
@@ -1761,6 +1773,7 @@ export type {
   QualityIntelligenceModelPolicyPreflightResponse,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceSkippedSource,
+  QualityIntelligenceSourceSummary,
   QualityIntelligenceRunStreamAccepted,
   QualityIntelligenceRunStreamEvent,
   QualityIntelligenceRunStreamDone,

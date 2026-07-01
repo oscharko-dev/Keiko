@@ -33,6 +33,10 @@ const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
 
 export interface PdfTextItem {
   readonly str?: string;
+  readonly transform?: readonly number[];
+  readonly width?: number;
+  readonly height?: number;
+  readonly hasEOL?: boolean;
 }
 
 export interface PdfTextContentChunk {
@@ -274,7 +278,7 @@ export async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLik
   installPdfTextExtractionDomPolyfills();
   const pdfjs = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfJsModule;
   const task = pdfjs.getDocument({
-    data: bytes,
+    data: bytes.slice(),
     useWorkerFetch: false,
     verbosity: 0,
   });
@@ -371,7 +375,7 @@ function pageTextStopDiagnostic(state: PageTextReadState): ParserDiagnostic | un
 }
 
 function appendPdfTextItems(
-  tokens: string[],
+  itemsOut: PdfTextItem[],
   items: readonly PdfTextItem[],
   state: PageTextReadState,
 ): { readonly state: PageTextReadState; readonly diagnostic?: ParserDiagnostic } {
@@ -382,12 +386,116 @@ function appendPdfTextItems(
       return { state: next, diagnostic: stopped };
     }
     next = { ...next, scannedObjects: next.scannedObjects + 1 };
-    const value = item.str?.trim();
-    if (value !== undefined && value.length > 0) {
-      tokens.push(value);
+    const value = normalizePdfText(item.str ?? "").trim();
+    if (value.length > 0) {
+      itemsOut.push({ ...item, str: value });
     }
   }
   return { state: next };
+}
+
+function normalizePdfText(value: string): string {
+  return value
+    .replaceAll("\ufb00", "ff")
+    .replaceAll("\ufb01", "fi")
+    .replaceAll("\ufb02", "fl")
+    .replaceAll("\ufb03", "ffi")
+    .replaceAll("\ufb04", "ffl");
+}
+
+interface PositionedLine {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+function itemX(item: PdfTextItem): number {
+  return item.transform?.[4] ?? 0;
+}
+
+function itemY(item: PdfTextItem): number {
+  return item.transform?.[5] ?? 0;
+}
+
+function hasPosition(item: PdfTextItem): boolean {
+  return item.transform !== undefined && item.transform.length >= 6;
+}
+
+function lineForItem(
+  lines: readonly {
+    readonly x: number;
+    readonly y: number;
+    readonly items: readonly PdfTextItem[];
+  }[],
+  item: PdfTextItem,
+): number {
+  const y = itemY(item);
+  const x = itemX(item);
+  const index = lines.findIndex(
+    (line) => Math.abs(line.y - y) <= 3 && Math.abs(line.x - x) <= 180,
+  );
+  return index;
+}
+
+function positionedLines(items: readonly PdfTextItem[]): readonly PositionedLine[] {
+  const mutable: { text: string; x: number; y: number; items: PdfTextItem[] }[] = [];
+  for (const item of items) {
+    const existing = lineForItem(mutable, item);
+    if (existing >= 0) {
+      mutable[existing]?.items.push(item);
+      continue;
+    }
+    mutable.push({ text: "", x: itemX(item), y: itemY(item), items: [item] });
+  }
+  return mutable.map((line) => {
+    const ordered = [...line.items].sort((a, b) => itemX(a) - itemX(b));
+    return {
+      text: ordered.map((item) => item.str ?? "").join(" ").trim(),
+      x: Math.min(...ordered.map(itemX)),
+      y: line.y,
+    };
+  });
+}
+
+function largestColumnGap(lines: readonly PositionedLine[]): {
+  readonly index: number;
+  readonly gap: number;
+} {
+  const ordered = [...lines].sort((a, b) => a.x - b.x);
+  let best = { index: -1, gap: 0 };
+  for (let i = 0; i < ordered.length - 1; i += 1) {
+    const gap = (ordered[i + 1]?.x ?? 0) - (ordered[i]?.x ?? 0);
+    if (gap > best.gap) best = { index: i, gap };
+  }
+  return best;
+}
+
+function orderedPositionedText(items: readonly PdfTextItem[]): string {
+  const lines = positionedLines(items).filter((line) => line.text.length > 0);
+  if (lines.length === 0) return "";
+  const gap = largestColumnGap(lines);
+  if (gap.index >= 0 && gap.gap >= 80) {
+    const orderedByX = [...lines].sort((a, b) => a.x - b.x);
+    const splitX =
+      ((orderedByX[gap.index]?.x ?? 0) + (orderedByX[gap.index + 1]?.x ?? 0)) / 2;
+    const left = lines.filter((line) => line.x <= splitX).sort((a, b) => b.y - a.y || a.x - b.x);
+    const right = lines.filter((line) => line.x > splitX).sort((a, b) => b.y - a.y || a.x - b.x);
+    return [...left, ...right].map((line) => line.text).join("\n").trim();
+  }
+  return [...lines]
+    .sort((a, b) => b.y - a.y || a.x - b.x)
+    .map((line) => line.text)
+    .join("\n")
+    .trim();
+}
+
+function itemsText(items: readonly PdfTextItem[]): string {
+  if (items.some(hasPosition)) return orderedPositionedText(items);
+  return items
+    .map((item) => item.str?.trim() ?? "")
+    .filter((value) => value.length > 0)
+    .join(" ")
+    .trim();
 }
 
 export async function readPageText(
@@ -395,28 +503,28 @@ export async function readPageText(
   state: PageTextReadState,
 ): Promise<PageTextReadResult> {
   const reader = page.streamTextContent().getReader();
-  const tokens: string[] = [];
+  const items: PdfTextItem[] = [];
   let next = state;
   try {
     for (;;) {
       const stopped = pageTextStopDiagnostic(next);
       if (stopped !== undefined) {
         return {
-          text: tokens.join(" ").trim(),
+          text: itemsText(items),
           scannedObjects: next.scannedObjects,
           diagnostic: stopped,
         };
       }
       const read = await reader.read();
       if (read.done) {
-        return { text: tokens.join(" ").trim(), scannedObjects: next.scannedObjects };
+        return { text: itemsText(items), scannedObjects: next.scannedObjects };
       }
       const chunk = read.value;
-      const appended = appendPdfTextItems(tokens, chunk.items, next);
+      const appended = appendPdfTextItems(items, chunk.items, next);
       next = appended.state;
       if (appended.diagnostic !== undefined) {
         return {
-          text: tokens.join(" ").trim(),
+          text: itemsText(items),
           scannedObjects: next.scannedObjects,
           diagnostic: appended.diagnostic,
         };

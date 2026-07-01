@@ -391,7 +391,80 @@ export interface ToolDefinition {
 
 export type ResponseFormat =
   | { readonly type: "text" }
-  | { readonly type: "json_schema"; readonly schema: Record<string, unknown> };
+  | {
+      readonly type: "json_schema";
+      readonly schema: Record<string, unknown>;
+      readonly name?: string | undefined;
+      readonly strict?: boolean | undefined;
+    };
+
+export interface GatewaySamplingParameters {
+  readonly temperature?: unknown;
+  readonly topP?: unknown;
+}
+
+export type GatewaySamplingParameterName = "temperature" | "topP";
+
+export interface GatewaySamplingParameterIssue {
+  readonly parameter: GatewaySamplingParameterName;
+  readonly message: string;
+}
+
+export const GATEWAY_TEMPERATURE_RANGE = Object.freeze({ min: 0, max: 2 });
+export const GATEWAY_TOP_P_RANGE = Object.freeze({ min: 0, max: 1 });
+const GATEWAY_TEMPERATURE_RANGE_LABEL = `${String(GATEWAY_TEMPERATURE_RANGE.min)} and ${String(
+  GATEWAY_TEMPERATURE_RANGE.max,
+)}`;
+const GATEWAY_TOP_P_RANGE_LABEL = `${String(GATEWAY_TOP_P_RANGE.min)} and ${String(
+  GATEWAY_TOP_P_RANGE.max,
+)}`;
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function isValidGatewayTemperature(value: unknown): value is number {
+  return (
+    isFiniteNumber(value) &&
+    value >= GATEWAY_TEMPERATURE_RANGE.min &&
+    value <= GATEWAY_TEMPERATURE_RANGE.max
+  );
+}
+
+export function isValidGatewayTopP(value: unknown): value is number {
+  return (
+    isFiniteNumber(value) && value >= GATEWAY_TOP_P_RANGE.min && value <= GATEWAY_TOP_P_RANGE.max
+  );
+}
+
+export function validateGatewaySamplingParameters(
+  parameters: GatewaySamplingParameters,
+): readonly GatewaySamplingParameterIssue[] {
+  const issues: GatewaySamplingParameterIssue[] = [];
+  if (parameters.temperature !== undefined && !isValidGatewayTemperature(parameters.temperature)) {
+    issues.push({
+      parameter: "temperature",
+      message: `temperature must be a finite number between ${GATEWAY_TEMPERATURE_RANGE_LABEL}`,
+    });
+  }
+  if (parameters.topP !== undefined && !isValidGatewayTopP(parameters.topP)) {
+    issues.push({
+      parameter: "topP",
+      message: `topP must be a finite number between ${GATEWAY_TOP_P_RANGE_LABEL}`,
+    });
+  }
+  return Object.freeze(issues);
+}
+
+export function isValidGatewaySamplingParameters(parameters: GatewaySamplingParameters): boolean {
+  return validateGatewaySamplingParameters(parameters).length === 0;
+}
+
+export function assertValidGatewaySamplingParameters(parameters: GatewaySamplingParameters): void {
+  const issues = validateGatewaySamplingParameters(parameters);
+  if (issues.length === 0) return;
+  throw new RangeError(issues.map((issue) => issue.message).join("; "));
+}
 
 export interface GatewayRequest {
   readonly modelId: string;
@@ -400,6 +473,10 @@ export interface GatewayRequest {
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;
+  /** Optional provider-neutral temperature for sampling; valid range is 0..2. */
+  readonly temperature?: number | undefined;
+  /** Optional provider-neutral nucleus sampling value; serialized as `top_p` for OpenAI APIs. */
+  readonly topP?: number | undefined;
   /** Optional seed for deterministic sampling when the model supports it (Epic #761). */
   readonly seed?: number | undefined;
 }
