@@ -6,8 +6,9 @@
 // The port is pure and total — it never throws and performs no IO. It shapes only `run_command`
 // results (the only shapeable tool type the harness emits today); for every other tool it returns
 // undefined, leaving the ToolCallResult untouched. The CommandResult is reconstructed from the
-// summarizeCommand JSON that keiko-tools writes to ToolCallResult.output (the byte-identical
-// model-facing string); the reconstruction is read-only and the model-facing output is unchanged.
+// summarizeCommand JSON that keiko-tools writes to ToolCallResult.output. The reconstruction is
+// read-only; the harness still prefers raw output and renders the shaped observation only when raw
+// output would exceed the live context budget.
 
 import type { CommandResult } from "@oscharko-dev/keiko-contracts";
 import type { HarnessShaperInput, HarnessShaperPort } from "@oscharko-dev/keiko-harness";
