@@ -3,14 +3,15 @@
 // Reading a host-endian `Float32Array` directly off the buffer would be silently wrong on a
 // big-endian host (rare in practice, but the round-trip test catches the regression class).
 //
-// Storage is upsert by primary key (memory_id). Replacing an embedding is the common path: the
-// retrieval layer (#210) reschedules a re-embedding when the model identity drifts.
+// Storage is upsert by primary key (memory_id). The vault keeps one comparable embedding space at a
+// time; callers must clear/re-embed the corpus before switching model identity, metric, or shape.
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryEmbeddingInput, MemoryEmbeddingMetric, MemoryEmbeddingRow } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
+import { cachedPrepare } from "./statements.js";
 
 // Hard upper bound on vector dimensions. The largest production embedding model in scope today
 // (OpenAI text-embedding-3-large) is 3072 dims; 4096 gives one binary-doubling of headroom while
@@ -35,6 +36,14 @@ interface EmbeddingDbRow {
   readonly created_at: number;
 }
 
+interface ActiveVectorSpaceRow {
+  readonly provider: string;
+  readonly model_id: string;
+  readonly model_revision: string | null;
+  readonly vector_dimensions: number;
+  readonly vector_metric: string;
+}
+
 const UPSERT_SQL = `
 INSERT INTO memory_embeddings (
   memory_id, provider, model_id, model_revision, vector_dimensions,
@@ -52,17 +61,12 @@ ON CONFLICT(memory_id) DO UPDATE SET
 
 const SELECT_SQL = "SELECT * FROM memory_embeddings WHERE memory_id = ?";
 const DELETE_SQL = "DELETE FROM memory_embeddings WHERE memory_id = ?";
-const EXISTING_DIMENSIONS_FOR_IDENTITY_SQL = `
-SELECT vector_dimensions
+const ACTIVE_VECTOR_SPACES_SQL = `
+SELECT provider, model_id, model_revision, vector_dimensions, vector_metric
 FROM memory_embeddings
-WHERE provider = ?
-  AND model_id = ?
-  AND vector_metric = ?
-  AND (
-    (model_revision IS NULL AND ? IS NULL)
-    OR model_revision = ?
-  )
-LIMIT 1
+WHERE memory_id <> ?
+GROUP BY provider, model_id, model_revision, vector_dimensions, vector_metric
+LIMIT 2
 `;
 const BULK_SELECT_CHUNK_SIZE = 500;
 
@@ -89,22 +93,40 @@ function decodeVectorLE(bytes: Uint8Array, dimensions: number): Float32Array {
   return out;
 }
 
-function assertConsistentDimensionsForIdentity(
+function activeVectorSpaceMatches(
+  row: ActiveVectorSpaceRow | undefined,
+  embedding: MemoryEmbeddingInput,
+  revision: string | null,
+): boolean {
+  if (row === undefined) return false;
+  return (
+    row.provider === embedding.provider &&
+    row.model_id === embedding.modelId &&
+    row.model_revision === revision &&
+    row.vector_dimensions === embedding.vector.length &&
+    row.vector_metric === embedding.metric
+  );
+}
+
+function assertCompatibleActiveVectorSpace(
   db: DatabaseSync,
+  memoryId: MemoryId,
   embedding: MemoryEmbeddingInput,
 ): void {
   const revision = embedding.modelRevision ?? null;
-  const row = db
-    .prepare(EXISTING_DIMENSIONS_FOR_IDENTITY_SQL)
-    .get(embedding.provider, embedding.modelId, embedding.metric, revision, revision) as
-    | { vector_dimensions?: number }
-    | undefined;
-  if (row === undefined || row.vector_dimensions === embedding.vector.length) {
+  const rows = cachedPrepare(db, ACTIVE_VECTOR_SPACES_SQL).all(
+    memoryId,
+  ) as unknown as readonly ActiveVectorSpaceRow[];
+  if (rows.length === 0) {
+    return;
+  }
+  const row = rows[0];
+  if (rows.length === 1 && activeVectorSpaceMatches(row, embedding, revision)) {
     return;
   }
   throw new MemoryStorageError(
     "schema-mismatch",
-    "Embedding dimensions differ from existing rows for the same model identity.",
+    "Embedding vector space differs from existing rows; clear or re-embed the vault before switching embedding models.",
   );
 }
 
@@ -115,11 +137,11 @@ export function upsertEmbeddingRow(
   nowMs: number,
   cipher: MemoryContentCipher,
 ): void {
-  assertConsistentDimensionsForIdentity(db, embedding);
+  assertCompatibleActiveVectorSpace(db, memoryId, embedding);
   // The vector is memory CONTENT (ADR-0035), so the packed LE bytes are sealed before they touch
   // the BLOB column. vector_dimensions / vector_metric stay cleartext for retrieval-side dispatch.
   const bytes = cipher.sealBytes(encodeVectorLE(embedding.vector));
-  db.prepare(UPSERT_SQL).run(
+  cachedPrepare(db, UPSERT_SQL).run(
     memoryId,
     embedding.provider,
     embedding.modelId,
@@ -154,7 +176,7 @@ export function getEmbeddingRow(
   memoryId: MemoryId,
   cipher: MemoryContentCipher,
 ): MemoryEmbeddingRow | undefined {
-  const row = db.prepare(SELECT_SQL).get(memoryId) as unknown as EmbeddingDbRow | undefined;
+  const row = cachedPrepare(db, SELECT_SQL).get(memoryId) as unknown as EmbeddingDbRow | undefined;
   if (row === undefined) return undefined;
   return rowToEmbedding(row, cipher);
 }
@@ -194,9 +216,10 @@ export function getEmbeddingRows(
   for (let i = 0; i < uniqueIds.length; i += BULK_SELECT_CHUNK_SIZE) {
     const chunk = uniqueIds.slice(i, i + BULK_SELECT_CHUNK_SIZE);
     const placeholders = chunk.map(() => "?").join(",");
-    const rows = db
-      .prepare(`SELECT * FROM memory_embeddings WHERE memory_id IN (${placeholders})`)
-      .all(...chunk) as unknown as readonly EmbeddingDbRow[];
+    const rows = cachedPrepare(
+      db,
+      `SELECT * FROM memory_embeddings WHERE memory_id IN (${placeholders})`,
+    ).all(...chunk) as unknown as readonly EmbeddingDbRow[];
     for (const row of rows) {
       out.set(row.memory_id as MemoryId, rowToEmbedding(row, cipher));
     }
@@ -205,6 +228,6 @@ export function getEmbeddingRows(
 }
 
 export function deleteEmbeddingRow(db: DatabaseSync, memoryId: MemoryId): boolean {
-  const result = db.prepare(DELETE_SQL).run(memoryId);
+  const result = cachedPrepare(db, DELETE_SQL).run(memoryId);
   return result.changes > 0;
 }

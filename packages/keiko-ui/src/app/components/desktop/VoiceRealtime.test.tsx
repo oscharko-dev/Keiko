@@ -2,7 +2,7 @@
 // the status/error surfaces, keyboard/focus handoff, the discoverable local-only privacy disclosure,
 // and zero axe violations across phases.
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
@@ -152,9 +152,64 @@ describe("VoiceRealtimeStatus", () => {
         onDismiss={vi.fn()}
       />,
     );
-    const status = screen.getByRole("status");
-    expect(status).toHaveTextContent("MemoriaViva context active.");
-    expect(status).not.toHaveTextContent("Use pnpm");
+    const memory = screen.getByLabelText("MemoriaViva voice memory");
+    expect(memory).toHaveTextContent("MemoriaViva context active.");
+    expect(memory).not.toHaveTextContent("Use pnpm");
+  });
+
+  it("shows the recalled memory count when supplied", () => {
+    render(
+      <VoiceRealtimeStatus
+        phase="connected"
+        error={undefined}
+        memoryContextText={"Included memory context:\n- Use pnpm\n- Use vitest"}
+        memoryContextCount={2}
+        onRetry={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("MemoriaViva voice memory")).toHaveTextContent(
+      "2 recalled memories active.",
+    );
+    expect(screen.queryByText("Use pnpm")).toBeNull();
+  });
+
+  it("surfaces pending memory candidates with approve and reject actions", async () => {
+    const onAccept = vi.fn().mockResolvedValue(undefined);
+    const onReject = vi.fn().mockResolvedValue(undefined);
+    render(
+      <VoiceRealtimeStatus
+        phase="connected"
+        error={undefined}
+        onRetry={vi.fn()}
+        onDismiss={vi.fn()}
+        memoryActions={[
+          {
+            kind: "candidate",
+            proposalId: "proposal-1",
+            body: "The user's preferred test runner is Vitest.",
+            scopeLabel: "Project memory",
+            requiresApproval: false,
+          },
+        ]}
+        onAcceptMemoryCandidate={onAccept}
+        onRejectMemoryCandidate={onReject}
+      />,
+    );
+
+    expect(screen.getByLabelText("MemoriaViva voice memory")).toHaveTextContent(
+      "The user's preferred test runner is Vitest.",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(onAccept).toHaveBeenCalledWith("proposal-1");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Approve" })).toHaveAttribute(
+        "aria-busy",
+        "false",
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(onReject).toHaveBeenCalledWith("proposal-1");
   });
 
   it("renders an alert with retry/dismiss on error and focuses retry", () => {

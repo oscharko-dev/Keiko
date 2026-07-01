@@ -1194,19 +1194,22 @@ async function* handlePersistedDocument(
 ): AsyncGenerator<IndexingEvent> {
   const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
   if (documentId === null) return;
-  if (result.outcome.document.status === "unsupported") {
+  if (
+    result.outcome.document.status === "unsupported" ||
+    result.outcome.document.status === "extracted-image"
+  ) {
     yield* handleUnsupportedDocument(state, result, documentId);
     return;
   }
 
-  // A document with a durable extraction checkpoint took the progressive page-windowed path; route
-  // it to the bounded chunk/embed pass (which owns its own resume + fast-path logic).
+  // Progressive checkpoints take the page-windowed bounded chunk/embed pass. Standard checkpoints
+  // are content-free extraction metadata only; ordinary documents still use the normal chunker.
   const checkpoint = selectExtractionCheckpoint(
     state.options.store._internal.db,
     state.capsule.id,
     documentId,
   );
-  if (checkpoint !== undefined) {
+  if (checkpoint?.strategy === "progressive-pdf") {
     yield* handleBoundedDocument(state, result, documentId, checkpoint);
     return;
   }

@@ -71,7 +71,7 @@ import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_MEMORY_BODY_BYTES = 64_000;
-const DEFAULT_REVIEWER_ID = "memoriaviva-ui" as MemoryReviewerId;
+const DEFAULT_REVIEWER_ID = "local-operator" as MemoryReviewerId;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_QUERY_CHARS = 200;
@@ -279,7 +279,15 @@ function listMemoriesAcrossScopes(
   vault: MemoryVaultStore,
   options: ListAcrossScopesOptions,
 ): readonly MemoryRecord[] {
-  const records = vault.listMemories({
+  const scopes = vault
+    .listMemoryScopes()
+    .filter(
+      (scope) =>
+        options.scopeKinds === undefined ||
+        options.scopeKinds.length === 0 ||
+        options.scopeKinds.includes(scope.kind),
+    );
+  const records = vault.listMemoriesAcrossScopes(scopes, {
     ...(options.types !== undefined && options.types.length > 0 ? { type: options.types } : {}),
     ...(options.statuses !== undefined && options.statuses.length > 0
       ? { status: options.statuses }
@@ -287,13 +295,6 @@ function listMemoriesAcrossScopes(
     includeExpired: true,
   });
   const filtered = records.filter((record) => {
-    if (
-      options.scopeKinds !== undefined &&
-      options.scopeKinds.length > 0 &&
-      !options.scopeKinds.includes(record.scope.kind)
-    ) {
-      return false;
-    }
     if (
       options.sensitivities !== undefined &&
       options.sensitivities.length > 0 &&
@@ -601,7 +602,10 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildPinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
+    void buildPinOperation(record, {
+      reviewerId: reviewerIdForMemoryMutation(deps),
+      nowMs: Date.now(),
+    });
     const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -634,7 +638,10 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildUnpinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
+    void buildUnpinOperation(record, {
+      reviewerId: reviewerIdForMemoryMutation(deps),
+      nowMs: Date.now(),
+    });
     const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -677,7 +684,7 @@ export async function handleArchiveMemory(
     }
     void buildArchiveOperation(
       record,
-      { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() },
+      { reviewerId: reviewerIdForMemoryMutation(deps), nowMs: Date.now() },
       reason,
     );
     const updated = vault.updateMemory(id as MemoryId, { status: "archived" }, Date.now());
@@ -833,6 +840,44 @@ function parseForgetSelectionInput(
   return { ...destructive, selector };
 }
 
+function reviewerIdForMemoryMutation(deps: UiHandlerDeps): MemoryReviewerId {
+  return deps.memoryAuthorization?.reviewerId ?? DEFAULT_REVIEWER_ID;
+}
+
+function authorizedMemoryScopes(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+): readonly MemoryScope[] {
+  return deps.memoryAuthorization?.authorizedScopes() ?? vault.listMemoryScopes();
+}
+
+function selectorScope(selector: ForgetSelector): MemoryScope | undefined {
+  switch (selector.kind) {
+    case "by-id":
+      return undefined;
+    case "by-scope":
+    case "by-type":
+    case "by-source-conversation":
+    case "by-time-window":
+      return selector.scope;
+  }
+}
+
+function scopeAuthorized(scope: MemoryScope, authorizedScopes: readonly MemoryScope[]): boolean {
+  const key = scopeKey(scope);
+  return authorizedScopes.some((authorized) => scopeKey(authorized) === key);
+}
+
+function forbiddenMemoryScopeResult(): RouteResult {
+  return {
+    status: 403,
+    body: errorBody(
+      "MEMORY_SCOPE_FORBIDDEN",
+      "The requested memory scope is not authorized for this caller.",
+    ),
+  };
+}
+
 function listForgetCandidates(
   vault: MemoryVaultStore,
   selector: ForgetSelector,
@@ -848,13 +893,22 @@ function listForgetCandidates(
 }
 
 function executeForgetSelection(
+  deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: string,
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
   const nowMs = Date.now();
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  const requestedScope = selectorScope(selector);
+  if (requestedScope !== undefined && !scopeAuthorized(requestedScope, authorizedScopes)) {
+    return forbiddenMemoryScopeResult();
+  }
   const records = listForgetCandidates(vault, selector);
   if (isRouteResult(records)) return records;
+  if (records.some((record) => !scopeAuthorized(record.scope, authorizedScopes))) {
+    return forbiddenMemoryScopeResult();
+  }
   const candidates = selectMemoriesForForget(records, selector, { nowMs });
   if (candidates.length === 0) {
     return {
@@ -864,7 +918,7 @@ function executeForgetSelection(
   }
   const operations = buildForgetOperations(
     candidates,
-    { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+    { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
     { reason, writeTombstone: true },
   );
   vault.deleteMemories(
@@ -941,6 +995,7 @@ export async function handleForgetMemory(
 
   try {
     const result = executeForgetSelection(
+      deps,
       vault,
       { kind: "by-id", memoryId: id as MemoryId },
       input.reason,
@@ -968,7 +1023,7 @@ export async function handleForgetMemories(
   if (auditReady !== undefined) return auditReady;
 
   try {
-    const result = executeForgetSelection(vault, input.selector, input.reason);
+    const result = executeForgetSelection(deps, vault, input.selector, input.reason);
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -1001,6 +1056,7 @@ export async function handleDeleteMemory(
 
   try {
     const result = executeForgetSelection(
+      deps,
       vault,
       { kind: "by-id", memoryId: id as MemoryId },
       input.reason,
@@ -1204,7 +1260,7 @@ function executeConflictResolution(
   const resolution = buildConflictTransitions(
     memories,
     { winner: input.winner, losers: input.losers },
-    { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+    { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
   );
   persistConflictTransitions(vault, resolution, input.reason);
   const edgeIds = persistConflictSupersessions(
@@ -1386,7 +1442,7 @@ export async function handleCorrectMemory(
     const { proposal, supersession } = buildCorrection({
       olderMemory: existing,
       correctedBody: input.correctedBody,
-      context: { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+      context: { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
       newProposalId: randomUUID() as MemoryProposalId,
       newMemoryId: correctionId,
     });
@@ -1648,6 +1704,9 @@ export async function handleRejectMemoryProposal(
 export function createBffMemoryVault(
   redactString: (s: string) => string,
   onMemoryEvent?: (event: import("@oscharko-dev/keiko-memory-vault").MemoryEvent) => void,
+  onDeleteEventsBeforeCommit?: (
+    events: readonly import("@oscharko-dev/keiko-memory-vault").MemoryEvent[],
+  ) => void,
   env?: Readonly<Record<string, string | undefined>>,
 ): MemoryVaultStore {
   // Optional onMemoryEvent (#214) wires every successful vault mutation into the audit
@@ -1656,6 +1715,7 @@ export function createBffMemoryVault(
   return createMemoryVault({
     redactString,
     ...(onMemoryEvent === undefined ? {} : { onMemoryEvent }),
+    ...(onDeleteEventsBeforeCommit === undefined ? {} : { onDeleteEventsBeforeCommit }),
     ...(env === undefined ? {} : { env }),
   });
 }

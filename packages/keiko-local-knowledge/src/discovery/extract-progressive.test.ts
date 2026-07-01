@@ -149,6 +149,40 @@ describe("extractDocument — progressive large-document path", () => {
     expect(checkpoint?.source_content_hash).toMatch(/^[0-9a-f]{64}$/u);
   });
 
+  it("fails progressive extraction when source hashing observes a short range read", async () => {
+    const totalPages = 3;
+    const pageChars = 8;
+    const content = syntheticDoc(totalPages, pageChars);
+    const baseFs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);
+    const shortReadFs: WorkspaceFs = {
+      ...baseFs,
+      readFileRange: async (absolutePath, startByte, length): Promise<Uint8Array> => {
+        if (baseFs.readFileRange === undefined) throw new Error("readFileRange unavailable");
+        const bytes = await baseFs.readFileRange(absolutePath, startByte, length);
+        return bytes.subarray(0, Math.max(0, bytes.byteLength - 1));
+      },
+    };
+
+    const result = await extractDocument(
+      {
+        fs: shortReadFs,
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: policy(),
+        progressiveExtractors: [
+          syntheticProgressiveExtractor({ totalPages, pageChars, pagesPerWindow: 2 }),
+        ],
+        largeDocumentJobId: "job-short-read",
+      },
+      { capsuleId, source, file: { relativePath: "big.synthetic", sizeBytes: content.length } },
+    );
+
+    expect(result.outcome.kind).toBe("failed");
+    if (result.outcome.kind !== "failed") return;
+    expect(result.outcome.error.code).toBe("READ_FAILED");
+    expect(count(store, "pages", result.outcome.document.id)).toBe(0);
+  });
+
   it("reads a page span back through the unified windowed reader", async () => {
     const content = syntheticDoc(4, 8);
     const fs = memoryFs(ROOT, [{ relativePath: "big.synthetic", content }]);
@@ -177,6 +211,66 @@ describe("extractDocument — progressive large-document path", () => {
         28,
       ),
     ).toBe(content.slice(20, 28));
+  });
+
+  it("marks progressive documents with pages but no text as extracted-image", async () => {
+    const content = "x".repeat(32);
+    const fs = memoryFs(ROOT, [{ relativePath: "scan.synthetic", content }]);
+    const imageOnlyExtractor: ProgressiveExtractor = {
+      strategyId: "progressive-pdf",
+      parserVersion: "image-only-test@1",
+      matches: (input) => input.extension === "synthetic",
+      extractWindows: async function* (
+        _source,
+        options: ProgressiveExtractionOptions,
+      ): AsyncIterable<ProgressiveExtractionWindow> {
+        await Promise.resolve();
+        yield {
+          windowIndex: 0,
+          pages: [
+            {
+              documentId: options.documentId,
+              pageNumber: 1,
+              pageLabel: "1",
+              characterStart: 0,
+              characterEnd: 0,
+            },
+          ],
+          units: [
+            {
+              kind: "page",
+              documentId: options.documentId,
+              pageNumber: 1,
+              pageLabel: "1",
+              characterStart: 0,
+              characterEnd: 0,
+            },
+          ],
+          text: "",
+          characterStart: 0,
+          objectCursor: 1,
+          lastPageNumber: 1,
+          diagnostics: [],
+        };
+      },
+    };
+
+    const result = await extractDocument(
+      {
+        fs,
+        store,
+        parserRegistry: createDefaultParserRegistry(),
+        largeDocumentPolicy: policy(),
+        progressiveExtractors: [imageOnlyExtractor],
+      },
+      { capsuleId, source, file: { relativePath: "scan.synthetic", sizeBytes: content.length } },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("extracted-image");
+    expect(count(store, "pages", result.outcome.document.id)).toBe(1);
+    expect(count(store, "document_texts", result.outcome.document.id)).toBe(0);
   });
 
   it("re-running an extracted large document hits the unchanged fast-path", async () => {

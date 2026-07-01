@@ -10507,6 +10507,15 @@ select.dlg-input {
     color-mix(in oklch, var(--surface-primary) 94%, var(--surface-inset))
   );
 }
+.pdfv-page-error {
+  width: min(100%, 680px);
+  min-height: 220px;
+  margin: 0;
+  padding: 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-primary);
+}
 @media (max-width: 720px) {
   .pdfv-header,
   .pdfv-context,
@@ -23411,6 +23420,40 @@ ul.integ {
   background: var(--surface-secondary);
   color: var(--text-primary);
   font-size: 14px;
+}
+.cmp-voice-connected-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cmp-voice-memory {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+.cmp-voice-memory-summary {
+  color: var(--text-secondary);
+}
+.cmp-voice-memory-candidate {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-primary);
+}
+.cmp-voice-memory-candidate-text {
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+.cmp-voice-memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cmp-voice-memory-error {
+  color: var(--feedback-danger);
 }
 .cmp-voice-error {
   border-color: var(--feedback-danger);

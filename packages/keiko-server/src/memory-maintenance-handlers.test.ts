@@ -237,10 +237,8 @@ describe("handleRunMaintenance", () => {
   });
 
   it("promotes proposed conflicts and surfaces review evidence in a single pass", () => {
-    // Regression guard for the promote-before-consolidate ordering. Consolidation only inspects
-    // `accepted` records, so freshly-captured `proposed` conflicts must be promoted FIRST within the
-    // same pass — otherwise a single "Run maintenance" promotes but detects nothing until a
-    // second run.
+    // Regression guard for the promote-before-consolidate ordering: strong public proposals become
+    // accepted and are reviewed for conflicts in the same maintenance pass.
     const vault = makeVault();
     const now = Date.now();
     insert(vault, {
@@ -273,6 +271,33 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("new"))?.status).toBe("accepted");
   });
 
+  it("surfaces review for non-promoted proposed and conflicted records", () => {
+    const vault = makeVault();
+    const now = Date.now();
+    insert(vault, {
+      id: "conflicted",
+      status: "conflicted",
+      body: "deployment window is friday morning",
+      createdAt: now - DAY,
+    });
+    insert(vault, {
+      id: "proposed",
+      status: "proposed",
+      sensitivity: "confidential",
+      body: "deployment window is friday morning",
+      createdAt: now,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    const body = result.body as {
+      reviewItems: readonly { reason: string }[];
+      reviewItemsCreated: number;
+      promoted: number;
+    };
+    expect(body.promoted).toBe(0);
+    expect(body.reviewItemsCreated).toBe(1);
+    expect(body.reviewItems[0]?.reason).toBe("duplicate-review");
+  });
+
   it("never touches a pinned memory", () => {
     const vault = makeVault();
     insert(vault, {
@@ -295,7 +320,7 @@ describe("handleRunMaintenance", () => {
     const vault = makeVault();
     const faulty: MemoryVaultStore = {
       ...vault,
-      listMemories: () => {
+      listMemoriesAcrossScopes: () => {
         throw new Error("disk gone");
       },
     };
@@ -366,7 +391,7 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
   it("never throws and still advances the cursor when the pass faults", () => {
     const faulty = {
       ...makeVault(),
-      listMemories: () => {
+      listMemoriesAcrossScopes: () => {
         throw new Error("disk gone");
       },
     } as MemoryVaultStore;

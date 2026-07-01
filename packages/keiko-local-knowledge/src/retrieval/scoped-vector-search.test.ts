@@ -458,6 +458,72 @@ describe("searchVectorsForScope — citation fields", () => {
     }
   });
 
+  it("attaches the first overlapping page hop for section chunks that cross pages", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-a",
+      unit: {
+        kind: "section",
+        sectionPath: ["Boundary"],
+        characterStart: 80,
+        characterEnd: 130,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "x ".repeat(120),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const insertPage = store._internal.db.prepare(
+      "INSERT INTO pages (capsule_id, document_id, page_number, page_label, character_start, character_end, bbox_x, bbox_y, bbox_w, bbox_h) VALUES (:c, :d, :n, :l, :s, :e, NULL, NULL, NULL, NULL)",
+    );
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 1, l: "1", s: 0, e: 100 });
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 2, l: "2", s: 101, e: 200 });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "query",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.references[0]?.citation.pageNumber).toBe(1);
+    expect(outcome.references[0]?.citation.pageLabel).toBe("1");
+  });
+
+  it("does not let empty placeholder pages claim a following text span", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-a",
+      unit: {
+        kind: "section",
+        sectionPath: ["Body"],
+        characterStart: 0,
+        characterEnd: 50,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "x ".repeat(60),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const insertPage = store._internal.db.prepare(
+      "INSERT INTO pages (capsule_id, document_id, page_number, page_label, character_start, character_end, bbox_x, bbox_y, bbox_w, bbox_h) VALUES (:c, :d, :n, :l, :s, :e, NULL, NULL, NULL, NULL)",
+    );
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 1, l: "blank", s: 0, e: 0 });
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 2, l: "2", s: 0, e: 100 });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "query",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.references[0]?.citation.pageNumber).toBe(2);
+    expect(outcome.references[0]?.citation.pageLabel).toBe("2");
+  });
+
   it("preserves jsonPointer for json-path citations", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {

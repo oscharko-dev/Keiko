@@ -449,7 +449,7 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     socket.close();
   });
 
-  it("degrades active grounding to a recorded voice session when the realtime provider does not advertise tool calling", async () => {
+  it("uses client-side grounded retrieval when the realtime provider does not advertise tool calling", async () => {
     let seenRequest: RealtimeNegotiationRequest | undefined;
     const { deps, chat } = depsWithChat({
       config: voiceConfig(true, {
@@ -500,6 +500,7 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     });
     expect(seenRequest?.tools).toBeUndefined();
     expect(seenRequest?.toolChoice).toBeUndefined();
+    expect(seenRequest?.disableAutomaticResponse).toBe(true);
     socket.close();
   });
 

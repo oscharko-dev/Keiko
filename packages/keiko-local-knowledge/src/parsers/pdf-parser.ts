@@ -21,6 +21,7 @@ import type {
   ParserOptions,
   ParserSelectionInput,
 } from "./types.js";
+import { WindowTextBuilder } from "./large-document/window-builder.js";
 
 const PARSER_ID = "pdf";
 const PARSER_VERSION = "1";
@@ -45,6 +46,7 @@ export interface PdfPageLike {
 export interface PdfDocumentLike {
   readonly numPages: number;
   readonly getPage: (pageNumber: number) => Promise<PdfPageLike>;
+  readonly getPageLabels?: () => Promise<readonly (string | null)[] | null>;
 }
 
 interface PdfLoadingTaskLike {
@@ -334,25 +336,6 @@ function unsupportedMediaUnit(
   return { kind: "unsupported-media", documentId, reason };
 }
 
-function pageUnit(page: PageRecord): ParsedUnit {
-  return page.pageLabel === undefined
-    ? {
-        kind: "page",
-        documentId: page.documentId,
-        pageNumber: page.pageNumber,
-        characterStart: page.characterStart,
-        characterEnd: page.characterEnd,
-      }
-    : {
-        kind: "page",
-        documentId: page.documentId,
-        pageNumber: page.pageNumber,
-        pageLabel: page.pageLabel,
-        characterStart: page.characterStart,
-        characterEnd: page.characterEnd,
-      };
-}
-
 export interface PageTextReadState {
   readonly input: ParserSelectionInput;
   readonly options: ParserOptions;
@@ -444,29 +427,6 @@ export async function readPageText(
   }
 }
 
-function appendPageRecord(
-  pages: PageRecord[],
-  units: ParsedUnit[],
-  input: ParserSelectionInput,
-  pageNumber: number,
-  text: string,
-  cursor: number,
-): number {
-  const pageStart = cursor;
-  const pageEnd = cursor + text.length;
-  const pageLabel = String(pageNumber);
-  const pageRecord: PageRecord = {
-    documentId: input.documentId,
-    pageNumber,
-    pageLabel,
-    characterStart: pageStart,
-    characterEnd: pageEnd,
-  };
-  pages.push(pageRecord);
-  units.push(pageUnit(pageRecord));
-  return pageEnd + 2;
-}
-
 function noTextResult(
   capability: ParserCapability,
   input: ParserSelectionInput,
@@ -492,6 +452,129 @@ function noTextResult(
   );
 }
 
+async function pageLabelsFor(doc: PdfDocumentLike): Promise<readonly (string | null)[]> {
+  try {
+    return (await doc.getPageLabels?.()) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function pageLabelFor(labels: readonly (string | null)[], pageNumber: number): string | undefined {
+  return labels[pageNumber - 1] ?? undefined;
+}
+
+function pageFailureDiagnostic(
+  input: ParserSelectionInput,
+  pageNumber: number,
+  code: "PAGE_PARSE_FAILED" | "PAGE_TEXT_UNREADABLE",
+  message: string,
+): ParserDiagnostic {
+  return { code, message, documentId: input.documentId, severity: "warning", pageNumber };
+}
+
+function pdfLoadFailureDiagnostic(input: ParserSelectionInput, cause: unknown): ParserDiagnostic {
+  const name =
+    cause instanceof Error
+      ? `${cause.name} ${cause.message}`.toLowerCase()
+      : String(cause).toLowerCase();
+  if (name.includes("password") || name.includes("encrypted")) {
+    return {
+      code: "ENCRYPTED_PDF",
+      message: "pdf parser rejected encrypted document",
+      documentId: input.documentId,
+      severity: "error",
+    };
+  }
+  return {
+    code: "MALFORMED_INPUT",
+    message: "pdf parser rejected malformed or unsupported document",
+    documentId: input.documentId,
+    severity: "error",
+  };
+}
+
+interface PageExtractionStepResult {
+  readonly scannedObjects: number;
+  readonly stopAfterPage: boolean;
+}
+
+interface PdfPageStepArgs {
+  readonly builder: WindowTextBuilder;
+  readonly diagnostics: ParserDiagnostic[];
+  readonly doc: PdfDocumentLike;
+  readonly input: ParserSelectionInput;
+  readonly options: ParserOptions;
+  readonly pageLabel: string | undefined;
+  readonly pageNumber: number;
+  readonly scannedObjects: number;
+  readonly startedAt: number;
+}
+
+function addEmptyPdfPage(
+  builder: WindowTextBuilder,
+  diagnostics: ParserDiagnostic[],
+  input: ParserSelectionInput,
+  pageNumber: number,
+  pageLabel: string | undefined,
+  code: "PAGE_PARSE_FAILED" | "PAGE_TEXT_UNREADABLE",
+  message: string,
+): void {
+  diagnostics.push(pageFailureDiagnostic(input, pageNumber, code, message));
+  builder.addPage(pageNumber, "", pageLabel);
+}
+
+async function readPdfPageTextStep(
+  page: PdfPageLike,
+  args: PdfPageStepArgs,
+): Promise<PageExtractionStepResult> {
+  try {
+    const result = await readPageText(page, {
+      input: args.input,
+      options: args.options,
+      startedAt: args.startedAt,
+      emittedUnits: args.builder.pageCount,
+      scannedObjects: args.scannedObjects,
+    });
+    args.builder.addPage(args.pageNumber, result.text, args.pageLabel);
+    if (result.diagnostic !== undefined) args.diagnostics.push(result.diagnostic);
+    return {
+      scannedObjects: result.scannedObjects,
+      stopAfterPage: result.diagnostic !== undefined,
+    };
+  } catch {
+    addEmptyPdfPage(
+      args.builder,
+      args.diagnostics,
+      args.input,
+      args.pageNumber,
+      args.pageLabel,
+      "PAGE_TEXT_UNREADABLE",
+      "pdf parser could not read page text; indexed page provenance without text",
+    );
+    return { scannedObjects: args.scannedObjects, stopAfterPage: false };
+  }
+}
+
+async function extractPdfPageStep(args: PdfPageStepArgs): Promise<PageExtractionStepResult> {
+  let page: PdfPageLike;
+  try {
+    page = await args.doc.getPage(args.pageNumber);
+  } catch {
+    addEmptyPdfPage(
+      args.builder,
+      args.diagnostics,
+      args.input,
+      args.pageNumber,
+      args.pageLabel,
+      "PAGE_PARSE_FAILED",
+      "pdf parser could not load page; indexed page provenance without text",
+    );
+    return { scannedObjects: args.scannedObjects, stopAfterPage: false };
+  }
+  return readPdfPageTextStep(page, args);
+}
+
 export async function extractPages(
   doc: PdfDocumentLike,
   input: ParserSelectionInput,
@@ -501,17 +584,15 @@ export async function extractPages(
   readonly diagnostics: readonly ParserDiagnostic[];
   readonly pages: readonly PageRecord[];
   readonly units: readonly ParsedUnit[];
-  readonly pageTexts: readonly string[];
+  readonly normalizedText?: string;
 }> {
   const diagnostics: ParserDiagnostic[] = [];
-  const pages: PageRecord[] = [];
-  const units: ParsedUnit[] = [];
-  const pageTexts: string[] = [];
-  let cursor = 0;
+  const builder = new WindowTextBuilder(input.documentId, 0, false);
+  const pageLabels = await pageLabelsFor(doc);
   let scannedObjects = 0;
 
   for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-    const limit = shouldStop(startedAt, options, units.length);
+    const limit = shouldStop(startedAt, options, builder.pageCount);
     if (limit.stop) {
       if (limit.code !== undefined && limit.message !== undefined) {
         diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
@@ -519,27 +600,29 @@ export async function extractPages(
       break;
     }
 
-    const page = await doc.getPage(pageNumber);
-    const textResult = await readPageText(page, {
+    const pageLabel = pageLabelFor(pageLabels, pageNumber);
+    const step = await extractPdfPageStep({
+      builder,
+      diagnostics,
+      doc,
       input,
       options,
-      startedAt,
-      emittedUnits: units.length,
+      pageLabel,
+      pageNumber,
       scannedObjects,
+      startedAt,
     });
-    scannedObjects = textResult.scannedObjects;
-    if (textResult.diagnostic !== undefined) {
-      diagnostics.push(textResult.diagnostic);
-      break;
-    }
-    if (textResult.text.length === 0) {
-      continue;
-    }
-    pageTexts.push(textResult.text);
-    cursor = appendPageRecord(pages, units, input, pageNumber, textResult.text, cursor);
+    scannedObjects = step.scannedObjects;
+    if (step.stopAfterPage) break;
   }
 
-  return { diagnostics, pages, units, pageTexts };
+  const normalizedText = builder.text();
+  return {
+    diagnostics,
+    pages: builder.snapshotPages(),
+    units: builder.snapshotUnits(),
+    ...(normalizedText.length > 0 ? { normalizedText } : {}),
+  };
 }
 
 async function asyncParse(
@@ -559,7 +642,7 @@ async function asyncParse(
   const startedAt = options.now();
   try {
     const doc = await loadPdfDocument(input.bytes);
-    const { diagnostics, pages, units, pageTexts } = await extractPages(
+    const { diagnostics, pages, units, normalizedText } = await extractPages(
       doc,
       input,
       options,
@@ -581,16 +664,11 @@ async function asyncParse(
       units,
       diagnostics,
       extractedAt: options.now(),
-      normalizedText: pageTexts.join("\n\n"),
+      ...(normalizedText !== undefined ? { normalizedText } : {}),
     } satisfies InternalParserResult;
-  } catch {
+  } catch (cause) {
     return emptyResult(capability, input.documentId, options, [
-      diagnostic(
-        "MALFORMED_INPUT",
-        "pdf parser rejected malformed or unsupported document",
-        input.documentId,
-        "error",
-      ),
+      pdfLoadFailureDiagnostic(input, cause),
     ]);
   }
 }

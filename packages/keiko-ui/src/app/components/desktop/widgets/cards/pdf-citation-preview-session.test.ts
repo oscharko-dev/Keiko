@@ -10,6 +10,7 @@ import {
   getPdfCitationPreviewSession,
   openPdfCitationPreviewWindow,
   registerPdfCitationPreviewMessageTarget,
+  showPdfCitationPreviewFailure,
   showPdfCitationPreviewResult,
   syncPdfCitationPreviewWindowRegistry,
 } from "./pdf-citation-preview-session";
@@ -94,7 +95,34 @@ describe("pdf-citation-preview-session", () => {
     });
   });
 
-  it("closes orphaned preview sessions when the window leaves the workspace", () => {
+  it("persists answer context in cfg so restored viewers can re-open", () => {
+    const add = vi.fn<WorkspaceApi["add"]>(() => "pdf-preview-1");
+    const context = {
+      activeStableId: "stable-1",
+      citations: [
+        {
+          citation: { stableId: "stable-1", marker: "[1]", label: "policy.pdf" },
+          display: PREVIEW.display,
+        },
+      ],
+      origin: {
+        assistantMessageId: "msg-a",
+        chatId: "chat-1",
+        chatWindowId: "chat-window-1",
+        marker: "[1]",
+        representation: "inline-marker" as const,
+      },
+    };
+
+    openPdfCitationPreviewWindow(add, PREVIEW, { context });
+
+    const cfg = add.mock.calls[0]?.[1] as { readonly previewContextJson?: string } | undefined;
+    expect(cfg?.previewContextJson).toBe(JSON.stringify(context));
+    expect(cfg).not.toHaveProperty("handle");
+    expect(getPdfCitationPreviewSession("pdf-preview-1")?.context).toEqual(context);
+  });
+
+  it("closes orphaned preview sessions when the window leaves the workspace", async () => {
     const add = vi.fn(() => "pdf-preview-1");
     openPdfCitationPreviewWindow(add, PREVIEW);
 
@@ -116,8 +144,34 @@ describe("pdf-citation-preview-session", () => {
 
     syncPdfCitationPreviewWindowRegistry([]);
 
-    expect(closePdfCitationPreviewSession).toHaveBeenCalledWith("preview-session-1");
+    await Promise.resolve();
+
+    expect(closePdfCitationPreviewSession).toHaveBeenCalledWith(
+      "preview-session-1",
+      "2026-06-28T12:00:00.000Z",
+    );
     expect(getPdfCitationPreviewSession("pdf-preview-1")).toBeUndefined();
+  });
+
+  it("does not close an orphaned handle after it is rebound before cleanup runs", async () => {
+    const firstAdd = vi.fn(() => "pdf-preview-1");
+    openPdfCitationPreviewWindow(firstAdd, PREVIEW);
+
+    syncPdfCitationPreviewWindowRegistry([]);
+    const secondAdd = vi.fn(() => "pdf-preview-2");
+    openPdfCitationPreviewWindow(secondAdd, {
+      ...PREVIEW,
+      session: {
+        ...PREVIEW.session,
+        reused: true,
+      },
+    });
+    await Promise.resolve();
+
+    expect(closePdfCitationPreviewSession).not.toHaveBeenCalled();
+    expect(getPdfCitationPreviewSession("pdf-preview-2")?.session.handle).toBe(
+      "preview-session-1",
+    );
   });
 
   it("reuses and focuses the existing viewer for the same verified PDF session", () => {
@@ -297,7 +351,7 @@ describe("pdf-citation-preview-session", () => {
       update: vi.fn<WorkspaceApi["update"]>(),
     };
 
-    const windowId = showPdfCitationPreviewResult(windows, {
+    const windowId = showPdfCitationPreviewFailure(windows, {
       outcome: "rejected",
       state: "recoverable",
       reason: "document-content-mismatch",
@@ -309,6 +363,7 @@ describe("pdf-citation-preview-session", () => {
       "pdfCitationPreview",
       expect.objectContaining({
         documentLabel: "Policy wording.pdf",
+        currentPage: 1,
         failureTitle: "Preview changed",
         failureRetryable: false,
       }),
@@ -316,14 +371,18 @@ describe("pdf-citation-preview-session", () => {
     expect(windows.focus).not.toHaveBeenCalled();
   });
 
-  it("does not expose retry for open-time recovery shells without a retained open request", () => {
+  it("preserves retryability for open-time recovery shells without a retained open request", () => {
     const expectations = [
-      ["document-not-ready", false],
+      ["document-not-ready", true],
       ["preview-source-unreadable", false],
       ["preview-metadata-missing", false],
       ["document-content-mismatch", false],
+      ["source-modified", false],
       ["page-provenance-missing", false],
       ["preview-source-missing", false],
+      ["source-needs-rebind", false],
+      ["source-dehydrated", true],
+      ["source-unavailable", false],
       ["preview-source-oversized", false],
     ] as const;
 
@@ -334,7 +393,7 @@ describe("pdf-citation-preview-session", () => {
         update: vi.fn<WorkspaceApi["update"]>(),
       };
 
-      showPdfCitationPreviewResult(windows, {
+      showPdfCitationPreviewFailure(windows, {
         outcome: "rejected",
         state: "recoverable",
         reason,

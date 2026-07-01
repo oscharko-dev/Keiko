@@ -1720,12 +1720,17 @@ export async function openPdfCitationPreviewSession(
   });
 }
 
-export async function closePdfCitationPreviewSession(sessionHandle: string): Promise<{ ok: true }> {
+export async function closePdfCitationPreviewSession(
+  sessionHandle: string,
+  expectedExpiresAt?: string,
+): Promise<{ ok: true }> {
   return fetchJson(
     `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}`,
     {
       method: "DELETE",
-      body: "{}",
+      body: JSON.stringify(
+        expectedExpiresAt === undefined ? {} : { expectedExpiresAt },
+      ),
     },
   );
 }

@@ -30,6 +30,7 @@ export {
   type BuildHandlerDepsOptions,
   type Redactor,
   type ModelPortFactory,
+  type MemoryAuthorizationContext,
 } from "./deps.js";
 export {
   createUpdateLocalStateManager,

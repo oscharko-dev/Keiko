@@ -213,7 +213,6 @@ function realtimeGroundedVoiceAvailable(resolution: VoiceCapabilityResolution): 
     resolution.available &&
     resolution.profile === "full-realtime" &&
     resolution.capabilities.realtimeVoice &&
-    resolution.capabilities.realtimeToolCalling === true &&
     resolution.transport.webrtcMedia
   );
 }

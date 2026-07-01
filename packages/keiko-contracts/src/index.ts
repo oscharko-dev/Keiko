@@ -1591,6 +1591,7 @@ export {
   PDF_CITATION_PREVIEW_ORIGINS,
   PDF_CITATION_PREVIEW_REASON_CODES,
   PDF_CITATION_PREVIEW_STATUS_STATES,
+  normalizePdfCitationPreviewMarkerIndex,
   pdfCitationPreviewAnchorQuality,
   pdfCitationPreviewFailureState,
 } from "./local-knowledge-preview.js";

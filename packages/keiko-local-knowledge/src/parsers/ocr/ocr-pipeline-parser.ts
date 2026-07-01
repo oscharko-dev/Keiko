@@ -5,8 +5,8 @@
 // it emits one `ParsedUnit { kind: "page" }` per recognised page; when OCR fails it fires
 // the standard unsupported-media diagnostic consistent with unsupported-parser.ts (#266).
 //
-// No multi-page splitter ships yet — until a real splitter exists the input bytes are treated
-// as page 1. That assumption is isolated here and collapses when a splitter is added.
+// No multi-page splitter ships yet. Callers that already split documents into page images pass
+// `input.pageNumber`; otherwise the single-image fallback remains page 1.
 
 import type { ParsedUnit, ParserResult } from "@oscharko-dev/keiko-contracts";
 
@@ -93,6 +93,14 @@ function cancelled(
   ]);
 }
 
+function pageNumberForInput(input: ParserSelectionInput): number {
+  return input.pageNumber !== undefined &&
+    Number.isInteger(input.pageNumber) &&
+    input.pageNumber > 0
+    ? input.pageNumber
+    : 1;
+}
+
 function resultFromOcrOutcome(
   ocrResult: OcrPageResult,
   cap: ParserCapability,
@@ -122,7 +130,7 @@ function resultFromOcrOutcome(
   const pageUnit: ParsedUnit = {
     kind: "page",
     documentId: input.documentId,
-    pageNumber: 1,
+    pageNumber: pageNumberForInput(input),
     characterStart: 0,
     characterEnd: ocrResult.text.length,
   };
@@ -170,7 +178,10 @@ function buildAsyncParse(cap: ParserCapability, adapter: OcrAdapter) {
         diagnostic(preCheck.code, preCheck.message, input.documentId, "info"),
       ]);
     }
-    const ocrResult = await adapter.ocrPage({ bytes: input.bytes, pageNumber: 1 });
+    const ocrResult = await adapter.ocrPage({
+      bytes: input.bytes,
+      pageNumber: pageNumberForInput(input),
+    });
     if (isAborted(options.signal)) return cancelled(cap, input, options);
     const postCheck = shouldStop(startedAt, options, 0);
     if (postCheck.stop && postCheck.code !== undefined && postCheck.message !== undefined) {

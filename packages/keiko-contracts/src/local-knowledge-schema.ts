@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 14 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 15 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -126,7 +126,7 @@ CREATE TABLE capsule_set_members (
 // source is required to live in the same capsule as the document. UNIQUE (capsule_id, id)
 // exposes the same composite for downstream tables (chunks, vectors, pages, sections,
 // parsed_units, parser_diagnostics) to lock document_id to capsule_id.
-const CREATE_DOCUMENTS = `
+const CREATE_DOCUMENTS_V14 = `
 CREATE TABLE documents (
   id TEXT PRIMARY KEY NOT NULL,
   capsule_id TEXT NOT NULL,
@@ -145,6 +145,49 @@ CREATE TABLE documents (
   UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
+
+const CREATE_DOCUMENTS = `
+CREATE TABLE documents (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_path TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  media_type TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  parser_id TEXT NOT NULL,
+  parser_version TEXT NOT NULL,
+  last_extracted_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  safe_display_name TEXT NOT NULL,
+  blob_ref TEXT,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+const CREATE_DOCUMENT_BLOBS = `
+CREATE TABLE document_blobs (
+  capsule_id TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  byte_length INTEGER NOT NULL,
+  media_type TEXT NOT NULL,
+  storage_kind TEXT NOT NULL CHECK (storage_kind IN ('plaintext', 'sealed')),
+  seal_version TEXT,
+  blob_bytes BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  created_source_id TEXT NOT NULL,
+  created_document_id TEXT NOT NULL,
+  PRIMARY KEY (capsule_id, content_hash),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, created_source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, created_document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX =
+  "CREATE INDEX idx_document_blobs_created_document ON document_blobs(capsule_id, created_document_id);";
 
 const CREATE_DOCUMENT_TEXTS = `
 CREATE TABLE document_texts (
@@ -365,7 +408,8 @@ CREATE TABLE capsule_audit_events (
       'model-context-sent',
       'citation-preview-authorized',
       'citation-preview-recoverable',
-      'citation-preview-blocked'
+      'citation-preview-blocked',
+      'citation-preview-document-accessed'
     )
   ),
   source_id TEXT,
@@ -419,6 +463,21 @@ CREATE TABLE capsule_audit_events_v14 (
 
 const COPY_CAPSULE_AUDIT_EVENTS_TO_V14 = `
 INSERT INTO capsule_audit_events_v14 (
+  id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+)
+SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+FROM capsule_audit_events;
+`.trim();
+
+const CREATE_CAPSULE_AUDIT_EVENTS_V15 = CREATE_CAPSULE_AUDIT_EVENTS.replace(
+  "capsule_audit_events",
+  "capsule_audit_events_v15",
+);
+
+const COPY_CAPSULE_AUDIT_EVENTS_TO_V15 = `
+INSERT INTO capsule_audit_events_v15 (
   id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
   deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
 )
@@ -510,6 +569,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULE_SOURCES,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
+  CREATE_DOCUMENT_BLOBS,
   CREATE_DOCUMENT_TEXTS,
   CREATE_PAGES,
   CREATE_SECTIONS,
@@ -553,6 +613,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   CREATE_EXTRACTION_CHECKPOINTS_PHASE_INDEX,
   CREATE_EXTRACTION_CHECKPOINTS_JOB_INDEX,
   CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX,
+  CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX,
 ] as const;
 
 // Runtime deletion primitive (#193 uses this inside a transaction). The cascade chain in
@@ -578,7 +639,7 @@ const V1_DDL_WITHOUT_V2: readonly string[] = [
   CREATE_CAPSULES,
   CREATE_CAPSULE_SOURCES_V1,
   CREATE_CAPSULE_SET_MEMBERS,
-  CREATE_DOCUMENTS,
+  CREATE_DOCUMENTS_V14,
   CREATE_PAGES,
   CREATE_SECTIONS_V1,
   CREATE_PARSED_UNITS,
@@ -794,6 +855,21 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
     ],
   },
+  {
+    version: 15,
+    reason:
+      "Persist content-addressed PDF preview blobs and metadata-only byte-delivery audit events.",
+    up: [
+      "ALTER TABLE documents ADD COLUMN blob_ref TEXT;",
+      CREATE_DOCUMENT_BLOBS,
+      CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX,
+      CREATE_CAPSULE_AUDIT_EVENTS_V15,
+      COPY_CAPSULE_AUDIT_EVENTS_TO_V15,
+      "DROP TABLE capsule_audit_events;",
+      "ALTER TABLE capsule_audit_events_v15 RENAME TO capsule_audit_events;",
+      CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+    ],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -826,6 +902,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "capsule_audit_events",
   "extraction_checkpoints",
   "document_text_windows",
+  "document_blobs",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
@@ -855,4 +932,5 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_extraction_checkpoints_capsule_phase",
   "idx_extraction_checkpoints_job",
   "idx_document_text_windows_span",
+  "idx_document_blobs_created_document",
 ] as const;

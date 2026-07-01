@@ -26,7 +26,7 @@ import {
   type ParserOptions,
   type ParserSelectionInput,
 } from "../parsers/index.js";
-import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
+import { PDF_NO_TEXT_LAYER, PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 import { readExistingDocumentRow } from "../discovery/persist.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
@@ -827,6 +827,36 @@ describe("runIndexingJob — unsupported documents", () => {
     const row = selectJobById(fixture.store._internal.db, started.jobId);
     expect(row?.processed_documents).toBe(0);
     expect(row?.skipped_documents).toBe(1);
+  });
+
+  it("keeps extracted-image PDFs previewable and skips grounding work", async () => {
+    const imageFixture = buildFixture({ "scan.pdf": PDF_NO_TEXT_LAYER });
+    try {
+      const events = await drain(runIndexingJob(buildOptions(imageFixture)));
+      const documentId = documentIdFor({
+        capsuleId: imageFixture.capsuleId,
+        sourceId: imageFixture.sourceId,
+        relativePath: "scan.pdf",
+      });
+      const row = readExistingDocumentRow(
+        imageFixture.store._internal.db,
+        imageFixture.capsuleId,
+        documentId,
+      );
+      const pageCount = imageFixture.store._internal.db
+        .prepare("SELECT COUNT(*) AS n FROM pages WHERE capsule_id = :c AND document_id = :d")
+        .get({ c: imageFixture.capsuleId, d: String(documentId) }) as { readonly n: number };
+
+      expect(row?.status).toBe("extracted-image");
+      expect(pageCount.n).toBe(1);
+      expect(
+        events.some((event) => event.kind === "document-skipped" && event.reason === "unsupported"),
+      ).toBe(true);
+      expect(events.some((event) => event.kind === "document-failed")).toBe(false);
+      expect(events.some((event) => event.kind === "document-embedded")).toBe(false);
+    } finally {
+      imageFixture.cleanup();
+    }
   });
 });
 
