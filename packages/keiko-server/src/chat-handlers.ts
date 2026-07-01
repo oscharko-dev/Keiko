@@ -1232,6 +1232,7 @@ export interface VoiceTurnAppendRequest {
   readonly messages: readonly VoiceTurnAppendMessage[];
   readonly modelId: string | undefined;
   readonly memory: ParsedConversationMemoryRequest | undefined;
+  readonly groundedAnswer?: GroundedAnswer | undefined;
 }
 
 const MAX_VOICE_TURN_MESSAGES = 8;
@@ -1306,12 +1307,15 @@ function voiceTurnAppendRequestFromBody(
   if (isRouteResult(modelId)) return modelId;
   const memory = parseMemoryRequest(body.memory);
   if (isRouteResult(memory)) return memory;
+  const groundedAnswer = isRecord(body.groundedAnswer) ? body.groundedAnswer as unknown as GroundedAnswer : undefined;
+
   return {
     chatId,
     projectPath,
     messages,
     modelId,
     memory,
+    groundedAnswer,
   };
 }
 
