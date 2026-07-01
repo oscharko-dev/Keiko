@@ -35,6 +35,13 @@ import {
 
 type Redactor = (input: string) => string;
 
+const POSIX_ABSOLUTE_PATH_FRAGMENT =
+  /(^|[^A-Za-z0-9._~/-])\/(?!\/)(?:[A-Za-z0-9._~+@-]+\/)+[A-Za-z0-9._~+@-]+/gu;
+const WINDOWS_DRIVE_ABSOLUTE_PATH_FRAGMENT =
+  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?:[A-Za-z0-9._~+@ -]+[\\/])*[A-Za-z0-9._~+@ -]+/gu;
+const WINDOWS_UNC_ABSOLUTE_PATH_FRAGMENT =
+  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)[A-Za-z0-9._~+@-]+[\\/][^\s("'`<>]+/gu;
+
 export interface CompactionEvidenceInput {
   readonly runId: string;
   readonly modelId: string;
@@ -70,23 +77,41 @@ function workspaceRootAuditId(workspaceRoot: string, redact: Redactor): string {
   return `compaction-root-${sha256Hex(redact(workspaceRoot)).slice(0, 16)}`;
 }
 
+function redactedPathSafe(value: string, redact: Redactor): string {
+  const redacted = redact(value);
+  return redacted
+    .replace(POSIX_ABSOLUTE_PATH_FRAGMENT, (_match, prefix: string) => `${prefix}[REDACTED_PATH]`)
+    .replace(
+      WINDOWS_DRIVE_ABSOLUTE_PATH_FRAGMENT,
+      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
+    )
+    .replace(
+      WINDOWS_UNC_ABSOLUTE_PATH_FRAGMENT,
+      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
+    );
+}
+
 function redactProvenanceRef(ref: ContextProvenanceRef, redact: Redactor): ContextProvenanceRef {
   return {
     kind: ref.kind,
-    stableId: redact(ref.stableId),
-    ...(ref.scopePath === undefined ? {} : { scopePath: redact(ref.scopePath) }),
+    stableId: redactedPathSafe(ref.stableId, redact),
+    ...(ref.scopePath === undefined ? {} : { scopePath: redactedPathSafe(ref.scopePath, redact) }),
     ...(ref.lineRange === undefined ? {} : { lineRange: ref.lineRange }),
-    ...(ref.contentHash === undefined ? {} : { contentHash: redact(ref.contentHash) }),
-    ...(ref.evidenceAtomId === undefined ? {} : { evidenceAtomId: redact(ref.evidenceAtomId) }),
+    ...(ref.contentHash === undefined
+      ? {}
+      : { contentHash: redactedPathSafe(ref.contentHash, redact) }),
+    ...(ref.evidenceAtomId === undefined
+      ? {}
+      : { evidenceAtomId: redactedPathSafe(ref.evidenceAtomId, redact) }),
     ...(ref.notPersistedReason === undefined
       ? {}
-      : { notPersistedReason: redact(ref.notPersistedReason) }),
+      : { notPersistedReason: redactedPathSafe(ref.notPersistedReason, redact) }),
   };
 }
 
 function redactPreservedFact(fact: ContextPreservedFact, redact: Redactor): ContextPreservedFact {
   return {
-    statement: redact(fact.statement),
+    statement: redactedPathSafe(fact.statement, redact),
     ...(fact.sourceRef === undefined
       ? {}
       : { sourceRef: redactProvenanceRef(fact.sourceRef, redact) }),
@@ -99,8 +124,8 @@ function redactPreservedFact(fact: ContextPreservedFact, redact: Redactor): Cont
 
 function redactAssumption(assumption: ContextAssumption, redact: Redactor): ContextAssumption {
   return {
-    statement: redact(assumption.statement),
-    rationale: redact(assumption.rationale),
+    statement: redactedPathSafe(assumption.statement, redact),
+    rationale: redactedPathSafe(assumption.rationale, redact),
     confidence: assumption.confidence,
   };
 }
@@ -110,7 +135,7 @@ function redactUserConstraint(
   redact: Redactor,
 ): ContextUserConstraint {
   return {
-    statement: redact(constraint.statement),
+    statement: redactedPathSafe(constraint.statement, redact),
     ...(constraint.sourceRef === undefined
       ? {}
       : { sourceRef: redactProvenanceRef(constraint.sourceRef, redact) }),
@@ -122,9 +147,9 @@ function redactCommandOutcome(
   redact: Redactor,
 ): ContextCommandOutcome {
   return {
-    command: redact(outcome.command),
+    command: redactedPathSafe(outcome.command, redact),
     exitCode: outcome.exitCode,
-    summary: redact(outcome.summary),
+    summary: redactedPathSafe(outcome.summary, redact),
   };
 }
 
@@ -132,11 +157,14 @@ function redactInvalidationKey(
   key: ContextInvalidationKey,
   redact: Redactor,
 ): ContextInvalidationKey {
-  return { scopePath: redact(key.scopePath), contentHash: redact(key.contentHash) };
+  return {
+    scopePath: redactedPathSafe(key.scopePath, redact),
+    contentHash: redactedPathSafe(key.contentHash, redact),
+  };
 }
 
 function redactStrings(values: readonly string[], redact: Redactor): readonly string[] {
-  return values.map((value) => redact(value));
+  return values.map((value) => redactedPathSafe(value, redact));
 }
 
 function redactRehydration(
@@ -146,22 +174,26 @@ function redactRehydration(
   return {
     schemaVersion: handle.schemaVersion,
     laneId: handle.laneId,
-    handleId: redact(handle.handleId),
+    handleId: redactedPathSafe(handle.handleId, redact),
     itemCount: handle.itemCount,
     approxTokens: handle.approxTokens,
     ...(handle.kind === undefined ? {} : { kind: handle.kind }),
-    ...(handle.scopePath === undefined ? {} : { scopePath: redact(handle.scopePath) }),
+    ...(handle.scopePath === undefined
+      ? {}
+      : { scopePath: redactedPathSafe(handle.scopePath, redact) }),
     ...(handle.lineRange === undefined ? {} : { lineRange: handle.lineRange }),
-    ...(handle.contentHash === undefined ? {} : { contentHash: redact(handle.contentHash) }),
+    ...(handle.contentHash === undefined
+      ? {}
+      : { contentHash: redactedPathSafe(handle.contentHash, redact) }),
     ...(handle.evidenceAtomId === undefined
       ? {}
-      : { evidenceAtomId: redact(handle.evidenceAtomId) }),
+      : { evidenceAtomId: redactedPathSafe(handle.evidenceAtomId, redact) }),
     ...(handle.notPersistedReason === undefined
       ? {}
-      : { notPersistedReason: redact(handle.notPersistedReason) }),
+      : { notPersistedReason: redactedPathSafe(handle.notPersistedReason, redact) }),
     ...(handle.approvedSummary === undefined
       ? {}
-      : { approvedSummary: redact(handle.approvedSummary) }),
+      : { approvedSummary: redactedPathSafe(handle.approvedSummary, redact) }),
   };
 }
 
@@ -188,7 +220,7 @@ function redactRecordBase(
   return {
     schemaVersion: record.schemaVersion,
     laneId: record.laneId,
-    reason: redact(record.reason),
+    reason: redactedPathSafe(record.reason, redact),
     itemsBefore: record.itemsBefore,
     itemsAfter: record.itemsAfter,
     tokensBefore: record.tokensBefore,
@@ -203,7 +235,7 @@ function redactScalarFields(
   return {
     ...(record.summaryRefHash === undefined
       ? {}
-      : { summaryRefHash: redact(record.summaryRefHash) }),
+      : { summaryRefHash: redactedPathSafe(record.summaryRefHash, redact) }),
     ...(record.rehydration === undefined
       ? {}
       : { rehydration: redactRehydration(record.rehydration, redact) }),
