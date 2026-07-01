@@ -1,4 +1,5 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -103,10 +104,22 @@ function absoluteToRelative(absolutePath: string): string | undefined {
   return absolutePath.slice(MEM_ROOT.length + 1);
 }
 
-function directoryEntries(files: ReadonlyMap<string, { content: string }>, dirRel: string): readonly WorkspaceDirEntry[] {
+function directoryEntries(
+  files: ReadonlyMap<string, { content: string }>,
+  explicitDirectories: ReadonlySet<string>,
+  dirRel: string,
+): readonly WorkspaceDirEntry[] {
   const prefix = dirRel.length === 0 ? "" : `${dirRel}/`;
   const dirs = new Set<string>();
   const plainFiles = new Set<string>();
+  for (const directory of explicitDirectories) {
+    if (!directory.startsWith(prefix) || directory === dirRel) {
+      continue;
+    }
+    const rest = directory.slice(prefix.length);
+    const slash = rest.indexOf("/");
+    dirs.add(slash === -1 ? rest : rest.slice(0, slash));
+  }
   for (const key of files.keys()) {
     if (!key.startsWith(prefix)) {
       continue;
@@ -148,9 +161,13 @@ function fileAncestorDirectories(scopePath: string): readonly string[] {
   return ancestors;
 }
 
-function createTrackedFs(initialFiles: Readonly<Record<string, string>>): MutableTrackedFs {
+function createTrackedFs(
+  initialFiles: Readonly<Record<string, string>>,
+  initialDirectories: readonly string[] = [],
+): MutableTrackedFs {
   let nextMtimeMs = 1_000;
   const files = new Map<string, { content: string; mtimeMs: number }>();
+  const explicitDirectories = new Set(initialDirectories);
   const directoryMtimes = new Map<string, number>();
   const bumpDirectory = (scopePath: string): void => {
     directoryMtimes.set(scopePath, nextMtimeMs);
@@ -177,6 +194,9 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
     files.set(scopePath, { content, mtimeMs: nextMtimeMs });
     nextMtimeMs += 1;
     bumpInitialDirectories(scopePath);
+  }
+  for (const directory of initialDirectories) {
+    bumpInitialDirectories(`${directory}/.placeholder`);
   }
   const counters = {
     readDir: 0,
@@ -208,6 +228,11 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
     }
     if (scopePath.length === 0) {
       return true;
+    }
+    for (const directory of explicitDirectories) {
+      if (directory === scopePath || directory.startsWith(`${scopePath}/`)) {
+        return true;
+      }
     }
     for (const key of files.keys()) {
       if (key === scopePath || key.startsWith(`${scopePath}/`)) {
@@ -253,7 +278,7 @@ function createTrackedFs(initialFiles: Readonly<Record<string, string>>): Mutabl
         if (dirRel === undefined) {
           throw makeErrnoError("ENOENT", absolutePath);
         }
-        return directoryEntries(files, dirRel);
+        return directoryEntries(files, explicitDirectories, dirRel);
       },
       realPath: (absolutePath: string): string => {
         counters.realPath += 1;
@@ -412,7 +437,11 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(tracked.counters.readDir).toBe(0);
+    expect(result.workspaceIndex).toMatchObject({
+      reusedRecords: 1,
+      staleRecords: 1,
+    });
+    expect(tracked.counters.readDir).toBeGreaterThan(0);
     expect(tracked.counters.readFileUtf8).toBe(1);
     expect(tracked.counters.readFileBytes).toBe(1);
   });
@@ -474,6 +503,37 @@ describe("workspaceIndex", () => {
     expect(tracked.counters.readFileBytes).toBe(1);
   });
 
+  it("discovers files added inside an existing empty tracked directory", async () => {
+    const tracked = createTrackedFs(
+      {
+        "src/a.ts": "export const alpha = 'needle';\n",
+      },
+      ["docs"],
+    );
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect((await snapshotFor(index, currentScope))?.discovery.directories.map((dir) => dir.scopePath)).toContain("docs");
+
+    tracked.writeFile("docs/readme.md", "needle in docs\n");
+    tracked.resetCounters();
+
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["docs/readme.md", "src/a.ts"]);
+    expect(tracked.counters.readFileUtf8).toBe(1);
+    expect(tracked.counters.readFileBytes).toBe(1);
+  });
+
   it("rebuilds same-size changed records when precise metadata changes", async () => {
     const tracked = createTrackedFs({
       "src/app.ts": "needle alpha\n",
@@ -497,7 +557,7 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
-    expect(tracked.counters.readDir).toBe(0);
+    expect(tracked.counters.readDir).toBeGreaterThan(0);
     expect(tracked.counters.readFileUtf8).toBe(1);
     expect(tracked.counters.readFileBytes).toBe(1);
   });
@@ -1008,6 +1068,31 @@ describe("workspaceIndex", () => {
     } finally {
       removeRuntimeDir(runtimeDir);
       removeRuntimeDir(targetDir);
+    }
+  });
+
+  it("does not follow a runtime directory replaced by a workspace symlink after store creation", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const runtimeDir = tempRuntimeDir();
+    const workspaceRoot = tempRuntimeDir();
+    try {
+      const workspaceStateDir = join(workspaceRoot, ".keiko");
+      const store = createFileWorkspaceIndexStore({ runtimeDir, workspaceRoot });
+      await store.saveSnapshot("safe-key", sampleSnapshot("needle"));
+
+      removeRuntimeDir(runtimeDir);
+      mkdirSync(workspaceStateDir, { recursive: true });
+      symlinkSync(workspaceStateDir, runtimeDir, "dir");
+
+      await store.saveSnapshot("poc-key", sampleSnapshot("needle"));
+
+      expect(runtimeFiles(workspaceStateDir)).toEqual([]);
+      await expect(Promise.resolve(store.loadSnapshot("safe-key"))).resolves.toBeUndefined();
+    } finally {
+      removeRuntimeDir(runtimeDir);
+      removeRuntimeDir(workspaceRoot);
     }
   });
 

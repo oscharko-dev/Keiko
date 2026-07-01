@@ -143,6 +143,7 @@ function collectFromDirectory(
   policy: SearchPolicy,
 ): {
   readonly files: readonly DiscoveredFile[];
+  readonly directories: readonly string[];
   readonly filesDiscovered: number;
   readonly truncated: boolean;
   readonly ignored: number;
@@ -166,6 +167,7 @@ function collectFromDirectory(
   const files = result.files;
   return {
     files: files.slice(0, limits.maxFilesScanned),
+    directories: result.directories,
     filesDiscovered: files.length,
     truncated: files.length > limits.maxFilesScanned || result.stats.depthPruned > 0,
     ignored: result.stats.ignored,
@@ -176,6 +178,7 @@ function collectFromDirectory(
 
 export interface CandidateSet {
   readonly files: readonly DiscoveredFile[];
+  readonly directories: readonly string[];
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics;
 }
@@ -264,6 +267,7 @@ export function gatherCandidates(
     );
     return {
       files: ordered.files,
+      directories: result.directories,
       truncated: result.truncated,
       diagnostics: {
         ...ordered.diagnostics,
@@ -276,6 +280,7 @@ export function gatherCandidates(
   const ordered = orderCandidatesForSearch(result.files, inputs.query, inputs.policy, 0, 0);
   return {
     files: ordered.files,
+    directories: result.directories,
     truncated: result.truncated,
     diagnostics: {
       ...ordered.diagnostics,

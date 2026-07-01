@@ -154,6 +154,7 @@ export interface PreparedWorkspaceIndexSnapshot {
 
 export interface WorkspaceIndexCandidateSet {
   readonly files: readonly DiscoveredFile[];
+  readonly directories: readonly string[];
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics;
 }
@@ -525,11 +526,48 @@ export function buildWorkspaceIndexScopeKey(
 
 interface FileWorkspaceIndexStoreConfig {
   readonly runtimeDir: string;
+  readonly runtimeDirRealPath: string | undefined;
   readonly workspaceRoot: string | undefined;
   readonly allowWorkspaceLocalRuntimeDir: boolean;
   readonly maxSnapshotBytes: number;
   readonly maxSnapshots: number;
   readonly maxSnapshotEntries: number;
+}
+
+function resolvedRuntimeDirRealPath(
+  runtimeDir: string,
+  workspaceRoot: string | undefined,
+  allowWorkspaceLocalRuntimeDir: boolean,
+): string | undefined {
+  try {
+    const realPath = realpathSync(runtimeDir);
+    if (
+      workspaceRoot !== undefined &&
+      !allowWorkspaceLocalRuntimeDir &&
+      isRuntimeDirWithinWorkspace(realPath, existingRealPath(workspaceRoot))
+    ) {
+      return undefined;
+    }
+    return realPath;
+  } catch {
+    return undefined;
+  }
+}
+
+async function runtimeDirRealPathIfSafe(
+  runtimeDir: string,
+  workspaceRoot: string | undefined,
+  allowWorkspaceLocalRuntimeDir: boolean,
+): Promise<string | undefined> {
+  try {
+    const dirStat = await lstat(runtimeDir);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
 }
 
 function normalizeLimit(value: number | undefined, fallback: number): number {
@@ -581,13 +619,20 @@ function assertValidRuntimeDir(
 function fileWorkspaceIndexStoreConfig(
   options: FileWorkspaceIndexStoreOptions,
 ): FileWorkspaceIndexStoreConfig {
+  const runtimeDir = assertValidRuntimeDir(
+    options.runtimeDir,
+    options.workspaceRoot,
+    options.allowWorkspaceLocalRuntimeDir === true,
+  );
+  const workspaceRoot = options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot);
   return {
-    runtimeDir: assertValidRuntimeDir(
-      options.runtimeDir,
-      options.workspaceRoot,
+    runtimeDir,
+    runtimeDirRealPath: resolvedRuntimeDirRealPath(
+      runtimeDir,
+      workspaceRoot,
       options.allowWorkspaceLocalRuntimeDir === true,
     ),
-    workspaceRoot: options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot),
+    workspaceRoot,
     allowWorkspaceLocalRuntimeDir: options.allowWorkspaceLocalRuntimeDir === true,
     maxSnapshotBytes: normalizeLimit(
       options.maxSnapshotBytes,
@@ -741,41 +786,81 @@ async function atomicWriteSnapshotFile(path: string, tempPath: string, content: 
   await bestEffortChmod(path, 0o600);
 }
 
+type RuntimeDirGuard = () => Promise<string | undefined>;
+
+function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDirGuard {
+  let expectedRuntimeDirRealPath = config.runtimeDirRealPath;
+  return async (): Promise<string | undefined> => {
+    const current = await runtimeDirRealPathIfSafe(
+      config.runtimeDir,
+      config.workspaceRoot,
+      config.allowWorkspaceLocalRuntimeDir,
+    );
+    if (current === undefined) {
+      return undefined;
+    }
+    if (expectedRuntimeDirRealPath === undefined) {
+      expectedRuntimeDirRealPath = current;
+      return current;
+    }
+    return current === expectedRuntimeDirRealPath ? current : undefined;
+  };
+}
+
+async function loadFileWorkspaceIndexSnapshot(
+  config: FileWorkspaceIndexStoreConfig,
+  safeRuntimeDir: RuntimeDirGuard,
+  storageKey: string,
+): Promise<WorkspaceIndexSnapshot | undefined> {
+  const runtimeDir = await safeRuntimeDir();
+  if (runtimeDir === undefined) {
+    return undefined;
+  }
+  const raw = await safeReadSnapshotFile(
+    snapshotPath(runtimeDir, storageKey),
+    config.maxSnapshotBytes,
+  );
+  return raw === undefined ? undefined : parseStoredSnapshot(raw, config.maxSnapshotEntries);
+}
+
+async function saveFileWorkspaceIndexSnapshot(
+  config: FileWorkspaceIndexStoreConfig,
+  safeRuntimeDir: RuntimeDirGuard,
+  storageKey: string,
+  snapshot: WorkspaceIndexSnapshot,
+): Promise<void> {
+  const normalized = normalizeSnapshot(snapshot);
+  if (normalized === undefined || !snapshotFitsStoreBounds(normalized, config.maxSnapshotEntries)) {
+    return;
+  }
+  const raw = JSON.stringify(normalized);
+  if (Buffer.byteLength(raw, "utf8") > config.maxSnapshotBytes) {
+    return;
+  }
+  await mkdir(config.runtimeDir, { recursive: true, mode: 0o700 });
+  const runtimeDir = await safeRuntimeDir();
+  if (runtimeDir === undefined) {
+    return;
+  }
+  await bestEffortChmod(runtimeDir, 0o700);
+  await atomicWriteSnapshotFile(
+    snapshotPath(runtimeDir, storageKey),
+    tempSnapshotPath(runtimeDir, storageKey),
+    raw,
+  );
+  await pruneWorkspaceIndexSnapshots(runtimeDir, config.maxSnapshots);
+}
+
 export function createFileWorkspaceIndexStore(
   options: FileWorkspaceIndexStoreOptions,
 ): WorkspaceIndexStore {
   const config = fileWorkspaceIndexStoreConfig(options);
+  const safeRuntimeDir = createRuntimeDirGuard(config);
   return {
-    loadSnapshot: async (storageKey: string): Promise<WorkspaceIndexSnapshot | undefined> => {
-      const raw = await safeReadSnapshotFile(
-        snapshotPath(config.runtimeDir, storageKey),
-        config.maxSnapshotBytes,
-      );
-      return raw === undefined
-        ? undefined
-        : parseStoredSnapshot(raw, config.maxSnapshotEntries);
-    },
-    saveSnapshot: async (storageKey: string, snapshot: WorkspaceIndexSnapshot): Promise<void> => {
-      const normalized = normalizeSnapshot(snapshot);
-      if (
-        normalized === undefined ||
-        !snapshotFitsStoreBounds(normalized, config.maxSnapshotEntries)
-      ) {
-        return;
-      }
-      const raw = JSON.stringify(normalized);
-      if (Buffer.byteLength(raw, "utf8") > config.maxSnapshotBytes) {
-        return;
-      }
-      await mkdir(config.runtimeDir, { recursive: true, mode: 0o700 });
-      await bestEffortChmod(config.runtimeDir, 0o700);
-      await atomicWriteSnapshotFile(
-        snapshotPath(config.runtimeDir, storageKey),
-        tempSnapshotPath(config.runtimeDir, storageKey),
-        raw,
-      );
-      await pruneWorkspaceIndexSnapshots(config.runtimeDir, config.maxSnapshots);
-    },
+    loadSnapshot: async (storageKey) =>
+      loadFileWorkspaceIndexSnapshot(config, safeRuntimeDir, storageKey),
+    saveSnapshot: async (storageKey, snapshot) =>
+      saveFileWorkspaceIndexSnapshot(config, safeRuntimeDir, storageKey, snapshot),
   };
 }
 
@@ -1534,6 +1619,7 @@ export function workspaceIndexCandidateSet(
   );
   return {
     files: ordered.files,
+    directories: prepared.discovery.directories.map((directory) => directory.scopePath),
     truncated: prepared.discovery.truncated,
     diagnostics: {
       ...ordered.diagnostics,

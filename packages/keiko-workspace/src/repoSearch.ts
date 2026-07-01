@@ -345,6 +345,7 @@ interface SearchWorkspaceIndexSession {
   readonly preparedEntries: Map<string, PreparedWorkspaceIndexEntry>;
   readonly recordByPath: Map<string, WorkspaceIndexRecord>;
   readonly discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>;
+  readonly rebuiltCachedRecords: Set<string>;
   dirty: boolean;
   report: WorkspaceIndexPreparationReport | undefined;
   readonly persist: () => Promise<void>;
@@ -435,23 +436,12 @@ function buildWorkspaceIndexDirectories(
   discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
   fs: WorkspaceFs,
   relativePaths: readonly string[],
+  visitedDirectories: readonly string[],
 ): readonly WorkspaceIndexDirectorySnapshot[] {
   const directories = new Set<string>();
-  if (relativePaths.length === 0) {
-    directories.add("");
-  } else {
-    for (const scopePath of relativePaths) {
-      const directory = selectedDirectoryPath(workspaceRoot, scopePath, fs);
-      if (directory !== undefined) {
-        directories.add(directory);
-      }
-    }
-  }
-  for (const scopePath of discoveryByPath.keys()) {
-    for (const ancestor of ancestorDirectoryPaths(scopePath)) {
-      directories.add(ancestor);
-    }
-  }
+  addVisitedWorkspaceIndexDirectories(directories, visitedDirectories);
+  addSelectedWorkspaceIndexDirectories(directories, workspaceRoot, fs, relativePaths);
+  addIndexedWorkspaceIndexAncestors(directories, discoveryByPath);
   const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
   for (const scopePath of [...directories].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const absolutePath = scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
@@ -468,6 +458,46 @@ function buildWorkspaceIndexDirectories(
     }
   }
   return snapshots;
+}
+
+function addVisitedWorkspaceIndexDirectories(
+  directories: Set<string>,
+  visitedDirectories: readonly string[],
+): void {
+  for (const directory of visitedDirectories) {
+    if (isValidScopePath(directory, { mustBeRelative: true }) && !isDenied(directory)) {
+      directories.add(directory);
+    }
+  }
+}
+
+function addSelectedWorkspaceIndexDirectories(
+  directories: Set<string>,
+  workspaceRoot: string,
+  fs: WorkspaceFs,
+  relativePaths: readonly string[],
+): void {
+  if (relativePaths.length === 0) {
+    directories.add("");
+    return;
+  }
+  for (const scopePath of relativePaths) {
+    const directory = selectedDirectoryPath(workspaceRoot, scopePath, fs);
+    if (directory !== undefined) {
+      directories.add(directory);
+    }
+  }
+}
+
+function addIndexedWorkspaceIndexAncestors(
+  directories: Set<string>,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+): void {
+  for (const scopePath of discoveryByPath.keys()) {
+    for (const ancestor of ancestorDirectoryPaths(scopePath)) {
+      directories.add(ancestor);
+    }
+  }
 }
 
 function sameWorkspaceIndexRecord(
@@ -721,6 +751,7 @@ function initialWorkspaceIndexSessionState(
   return {
     candidateSet,
     ...seedWorkspaceIndexCaches(prepared, candidateSet),
+    rebuiltCachedRecords: new Set<string>(),
     dirty: prepared === undefined,
     report: prepared?.report,
   };
@@ -820,6 +851,7 @@ function persistWorkspaceIndexSession(
       session.discoveryByPath,
       runner.fs,
       scope.relativePaths,
+      session.candidateSet.directories,
     );
     try {
       await workspaceIndex.saveSnapshot(
@@ -868,7 +900,9 @@ async function buildSearchWorkspaceIndexSession(
       limits,
     });
   }
-  return { ...session, persist: persistWorkspaceIndexSession(workspaceIndex, scope, runner, session) };
+  return Object.assign(session, {
+    persist: persistWorkspaceIndexSession(workspaceIndex, scope, runner, session),
+  });
 }
 
 async function runScanLoop(
@@ -977,8 +1011,17 @@ function indexedSearchRunner(
         const previousRecord = session.recordByPath.get(record.scopePath);
         const discovery = discoveredFileSnapshot(record.scopePath, record.sizeBytes, record.mtimeMs);
         const previousDiscovery = session.discoveryByPath.get(record.scopePath);
-        if (!sameWorkspaceIndexRecord(previousRecord, record) || !sameDiscoveryFile(previousDiscovery, discovery)) {
+        const rebuiltCachedRecord = session.preparedEntries.has(record.scopePath);
+        if (
+          rebuiltCachedRecord ||
+          !sameWorkspaceIndexRecord(previousRecord, record) ||
+          !sameDiscoveryFile(previousDiscovery, discovery)
+        ) {
+          if (rebuiltCachedRecord) {
+            session.rebuiltCachedRecords.add(record.scopePath);
+          }
           session.dirty = true;
+          session.report = undefined;
         }
         session.recordByPath.set(record.scopePath, record);
         session.discoveryByPath.set(record.scopePath, discovery);
@@ -989,6 +1032,7 @@ function indexedSearchRunner(
           session.preparedEntries.delete(scopePath)
         ) {
           session.dirty = true;
+          session.report = undefined;
         }
       },
     },
@@ -1049,15 +1093,28 @@ function workspaceIndexReport(
   if (session === undefined) {
     return undefined;
   }
-  if (session.report !== undefined) {
+  if (
+    session.report !== undefined &&
+    (!session.dirty ||
+      session.report.deletedEntries > 0 ||
+      session.report.droppedRecords > 0 ||
+      session.report.staleRecords > 0)
+  ) {
     return session.report;
   }
+  const reusedRecords = [...session.preparedEntries.values()].filter(
+    (entry) =>
+      entry.record !== undefined &&
+      session.recordByPath.has(entry.scopePath) &&
+      !session.rebuiltCachedRecords.has(entry.scopePath),
+  ).length;
+  const staleRecords = session.rebuiltCachedRecords.size;
   return {
     discoveredEntries: session.candidateSet.diagnostics.filesDiscovered,
     retainedEntries: session.discoveryByPath.size,
     indexedRecords: session.recordByPath.size,
-    reusedRecords: 0,
-    staleRecords: 0,
+    reusedRecords,
+    staleRecords,
     skippedEntries: Math.max(
       0,
       session.candidateSet.diagnostics.filesDiscovered - session.discoveryByPath.size,
