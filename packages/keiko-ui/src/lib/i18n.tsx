@@ -323,8 +323,7 @@ const EN_MESSAGES = {
   "memoria.consolidation.help.maxAge": "Memories older than this are checked for staleness.",
   "memoria.consolidation.help.maxClusters":
     "Hard bound on duplicate clusters inspected in one run.",
-  "memoria.consolidation.help.maxRecords":
-    "Hard bound on accepted records admitted to one scan.",
+  "memoria.consolidation.help.maxRecords": "Hard bound on accepted records admitted to one scan.",
   "memoria.consolidation.start": "Start consolidation",
   "memoria.consolidation.starting": "Starting...",
   "memoria.consolidation.refreshStatus": "Refresh status",
@@ -468,8 +467,7 @@ const EN_MESSAGES = {
   "settings.workspace.borderStrength": "Workspace border strength",
   "settings.workspace.innerGlow": "Workspace inner glow",
   "settings.updates.title": "Updates",
-  "settings.updates.description":
-    "Review package updates, state impact, restart needs, patch notes, and remediation before installing.",
+  "settings.updates.description": "Check for Keiko updates and install them when available.",
   "settings.updates.open": "Review updates",
   "updates.notice.aria": "Keiko update notification",
   "updates.notice.title": "Update available",
@@ -480,6 +478,7 @@ const EN_MESSAGES = {
   "updates.notice.notNow": "Not now",
   "updates.versionUnknown": "unknown",
   "updates.versionLine": "Current {current} -> target {target}",
+  "updates.versionInstalled": "Keiko is now running {version}.",
   "updates.loading": "Checking update status...",
   "updates.error.title": "Update status unavailable",
   "updates.error.load": "Could not load update status from the local Keiko backend.",
@@ -495,33 +494,69 @@ const EN_MESSAGES = {
   "updates.primary.title": "Recommended action",
   "updates.primary.available": "Review the state impact, then install when you are ready.",
   "updates.primary.current": "No update is available. You can check again at any time.",
-  "updates.primary.manual": "This installation needs the manual update path.",
+  "updates.primary.manual":
+    "Automatic install is unavailable. Run a command below, restart Keiko, then check again.",
+  "updates.primary.installed":
+    "The update is installed. No further action is required unless you want to check for a newer release.",
+  "updates.primary.cancelled": "The update was cancelled. Check again before starting another run.",
+  "updates.primary.failed":
+    "The update did not complete. Review the failure details before retrying.",
+  "updates.primary.restart":
+    "Restart Keiko outside this window, then verify that the new version is running.",
   "updates.action.check": "Check again",
   "updates.action.install": "Install update",
   "updates.action.retry": "Retry update",
   "updates.action.cancel": "Cancel update",
-  "updates.action.verifyRestart": "I restarted Keiko",
+  "updates.action.verifyRestart": "Verify restart",
+  "updates.action.showCommands": "Show commands",
+  "updates.action.hideCommands": "Hide commands",
+  "updates.restart.verifyHelp":
+    "This does not restart Keiko. Use your normal restart command first, then verify here.",
+  "updates.check.checking": "Checking for updates...",
+  "updates.check.current": "Checked just now. No newer update is available.",
+  "updates.check.available": "Checked just now. A newer update is available.",
+  "updates.check.manualStillRequired":
+    "Manual install is still pending. Run a command, restart Keiko, then check again.",
+  "updates.check.manualInstalled": "Update installed. Keiko is now running {version}.",
   "updates.action.runRemediation": "Run action",
+  "updates.action.runDeferred": "Run now",
   "updates.action.defer": "Defer",
   "updates.progress.label": "Update progress",
-  "updates.impact.title": "Workflow and state impact",
-  "updates.impact.body":
-    "Affected local state and features are listed before patch notes or technical logs.",
-  "updates.impact.required": "Required remediation: {remediation}",
-  "updates.remediation.title": "Remediation status",
-  "updates.remediation.canComplete": "Required actions are complete or can be skipped safely.",
-  "updates.remediation.needsAction": "Complete or defer the required actions before finishing.",
+  "updates.impact.title": "Impact",
+  "updates.impact.body": "This update affects local state.",
+  "updates.impact.required": "Required action: {remediation}",
+  "updates.remediation.title": "Follow-up action",
+  "updates.remediation.plannedTitle": "Follow-up after install",
+  "updates.remediation.plannedBody":
+    "This update will require this after the package is installed.",
+  "updates.remediation.deferredTitle": "Deferred follow-up",
+  "updates.remediation.deferredBody":
+    "Skipped for now. Run it later if you want affected workflows fully ready.",
+  "updates.remediation.canComplete": "All required follow-up work is complete.",
+  "updates.remediation.needsAction": "Run or defer this action before finishing.",
   "updates.remediation.userActionRequired":
-    "This update requires a user decision before completion.",
+    "Choose how to handle this before completing the update.",
   "updates.remediation.none": "No action required",
   "updates.remediation.restart": "Restart required",
   "updates.remediation.repair": "Local state repair",
-  "updates.remediation.reindex": "Local knowledge reindex",
+  "updates.remediation.reindex": "Local Knowledge Reindex",
   "updates.remediation.migration": "Migration required",
   "updates.remediation.manualReview": "Manual review required",
   "updates.manual.title": "Manual update path",
+  "updates.manual.body":
+    "Keiko cannot safely update itself from this installation. Use a terminal command, restart Keiko, then verify the version here.",
   "updates.manual.default":
     "Use your approved package-management process, then restart Keiko and check again.",
+  "updates.manual.stepCommand": "Run one package-manager command in your terminal.",
+  "updates.manual.stepRestart": "Restart Keiko using your normal launcher.",
+  "updates.manual.stepCheck": "Return here and check again to verify the new version.",
+  "updates.manual.commandsSummary": "Manual install commands",
+  "updates.manual.commandNpm": "npm global install",
+  "updates.manual.commandYarn": "Yarn global install",
+  "updates.manual.copyCommand": "Copy {label} command",
+  "updates.manual.copied": "Copied",
+  "updates.manual.copiedStatus": "Command copied",
+  "updates.manual.finish": "After the command finishes and Keiko has restarted, verify here.",
   "updates.manual.releaseLink": "Open release notes",
   "updates.patchNotes.summary": "Patch notes",
   "updates.details.summary": "Technical details and logs",
@@ -930,8 +965,7 @@ const DE_MESSAGES: Record<MessageKey, string> = {
     "Erinnerungen mit dieser Konfidenz oder darunter werden als stale markiert.",
   "memoria.consolidation.help.maxAge":
     "Erinnerungen oberhalb dieses Alters werden auf Staleness geprueft.",
-  "memoria.consolidation.help.maxClusters":
-    "Harte Grenze fuer Duplikatcluster in einem Lauf.",
+  "memoria.consolidation.help.maxClusters": "Harte Grenze fuer Duplikatcluster in einem Lauf.",
   "memoria.consolidation.help.maxRecords":
     "Harte Grenze fuer akzeptierte Datensaetze in einem Scan.",
   "memoria.consolidation.start": "Konsolidierung starten",
@@ -1080,7 +1114,7 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "settings.workspace.innerGlow": "Inneres Leuchten",
   "settings.updates.title": "Updates",
   "settings.updates.description":
-    "Pruefe Paket-Updates, Statusauswirkungen, Neustartbedarf, Patch Notes und Reparaturen vor der Installation.",
+    "Pruefe Keiko-Updates und installiere sie, wenn sie verfuegbar sind.",
   "settings.updates.open": "Updates pruefen",
   "updates.notice.aria": "Keiko-Update-Hinweis",
   "updates.notice.title": "Update verfuegbar",
@@ -1091,6 +1125,7 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "updates.notice.notNow": "Nicht jetzt",
   "updates.versionUnknown": "unbekannt",
   "updates.versionLine": "Aktuell {current} -> Ziel {target}",
+  "updates.versionInstalled": "Keiko laeuft jetzt mit {version}.",
   "updates.loading": "Update-Status wird geprueft...",
   "updates.error.title": "Update-Status nicht verfuegbar",
   "updates.error.load": "Update-Status konnte nicht vom lokalen Keiko-Backend geladen werden.",
@@ -1107,26 +1142,50 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "updates.primary.available":
     "Pruefe die Statusauswirkungen und installiere, wenn du bereit bist.",
   "updates.primary.current": "Kein Update verfuegbar. Du kannst jederzeit erneut pruefen.",
-  "updates.primary.manual": "Diese Installation benoetigt den manuellen Update-Pfad.",
+  "updates.primary.manual":
+    "Automatische Installation ist nicht verfuegbar. Fuehre unten einen Befehl aus, starte Keiko neu und pruefe erneut.",
+  "updates.primary.installed":
+    "Das Update ist installiert. Keine weitere Aktion ist erforderlich, ausser du moechtest nach einer neueren Version suchen.",
+  "updates.primary.cancelled":
+    "Das Update wurde abgebrochen. Pruefe erneut, bevor du einen weiteren Lauf startest.",
+  "updates.primary.failed":
+    "Das Update wurde nicht abgeschlossen. Pruefe die Fehlerdetails vor einem erneuten Versuch.",
+  "updates.primary.restart":
+    "Starte Keiko ausserhalb dieses Fensters neu und pruefe dann, ob die neue Version laeuft.",
   "updates.action.check": "Erneut pruefen",
   "updates.action.install": "Update installieren",
   "updates.action.retry": "Update erneut versuchen",
   "updates.action.cancel": "Update abbrechen",
-  "updates.action.verifyRestart": "Keiko wurde neu gestartet",
+  "updates.action.verifyRestart": "Neustart pruefen",
+  "updates.action.showCommands": "Befehle anzeigen",
+  "updates.action.hideCommands": "Befehle ausblenden",
+  "updates.restart.verifyHelp":
+    "Diese Aktion startet Keiko nicht neu. Nutze zuerst deinen normalen Neustart-Befehl und pruefe danach hier.",
+  "updates.check.checking": "Updates werden geprueft...",
+  "updates.check.current": "Gerade geprueft. Kein neueres Update verfuegbar.",
+  "updates.check.available": "Gerade geprueft. Ein neueres Update ist verfuegbar.",
+  "updates.check.manualStillRequired":
+    "Manuelle Installation steht noch aus. Fuehre einen Befehl aus, starte Keiko neu und pruefe erneut.",
+  "updates.check.manualInstalled": "Update installiert. Keiko laeuft jetzt mit {version}.",
   "updates.action.runRemediation": "Aktion ausfuehren",
+  "updates.action.runDeferred": "Jetzt ausfuehren",
   "updates.action.defer": "Aufschieben",
   "updates.progress.label": "Update-Fortschritt",
-  "updates.impact.title": "Workflow- und Statusauswirkung",
-  "updates.impact.body":
-    "Betroffene lokale Statusdaten und Features stehen vor Patch Notes oder technischen Logs.",
-  "updates.impact.required": "Erforderliche Reparatur: {remediation}",
-  "updates.remediation.title": "Reparaturstatus",
-  "updates.remediation.canComplete":
-    "Erforderliche Aktionen sind abgeschlossen oder koennen sicher uebersprungen werden.",
+  "updates.impact.title": "Auswirkung",
+  "updates.impact.body": "Dieses Update betrifft lokalen Zustand.",
+  "updates.impact.required": "Erforderliche Aktion: {remediation}",
+  "updates.remediation.title": "Folgeaktion",
+  "updates.remediation.plannedTitle": "Folgeaktion nach der Installation",
+  "updates.remediation.plannedBody":
+    "Dieses Update erfordert dies, nachdem das Paket installiert wurde.",
+  "updates.remediation.deferredTitle": "Aufgeschobene Folgeaktion",
+  "updates.remediation.deferredBody":
+    "Vorerst uebersprungen. Fuehre sie spaeter aus, wenn betroffene Workflows voll bereit sein sollen.",
+  "updates.remediation.canComplete": "Alle erforderlichen Folgearbeiten sind abgeschlossen.",
   "updates.remediation.needsAction":
-    "Schliesse die erforderlichen Aktionen ab oder verschiebe sie vor dem Abschluss.",
+    "Fuehre diese Aktion aus oder verschiebe sie vor dem Abschluss.",
   "updates.remediation.userActionRequired":
-    "Dieses Update erfordert eine Benutzerentscheidung vor dem Abschluss.",
+    "Waehle, wie diese Aktion behandelt werden soll, bevor du das Update abschliesst.",
   "updates.remediation.none": "Keine Aktion erforderlich",
   "updates.remediation.restart": "Neustart erforderlich",
   "updates.remediation.repair": "Lokale Statusreparatur",
@@ -1134,8 +1193,21 @@ const DE_MESSAGES: Record<MessageKey, string> = {
   "updates.remediation.migration": "Migration erforderlich",
   "updates.remediation.manualReview": "Manuelle Pruefung erforderlich",
   "updates.manual.title": "Manueller Update-Pfad",
+  "updates.manual.body":
+    "Keiko kann sich aus dieser Installation nicht sicher selbst aktualisieren. Nutze einen Terminal-Befehl, starte Keiko neu und pruefe die Version danach hier.",
   "updates.manual.default":
     "Nutze deinen freigegebenen Paketverwaltungsprozess, starte Keiko neu und pruefe erneut.",
+  "updates.manual.stepCommand": "Fuehre einen Paketmanager-Befehl im Terminal aus.",
+  "updates.manual.stepRestart": "Starte Keiko mit deinem normalen Launcher neu.",
+  "updates.manual.stepCheck": "Kehre hierher zurueck und pruefe erneut die neue Version.",
+  "updates.manual.commandsSummary": "Manuelle Installationsbefehle",
+  "updates.manual.commandNpm": "npm globale Installation",
+  "updates.manual.commandYarn": "Yarn globale Installation",
+  "updates.manual.copyCommand": "{label}-Befehl kopieren",
+  "updates.manual.copied": "Kopiert",
+  "updates.manual.copiedStatus": "Befehl kopiert",
+  "updates.manual.finish":
+    "Nachdem der Befehl beendet ist und Keiko neu gestartet wurde, hier verifizieren.",
   "updates.manual.releaseLink": "Versionshinweise oeffnen",
   "updates.patchNotes.summary": "Patch Notes",
   "updates.details.summary": "Technische Details und Logs",

@@ -12,8 +12,22 @@ import type {
 
 export type UpdateTone = "neutral" | "info" | "success" | "warning" | "danger";
 
-export function sessionForDisplay(status: UpdateSessionStatus): UpdateSession | undefined {
-  return status.activeSession ?? status.lastSession;
+export function sessionForDisplay(
+  status: UpdateSessionStatus,
+  report?: UpdatePreflightReport,
+): UpdateSession | undefined {
+  const session = status.activeSession ?? status.lastSession;
+  if (session === undefined || report === undefined || status.activeSession !== undefined) {
+    return session;
+  }
+  if (
+    report.updateAvailable &&
+    report.targetVersion !== undefined &&
+    session.targetVersion !== report.targetVersion
+  ) {
+    return undefined;
+  }
+  return session;
 }
 
 export function isSessionInProgress(session: UpdateSession | undefined): boolean {
@@ -36,10 +50,11 @@ export function isManualUpdatePath(
   session: UpdateSessionStatus,
 ): boolean {
   return (
-    report.manualUpdateRequired ||
-    !report.oneClickEligible ||
-    session.installMode.status === "unsupported" ||
-    !session.policy.enabled
+    report.updateAvailable &&
+    (report.manualUpdateRequired ||
+      !report.oneClickEligible ||
+      session.installMode.status === "unsupported" ||
+      !session.policy.enabled)
   );
 }
 

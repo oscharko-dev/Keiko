@@ -166,6 +166,22 @@ describe("Workspace card connections", () => {
     expect(screen.getByRole("main", { name: "Workspace surface" })).toBeInTheDocument();
   });
 
+  it("renders canvas overlay children inside the workspace surface", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      >
+        <div data-testid="canvas-overlay-slot">Canvas overlay</div>
+      </Workspace>,
+    );
+
+    expect(screen.getByTestId("canvas-overlay-slot").closest(".workspace")).toBe(
+      screen.getByRole("main", { name: "Workspace surface" }),
+    );
+  });
+
   it("does not expose connection ports on the Local Knowledge management window", () => {
     const wins = [appWindow({ id: "localKnowledge", type: "localKnowledge", z: 1 })];
     render(
