@@ -113,7 +113,7 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(17);
+    expect(localKnowledgeRoutes).toHaveLength(18);
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
@@ -174,6 +174,13 @@ describe("API route contract", () => {
       localKnowledgeRoutes.find(
         (r) =>
           r.method === "POST" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/reindex",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "PATCH" &&
+          r.pattern === "/api/local-knowledge/capsules/:capsuleId/sources/:sourceId/root",
       ),
     ).toBeDefined();
     expect(

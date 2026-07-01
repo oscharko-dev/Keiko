@@ -51,6 +51,7 @@ export {
   addSourceToCapsule,
   listCapsuleSources,
   removeSourceFromCapsule,
+  updateSourceScopeInCapsule,
   type AddCapsuleSourceInput,
 } from "./source-lifecycle.js";
 export {

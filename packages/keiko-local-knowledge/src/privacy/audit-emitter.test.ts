@@ -130,11 +130,19 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
       { kind: "capsule-created", capsuleId, occurredAt: 1 },
       { kind: "capsule-deleted", capsuleId, occurredAt: 2 },
       {
+        kind: "source-rebound",
+        capsuleId,
+        sourceId,
+        previousScopeKind: "folder",
+        currentScopeKind: "folder",
+        occurredAt: 3,
+      },
+      {
         kind: "indexing-job-started",
         capsuleId,
         sourceIds: [sourceId],
         jobId: "job-1",
-        occurredAt: 3,
+        occurredAt: 4,
       },
       {
         kind: "indexing-job-completed",
@@ -143,7 +151,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         jobId: "job-1",
         processedDocuments: 5,
         failedDocuments: 0,
-        occurredAt: 4,
+        occurredAt: 5,
       },
       {
         kind: "indexing-job-failed",
@@ -151,7 +159,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         sourceIds: [sourceId],
         jobId: "job-1",
         errorCode: "embedding-failed",
-        occurredAt: 5,
+        occurredAt: 6,
       },
       {
         kind: "retention-applied",
@@ -159,7 +167,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         sourceIds: [sourceId],
         deletedVectorCount: 1,
         deletedExtractedTextCount: 0,
-        occurredAt: 6,
+        occurredAt: 7,
       },
     ];
 
@@ -193,6 +201,18 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         occurred_at: 2,
       },
       {
+        kind: "source-rebound",
+        source_id: sourceId,
+        job_id: null,
+        error_code: null,
+        processed_documents: null,
+        failed_documents: null,
+        deleted_vector_count: null,
+        deleted_extracted_text_count: null,
+        details_json: '{"previousScopeKind":"folder","currentScopeKind":"folder"}',
+        occurred_at: 3,
+      },
+      {
         kind: "indexing-job-started",
         source_id: null,
         job_id: "job-1",
@@ -202,7 +222,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
         details_json: '{"sourceIds":["src-audit"]}',
-        occurred_at: 3,
+        occurred_at: 4,
       },
       {
         kind: "indexing-job-completed",
@@ -214,7 +234,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
         details_json: '{"sourceIds":["src-audit"]}',
-        occurred_at: 4,
+        occurred_at: 5,
       },
       {
         kind: "indexing-job-failed",
@@ -226,7 +246,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
         details_json: '{"sourceIds":["src-audit"]}',
-        occurred_at: 5,
+        occurred_at: 6,
       },
       {
         kind: "retention-applied",
@@ -238,7 +258,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         deleted_vector_count: 1,
         deleted_extracted_text_count: 0,
         details_json: '{"sourceIds":["src-audit"]}',
-        occurred_at: 6,
+        occurred_at: 7,
       },
     ]);
   });
