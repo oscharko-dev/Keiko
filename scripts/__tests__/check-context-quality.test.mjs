@@ -6,6 +6,7 @@ import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts";
 import {
   conversationForGateway,
   conversationForGatewayWithCompaction,
+  usableGatewayMessages,
 } from "@oscharko-dev/keiko-server";
 
 import {
@@ -24,6 +25,7 @@ import {
   evaluateInvalidationDetected,
   evaluateLineRefAccuracy,
   evaluateLongSessionCompaction,
+  evaluateNoProfileOverflowCompaction,
   evaluateNoProfileUnchanged,
   evaluateNonVacuousRehydration,
   evaluateManyShortBudgetSafeUnchanged,
@@ -44,6 +46,12 @@ import {
   buildScenarioCorpus,
   buildToolObservationFixtures,
 } from "../lib/context-quality-corpus.mjs";
+
+function fullGatewayProjection(messages) {
+  const system = conversationForGateway(messages)[0];
+  const filtered = usableGatewayMessages(messages);
+  return system === undefined ? filtered : [system, ...filtered];
+}
 
 // A strict budget mirroring the committed thresholds; a passing summary must clear all of them.
 const STRICT_BUDGET = {
@@ -68,6 +76,7 @@ const STRICT_BUDGET = {
   requireChatCurrentInstructionPreserved: true,
   requireChatShortSessionByteIdentical: true,
   requireChatNoProfileUnchanged: true,
+  requireChatNoProfileOverflowCompaction: true,
   maxChatCompactionLatencyP95Ms: 1000,
   maxAssemblyLatencyP95Ms: 1000,
 };
@@ -98,6 +107,7 @@ function passingSummary() {
       chatCurrentInstructionPreserved: true,
       chatShortSessionByteIdentical: true,
       chatNoProfileUnchanged: true,
+      chatNoProfileOverflowCompaction: true,
     },
     latency: { p95Ms: 3 },
     chatLatency: { p50Ms: 2, p95Ms: 3, iterations: 120 },
@@ -449,6 +459,10 @@ describe("evaluateContextQualityBudget", () => {
       ],
       ["chatShortSessionByteIdentical", (s) => (s.measured.chatShortSessionByteIdentical = false)],
       ["chatNoProfileUnchanged", (s) => (s.measured.chatNoProfileUnchanged = false)],
+      [
+        "chatNoProfileOverflowCompaction",
+        (s) => (s.measured.chatNoProfileOverflowCompaction = false),
+      ],
       ["chatCompactionLatencyP95Ms", (s) => (s.chatLatency.p95Ms = 99999)],
       ["assemblyLatencyP95Ms", (s) => (s.latency.p95Ms = 99999)],
     ];
@@ -650,6 +664,23 @@ describe("buildChatHistoryFixtures (PR4-W4)", () => {
       expect(typeof message.id).toBe("string");
     }
   });
+
+  it("fullGatewayProjection reuses usableGatewayMessages and drops non-chat roles", () => {
+    const messages = [
+      { id: "s", chatId: "chat-1", role: "system", content: "ignore", timestamp: 1 },
+      { id: "u", chatId: "chat-1", role: "user", content: "keep", timestamp: 2 },
+      { id: "a", chatId: "chat-1", role: "assistant", content: "keep too", timestamp: 3 },
+    ];
+    expect(usableGatewayMessages(messages)).toEqual([
+      { role: "user", content: "keep" },
+      { role: "assistant", content: "keep too" },
+    ]);
+    expect(fullGatewayProjection(messages)).toEqual([
+      conversationForGateway(messages)[0],
+      { role: "user", content: "keep" },
+      { role: "assistant", content: "keep too" },
+    ]);
+  });
 });
 
 describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
@@ -754,11 +785,14 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
   it("evaluateManyShortBudgetSafeUnchanged is true above the threshold when budget-safe, false when divergent", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.long, PROFILE);
-    const plain = conversationForGateway(f.long);
-    expect(evaluateManyShortBudgetSafeUnchanged(outcome, plain)).toBe(true);
-    const divergent = [...plain.slice(0, -1), { ...plain[plain.length - 1], content: "changed" }];
+    const expected = fullGatewayProjection(f.long);
+    expect(evaluateManyShortBudgetSafeUnchanged(outcome, expected)).toBe(true);
+    const divergent = [
+      ...expected.slice(0, -1),
+      { ...expected[expected.length - 1], content: "changed" },
+    ];
     expect(evaluateManyShortBudgetSafeUnchanged(outcome, divergent)).toBe(false);
-    expect(evaluateManyShortBudgetSafeUnchanged({ ...outcome, compaction: {} }, plain)).toBe(
+    expect(evaluateManyShortBudgetSafeUnchanged({ ...outcome, compaction: {} }, expected)).toBe(
       false,
     );
   });
@@ -766,15 +800,25 @@ describe("chat-compaction evaluators (PR4-W4) over the REAL splice", () => {
   it("evaluateNoProfileUnchanged is true with no profile, false when a record appears", () => {
     const f = buildChatHistoryFixtures();
     const outcome = conversationForGatewayWithCompaction(f.long);
-    const plain = conversationForGateway(f.long);
-    expect(evaluateNoProfileUnchanged(outcome, plain)).toBe(true);
-    expect(evaluateNoProfileUnchanged({ ...outcome, compaction: {} }, plain)).toBe(false);
+    const expected = fullGatewayProjection(f.long);
+    expect(evaluateNoProfileUnchanged(outcome, expected)).toBe(true);
+    expect(evaluateNoProfileUnchanged({ ...outcome, compaction: {} }, expected)).toBe(false);
   });
 
-  it("evaluateChatCompaction returns all five hard booleans true on the real fixtures", () => {
+  it("evaluateNoProfileOverflowCompaction is true on the real no-profile pressure splice", () => {
+    const f = buildChatHistoryFixtures();
+    const outcome = conversationForGatewayWithCompaction(f.pressure, {
+      redactionSecrets: [f.earlySecret],
+    });
+    const plain = conversationForGateway(f.pressure);
+    expect(evaluateNoProfileOverflowCompaction(outcome, plain, f)).toBe(true);
+  });
+
+  it("evaluateChatCompaction returns all six hard booleans true on the real fixtures", () => {
     const r = evaluateChatCompaction(buildChatHistoryFixtures());
     expect(r).toEqual({
       chatLongSessionCompaction: true,
+      chatNoProfileOverflowCompaction: true,
       chatManyShortBudgetSafeUnchanged: true,
       chatCurrentInstructionPreserved: true,
       chatShortSessionByteIdentical: true,

@@ -221,6 +221,7 @@ export {
 export {
   conversationForGateway,
   MAX_CONTEXT_MESSAGES,
+  usableGatewayMessages,
   type GatewayConversationMessage,
 } from "./chat-handlers.js";
 export {

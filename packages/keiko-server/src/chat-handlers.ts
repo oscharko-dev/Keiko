@@ -306,10 +306,10 @@ function messageForGateway(
   return { role: message.role, content: message.content };
 }
 
-// The map+filter projection shared by conversationForGateway and the PR4-W2 compaction shim
+// The map+filter projection shared by conversationForGateway and the budget-aware compaction shim
 // (conversation-compaction.ts). Returns the full filtered, ORDER-PRESERVED set of user/assistant
-// turns BEFORE the recent-window slice — so the shim's "post-filter count", kept window, and
-// dropped prefix are derived from the exact same selection the slice operates on.
+// turns so the shim can budget-check, retain the full safe verbatim history, or compact the
+// minimum oldest prefix without re-filtering.
 export function usableGatewayMessages(
   messages: readonly ChatMessage[],
 ): { role: "user" | "assistant"; content: string }[] {
@@ -771,7 +771,11 @@ async function retrieveChatMemory(
   budgetTokens: number | undefined,
   nowMs: number,
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
-  const semanticGate = semanticRetrievalGateForText(deps, content, memoryCapturePolicyForDeps(deps));
+  const semanticGate = semanticRetrievalGateForText(
+    deps,
+    content,
+    memoryCapturePolicyForDeps(deps),
+  );
   const signals = await buildConversationRetrievalSignals(
     deps,
     vault,
@@ -986,9 +990,9 @@ export function buildGatewayMessages(
   memoryText: string,
   modelId: string | undefined,
 ): GatewayConversationMessage[] {
-  // PR4-W2 (ADR-0055 D3): route history assembly through the predicate-gated compaction shim. On
-  // the fast path (no profile or <= MAX_CONTEXT_MESSAGES filtered turns) the shim returns the EXACT
-  // conversationForGateway(...) value, so this is byte-identical to the pre-PR4 path.
+  // PR4-W2 (ADR-0055 D3): route history assembly through the budget-aware compaction shim. When
+  // the full filtered history fits the active effective budget, the shim returns the full verbatim
+  // projection; otherwise it deterministically compacts the minimum oldest prefix needed.
   const { messages } = deriveCompactionOutcome(deps, request, modelId);
   return applyDocumentContextToLatestUserTurn(messages, request, memoryText);
 }

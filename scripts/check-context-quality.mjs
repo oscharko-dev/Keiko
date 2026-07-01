@@ -36,6 +36,7 @@ import { redact, detectPromptInjectionSignals } from "@oscharko-dev/keiko-securi
 import {
   conversationForGateway,
   conversationForGatewayWithCompaction,
+  usableGatewayMessages,
 } from "@oscharko-dev/keiko-server";
 import {
   allocateContext,
@@ -518,6 +519,12 @@ function hasValidCompactionRecord(compaction) {
   return compaction !== undefined && validateContextCompactionRecord(compaction).ok;
 }
 
+function buildFullGatewayProjection(messages) {
+  const system = conversationForGateway(messages)[0];
+  const filtered = usableGatewayMessages(messages);
+  return system === undefined ? filtered : [system, ...filtered];
+}
+
 function retainedTailMatches(outcomeMessages, plainMessages, itemsBefore) {
   return deepEqual(outcomeMessages.slice(2), plainMessages.slice(1 + itemsBefore));
 }
@@ -559,6 +566,10 @@ export function evaluateLongSessionCompaction(outcome, plain, fixtures) {
   return evaluatePressureCompactionContent(outcome, plain, fixtures);
 }
 
+export function evaluateNoProfileOverflowCompaction(outcome, plain, fixtures) {
+  return evaluatePressureCompactionContent(outcome, plain, fixtures);
+}
+
 // chatCurrentInstructionPreserved (required true): the milestone headline — the latest user message
 // content appears UNCHANGED in the spliced output. Isolated from the broader compaction invariant so
 // a regression that drops the current instruction fails THIS metric distinctly.
@@ -575,20 +586,21 @@ export function evaluateShortSessionByteIdentical(outcome, plain) {
 }
 
 // chatManyShortBudgetSafeUnchanged (required true): a session above MAX_CONTEXT_MESSAGES but still
-// under the effective budget WITH a profile must stay byte-identical and carry NO compaction
-// record. `plain` is conversationForGateway(manyShortHistory).
+// under the effective budget WITH a profile must stay byte-identical to the FULL usable gateway
+// projection and carry NO compaction record. `expected` is the full filtered projection, not the
+// legacy sliced conversationForGateway(manyShortHistory) result.
 export function evaluateManyShortBudgetSafeUnchanged(outcome, plain) {
   return outcome.compaction === undefined && deepEqual(outcome.messages, plain);
 }
 
-// chatNoProfileUnchanged (required true): the 30-msg history with NO profile must be byte-identical
-// to the plain projection and carry NO compaction record (the no-profile guard). `plain` is
-// conversationForGateway(longHistory).
+// chatNoProfileUnchanged (required true): the 30-msg history with NO profile must use the fallback
+// default budget path and stay byte-identical to the FULL usable gateway projection with no
+// compaction record. `expected` is the full filtered projection, not the legacy slice.
 export function evaluateNoProfileUnchanged(outcome, plain) {
   return outcome.compaction === undefined && deepEqual(outcome.messages, plain);
 }
 
-// Drives the REAL splice over the chat fixtures and returns the five measured hard booleans. The
+// Drives the REAL splice over the chat fixtures and returns the six measured hard booleans. The
 // splice is deterministic (no clock/random), so this is reproducible. Internal message bodies (which
 // carry the secret + markers) are never returned — only the boolean verdicts.
 export function evaluateChatCompaction(fixtures) {
@@ -597,9 +609,12 @@ export function evaluateChatCompaction(fixtures) {
     ...profile,
     redactionSecrets: [fixtures.earlySecret],
   });
+  const noProfilePressureOutcome = conversationForGatewayWithCompaction(fixtures.pressure, {
+    redactionSecrets: [fixtures.earlySecret],
+  });
   const pressurePlain = conversationForGateway(fixtures.pressure);
   const longOutcome = conversationForGatewayWithCompaction(fixtures.long, profile);
-  const longPlain = conversationForGateway(fixtures.long);
+  const longExpected = buildFullGatewayProjection(fixtures.long);
   const shortOutcome = conversationForGatewayWithCompaction(fixtures.short, profile);
   const shortPlain = conversationForGateway(fixtures.short);
   const noProfileOutcome = conversationForGatewayWithCompaction(fixtures.long);
@@ -609,13 +624,18 @@ export function evaluateChatCompaction(fixtures) {
       pressurePlain,
       fixtures,
     ),
+    chatNoProfileOverflowCompaction: evaluateNoProfileOverflowCompaction(
+      noProfilePressureOutcome,
+      pressurePlain,
+      fixtures,
+    ),
     chatManyShortBudgetSafeUnchanged: evaluateManyShortBudgetSafeUnchanged(
       longOutcome,
-      longPlain,
+      longExpected,
     ),
     chatCurrentInstructionPreserved: evaluateCurrentInstructionPreserved(pressureOutcome, fixtures),
     chatShortSessionByteIdentical: evaluateShortSessionByteIdentical(shortOutcome, shortPlain),
-    chatNoProfileUnchanged: evaluateNoProfileUnchanged(noProfileOutcome, longPlain),
+    chatNoProfileUnchanged: evaluateNoProfileUnchanged(noProfileOutcome, longExpected),
   };
 }
 
@@ -864,6 +884,7 @@ function buildMeasuredSummary(metrics, determinism, rehydration, shaping, chat) 
     chatCurrentInstructionPreserved: chat.chatCurrentInstructionPreserved,
     chatShortSessionByteIdentical: chat.chatShortSessionByteIdentical,
     chatNoProfileUnchanged: chat.chatNoProfileUnchanged,
+    chatNoProfileOverflowCompaction: chat.chatNoProfileOverflowCompaction,
   };
 }
 
@@ -1017,6 +1038,12 @@ const BUDGET_CHECKS = [
     kind: "flag",
   },
   {
+    metric: "chatNoProfileOverflowCompaction",
+    observed: (s) => s.measured.chatNoProfileOverflowCompaction,
+    threshold: (b) => b.requireChatNoProfileOverflowCompaction,
+    kind: "flag",
+  },
+  {
     metric: "chatCompactionLatencyP95Ms",
     observed: (s) => s.chatLatency.p95Ms,
     threshold: (b) => b.maxChatCompactionLatencyP95Ms,
@@ -1107,7 +1134,9 @@ function logSummary(onLog, summary, vacuity) {
       m.chatCurrentInstructionPreserved,
     )} short-session-byte-identical=${String(
       m.chatShortSessionByteIdentical,
-    )} no-profile-unchanged=${String(m.chatNoProfileUnchanged)}.`,
+    )} no-profile-unchanged=${String(
+      m.chatNoProfileUnchanged,
+    )} no-profile-overflow-compaction=${String(m.chatNoProfileOverflowCompaction)}.`,
   );
 }
 
