@@ -8,6 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 
 import {
+  buildSalienceMessages,
   extractSalientMemories,
   normalizeForDedup,
   parseSalienceItems,
@@ -142,6 +143,31 @@ describe("extractSalientMemories", () => {
     if (candidates[0]?.kind === "candidate") {
       expect(candidates[0].proposal.body).toBe("Der Nutzer baut Atlas in Rust mit PostgreSQL.");
     }
+  });
+
+  it("passes assistant text as a separate assistant-role context message when supported", async () => {
+    const seen: ReturnType<typeof buildSalienceMessages>[] = [];
+    const result = await extractSalientMemories(
+      input({
+        userText: "I use PostgreSQL for Atlas.",
+        assistantText: "Redis would also be a good fit.",
+      }),
+      {
+        ...deps("[]"),
+        callModelMessages: (messages): Promise<string> => {
+          seen.push(messages);
+          return Promise.resolve("[]");
+        },
+      },
+    );
+
+    expect(result).toEqual([]);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.map((message) => message.role)).toEqual(["system", "assistant", "user"]);
+    expect(seen[0]?.[1]?.content).toContain("CONTEXT ONLY");
+    expect(seen[0]?.[1]?.content).toContain("Redis would also be a good fit.");
+    expect(seen[0]?.[2]?.content).toContain("I use PostgreSQL for Atlas.");
+    expect(seen[0]?.[2]?.content).not.toContain("Redis");
   });
 
   it("maps scope hints to the correct MemoryScope kinds", async () => {

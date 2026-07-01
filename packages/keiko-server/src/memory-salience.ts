@@ -19,6 +19,7 @@ import {
   type CaptureContext,
   type CaptureOutcome,
   type SalienceDiagnostic,
+  type SalienceDeps,
 } from "@oscharko-dev/keiko-memory-capture";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
@@ -123,21 +124,18 @@ function buildSalienceContext(context: ConversationMemoryRuntimeContext): Captur
 function buildCallModel(
   deps: UiHandlerDeps,
   modelId: string,
-): ((system: string, user: string) => Promise<string>) | null {
+): NonNullable<SalienceDeps["callModelMessages"]> | null {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
     return null;
   }
   const responseFormat = salienceResponseFormatFor(deps, modelId);
   const seed = salienceSeedFor(deps, modelId);
-  return async (system: string, user: string): Promise<string> => {
+  return async (messages): Promise<string> => {
     const response = await model.call(
       {
         modelId,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+        messages,
         stream: false,
         ...(responseFormat !== undefined ? { responseFormat } : {}),
         ...(seed !== undefined ? { seed } : {}),
@@ -251,8 +249,8 @@ async function extractTurnSalienceOutcomes(
   assistantText: string,
 ): Promise<readonly CaptureOutcome[] | null> {
   const salienceModelId = configuredSalienceModelId(deps, modelId);
-  const callModel = buildCallModel(deps, salienceModelId);
-  if (callModel === null) return null;
+  const callModelMessages = buildCallModel(deps, salienceModelId);
+  if (callModelMessages === null) return null;
   const policy = memoryCapturePolicyForDeps(deps);
   if (memoryTextSecretEgressRejectionReason(request.content, policy) !== null) return null;
   return extractSalientMemories(
@@ -264,7 +262,12 @@ async function extractTurnSalienceOutcomes(
       policy,
     },
     {
-      callModel,
+      callModel: (system, user) =>
+        callModelMessages([
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ]),
+      callModelMessages,
       now: () => Date.now(),
       newMemoryId: () => randomUUID() as MemoryId,
       newProposalId: () => randomUUID() as MemoryProposalId,
