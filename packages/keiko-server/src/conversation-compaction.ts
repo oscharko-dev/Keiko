@@ -3,23 +3,26 @@
 // wraps conversationForGateway (chat-handlers.ts).
 //
 // ACTIVATION PREDICATE (the unchanged-guarantee, ADR-0055 D6):
-//   opts.contextProfile === undefined  ||  filtered.length <= MAX_CONTEXT_MESSAGES
+//   opts.contextProfile === undefined  ||  assembledGatewayTokens <= opts.contextProfile.effectiveInputBudget
 // When true, this returns the EXACT return value of conversationForGateway(messages) — no copy,
 // no spread, no transform — so short sessions and no-profile callers are byte-identical to today.
 //
-// SLOW PATH (profile present AND > MAX_CONTEXT_MESSAGES filtered turns): the older turns that the
-// existing slice HARD-DROPS are folded into a single deterministic, REDACTED, byte-bounded summary
-// segment (role "user", model-agnostic-safe — not a second system turn) placed immediately AFTER
-// the existing system message, accompanied by a validated ContextCompactionRecord. No model call.
+// SLOW PATH (profile present AND assembled tokens exceed the effective input budget): the older
+// turns that would otherwise overrun the budget are folded into a single deterministic, REDACTED,
+// byte-bounded summary segment (role "user", model-agnostic-safe — not a second system turn)
+// placed immediately AFTER the existing system message, accompanied by a validated
+// ContextCompactionRecord. No model call.
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   estimateTokens,
+  stripUnsafeFormatChars,
   validateContextCompactionRecord,
   type ContextCompactionRecord,
   type ContextProfile,
   type ContextProvenanceRef,
 } from "@oscharko-dev/keiko-contracts";
+import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { ChatMessage } from "./store/index.js";
 import {
@@ -31,6 +34,7 @@ import {
 
 export interface ConversationCompactionOptions {
   readonly contextProfile?: ContextProfile | undefined;
+  readonly redactionSecrets?: readonly string[] | undefined;
 }
 
 export interface ConversationCompactionOutcome {
@@ -40,13 +44,12 @@ export interface ConversationCompactionOutcome {
 
 // Per-dropped-message redacted snippet budget (UTF-8 bytes). Bounds a single noisy turn.
 const SNIPPET_BYTE_BUDGET = 200;
-// Total token budget for the whole synthetic summary segment (a few KB at ~3.5 bytes/token).
-const SUMMARY_TOKEN_BUDGET = 1024;
-
 interface DroppedTurn {
   readonly role: "user" | "assistant";
   readonly content: string;
   readonly stableId: string;
+  readonly contentTokens: number;
+  readonly redactedSnippet: string;
 }
 
 // Deterministic, offline, predicate-gated wrapper over conversationForGateway. On the fast path it
@@ -57,44 +60,137 @@ export function conversationForGatewayWithCompaction(
   opts: ConversationCompactionOptions = {},
 ): ConversationCompactionOutcome {
   const filtered = usableGatewayMessages(messages);
-  if (opts.contextProfile === undefined || filtered.length <= MAX_CONTEXT_MESSAGES) {
-    return { messages: conversationForGateway(messages) };
+  const gatewayMessages = conversationForGateway(messages);
+  if (opts.contextProfile === undefined) {
+    return { messages: gatewayMessages };
   }
-  return buildCompactedOutcome(messages, filtered);
+  if (filtered.length === 0) {
+    return { messages: gatewayMessages };
+  }
+  const prepared = prepareDroppedTurns(filtered, opts.redactionSecrets);
+  const systemMessage = gatewayMessages[0];
+  const systemTokens = systemMessage === undefined ? 0 : estimateTokens(systemMessage.content);
+  const totalContentTokens = prepared.reduce((sum, turn) => sum + turn.contentTokens, 0);
+  const assembledTokens = systemTokens + totalContentTokens;
+  if (assembledTokens <= opts.contextProfile.effectiveInputBudget) {
+    return { messages: gatewayMessages };
+  }
+  const selection = selectCompaction(prepared, systemTokens, opts.contextProfile.effectiveInputBudget);
+  if (selection === undefined) {
+    throw new ContextOverflowError(
+      "conversation history exceeds the effective input budget and cannot be compacted without overflow.",
+    );
+  }
+  return buildCompactedOutcome(prepared, systemMessage, selection);
 }
 
 function buildCompactedOutcome(
-  messages: readonly ChatMessage[],
-  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  prepared: readonly DroppedTurn[],
+  systemMessage: GatewayConversationMessage | undefined,
+  selection: { readonly dropCount: number; readonly summaryContent: string },
 ): ConversationCompactionOutcome {
-  const dropped = toDroppedTurns(filtered.slice(0, filtered.length - MAX_CONTEXT_MESSAGES));
-  const summaryContent = buildSummaryContent(dropped);
-  const summarySegment: GatewayConversationMessage = { role: "user", content: summaryContent };
-  const record = buildRecord(dropped, summaryContent);
-  const gatewayMessages = conversationForGateway(messages);
-  const [systemMessage, ...recentMessages] = gatewayMessages;
+  const dropped = prepared.slice(0, selection.dropCount);
+  const retained = prepared.slice(selection.dropCount);
+  const summarySegment: GatewayConversationMessage = {
+    role: "user",
+    content: selection.summaryContent,
+  };
+  const record = buildRecord(dropped, selection.summaryContent);
   return {
     messages:
       systemMessage === undefined
-        ? [summarySegment]
-        : [systemMessage, summarySegment, ...recentMessages],
+        ? [summarySegment, ...retained.map((turn) => ({ role: turn.role, content: turn.content }))]
+        : [
+            systemMessage,
+            summarySegment,
+            ...retained.map((turn) => ({ role: turn.role, content: turn.content })),
+          ],
     compaction: record,
   };
 }
 
-function toDroppedTurns(
+function selectCompaction(
+  prepared: readonly DroppedTurn[],
+  systemTokens: number,
+  effectiveInputBudget: number,
+): { readonly dropCount: number; readonly summaryContent: string } | undefined {
+  const remainingForSummary = effectiveInputBudget - systemTokens;
+  if (remainingForSummary < 2) {
+    return undefined;
+  }
+  const tokenPrefix = buildTokenPrefix(prepared);
+  const maxDropCount = prepared.length - 1;
+  if (maxDropCount < 1) {
+    return undefined;
+  }
+  const initialDropCount =
+    prepared.length > MAX_CONTEXT_MESSAGES ? prepared.length - MAX_CONTEXT_MESSAGES : 1;
+  for (
+    let dropCount = Math.min(Math.max(1, initialDropCount), maxDropCount);
+    dropCount <= maxDropCount;
+    dropCount += 1
+  ) {
+    const selection = selectCompactionCandidate(
+      prepared,
+      tokenPrefix,
+      dropCount,
+      remainingForSummary,
+    );
+    if (selection !== undefined) {
+      return selection;
+    }
+  }
+  return undefined;
+}
+
+function buildTokenPrefix(prepared: readonly DroppedTurn[]): number[] {
+  const tokenPrefix: number[] = [0];
+  for (const turn of prepared) {
+    const previousTotal = tokenPrefix[tokenPrefix.length - 1] ?? 0;
+    tokenPrefix.push(previousTotal + turn.contentTokens);
+  }
+  return tokenPrefix;
+}
+
+function selectCompactionCandidate(
+  prepared: readonly DroppedTurn[],
+  tokenPrefix: readonly number[],
+  dropCount: number,
+  remainingForSummary: number,
+): { readonly dropCount: number; readonly summaryContent: string } | undefined {
+  const retainedTokens = (tokenPrefix[prepared.length] ?? 0) - (tokenPrefix[dropCount] ?? 0);
+  const summaryBudget = remainingForSummary - retainedTokens;
+  if (summaryBudget < 2) {
+    return undefined;
+  }
+  const summaryContent = buildSummaryContent(prepared.slice(0, dropCount), summaryBudget);
+  return estimateTokens(summaryContent) <= summaryBudget ? { dropCount, summaryContent } : undefined;
+}
+
+function prepareDroppedTurns(
   prefix: readonly { role: "user" | "assistant"; content: string }[],
+  redactionSecrets: readonly string[] | undefined,
 ): DroppedTurn[] {
-  return prefix.map((turn, index) => ({
-    role: turn.role,
-    content: turn.content,
-    stableId: `history-msg-${String(index)}`,
-  }));
+  return prefix.map((turn, index) => {
+    const content = turn.content;
+    const stableId = `history-msg-${String(index)}`;
+    const redactedSnippet = snippetFor(content, redactionSecrets);
+    return {
+      role: turn.role,
+      content,
+      stableId,
+      contentTokens: estimateTokens(content),
+      redactedSnippet,
+    };
+  });
 }
 
 // Redact + byte-bound a single dropped turn to a one-line snippet. UTF-8-safe truncation.
-function snippetFor(turn: DroppedTurn): string {
-  const redacted = redact(turn.content).replace(/\s+/gu, " ").trim();
+function snippetFor(content: string, redactionSecrets: readonly string[] | undefined): string {
+  const redacted = redact(stripUnsafeFormatChars(content), redactionSecrets ?? []).replace(
+    /\s+/gu,
+    " ",
+  ).trim();
   const bytes = new TextEncoder().encode(redacted);
   if (bytes.length <= SNIPPET_BYTE_BUDGET) {
     return redacted;
@@ -107,24 +203,44 @@ const SUMMARY_HEADER =
   "[Automated summary of earlier conversation turns — older messages were compacted to fit the " +
   "context window. The verbatim recent turns follow below.]";
 
-function buildSummaryContent(dropped: readonly DroppedTurn[]): string {
+function buildSummaryContent(dropped: readonly DroppedTurn[], summaryTokenBudget: number): string {
+  if (summaryTokenBudget <= 2) {
+    return "";
+  }
   const lines: string[] = [SUMMARY_HEADER, `Dropped ${String(dropped.length)} earlier turn(s):`];
   let omitted = 0;
   for (const turn of dropped) {
-    const candidate = `- [${turn.role}] ${snippetFor(turn)}`;
+    const candidate = `- [${turn.role}] ${turn.redactedSnippet}`;
     const next = [...lines, candidate].join("\n");
-    if (estimateTokens(next) > SUMMARY_TOKEN_BUDGET) {
+    if (estimateTokens(next) > summaryTokenBudget) {
       omitted += 1;
       continue;
     }
     lines.push(candidate);
   }
   if (omitted > 0) {
-    lines.push(
-      `…and ${String(omitted)} further turn(s) omitted to stay within the summary budget.`,
-    );
+    const omittedLine = `…and ${String(omitted)} further turn(s) omitted to stay within the summary budget.`;
+    const next = [...lines, omittedLine].join("\n");
+    if (estimateTokens(next) <= summaryTokenBudget) {
+      lines.push(omittedLine);
+    }
   }
-  return lines.join("\n");
+  let summary = lines.join("\n");
+  if (estimateTokens(summary) > summaryTokenBudget) {
+    summary = trimSummaryToTokenBudget(summary, summaryTokenBudget);
+  }
+  return summary;
+}
+
+function trimSummaryToTokenBudget(summary: string, summaryTokenBudget: number): string {
+  if (summaryTokenBudget <= 2) {
+    return "";
+  }
+  let trimmed = summary;
+  while (trimmed.length > 0 && estimateTokens(trimmed) > summaryTokenBudget) {
+    trimmed = trimmed.slice(0, -1).trimEnd();
+  }
+  return trimmed;
 }
 
 function sourceSpansFor(dropped: readonly DroppedTurn[]): ContextProvenanceRef[] {
@@ -135,11 +251,14 @@ function buildRecord(
   dropped: readonly DroppedTurn[],
   summaryContent: string,
 ): ContextCompactionRecord {
-  const tokensBefore = dropped.reduce((sum, turn) => sum + estimateTokens(turn.content), 0);
+  if (dropped.length === 0) {
+    throw new Error("conversation-compaction cannot emit a zero-item summary record");
+  }
+  const tokensBefore = dropped.reduce((sum, turn) => sum + turn.contentTokens, 0);
   const record: ContextCompactionRecord = {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     laneId: "history-summary",
-    reason: "history-window",
+    reason: "exceeded effective input budget",
     itemsBefore: dropped.length,
     itemsAfter: 0,
     tokensBefore,

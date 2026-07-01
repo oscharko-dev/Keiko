@@ -976,6 +976,7 @@ export function deriveCompactionOutcome(
   const contextProfile = currentContextProfileForModel(deps, modelId);
   return conversationForGatewayWithCompaction(deps.store.listMessages(request.chatId), {
     contextProfile,
+    redactionSecrets: currentRedactionSecrets(deps),
   });
 }
 
