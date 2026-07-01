@@ -2,9 +2,9 @@
 // regulated evidence. Drives the REAL buffered (handleSendDesktopChat) and streaming
 // (handleSendDesktopChatStream) handlers against an in-memory UI store + a real in-memory evidence
 // store. Gates:
-//   - slow path (> 24 filtered turns WITH an active profile) persists a redacted, valid manifest
-//     under an assertValidRunId-valid runId; chatId is hashed, never raw;
-//   - fast path (<= 24) persists NOTHING;
+//   - budget-triggered slow path WITH an active profile persists a redacted, valid manifest under
+//     an assertValidRunId-valid runId; chatId is hashed, never raw;
+//   - budget-safe fast path persists NOTHING;
 //   - a throwing evidence store does NOT fail the send (best-effort try/catch);
 //   - the runId is identical across the buffered and streaming paths for the same turn (no
 //     off-by-one).
@@ -101,6 +101,15 @@ function bufferedModel(content: string): ModelPort {
   };
 }
 
+function capturingBufferedModel(content: string, calls: GatewayRequest[]): ModelPort {
+  return {
+    call(request: GatewayRequest): Promise<NormalizedResponse> {
+      calls.push(request);
+      return Promise.resolve(normalizedResponse(content));
+    },
+  };
+}
+
 function streamingModel(content: string): ModelPort {
   return {
     call(): Promise<NormalizedResponse> {
@@ -186,6 +195,49 @@ function seedHistory(chatId: string, count: number): void {
   }
 }
 
+function seedOversizedHistory(chatId: string): number {
+  const seedBaseTimestamp = 1_700_000_000_000;
+  const huge = "x".repeat(150_000);
+  const count = 3;
+  for (let i = 0; i < count; i += 1) {
+    store.createMessage({
+      chatId,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: i === 0 ? `leak ${SECRET} in turn 0 ${huge}` : `turn ${String(i)} content ${huge}`,
+      timestamp: seedBaseTimestamp + i,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+  }
+  return count;
+}
+
+function seedStructuredOversizedHistory(chatId: string): number {
+  const seedBaseTimestamp = 1_700_000_100_000;
+  const huge = "x".repeat(150_000);
+  const count = 3;
+  for (let i = 0; i < count; i += 1) {
+    store.createMessage({
+      chatId,
+      role: i % 2 === 0 ? "user" : "assistant",
+      content:
+        i === 0
+          ? `Fact: retained compliance decision\nAssumption: old branch still exists\nDecision: persist compaction evidence\nConstraint: re-verify repo-derived facts\n${huge}`
+          : `turn ${String(i)} content ${huge}`,
+      timestamp: seedBaseTimestamp + i,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+  }
+  return count;
+}
+
 async function sendBuffered(d: UiHandlerDeps, chatId: string): Promise<void> {
   const res = captureRes();
   await handleSendDesktopChat(
@@ -224,7 +276,7 @@ afterEach(() => {
 describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
   it("buffered slow path persists a valid, redacted compaction manifest with a hashed chatId", async () => {
     const chatId = seedChat();
-    seedHistory(chatId, 30);
+    const count = seedOversizedHistory(chatId);
     const evidenceStore = createInMemoryEvidenceStore();
     await sendBuffered(deps(bufferedModel("answer"), evidenceStore, true), chatId);
 
@@ -235,8 +287,8 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
       assertValidRunId(runId);
     }).not.toThrow();
     // runId = chat-<sha256(chatId)[:16]>-t<countBeforeUserMessage>; the user message was stored
-    // AFTER the count was pinned, so the count is the seeded 30.
-    expect(runId).toBe(`chat-${sha256Hex(chatId).slice(0, 16)}-t30`);
+    // AFTER the count was pinned, so the count is the seeded oversized-history length.
+    expect(runId).toBe(`chat-${sha256Hex(chatId).slice(0, 16)}-t${String(count)}`);
 
     // loadEvidence parses + structurally validates the manifest; returning without throwing is the
     // schema gate. The compaction record itself is validated explicitly.
@@ -256,16 +308,16 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
 
   it("streaming slow path persists the SAME runId as the buffered path (no off-by-one)", async () => {
     const chatId = seedChat();
-    seedHistory(chatId, 30);
+    const count = seedOversizedHistory(chatId);
     const evidenceStore = createInMemoryEvidenceStore();
     await sendStreaming(deps(streamingModel("answer"), evidenceStore, true), chatId);
 
     const entries = listEvidence(evidenceStore);
     expect(entries.length).toBe(1);
-    expect(entries[0]?.runId).toBe(`chat-${sha256Hex(chatId).slice(0, 16)}-t30`);
+    expect(entries[0]?.runId).toBe(`chat-${sha256Hex(chatId).slice(0, 16)}-t${String(count)}`);
   });
 
-  it("fast path (<= 24 filtered turns) persists NOTHING", async () => {
+  it("budget-safe fast path persists NOTHING", async () => {
     const chatId = seedChat();
     seedHistory(chatId, 10);
     const evidenceStore = createInMemoryEvidenceStore();
@@ -307,5 +359,25 @@ describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
         .map((m) => m.role)
         .slice(-2),
     ).toEqual(["user", "assistant"]);
+  });
+
+  it("later turns resurface persisted pinned facts from prior compaction evidence", async () => {
+    const chatId = seedChat();
+    seedStructuredOversizedHistory(chatId);
+    const evidenceStore = createInMemoryEvidenceStore();
+    await sendBuffered(deps(bufferedModel("first answer"), evidenceStore, true), chatId);
+
+    const calls: GatewayRequest[] = [];
+    await sendBuffered(
+      deps(capturingBufferedModel("second answer", calls), evidenceStore, true),
+      chatId,
+    );
+
+    const prompt = calls[0]?.messages.map((message) => message.content).join("\n") ?? "";
+    expect(prompt).toContain("# Persisted compaction context");
+    expect(prompt).toContain("retained compliance decision");
+    expect(prompt).toContain("persist compaction evidence");
+    expect(prompt).toContain("Assumptions (not facts)");
+    expect(prompt).toContain("re-verify");
   });
 });

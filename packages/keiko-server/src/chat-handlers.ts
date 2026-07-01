@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import {
   GatewayError,
+  ContextOverflowError,
   findCapability,
   findConfiguredCapability,
   listCapabilities,
@@ -17,6 +18,7 @@ import {
 import {
   isDiscussionMode,
   stripUnsafeFormatChars,
+  DEFAULT_CONTEXT_PROFILE,
   type ConversationDocumentContextWire,
   type DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
@@ -54,7 +56,6 @@ import {
   type ChatMessage,
   type Project,
 } from "./store/index.js";
-import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
 import {
   validateConversationPayload,
   type ConversationAttachment,
@@ -62,7 +63,11 @@ import {
 import { validateProjectPath } from "./store/validation.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentRedactionSecrets,
+} from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
@@ -89,19 +94,27 @@ import {
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
 import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import {
+  buildChatCompactionContextText,
+  selectGatewayPromptAssembly,
+  type GatewayPromptAssembly,
+} from "./chat-prompt-budget.js";
+import { usableGatewayMessages } from "./conversation-gateway.js";
+import type { GatewayConversationMessage } from "./conversation-gateway.js";
+export {
+  MAX_CONTEXT_MESSAGES,
+  conversationForGateway,
+  usableGatewayMessages,
+} from "./conversation-gateway.js";
+export type { GatewayConversationMessage } from "./conversation-gateway.js";
+export type { GatewayPromptAssembly } from "./chat-prompt-budget.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
-export const MAX_CONTEXT_MESSAGES = 24;
 const MAX_PENDING_SALIENCE_CAPTURES = 32;
 let pendingSalienceCaptures = 0;
-
-export interface GatewayConversationMessage {
-  readonly role: "system" | "user" | "assistant";
-  readonly content: string;
-}
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -290,45 +303,6 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
     };
   }
   throw error;
-}
-
-function messageForGateway(
-  message: ChatMessage,
-): { role: "user" | "assistant"; content: string } | null {
-  if (isLegacyEmptyAssistantPlaceholder(message)) {
-    return null;
-  }
-  if (message.role !== "user" && message.role !== "assistant") {
-    return null;
-  }
-  return { role: message.role, content: message.content };
-}
-
-// The map+filter projection shared by conversationForGateway and the PR4-W2 compaction shim
-// (conversation-compaction.ts). Returns the full filtered, ORDER-PRESERVED set of user/assistant
-// turns BEFORE the recent-window slice — so the shim's "post-filter count", kept window, and
-// dropped prefix are derived from the exact same selection the slice operates on.
-export function usableGatewayMessages(
-  messages: readonly ChatMessage[],
-): { role: "user" | "assistant"; content: string }[] {
-  return messages
-    .map(messageForGateway)
-    .filter(
-      (message): message is { role: "user" | "assistant"; content: string } => message !== null,
-    );
-}
-
-export function conversationForGateway(
-  messages: readonly ChatMessage[],
-): GatewayConversationMessage[] {
-  const usable = usableGatewayMessages(messages).slice(-MAX_CONTEXT_MESSAGES);
-  return [
-    {
-      role: "system",
-      content: CONVERSATION_SYSTEM_PROMPT,
-    },
-    ...usable,
-  ];
 }
 
 export interface SendDesktopChatRequest {
@@ -639,42 +613,6 @@ export function createAssistantMessage(
     shortResult: undefined,
     taskType: undefined,
   });
-}
-
-// Issue #148 — projects the latest user turn into the structured prompt form (user message +
-// attached document blocks). Earlier history turns stay verbatim — the document context is a
-// per-send payload and never replayed across the conversation log.
-function applyDocumentContextToLatestUserTurn(
-  history: readonly GatewayConversationMessage[],
-  request: SendDesktopChatRequest,
-  memoryText: string | undefined,
-): GatewayConversationMessage[] {
-  // Issue #502 — a selected discussion mode also requires composing the latest user turn (to
-  // prepend the additive directive block), even with no documents or memory.
-  if (
-    request.documentContext.length === 0 &&
-    (memoryText === undefined || memoryText.length === 0) &&
-    request.discussionMode === undefined
-  ) {
-    return Array.from(history);
-  }
-  const composed = composeConversationPrompt(
-    request.content,
-    request.documentContext,
-    memoryText,
-    request.discussionMode,
-  );
-  // Replace ONLY the last user turn (the one we just persisted). System and assistant turns
-  // are untouched. Walking from the end avoids rewriting a same-text earlier turn.
-  const out: GatewayConversationMessage[] = Array.from(history);
-  for (let i = out.length - 1; i >= 0; i -= 1) {
-    const entry = out[i];
-    if (entry?.role === "user" && entry.content === request.content) {
-      out[i] = { role: "user", content: composed };
-      break;
-    }
-  }
-  return out;
 }
 
 export function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
@@ -1014,26 +952,55 @@ export function buildChatPatch(
 export function deriveCompactionOutcome(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
+  modelId: string | undefined,
 ): ConversationCompactionOutcome {
+  const contextProfile = currentContextProfileForModel(deps, modelId);
   return conversationForGatewayWithCompaction(deps.store.listMessages(request.chatId), {
-    contextProfile: deps.contextProfile,
+    contextProfile: contextProfile ?? DEFAULT_CONTEXT_PROFILE,
+    redactionSecrets: currentRedactionSecrets(deps),
   });
+}
+
+export function buildGatewayAssembly(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memory: ConversationMemoryResultWire,
+  modelId: string | undefined,
+): GatewayPromptAssembly {
+  const history = deps.store.listMessages(request.chatId);
+  const historyPrefix = history.slice(0, Math.max(0, history.length - 1));
+  const selected = selectGatewayPromptAssembly({
+    historyPrefix,
+    historyTurnCount: usableGatewayMessages(historyPrefix).length,
+    request: {
+      content: request.content,
+      discussionMode: request.discussionMode,
+    },
+    profile: currentContextProfileForModel(deps, modelId) ?? DEFAULT_CONTEXT_PROFILE,
+    memoryEntries: memory.context.memories,
+    compactionContextText: buildChatCompactionContextText(deps.evidenceStore, request.chatId),
+    documentContext: request.documentContext,
+    redactionSecrets: currentRedactionSecrets(deps),
+  });
+  if (selected === undefined) {
+    throw new ContextOverflowError(
+      "conversation prompt exceeds the effective input budget and cannot be assembled without overflow.",
+    );
+  }
+  return selected;
 }
 
 export function buildGatewayMessages(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
-  memoryText: string,
+  memory: ConversationMemoryResultWire,
+  modelId: string | undefined,
 ): GatewayConversationMessage[] {
-  // PR4-W2 (ADR-0055 D3): route history assembly through the predicate-gated compaction shim. On
-  // the fast path (no profile or <= MAX_CONTEXT_MESSAGES filtered turns) the shim returns the EXACT
-  // conversationForGateway(...) value, so this is byte-identical to the pre-PR4 path.
-  const { messages } = deriveCompactionOutcome(deps, request);
-  return applyDocumentContextToLatestUserTurn(messages, request, memoryText);
+  return buildGatewayAssembly(deps, request, memory, modelId).messages;
 }
 
 export interface ChatCompactionTurn {
-  readonly outcome: ConversationCompactionOutcome;
+  readonly compaction: ConversationCompactionOutcome["compaction"];
   readonly request: SendDesktopChatRequest;
   readonly modelId: string;
   readonly messageCount: number;
@@ -1046,7 +1013,7 @@ export interface ChatCompactionTurn {
 // fully guarded and a no-op on the fast path).
 export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTurn): void {
   persistChatCompactionEvidence(deps, {
-    compaction: turn.outcome.compaction,
+    compaction: turn.compaction,
     chatId: turn.request.chatId,
     modelId: turn.modelId,
     messageCount: turn.messageCount,
@@ -1076,14 +1043,14 @@ async function persistModelChatTurn(
         ? emptyMemoryResult(false)
         : await buildMemoryResult(request, deps, memoryContext);
     const userMessage = createUserMessage(deps, request);
-    const outcome = deriveCompactionOutcome(deps, request);
-    const messages = buildGatewayMessages(deps, request, memory.context.text);
+    const assembly = buildGatewayAssembly(deps, request, memory, modelId);
+    const messages = assembly.messages;
     const response = await model.call(
       { modelId, messages, stream: false },
       new AbortController().signal,
     );
     recordChatCompaction(deps, {
-      outcome,
+      compaction: assembly.compaction,
       request,
       modelId,
       messageCount: messageCountBeforeTurn,

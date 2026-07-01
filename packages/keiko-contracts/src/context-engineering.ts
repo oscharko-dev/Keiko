@@ -5,6 +5,8 @@
 // isRecord + predicate envelope and live in the sibling context-engineering-validation.ts to
 // keep both files under the 400-LOC budget (mirrors the memory-validation.ts split).
 
+import type { ModelCapability } from "./gateway.js";
+
 export const CONTEXT_ENGINEERING_SCHEMA_VERSION = "1" as const;
 
 // Provenance string recording which estimator produced a profile's counts. The estimator
@@ -336,6 +338,15 @@ export function estimateTokensForSegments(segments: readonly string[]): number {
   return total;
 }
 
+// Converts a token budget back into a conservative UTF-8 byte ceiling using the SAME estimator
+// constants as estimateTokens(). This is the only approved token->byte bridge for prompt assembly.
+export function maxUtf8BytesForTokenBudget(tokenBudget: number): number {
+  const normalized = Number.isFinite(tokenBudget) ? Math.max(0, Math.floor(tokenBudget)) : 0;
+  return normalized <= TOKEN_STRUCTURAL_OVERHEAD
+    ? 0
+    : Math.floor((normalized - TOKEN_STRUCTURAL_OVERHEAD) * TOKEN_BYTES_PER_TOKEN_DIVISOR);
+}
+
 // Derives effectiveInputBudget = maxInputTokens − reservedOutputTokens − safetyMarginTokens,
 // clamped to >= 0. Pure. Used to build a ContextProfile from a customer model window override.
 export function deriveContextProfile(input: {
@@ -354,5 +365,32 @@ export function deriveContextProfile(input: {
     safetyMarginTokens: input.safetyMarginTokens,
     effectiveInputBudget: effective,
     tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
+  };
+}
+
+// Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
+// runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
+export function deriveContextProfileFromCapability(
+  capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens">,
+): ContextProfile {
+  const maxInputTokens =
+    capability.contextWindow > 0 ? capability.contextWindow : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
+  const reservedOutputTokens =
+    capability.maxOutputTokens > 0
+      ? Math.min(maxInputTokens, capability.maxOutputTokens)
+      : Math.ceil(
+          (maxInputTokens * DEFAULT_CONTEXT_PROFILE.reservedOutputTokens) /
+            DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+        );
+  const safetyMarginTokens = Math.min(
+    maxInputTokens - reservedOutputTokens,
+    Math.ceil(
+      (maxInputTokens * DEFAULT_CONTEXT_PROFILE.safetyMarginTokens) /
+        DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    ),
+  );
+  return {
+    ...deriveContextProfile({ maxInputTokens, reservedOutputTokens, safetyMarginTokens }),
+    model: { id: capability.id },
   };
 }
