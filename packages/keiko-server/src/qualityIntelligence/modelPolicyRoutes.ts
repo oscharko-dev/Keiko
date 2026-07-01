@@ -31,11 +31,7 @@ import {
   resolveQiModelPolicy,
   validateQiModelPolicy,
 } from "./modelSelection.js";
-import {
-  buildJudgePrompt,
-  buildQiJudgeResponseFormat,
-  tryParseJudgeVerdict,
-} from "./judgePort.js";
+import { buildJudgePrompt, buildQiJudgeResponseFormat, tryParseJudgeVerdict } from "./judgePort.js";
 
 const QI_POLICY_DIR = "quality-intelligence";
 const QI_POLICY_FILE = "model-policy.json";
@@ -266,6 +262,7 @@ function requestForPreflight(
         ],
       ),
       stream: false,
+      temperature: 0,
       responseFormat: buildQiJudgeResponseFormat(),
     };
   }
