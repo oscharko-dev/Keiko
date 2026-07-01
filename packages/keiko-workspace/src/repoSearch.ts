@@ -12,6 +12,7 @@ import type {
   EvidenceAtom,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { createHash } from "node:crypto";
 import {
   isValidScopePath,
   validateRetrievalQuery,
@@ -51,9 +52,12 @@ import type { WorkspaceInfo } from "./types.js";
 import {
   buildWorkspaceIndexScopeKey,
   buildWorkspaceIndexSnapshot,
+  isWorkspaceIndexSnapshotFresh,
   prepareWorkspaceIndexSnapshot,
   workspaceIndexCandidateSet,
   type PreparedWorkspaceIndexEntry,
+  type WorkspaceIndexDirectorySnapshot,
+  type WorkspaceIndexPreparationReport,
   type WorkspaceIndex,
   type WorkspaceIndexDiscoverySnapshot,
   type WorkspaceIndexDiscoveredFile,
@@ -99,6 +103,7 @@ export interface SearchResult {
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics | undefined;
   readonly coverage: ContextCoverageDiagnostics;
+  readonly workspaceIndex: WorkspaceIndexPreparationReport | undefined;
 }
 
 export interface ReadExcerptRequest {
@@ -296,6 +301,7 @@ function abortedSearchResult(
       candidateTruncated,
       truncationReasons,
     }),
+    workspaceIndex: undefined,
   };
 }
 
@@ -335,6 +341,8 @@ interface SearchWorkspaceIndexSession {
   readonly preparedEntries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>;
   readonly recordByPath: Map<string, WorkspaceIndexRecord>;
   readonly discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>;
+  dirty: boolean;
+  readonly report: WorkspaceIndexPreparationReport | undefined;
   readonly persist: () => Promise<void>;
 }
 
@@ -353,15 +361,84 @@ function discoveredFileSnapshot(
 function candidateSetDiscoverySnapshot(
   candidateSet: CandidateSet,
   discoveryFiles: readonly WorkspaceIndexDiscoveredFile[],
+  directories: readonly WorkspaceIndexDirectorySnapshot[],
 ): WorkspaceIndexDiscoverySnapshot {
   return {
     files: discoveryFiles,
+    directories,
     filesDiscovered: candidateSet.diagnostics.filesDiscovered,
     ignoredByDiscovery: candidateSet.diagnostics.ignoredByDiscovery,
     deniedByDiscovery: candidateSet.diagnostics.deniedByDiscovery,
     depthPrunedByDiscovery: candidateSet.diagnostics.depthPrunedByDiscovery,
     truncated: candidateSet.truncated,
   };
+}
+
+function directoryFingerprint(entries: readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[]): string {
+  return createHash("sha256").update(JSON.stringify(
+    entries
+      .map((entry) => ({
+        name: entry.name,
+        isDirectory: entry.isDirectory,
+        isFile: entry.isFile,
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+  )).digest("hex");
+}
+
+function ancestorDirectoryPaths(scopePath: string): readonly string[] {
+  const normalized = scopePath.split("\\").join("/");
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  const paths: string[] = [""];
+  let current = "";
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = current.length === 0 ? (parts[index] ?? "") : `${current}/${parts[index] ?? ""}`;
+    paths.push(current);
+  }
+  return [...new Set(paths)];
+}
+
+function buildWorkspaceIndexDirectories(
+  workspaceRoot: string,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+  fs: WorkspaceFs,
+): readonly WorkspaceIndexDirectorySnapshot[] {
+  const directories = new Set<string>();
+  for (const scopePath of discoveryByPath.keys()) {
+    for (const ancestor of ancestorDirectoryPaths(scopePath)) {
+      directories.add(ancestor);
+    }
+  }
+  const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
+  for (const scopePath of [...directories].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const absolutePath = scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
+    try {
+      const entries = fs.readDir(absolutePath);
+      const stat = fs.stat(absolutePath);
+      snapshots.push({
+        scopePath,
+        fingerprint: directoryFingerprint(entries),
+        ...(typeof stat.mtimeMs === "number" ? { mtimeMs: Math.trunc(stat.mtimeMs) } : {}),
+      });
+    } catch {
+      snapshots.push({ scopePath, fingerprint: "unavailable", mtimeMs: undefined });
+    }
+  }
+  return snapshots;
+}
+
+function sameWorkspaceIndexRecord(
+  a: WorkspaceIndexRecord | undefined,
+  b: WorkspaceIndexRecord | undefined,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameDiscoveryFile(
+  a: WorkspaceIndexDiscoveredFile | undefined,
+  b: WorkspaceIndexDiscoveredFile,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 function workspaceIndexPolicyShape(runner: SearchTextRunner): {
@@ -384,6 +461,7 @@ function workspaceIndexScopeKey(
     scope,
     workspaceIndexPolicyShape(runner),
     runner.limits.maxBytesPerFileScanned,
+    runner.limits.maxFilesScanned,
   );
 }
 
@@ -427,13 +505,26 @@ function persistWorkspaceIndexSession(
 ): () => Promise<void> {
   const scopeKey = workspaceIndexScopeKey(scope, runner);
   return async (): Promise<void> => {
+    if (!session.dirty) {
+      return;
+    }
+    const directories = buildWorkspaceIndexDirectories(
+      scope.workspace.root,
+      session.discoveryByPath,
+      runner.fs,
+    );
     await workspaceIndex.saveSnapshot(
       scopeKey,
       buildWorkspaceIndexSnapshot({
         scope,
         policy: workspaceIndexPolicyShape(runner),
         maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
-        discovery: candidateSetDiscoverySnapshot(session.candidateSet, [...session.discoveryByPath.values()]),
+        maxFilesScanned: runner.limits.maxFilesScanned,
+        discovery: candidateSetDiscoverySnapshot(
+          session.candidateSet,
+          [...session.discoveryByPath.values()],
+          directories,
+        ),
         records: session.recordByPath.values(),
       }),
     );
@@ -448,8 +539,14 @@ async function buildSearchWorkspaceIndexSession(
   workspaceIndex: WorkspaceIndex,
 ): Promise<SearchWorkspaceIndexSession> {
   const snapshot = await workspaceIndex.loadSnapshot(workspaceIndexScopeKey(scope, runner));
+  const freshSnapshot =
+    snapshot !== undefined && isWorkspaceIndexSnapshotFresh(snapshot, scope.workspace, runner.fs)
+      ? snapshot
+      : undefined;
   const prepared =
-    snapshot === undefined ? undefined : prepareWorkspaceIndexSnapshot(snapshot, scope.workspace, runner.fs);
+    freshSnapshot === undefined
+      ? undefined
+      : prepareWorkspaceIndexSnapshot(freshSnapshot, scope.workspace, runner.fs);
   const candidateSet =
     prepared === undefined
       ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
@@ -457,6 +554,8 @@ async function buildSearchWorkspaceIndexSession(
   const session: Omit<SearchWorkspaceIndexSession, "persist"> = {
     candidateSet,
     ...seedWorkspaceIndexCaches(prepared, candidateSet),
+    dirty: prepared === undefined,
+    report: prepared?.report,
   };
   return { ...session, persist: persistWorkspaceIndexSession(workspaceIndex, scope, runner, session) };
 }
@@ -497,6 +596,7 @@ interface CompletedSearchResultInputs {
   readonly limits: SearchLimits;
   readonly candidateTruncated: boolean;
   readonly truncationReasons: ReadonlySet<ContextCoverageTruncationReason>;
+  readonly workspaceIndex: WorkspaceIndexPreparationReport | undefined;
 }
 
 function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResult {
@@ -517,6 +617,7 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
       candidateTruncated: inputs.candidateTruncated,
       truncationReasons: inputs.truncationReasons,
     }),
+    workspaceIndex: inputs.workspaceIndex,
   };
 }
 
@@ -562,11 +663,14 @@ function indexedSearchRunner(
     workspaceIndex: {
       entries: session.preparedEntries,
       onRecord: (record: WorkspaceIndexRecord): void => {
+        const previousRecord = session.recordByPath.get(record.scopePath);
+        const discovery = discoveredFileSnapshot(record.scopePath, record.sizeBytes, record.mtimeMs);
+        const previousDiscovery = session.discoveryByPath.get(record.scopePath);
+        if (!sameWorkspaceIndexRecord(previousRecord, record) || !sameDiscoveryFile(previousDiscovery, discovery)) {
+          session.dirty = true;
+        }
         session.recordByPath.set(record.scopePath, record);
-        session.discoveryByPath.set(
-          record.scopePath,
-          discoveredFileSnapshot(record.scopePath, record.sizeBytes, record.mtimeMs),
-        );
+        session.discoveryByPath.set(record.scopePath, discovery);
       },
     },
   };
@@ -595,6 +699,7 @@ function completedSearchTextResult(
   atoms: readonly EvidenceAtom[],
   candidates: readonly CandidateFile[],
   truncationReasons: ReadonlySet<ContextCoverageTruncationReason>,
+  workspaceIndex: WorkspaceIndexPreparationReport | undefined,
 ): SearchResult {
   return completedSearchResult({
     atoms,
@@ -607,6 +712,7 @@ function completedSearchTextResult(
     limits: runner.limits,
     candidateTruncated: candidateSet.truncated,
     truncationReasons,
+    workspaceIndex,
   });
 }
 
@@ -616,6 +722,30 @@ async function persistSearchTextSession(
   if (session !== undefined) {
     await session.persist();
   }
+}
+
+function workspaceIndexReport(
+  session: SearchWorkspaceIndexSession | undefined,
+): WorkspaceIndexPreparationReport | undefined {
+  if (session === undefined) {
+    return undefined;
+  }
+  if (session.report !== undefined) {
+    return session.report;
+  }
+  return {
+    discoveredEntries: session.candidateSet.diagnostics.filesDiscovered,
+    retainedEntries: session.discoveryByPath.size,
+    indexedRecords: session.recordByPath.size,
+    reusedRecords: 0,
+    staleRecords: 0,
+    skippedEntries: Math.max(
+      0,
+      session.candidateSet.diagnostics.filesDiscovered - session.discoveryByPath.size,
+    ),
+    deletedEntries: 0,
+    droppedRecords: 0,
+  };
 }
 
 export async function searchText(
@@ -659,6 +789,7 @@ export async function searchText(
     atoms,
     candidates,
     truncationReasons,
+    workspaceIndexReport(workspaceIndexSession),
   );
 }
 
@@ -808,6 +939,7 @@ function findFilesSync(
     limits: { ...limits, maxMatchesReturned: effectiveMaxMatches },
     candidateTruncated: candidateSet.truncated,
     truncationReasons: state.truncationReasons,
+    workspaceIndex: undefined,
   });
 }
 

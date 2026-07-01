@@ -851,6 +851,7 @@ function defaultRunner(
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+      workspaceIndexForRoot: deps.workspaceIndexForRoot,
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
@@ -1200,7 +1201,7 @@ function resolveMultiSourceSeam(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   return {
-    retriever: defaultRetriever(signal),
+    retriever: defaultRetriever(signal, deps.workspaceIndexForRoot),
     answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal),
   };
 }

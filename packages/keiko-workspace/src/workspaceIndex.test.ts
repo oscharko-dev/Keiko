@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,9 @@ import type { WorkspaceInfo } from "./types.js";
 import {
   buildWorkspaceIndexSnapshot,
   buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexLexicalRecord,
   createFileWorkspaceIndexStore,
+  createInMemoryWorkspaceIndexStore,
   createWorkspaceIndex,
   prepareWorkspaceIndexSnapshot,
   type WorkspaceIndex,
@@ -254,6 +256,7 @@ async function snapshotFor(index: WorkspaceIndex, currentScope: SearchScope): Pr
         omitLowValueWorkspaceFiles: policy.omitLowValueWorkspaceFiles,
       },
       DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      DEFAULT_SEARCH_LIMITS.maxFilesScanned,
     ),
   );
 }
@@ -279,8 +282,10 @@ function sampleSnapshot(content: string): WorkspaceIndexSnapshot {
       omitLowValueWorkspaceFiles: true,
     },
     maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+    maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
     discovery: {
       files: [{ scopePath: "src/app.ts", sizeBytes: Buffer.byteLength(content, "utf8") }],
+      directories: [],
       filesDiscovered: 1,
       ignoredByDiscovery: 0,
       deniedByDiscovery: 0,
@@ -292,14 +297,14 @@ function sampleSnapshot(content: string): WorkspaceIndexSnapshot {
         scopePath: "src/app.ts",
         sizeBytes: Buffer.byteLength(content, "utf8"),
         kind: "text",
-        content,
+        lexical: buildWorkspaceIndexLexicalRecord(content),
       },
     ],
   });
 }
 
 describe("workspaceIndex", () => {
-  it("reuses unchanged indexed files without rewalking or rereading", async () => {
+  it("reuses unchanged indexed files without rereading file contents", async () => {
     const tracked = createTrackedFs({
       "README.md": "needle in docs\n",
       "src/a.ts": "export const alpha = 'needle';\n",
@@ -323,7 +328,7 @@ describe("workspaceIndex", () => {
     });
 
     expect(second.atoms.map((atom) => atom.scopePath)).toEqual(["README.md", "src/a.ts"]);
-    expect(tracked.counters.readDir).toBe(0);
+    expect(tracked.counters.readDir).toBe(2);
     expect(tracked.counters.readFileUtf8).toBe(0);
     expect(tracked.counters.readFileBytes).toBe(0);
   });
@@ -352,9 +357,142 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(tracked.counters.readDir).toBe(0);
+    expect(tracked.counters.readDir).toBe(2);
     expect(tracked.counters.readFileUtf8).toBe(1);
     expect(tracked.counters.readFileBytes).toBe(1);
+  });
+
+  it("detects newly added files on warm searches before reusing cached candidates", async () => {
+    const tracked = createTrackedFs({
+      "src/a.ts": "export const alpha = 'needle';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    tracked.writeFile("src/c.ts", "export const gamma = 'needle';\n");
+    tracked.resetCounters();
+
+    const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    const snapshot = await snapshotFor(index, currentScope);
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
+    expect(snapshot?.discovery.files.map((file) => file.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
+    expect(tracked.counters.readDir).toBeGreaterThan(0);
+    expect(tracked.counters.readFileUtf8).toBe(2);
+    expect(tracked.counters.readFileBytes).toBe(2);
+  });
+
+  it("keys snapshots by maxFilesScanned so narrow scans cannot poison broader queries", async () => {
+    const tracked = createTrackedFs({
+      "src/a.ts": "export const alpha = 'needle';\n",
+      "src/b.ts": "export const beta = 'needle';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+    const narrowLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const first = await searchText(currentScope, nlq("needle"), narrowLimits, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect(first.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts"]);
+
+    tracked.resetCounters();
+    const second = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+
+    expect(second.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(tracked.counters.readFileUtf8).toBe(2);
+    expect(tracked.counters.readFileBytes).toBe(2);
+  });
+
+  it("surfaces path-free workspace index diagnostics on cold and warm results", async () => {
+    const tracked = createTrackedFs({
+      "src/a.ts": "export const alpha = 'needle';\n",
+      "src/b.ts": "export const beta = 'other';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    const cold = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect(cold.workspaceIndex).toEqual({
+      discoveredEntries: 2,
+      retainedEntries: 2,
+      indexedRecords: 2,
+      reusedRecords: 0,
+      staleRecords: 0,
+      skippedEntries: 0,
+      deletedEntries: 0,
+      droppedRecords: 0,
+    });
+    expect(JSON.stringify(cold.workspaceIndex)).not.toContain(MEM_ROOT);
+
+    const warm = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect(warm.workspaceIndex).toEqual({
+      discoveredEntries: 2,
+      retainedEntries: 2,
+      indexedRecords: 2,
+      reusedRecords: 2,
+      staleRecords: 0,
+      skippedEntries: 0,
+      deletedEntries: 0,
+      droppedRecords: 0,
+    });
+    expect(JSON.stringify(warm.workspaceIndex)).not.toContain(MEM_ROOT);
+  });
+
+  it("does not rewrite an unchanged warm snapshot", async () => {
+    const tracked = createTrackedFs({
+      "src/a.ts": "export const alpha = 'needle';\n",
+      "src/b.ts": "export const beta = 'other';\n",
+    });
+    const currentScope = scope();
+    let savedSnapshot: WorkspaceIndexSnapshot | undefined;
+    let saves = 0;
+    const store: WorkspaceIndexStore = {
+      loadSnapshot: (): WorkspaceIndexSnapshot | undefined => savedSnapshot,
+      saveSnapshot: (_key: string, snapshot: WorkspaceIndexSnapshot): void => {
+        saves += 1;
+        savedSnapshot = snapshot;
+      },
+    };
+    const index = createWorkspaceIndex(store);
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect(saves).toBe(1);
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    expect(saves).toBe(1);
   });
 
   it("reports retained, reused, stale, deleted, skipped, and dropped counts without exposing paths", async () => {
@@ -420,9 +558,9 @@ describe("workspaceIndex", () => {
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/b.ts"]);
     expect(snapshot?.discovery.files.map((file) => file.scopePath)).toEqual(["src/b.ts"]);
     expect(snapshot?.records.map((record) => record.scopePath)).toEqual(["src/b.ts"]);
-    expect(tracked.counters.readDir).toBe(0);
-    expect(tracked.counters.readFileUtf8).toBe(0);
-    expect(tracked.counters.readFileBytes).toBe(0);
+    expect(tracked.counters.readDir).toBeGreaterThan(0);
+    expect(tracked.counters.readFileUtf8).toBe(1);
+    expect(tracked.counters.readFileBytes).toBe(1);
   });
 
   it("never persists denied runtime paths and stores only relative POSIX scope paths", async () => {
@@ -458,10 +596,11 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("redacts secret-shaped text before it is persisted in cached records", async () => {
+  it("stores non-reconstructive lexical chunks instead of secret-bearing source text", async () => {
     const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
+    const unsupportedSecret = "hf_abcdefghijklmnopqrstuvwxyz123456";
     const tracked = createTrackedFs({
-      "src/app.ts": `export const token = "${secret}";\n`,
+      "src/app.ts": `export const token = "${secret}";\nexport const modelToken = "${unsupportedSecret}";\n`,
     });
     const currentScope = scope();
     const index = createWorkspaceIndex();
@@ -475,6 +614,10 @@ describe("workspaceIndex", () => {
     const persisted = JSON.stringify(snapshot);
 
     expect(persisted).not.toContain(secret);
+    expect(persisted).not.toContain(unsupportedSecret);
+    expect(persisted).not.toContain("export const");
+    expect(snapshot?.records[0]?.kind).toBe("text");
+    expect(snapshot?.records[0]).not.toHaveProperty("content");
   });
 
   it("persists a file-backed snapshot across index instances and reuses warm data", async () => {
@@ -506,7 +649,7 @@ describe("workspaceIndex", () => {
       });
 
       expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["README.md", "src/a.ts"]);
-      expect(tracked.counters.readDir).toBe(0);
+      expect(tracked.counters.readDir).toBe(2);
       expect(tracked.counters.readFileUtf8).toBe(0);
       expect(tracked.counters.readFileBytes).toBe(0);
       expect(runtimeFiles(runtimeDir)).toHaveLength(1);
@@ -515,12 +658,13 @@ describe("workspaceIndex", () => {
     }
   });
 
-  it("writes file-backed snapshots with hashed filenames and redacted path-free JSON", async () => {
+  it("writes file-backed snapshots with hashed filenames and source-free path-free JSON", async () => {
     const runtimeDir = tempRuntimeDir();
     const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
+    const unsupportedSecret = "hf_abcdefghijklmnopqrstuvwxyz123456";
     try {
       const tracked = createTrackedFs({
-        "src/app.ts": `export const token = "${secret}";\n`,
+        "src/app.ts": `export const token = "${secret}";\nexport const modelToken = "${unsupportedSecret}";\n`,
       });
       const currentScope = scope();
       const index = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
@@ -541,9 +685,83 @@ describe("workspaceIndex", () => {
       expect(fileName).not.toContain(MEM_ROOT);
       expect(raw).not.toContain(MEM_ROOT);
       expect(raw).not.toContain(secret);
+      expect(raw).not.toContain(unsupportedSecret);
+      expect(raw).not.toContain("export const");
     } finally {
       removeRuntimeDir(runtimeDir);
     }
+  });
+
+  it("writes owner-only file-backed runtime directories and snapshots", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const tracked = createTrackedFs({
+        "src/app.ts": "export const token = 'needle';\n",
+      });
+      const currentScope = scope();
+      const index = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
+
+      await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+        fs: tracked.fs,
+        nowMs: FIXED_NOW,
+        workspaceIndex: index,
+      });
+
+      const [fileName] = runtimeFiles(runtimeDir);
+      if (fileName === undefined) {
+        throw new Error("expected persisted snapshot file");
+      }
+      expect(statSync(runtimeDir).mode & 0o777).toBe(0o700);
+      expect(statSync(join(runtimeDir, fileName)).mode & 0o777).toBe(0o600);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("rejects workspace-local file-backed runtime directories unless explicitly allowed", () => {
+    expect(() =>
+      createFileWorkspaceIndexStore({
+        runtimeDir: join(MEM_ROOT, ".keiko", "workspace-index"),
+        workspaceRoot: MEM_ROOT,
+      }),
+    ).toThrow("workspace index runtimeDir must not be inside the workspace root");
+    expect(() =>
+      createFileWorkspaceIndexStore({
+        runtimeDir: join(MEM_ROOT, ".keiko", "workspace-index"),
+        workspaceRoot: MEM_ROOT,
+        allowWorkspaceLocalRuntimeDir: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it("prunes orphaned temp snapshots under the configured snapshot cap", async () => {
+    const runtimeDir = tempRuntimeDir();
+    try {
+      const tempFileName = `workspace-index-${"a".repeat(64)}.json.${"b".repeat(16)}.tmp`;
+      writeFileSync(join(runtimeDir, tempFileName), "{}\n", "utf8");
+      const store = createFileWorkspaceIndexStore({ runtimeDir, maxSnapshots: 1 });
+
+      await store.saveSnapshot("fresh-key", sampleSnapshot("needle"));
+
+      const files = runtimeFiles(runtimeDir);
+      expect(files).toHaveLength(1);
+      expect(files[0]).toMatch(/^workspace-index-[0-9a-f]{64}\.json$/u);
+    } finally {
+      removeRuntimeDir(runtimeDir);
+    }
+  });
+
+  it("bounds the default in-memory store with least-recently-used pruning", async () => {
+    const store = createInMemoryWorkspaceIndexStore({ maxSnapshots: 1 });
+
+    await store.saveSnapshot("first", sampleSnapshot("first needle"));
+    await store.saveSnapshot("second", sampleSnapshot("second needle"));
+
+    await expect(Promise.resolve(store.loadSnapshot("first"))).resolves.toBeUndefined();
+    await expect(Promise.resolve(store.loadSnapshot("second"))).resolves.toBeDefined();
   });
 
   it("refuses oversize file-backed snapshots and falls back to a live scan", async () => {

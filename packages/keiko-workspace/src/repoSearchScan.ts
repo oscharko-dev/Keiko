@@ -26,6 +26,8 @@ import { collectFromEntries } from "./repoSearchEntries.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
 import type { LineMatcher } from "./repoSearchMatchers.js";
+import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import {
   extraIgnoreLinesForSearch,
   legacyDiscoveryPolicy,
@@ -39,8 +41,11 @@ import {
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import type {
   PreparedWorkspaceIndexEntry,
+  WorkspaceIndexLexicalRecord,
   WorkspaceIndexRecord,
 } from "./workspaceIndex.js";
+import { buildWorkspaceIndexLexicalRecord } from "./workspaceIndex.js";
+import { createHash } from "node:crypto";
 
 const BINARY_PROBE_BYTES = 512;
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
@@ -387,6 +392,64 @@ function currentRecordMetadata(
   };
 }
 
+function hashTerm(term: string): string {
+  return createHash("sha256").update(term).digest("hex");
+}
+
+function queryLexicalTerms(query: RetrievalQuery): readonly string[] {
+  if (query.kind === "regex" || query.kind === "file-pattern") {
+    return [];
+  }
+  if (query.kind === "exact-symbol") {
+    return expandedQueryTerms(query.text, query.caseSensitive);
+  }
+  return naturalLanguageContentTerms(query.text, query.caseSensitive);
+}
+
+function queryLexicalTermHashes(query: RetrievalQuery): readonly string[] {
+  return [...new Set(queryLexicalTerms(query).map((term) => hashTerm(term)))].sort((a, b) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+}
+
+function lexicalMatchesQuery(
+  record: WorkspaceIndexLexicalRecord,
+  queryTermHashes: ReadonlySet<string>,
+): boolean {
+  if (record.truncated || queryTermHashes.size === 0) {
+    return false;
+  }
+  return record.termHashes.some((termHash) => queryTermHashes.has(termHash));
+}
+
+function bestCachedLines(
+  record: WorkspaceIndexLexicalRecord,
+  queryTermHashes: ReadonlySet<string>,
+): readonly ScoredLine[] {
+  const best: ScoredLine[] = [];
+  for (const line of record.lines) {
+    let score = 0;
+    for (const termHash of line.termHashes) {
+      if (queryTermHashes.has(termHash)) {
+        score += 1;
+      }
+    }
+    if (score === 0) {
+      continue;
+    }
+    best.push({
+      line: line.startLine,
+      startLine: line.startLine,
+      endLine: line.endLine,
+      score,
+    });
+  }
+  return best
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine))
+    .slice(0, 3)
+    .sort((a, b) => (a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine));
+}
+
 function safeStat(runner: SearchTextRunner, absolutePath: string): ReturnType<WorkspaceFs["stat"]> | undefined {
   try {
     return runner.fs.stat(absolutePath);
@@ -419,7 +482,11 @@ function persistWorkspaceIndexRecord(
 ): void {
   const metadata = currentRecordMetadata(runner, record.scopePath, record.absolutePath, record.sizeBytes);
   if (record.kind === "text") {
-    runner.workspaceIndex?.onRecord({ ...metadata, kind: "text", content: record.content });
+    runner.workspaceIndex?.onRecord({
+      ...metadata,
+      kind: "text",
+      lexical: buildWorkspaceIndexLexicalRecord(record.content),
+    });
     return;
   }
   runner.workspaceIndex?.onRecord({ ...metadata, kind: record.kind });
@@ -552,26 +619,22 @@ async function binaryOmission(
   }
 }
 
-function scanCachedText(
+function cachedLexicalRecord(
   runner: SearchTextRunner,
-  file: DiscoveredFile,
-  state: RunState,
-  atoms: EvidenceAtom[],
   cached: WorkspaceIndexRecord,
-): boolean {
-  if (cached.kind === "binary" || cached.kind === "size-exceeded") {
-    return false;
+): {
+  readonly lexical: WorkspaceIndexLexicalRecord;
+  readonly queryTermHashes: ReadonlySet<string>;
+} | undefined {
+  if (runner.query.kind === "regex" || runner.query.kind === "file-pattern" || runner.query.caseSensitive) {
+    return undefined;
   }
-  if (abortScanFile(runner, state)) {
-    return true;
+  const lexical = cached.lexical;
+  if (lexical === undefined || lexical.truncated) {
+    return undefined;
   }
-  state.filesScanned += 1;
-  const cachedContent = cached.content ?? "";
-  if (!shouldScoreContent(runner.query, cachedContent, runner.policy)) {
-    return true;
-  }
-  scanLines(runner, file.relativePath, cachedContent, state, atoms);
-  return true;
+  const queryTermHashes = new Set(queryLexicalTermHashes(runner.query));
+  return queryTermHashes.size === 0 ? undefined : { lexical, queryTermHashes };
 }
 
 function handleCachedRecord(
@@ -589,7 +652,25 @@ function handleCachedRecord(
     recordCandidateOmission(candidates, file.relativePath, cached.kind);
     return true;
   }
-  return scanCachedText(runner, file, state, atoms, cached);
+  if (abortScanFile(runner, state)) {
+    return true;
+  }
+  const lexical = cachedLexicalRecord(runner, cached);
+  if (lexical === undefined) {
+    return false;
+  }
+  state.filesScanned += 1;
+  if (!lexicalMatchesQuery(lexical.lexical, lexical.queryTermHashes)) {
+    return true;
+  }
+  emitBestLines(
+    runner,
+    file.relativePath,
+    state,
+    atoms,
+    bestCachedLines(lexical.lexical, lexical.queryTermHashes),
+  );
+  return true;
 }
 
 async function handleLiveRecord(

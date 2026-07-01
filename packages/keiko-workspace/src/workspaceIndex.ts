@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  chmod,
   mkdir,
   readFile,
   readdir,
@@ -9,12 +10,11 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import {
   isValidScopePath,
   type RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { redact } from "@oscharko-dev/keiko-security";
 import type { WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -29,7 +29,7 @@ import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 1;
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 2;
 
 export type WorkspaceIndexRecordKind = "text" | "binary" | "size-exceeded";
 
@@ -40,6 +40,7 @@ export interface WorkspaceIndexScopeKey {
   readonly applyGitignore: boolean;
   readonly omitLowValueWorkspaceFiles: boolean;
   readonly maxBytesPerFileScanned: number;
+  readonly maxFilesScanned: number;
 }
 
 export interface WorkspaceIndexDiscoveredFile {
@@ -48,8 +49,27 @@ export interface WorkspaceIndexDiscoveredFile {
   readonly mtimeMs?: number | undefined;
 }
 
+export interface WorkspaceIndexLexicalLine {
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly termHashes: readonly string[];
+}
+
+export interface WorkspaceIndexLexicalRecord {
+  readonly truncated: boolean;
+  readonly termHashes: readonly string[];
+  readonly lines: readonly WorkspaceIndexLexicalLine[];
+}
+
+export interface WorkspaceIndexDirectorySnapshot {
+  readonly scopePath: string;
+  readonly fingerprint: string;
+  readonly mtimeMs?: number | undefined;
+}
+
 export interface WorkspaceIndexDiscoverySnapshot {
   readonly files: readonly WorkspaceIndexDiscoveredFile[];
+  readonly directories: readonly WorkspaceIndexDirectorySnapshot[];
   readonly filesDiscovered: number;
   readonly ignoredByDiscovery: number;
   readonly deniedByDiscovery: number;
@@ -59,7 +79,7 @@ export interface WorkspaceIndexDiscoverySnapshot {
 
 export interface WorkspaceIndexRecord extends WorkspaceIndexDiscoveredFile {
   readonly kind: WorkspaceIndexRecordKind;
-  readonly content?: string | undefined;
+  readonly lexical?: WorkspaceIndexLexicalRecord | undefined;
 }
 
 export interface WorkspaceIndexSnapshot {
@@ -69,6 +89,7 @@ export interface WorkspaceIndexSnapshot {
   readonly applyGitignore: boolean;
   readonly omitLowValueWorkspaceFiles: boolean;
   readonly maxBytesPerFileScanned: number;
+  readonly maxFilesScanned: number;
   readonly discovery: WorkspaceIndexDiscoverySnapshot;
   readonly records: readonly WorkspaceIndexRecord[];
 }
@@ -83,6 +104,8 @@ export interface WorkspaceIndexStore {
 
 export interface FileWorkspaceIndexStoreOptions {
   readonly runtimeDir: string;
+  readonly workspaceRoot?: string | undefined;
+  readonly allowWorkspaceLocalRuntimeDir?: boolean | undefined;
   readonly maxSnapshotBytes?: number | undefined;
   readonly maxSnapshots?: number | undefined;
   readonly maxSnapshotEntries?: number | undefined;
@@ -218,6 +241,18 @@ function normalizeMtimeMs(value: unknown): number | undefined {
   return normalizeWholeNumber(value);
 }
 
+function hashLexicalTerm(term: string): string {
+  return sha256Hex(term);
+}
+
+function normalizeDirectoryPath(scopePath: string): string | undefined {
+  const normalized = normalizeScopePath(scopePath);
+  if (normalized.length === 0) {
+    return "";
+  }
+  return isSafeIndexScopePath(normalized) ? normalized : undefined;
+}
+
 function normalizeDiscoveredFile(
   file: WorkspaceIndexDiscoveredFile,
 ): WorkspaceIndexDiscoveredFile | undefined {
@@ -234,16 +269,76 @@ function normalizeDiscoveredFile(
   };
 }
 
+function normalizeLexicalLine(line: WorkspaceIndexLexicalLine): WorkspaceIndexLexicalLine | undefined {
+  const startLine = normalizeWholeNumber(line.startLine);
+  const endLine = normalizeWholeNumber(line.endLine);
+  if (
+    startLine === undefined ||
+    endLine === undefined ||
+    startLine === 0 ||
+    endLine === 0 ||
+    endLine < startLine
+  ) {
+    return undefined;
+  }
+  const termHashes = [...new Set(line.termHashes.filter((term) => typeof term === "string" && term.length > 0))].sort(
+    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+  );
+  return {
+    startLine,
+    endLine,
+    termHashes,
+  };
+}
+
+function normalizeLexicalRecord(
+  lexical: WorkspaceIndexLexicalRecord,
+): WorkspaceIndexLexicalRecord | undefined {
+  const lines = lexical.lines
+    .map((line) => normalizeLexicalLine(line))
+    .filter((line): line is WorkspaceIndexLexicalLine => line !== undefined);
+  const termHashes = [...new Set(lexical.termHashes.filter((term) => typeof term === "string" && term.length > 0))].sort(
+    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+  );
+  if (termHashes.length === 0 && lines.length === 0) {
+    return undefined;
+  }
+  return {
+    truncated: lexical.truncated,
+    termHashes,
+    lines,
+  };
+}
+
+function normalizeDirectorySnapshot(
+  directory: WorkspaceIndexDirectorySnapshot,
+): WorkspaceIndexDirectorySnapshot | undefined {
+  const scopePath = normalizeDirectoryPath(directory.scopePath);
+  if (scopePath === undefined) {
+    return undefined;
+  }
+  const mtimeMs = normalizeMtimeMs(directory.mtimeMs);
+  if (typeof directory.fingerprint !== "string" || directory.fingerprint.length === 0) {
+    return undefined;
+  }
+  return {
+    scopePath,
+    fingerprint: directory.fingerprint,
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+  };
+}
+
 function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
   const base = normalizeDiscoveredFile(record);
   if (base === undefined) {
     return undefined;
   }
   if (record.kind === "text") {
-    if (typeof record.content !== "string") {
+    const lexical = normalizeLexicalRecord(record.lexical ?? { truncated: false, termHashes: [], lines: [] });
+    if (lexical === undefined) {
       return undefined;
     }
-    return { ...base, kind: "text", content: redact(record.content) };
+    return { ...base, kind: "text", lexical };
   }
   return { ...base, kind: record.kind };
 }
@@ -259,6 +354,18 @@ function dedupeDiscoveredFiles(
   for (const file of sortByScopePath(files)) {
     if (!byPath.has(file.scopePath)) {
       byPath.set(file.scopePath, file);
+    }
+  }
+  return [...byPath.values()];
+}
+
+function dedupeDirectories(
+  directories: readonly WorkspaceIndexDirectorySnapshot[],
+): readonly WorkspaceIndexDirectorySnapshot[] {
+  const byPath = new Map<string, WorkspaceIndexDirectorySnapshot>();
+  for (const directory of sortByScopePath(directories)) {
+    if (!byPath.has(directory.scopePath)) {
+      byPath.set(directory.scopePath, directory);
     }
   }
   return [...byPath.values()];
@@ -286,6 +393,11 @@ function normalizeDiscoverySnapshot(
       .map((file) => normalizeDiscoveredFile(file))
       .filter((file): file is WorkspaceIndexDiscoveredFile => file !== undefined),
   );
+  const directories = dedupeDirectories(
+    discovery.directories
+      .map((directory) => normalizeDirectorySnapshot(directory))
+      .filter((directory): directory is WorkspaceIndexDirectorySnapshot => directory !== undefined),
+  );
   const filesDiscovered = normalizeWholeNumber(discovery.filesDiscovered);
   const ignoredByDiscovery = normalizeWholeNumber(discovery.ignoredByDiscovery);
   const deniedByDiscovery = normalizeWholeNumber(discovery.deniedByDiscovery);
@@ -301,6 +413,7 @@ function normalizeDiscoverySnapshot(
   }
   return {
     files,
+    directories,
     filesDiscovered: Math.max(files.length, filesDiscovered),
     ignoredByDiscovery,
     deniedByDiscovery,
@@ -318,7 +431,13 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
     return undefined;
   }
   const maxBytesPerFileScanned = normalizeWholeNumber(snapshot.maxBytesPerFileScanned);
-  if (maxBytesPerFileScanned === undefined || maxBytesPerFileScanned === 0) {
+  const maxFilesScanned = normalizeWholeNumber(snapshot.maxFilesScanned);
+  if (
+    maxBytesPerFileScanned === undefined ||
+    maxBytesPerFileScanned === 0 ||
+    maxFilesScanned === undefined ||
+    maxFilesScanned === 0
+  ) {
     return undefined;
   }
   const discovery = normalizeDiscoverySnapshot(snapshot.discovery);
@@ -340,6 +459,7 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
     applyGitignore: snapshot.applyGitignore,
     omitLowValueWorkspaceFiles: snapshot.omitLowValueWorkspaceFiles,
     maxBytesPerFileScanned,
+    maxFilesScanned,
     discovery,
     records,
   };
@@ -354,6 +474,7 @@ function storageKey(scopeKey: WorkspaceIndexScopeKey): string {
       applyGitignore: scopeKey.applyGitignore,
       omitLowValueWorkspaceFiles: scopeKey.omitLowValueWorkspaceFiles,
       maxBytesPerFileScanned: scopeKey.maxBytesPerFileScanned,
+      maxFilesScanned: scopeKey.maxFilesScanned,
     }),
   )}`;
 }
@@ -362,6 +483,7 @@ export function buildWorkspaceIndexScopeKey(
   scope: ScopeShape,
   policy: PolicyShape,
   maxBytesPerFileScanned: number,
+  maxFilesScanned: number,
 ): WorkspaceIndexScopeKey {
   return {
     workspaceRoot: scope.workspace.root,
@@ -370,11 +492,14 @@ export function buildWorkspaceIndexScopeKey(
     applyGitignore: policy.applyGitignore,
     omitLowValueWorkspaceFiles: policy.omitLowValueWorkspaceFiles,
     maxBytesPerFileScanned,
+    maxFilesScanned,
   };
 }
 
 interface FileWorkspaceIndexStoreConfig {
   readonly runtimeDir: string;
+  readonly workspaceRoot: string | undefined;
+  readonly allowWorkspaceLocalRuntimeDir: boolean;
   readonly maxSnapshotBytes: number;
   readonly maxSnapshots: number;
   readonly maxSnapshotEntries: number;
@@ -385,21 +510,44 @@ function normalizeLimit(value: number | undefined, fallback: number): number {
   return normalized === undefined || normalized === 0 ? fallback : normalized;
 }
 
-function assertValidRuntimeDir(runtimeDir: string): string {
+function isRuntimeDirWithinWorkspace(runtimeDir: string, workspaceRoot: string): boolean {
+  const rel = relative(workspaceRoot, runtimeDir);
+  return rel.length === 0 || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function assertValidRuntimeDir(
+  runtimeDir: string,
+  workspaceRoot: string | undefined,
+  allowWorkspaceLocalRuntimeDir: boolean,
+): string {
   if (runtimeDir.length === 0 || runtimeDir.trim().length === 0) {
     throw new Error("workspace index runtimeDir must not be empty");
   }
   if (runtimeDir.includes("\u0000")) {
     throw new Error("workspace index runtimeDir must not contain NUL bytes");
   }
-  return resolve(runtimeDir);
+  const resolved = resolve(runtimeDir);
+  if (
+    workspaceRoot !== undefined &&
+    !allowWorkspaceLocalRuntimeDir &&
+    isRuntimeDirWithinWorkspace(resolved, resolve(workspaceRoot))
+  ) {
+    throw new Error("workspace index runtimeDir must not be inside the workspace root");
+  }
+  return resolved;
 }
 
 function fileWorkspaceIndexStoreConfig(
   options: FileWorkspaceIndexStoreOptions,
 ): FileWorkspaceIndexStoreConfig {
   return {
-    runtimeDir: assertValidRuntimeDir(options.runtimeDir),
+    runtimeDir: assertValidRuntimeDir(
+      options.runtimeDir,
+      options.workspaceRoot,
+      options.allowWorkspaceLocalRuntimeDir === true,
+    ),
+    workspaceRoot: options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot),
+    allowWorkspaceLocalRuntimeDir: options.allowWorkspaceLocalRuntimeDir === true,
     maxSnapshotBytes: normalizeLimit(
       options.maxSnapshotBytes,
       DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES,
@@ -454,7 +602,12 @@ function tempSnapshotPath(runtimeDir: string, storageKey: string): string {
 }
 
 function countSnapshotEntries(snapshot: WorkspaceIndexSnapshot): number {
-  return snapshot.relativePaths.length + snapshot.discovery.files.length + snapshot.records.length;
+  return (
+    snapshot.relativePaths.length +
+    snapshot.discovery.files.length +
+    snapshot.discovery.directories.length +
+    snapshot.records.length
+  );
 }
 
 function snapshotFitsStoreBounds(
@@ -464,9 +617,14 @@ function snapshotFitsStoreBounds(
   return (
     snapshot.relativePaths.length <= maxSnapshotEntries &&
     snapshot.discovery.files.length <= maxSnapshotEntries &&
+    snapshot.discovery.directories.length <= maxSnapshotEntries &&
     snapshot.records.length <= maxSnapshotEntries &&
     countSnapshotEntries(snapshot) <= maxSnapshotEntries
   );
+}
+
+function bestEffortChmod(path: string, mode: number): Promise<void> {
+  return chmod(path, mode).catch(() => undefined);
 }
 
 async function safeReadSnapshotFile(
@@ -518,12 +676,7 @@ async function pruneWorkspaceIndexSnapshots(
   }
   const files = await Promise.all(
     entries
-      .filter(
-        (entry) =>
-          entry.isFile() &&
-          FILE_WORKSPACE_INDEX_SEGMENT_RE.test(entry.name) &&
-          entry.name.endsWith(FILE_WORKSPACE_INDEX_EXTENSION),
-      )
+      .filter((entry) => entry.isFile() && FILE_WORKSPACE_INDEX_SEGMENT_RE.test(entry.name))
       .map(async (entry) => ({
         path: runtimeFilePath(runtimeDir, entry.name),
         stat: await stat(runtimeFilePath(runtimeDir, entry.name)),
@@ -536,13 +689,15 @@ async function pruneWorkspaceIndexSnapshots(
 }
 
 async function atomicWriteSnapshotFile(path: string, tempPath: string, content: string): Promise<void> {
-  await writeFile(tempPath, content, "utf8");
+  await writeFile(tempPath, content, { encoding: "utf8", mode: 0o600 });
+  await bestEffortChmod(tempPath, 0o600);
   try {
     await rename(tempPath, path);
   } catch (error) {
     await unlink(tempPath).catch(() => undefined);
     throw error;
   }
+  await bestEffortChmod(path, 0o600);
 }
 
 export function createFileWorkspaceIndexStore(
@@ -571,7 +726,8 @@ export function createFileWorkspaceIndexStore(
       if (Buffer.byteLength(raw, "utf8") > config.maxSnapshotBytes) {
         return;
       }
-      await mkdir(config.runtimeDir, { recursive: true });
+      await mkdir(config.runtimeDir, { recursive: true, mode: 0o700 });
+      await bestEffortChmod(config.runtimeDir, 0o700);
       await atomicWriteSnapshotFile(
         snapshotPath(config.runtimeDir, storageKey),
         tempSnapshotPath(config.runtimeDir, storageKey),
@@ -582,12 +738,37 @@ export function createFileWorkspaceIndexStore(
   };
 }
 
-export function createInMemoryWorkspaceIndexStore(): WorkspaceIndexStore {
+export interface InMemoryWorkspaceIndexStoreOptions {
+  readonly maxSnapshots?: number | undefined;
+}
+
+export function createInMemoryWorkspaceIndexStore(
+  options: InMemoryWorkspaceIndexStoreOptions = {},
+): WorkspaceIndexStore {
+  const maxSnapshots = normalizeLimit(options.maxSnapshots, DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS);
   const snapshots = new Map<string, WorkspaceIndexSnapshot>();
   return {
-    loadSnapshot: (key: string): WorkspaceIndexSnapshot | undefined => snapshots.get(key),
-    saveSnapshot: (key: string, snapshot: WorkspaceIndexSnapshot): void => {
+    loadSnapshot: (key: string): WorkspaceIndexSnapshot | undefined => {
+      const snapshot = snapshots.get(key);
+      if (snapshot === undefined) {
+        return undefined;
+      }
+      snapshots.delete(key);
       snapshots.set(key, snapshot);
+      return snapshot;
+    },
+    saveSnapshot: (key: string, snapshot: WorkspaceIndexSnapshot): void => {
+      if (snapshots.has(key)) {
+        snapshots.delete(key);
+      }
+      snapshots.set(key, snapshot);
+      while (snapshots.size > maxSnapshots) {
+        const oldestKey = snapshots.keys().next().value;
+        if (oldestKey === undefined) {
+          break;
+        }
+        snapshots.delete(oldestKey);
+      }
     },
   };
 }
@@ -613,6 +794,210 @@ export function createWorkspaceIndex(
       await store.saveSnapshot(storageKey(scopeKey), normalized);
     },
   };
+}
+
+const WORKSPACE_INDEX_TEXT_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
+const WORKSPACE_INDEX_TOKEN_SEPARATOR_RE = /[/@.:\-_]+/u;
+const MAX_WORKSPACE_INDEX_LEXICAL_LINES = 256;
+const MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_LINE = 16;
+const MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_FILE = 512;
+
+function isAsciiUpper(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 65 && code <= 90;
+}
+
+function isAsciiLower(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 97 && code <= 122;
+}
+
+function isAsciiDigit(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 48 && code <= 57;
+}
+
+function shouldSplitBefore(previous: string, current: string, next: string | undefined): boolean {
+  if (!isAsciiUpper(current)) {
+    return false;
+  }
+  if (isAsciiLower(previous) || isAsciiDigit(previous)) {
+    return true;
+  }
+  return isAsciiUpper(previous) && next !== undefined && isAsciiLower(next);
+}
+
+function camelParts(token: string): readonly string[] {
+  const parts: string[] = [];
+  let current = "";
+  for (let index = 0; index < token.length; index += 1) {
+    const char = token[index] ?? "";
+    if (current.length > 0 && shouldSplitBefore(token[index - 1] ?? "", char, token[index + 1])) {
+      if (current.length >= 2) {
+        parts.push(current);
+      }
+      current = char;
+      continue;
+    }
+    current += char;
+  }
+  if (current.length >= 2) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+function stripTestSuffix(token: string): string | undefined {
+  const stripped = token.replace(/(?:tests?|specs?)$/iu, "");
+  return stripped.length >= 3 && stripped.length < token.length ? stripped : undefined;
+}
+
+function addTerm(out: string[], seen: Set<string>, term: string): void {
+  const trimmed = term.trim();
+  if (trimmed.length < 2 || !/[\p{L}\p{N}]/u.test(trimmed)) {
+    return;
+  }
+  if (seen.has(trimmed)) {
+    return;
+  }
+  seen.add(trimmed);
+  out.push(trimmed);
+}
+
+function expandContentToken(token: string): readonly string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const normalized = token.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "");
+  if (normalized.length === 0) {
+    return out;
+  }
+  addTerm(out, seen, normalized.toLowerCase());
+  const strippedTest = stripTestSuffix(normalized);
+  if (strippedTest !== undefined) {
+    addTerm(out, seen, strippedTest.toLowerCase());
+  }
+  for (const part of normalized.split(WORKSPACE_INDEX_TOKEN_SEPARATOR_RE).filter((part) => part.length > 0)) {
+    addTerm(out, seen, part.toLowerCase());
+    const derived = stripTestSuffix(part);
+    if (derived !== undefined) {
+      addTerm(out, seen, derived.toLowerCase());
+    }
+    for (const camel of camelParts(part)) {
+      addTerm(out, seen, camel.toLowerCase());
+    }
+    if (derived !== undefined) {
+      for (const camel of camelParts(derived)) {
+        addTerm(out, seen, camel.toLowerCase());
+      }
+    }
+  }
+  return out;
+}
+
+function lexicalTermsForLine(line: string): readonly string[] {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  for (const match of line.matchAll(WORKSPACE_INDEX_TEXT_TOKEN_RE)) {
+    for (const term of expandContentToken(match[0])) {
+      if (terms.length >= MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_LINE) {
+        return terms;
+      }
+      if (!seen.has(term)) {
+        seen.add(term);
+        terms.push(term);
+      }
+    }
+  }
+  return terms;
+}
+
+export function buildWorkspaceIndexLexicalRecord(content: string): WorkspaceIndexLexicalRecord {
+  const lines = content.split("\n");
+  const lexicalLines: WorkspaceIndexLexicalLine[] = [];
+  const termHashes = new Set<string>();
+  let truncated = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    const lineTerms = lexicalTermsForLine(line);
+    if (lineTerms.length === 0) {
+      continue;
+    }
+    if (lexicalLines.length >= MAX_WORKSPACE_INDEX_LEXICAL_LINES) {
+      truncated = true;
+      break;
+    }
+    const hashed = [...new Set(lineTerms.map((term) => hashLexicalTerm(term)))].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    for (const termHash of hashed) {
+      if (termHashes.size >= MAX_WORKSPACE_INDEX_LEXICAL_TERMS_PER_FILE) {
+        truncated = true;
+        break;
+      }
+      termHashes.add(termHash);
+    }
+    lexicalLines.push({
+      startLine: index + 1,
+      endLine: index + 1,
+      termHashes: hashed,
+    });
+    if (truncated) {
+      break;
+    }
+  }
+  return {
+    truncated,
+    termHashes: [...termHashes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    lines: lexicalLines,
+  };
+}
+
+function dirFingerprint(entries: readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[]): string {
+  return sha256Hex(
+    JSON.stringify(
+      entries
+        .map((entry) => ({
+          name: entry.name,
+          isDirectory: entry.isDirectory,
+          isFile: entry.isFile,
+        }))
+        .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+    ),
+  );
+}
+
+export function isWorkspaceIndexSnapshotFresh(
+  snapshot: WorkspaceIndexSnapshot,
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+): boolean {
+  const normalized = normalizeSnapshot(snapshot);
+  if (normalized === undefined) {
+    return false;
+  }
+  for (const directory of normalized.discovery.directories) {
+    const absolutePath = directory.scopePath.length === 0
+      ? workspace.root
+      : resolveWithinWorkspace(workspace.root, directory.scopePath);
+    try {
+      const entries = fs.readDir(absolutePath);
+      if (dirFingerprint(entries) !== directory.fingerprint) {
+        return false;
+      }
+      if (directory.mtimeMs !== undefined) {
+        const current = fs.stat(absolutePath);
+        if (
+          typeof current.mtimeMs !== "number" ||
+          Math.trunc(current.mtimeMs) !== directory.mtimeMs
+        ) {
+          return false;
+        }
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function currentMetadata(scopePath: string, stat: WorkspaceStat): WorkspaceIndexDiscoveredFile {
@@ -652,6 +1037,7 @@ function emptyPreparedWorkspaceIndexSnapshot(): PreparedWorkspaceIndexSnapshot {
     entries: [],
     discovery: {
       files: [],
+      directories: [],
       filesDiscovered: 0,
       ignoredByDiscovery: 0,
       deniedByDiscovery: 0,
@@ -781,6 +1167,7 @@ function preparedDiscoverySnapshot(
   const files = entries.map((entry) => preparedDiscoveryFile(entry));
   return {
     files,
+    directories: normalized.discovery.directories,
     filesDiscovered: normalized.discovery.truncated ? normalized.discovery.filesDiscovered : files.length,
     ignoredByDiscovery: normalized.discovery.ignoredByDiscovery,
     deniedByDiscovery: normalized.discovery.deniedByDiscovery,
@@ -866,6 +1253,7 @@ export interface BuildWorkspaceIndexSnapshotInput {
   readonly scope: ScopeKeyShape;
   readonly policy: PolicyShape;
   readonly maxBytesPerFileScanned: number;
+  readonly maxFilesScanned: number;
   readonly discovery: WorkspaceIndexDiscoverySnapshot;
   readonly records: Iterable<WorkspaceIndexRecord>;
 }
@@ -875,6 +1263,7 @@ export function buildWorkspaceIndexSnapshot(
 ): WorkspaceIndexSnapshot {
   const discovery = normalizeDiscoverySnapshot(input.discovery) ?? {
     files: [],
+    directories: [],
     filesDiscovered: 0,
     ignoredByDiscovery: 0,
     deniedByDiscovery: 0,
@@ -895,6 +1284,7 @@ export function buildWorkspaceIndexSnapshot(
     applyGitignore: input.policy.applyGitignore,
     omitLowValueWorkspaceFiles: input.policy.omitLowValueWorkspaceFiles,
     maxBytesPerFileScanned: input.maxBytesPerFileScanned,
+    maxFilesScanned: input.maxFilesScanned,
     discovery,
     records,
   };
