@@ -584,10 +584,15 @@ async function openUpdateFromSettings(
 async function assertUpdateWindowCore(updateWindow: Locator): Promise<void> {
   await expect(updateWindow.getByRole("heading", { name: "Update available" })).toBeFocused();
   await expect(updateWindow.getByText("Current 0.2.10 -> target 0.2.11")).toBeVisible();
-  await expect(updateWindow.getByText("Workflow and state impact")).toBeVisible();
-  await expect(updateWindow.getByText("Local Knowledge", { exact: true }).first()).toBeVisible();
+  await expect(updateWindow.getByText("Follow-up after install")).toBeVisible();
   await expect(
-    updateWindow.getByText("Local knowledge reindex", { exact: true }).first(),
+    updateWindow.getByText("This update will require this after the package is installed."),
+  ).toBeVisible();
+  await expect(
+    updateWindow.getByText("Local Knowledge Reindex", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(
+    updateWindow.getByText("Vectors need reindexing before search is fully current."),
   ).toBeVisible();
   await expect(updateWindow.getByRole("button", { name: "Install update" })).toBeEnabled();
 
@@ -622,6 +627,7 @@ async function assertManualPath(updateWindow: Locator): Promise<void> {
     updateWindow.getByRole("heading", { name: "Critical update available" }),
   ).toBeVisible();
   await expect(updateWindow.getByText("Manual update path", { exact: true })).toBeVisible();
+  await updateWindow.getByRole("button", { name: "Show instructions" }).click();
   await expect(
     updateWindow.getByText("Run the approved package update outside Keiko"),
   ).toBeVisible();
@@ -629,7 +635,8 @@ async function assertManualPath(updateWindow: Locator): Promise<void> {
 }
 
 async function capture(locator: Locator, name: ArtifactName): Promise<ArtifactName> {
-  await locator.screenshot({ path: artifactPath(name) });
+  await locator.evaluate(() => document.fonts.ready.then(() => undefined));
+  await locator.screenshot({ path: artifactPath(name), animations: "disabled", caret: "hide" });
   return name;
 }
 

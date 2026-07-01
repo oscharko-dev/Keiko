@@ -29,6 +29,7 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   deriveContextProfileFromCapability,
   type ContextProfile,
+  type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
 import type { IncomingMessage } from "node:http";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -226,6 +227,14 @@ export interface UiHandlerDeps {
   // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
   // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
   readonly updateSession?: UpdateSessionManager | undefined;
+  // Issue #1687 — deterministic update preflight seam for integration tests. Production leaves this
+  // undefined so each BFF uses the default registry/GitHub-backed preflight service.
+  readonly updatePreflight?:
+    | {
+        getStartupReport(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
+        runManualCheck(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
+      }
+    | undefined;
   // Issue #1694 — content-free update compatibility, recovery snapshot, and audit state. Optional so
   // tests can inject a deterministic store; production wiring resolves KEIKO_STATE_DIR.
   readonly updateLocalState?: UpdateLocalStateManager | undefined;
@@ -394,6 +403,12 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional injected governed update session manager (tests); production creates the real
+  // state-dir-backed updater session manager.
+  readonly updateSession?: UpdateSessionManager | undefined;
+  // Optional injected governed update preflight service (tests); production uses the default
+  // registry + GitHub-backed runtime service.
+  readonly updatePreflight?: UiHandlerDeps["updatePreflight"];
   // Optional injected governed update local-state manager (tests); production resolves it from
   // KEIKO_STATE_DIR or <cwd>/.keiko without importing the CLI package.
   readonly updateLocalState?: UpdateLocalStateManager | undefined;
@@ -862,9 +877,11 @@ function buildCommandRunner(options: {
 }
 
 function buildUpdateSession(options: {
+  readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
 }): UpdateSessionManager {
+  if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
     processEnv: options.env,
     lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
@@ -1224,6 +1241,7 @@ interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
   readonly updateSession: UpdateSessionManager;
+  readonly updatePreflight: UiHandlerDeps["updatePreflight"];
   readonly updateLocalState: UpdateLocalStateManager;
   readonly updateRemediation: UpdateRemediationManager;
   readonly containerRunner: ContainerRunnerManager;
@@ -1252,13 +1270,14 @@ function buildUpdateRemediation(options: {
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
 }): UpdateRemediationManager {
   if (options.injected !== undefined) return options.injected;
+  const localKnowledge = buildLocalKnowledgeRemediation({
+    runtimeStateDir: options.runtimeStateDir,
+    runtimeConfig: options.runtimeConfig,
+    keyProvider: options.localKnowledgeKeyProvider,
+  });
   return createUpdateRemediationManager({
     localState: options.updateLocalState,
-    localKnowledge: buildLocalKnowledgeRemediation({
-      runtimeStateDir: options.runtimeStateDir,
-      runtimeConfig: options.runtimeConfig,
-      keyProvider: options.localKnowledgeKeyProvider,
-    }),
+    localKnowledge,
   });
 }
 
@@ -1290,9 +1309,11 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       liveRedactor: args.liveRedactor,
     }),
     updateSession: buildUpdateSession({
+      injected: args.options.updateSession,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
     }),
+    updatePreflight: args.options.updatePreflight,
     updateLocalState,
     updateRemediation: buildUpdateRemediation({
       injected: args.options.updateRemediation,
@@ -1565,6 +1586,14 @@ function gatewayConfigFields(
   return { config, configPresent };
 }
 
+function runtimePathFields(options: BuildHandlerDepsOptions): {
+  readonly resolvedUiDbPath: string;
+  readonly runtimeConfigPath: string;
+} {
+  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
+  return { resolvedUiDbPath, runtimeConfigPath: localGatewayConfigPath(resolvedUiDbPath) };
+}
+
 interface UiHandlerDepsAssemblyArgs {
   readonly options: BuildHandlerDepsOptions;
   readonly resolvedUiDbPath: string;
@@ -1621,8 +1650,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
-  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env),
-    runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
+  const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
   const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
   const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
     options,

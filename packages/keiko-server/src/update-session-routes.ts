@@ -149,8 +149,8 @@ export async function handleVerifyUpdateRestart(
       throw new UpdateSessionError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
     const session = guard.verifyRestart(parsed.value.targetVersion, (verified) => {
-      const remediation = deps.updateRemediation?.completeRestart(verified.targetVersion);
-      return remediation?.updateCanComplete ?? true;
+      deps.updateRemediation?.completeRestart(verified.targetVersion);
+      return deps.updateRemediation?.updateCanComplete(verified.targetVersion) ?? true;
     });
     return { status: 200, body: session };
   });

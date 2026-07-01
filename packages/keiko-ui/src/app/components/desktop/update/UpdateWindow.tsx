@@ -71,13 +71,7 @@ type LoadState =
   | { readonly status: "error"; readonly message: string };
 
 type BusyAction =
-  | "checking"
-  | "starting"
-  | "retrying"
-  | "cancelling"
-  | "restart"
-  | "remediation"
-  | undefined;
+  "checking" | "starting" | "retrying" | "cancelling" | "restart" | "remediation" | undefined;
 
 const DEFAULT_API: UpdateWindowApi = {
   fetchPreflight: fetchStartupUpdatePreflight,
@@ -112,24 +106,70 @@ async function loadRemediation(
   return api.fetchRemediationStatus();
 }
 
-function versionText(report: UpdatePreflightReport, t: I18nTranslate): string {
+function versionText(
+  report: UpdatePreflightReport,
+  t: I18nTranslate,
+  manualInstallVerified = false,
+): string {
+  if (manualInstallVerified)
+    return t("updates.versionInstalled", { version: report.currentVersion });
   const target = report.targetVersion ?? t("updates.versionUnknown");
   return t("updates.versionLine", { current: report.currentVersion, target });
+}
+
+function hasReleaseNotes(report: UpdatePreflightReport): boolean {
+  return report.patchNotes !== undefined || report.release !== undefined;
+}
+
+function patchNotesReportFor(
+  report: UpdatePreflightReport,
+  session: ReturnType<typeof sessionForDisplay>,
+  cachedReport: UpdatePreflightReport | undefined,
+): UpdatePreflightReport {
+  if (hasReleaseNotes(report)) return report;
+  if (
+    session?.phase === "succeeded" &&
+    cachedReport !== undefined &&
+    cachedReport.targetVersion === session.targetVersion &&
+    hasReleaseNotes(cachedReport)
+  ) {
+    return cachedReport;
+  }
+  return report;
+}
+
+function primaryActionText(
+  report: UpdatePreflightReport,
+  session: UpdateSessionStatus,
+  t: I18nTranslate,
+  manualInstallVerified = false,
+): string {
+  const visibleSession = sessionForDisplay(session, report);
+  if (manualInstallVerified) return t("updates.primary.installed");
+  if (visibleSession?.phase === "succeeded") return t("updates.primary.installed");
+  if (visibleSession?.phase === "cancelled") return t("updates.primary.cancelled");
+  if (visibleSession?.phase === "failed") return t("updates.primary.failed");
+  if (visibleSession?.phase === "restart-required") return t("updates.primary.restart");
+  if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
+  if (report.updateAvailable) return t("updates.primary.available");
+  return t("updates.primary.current");
 }
 
 function SummaryCard({
   report,
   session,
   remediation,
+  manualInstallVerified,
   titleRef,
 }: {
   readonly report: UpdatePreflightReport;
   readonly session: UpdateSessionStatus;
   readonly remediation: UpdateRemediationStatusReport;
+  readonly manualInstallVerified: boolean;
   readonly titleRef: RefObject<HTMLHeadingElement>;
 }): ReactNode {
   const { t } = useI18n();
-  const visibleSession = sessionForDisplay(session);
+  const visibleSession = sessionForDisplay(session, report);
   const tone = updateTone(report, visibleSession, remediation);
   return (
     <div className="upd-summary" data-tone={tone}>
@@ -139,9 +179,11 @@ function SummaryCard({
       <div>
         <p className="upd-kicker">{t("updates.window.kicker")}</p>
         <h2 id="updates-window-title" ref={titleRef} tabIndex={-1} className="upd-title">
-          {statusTitle(report, visibleSession, t)}
+          {manualInstallVerified
+            ? t("updates.status.success")
+            : statusTitle(report, visibleSession, t)}
         </h2>
-        <p className="upd-body">{versionText(report, t)}</p>
+        <p className="upd-body">{versionText(report, t, manualInstallVerified)}</p>
       </div>
     </div>
   );
@@ -157,6 +199,8 @@ function PrimaryActions({
   onRetry,
   onCancel,
   onVerifyRestart,
+  onShowManualInstructions,
+  manualInstructionsOpen,
   canVerifyRestart,
 }: {
   readonly report: UpdatePreflightReport;
@@ -168,22 +212,30 @@ function PrimaryActions({
   readonly onRetry: () => void;
   readonly onCancel: () => void;
   readonly onVerifyRestart: () => void;
+  readonly onShowManualInstructions: () => void;
+  readonly manualInstructionsOpen: boolean;
   readonly canVerifyRestart: boolean;
 }): ReactNode {
   const { t } = useI18n();
-  const visibleSession = sessionForDisplay(session);
+  const visibleSession = sessionForDisplay(session, report);
   const disabled = busy !== undefined;
   const manual = isManualUpdatePath(report, session);
   if (visibleSession?.phase === "restart-required") {
     return (
-      <button
-        type="button"
-        className="upd-primary-btn"
-        disabled={disabled || !canVerifyRestart}
-        onClick={onVerifyRestart}
-      >
-        {t("updates.action.verifyRestart")}
-      </button>
+      <div className="upd-restart-action">
+        <button
+          type="button"
+          className="upd-primary-btn"
+          aria-describedby="updates-restart-verification-help"
+          disabled={disabled || !canVerifyRestart}
+          onClick={onVerifyRestart}
+        >
+          {t("updates.action.verifyRestart")}
+        </button>
+        <span id="updates-restart-verification-help" className="upd-restart-help">
+          {t("updates.restart.verifyHelp")}
+        </span>
+      </div>
     );
   }
   if (visibleSession?.phase === "failed" && visibleSession.retryable) {
@@ -208,6 +260,20 @@ function PrimaryActions({
     ) : null;
   }
   if (manual || !report.updateAvailable || remediation.overallStatus === "manual-review-required") {
+    if (manual) {
+      return (
+        <button
+          type="button"
+          className="upd-primary-btn"
+          disabled={disabled}
+          onClick={onShowManualInstructions}
+        >
+          {manualInstructionsOpen
+            ? t("updates.action.hideInstructions")
+            : t("updates.action.showInstructions")}
+        </button>
+      );
+    }
     return (
       <button type="button" className="upd-secondary-btn" disabled={disabled} onClick={onCheck}>
         {t("updates.action.check")}
@@ -242,8 +308,10 @@ function ProgressPanel({ session }: { readonly session: ReturnType<typeof sessio
 
 function SessionOutcomePanel({
   session,
+  patchNotesReport,
 }: {
   readonly session: ReturnType<typeof sessionForDisplay>;
+  readonly patchNotesReport: UpdatePreflightReport;
 }): ReactNode {
   const { t } = useI18n();
   if (session === undefined || isSessionInProgress(session)) return null;
@@ -254,6 +322,24 @@ function SessionOutcomePanel({
     session.phase !== "cancelled"
   ) {
     return null;
+  }
+  if (session.phase === "succeeded" && hasReleaseNotes(patchNotesReport)) {
+    return (
+      <details className="upd-panel upd-outcome-details">
+        <summary className="upd-outcome-summary">
+          <div className="upd-panel-head">
+            <strong>{sessionPhaseLabel(session, t)}</strong>
+            <span>{session.message}</span>
+          </div>
+          <span className="upd-secondary-btn upd-outcome-patch-trigger">
+            {t("updates.patchNotes.summary")}
+          </span>
+        </summary>
+        <div className="upd-outcome-notes">
+          <PatchNotesContent report={patchNotesReport} />
+        </div>
+      </details>
+    );
   }
   return (
     <section
@@ -278,7 +364,7 @@ function ImpactPanel({
 }): ReactNode {
   const { t } = useI18n();
   const impacts = report.impact?.stateImpact ?? [];
-  const remediations = report.impact?.remediations ?? [];
+  if (remediation.actions.length > 0) return null;
   if (impacts.length === 0 && remediation.affectedFeatures.length === 0) return null;
   return (
     <section className="upd-panel" aria-labelledby="updates-impact-title">
@@ -290,20 +376,66 @@ function ImpactPanel({
         <ul className="upd-impact-list">
           {impacts.map((impact) => (
             <li key={`${impact.store}:${impact.remediation}`}>
-              <span className="upd-impact-store">{storeLabel(impact.store)}</span>
               <span>{impact.description}</span>
-              <span className="upd-chip">{remediationLabel(impact.remediation, t)}</span>
+              <small>{storeLabel(impact.store)}</small>
             </li>
           ))}
         </ul>
       ) : null}
-      {remediations.length > 0 ? (
-        <p className="upd-muted">
-          {t("updates.impact.required", {
-            remediation: remediations.map((entry) => remediationLabel(entry, t)).join(", "),
-          })}
-        </p>
-      ) : null}
+    </section>
+  );
+}
+
+function actionStatusOpen(action: UpdateRemediationAction): boolean {
+  return action.status === "pending" || action.status === "failed" || action.status === "deferred";
+}
+
+function actionVisible(action: UpdateRemediationAction): boolean {
+  return action.status !== "completed" && action.status !== "not-needed";
+}
+
+function remediationRunnable(session: ReturnType<typeof sessionForDisplay>): boolean {
+  return session?.phase === "restart-required" || session?.phase === "succeeded";
+}
+
+function featureForAction(
+  remediation: UpdateRemediationStatusReport,
+  action: UpdateRemediationAction,
+) {
+  return remediation.affectedFeatures.find((feature) =>
+    feature.actionIds.includes(action.actionId),
+  );
+}
+
+function PlannedRemediationPanel({
+  remediation,
+}: {
+  readonly remediation: UpdateRemediationStatusReport;
+}): ReactNode {
+  const { t } = useI18n();
+  const visibleActions = remediation.actions.filter(actionVisible);
+  if (visibleActions.length === 0) return null;
+  return (
+    <section className="upd-panel" aria-labelledby="updates-planned-remediation-title">
+      <div className="upd-panel-head">
+        <strong id="updates-planned-remediation-title">
+          {t("updates.remediation.plannedTitle")}
+        </strong>
+        <span>{t("updates.remediation.plannedBody")}</span>
+      </div>
+      {visibleActions.map((action) => {
+        const feature = featureForAction(remediation, action);
+        return (
+          <div className="upd-action" key={action.actionId}>
+            <div>
+              <div className="upd-action-title">
+                <strong>{remediationLabel(action.remediation, t)}</strong>
+              </div>
+              <small>{feature?.reason ?? action.message}</small>
+            </div>
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -321,17 +453,29 @@ function RemediationPanel({
 }): ReactNode {
   const { t } = useI18n();
   if (remediation.actions.length === 0 && remediation.affectedFeatures.length === 0) return null;
+  const visibleActions = remediation.actions.filter(actionVisible);
+  if (remediation.actions.length > 0 && visibleActions.length === 0) return null;
+  const showFeatureSummary = remediation.actions.length === 0;
+  const hasDeferredAction = visibleActions.some((action) => action.status === "deferred");
+  const showDecisionCopy =
+    report.impact?.userActionRequired === true && !remediation.updateCanComplete;
   return (
     <section className="upd-panel" aria-labelledby="updates-remediation-title">
       <div className="upd-panel-head">
-        <strong id="updates-remediation-title">{t("updates.remediation.title")}</strong>
+        <strong id="updates-remediation-title">
+          {hasDeferredAction
+            ? t("updates.remediation.deferredTitle")
+            : t("updates.remediation.title")}
+        </strong>
         <span>
-          {remediation.updateCanComplete
-            ? t("updates.remediation.canComplete")
-            : t("updates.remediation.needsAction")}
+          {hasDeferredAction
+            ? t("updates.remediation.deferredBody")
+            : remediation.updateCanComplete
+              ? t("updates.remediation.canComplete")
+              : t("updates.remediation.needsAction")}
         </span>
       </div>
-      {remediation.affectedFeatures.length > 0 ? (
+      {showFeatureSummary && remediation.affectedFeatures.length > 0 ? (
         <ul className="upd-feature-list">
           {remediation.affectedFeatures.map((feature) => (
             <li key={feature.featureId}>
@@ -342,38 +486,49 @@ function RemediationPanel({
           ))}
         </ul>
       ) : null}
-      {remediation.actions.map((action) => (
-        <div className="upd-action" key={action.actionId}>
-          <div>
-            <strong>{action.message}</strong>
-            <span>{actionStatusLabel(action.status, t)}</span>
-            {action.instructions !== undefined ? <small>{action.instructions}</small> : null}
-          </div>
-          <div className="upd-action-buttons">
-            {action.canRun ? (
-              <button
-                type="button"
-                className="upd-secondary-btn"
-                disabled={busy !== undefined}
-                onClick={() => onAction(action, "run")}
-              >
-                {t("updates.action.runRemediation")}
-              </button>
+      {visibleActions.map((action) => {
+        const feature = featureForAction(remediation, action);
+        const open = actionStatusOpen(action);
+        return (
+          <div className="upd-action" key={action.actionId}>
+            <div>
+              <div className="upd-action-title">
+                <strong>{remediationLabel(action.remediation, t)}</strong>
+                <span className="upd-chip">{actionStatusLabel(action.status, t)}</span>
+              </div>
+              <small>{feature?.reason ?? action.message}</small>
+              {action.instructions !== undefined ? <small>{action.instructions}</small> : null}
+            </div>
+            {open ? (
+              <div className="upd-action-buttons">
+                {action.canRun ? (
+                  <button
+                    type="button"
+                    className="upd-secondary-btn"
+                    disabled={busy !== undefined}
+                    onClick={() => onAction(action, "run")}
+                  >
+                    {action.status === "deferred"
+                      ? t("updates.action.runDeferred")
+                      : t("updates.action.runRemediation")}
+                  </button>
+                ) : null}
+                {action.canDefer && action.status !== "deferred" ? (
+                  <button
+                    type="button"
+                    className="upd-ghost-btn"
+                    disabled={busy !== undefined}
+                    onClick={() => onAction(action, "defer")}
+                  >
+                    {t("updates.action.defer")}
+                  </button>
+                ) : null}
+              </div>
             ) : null}
-            {action.canDefer ? (
-              <button
-                type="button"
-                className="upd-ghost-btn"
-                disabled={busy !== undefined}
-                onClick={() => onAction(action, "defer")}
-              >
-                {t("updates.action.defer")}
-              </button>
-            ) : null}
           </div>
-        </div>
-      ))}
-      {report.impact?.userActionRequired === true ? (
+        );
+      })}
+      {showDecisionCopy ? (
         <p className="upd-muted">{t("updates.remediation.userActionRequired")}</p>
       ) : null}
     </section>
@@ -383,9 +538,17 @@ function RemediationPanel({
 function ManualPath({
   report,
   session,
+  busy,
+  instructionsOpen,
+  onInstructionsOpenChange,
+  onCheck,
 }: {
   readonly report: UpdatePreflightReport;
   readonly session: UpdateSessionStatus;
+  readonly busy: BusyAction;
+  readonly instructionsOpen: boolean;
+  readonly onInstructionsOpenChange: (open: boolean) => void;
+  readonly onCheck: () => void;
 }): ReactNode {
   const { t } = useI18n();
   if (!isManualUpdatePath(report, session)) return null;
@@ -394,7 +557,31 @@ function ManualPath({
     <section className="upd-panel upd-manual" aria-labelledby="updates-manual-title">
       <div className="upd-panel-head">
         <strong id="updates-manual-title">{t("updates.manual.title")}</strong>
-        <span>{instructions}</span>
+        <span>{t("updates.manual.body")}</span>
+      </div>
+      <ol className="upd-manual-steps">
+        <li>{t("updates.manual.stepCommand")}</li>
+        <li>{t("updates.manual.stepRestart")}</li>
+        <li>{t("updates.manual.stepCheck")}</li>
+      </ol>
+      <details
+        className="upd-manual-commands"
+        open={instructionsOpen}
+        onToggle={(event) => onInstructionsOpenChange(event.currentTarget.open)}
+      >
+        <summary>{t("updates.manual.instructionsSummary")}</summary>
+        <p>{instructions}</p>
+      </details>
+      <div className="upd-manual-finish">
+        <span>{t("updates.manual.finish")}</span>
+        <button
+          type="button"
+          className="upd-secondary-btn"
+          disabled={busy !== undefined}
+          onClick={onCheck}
+        >
+          {t("updates.action.check")}
+        </button>
       </div>
       {report.release?.url !== undefined ? (
         <a className="upd-link" href={report.release.url} target="_blank" rel="noreferrer">
@@ -406,14 +593,11 @@ function ManualPath({
   );
 }
 
-function PatchNotes({ report }: { readonly report: UpdatePreflightReport }): ReactNode {
-  const { t } = useI18n();
+function PatchNotesContent({ report }: { readonly report: UpdatePreflightReport }): ReactNode {
   const notes = report.patchNotes;
-  if (notes === undefined && report.release === undefined) return null;
   const bullets = notes?.bullets ?? report.release?.notes ?? [];
   return (
-    <details className="upd-details">
-      <summary>{t("updates.patchNotes.summary")}</summary>
+    <>
       {notes?.summary !== undefined ? <p>{notes.summary}</p> : null}
       <ul>
         {bullets.map((entry) => (
@@ -423,6 +607,18 @@ function PatchNotes({ report }: { readonly report: UpdatePreflightReport }): Rea
       {notes?.details.map((entry) => (
         <p key={entry}>{entry}</p>
       ))}
+    </>
+  );
+}
+
+function PatchNotes({ report }: { readonly report: UpdatePreflightReport }): ReactNode {
+  const { t } = useI18n();
+  const notes = report.patchNotes;
+  if (notes === undefined && report.release === undefined) return null;
+  return (
+    <details className="upd-details">
+      <summary>{t("updates.patchNotes.summary")}</summary>
+      <PatchNotesContent report={report} />
     </details>
   );
 }
@@ -437,7 +633,7 @@ function TechnicalDetails({
   readonly remediation: UpdateRemediationStatusReport;
 }): ReactNode {
   const { t } = useI18n();
-  const visibleSession = sessionForDisplay(session);
+  const visibleSession = sessionForDisplay(session, report);
   return (
     <details className="upd-details">
       <summary>{t("updates.details.summary")}</summary>
@@ -484,20 +680,59 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   const { t } = useI18n();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = useState<BusyAction>();
+  const [checkFeedback, setCheckFeedback] = useState<string>();
+  const [releaseNotesReport, setReleaseNotesReport] = useState<UpdatePreflightReport>();
+  const [manualInstructionsOpen, setManualInstructionsOpen] = useState(false);
+  const [verifiedManualTargetVersion, setVerifiedManualTargetVersion] = useState<string>();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const focusedRef = useRef(false);
+  const readyStateRef = useRef<Extract<LoadState, { status: "ready" }> | undefined>(undefined);
 
   const refresh = useCallback(
     async (manual: boolean): Promise<void> => {
       setBusy(manual ? "checking" : undefined);
+      setCheckFeedback(manual ? t("updates.check.checking") : undefined);
       try {
+        const previousReady = readyStateRef.current;
+        const previousManualTarget =
+          manual &&
+          previousReady !== undefined &&
+          isManualUpdatePath(previousReady.report, previousReady.session)
+            ? previousReady.report.targetVersion
+            : undefined;
         const report = manual ? await api.checkPreflight() : await api.fetchPreflight();
         const [session, remediation] = await Promise.all([
           api.fetchSessionStatus(),
           loadRemediation(api, report),
         ]);
+        const manualInstallVerified =
+          previousManualTarget !== undefined &&
+          !report.updateAvailable &&
+          report.currentVersion === previousManualTarget;
         setState({ status: "ready", report, session, remediation });
+        if (hasReleaseNotes(report) && report.targetVersion !== undefined) {
+          setReleaseNotesReport(report);
+        }
+        if (manualInstallVerified) {
+          setVerifiedManualTargetVersion(previousManualTarget);
+          setManualInstructionsOpen(false);
+        } else if (report.updateAvailable) {
+          setVerifiedManualTargetVersion(undefined);
+        }
+        if (manual) {
+          const manualStillRequired = report.updateAvailable && isManualUpdatePath(report, session);
+          setCheckFeedback(
+            manualInstallVerified
+              ? t("updates.check.manualInstalled", { version: report.currentVersion })
+              : report.updateAvailable
+                ? manualStillRequired
+                  ? t("updates.check.manualStillRequired")
+                  : t("updates.check.available")
+                : t("updates.check.current"),
+          );
+        }
       } catch (error) {
+        setCheckFeedback(undefined);
         setState({ status: "error", message: errorMessage(error, t) });
       } finally {
         setBusy(undefined);
@@ -510,7 +745,11 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
     void refresh(false);
   }, [refresh]);
 
-  const visibleSession = state.status === "ready" ? sessionForDisplay(state.session) : undefined;
+  const visibleSession =
+    state.status === "ready" ? sessionForDisplay(state.session, state.report) : undefined;
+  useEffect(() => {
+    if (state.status === "ready") readyStateRef.current = state;
+  }, [state]);
   useEffect(() => {
     if (state.status !== "ready" || !isSessionInProgress(visibleSession)) return undefined;
     const timer = window.setInterval(() => {
@@ -525,7 +764,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
     titleRef.current?.focus();
   }, [state.status]);
 
-  const targetVersion = state.status === "ready" ? state.report.targetVersion : undefined;
+  const reportTargetVersion = state.status === "ready" ? state.report.targetVersion : undefined;
+  const actionTargetVersion = visibleSession?.targetVersion ?? reportTargetVersion;
   const releaseImpact = useMemo(
     () => (state.status === "ready" ? impactInput(state.report) : undefined),
     [state],
@@ -571,24 +811,27 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   }
 
   const { report, session, remediation } = state;
+  const manualInstallVerified =
+    verifiedManualTargetVersion !== undefined &&
+    !report.updateAvailable &&
+    report.currentVersion === verifiedManualTargetVersion;
+  const patchNotesReport = patchNotesReportFor(report, visibleSession, releaseNotesReport);
+  const outcomePatchNotesVisible =
+    visibleSession?.phase === "succeeded" && hasReleaseNotes(patchNotesReport);
+  const canRunRemediation = remediationRunnable(visibleSession);
   return (
     <section className="upd" aria-labelledby="updates-window-title">
       <SummaryCard
         report={report}
         session={session}
         remediation={remediation}
+        manualInstallVerified={manualInstallVerified}
         titleRef={titleRef}
       />
       <div className="upd-primary">
         <div>
           <strong>{t("updates.primary.title")}</strong>
-          <span>
-            {isManualUpdatePath(report, session)
-              ? t("updates.primary.manual")
-              : report.updateAvailable
-                ? t("updates.primary.available")
-                : t("updates.primary.current")}
-          </span>
+          <span>{primaryActionText(report, session, t, manualInstallVerified)}</span>
         </div>
         <PrimaryActions
           report={report}
@@ -597,40 +840,63 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           busy={busy}
           onCheck={() => void refresh(true)}
           onStart={() => {
-            if (targetVersion !== undefined) {
-              void runAndRefresh("starting", () => api.startSession({ targetVersion }));
+            if (reportTargetVersion !== undefined) {
+              void runAndRefresh("starting", () =>
+                api.startSession({ targetVersion: reportTargetVersion }),
+              );
             }
           }}
           onRetry={() => void runAndRefresh("retrying", api.retrySession)}
           onCancel={() => void runAndRefresh("cancelling", api.cancelSession)}
           onVerifyRestart={() => {
-            if (targetVersion !== undefined) {
-              void runAndRefresh("restart", () => api.verifyRestart({ targetVersion }));
+            if (actionTargetVersion !== undefined) {
+              void runAndRefresh("restart", () =>
+                api.verifyRestart({ targetVersion: actionTargetVersion }),
+              );
             }
           }}
-          canVerifyRestart={targetVersion !== undefined}
+          onShowManualInstructions={() => setManualInstructionsOpen((open) => !open)}
+          manualInstructionsOpen={manualInstructionsOpen}
+          canVerifyRestart={actionTargetVersion !== undefined}
         />
       </div>
+      {checkFeedback !== undefined ? (
+        <div className="upd-check-feedback" role="status" aria-live="polite">
+          {checkFeedback}
+        </div>
+      ) : null}
       <ProgressPanel session={visibleSession} />
-      <SessionOutcomePanel session={visibleSession} />
-      <ManualPath report={report} session={session} />
-      <ImpactPanel report={report} remediation={remediation} />
-      <RemediationPanel
+      <SessionOutcomePanel session={visibleSession} patchNotesReport={patchNotesReport} />
+      <ManualPath
         report={report}
-        remediation={remediation}
+        session={session}
         busy={busy}
-        onAction={(action, decision) => {
-          void runAndRefresh("remediation", () =>
-            api.runRemediationAction({
-              actionId: action.actionId,
-              targetVersion,
-              impact: releaseImpact,
-              decision,
-            }),
-          );
-        }}
+        instructionsOpen={manualInstructionsOpen}
+        onInstructionsOpenChange={setManualInstructionsOpen}
+        onCheck={() => void refresh(true)}
       />
-      <PatchNotes report={report} />
+      <ImpactPanel report={report} remediation={remediation} />
+      {canRunRemediation ? (
+        <RemediationPanel
+          report={report}
+          remediation={remediation}
+          busy={busy}
+          onAction={(action, decision) => {
+            if (actionTargetVersion === undefined) return;
+            void runAndRefresh("remediation", () =>
+              api.runRemediationAction({
+                actionId: action.actionId,
+                targetVersion: actionTargetVersion,
+                impact: releaseImpact,
+                decision,
+              }),
+            );
+          }}
+        />
+      ) : (
+        <PlannedRemediationPanel remediation={remediation} />
+      )}
+      {outcomePatchNotesVisible ? null : <PatchNotes report={patchNotesReport} />}
       <TechnicalDetails report={report} session={session} remediation={remediation} />
     </section>
   );

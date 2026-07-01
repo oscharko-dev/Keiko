@@ -21,7 +21,7 @@ professional English in v1 and are supplied by release-impact metadata.
 | No update       | `Keiko is up to date`, `No update is available. You can check again at any time.`                                       | Pass - clear no-action messaging.                                                              |
 | Critical update | `Critical update available` with alert treatment and visible target-version body copy.                                  | Pass - warning is textual and not color-only; no forced install language.                      |
 | Manual/blocked  | `Manual update path` plus install-mode instructions.                                                                    | Pass - avoids presenting unsupported local checkout/package-manager cases as runtime failures. |
-| Remediation     | `Workflow and state impact`, `Remediation status`, affected feature labels, and `Run action` / `Defer`.                 | Pass - names impacted state and feature before action, and makes user decision explicit.       |
+| Remediation     | `Follow-up after install`, `Follow-up action`, affected feature labels, and `Run action` / `Defer`.                    | Pass - previews required follow-up before install and exposes actions only after install.      |
 | Progress        | `Preparing update` / `Installing update` with a native progress label.                                                  | Pass - status is accessible and does not expose command logs by default.                       |
 | Restart         | `Restart required` and `I restarted Keiko`.                                                                             | Pass - separates package install from post-restart verification.                               |
 | Failure         | `Update failed`, retry when retryable, technical details collapsed.                                                     | Pass - states failure without leaking raw logs in primary copy.                                |
@@ -31,7 +31,8 @@ professional English in v1 and are supplied by release-impact metadata.
 
 - Keep `Install update` as the primary CTA for one-click-eligible updates because the surrounding copy
   states review-before-install and no automatic update occurs.
-- Keep `Run action` for remediation v1 because action rows carry the specific remediation message. If
-  future rows contain multiple action kinds in one viewport, revisit with action-specific button labels.
+- Keep `Run action` for remediation v1 because action rows carry the specific remediation message after
+  install. If future rows contain multiple action kinds in one viewport, revisit with action-specific
+  button labels.
 - Keep technical detail labels short (`Registry`, `Release metadata`, `Install mode`, `Remediation`) so
   logs remain secondary and scannable.

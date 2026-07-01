@@ -2,10 +2,10 @@
   "issue": 1300,
   "epic": 1290,
   "tool": "axe-core 4.12.0",
-  "postCssSha256": "1dcc9844133148f441e920e8734543ab8ae03a41ea9ed344952c644787791123",
+  "postCssSha256": "bb4d57273cf58d823d435a346feb87400145bcb0636348a22eefb17027e2585f",
   "run": {
-    "generatedAt": "2026-07-01T00:22:48.168Z",
-    "repoHeadSha": "62a3d0b2fd79a9bcd6d6784635787e0a93ac81b3"
+    "generatedAt": "2026-07-01T15:55:43.862Z",
+    "repoHeadSha": "cde27a3a4f1865b25ff9b5ad556bf0b70c456665"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",
@@ -792,17 +792,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -837,12 +829,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -859,9 +846,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -878,12 +863,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -918,12 +898,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -938,12 +913,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -978,12 +948,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -1088,9 +1053,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -1108,12 +1071,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -1131,9 +1089,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -1148,35 +1104,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -1203,14 +1145,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -1228,9 +1165,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -1248,17 +1183,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -1295,46 +1225,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -1363,10 +1275,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -1393,71 +1302,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -1476,9 +1351,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -1497,9 +1370,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -1519,12 +1390,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []
@@ -1558,17 +1424,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -1603,12 +1461,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -1625,9 +1478,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -1644,12 +1495,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -1684,12 +1530,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -1704,12 +1545,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -1744,12 +1580,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -1854,9 +1685,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -1874,12 +1703,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -1897,9 +1721,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -1914,35 +1736,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -1969,14 +1777,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -1994,9 +1797,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -2014,17 +1815,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -2061,46 +1857,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -2129,10 +1907,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -2159,71 +1934,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -2242,9 +1983,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -2263,9 +2002,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -2285,12 +2022,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []
@@ -2324,17 +2056,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -2369,12 +2093,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -2391,9 +2110,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -2410,12 +2127,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -2450,12 +2162,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -2470,12 +2177,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -2510,12 +2212,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -2620,9 +2317,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -2640,12 +2335,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -2663,9 +2353,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -2680,35 +2368,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -2735,14 +2409,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -2760,9 +2429,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -2780,17 +2447,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -2827,46 +2489,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -2895,10 +2539,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -2925,71 +2566,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -3008,9 +2615,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -3029,9 +2634,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -3051,12 +2654,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []
@@ -3090,17 +2688,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -3135,12 +2725,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -3157,9 +2742,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -3176,12 +2759,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -3216,12 +2794,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -3236,12 +2809,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -3276,12 +2844,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -3386,9 +2949,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -3406,12 +2967,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -3429,9 +2985,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -3446,35 +3000,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -3501,14 +3041,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -3526,9 +3061,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -3546,17 +3079,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -3593,46 +3121,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -3661,10 +3171,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -3691,71 +3198,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -3774,9 +3247,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -3795,9 +3266,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -3817,12 +3286,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []
@@ -3856,17 +3320,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -3901,12 +3357,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -3923,9 +3374,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -3942,12 +3391,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -3982,12 +3426,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -4002,12 +3441,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -4042,12 +3476,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -4152,9 +3581,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -4172,12 +3599,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -4195,9 +3617,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -4212,35 +3632,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -4267,14 +3673,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -4292,9 +3693,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -4312,17 +3711,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -4359,46 +3753,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -4427,10 +3803,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -4457,71 +3830,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -4540,9 +3879,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -4561,9 +3898,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -4583,12 +3918,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []
@@ -4622,17 +3952,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -4667,12 +3989,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -4689,9 +4006,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -4708,12 +4023,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -4748,12 +4058,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -4768,12 +4073,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -4808,12 +4108,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -4918,9 +4213,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -4938,12 +4231,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -4961,9 +4249,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -4978,35 +4264,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -5033,14 +4305,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -5058,9 +4325,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -5078,17 +4343,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -5125,46 +4385,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -5193,10 +4435,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -5223,71 +4462,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -5306,9 +4511,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -5327,9 +4530,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -5349,12 +4550,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []
@@ -5388,17 +4584,9 @@
         {
           "id": "aria-allowed-role",
           "impact": null,
-          "tags": [
-            "cat.aria",
-            "best-practice"
-          ],
+          "tags": ["cat.aria", "best-practice"],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-conditional-attr",
@@ -5433,12 +4621,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-hidden-body",
@@ -5455,9 +4638,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 1,
-          "targets": [
-            "body"
-          ]
+          "targets": ["body"]
         },
         {
           "id": "aria-hidden-focus",
@@ -5474,12 +4655,7 @@
             "RGAA-10.8.1"
           ],
           "nodes": 10,
-          "targets": [
-            ".ic",
-            ".n",
-            ".track",
-            ".bx"
-          ]
+          "targets": [".ic", ".n", ".track", ".bx"]
         },
         {
           "id": "aria-prohibited-attr",
@@ -5514,12 +4690,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-required-children",
@@ -5534,12 +4705,7 @@
             "RGAA-9.3.1"
           ],
           "nodes": 6,
-          "targets": [
-            "table",
-            "thead > tr",
-            "tbody > tr:nth-child(1)",
-            "tr:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "tbody > tr:nth-child(1)", "tr:nth-child(2)"]
         },
         {
           "id": "aria-required-parent",
@@ -5574,12 +4740,7 @@
             "RGAA-7.1.1"
           ],
           "nodes": 21,
-          "targets": [
-            "table",
-            "thead > tr",
-            "th:nth-child(1)",
-            "th:nth-child(2)"
-          ]
+          "targets": ["table", "thead > tr", "th:nth-child(1)", "th:nth-child(2)"]
         },
         {
           "id": "aria-toggle-field-name",
@@ -5684,9 +4845,7 @@
             "RGAA-12.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "color-contrast",
@@ -5704,12 +4863,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 34,
-          "targets": [
-            "b",
-            ".st",
-            ".ai-tool-body",
-            ".ai-response"
-          ]
+          "targets": ["b", ".st", ".ai-tool-body", ".ai-response"]
         },
         {
           "id": "document-title",
@@ -5727,9 +4881,7 @@
             "RGAA-8.5.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "duplicate-id-aria",
@@ -5744,35 +4896,21 @@
             "RGAA-8.2.1"
           ],
           "nodes": 1,
-          "targets": [
-            "#ev-list"
-          ]
+          "targets": ["#ev-list"]
         },
         {
           "id": "empty-heading",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "empty-table-header",
           "impact": null,
-          "tags": [
-            "cat.name-role-value",
-            "best-practice"
-          ],
+          "tags": ["cat.name-role-value", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "form-field-multiple-labels",
@@ -5799,14 +4937,9 @@
         {
           "id": "heading-order",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "h1"
-          ]
+          "targets": ["h1"]
         },
         {
           "id": "html-has-lang",
@@ -5824,9 +4957,7 @@
             "RGAA-8.3.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "html-lang-valid",
@@ -5844,17 +4975,12 @@
             "RGAA-8.4.1"
           ],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "label-title-only",
           "impact": null,
-          "tags": [
-            "cat.forms",
-            "best-practice"
-          ],
+          "tags": ["cat.forms", "best-practice"],
           "nodes": 5,
           "targets": [
             "input[type=\"checkbox\"]",
@@ -5891,46 +5017,28 @@
         {
           "id": "landmark-main-is-top-level",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-no-duplicate-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "main"
-          ]
+          "targets": ["main"]
         },
         {
           "id": "landmark-one-main",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "landmark-unique",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 7,
           "targets": [
             "main",
@@ -5959,10 +5067,7 @@
             "RGAA-6.2.1"
           ],
           "nodes": 2,
-          "targets": [
-            "a[href=\"#a\"]",
-            "a[href=\"#b\"]"
-          ]
+          "targets": ["a[href=\"#a\"]", "a[href=\"#b\"]"]
         },
         {
           "id": "nested-interactive",
@@ -5989,71 +5094,37 @@
         {
           "id": "page-has-heading-one",
           "impact": null,
-          "tags": [
-            "cat.semantics",
-            "best-practice"
-          ],
+          "tags": ["cat.semantics", "best-practice"],
           "nodes": 1,
-          "targets": [
-            "html"
-          ]
+          "targets": ["html"]
         },
         {
           "id": "region",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-9.2.1"
-          ],
+          "tags": ["cat.keyboard", "best-practice", "RGAAv4", "RGAA-9.2.1"],
           "nodes": 72,
-          "targets": [
-            "main",
-            "h1",
-            "section[aria-label=\"AI components\"]",
-            ".ai-tool"
-          ]
+          "targets": ["main", "h1", "section[aria-label=\"AI components\"]", ".ai-tool"]
         },
         {
           "id": "scope-attr-valid",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice"
-          ],
+          "tags": ["cat.tables", "best-practice"],
           "nodes": 3,
-          "targets": [
-            "th:nth-child(1)",
-            "th:nth-child(2)",
-            "th[aria-sort=\"descending\"]"
-          ]
+          "targets": ["th:nth-child(1)", "th:nth-child(2)", "th[aria-sort=\"descending\"]"]
         },
         {
           "id": "tabindex",
           "impact": null,
-          "tags": [
-            "cat.keyboard",
-            "best-practice"
-          ],
+          "tags": ["cat.keyboard", "best-practice"],
           "nodes": 1,
-          "targets": [
-            ".c-utab[role=\"tab\"]:nth-child(2)"
-          ]
+          "targets": [".c-utab[role=\"tab\"]:nth-child(2)"]
         },
         {
           "id": "table-duplicate-name",
           "impact": null,
-          "tags": [
-            "cat.tables",
-            "best-practice",
-            "RGAAv4",
-            "RGAA-5.2.1"
-          ],
+          "tags": ["cat.tables", "best-practice", "RGAAv4", "RGAA-5.2.1"],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "td-headers-attr",
@@ -6072,9 +5143,7 @@
             "RGAA-5.7.4"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         },
         {
           "id": "th-has-data-cells",
@@ -6093,9 +5162,7 @@
             "RGAA-5.7.1"
           ],
           "nodes": 1,
-          "targets": [
-            "table"
-          ]
+          "targets": ["table"]
         }
       ],
       "incomplete": [
@@ -6115,12 +5182,7 @@
             "RGAA-3.2.1"
           ],
           "nodes": 6,
-          "targets": [
-            ".ic",
-            ".bx",
-            ".chev",
-            ".c-tag"
-          ]
+          "targets": [".ic", ".bx", ".chev", ".c-tag"]
         }
       ],
       "violations": []

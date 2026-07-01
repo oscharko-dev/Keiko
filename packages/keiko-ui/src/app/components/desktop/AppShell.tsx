@@ -801,7 +801,12 @@ function AppShellInner(): ReactNode {
                 />
               )}
               <div className="stage" id="main" tabIndex={-1}>
-                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode}>
+                  <UpdateStartupNotice
+                    ready={updateStartupReady}
+                    openUpdates={openUpdatesFromStartup}
+                  />
+                </Workspace>
                 {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
                 {sourceConnectionNotice !== null && (
@@ -847,7 +852,6 @@ function AppShellInner(): ReactNode {
             )}
             {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
             {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-            <UpdateStartupNotice ready={updateStartupReady} openUpdates={openUpdatesFromStartup} />
             <InstallBanner />
           </div>
         </WsContext.Provider>
