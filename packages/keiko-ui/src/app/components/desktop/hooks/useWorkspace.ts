@@ -52,7 +52,7 @@ const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
 const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
 const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
-const PAN_CAMERA_SMOOTHNESS_SCALE = 0.65;
+const DIRECT_PAN_SMOOTHNESS_SCALE = 0;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -530,7 +530,7 @@ function usePanZoom({
       const delta = normalizeWheelDelta(e);
       queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
         minDurationMs: 0,
-        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+        smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -577,7 +577,7 @@ function usePanZoom({
     (dx: number, dy: number): void =>
       queueView((v) => ({ ...v, x: v.x + dx, y: v.y + dy }), {
         minDurationMs: 0,
-        smoothnessScale: PAN_CAMERA_SMOOTHNESS_SCALE,
+        smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       }),
     [queueView],
   );
@@ -991,11 +991,6 @@ interface UseFitMaximizedArgs {
 // window entirely off-screen with no visible recovery path (audit C132).
 export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow {
   if (w.max) return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
-  if (vp.w < 520 || vp.h < 420) {
-    const x = vp.x + 8;
-    const y = vp.y + 8;
-    return x === w.x && y === w.y ? w : { ...w, x, y };
-  }
   const x = Math.max(vp.x - (w.w - 120), Math.min(vp.x + vp.w - 120, w.x));
   const y = Math.max(vp.y, Math.min(vp.y + vp.h - 38, w.y));
   return x === w.x && y === w.y ? w : { ...w, x, y };
