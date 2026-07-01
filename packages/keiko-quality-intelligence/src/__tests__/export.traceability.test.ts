@@ -22,29 +22,29 @@ const rows: readonly QualityIntelligenceTraceabilityRow[] = [
 ];
 
 describe("adaptToTraceabilityCsv", () => {
-  it("emits a requirements->tests section, sorted by atom id", () => {
+  it("emits one normalised table sorted by atom id", () => {
     const csv = adaptToTraceabilityCsv(rows);
     const lines = csv.trimEnd().split("\r\n");
-    expect(lines[0]).toContain("Requirements to tests");
-    expect(lines[1]).toContain("Requirement ID");
+    expect(lines[0]).toContain("RecordType,Requirement ID");
     // atom-1 sorts before atom-2.
-    expect(lines[2]).toContain("atom-1");
-    expect(lines[3]).toContain("atom-2");
+    expect(lines[1]).toContain("atom-1");
+    expect(csv).toContain("atom-2");
+    expect(csv).not.toContain("Requirements to tests");
+    expect(csv).not.toContain("Tests to requirements");
   });
 
-  it("emits a test->requirements (reverse) section that inverts the matrix", () => {
+  it("emits test-to-requirement records that invert the matrix", () => {
     const csv = adaptToTraceabilityCsv(rows);
-    expect(csv).toContain("Tests to requirements");
-    expect(csv).toContain("Test ID,Test Title,Requirements Covered,Requirement Count");
     // tc-1 and tc-2 each cover atom-1; the title cell falls back to an em-dash without a lookup.
-    expect(csv).toMatch(/tc-1,—,atom-1,1/u);
-    expect(csv).toMatch(/tc-2,—,atom-1,1/u);
+    expect(csv).toMatch(/test-to-requirement,atom-1,—,covered,"0,90",tc-1,—/u);
+    expect(csv).toMatch(/test-to-requirement,atom-1,—,covered,"0,90",tc-2,—/u);
   });
 
-  it("reports covering test ids and the test count", () => {
+  it("reports covering test ids and decimal-comma confidence", () => {
     const csv = adaptToTraceabilityCsv(rows);
-    expect(csv).toContain("tc-1 ; tc-2");
-    expect(csv).toMatch(/atom-1.*covered.*0\.90/u);
+    expect(csv).toContain('requirement-to-test,atom-1,—,covered,"0,90",tc-1,—');
+    expect(csv).toContain('requirement-to-test,atom-1,—,covered,"0,90",tc-2,—');
+    expect(csv).not.toContain("0.90");
   });
 
   it("is deterministic: identical input yields byte-identical output", () => {
@@ -118,7 +118,7 @@ describe("traceability readability (#790)", () => {
     expect(csv).toContain("Lock the account after five failed logins.");
     expect(csv).toContain("Verify lockout engages on the fifth failed login");
     // The legacy row degrades to the em-dash placeholder, never to a crash or an empty shift.
-    expect(csv).toMatch(/atom-2,—,uncovered/u);
+    expect(csv).toMatch(/requirement-to-test,atom-2,—,uncovered,"0,00",—,—/u);
   });
 
   it("Markdown: emits the excerpt and title columns with em-dash fallbacks", () => {
@@ -192,23 +192,18 @@ describe("T3: all-uncovered run emits placeholder in Tests→Requirements sectio
 });
 
 // ---------------------------------------------------------------------------
-// T4 — CSV blank-line separator between the two sections (cheap invariant)
+// T4 — CSV single-table invariant
 // ---------------------------------------------------------------------------
-// The blank-line separator (\r\n) between Requirements→Tests and
-// Tests→Requirements sections must be present so tools that consume the CSV
-// can split the two logical tables.
 
-describe("T4: CSV contains blank-line separator between sections", () => {
-  it("contains a bare \\r\\n separator between sections", () => {
+describe("T4: CSV contains a single normalised table", () => {
+  it("contains no blank section separator", () => {
     const csv = adaptToTraceabilityCsv(rows);
-    expect(csv).toContain("\r\n\r\n");
+    expect(csv).not.toContain("\r\n\r\n");
   });
 
-  it("blank separator appears between Requirements and Tests sections", () => {
+  it("uses RecordType values for both logical directions", () => {
     const csv = adaptToTraceabilityCsv(rows);
-    const reqIdx = csv.indexOf("Requirements to tests");
-    const testsIdx = csv.indexOf("Tests to requirements");
-    const between = csv.slice(reqIdx, testsIdx);
-    expect(between).toContain("\r\n\r\n");
+    expect(csv).toContain("requirement-to-test");
+    expect(csv).toContain("test-to-requirement");
   });
 });

@@ -91,6 +91,7 @@ function chatCapability(modelId: string): ModelCapability {
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    supportsResponseFormat: true,
     supportsImageInput: false,
     supportsDocumentInput: false,
     workflowEligible: true,

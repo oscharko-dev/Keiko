@@ -4,13 +4,13 @@
 // QI run against current source fingerprints to classify each test-case candidate as fresh or
 // stale. A candidate is stale on ANY of its source envelopes changing (hash differs → "source-changed")
 // or disappearing from the current scan (envelope absent → "source-removed"). The removed case takes
-// precedence over changed. Candidates with no resolvable envelope (unknown atoms) are treated as
-// stale to prevent silently keeping invalid tests.
+// precedence over changed. Candidates with no provenance or no resolvable envelope are treated as
+// stale without pretending that a concrete source disappeared.
 
 /** A reason why a single candidate is stale. */
 export interface StalenessReason {
   readonly candidateId: string;
-  readonly reason: "source-changed" | "source-removed";
+  readonly reason: "source-changed" | "source-removed" | "unknown-provenance" | "unknown-source";
   readonly envelopeId: string;
 }
 
@@ -374,13 +374,13 @@ function classifyCandidateWithAtomFingerprints(
   ctx: ClassifyContext,
 ): StalenessReason | null {
   if (candidate.derivedFromAtomIds.length === 0) {
-    return staleReason(candidate.id, "source-removed", UNKNOWN_ENVELOPE);
+    return staleReason(candidate.id, "unknown-provenance", UNKNOWN_ENVELOPE);
   }
   let changedEnvelopeId: string | undefined;
   for (const atomId of candidate.derivedFromAtomIds) {
     const oldAtom = ctx.oldAtoms.get(atomId);
     if (oldAtom === undefined) {
-      return staleReason(candidate.id, "source-changed", UNKNOWN_ENVELOPE);
+      return staleReason(candidate.id, "unknown-source", UNKNOWN_ENVELOPE);
     }
     const currentAtom = ctx.currentAtoms.get(atomId);
     if (currentAtom !== undefined) {
@@ -441,7 +441,7 @@ function classifyEnvelopeLevelCandidate(
 /**
  * Classify ONE candidate. Returns the dominant staleness reason, or null when fresh.
  * Removed (envelope gone from the current scan) takes precedence over changed (hash differs);
- * an unresolvable atom is treated as changed so an invalid test is never silently kept fresh.
+ * unresolvable provenance stays stale without being mislabeled as a concrete source deletion.
  */
 function classifyCandidate(
   candidate: { readonly id: string; readonly derivedFromAtomIds: readonly string[] },
@@ -454,10 +454,10 @@ function classifyCandidate(
     return classifyCandidateWithAtomFingerprints(candidate, ctx);
   }
   if (candidate.derivedFromAtomIds.length === 0) {
-    return staleReason(candidate.id, "source-removed", UNKNOWN_ENVELOPE);
+    return staleReason(candidate.id, "unknown-provenance", UNKNOWN_ENVELOPE);
   }
   if (candidate.derivedFromAtomIds.some((atomId) => !ctx.atomToEnvelope.has(atomId))) {
-    return staleReason(candidate.id, "source-changed", UNKNOWN_ENVELOPE);
+    return staleReason(candidate.id, "unknown-source", UNKNOWN_ENVELOPE);
   }
   return classifyEnvelopeLevelCandidate(
     candidate.id,

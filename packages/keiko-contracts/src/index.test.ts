@@ -57,6 +57,9 @@ import {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
   normalizePdfCitationPreviewMarkerIndex,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  validateGatewaySamplingParameters,
 } from "./index.js";
 import type {
   ConnectedContextPack,
@@ -125,6 +128,7 @@ import type {
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
+  GatewayRequest,
   GitDeliveryActionEnvelope,
   GitDeliveryResolvedInputs,
   GitDeliveryConstraint,
@@ -181,6 +185,36 @@ describe("keiko-contracts package surface", () => {
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
     expect(HARNESS_CODES.LIMIT_ITERATIONS).toBe("HARNESS_LIMIT_ITERATIONS");
+  });
+
+  it("accepts legacy gateway requests without sampling parameters", () => {
+    const request: GatewayRequest = {
+      modelId: "plain-chat",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    expect(isValidGatewaySamplingParameters(request)).toBe(true);
+    expect(validateGatewaySamplingParameters(request)).toEqual([]);
+  });
+
+  it("accepts deterministic gateway sampling parameters", () => {
+    const request: GatewayRequest = {
+      modelId: "deterministic-chat",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0,
+      topP: 1,
+    };
+    expect(isValidGatewaySamplingParameters(request)).toBe(true);
+    expect(() => {
+      assertValidGatewaySamplingParameters(request);
+    }).not.toThrow();
+  });
+
+  it("rejects invalid gateway sampling parameters", () => {
+    const issues = validateGatewaySamplingParameters({ temperature: -0.1, topP: 1.1 });
+    expect(issues.map((issue) => issue.parameter)).toEqual(["temperature", "topP"]);
+    expect(() => {
+      assertValidGatewaySamplingParameters({ temperature: Number.NaN });
+    }).toThrow(RangeError);
   });
 
   it("DEFAULT_LIMITS.maxIterations is 10", () => {

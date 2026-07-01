@@ -58,6 +58,41 @@ const PROMPT_INJECTION_PATTERNS: readonly InjectionPattern[] = [
     pattern:
       /(?:reveal|print|show|leak|exfiltrate) (?:the |your |any )?(?:api[\s-]?key|secret|password|token)s?/iu,
   },
+  {
+    name: "de-ignore-previous-instructions",
+    pattern:
+      /ignoriere\s+(?:alle\s+|die\s+)?(?:bisherigen|vorherigen|obigen)?\s*(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
+  },
+  {
+    name: "de-forget-previous-instructions",
+    pattern:
+      /vergiss\s+(?:alle\s+|die\s+)?(?:bisherigen|vorherigen|obigen)?\s*(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
+  },
+  {
+    name: "de-disregard-previous-instructions",
+    pattern:
+      /missachte\s+(?:alle\s+|die\s+)?(?:bisherigen|vorherigen|obigen)?\s*(?:anweisungen|instruktionen|regeln|vorgaben)/iu,
+  },
+  {
+    name: "de-override-system-prompt",
+    pattern: /(?:ue|ü)berschreibe\s+(?:den\s+)?(?:system[\s-]*prompt|die\s+anweisungen)/iu,
+  },
+  {
+    name: "de-you-are-now-jailbreak",
+    pattern: /du\s+bist\s+jetzt/iu,
+  },
+  {
+    name: "de-reveal-system-prompt",
+    pattern: /gib\s+(?:den\s+|die\s+)?system[\s-]*prompt\s+aus/iu,
+  },
+  {
+    name: "de-system-role-injection",
+    pattern: /(^|[\n\r])\s*systemnachricht\s*:/iu,
+  },
+  {
+    name: "de-developer-role-injection",
+    pattern: /(^|[\n\r])\s*entwicklernachricht\s*:/iu,
+  },
 ];
 
 /** Number of patterns in the injection corpus. Useful for tests/diagnostics. */

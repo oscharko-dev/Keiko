@@ -30,6 +30,7 @@ import {
   deriveContextProfileFromCapability,
   type ContextProfile,
 } from "@oscharko-dev/keiko-contracts";
+import type { IncomingMessage } from "node:http";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -159,6 +160,17 @@ export interface MemoryAuthorizationContext {
   readonly authorizedScopes: () => readonly MemoryScope[];
 }
 
+export interface QualityIntelligenceReviewPrincipal {
+  readonly actorId: string;
+  readonly displayLabel: string;
+  readonly source?: string;
+  readonly kind?: "human" | "system";
+}
+
+export type QualityIntelligenceReviewPrincipalResolver = (
+  req: IncomingMessage,
+) => QualityIntelligenceReviewPrincipal;
+
 export interface RuntimeGatewayConfig {
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
@@ -234,6 +246,10 @@ export interface UiHandlerDeps {
   // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
   // deployments must inject the authenticated principal's reviewer id and authorized scopes.
   readonly memoryAuthorization?: MemoryAuthorizationContext | undefined;
+  // Server-authoritative principal for Quality Intelligence review governance. The browser may send
+  // a display label, but review identity is resolved here (or by the local loopback fallback).
+  readonly qualityIntelligenceReviewPrincipal?:
+    QualityIntelligenceReviewPrincipalResolver | undefined;
   // Issue #208 — explicit, bounded in-memory consolidation job registry for MemoriaViva polling.
   readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config

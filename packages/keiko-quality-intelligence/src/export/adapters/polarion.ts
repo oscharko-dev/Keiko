@@ -20,6 +20,8 @@ export const POLARION_CSV_HEADERS: readonly string[] = Object.freeze([
   "Severity",
   "Description",
   "TestSteps",
+  "Tags",
+  "Status",
 ]);
 
 const mapSeverity = (priority: QualityIntelligenceTestCaseCandidate["priority"]): string => {
@@ -47,6 +49,9 @@ const buildDescription = (candidate: QualityIntelligenceTestCaseCandidate): stri
   return parts.join(" || ");
 };
 
+const buildTags = (candidate: QualityIntelligenceTestCaseCandidate): string =>
+  [candidate.riskClass, ...candidate.tags].join(" ");
+
 export function adaptToPolarion(
   bundle: QualityIntelligenceExportBundle,
   candidates: readonly QualityIntelligenceTestCaseCandidate[],
@@ -73,6 +78,8 @@ export function adaptToPolarion(
       mapSeverity(candidate.priority),
       buildDescription(candidate),
       candidate.steps.join(" ; "),
+      buildTags(candidate),
+      candidate.status,
     ]);
   }
   return body;

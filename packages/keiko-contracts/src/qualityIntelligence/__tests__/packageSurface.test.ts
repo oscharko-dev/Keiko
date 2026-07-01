@@ -21,6 +21,7 @@ const requiredValueExports: readonly string[] = [
   "QUALITY_INTELLIGENCE_TEST_CASE_STATUSES",
   "QUALITY_INTELLIGENCE_COVERAGE_KINDS",
   "QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS",
+  "QUALITY_INTELLIGENCE_REQUIREMENT_QUALITY_CATEGORIES",
   "QUALITY_INTELLIGENCE_SEVERITIES",
   "QUALITY_INTELLIGENCE_SEVERITY_RANK",
   "TEST_QUALITY_RUBRIC_DIMENSIONS",
@@ -115,6 +116,12 @@ describe("QI module barrel — value exports", () => {
       type: "object",
       additionalProperties: false,
       required: ["dimensions", "overallRationale"],
+      properties: {
+        dimensions: {
+          minItems: 4,
+          maxItems: 4,
+        },
+      },
     });
   });
 

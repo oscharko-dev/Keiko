@@ -125,6 +125,51 @@ export const normaliseCandidateText = (value: string | undefined): string => {
 };
 
 /**
+ * Comparison-only German case fold. This is deliberately NOT used for value-bearing fields:
+ * it exists for equivalence keys and lexical heuristics where "Straße" and "Strasse" must
+ * compare identically without mutating the human-readable source/candidate text.
+ */
+export const normaliseGermanComparisonText = (value: string | undefined): string =>
+  normaliseCandidateText(value).toLowerCase().replace(/ß/gu, "ss");
+
+/**
+ * Keyword-matching fold layered on top of the comparison fold. Umlauts are mapped to their
+ * ASCII transliterations so German source text and ASCII fixtures ("Überweisung"/"Ueberweisung")
+ * hit the same deterministic lexica.
+ */
+export const normaliseGermanKeywordText = (value: string | undefined): string =>
+  normaliseGermanComparisonText(value)
+    .replace(/ä/gu, "ae")
+    .replace(/ö/gu, "oe")
+    .replace(/ü/gu, "ue");
+
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const KEYWORD_PART_SEPARATOR = /[\s-]+/u;
+const KEYWORD_BOUNDARY = "[^\\p{L}\\p{N}]";
+
+/**
+ * Boundary-aware keyword test over the German keyword fold. Hyphens and whitespace are equivalent
+ * inside multi-part keywords, while surrounding letters/digits must not be part of the match.
+ */
+export const containsNormalisedKeyword = (text: string, keyword: string): boolean => {
+  const normalisedText = normaliseGermanKeywordText(text);
+  const normalisedKeyword = normaliseGermanKeywordText(keyword);
+  if (normalisedText.length === 0 || normalisedKeyword.length === 0) {
+    return false;
+  }
+  const parts = normalisedKeyword.split(KEYWORD_PART_SEPARATOR).filter((part) => part.length > 0);
+  if (parts.length === 0) {
+    return false;
+  }
+  const keywordPattern = parts.map(escapeRegExp).join("[\\s-]+");
+  return new RegExp(
+    `(?:^|${KEYWORD_BOUNDARY})${keywordPattern}(?=$|${KEYWORD_BOUNDARY})`,
+    "u",
+  ).test(normalisedText);
+};
+
+/**
  * Returns a stable, lexicographic, NFKC-normalised copy of the supplied
  * fragments. Equal fragments after normalisation collapse to a single entry.
  * Used by deduplication and canonicalisation routines.
@@ -132,7 +177,7 @@ export const normaliseCandidateText = (value: string | undefined): string => {
 export const canonicaliseFragmentList = (fragments: readonly string[]): readonly string[] => {
   const seen = new Set<string>();
   for (const fragment of fragments) {
-    const normalised = normaliseText(fragment);
+    const normalised = normaliseCandidateText(fragment);
     if (normalised.length === 0) {
       continue;
     }
