@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 import { WorkspaceNotFoundError } from "./errors.js";
@@ -18,6 +18,12 @@ afterEach(() => {
 
 function writePkg(root: string, body: unknown): void {
   writeFileSync(join(root, "package.json"), JSON.stringify(body), "utf8");
+}
+
+function writeRel(root: string, relativePath: string, content = ""): void {
+  const absolutePath = join(root, relativePath);
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, content, "utf8");
 }
 
 describe("detectWorkspace", () => {
@@ -72,6 +78,39 @@ describe("detectWorkspace", () => {
     writePkg(dir, { name: "demo" });
     writeFileSync(join(dir, "tsconfig.json"), "{}", "utf8");
     expect(detectWorkspace(dir).languages).toContain("typescript");
+  });
+
+  it("detects a pure Maven Java workspace without falling back to JavaScript", () => {
+    writeRel(dir, "pom.xml", "<project />\n");
+    writeRel(dir, "src/main/java/com/acme/App.java", "class App {}\n");
+    const info = detectWorkspace(join(dir, "src/main/java/com/acme"));
+
+    expect(info.root).toBe(dir);
+    expect(info.languages).toContain("java");
+    expect(info.languages).not.toContain("javascript");
+    expect(info.languages).not.toContain("typescript");
+  });
+
+  it("detects a Gradle Java workspace from Java source extensions", () => {
+    writeRel(dir, "build.gradle", "plugins { id 'java' }\n");
+    writeRel(dir, "src/main/java/com/acme/App.java", "class App {}\n");
+    const info = detectWorkspace(dir);
+
+    expect(info.languages).toContain("java");
+    expect(info.languages).not.toContain("javascript");
+  });
+
+  it.each([
+    ["Kotlin", "build.gradle.kts", "src/main/kotlin/App.kt", "kotlin"],
+    ["Python", "pyproject.toml", "src/app.py", "python"],
+    ["Go", "go.mod", "cmd/api/main.go", "go"],
+    ["Rust", "Cargo.toml", "src/lib.rs", "rust"],
+    ["C#", "Service.csproj", "Program.cs", "csharp"],
+  ] as const)("detects %s from registered manifests and source extensions", (_label, manifest, source, language) => {
+    writeRel(dir, manifest, "");
+    writeRel(dir, source, "");
+
+    expect(detectWorkspace(dir).languages).toContain(language);
   });
 
   it("reads .gitignore lines", () => {

@@ -101,6 +101,7 @@ export {
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
   DEFAULT_CONTEXT_REQUEST,
+  WORKSPACE_LANGUAGES,
 } from "./workspace.js";
 
 // ─── Editor session (Issue #1197) ─────────────────────────────────────────────────

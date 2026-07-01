@@ -26,4 +26,5 @@ export {
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
   DEFAULT_CONTEXT_REQUEST,
+  WORKSPACE_LANGUAGES,
 } from "@oscharko-dev/keiko-contracts";

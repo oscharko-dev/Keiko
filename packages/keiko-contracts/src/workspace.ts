@@ -5,7 +5,18 @@
 
 // ─── Detected workspace ─────────────────────────────────────────────────────────
 
-export type WorkspaceLanguage = "typescript" | "javascript";
+export const WORKSPACE_LANGUAGES = [
+  "typescript",
+  "javascript",
+  "java",
+  "kotlin",
+  "python",
+  "go",
+  "rust",
+  "csharp",
+] as const;
+
+export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
 export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
 

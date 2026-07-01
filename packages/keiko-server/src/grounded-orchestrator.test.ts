@@ -1572,6 +1572,11 @@ describe("isSymbolDefinitionPath", () => {
     );
     expect(isSymbolDefinitionPath("src/windowFrame.ts", "WindowFrame")).toBe(true);
     expect(isSymbolDefinitionPath("a/b/Foo.vue", "foo")).toBe(true);
+    expect(isSymbolDefinitionPath("src/main/java/com/acme/PaymentService.java", "PaymentService")).toBe(
+      true,
+    );
+    expect(isSymbolDefinitionPath("app/payment_service.py", "payment_service")).toBe(true);
+    expect(isSymbolDefinitionPath("cmd/api/payment_service.go", "payment_service")).toBe(true);
   });
 
   it("rejects co-named spec/story/non-code files the broad `**/term.*` glob over-matches", () => {
@@ -1580,5 +1585,8 @@ describe("isSymbolDefinitionPath", () => {
     expect(isSymbolDefinitionPath("src/PaymentService.stories.tsx", "PaymentService")).toBe(false);
     expect(isSymbolDefinitionPath("docs/PaymentService.md", "PaymentService")).toBe(false);
     expect(isSymbolDefinitionPath("src/PaymentService.d.ts", "PaymentService")).toBe(false);
+    expect(isSymbolDefinitionPath("src/test/java/com/acme/PaymentServiceTest.java", "PaymentService")).toBe(
+      false,
+    );
   });
 });

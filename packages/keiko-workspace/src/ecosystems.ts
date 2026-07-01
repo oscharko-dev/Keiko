@@ -24,6 +24,8 @@
 //   * GENERATED MARKERS are WHOLE-SEGMENT or ANCHORED-SUFFIX only — never a bare substring — so a
 //     hand-authored `src/builder.ts` is not mistaken for a `build/` artifact.
 
+import type { WorkspaceLanguage } from "./types.js";
+
 export type EcosystemId =
   | "java"
   | "kotlin"
@@ -1156,6 +1158,59 @@ export function isEcosystemSourceFile(scopePath: string): boolean {
     return false;
   }
   return ECOSYSTEM_SOURCE_EXTENSIONS.has(name.slice(dot + 1));
+}
+
+const WORKSPACE_LANGUAGE_BY_ECOSYSTEM: Partial<Record<EcosystemId, WorkspaceLanguage>> = {
+  bun: "javascript",
+  deno: "typescript",
+  dotnet: "csharp",
+  go: "go",
+  java: "java",
+  javascript: "javascript",
+  kotlin: "kotlin",
+  maven: "java",
+  node: "javascript",
+  python: "python",
+  rust: "rust",
+  typescript: "typescript",
+};
+
+const WORKSPACE_LANGUAGE_BY_SOURCE_EXTENSION: ReadonlyMap<string, WorkspaceLanguage> = new Map([
+  ["cjs", "javascript"],
+  ["cs", "csharp"],
+  ["cts", "typescript"],
+  ["go", "go"],
+  ["java", "java"],
+  ["js", "javascript"],
+  ["jsx", "javascript"],
+  ["kt", "kotlin"],
+  ["kts", "kotlin"],
+  ["mjs", "javascript"],
+  ["mts", "typescript"],
+  ["py", "python"],
+  ["pyi", "python"],
+  ["rs", "rust"],
+  ["ts", "typescript"],
+  ["tsx", "typescript"],
+]);
+
+export function workspaceLanguageForEcosystem(
+  ecosystem: EcosystemId | undefined,
+): WorkspaceLanguage | undefined {
+  return ecosystem === undefined ? undefined : WORKSPACE_LANGUAGE_BY_ECOSYSTEM[ecosystem];
+}
+
+export function workspaceLanguageForPath(scopePath: string): WorkspaceLanguage | undefined {
+  const metadataLanguage = workspaceLanguageForEcosystem(canonicalMetadataEcosystem(scopePath));
+  if (metadataLanguage !== undefined) {
+    return metadataLanguage;
+  }
+  const name = basenameLc(scopePath);
+  const dot = name.lastIndexOf(".");
+  if (dot <= 0 || !isEcosystemSourceFile(scopePath)) {
+    return undefined;
+  }
+  return WORKSPACE_LANGUAGE_BY_SOURCE_EXTENSION.get(name.slice(dot + 1));
 }
 
 // True for a generated/vendored artifact, detected by WHOLE path segment or ANCHORED basename
