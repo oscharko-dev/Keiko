@@ -1,0 +1,53 @@
+{
+  "issue": 1696,
+  "verdict": "PASS",
+  "tool": "axe-core 4.12.1",
+  "cssSha256": "1dcc9844133148f441e920e8734543ab8ae03a41ea9ed344952c644787791123",
+  "gate": "zero serious/critical axe violations across update window modes, startup notice, and responsive manual path",
+  "captures": [
+    {
+      "file": "01-update-window-dark.png",
+      "violations": []
+    },
+    {
+      "file": "02-update-window-light.png",
+      "violations": []
+    },
+    {
+      "file": "03-update-window-dark-high-contrast.png",
+      "violations": []
+    },
+    {
+      "file": "04-update-window-light-high-contrast.png",
+      "violations": []
+    },
+    {
+      "file": "05-update-window-prefers-contrast.png",
+      "violations": []
+    },
+    {
+      "file": "06-update-window-forced-colors.png",
+      "violations": []
+    },
+    {
+      "file": "07-update-window-reduced-motion.png",
+      "violations": []
+    },
+    {
+      "file": "08-startup-notice-critical.png",
+      "violations": []
+    },
+    {
+      "file": "10-responsive-manual-path.png",
+      "violations": []
+    }
+  ],
+  "deterministicChecks": {
+    "titleFocus": true,
+    "criticalNoticeUsesAlert": true,
+    "progressHasNativeProgressElement": true,
+    "collapsedDetailsUseNativeDetails": true,
+    "criticalAndManualStatesAreNotColorOnly": true,
+    "keyboardReachableEntrypoints": true
+  }
+}

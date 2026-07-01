@@ -105,6 +105,19 @@ Clearly define what is in scope. Remember: no implementation happens without an 
 
 List items that are explicitly not part of this issue. Use follow-up issues for deferred scope.
 
+## Update Impact
+
+Complete this section for every release-impacting change. Use `Not release-impacting` only when the change has no observable UX, reliability, performance, security, installation, update, state, or compatibility effect.
+
+- Release-note category: `critical-security | update-notes | state-or-compatibility-changes | new-additions | improvements | fixes | ui-polish | internal-only | not-release-impacting`.
+- Priority: `critical | high | normal | low | internal`.
+- User-visible change:
+- Release-note bullet:
+- Supported-from versions:
+- Affected state stores:
+- User action required and remediation:
+- Internal-only rationale, if applicable:
+
 ## Deliverables
 
 - [ ] Deliverable 1

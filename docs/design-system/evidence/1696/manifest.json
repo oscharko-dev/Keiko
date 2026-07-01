@@ -1,0 +1,34 @@
+{
+  "issue": "#1696",
+  "epic": "#1687",
+  "generatedAt": "2026-06-30T17:11:30.507Z",
+  "command": "npm run test:e2e:update-ui-1696",
+  "receiptCommand": ".keiko-scripts/ui-verify-receipt.sh 1696 -- npx playwright test --config tests/e2e/config/playwright.issue-1696-update-ui.config.ts --project=chromium",
+  "artifacts": [
+    "01-update-window-dark.png",
+    "02-update-window-light.png",
+    "03-update-window-dark-high-contrast.png",
+    "04-update-window-light-high-contrast.png",
+    "05-update-window-prefers-contrast.png",
+    "06-update-window-forced-colors.png",
+    "07-update-window-reduced-motion.png",
+    "08-startup-notice-critical.png",
+    "09-settings-entrypoint.png",
+    "10-responsive-manual-path.png",
+    "11-progress-state.png",
+    "update-experience-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ],
+  "routeLedger": {
+    "updatePreflightGets": 15,
+    "updatePreflightChecks": 0,
+    "sessionStarts": 1,
+    "remediationActions": 0
+  },
+  "notes": [
+    "Packaged CLI UI renders the real Settings panel, startup notice, WindowsRegistry, and UpdateWindow.",
+    "Only /api/update/* routes are mocked; the shell, registry, theme, i18n, and focus behavior are real.",
+    "Update window is transient and cannot be seeded directly through keiko.workspace.v4; evidence opens it from Settings/startup."
+  ]
+}

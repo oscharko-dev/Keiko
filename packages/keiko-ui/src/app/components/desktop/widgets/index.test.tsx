@@ -98,7 +98,16 @@ vi.mock("./panels/NotificationsPanel", () => ({
 vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>ResourcesPanel</div> }));
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
 vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
-vi.mock("./panels/SettingsPanel", () => ({ SettingsPanel: () => <div>SettingsPanel</div> }));
+vi.mock("./panels/SettingsPanel", () => ({
+  SettingsPanel: ({ openUpdatesWindow }: { readonly openUpdatesWindow?: () => void }) => (
+    <button type="button" data-testid="settings-panel" onClick={openUpdatesWindow}>
+      SettingsPanel
+    </button>
+  ),
+}));
+vi.mock("../update/UpdateWindow", () => ({
+  UpdateWindow: () => <div data-testid="update-window">UpdateWindow</div>,
+}));
 
 vi.mock("./cards/FilesWidget", () => ({
   FilesWidget: ({
@@ -523,6 +532,13 @@ describe("workspace widget renderer registry", () => {
     expect(screen.getByTestId("prompt-enhancer-panel")).toHaveTextContent(
       "/repo:src/app.ts:/repo|/docs",
     );
+
+    view.rerender(<>{WIN_TYPES.settings.render({}, ctx)}</>);
+    fireEvent.click(screen.getByTestId("settings-panel"));
+    expect(ctx.openWindow).toHaveBeenCalledWith("updates", { entrypoint: "settings" });
+
+    view.rerender(<>{WIN_TYPES.updates.render({}, ctx)}</>);
+    expect(screen.getByTestId("update-window")).toHaveTextContent("UpdateWindow");
   });
 
   it("maps the runtime hub into existing runtime and governed delivery windows", () => {

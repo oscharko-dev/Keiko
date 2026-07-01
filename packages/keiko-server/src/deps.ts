@@ -27,7 +27,7 @@ import { DEFAULT_CONTEXT_PROFILE, type ContextProfile } from "@oscharko-dev/keik
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import {
@@ -40,6 +40,20 @@ import {
 } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
+import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
+import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
+import {
+  createUpdateLocalStateManager,
+  type UpdateLocalStateManager,
+} from "./update-local-state.js";
+import {
+  createUpdateRemediationManager,
+  type UpdateRemediationManager,
+} from "./update-remediation.js";
+import {
+  createLocalKnowledgeRemediationPort,
+  type LocalKnowledgeRemediationPort,
+} from "./local-knowledge-remediation.js";
 import {
   createContainerRunnerManager,
   type ContainerRunnerManager,
@@ -185,6 +199,15 @@ export interface UiHandlerDeps {
   // exercise /api/commands/* keep their fixtures unchanged; production wiring creates one per BFF and
   // injects the UI store for the projectId → workspaceRoot lookup plus package-script discovery.
   readonly commandRunner?: CommandRunnerManager | undefined;
+  // Issue #1693 — governed self-update session runner. Optional so legacy tests that do not exercise
+  // /api/update/session keep their fixtures unchanged; production wiring creates one per BFF.
+  readonly updateSession?: UpdateSessionManager | undefined;
+  // Issue #1694 — content-free update compatibility, recovery snapshot, and audit state. Optional so
+  // tests can inject a deterministic store; production wiring resolves KEIKO_STATE_DIR.
+  readonly updateLocalState?: UpdateLocalStateManager | undefined;
+  // Issue #1695 — in-app update remediation action/status orchestration. Optional so legacy route
+  // fixtures stay minimal; production composes it over updateLocalState and Local Knowledge.
+  readonly updateRemediation?: UpdateRemediationManager | undefined;
   // Issue #1388 (ADR-0070) — governed container engine detection + execution pilot. Optional so
   // existing tests that do not exercise /api/containers/* keep their fixtures unchanged; production
   // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
@@ -328,6 +351,12 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional injected governed update local-state manager (tests); production resolves it from
+  // KEIKO_STATE_DIR or <cwd>/.keiko without importing the CLI package.
+  readonly updateLocalState?: UpdateLocalStateManager | undefined;
+  // Optional injected governed update remediation manager (tests); production composes one over
+  // updateLocalState and the Local Knowledge reindex port.
+  readonly updateRemediation?: UpdateRemediationManager | undefined;
   // Optional injected task-workspace provisioning service (tests); production composes one over the
   // sqlite WorkspaceInstanceStore + node worktree adapter when a node store is built.
   readonly workspaceProvisioning?: WorkspaceProvisioningService | undefined;
@@ -730,6 +759,29 @@ function buildCommandRunner(options: {
   });
 }
 
+function buildUpdateSession(options: {
+  readonly env: EnvSource;
+  readonly liveRedactor: Redactor;
+}): UpdateSessionManager {
+  return createUpdateSessionManager({
+    processEnv: options.env,
+    lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
+    redactor: (value: string): string => {
+      const redacted = options.liveRedactor(value);
+      return typeof redacted === "string" ? redacted : value;
+    },
+  });
+}
+
+function resolveUpdateStateDir(env: EnvSource): string {
+  const value = env.KEIKO_STATE_DIR ?? ".keiko";
+  return isAbsolute(value) ? value : resolve(process.cwd(), value);
+}
+
+function buildUpdateLocalState(env: EnvSource): UpdateLocalStateManager {
+  return createUpdateLocalStateManager({ stateDir: resolveUpdateStateDir(env) });
+}
+
 // Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
 // command runner so its content-free run audit inherits the identical secret-shape scrubbing. The
 // active engine probe and the frozen-argv container run both compose the single runCommand boundary.
@@ -1069,43 +1121,94 @@ function seedInitialProject(
 interface PeripheralManagers {
   readonly terminal: TerminalExecutionManager;
   readonly commandRunner: CommandRunnerManager;
+  readonly updateSession: UpdateSessionManager;
+  readonly updateLocalState: UpdateLocalStateManager;
+  readonly updateRemediation: UpdateRemediationManager;
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
   readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
-function buildPeripherals(
-  options: BuildHandlerDepsOptions,
-  uiStore: UiStore,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  liveRedactor: Redactor,
-): PeripheralManagers {
-  const memoryVault = buildMemoryVault(redactString, evidenceStore, options.env);
+function buildLocalKnowledgeRemediation(options: {
+  readonly runtimeStateDir: string;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly keyProvider: KnowledgeStoreKeyProvider;
+}): LocalKnowledgeRemediationPort {
+  return createLocalKnowledgeRemediationPort({
+    runtimeStateDir: options.runtimeStateDir,
+    currentConfig: () => options.runtimeConfig.current(),
+    keyProvider: options.keyProvider,
+  });
+}
+
+function buildUpdateRemediation(options: {
+  readonly injected: UpdateRemediationManager | undefined;
+  readonly updateLocalState: UpdateLocalStateManager;
+  readonly runtimeStateDir: string;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+}): UpdateRemediationManager {
+  if (options.injected !== undefined) return options.injected;
+  return createUpdateRemediationManager({
+    localState: options.updateLocalState,
+    localKnowledge: buildLocalKnowledgeRemediation({
+      runtimeStateDir: options.runtimeStateDir,
+      runtimeConfig: options.runtimeConfig,
+      keyProvider: options.localKnowledgeKeyProvider,
+    }),
+  });
+}
+
+interface BuildPeripheralsArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly uiStore: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly runtimeStateDir: string;
+}
+
+function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
+  const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
+  const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   return {
     terminal: buildTerminalManager({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     commandRunner: buildCommandRunner({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
+    }),
+    updateSession: buildUpdateSession({
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
+    }),
+    updateLocalState,
+    updateRemediation: buildUpdateRemediation({
+      injected: args.options.updateRemediation,
+      updateLocalState,
+      runtimeStateDir: args.runtimeStateDir,
+      runtimeConfig: args.runtimeConfig,
+      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     }),
     containerRunner: buildContainerRunner({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     browser: buildBrowserManager({
-      evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
-      evidenceStore,
-      redactor: liveRedactor,
+      evidenceDir: resolveEvidenceDir(args.options.evidenceDir, args.options.env),
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
     }),
     memoryVault,
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
@@ -1345,9 +1448,24 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
   };
 }
 
+function reconcileNodeStoreAtStartup(
+  options: BuildHandlerDepsOptions,
+  bundle: PersistenceBundle,
+): void {
+  if (options.store !== undefined) return;
+  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
+}
+
+function gatewayConfigFields(
+  config: GatewayConfig | undefined,
+  configPresent: boolean,
+): Pick<UiHandlerDeps, "config" | "configPresent"> {
+  return { config, configPresent };
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
-  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
-  const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
+  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env),
+    runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
   const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
   const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
     options,
@@ -1359,13 +1477,11 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
+  const localKnowledgeKeyProvider = createLocalKnowledgeKeyProvider({ env: options.env });
   const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
-  // Issue #447: run a best-effort startup reconciliation only on the real bootstrap path (no injected
-  // store), so test fixtures stay deterministic and trigger reconcile() explicitly when they need it.
-  if (options.store === undefined) reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation);
+  reconcileNodeStoreAtStartup(options, bundle);
   return {
-    config,
-    configPresent,
+    ...gatewayConfigFields(config, configPresent),
     evidenceStore,
     evidenceDir: resolvedEvidenceDir,
     env: options.env,
@@ -1381,9 +1497,18 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
     figmaCredentialTester: options.figmaCredentialTester,
-    localKnowledgeKeyProvider: createLocalKnowledgeKeyProvider({ env: options.env }),
+    localKnowledgeKeyProvider,
     contextProfile: DEFAULT_CONTEXT_PROFILE,
-    ...buildPeripherals(options, bundle.uiStore, evidenceStore, redactString, liveRedactor),
+    ...buildPeripherals({
+      options,
+      uiStore: bundle.uiStore,
+      evidenceStore,
+      redactString,
+      liveRedactor,
+      runtimeConfig,
+      localKnowledgeKeyProvider,
+      runtimeStateDir: dirname(resolvedUiDbPath),
+    }),
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore }),
     ...optionalPersistenceServices(bundle),
   };

@@ -30,6 +30,7 @@ import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
+import { UpdateWindow } from "../update/UpdateWindow";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 import { PdfCitationPreviewWindow } from "./cards/PdfCitationPreviewWindow";
 import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
@@ -262,7 +263,10 @@ registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
-registerWindowRender("settings", () => <SettingsPanel />);
+registerWindowRender("settings", (_cfg, ctx) => (
+  <SettingsPanel openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })} />
+));
+registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow
