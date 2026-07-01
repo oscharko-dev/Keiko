@@ -1160,53 +1160,55 @@ function buildUpdateRemediation(options: {
   });
 }
 
-function buildPeripherals(
-  options: BuildHandlerDepsOptions,
-  uiStore: UiStore,
-  evidenceStore: EvidenceStore,
-  redactString: (value: string) => string,
-  liveRedactor: Redactor,
-  runtimeConfig: RuntimeGatewayConfig,
-  localKnowledgeKeyProvider: KnowledgeStoreKeyProvider,
-  runtimeStateDir: string,
-): PeripheralManagers {
-  const updateLocalState = options.updateLocalState ?? buildUpdateLocalState(options.env);
-  const memoryVault = buildMemoryVault(redactString, evidenceStore, options.env);
+interface BuildPeripheralsArgs {
+  readonly options: BuildHandlerDepsOptions;
+  readonly uiStore: UiStore;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly liveRedactor: Redactor;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
+  readonly runtimeStateDir: string;
+}
+
+function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
+  const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
+  const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   return {
     terminal: buildTerminalManager({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     commandRunner: buildCommandRunner({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     updateSession: buildUpdateSession({
-      env: options.env,
-      liveRedactor,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     updateLocalState,
     updateRemediation: buildUpdateRemediation({
-      injected: options.updateRemediation,
+      injected: args.options.updateRemediation,
       updateLocalState,
-      runtimeStateDir,
-      runtimeConfig,
-      localKnowledgeKeyProvider,
+      runtimeStateDir: args.runtimeStateDir,
+      runtimeConfig: args.runtimeConfig,
+      localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
     }),
     containerRunner: buildContainerRunner({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
+      store: args.uiStore,
+      evidenceStore: args.evidenceStore,
+      env: args.options.env,
+      liveRedactor: args.liveRedactor,
     }),
     browser: buildBrowserManager({
-      evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
-      evidenceStore,
-      redactor: liveRedactor,
+      evidenceDir: resolveEvidenceDir(args.options.evidenceDir, args.options.env),
+      evidenceStore: args.evidenceStore,
+      redactor: args.liveRedactor,
     }),
     memoryVault,
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
@@ -1497,16 +1499,16 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     figmaCredentialTester: options.figmaCredentialTester,
     localKnowledgeKeyProvider,
     contextProfile: DEFAULT_CONTEXT_PROFILE,
-    ...buildPeripherals(
+    ...buildPeripherals({
       options,
-      bundle.uiStore,
+      uiStore: bundle.uiStore,
       evidenceStore,
       redactString,
       liveRedactor,
       runtimeConfig,
       localKnowledgeKeyProvider,
-      dirname(resolvedUiDbPath),
-    ),
+      runtimeStateDir: dirname(resolvedUiDbPath),
+    }),
     consolidationJobs: createConsolidationJobRegistry({ evidenceStore }),
     ...optionalPersistenceServices(bundle),
   };
