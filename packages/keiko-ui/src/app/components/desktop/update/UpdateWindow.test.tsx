@@ -175,11 +175,6 @@ describe("UpdateWindow", () => {
   });
 
   it("shows pre-install remediation as a notice instead of a runnable action", async () => {
-    const writeText = vi.fn(async () => undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
     const api = apiFor({
       report: preflight({
         severity: "critical",
@@ -250,43 +245,33 @@ describe("UpdateWindow", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Automatic install is unavailable. Run a command below, restart Keiko, then check again.",
+        "Automatic install is unavailable. Follow the approved manual instructions, restart Keiko, then check again.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show commands" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Show instructions" })).toBeEnabled();
     expect(screen.getByText("Manual update path")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Keiko cannot safely update itself from this installation. Use a terminal command, restart Keiko, then verify the version here.",
+        "Keiko cannot safely update itself from this installation. Follow the approved manual instructions, restart Keiko, then verify the version here.",
       ),
     ).toBeInTheDocument();
-    const commands = screen.getByText("Manual install commands").closest("details");
+    const commands = screen.getByText("Manual update instructions").closest("details");
     if (commands === null) throw new Error("Expected manual commands details");
     expect(commands).toBeInTheDocument();
     expect(commands).not.toHaveAttribute("open");
 
-    fireEvent.click(screen.getByRole("button", { name: "Show commands" }));
+    fireEvent.click(screen.getByRole("button", { name: "Show instructions" }));
     await waitFor(() => {
       expect(commands).toHaveAttribute("open");
     });
+    expect(screen.getByText("Run the approved package update outside Keiko.")).toBeInTheDocument();
     expect(
-      screen.getByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10"),
-    ).toBeInTheDocument();
+      screen.queryByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10"),
+    ).toBeNull();
     expect(
-      screen.getByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.10"),
-    ).toBeInTheDocument();
-
-    const npmCopyButton = screen.getByRole("button", {
-      name: "Copy npm global install command",
-    });
-    expect(npmCopyButton).toHaveTextContent("");
-    fireEvent.click(npmCopyButton);
-    await waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(
-        "npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10",
-      );
-    });
-    expect(await screen.findByText("Command copied")).toBeInTheDocument();
+      screen.queryByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.10"),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: /Copy .* command/u })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => {
@@ -294,7 +279,7 @@ describe("UpdateWindow", () => {
     });
     expect(
       await screen.findByText(
-        "Manual install is still pending. Run a command, restart Keiko, then check again.",
+        "Manual install is still pending. Follow the approved manual instructions, restart Keiko, then check again.",
       ),
     ).toBeInTheDocument();
 
@@ -665,8 +650,6 @@ describe("UpdateWindow", () => {
       status: "current",
       availabilityState: "current",
       severity: "none",
-      patchNotes: undefined,
-      release: undefined,
     });
     const api = {
       ...apiFor({ status: installedStatus }),

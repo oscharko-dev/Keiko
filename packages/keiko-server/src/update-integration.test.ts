@@ -5,12 +5,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
-import type {
-  ReleaseImpactCatalog,
-  UpdateRemediationStatusReport,
-  UpdatePreflightReport,
-  UpdateSession,
-  UpdateSessionStatus,
+import {
+  UPDATE_PREFLIGHT_SCHEMA_VERSION,
+  UPDATE_SESSION_SCHEMA_VERSION,
+  type ReleaseImpactCatalog,
+  type UpdateInstallMode,
+  type UpdateRemediationStatusReport,
+  type UpdatePreflightReport,
+  type UpdateSession,
+  type UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCspHeader } from "./csp.js";
@@ -34,6 +37,10 @@ const INSTALL_ROOT = `/usr/local/lib/node_modules/${PACKAGE_NAME}`;
 const FIXED_NOW = Date.parse("2026-07-01T12:00:00.000Z");
 
 interface ReleaseImpactCatalogOptions {
+  readonly localKnowledgeReindexRequired?: boolean | undefined;
+}
+
+interface SyntheticPreflightReportOptions {
   readonly localKnowledgeReindexRequired?: boolean | undefined;
 }
 
@@ -116,6 +123,86 @@ function releaseImpactCatalog(
         },
       },
     ],
+  };
+}
+
+function fixedUpdatePreflight(report: UpdatePreflightReport): UiHandlerDeps["updatePreflight"] {
+  return {
+    getStartupReport: () => Promise.resolve(report),
+    runManualCheck: () => Promise.resolve(report),
+  };
+}
+
+function manualInstallMode(): UpdateInstallMode {
+  return {
+    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
+    status: "unsupported",
+    packageName: PACKAGE_NAME,
+    reason: "manifest-unavailable",
+    manualInstructions:
+      "Automatic update is unavailable: this simulated state requires a manual package install. Use your package manager outside Keiko, then restart Keiko.",
+  };
+}
+
+function syntheticPreflightReport(
+  targetVersion: string,
+  options: SyntheticPreflightReportOptions = {},
+): UpdatePreflightReport {
+  const localKnowledgeReindexRequired = options.localKnowledgeReindexRequired === true;
+  const stateImpact = localKnowledgeReindexRequired
+    ? [
+        {
+          store: "local-knowledge",
+          description: "Local Knowledge vectors must be rebuilt after the package update.",
+          remediation: "local-knowledge-reindex-required" as const,
+          userActionRequired: true,
+        },
+      ]
+    : [];
+  const releaseNoteBullets = localKnowledgeReindexRequired
+    ? ["Refresh Local Knowledge vectors before grounded workflows are fully ready."]
+    : ["Exercises injected updater wiring without a real published release."];
+  return {
+    schemaVersion: UPDATE_PREFLIGHT_SCHEMA_VERSION,
+    checkedAt: new Date(FIXED_NOW).toISOString(),
+    currentVersion: SDK_VERSION,
+    targetVersion,
+    updateAvailable: true,
+    status: "update-available",
+    availabilityState: "update-available",
+    severity: localKnowledgeReindexRequired ? "high" : "normal",
+    registryStatus: "ok",
+    releaseMetadataStatus: "live",
+    userActionRequired: localKnowledgeReindexRequired,
+    affectedStateStores: localKnowledgeReindexRequired ? ["local-knowledge"] : [],
+    blockers: [],
+    manualUpdateRequired: false,
+    oneClickEligible: true,
+    impact: {
+      entries: [
+        {
+          packageVersion: targetVersion,
+          releaseTag: `v${targetVersion}`,
+          summary: localKnowledgeReindexRequired
+            ? "Injected update with Local Knowledge reindex."
+            : "Injected update fixture.",
+          releaseNoteBullets,
+          stateImpact,
+          userActionRequired: localKnowledgeReindexRequired,
+          remediation: localKnowledgeReindexRequired
+            ? "local-knowledge-reindex-required"
+            : "no-action-required",
+        },
+      ],
+      releaseNoteBullets,
+      stateImpact,
+      affectedStateStores: localKnowledgeReindexRequired ? ["local-knowledge"] : [],
+      userActionRequired: localKnowledgeReindexRequired,
+      remediations: [
+        localKnowledgeReindexRequired ? "local-knowledge-reindex-required" : "no-action-required",
+      ],
+    },
+    warnings: [],
   };
 }
 
@@ -589,8 +676,16 @@ describe("governed updater integration", () => {
     expect(finalStatus.lastSession).toMatchObject({ targetVersion, phase: "succeeded" });
   });
 
-  it("simulates a release that must be installed manually when automatic update is unsupported", async () => {
+  it("uses explicit injected updater seams when automatic update is unsupported", async () => {
     const targetVersion = nextPatchVersion(SDK_VERSION);
+    const updateSession = createUpdateSessionManager({
+      processEnv: {},
+      detector: () => manualInstallMode(),
+      currentVersion: () => SDK_VERSION,
+      idFactory: () => "manual-install-integration-session",
+      now: () => FIXED_NOW,
+      redactor: (value) => value,
+    });
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: join(staticRoot, "evidence"),
@@ -602,6 +697,8 @@ describe("governed updater integration", () => {
       },
       uiDbPath: join(staticRoot, "ui.db"),
       modelPortFactory: (): undefined => undefined,
+      updatePreflight: fixedUpdatePreflight(syntheticPreflightReport(targetVersion)),
+      updateSession,
     });
     await buildServer(deps);
 
@@ -642,5 +739,57 @@ describe("governed updater integration", () => {
     expect(started.error.code).toBe("UPDATE_INSTALL_MODE_UNSUPPORTED");
     expect(sessionStatus.activeSession).toBeUndefined();
     expect(sessionStatus.lastSession).toBeUndefined();
+  });
+
+  it("does not fabricate Local Knowledge remediation from env flags alone", async () => {
+    const targetVersion = nextPatchVersion(SDK_VERSION);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(staticRoot, "evidence"),
+      env: {
+        KEIKO_STATE_DIR: join(staticRoot, "state"),
+        KEIKO_SIMULATED_UPDATE_REINDEX_REQUIRED: "1",
+      },
+      uiDbPath: join(staticRoot, "ui.db"),
+      modelPortFactory: (): undefined => undefined,
+      updatePreflight: fixedUpdatePreflight(
+        syntheticPreflightReport(targetVersion, { localKnowledgeReindexRequired: true }),
+      ),
+    });
+    await buildServer(deps);
+
+    const preflightResponse = await fetch(`${baseUrl()}/api/update/preflight`);
+    const preflight = await readJson<UpdatePreflightReport>(preflightResponse);
+    const impact = impactInput(preflight);
+    const remediationStatusResponse = await fetch(`${baseUrl()}/api/update/remediation/status`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ targetVersion, impact, persist: true }),
+    });
+    const remediationStatus =
+      await readJson<UpdateRemediationStatusReport>(remediationStatusResponse);
+
+    expect(preflightResponse.status).toBe(200);
+    expect(preflight.impact?.remediations).toEqual(["local-knowledge-reindex-required"]);
+    expect(remediationStatusResponse.status).toBe(200);
+    expect(remediationStatus).toMatchObject({
+      targetVersion,
+      overallStatus: "not-required",
+      updateCanComplete: true,
+      affectedFeatures: [
+        {
+          featureId: "local-knowledge",
+          label: "Local Knowledge",
+          state: "ready",
+        },
+      ],
+    });
+    expect(remediationStatus.actions[0]).toMatchObject({
+      actionId: "local-knowledge-reindex:local-knowledge",
+      status: "not-needed",
+      required: false,
+      scopeCounts: { capsules: 0, documents: 0, vectors: 0 },
+      message: "No Local Knowledge capsules are present.",
+    });
   });
 });

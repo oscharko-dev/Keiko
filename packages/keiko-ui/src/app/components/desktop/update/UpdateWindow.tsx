@@ -73,12 +73,6 @@ type LoadState =
 type BusyAction =
   "checking" | "starting" | "retrying" | "cancelling" | "restart" | "remediation" | undefined;
 
-interface ManualCommand {
-  readonly id: string;
-  readonly label: string;
-  readonly command: string;
-}
-
 const DEFAULT_API: UpdateWindowApi = {
   fetchPreflight: fetchStartupUpdatePreflight,
   checkPreflight: checkUpdatePreflight,
@@ -161,65 +155,6 @@ function primaryActionText(
   return t("updates.primary.current");
 }
 
-async function writeTextWithFallback(text: string): Promise<void> {
-  const writeText = typeof navigator === "undefined" ? undefined : navigator.clipboard?.writeText;
-  if (writeText !== undefined && navigator.clipboard !== undefined) {
-    try {
-      await writeText.call(navigator.clipboard, text);
-      return;
-    } catch {
-      // Restricted clipboard contexts can still use the manual textarea fallback.
-    }
-  }
-
-  if (typeof document === "undefined" || document.body === null) {
-    throw new Error("clipboard-unavailable");
-  }
-
-  const previousFocus =
-    document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.inset = "0 auto auto -9999px";
-  textarea.style.width = "1px";
-  textarea.style.height = "1px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  try {
-    textarea.focus();
-    textarea.select();
-    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
-    if (!copied) throw new Error("clipboard-fallback-failed");
-  } finally {
-    textarea.remove();
-    previousFocus?.focus();
-  }
-}
-
-function manualCommands(
-  report: UpdatePreflightReport,
-  session: UpdateSessionStatus,
-  t: I18nTranslate,
-): readonly ManualCommand[] {
-  const targetVersion = report.targetVersion;
-  if (targetVersion === undefined) return [];
-  const spec = `${session.installMode.packageName}@${targetVersion}`;
-  const npm = {
-    id: "npm",
-    label: t("updates.manual.commandNpm"),
-    command: `npm install --global --ignore-scripts ${spec}`,
-  };
-  const yarn = {
-    id: "yarn",
-    label: t("updates.manual.commandYarn"),
-    command: `yarn global add --ignore-scripts ${spec}`,
-  };
-  if (session.installMode.packageManager === "yarn") return [yarn, npm];
-  return [npm, yarn];
-}
-
 function SummaryCard({
   report,
   session,
@@ -264,8 +199,8 @@ function PrimaryActions({
   onRetry,
   onCancel,
   onVerifyRestart,
-  onShowManualCommands,
-  manualCommandsOpen,
+  onShowManualInstructions,
+  manualInstructionsOpen,
   canVerifyRestart,
 }: {
   readonly report: UpdatePreflightReport;
@@ -277,8 +212,8 @@ function PrimaryActions({
   readonly onRetry: () => void;
   readonly onCancel: () => void;
   readonly onVerifyRestart: () => void;
-  readonly onShowManualCommands: () => void;
-  readonly manualCommandsOpen: boolean;
+  readonly onShowManualInstructions: () => void;
+  readonly manualInstructionsOpen: boolean;
   readonly canVerifyRestart: boolean;
 }): ReactNode {
   const { t } = useI18n();
@@ -331,9 +266,11 @@ function PrimaryActions({
           type="button"
           className="upd-primary-btn"
           disabled={disabled}
-          onClick={onShowManualCommands}
+          onClick={onShowManualInstructions}
         >
-          {manualCommandsOpen ? t("updates.action.hideCommands") : t("updates.action.showCommands")}
+          {manualInstructionsOpen
+            ? t("updates.action.hideInstructions")
+            : t("updates.action.showInstructions")}
         </button>
       );
     }
@@ -602,21 +539,20 @@ function ManualPath({
   report,
   session,
   busy,
-  commandsOpen,
-  onCommandsOpenChange,
+  instructionsOpen,
+  onInstructionsOpenChange,
   onCheck,
 }: {
   readonly report: UpdatePreflightReport;
   readonly session: UpdateSessionStatus;
   readonly busy: BusyAction;
-  readonly commandsOpen: boolean;
-  readonly onCommandsOpenChange: (open: boolean) => void;
+  readonly instructionsOpen: boolean;
+  readonly onInstructionsOpenChange: (open: boolean) => void;
   readonly onCheck: () => void;
 }): ReactNode {
   const { t } = useI18n();
   if (!isManualUpdatePath(report, session)) return null;
   const instructions = session.installMode.manualInstructions ?? t("updates.manual.default");
-  const commands = manualCommands(report, session, t);
   return (
     <section className="upd-panel upd-manual" aria-labelledby="updates-manual-title">
       <div className="upd-panel-head">
@@ -630,16 +566,11 @@ function ManualPath({
       </ol>
       <details
         className="upd-manual-commands"
-        open={commandsOpen}
-        onToggle={(event) => onCommandsOpenChange(event.currentTarget.open)}
+        open={instructionsOpen}
+        onToggle={(event) => onInstructionsOpenChange(event.currentTarget.open)}
       >
-        <summary>{t("updates.manual.commandsSummary")}</summary>
+        <summary>{t("updates.manual.instructionsSummary")}</summary>
         <p>{instructions}</p>
-        <div className="upd-command-list">
-          {commands.map((command) => (
-            <ManualCommandRow key={command.id} command={command} />
-          ))}
-        </div>
       </details>
       <div className="upd-manual-finish">
         <span>{t("updates.manual.finish")}</span>
@@ -659,52 +590,6 @@ function ManualPath({
         </a>
       ) : null}
     </section>
-  );
-}
-
-function ManualCommandRow({ command }: { readonly command: ManualCommand }): ReactNode {
-  const { t } = useI18n();
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-
-  const handleCopy = useCallback(() => {
-    void writeTextWithFallback(command.command).then(
-      () => {
-        setCopyState("copied");
-        window.setTimeout(() => setCopyState("idle"), 1500);
-      },
-      () => setCopyState("failed"),
-    );
-  }, [command.command]);
-
-  const copied = copyState === "copied";
-  const failed = copyState === "failed";
-  return (
-    <div className="upd-command-row">
-      <div className="upd-command-copy">
-        <strong>{command.label}</strong>
-        <div className="upd-command-line">
-          <code>{command.command}</code>
-          <button
-            type="button"
-            className="upd-command-copy-btn"
-            aria-label={t("updates.manual.copyCommand", { label: command.label })}
-            title={copied ? t("updates.manual.copied") : t("chat.copy.short")}
-            data-copied={copied ? "true" : "false"}
-            data-failed={failed ? "true" : "false"}
-            onClick={handleCopy}
-          >
-            {copied ? (
-              <Icons.check size={15} aria-hidden="true" />
-            ) : (
-              <Icons.copy size={15} aria-hidden="true" />
-            )}
-          </button>
-        </div>
-      </div>
-      <span className="upd-copy-status" role="status">
-        {copied ? t("updates.manual.copiedStatus") : failed ? t("chat.copy.failedStatus") : ""}
-      </span>
-    </div>
   );
 }
 
@@ -797,7 +682,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   const [busy, setBusy] = useState<BusyAction>();
   const [checkFeedback, setCheckFeedback] = useState<string>();
   const [releaseNotesReport, setReleaseNotesReport] = useState<UpdatePreflightReport>();
-  const [manualCommandsOpen, setManualCommandsOpen] = useState(false);
+  const [manualInstructionsOpen, setManualInstructionsOpen] = useState(false);
   const [verifiedManualTargetVersion, setVerifiedManualTargetVersion] = useState<string>();
   const titleRef = useRef<HTMLHeadingElement>(null);
   const focusedRef = useRef(false);
@@ -830,7 +715,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         }
         if (manualInstallVerified) {
           setVerifiedManualTargetVersion(previousManualTarget);
-          setManualCommandsOpen(false);
+          setManualInstructionsOpen(false);
         } else if (report.updateAvailable) {
           setVerifiedManualTargetVersion(undefined);
         }
@@ -965,8 +850,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
               void runAndRefresh("restart", () => api.verifyRestart({ targetVersion }));
             }
           }}
-          onShowManualCommands={() => setManualCommandsOpen((open) => !open)}
-          manualCommandsOpen={manualCommandsOpen}
+          onShowManualInstructions={() => setManualInstructionsOpen((open) => !open)}
+          manualInstructionsOpen={manualInstructionsOpen}
           canVerifyRestart={targetVersion !== undefined}
         />
       </div>
@@ -981,8 +866,8 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
         report={report}
         session={session}
         busy={busy}
-        commandsOpen={manualCommandsOpen}
-        onCommandsOpenChange={setManualCommandsOpen}
+        instructionsOpen={manualInstructionsOpen}
+        onInstructionsOpenChange={setManualInstructionsOpen}
         onCheck={() => void refresh(true)}
       />
       <ImpactPanel report={report} remediation={remediation} />

@@ -23,16 +23,11 @@ import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import { writeSideFile } from "@oscharko-dev/keiko-evidence";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
-import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import {
   DEFAULT_CONTEXT_PROFILE,
-  UPDATE_PREFLIGHT_SCHEMA_VERSION,
-  UPDATE_SESSION_SCHEMA_VERSION,
   type ContextProfile,
-  type UpdateInstallMode,
   type UpdatePreflightReport,
 } from "@oscharko-dev/keiko-contracts";
-import type { CommandResult } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -50,7 +45,6 @@ import {
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createCommandRunnerManager, type CommandRunnerManager } from "./command-runner.js";
 import { createUpdateSessionManager, type UpdateSessionManager } from "./update-session.js";
-import { detectUpdateInstallMode, PACKAGE_NAME } from "./update-install-mode.js";
 import { createStateDirUpdateSessionLock } from "./update-session-lock.js";
 import {
   createUpdateLocalStateManager,
@@ -63,8 +57,6 @@ import {
 import {
   createLocalKnowledgeRemediationPort,
   type LocalKnowledgeRemediationPort,
-  type LocalKnowledgeRemediationRunResult,
-  type LocalKnowledgeRemediationScope,
 } from "./local-knowledge-remediation.js";
 import {
   createContainerRunnerManager,
@@ -371,6 +363,12 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional injected governed update session manager (tests); production creates the real
+  // state-dir-backed updater session manager.
+  readonly updateSession?: UpdateSessionManager | undefined;
+  // Optional injected governed update preflight service (tests); production uses the default
+  // registry + GitHub-backed runtime service.
+  readonly updatePreflight?: UiHandlerDeps["updatePreflight"];
   // Optional injected governed update local-state manager (tests); production resolves it from
   // KEIKO_STATE_DIR or <cwd>/.keiko without importing the CLI package.
   readonly updateLocalState?: UpdateLocalStateManager | undefined;
@@ -779,115 +777,12 @@ function buildCommandRunner(options: {
   });
 }
 
-const SIMULATE_UPDATE_ENV = "KEIKO_SIMULATE_UPDATE_AVAILABLE";
-const SIMULATED_UPDATE_TARGET_ENV = "KEIKO_SIMULATED_UPDATE_TARGET_VERSION";
-const SIMULATED_UPDATE_REINDEX_ENV = "KEIKO_SIMULATED_UPDATE_REINDEX_REQUIRED";
-const SIMULATED_UPDATE_MANUAL_INSTALL_ENV = "KEIKO_SIMULATED_UPDATE_MANUAL_INSTALL_REQUIRED";
-const SIMULATED_INSTALL_ROOT = `/usr/local/lib/node_modules/${PACKAGE_NAME}`;
-
-interface SimulatedUpdateState {
-  readonly targetVersion: string;
-  readonly localKnowledgeReindexRequired: boolean;
-  readonly manualInstallRequired: boolean;
-  installed: boolean;
-  restarted: boolean;
-}
-
-function isTruthyEnvFlag(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function nextPatchVersion(version: string): string {
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
-  if (match === null) return "0.2.12";
-  const [, major, minor, patch] = match;
-  if (major === undefined || minor === undefined || patch === undefined) return "0.2.12";
-  return `${major}.${minor}.${String(Number(patch) + 1)}`;
-}
-
-function simulatedUpdateTargetVersion(env: EnvSource): string {
-  const configured = env[SIMULATED_UPDATE_TARGET_ENV]?.trim();
-  if (configured !== undefined && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.test(configured)) {
-    return configured;
-  }
-  return nextPatchVersion(SDK_VERSION);
-}
-
-function buildSimulatedUpdateState(env: EnvSource): SimulatedUpdateState | undefined {
-  if (!isTruthyEnvFlag(env[SIMULATE_UPDATE_ENV])) return undefined;
-  return {
-    targetVersion: simulatedUpdateTargetVersion(env),
-    localKnowledgeReindexRequired: isTruthyEnvFlag(env[SIMULATED_UPDATE_REINDEX_ENV]),
-    manualInstallRequired: isTruthyEnvFlag(env[SIMULATED_UPDATE_MANUAL_INSTALL_ENV]),
-    installed: false,
-    restarted: false,
-  };
-}
-
-function simulatedManualInstallMode(): UpdateInstallMode {
-  return {
-    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
-    status: "unsupported",
-    packageName: PACKAGE_NAME,
-    reason: "manifest-unavailable",
-    manualInstructions:
-      "Automatic update is unavailable: this simulated state requires a manual package install. Use your package manager outside Keiko, then restart Keiko.",
-  };
-}
-
-function simulatedCommandResult(input: {
-  readonly command: string;
-  readonly args: readonly string[];
-}): CommandResult {
-  return {
-    command: input.command,
-    args: [...input.args],
-    exitCode: 0,
-    signal: null,
-    stdout: "Simulated package-manager update completed. No files were changed.",
-    stderr: "",
-    durationMs: 5,
-    timedOut: false,
-    truncated: false,
-  };
-}
-
 function buildUpdateSession(options: {
+  readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
   readonly liveRedactor: Redactor;
-  readonly simulatedUpdateState?: SimulatedUpdateState | undefined;
 }): UpdateSessionManager {
-  if (options.simulatedUpdateState !== undefined) {
-    const state = options.simulatedUpdateState;
-    return createUpdateSessionManager({
-      processEnv: options.env,
-      detector: () =>
-        state.manualInstallRequired
-          ? simulatedManualInstallMode()
-          : detectUpdateInstallMode({
-              packageRoot: SIMULATED_INSTALL_ROOT,
-              packageName: PACKAGE_NAME,
-              packageManagerHint: "npm",
-              installScope: "global",
-            }),
-      currentVersion: () => {
-        if (!state.installed) return SDK_VERSION;
-        state.restarted = true;
-        return state.targetVersion;
-      },
-      idFactory: () => `simulated-update-${state.targetVersion}`,
-      runCommandImpl: (input) => {
-        const result = simulatedCommandResult(input);
-        if (result.exitCode === 0) state.installed = true;
-        return Promise.resolve(result);
-      },
-      redactor: (value: string): string => {
-        const redacted = options.liveRedactor(value);
-        return typeof redacted === "string" ? redacted : value;
-      },
-    });
-  }
+  if (options.injected !== undefined) return options.injected;
   return createUpdateSessionManager({
     processEnv: options.env,
     lock: createStateDirUpdateSessionLock(resolveUpdateStateDir(options.env)),
@@ -905,209 +800,6 @@ function resolveUpdateStateDir(env: EnvSource): string {
 
 function buildUpdateLocalState(env: EnvSource): UpdateLocalStateManager {
   return createUpdateLocalStateManager({ stateDir: resolveUpdateStateDir(env) });
-}
-
-function buildSimulatedLocalKnowledgeRemediation(
-  env: EnvSource,
-): LocalKnowledgeRemediationPort | undefined {
-  if (!isTruthyEnvFlag(env[SIMULATED_UPDATE_REINDEX_ENV])) return undefined;
-  const scope: LocalKnowledgeRemediationScope = {
-    capsules: 2,
-    sources: 3,
-    documents: 11,
-    chunks: 41,
-    vectors: 39,
-  };
-  return {
-    inspect: () => scope,
-    reindexAll: (): Promise<LocalKnowledgeRemediationRunResult> =>
-      Promise.resolve({
-        status: "completed",
-        scope,
-        failedCapsules: 0,
-        message: "Simulated Local Knowledge reindex completed.",
-      }),
-  };
-}
-
-function simulatedUpdateRelease(
-  targetVersion: string,
-  localKnowledgeReindexRequired = false,
-): NonNullable<UpdatePreflightReport["release"]> {
-  return {
-    source: "github-release",
-    tag: `v${targetVersion}`,
-    title: `Keiko ${targetVersion} (simulated)`,
-    summary: localKnowledgeReindexRequired
-      ? "Simulated update available with Local Knowledge reindex setup."
-      : "Simulated update available for local review.",
-    notes: [
-      "This local preview is pretending a new Keiko release exists.",
-      "Install and restart verification are simulated; no package files are changed.",
-      ...(localKnowledgeReindexRequired
-        ? ["Local Knowledge vectors must be refreshed before grounded workflows are fully ready."]
-        : []),
-    ],
-    publishedAt: new Date().toISOString(),
-  };
-}
-
-function simulatedUpdatePatchNotes(
-  targetVersion: string,
-  localKnowledgeReindexRequired = false,
-): NonNullable<UpdatePreflightReport["patchNotes"]> {
-  return {
-    collapsed: true,
-    summary: localKnowledgeReindexRequired
-      ? "Simulated update available with Local Knowledge reindex setup."
-      : "Simulated update available for local review.",
-    bullets: [
-      "Review update availability, impact, and package-manager command preview.",
-      "Exercise the governed in-app update path without publishing another release.",
-      ...(localKnowledgeReindexRequired
-        ? ["Run the Local Knowledge reindex remediation before marking the update complete."]
-        : []),
-    ],
-    details: [`Current ${SDK_VERSION}; simulated target ${targetVersion}.`],
-  };
-}
-
-function simulatedLocalKnowledgeReindexImpact(
-  targetVersion: string,
-): NonNullable<UpdatePreflightReport["impact"]> {
-  const stateImpact = [
-    {
-      store: "local-knowledge",
-      description: "Local Knowledge vectors must be rebuilt after the package update.",
-      remediation: "local-knowledge-reindex-required" as const,
-      userActionRequired: true,
-    },
-  ];
-  const releaseNoteBullets = [
-    "Refresh Local Knowledge vectors before grounded workflows are fully ready.",
-  ];
-  return {
-    entries: [
-      {
-        packageVersion: targetVersion,
-        releaseTag: `v${targetVersion}`,
-        summary: "Simulated updater rehearsal with Local Knowledge reindex.",
-        releaseNoteBullets,
-        stateImpact,
-        userActionRequired: true,
-        remediation: "local-knowledge-reindex-required",
-      },
-    ],
-    releaseNoteBullets,
-    stateImpact,
-    affectedStateStores: ["local-knowledge"],
-    userActionRequired: true,
-    remediations: ["local-knowledge-reindex-required"],
-  };
-}
-
-function simulatedNoActionImpact(
-  targetVersion: string,
-): NonNullable<UpdatePreflightReport["impact"]> {
-  return {
-    entries: [
-      {
-        packageVersion: targetVersion,
-        releaseTag: `v${targetVersion}`,
-        summary: "Simulated updater rehearsal.",
-        releaseNoteBullets: ["No state migration or remediation is required."],
-        stateImpact: [],
-        userActionRequired: false,
-        remediation: "no-action-required",
-      },
-    ],
-    releaseNoteBullets: ["No state migration or remediation is required."],
-    stateImpact: [],
-    affectedStateStores: [],
-    userActionRequired: false,
-    remediations: ["no-action-required"],
-  };
-}
-
-function simulatedUpdateImpact(
-  targetVersion: string,
-  localKnowledgeReindexRequired = false,
-): NonNullable<UpdatePreflightReport["impact"]> {
-  return localKnowledgeReindexRequired
-    ? simulatedLocalKnowledgeReindexImpact(targetVersion)
-    : simulatedNoActionImpact(targetVersion);
-}
-
-function simulatedCurrentReport(targetVersion: string): UpdatePreflightReport {
-  const localKnowledgeReindexRequired = false;
-  return {
-    schemaVersion: UPDATE_PREFLIGHT_SCHEMA_VERSION,
-    checkedAt: new Date().toISOString(),
-    currentVersion: targetVersion,
-    targetVersion,
-    updateAvailable: false,
-    status: "current",
-    availabilityState: "current",
-    severity: "none",
-    registryStatus: "ok",
-    releaseMetadataStatus: "live",
-    userActionRequired: false,
-    affectedStateStores: [],
-    blockers: [],
-    manualUpdateRequired: false,
-    oneClickEligible: true,
-    release: simulatedUpdateRelease(targetVersion, localKnowledgeReindexRequired),
-    patchNotes: simulatedUpdatePatchNotes(targetVersion, localKnowledgeReindexRequired),
-    impact: simulatedUpdateImpact(targetVersion, localKnowledgeReindexRequired),
-    warnings: ["Local simulation mode is enabled; this is not evidence of a published release."],
-  };
-}
-
-function simulatedUpdateReport(state: SimulatedUpdateState): UpdatePreflightReport {
-  const targetVersion = state.targetVersion;
-  const localKnowledgeReindexRequired = state.localKnowledgeReindexRequired;
-  if (state.restarted) {
-    return {
-      ...simulatedCurrentReport(targetVersion),
-      userActionRequired: localKnowledgeReindexRequired,
-      affectedStateStores: localKnowledgeReindexRequired ? ["local-knowledge"] : [],
-      release: simulatedUpdateRelease(targetVersion, localKnowledgeReindexRequired),
-      patchNotes: simulatedUpdatePatchNotes(targetVersion, localKnowledgeReindexRequired),
-      impact: simulatedUpdateImpact(targetVersion, localKnowledgeReindexRequired),
-    };
-  }
-  return {
-    schemaVersion: UPDATE_PREFLIGHT_SCHEMA_VERSION,
-    checkedAt: new Date().toISOString(),
-    currentVersion: SDK_VERSION,
-    targetVersion,
-    updateAvailable: true,
-    status: "update-available",
-    availabilityState: "update-available",
-    severity: localKnowledgeReindexRequired ? "high" : "normal",
-    registryStatus: "ok",
-    releaseMetadataStatus: "live",
-    userActionRequired: localKnowledgeReindexRequired,
-    affectedStateStores: localKnowledgeReindexRequired ? ["local-knowledge"] : [],
-    blockers: [],
-    manualUpdateRequired: false,
-    oneClickEligible: true,
-    release: simulatedUpdateRelease(targetVersion, localKnowledgeReindexRequired),
-    patchNotes: simulatedUpdatePatchNotes(targetVersion, localKnowledgeReindexRequired),
-    impact: simulatedUpdateImpact(targetVersion, localKnowledgeReindexRequired),
-    warnings: ["Local simulation mode is enabled; this is not evidence of a published release."],
-  };
-}
-
-function buildSimulatedUpdatePreflight(
-  env: EnvSource,
-  state: SimulatedUpdateState | undefined,
-): UiHandlerDeps["updatePreflight"] | undefined {
-  if (!isTruthyEnvFlag(env[SIMULATE_UPDATE_ENV]) || state === undefined) return undefined;
-  return {
-    getStartupReport: () => Promise.resolve(simulatedUpdateReport(state)),
-    runManualCheck: () => Promise.resolve(simulatedUpdateReport(state)),
-  };
 }
 
 // Issue #1388 — the container runner reuses the same store + evidence + live-redactor wiring as the
@@ -1477,16 +1169,13 @@ function buildUpdateRemediation(options: {
   readonly runtimeStateDir: string;
   readonly runtimeConfig: RuntimeGatewayConfig;
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
-  readonly env: EnvSource;
 }): UpdateRemediationManager {
   if (options.injected !== undefined) return options.injected;
-  const localKnowledge =
-    buildSimulatedLocalKnowledgeRemediation(options.env) ??
-    buildLocalKnowledgeRemediation({
-      runtimeStateDir: options.runtimeStateDir,
-      runtimeConfig: options.runtimeConfig,
-      keyProvider: options.localKnowledgeKeyProvider,
-    });
+  const localKnowledge = buildLocalKnowledgeRemediation({
+    runtimeStateDir: options.runtimeStateDir,
+    runtimeConfig: options.runtimeConfig,
+    keyProvider: options.localKnowledgeKeyProvider,
+  });
   return createUpdateRemediationManager({
     localState: options.updateLocalState,
     localKnowledge,
@@ -1506,7 +1195,6 @@ interface BuildPeripheralsArgs {
 
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
-  const simulatedUpdateState = buildSimulatedUpdateState(args.options.env);
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
   return {
     terminal: buildTerminalManager({
@@ -1522,11 +1210,11 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       liveRedactor: args.liveRedactor,
     }),
     updateSession: buildUpdateSession({
+      injected: args.options.updateSession,
       env: args.options.env,
       liveRedactor: args.liveRedactor,
-      simulatedUpdateState,
     }),
-    updatePreflight: buildSimulatedUpdatePreflight(args.options.env, simulatedUpdateState),
+    updatePreflight: args.options.updatePreflight,
     updateLocalState,
     updateRemediation: buildUpdateRemediation({
       injected: args.options.updateRemediation,
@@ -1534,7 +1222,6 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       runtimeStateDir: args.runtimeStateDir,
       runtimeConfig: args.runtimeConfig,
       localKnowledgeKeyProvider: args.localKnowledgeKeyProvider,
-      env: args.options.env,
     }),
     containerRunner: buildContainerRunner({
       store: args.uiStore,
