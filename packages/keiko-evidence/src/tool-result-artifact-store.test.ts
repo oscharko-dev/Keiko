@@ -1,4 +1,12 @@
-import { mkdtempSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -39,5 +47,24 @@ describe("createNodeToolResultArtifactStore", () => {
     expect(() => {
       store.read("A".repeat(64));
     }).toThrow(/disallowed/);
+  });
+
+  it("refuses a symlinked tool-results sub-store directory", () => {
+    if (process.platform === "win32") return;
+    const root = tempRoot();
+    const baseDir = join(root, ".keiko", "evidence");
+    const outside = join(root, "outside");
+    mkdirSync(baseDir, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "marker"), "outside", "utf8");
+    try {
+      symlinkSync(outside, join(baseDir, "tool-results"), "dir");
+      const store = createNodeToolResultArtifactStore(baseDir);
+      expect(() => { store.write(ARTIFACT_ID, "clean"); }).toThrow(/symlink/);
+      expect(() => readFileSync(join(outside, `${ARTIFACT_ID}${TOOL_RESULT_ARTIFACT_SUFFIX}`)))
+        .toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

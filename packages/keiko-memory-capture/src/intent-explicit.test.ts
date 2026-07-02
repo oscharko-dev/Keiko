@@ -132,6 +132,8 @@ describe("tryExtractForget", () => {
     expect(outcome?.kind).toBe("forget");
     if (outcome?.kind !== "forget") return;
     expect(outcome.operation.memoryId).toBe("m-7");
+    expect(outcome.operation.reason).toBe("explicit-user-request");
+    expect(outcome.operation.reason).not.toContain("dark mode");
     expect(outcome.operation.userAcknowledgedDestructive).toBe(true);
     expect(outcome.requiresConfirmation).toBe(true);
   });
@@ -156,6 +158,7 @@ describe("tryExtractForget", () => {
     expect(outcome?.kind).toBe("forget");
     if (outcome?.kind !== "forget") return;
     expect(outcome.operation.memoryId).toBe("m-9");
+    expect(outcome.operation.reason).toBe("explicit-user-request");
     expect(outcome.requiresConfirmation).toBe(true);
   });
 });

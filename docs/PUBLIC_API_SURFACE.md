@@ -36,6 +36,7 @@ details of the shipped artifact:
 @oscharko-dev/keiko-memory-vault
 @oscharko-dev/keiko-model-gateway
 @oscharko-dev/keiko-quality-intelligence
+@oscharko-dev/keiko-sandbox
 @oscharko-dev/keiko-sdk
 @oscharko-dev/keiko-security
 @oscharko-dev/keiko-server

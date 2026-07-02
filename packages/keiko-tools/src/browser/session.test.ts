@@ -166,6 +166,9 @@ const SCREENSHOT_BASE64 = SCREENSHOT_BYTES.toString("base64");
 
 const DEFAULT_RESPONSES: Readonly<Record<string, unknown>> = {
   "Browser.getVersion": { product: "Chrome/130.0", userAgent: "Chrome/130.0" },
+  "Browser.getBrowserCommandLine": {
+    arguments: [`--user-data-dir=${join(tmpdir(), "keiko-browser-profile-test")}`],
+  },
   "Target.createTarget": { targetId: "TARGET-123" },
   "Target.attachToTarget": { sessionId: "CDP-SESSION-1" },
   "Page.enable": {},
@@ -310,17 +313,46 @@ describe("openSession", () => {
     expect(created?.params).toMatchObject({ url: "about:blank" });
   });
 
-  it("records a trust warning when Chrome profile metadata is unavailable", async () => {
+  it("records that the opened session passed the ephemeral profile gate", async () => {
     const fixture = await withFixture();
     const meta = await fixture.manager.openSession(9222);
     const manifest = loadEvidence(fixture.evidenceStore, runIdFromSession(meta.sessionId));
-    expect(
-      manifest?.browser?.events.some(
-        (event) =>
-          event.type === "browser:trust-warning" &&
-          event.warning?.includes("--user-data-dir") === true,
-      ),
-    ).toBe(true);
+    const opened = manifest?.browser?.events.find((event) => event.type === "browser:session-opened");
+    expect(opened?.profileEphemeral).toBe(true);
+  });
+
+  it("refuses a persistent Chrome profile before creating a target", async () => {
+    const fixture = await withFixture({
+      responder: (call) => {
+        if (call.method === "Browser.getBrowserCommandLine") {
+          return {
+            arguments: ["--user-data-dir=/Users/example/Library/Application Support/Chrome"],
+          };
+        }
+        return defaultResponder(call);
+      },
+    });
+
+    await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
+      code: "BROWSER_PROFILE_NOT_EPHEMERAL",
+    });
+    expect(fixture.client.calls.map((call) => call.method)).not.toContain("Target.createTarget");
+  });
+
+  it("refuses Chrome when command-line metadata is unavailable before creating a target", async () => {
+    const fixture = await withFixture({
+      responder: (call) => {
+        if (call.method === "Browser.getBrowserCommandLine") {
+          throw new Error("method unavailable");
+        }
+        return defaultResponder(call);
+      },
+    });
+
+    await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
+      code: "BROWSER_PROFILE_NOT_EPHEMERAL",
+    });
+    expect(fixture.client.calls.map((call) => call.method)).not.toContain("Target.createTarget");
   });
 
   it("rejects opening more than 4 concurrent sessions", async () => {

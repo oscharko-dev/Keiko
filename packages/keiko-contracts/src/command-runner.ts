@@ -30,6 +30,22 @@ export const COMMAND_TASK_SOURCES: readonly CommandTaskSource[] = Object.freeze(
   "package-json-script",
 ] as const satisfies readonly CommandTaskSource[]);
 
+// Repository-authored scripts are executable code from the selected workspace. The browser can see
+// whether a task is currently runnable, but the server owns the trust decision and re-checks it at
+// execution time; the request never carries this field back as authority.
+export type CommandTaskTrustState = "trusted" | "approval-required";
+
+export const COMMAND_TASK_TRUST_STATES: readonly CommandTaskTrustState[] = Object.freeze([
+  "trusted",
+  "approval-required",
+] as const satisfies readonly CommandTaskTrustState[]);
+
+export type CommandTaskTrustReason = "repository-authored-script";
+
+export const COMMAND_TASK_TRUST_REASONS: readonly CommandTaskTrustReason[] = Object.freeze([
+  "repository-authored-script",
+] as const satisfies readonly CommandTaskTrustReason[]);
+
 // One vetted catalog entry: a stable id mapped to an exact, frozen argv. Agents and the UI pick a
 // task by id; they never supply `executable`/`args`, so an untrusted name can never reach a spawn.
 export interface CommandTask {
@@ -39,6 +55,8 @@ export interface CommandTask {
   readonly executable: string;
   readonly args: readonly string[];
   readonly source: CommandTaskSource;
+  readonly trustState: CommandTaskTrustState;
+  readonly trustReason: CommandTaskTrustReason;
 }
 
 export interface CommandTaskCatalog {
@@ -256,6 +274,12 @@ function validateTask(value: unknown, index: number, errors: string[]): void {
   }
   if (!isOneOf(value.kind, COMMAND_TASK_KINDS)) errors.push(`${path}.kind is invalid`);
   if (!isOneOf(value.source, COMMAND_TASK_SOURCES)) errors.push(`${path}.source is invalid`);
+  if (!isOneOf(value.trustState, COMMAND_TASK_TRUST_STATES)) {
+    errors.push(`${path}.trustState is invalid`);
+  }
+  if (!isOneOf(value.trustReason, COMMAND_TASK_TRUST_REASONS)) {
+    errors.push(`${path}.trustReason is invalid`);
+  }
   validateTaskArgs(value, path, errors);
 }
 

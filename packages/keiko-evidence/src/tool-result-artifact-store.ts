@@ -6,20 +6,16 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
+import { existingOwnedDirectory, ownedChildPath, prepareOwnedDirectory } from "./fs-safety.js";
 
 export const TOOL_RESULT_ARTIFACT_SUBDIR = "tool-results";
 export const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt";
@@ -61,37 +57,16 @@ function artifactName(artifactId: string): string {
 
 function prepareArtifactDir(baseDir: string, fs: WorkspaceFs): string {
   const dir = artifactDir(baseDir);
-  try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    return fs.realPath(dir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create tool-result artifact directory: ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
-    );
-  }
+  return prepareOwnedDirectory(dir, fs, "tool-result artifact directory", { mode: 0o700 });
 }
 
 function existingArtifactDir(baseDir: string, fs: WorkspaceFs): string | undefined {
   const dir = artifactDir(baseDir);
-  if (!fs.exists(dir)) {
-    return undefined;
-  }
-  try {
-    return fs.realPath(dir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read tool-result artifact directory: ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
-    );
-  }
+  return existingOwnedDirectory(dir, fs, "tool-result artifact directory");
 }
 
-function artifactPath(realDir: string, artifactId: string, fs: WorkspaceFs): string {
-  const lexical = resolveWithinWorkspace(realDir, artifactName(artifactId));
-  return assertContainedRealPath(fs, realDir, lexical, artifactId);
+function artifactPath(realDir: string, artifactId: string): string {
+  return ownedChildPath(realDir, artifactName(artifactId));
 }
 
 function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
@@ -155,7 +130,7 @@ export function createNodeToolResultArtifactStore(
   return {
     write: (artifactId: string, content: string): void => {
       const realDir = prepareArtifactDir(baseDir, fs);
-      const target = artifactPath(realDir, artifactId, fs);
+      const target = artifactPath(realDir, artifactId);
       assertWritableArtifact(target, fs);
       atomicWriteText(target, content, randomSuffix);
     },
@@ -165,14 +140,14 @@ export function createNodeToolResultArtifactStore(
       if (realDir === undefined) {
         return undefined;
       }
-      return readArtifact(artifactPath(realDir, artifactId, fs), fs);
+      return readArtifact(artifactPath(realDir, artifactId), fs);
     },
     location: (artifactId: string): string => {
       assertValidArtifactId(artifactId);
       const realDir = existingArtifactDir(baseDir, fs);
       return realDir === undefined
         ? join(resolve(artifactDir(baseDir)), artifactName(artifactId))
-        : artifactPath(realDir, artifactId, fs);
+        : artifactPath(realDir, artifactId);
     },
   };
 }

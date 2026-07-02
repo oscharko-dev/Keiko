@@ -13,7 +13,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import {
   applyQualityIntelligenceCandidateEdit,
+  QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
   loadQualityIntelligenceCandidates,
+  qualityIntelligenceCandidatesArtifactContentHash,
   recordQualityIntelligenceCandidates,
 } from "../candidatesArtifact.js";
 import { QI_SUBDIR } from "../store.js";
@@ -96,6 +98,14 @@ afterEach(() => {
 });
 
 describe("applyQualityIntelligenceCandidateEdit — persistence", () => {
+  it("records a companion content hash that covers the candidate artifact body", () => {
+    const artifact = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (artifact === undefined) throw new Error("expected seeded artifact");
+    expect(artifact.artifactIntegrity?.contentHashSha256Hex).toBe(
+      qualityIntelligenceCandidatesArtifactContentHash(artifact),
+    );
+  });
+
   it("returns ok with the updated candidate row reflecting the edit", () => {
     const result = applyQualityIntelligenceCandidateEdit({
       runId: RUN_ID,
@@ -124,6 +134,27 @@ describe("applyQualityIntelligenceCandidateEdit — persistence", () => {
     const row = reloaded?.candidates.find((c) => c.id === "tc-1");
     expect(row?.title).toBe("Edited title");
     expect(row?.steps).toEqual(["new-step-1", "new-step-2"]);
+  });
+
+  it("recomputes the companion content hash after an inline edit", () => {
+    const before = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (before === undefined) throw new Error("expected seeded artifact");
+    applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "tc-1",
+      editedFields: { title: "Edited title" },
+      provenance: provenance(),
+      evidenceDir,
+      redact: identityRedact,
+    });
+    const after = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (after === undefined) throw new Error("expected edited artifact");
+    expect(after.artifactIntegrity?.contentHashSha256Hex).toBe(
+      qualityIntelligenceCandidatesArtifactContentHash(after),
+    );
+    expect(after.artifactIntegrity?.contentHashSha256Hex).not.toBe(
+      before.artifactIntegrity?.contentHashSha256Hex,
+    );
   });
 
   it("leaves untouched fields and sibling candidates unchanged", () => {
@@ -162,6 +193,27 @@ describe("recordQualityIntelligenceCandidates — symlink overwrite hardening", 
         }),
       ).toThrow(EvidenceWriteError);
       expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a symlinked QI companion sub-store before writing candidates", () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-cand-substore-victim-"));
+    try {
+      rmSync(join(evidenceDir, QI_SUBDIR), { recursive: true, force: true });
+      symlinkSync(outside, join(evidenceDir, QI_SUBDIR), "dir");
+
+      expect(() =>
+        recordQualityIntelligenceCandidates({
+          runId: RUN_ID,
+          generatedAt: "2026-06-08T10:01:00.000Z",
+          candidates: [seedCandidate("tc-3")],
+          evidenceDir,
+          redact: identityRedact,
+        }),
+      ).toThrow(EvidenceWriteError);
+      expect(() => readFileSync(join(outside, `${RUN_ID}.candidates.json`), "utf8")).toThrow();
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
@@ -390,6 +442,25 @@ describe("applyQualityIntelligenceCandidateEdit — rejections", () => {
 });
 
 describe("loadQualityIntelligenceCandidates — fail closed companion parsing", () => {
+  it("throws EvidenceReadError when candidate content changes without an integrity update", () => {
+    const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (current === undefined) throw new Error("expected seeded artifact");
+    writeFileSync(
+      artifactPath(evidenceDir),
+      JSON.stringify({
+        ...current,
+        candidates: current.candidates.map((candidate) =>
+          candidate.id === "tc-1" ? { ...candidate, title: "Tampered after write" } : candidate,
+        ),
+      }),
+      "utf8",
+    );
+
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
   it("throws EvidenceReadError for a malformed nested candidate row", () => {
     const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     if (current === undefined) throw new Error("expected seeded artifact");
@@ -468,21 +539,28 @@ describe("loadQualityIntelligenceCandidates — fail closed companion parsing", 
   it("loads an edited revision whose optional list was legitimately cleared to []", () => {
     const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     if (current === undefined) throw new Error("expected seeded artifact");
+    const editedArtifact = {
+      ...current,
+      editedRevisions: [
+        {
+          candidateId: "tc-1",
+          provenance: {
+            editedAt: "2026-06-08T12:00:00.000Z",
+            editedBy: "human" as const,
+            editorLabel: "Alice",
+          },
+          editedFields: { preconditions: [], tags: [] },
+        },
+      ],
+    };
     writeFileSync(
       artifactPath(evidenceDir),
       JSON.stringify({
-        ...current,
-        editedRevisions: [
-          {
-            candidateId: "tc-1",
-            provenance: {
-              editedAt: "2026-06-08T12:00:00.000Z",
-              editedBy: "human",
-              editorLabel: "Alice",
-            },
-            editedFields: { preconditions: [], tags: [] },
-          },
-        ],
+        ...editedArtifact,
+        artifactIntegrity: {
+          schemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
+          contentHashSha256Hex: qualityIntelligenceCandidatesArtifactContentHash(editedArtifact),
+        },
       }),
       "utf8",
     );

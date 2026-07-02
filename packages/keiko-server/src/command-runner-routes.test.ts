@@ -18,6 +18,7 @@ import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import { CommandRunnerError } from "./command-runner-errors.js";
 import type {
   CommandRunInput,
   CommandRunnerEventEmitter,
@@ -27,6 +28,7 @@ import type {
 interface FakeOptions {
   readonly result?: Partial<CommandTaskRunResult>;
   readonly abortReturns?: boolean;
+  readonly executeError?: CommandRunnerError | undefined;
 }
 
 class FakeCommandRunnerManager implements CommandRunnerManager {
@@ -51,11 +53,16 @@ class FakeCommandRunnerManager implements CommandRunnerManager {
         executable: "npm",
         args: ["run", "test"],
         source: "package-json-script",
+        trustState: "trusted",
+        trustReason: "repository-authored-script",
       },
     ],
   });
 
   public readonly execute = (input: CommandRunInput): Promise<CommandTaskRunResult> => {
+    if (this.opts.executeError !== undefined) {
+      return Promise.reject(this.opts.executeError);
+    }
     this.executed.push(input);
     const runId = `run-${String(this.nextId++)}`;
     this.emit({
@@ -272,6 +279,24 @@ describe("POST /api/commands/runs", () => {
       body: JSON.stringify({ projectId: workspaceRoot }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("maps server-side package-script trust denial to 403", async () => {
+    commandRunner = new FakeCommandRunnerManager({
+      executeError: new CommandRunnerError(
+        "TASK_REQUIRES_TRUST",
+        "Repository package scripts require server-side workspace trust before execution.",
+      ),
+    });
+    await rebuild({ commandRunner });
+    const res = await fetch(`${baseUrl()}/api/commands/runs`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ projectId: workspaceRoot, taskId: "npm-script:test" }),
+    });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("TASK_REQUIRES_TRUST");
   });
 
   it("rejects a non-JSON body", async () => {

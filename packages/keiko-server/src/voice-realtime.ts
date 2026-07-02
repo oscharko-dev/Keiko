@@ -80,6 +80,9 @@ import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 // hard 404 + socket.destroy() default (server.ts).
 export const VOICE_CONTROL_PATH = "/api/voice/control";
 
+// Bound every client WebSocket control frame before UTF-8 conversion or JSON parsing. SDP and
+// transcript fields have narrower semantic caps below; this is the transport-level abuse guard.
+export const MAX_VOICE_CONTROL_FRAME_BYTES = 320_000;
 // An SDP offer is small (a single audio m-line plus ICE/DTLS metadata); reject a larger one before
 // any provider call so a hostile client cannot push an unbounded body through the egress seam.
 const MAX_OFFER_SDP_BYTES = 256_000;
@@ -891,6 +894,15 @@ function rawDataToString(data: RawData, isBinary: boolean): string | undefined {
   return Buffer.from(data).toString("utf8");
 }
 
+function rawDataByteLength(data: RawData): number {
+  if (typeof data === "string") return Buffer.byteLength(data, "utf8");
+  if (Buffer.isBuffer(data)) return data.byteLength;
+  if (Array.isArray(data)) {
+    return data.reduce((total, chunk) => total + chunk.byteLength, 0);
+  }
+  return Buffer.from(data).byteLength;
+}
+
 export interface VoiceControlPlaneDeps {
   // The bound loopback port; the upgrade reuses the HTTP path's Host/Origin check on it.
   readonly port: number;
@@ -976,7 +988,10 @@ function resolveSessionChatContext(
 }
 
 class VoiceControlPlaneImpl implements VoiceControlPlane {
-  private readonly wss = new WebSocketServer({ noServer: true });
+  private readonly wss = new WebSocketServer({
+    maxPayload: MAX_VOICE_CONTROL_FRAME_BYTES,
+    noServer: true,
+  });
   private readonly sessions = new Map<string, SessionState>();
   // Liveness sweep timer, started lazily on the first connection and cleared on closeAll (shutdown).
   // A socket that misses a ping/pong cycle is terminated by the next sweep.
@@ -1165,6 +1180,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     this.startHeartbeat();
   }
 
+  // eslint-disable-next-line max-lines-per-function -- connection lifecycle keeps heartbeat, frame limits, session start, and detach handling together.
   private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
     this.attachHeartbeat(ws);
     const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
@@ -1183,6 +1199,10 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     let activeSession: SessionState | undefined;
 
     ws.on("message", (data: RawData, isBinary: boolean) => {
+      if (rawDataByteLength(data) > MAX_VOICE_CONTROL_FRAME_BYTES) {
+        ws.close(1009, "control frame too large");
+        return;
+      }
       const raw = rawDataToString(data, isBinary);
       if (raw === undefined) {
         // Raw audio / binary frames are never a control message (AC1): reject and close.

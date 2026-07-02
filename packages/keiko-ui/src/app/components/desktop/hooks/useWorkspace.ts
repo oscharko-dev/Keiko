@@ -1242,7 +1242,9 @@ export function useWorkspace(
           const chatWindowId =
             c.boundChatWindowId ??
             (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
-          const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
+          const scope =
+            boundScopeOf(c) ??
+            (c.boundScopeElided === true ? null : filesChatBindScope(win, other, Date.now()));
           if (scope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, scope);
           const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
           if (connectorScope !== null && chatWindowId !== null) {

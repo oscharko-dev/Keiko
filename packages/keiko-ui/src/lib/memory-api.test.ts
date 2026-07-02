@@ -132,7 +132,6 @@ describe("memory governance API helpers", () => {
         body: JSON.stringify({
           acknowledged: true,
           selector: { kind: "by-type", scope: { kind: "global" }, type: "preference" },
-          reason: "remove global stale preferences",
         }),
         headers: expect.objectContaining({
           Accept: "application/json",
@@ -157,7 +156,7 @@ describe("memory governance API helpers", () => {
       "/api/memory/mem%201",
       expect.objectContaining({
         method: "DELETE",
-        body: JSON.stringify({ acknowledged: true, reason: "stale" }),
+        body: JSON.stringify({ acknowledged: true }),
         headers: expect.objectContaining({
           Accept: "application/json",
           "Content-Type": "application/json",

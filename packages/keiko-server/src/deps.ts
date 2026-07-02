@@ -75,6 +75,10 @@ import {
   createMemoryAuditHandler,
 } from "./memory-audit-handler.js";
 import {
+  createEditorHotExitStore,
+  type EditorHotExitStore,
+} from "./editor/hotExitStore.js";
+import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
 } from "./memory-consolidation-registry.js";
@@ -252,6 +256,9 @@ export interface UiHandlerDeps {
   // Issue #211 — MemoriaViva vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  // Server-owned encrypted editor recovery storage. The browser stores only metadata and an opaque
+  // reference in IndexedDB.
+  readonly editorHotExitStore?: EditorHotExitStore | undefined;
   // Server-authoritative identity and scope bounds for privacy-critical MemoriaViva mutations.
   // Loopback production wiring resolves this from the single local operator; hosted/auth-aware
   // deployments must inject the authenticated principal's reviewer id and authorized scopes.
@@ -417,6 +424,9 @@ export interface BuildHandlerDepsOptions {
   // Optional injected governed update local-state manager (tests); production resolves it from
   // KEIKO_STATE_DIR or <cwd>/.keiko without importing the CLI package.
   readonly updateLocalState?: UpdateLocalStateManager | undefined;
+  // Optional injected editor hot-exit store (tests); production creates an encrypted local vault
+  // under the UI state directory.
+  readonly editorHotExitStore?: EditorHotExitStore | undefined;
   // Optional injected governed update remediation manager (tests); production composes one over
   // updateLocalState and the Local Knowledge reindex port.
   readonly updateRemediation?: UpdateRemediationManager | undefined;
@@ -724,6 +734,10 @@ function configTopologyValues(config: GatewayConfig | undefined): readonly strin
     out.push(provider.baseUrl);
     addEgressTopology(provider.egress);
   }
+  if (config.reranker !== undefined) {
+    out.push(config.reranker.baseUrl);
+    addEgressTopology(config.reranker.egress);
+  }
   return out;
 }
 
@@ -735,6 +749,9 @@ function configOpaqueSecretValues(config: GatewayConfig | undefined): readonly s
   }
   for (const provider of config.providers) {
     out.push(provider.apiKey);
+  }
+  if (config.reranker !== undefined) {
+    out.push(config.reranker.apiKey);
   }
   return out;
 }
@@ -1258,6 +1275,7 @@ interface PeripheralManagers {
   readonly containerRunner: ContainerRunnerManager;
   readonly browser: BrowserSessionManager;
   readonly memoryVault: MemoryVaultStore;
+  readonly editorHotExitStore: EditorHotExitStore;
   readonly memoryAuthorization: MemoryAuthorizationContext;
 }
 
@@ -1303,6 +1321,7 @@ interface BuildPeripheralsArgs {
   readonly runtimeStateDir: string;
 }
 
+// eslint-disable-next-line max-lines-per-function -- central runtime wiring stays together so dependency authority is visible.
 function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
   const updateLocalState = args.options.updateLocalState ?? buildUpdateLocalState(args.options.env);
   const memoryVault = buildMemoryVault(args.redactString, args.evidenceStore, args.options.env);
@@ -1345,6 +1364,12 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
       redactor: args.liveRedactor,
     }),
     memoryVault,
+    editorHotExitStore:
+      args.options.editorHotExitStore ??
+      createEditorHotExitStore({
+        stateDir: args.runtimeStateDir,
+        env: args.options.env,
+      }),
     memoryAuthorization: buildLoopbackMemoryAuthorization(memoryVault),
   };
 }

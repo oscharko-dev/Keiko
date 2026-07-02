@@ -73,6 +73,36 @@ describe("findForbiddenPaths — .js.map (JS source map)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// TypeScript build metadata and compiled test artifacts
+// ---------------------------------------------------------------------------
+
+describe("findForbiddenPaths — build metadata and compiled tests", () => {
+  it("flags TypeScript incremental build metadata", () => {
+    const hits = findForbiddenPaths(["dist/tsconfig.tsbuildinfo"]);
+    expect(hits.some((h) => h.label === "TypeScript incremental build metadata")).toBe(true);
+  });
+
+  it("flags compiled test files", () => {
+    const hits = findForbiddenPaths([
+      "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.js",
+      "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.d.ts",
+    ]);
+    expect(hits.filter((h) => h.label === "compiled test or spec artifact").length).toBe(2);
+  });
+
+  it("flags nested __tests__ artifacts", () => {
+    const hits = findForbiddenPaths([
+      "node_modules/@oscharko-dev/keiko-evidence/dist/qualityIntelligence/__tests__/retention.js",
+    ]);
+    expect(hits.some((h) => h.label === "compiled test or spec artifact")).toBe(true);
+  });
+
+  it("does not flag production files whose basename contains the word test", () => {
+    expect(findForbiddenPaths(["dist/testGenerationRoutes.js"])).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Environment file rule
 // ---------------------------------------------------------------------------
 
@@ -255,8 +285,10 @@ describe("findForbiddenPaths — mixed-path batch", () => {
       "dist/index.d.ts",
       "dist/index.d.ts.map", // clean — declaration map stays
       "dist/index.js.map", // forbidden — JS source map
+      "dist/tsconfig.tsbuildinfo", // forbidden — build metadata
       "dist/ui/static/index.html", // clean
       ".env.local", // forbidden — env file
+      "node_modules/@oscharko-dev/keiko-server/dist/deps.test.js", // forbidden — compiled test
       "node_modules/@oscharko-dev/keiko-contracts/dist/index.js", // clean
       "node_modules/some-native/build/binding.node", // forbidden — native addon
       "dist/cli/index.js", // clean
@@ -264,7 +296,9 @@ describe("findForbiddenPaths — mixed-path batch", () => {
     const hits = findForbiddenPaths(paths);
     const flaggedPaths = hits.map((h) => h.path);
     expect(flaggedPaths).toContain("dist/index.js.map");
+    expect(flaggedPaths).toContain("dist/tsconfig.tsbuildinfo");
     expect(flaggedPaths).toContain(".env.local");
+    expect(flaggedPaths).toContain("node_modules/@oscharko-dev/keiko-server/dist/deps.test.js");
     expect(flaggedPaths).toContain("node_modules/some-native/build/binding.node");
     // Clean paths must NOT appear
     expect(flaggedPaths).not.toContain("dist/index.js");

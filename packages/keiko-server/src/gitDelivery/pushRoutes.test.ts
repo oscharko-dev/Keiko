@@ -288,6 +288,29 @@ describe("push execute — governed publish + no-bypass (AC2/AC3/AC4/AC5)", () =
     expect(adapter.calls()).toBe(0);
   });
 
+  it("rejects a forged browser-supplied approval object before publishing", async () => {
+    const adapter = recordingPublishAdapter();
+    const handler = createHandlePushExecute({
+      execution: seams({ publishAdapterFactory: () => adapter.adapter }),
+    });
+    const res = await handler(
+      ctxFor(
+        EXECUTE,
+        pushBody({
+          approval: {
+            required: true,
+            approvalTokenHash: "a".repeat(64),
+            approvedByUserId: "u-1",
+            approvedAtMs: 1_700_000_000_000,
+          },
+        }),
+      ),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(adapter.calls()).toBe(0);
+  });
+
   it("blocks a non-fast-forward push at preflight, executing nothing (AC5)", async () => {
     const adapter = recordingPublishAdapter();
     const handler = createHandlePushExecute({

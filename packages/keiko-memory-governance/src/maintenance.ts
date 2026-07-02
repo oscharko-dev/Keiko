@@ -36,7 +36,11 @@
 //     which already gates archive/forget. So a faded memory still archives/forgets, but its
 //     provenance stays intact and every run is idempotent.
 
-import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  MemoryForgetReason,
+  MemoryId,
+  MemoryRecord,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 // Structural subset of the vault's MemoryAccessStat so this leaf package does not depend on the
 // vault package (ADR-0019 direction). The orchestrator passes the vault's map directly.
@@ -77,7 +81,7 @@ export const MEMORY_MAINTENANCE_DEFAULTS: MemoryMaintenancePolicy = {
 export interface MemoryMaintenancePlan {
   readonly promote: MemoryId[];
   readonly archive: MemoryId[];
-  readonly forget: { id: MemoryId; reason: string }[];
+  readonly forget: { id: MemoryId; reason: MemoryForgetReason }[];
 }
 
 export interface PlanMaintenanceOptions {
@@ -129,7 +133,6 @@ export function effectiveStrength(
 }
 
 // ─── Per-record decision ───────────────────────────────────────────────────────
-type DecisionKind = "forget" | "archive" | "promote" | "none";
 
 interface RecordContext {
   readonly record: MemoryRecord;
@@ -139,17 +142,22 @@ interface RecordContext {
   readonly accessCount: number;
 }
 
-interface Decision {
-  readonly kind: DecisionKind;
-  readonly reason?: string;
-}
+type Decision =
+  | { readonly kind: "forget"; readonly reason: MemoryForgetReason }
+  | { readonly kind: "archive" }
+  | { readonly kind: "promote" }
+  | { readonly kind: "none" };
 
 function isValidityExpired(record: MemoryRecord, nowMs: number): boolean {
   const until = record.validity.validUntil;
   return until !== undefined && until <= nowMs;
 }
 
-function shouldForget(c: RecordContext, p: MemoryMaintenancePolicy, nowMs: number): string | null {
+function shouldForget(
+  c: RecordContext,
+  p: MemoryMaintenancePolicy,
+  nowMs: number,
+): MemoryForgetReason | null {
   if (
     isValidityExpired(c.record, nowMs) &&
     c.record.status !== "accepted" &&
@@ -212,7 +220,7 @@ function buildContext(
 
 interface ForgetCandidate {
   readonly id: MemoryId;
-  readonly reason: string;
+  readonly reason: MemoryForgetReason;
   readonly strength: number;
 }
 
@@ -226,7 +234,11 @@ function applyDecision(acc: Accumulator, c: RecordContext, decision: Decision): 
   const id = c.record.id;
   switch (decision.kind) {
     case "forget":
-      acc.forgetCandidates.push({ id, reason: decision.reason ?? "forget", strength: c.strength });
+      acc.forgetCandidates.push({
+        id,
+        reason: decision.reason,
+        strength: c.strength,
+      });
       return;
     case "archive":
       acc.archive.push(id);
@@ -244,7 +256,7 @@ function applyDecision(acc: Accumulator, c: RecordContext, decision: Decision): 
 function boundForget(
   candidates: readonly ForgetCandidate[],
   maxForgetPerRun: number,
-): { id: MemoryId; reason: string }[] {
+): { id: MemoryId; reason: MemoryForgetReason }[] {
   return [...candidates]
     .sort((a, b) =>
       a.strength !== b.strength ? a.strength - b.strength : a.id.localeCompare(b.id),

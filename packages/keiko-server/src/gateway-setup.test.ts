@@ -40,6 +40,10 @@ const VAULT_ENV: Readonly<Record<string, string>> = {
   KEIKO_PROVIDER_CREDENTIALS_KEY: Buffer.alloc(32, 0x21).toString("base64"),
   KEIKO_FIGMA_KEY: Buffer.alloc(32, 0x42).toString("base64"),
 };
+const MOCK_FETCH_EGRESS_ENV: Readonly<Record<string, string>> = {
+  ...VAULT_ENV,
+  KEIKO_ALLOW_PRIVATE_EGRESS: "1",
+};
 
 afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
@@ -785,7 +789,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -864,7 +868,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -1000,7 +1004,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -1102,7 +1106,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
@@ -1251,7 +1255,10 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV, KEIKO_ALLOW_LINK_LOCAL_GATEWAY: "1" },
+      env: {
+        ...MOCK_FETCH_EGRESS_ENV,
+        KEIKO_ALLOW_LINK_LOCAL_GATEWAY: "1",
+      },
       uiDbPath: join(uiDir, "keiko-ui.db"),
       gatewayModelDiscovery: () => {
         discoveryCalls += 1;
@@ -1355,7 +1362,7 @@ describe("handleGatewaySetup", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
-      env: { ...VAULT_ENV },
+      env: { ...MOCK_FETCH_EGRESS_ENV },
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {

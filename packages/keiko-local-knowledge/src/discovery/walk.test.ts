@@ -292,6 +292,24 @@ describe("walkSource — files scope", () => {
     expect(files).toStrictEqual([".vscode/settings.json"]);
   });
 
+  it("rejects unsafe explicit file references with the contract storage-reference gate", () => {
+    const fs = simpleFs();
+    const out = [
+      ...walkSource(fs, {
+        kind: "files",
+        rootPath: ROOT,
+        files: ["/etc/passwd"],
+      }),
+    ];
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe("error");
+    if (out[0]?.kind === "error") {
+      expect(out[0].error.code).toBe("INVALID_SCOPE");
+      expect(out[0].error.message).toContain("storage-reference gate");
+    }
+  });
+
   it("applies the always-on deny list to discovered descendants", () => {
     const fs = memoryFs(ROOT, [
       { relativePath: "README.md", content: "ok" },

@@ -84,6 +84,7 @@ that the tag-push release verification already completed successfully for the sa
 The script:
 
 - checks version and publish-manifest consistency,
+- checks workspace SBOM/license policy through the `check:workspace-supply-chain` gate in `prepack`,
 - checks release-impact metadata for the current package version,
 - generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
@@ -92,8 +93,8 @@ The script:
 - requires publish-time release-impact approval evidence to resolve to an approved GitHub PR review from `KEIKO_RELEASE_OWNER_GITHUB_LOGINS`,
 - requires a clean tracked working tree,
 - runs the `prepack` release gate,
-- publishes or reuses every publishable workspace package and the root package,
-- verifies every npm package version and selected dist-tag,
+- publishes or reuses the root package only; private runtime workspaces are bundled inside it,
+- verifies the root npm package version and selected dist-tag,
 - runs the registry install smoke,
 - creates or updates the matching GitHub Release with generated release-impact notes,
 - marks stable `--tag latest` publishes as GitHub `Latest`.
@@ -101,9 +102,9 @@ The script:
 Prerelease package versions are blocked from publishing with the `latest` dist-tag, and the
 selected tag must exactly match `v<package.json version>`.
 
-The `prepack` and `prepublishOnly` gates also run `npm run check:release-impact`, so a publish
-cannot bypass missing, duplicated, contradictory, unreviewed, unbundled, or version-mismatched
-release-impact metadata.
+The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
+`npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,
+duplicated, contradictory, unreviewed, unbundled, or version-mismatched release-impact metadata.
 
 ## GitHub Release and required checks
 

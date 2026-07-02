@@ -64,11 +64,28 @@ describe("tombstones", () => {
       bodyHash: memoryBodySuppressionHash("Der Nutzer wohnt in München."),
       reviewerId: "reviewer-1" as MemoryReviewerId,
       originalStatus: "accepted",
-      reason: "explicit user-requested deletion",
+      reason: "explicit-user-request",
     });
     insertTombstoneRow(db, t, TEST_CIPHER);
     expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toEqual([t]);
     expect(t.bodyHash).not.toContain("München");
+    db.close();
+  });
+
+  it("collapses free-form tombstone reasons to a content-free code", () => {
+    const db = openTestDb();
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "t1",
+        memoryId: "m1" as MemoryId,
+        reason: "forget customer acme-secret-token preference",
+      }),
+      TEST_CIPHER,
+    );
+    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)[0]?.reason).toBe(
+      "user-request",
+    );
     db.close();
   });
 

@@ -65,13 +65,16 @@ export type {
 // ─── Generated-candidate companion artifact (Issue #280) ────────────────────────────
 export {
   QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
+  QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
   recordQualityIntelligenceCandidates,
   loadQualityIntelligenceCandidates,
   deleteQualityIntelligenceCandidates,
   applyQualityIntelligenceCandidateEdit,
+  qualityIntelligenceCandidatesArtifactContentHash,
 } from "./candidatesArtifact.js";
 export type {
   QualityIntelligenceCandidateRow,
+  QualityIntelligenceCandidatesArtifactIntegrity,
   QualityIntelligenceCandidatesArtifact,
   QualityIntelligenceCandidatesStoreOptions,
   RecordQualityIntelligenceCandidatesInput,
@@ -125,6 +128,7 @@ export type {
 export {
   applyQualityIntelligenceRetention,
   deleteQualityIntelligenceRun,
+  enforceQualityIntelligenceQuarantineRetention,
   enforceQualityIntelligenceRetentionPolicy,
   quarantineCorruptQualityIntelligenceManifest,
   snapshotQualityIntelligenceRunsForRecovery,
@@ -135,6 +139,9 @@ export type {
   QualityIntelligenceDeletionStatus,
   QualityIntelligenceQuarantineOptions,
   QualityIntelligenceQuarantineReceipt,
+  QualityIntelligenceQuarantineRetentionOptions,
+  QualityIntelligenceQuarantineRetentionRemoval,
+  QualityIntelligenceQuarantineRetentionResult,
   QualityIntelligenceRecoverySnapshot,
   QualityIntelligenceRetentionDecision,
   QualityIntelligenceRetentionDecisionInput,
@@ -142,6 +149,8 @@ export type {
   QualityIntelligenceRetentionEnforcementOptions,
   QualityIntelligenceRetentionEnforcementResult,
   QualityIntelligenceRetentionResult,
+  QualityIntelligenceRetentionSkippedReason,
+  QualityIntelligenceRetentionSkippedRun,
   QualityIntelligenceRunDeletedEvent,
   QualityIntelligenceRunSnapshotEntry,
 } from "./retention.js";

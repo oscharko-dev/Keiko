@@ -35,6 +35,7 @@ function depsWith(
     spawn: spawnFn,
     monitor: fakeMonitor(),
     now: () => 1_000,
+    networkEnforcement: "inherit",
     ...extra,
   };
 }
@@ -217,6 +218,7 @@ describe("runVerification — cancellation (D5)", () => {
       // Empty PATH → defaultResolveExecutable throws CommandDeniedError before spawning.
       processEnv: {},
       now: () => 1_000,
+      networkEnforcement: "inherit",
     });
     expect(report.results[0]?.status).toBe("denied");
     expect(rec.calls()).toHaveLength(0);
@@ -254,6 +256,7 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
       spawn: rec.fn,
       monitor,
       now: () => 1,
+      networkEnforcement: "inherit",
     });
     const result = report.results[0];
     expect(result?.status).toBe("resource-exceeded");
@@ -275,6 +278,7 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
       spawn: recA.fn,
       monitor,
       now: () => 1,
+      networkEnforcement: "inherit",
     });
     expect(monitor.stopped()).toBe(1);
     // 2) a skipped step never spawns, so watch is never called and stop count is unchanged
@@ -292,7 +296,7 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
         ],
         ws.info.root,
       ),
-      { workspace: ws.info, spawn: recB.fn, monitor, now: () => 1 },
+      { workspace: ws.info, spawn: recB.fn, monitor, now: () => 1, networkEnforcement: "inherit" },
     );
     expect(monitor.watched()).toHaveLength(1); // unchanged: no spawn on a skip
   });

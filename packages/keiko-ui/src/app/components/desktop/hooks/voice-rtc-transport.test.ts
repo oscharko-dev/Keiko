@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  APPROVED_VOICE_RTC_CONFIGURATION,
   createBrowserVoiceRtcTransport,
   VoiceRtcError,
   realtimeVoiceTransportSupported,
@@ -14,6 +15,7 @@ type Listener = (event: unknown) => void;
 
 let nextDataChannelReadyState: RTCDataChannelState = "open";
 let lastDataChannel: FakeDataChannel | undefined;
+let lastPeerConnectionConfig: RTCConfiguration | undefined;
 
 class FakeDataChannel {
   public readyState: RTCDataChannelState;
@@ -64,6 +66,10 @@ class FakePeerConnection {
   private readonly listeners: Record<string, Listener[]> = {};
   private readonly senders: RTCRtpSender[] = [];
   private readonly channels: FakeDataChannel[] = [];
+
+  constructor(config?: RTCConfiguration) {
+    lastPeerConnectionConfig = config;
+  }
 
   addTrack(_track: MediaStreamTrack, _stream: MediaStream): RTCRtpSender {
     const sender = { track: _track, stop: vi.fn() } as unknown as RTCRtpSender;
@@ -141,6 +147,7 @@ afterEach(() => {
   Reflect.deleteProperty(navigator as unknown as Record<string, unknown>, "mediaDevices");
   nextDataChannelReadyState = "open";
   lastDataChannel = undefined;
+  lastPeerConnectionConfig = undefined;
 });
 
 describe("realtimeVoiceTransportSupported", () => {
@@ -181,6 +188,12 @@ describe("createBrowserVoiceRtcTransport", () => {
     const transport = createBrowserVoiceRtcTransport();
     const session = await transport.connect();
     expect(session.offerSdp).toBe("v=0\r\nfake-sdp-offer");
+    expect(lastPeerConnectionConfig).toBe(APPROVED_VOICE_RTC_CONFIGURATION);
+  });
+
+  it("keeps the approved WebRTC config free of browser-configured ICE servers", () => {
+    expect(APPROVED_VOICE_RTC_CONFIGURATION.iceServers).toEqual([]);
+    expect(Object.isFrozen(APPROVED_VOICE_RTC_CONFIGURATION.iceServers)).toBe(true);
   });
 
   it("falls back to the bounded timeout when ICE gathering never completes", async () => {

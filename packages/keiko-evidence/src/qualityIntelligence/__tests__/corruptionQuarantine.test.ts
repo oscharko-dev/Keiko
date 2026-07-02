@@ -14,7 +14,10 @@ import {
   recordQualityIntelligenceRun,
   type QualityIntelligenceRecordInput,
 } from "../store.js";
-import { quarantineCorruptQualityIntelligenceManifest } from "../retention.js";
+import {
+  enforceQualityIntelligenceQuarantineRetention,
+  quarantineCorruptQualityIntelligenceManifest,
+} from "../retention.js";
 import { EvidenceReadError } from "../../errors.js";
 import type { QualityIntelligenceEvidenceManifest } from "../manifestSchema.js";
 
@@ -117,5 +120,72 @@ describe("quarantineCorruptQualityIntelligenceManifest", () => {
 
   it("rejects an invalid runId at the quarantine boundary", () => {
     expect(() => quarantineCorruptQualityIntelligenceManifest(evidenceDir, "../escape")).toThrow();
+  });
+
+  it("purges quarantined manifests by age without touching active manifests", async () => {
+    recordQualityIntelligenceRun(inputFor("run-cq-live"), { evidenceDir });
+    await writeCorruptManifest("run-cq-old", "old");
+    await writeCorruptManifest("run-cq-new", "new");
+    quarantineCorruptQualityIntelligenceManifest(evidenceDir, "run-cq-old", {
+      now: () => Date.parse("2026-01-01T00:00:00.000Z"),
+    });
+    quarantineCorruptQualityIntelligenceManifest(evidenceDir, "run-cq-new", {
+      now: () => Date.parse("2026-07-01T00:00:00.000Z"),
+    });
+
+    const result = enforceQualityIntelligenceQuarantineRetention({
+      evidenceDir,
+      now: () => Date.parse("2026-07-15T00:00:00.000Z"),
+      retainedDays: 30,
+    });
+
+    expect(result.removed).toEqual([
+      expect.objectContaining({ runId: "run-cq-old", reason: "age-exceeded" }),
+    ]);
+    const entries = await readdir(join(evidenceDir, QI_SUBDIR));
+    expect(entries).toContain("run-cq-live.qi.json");
+    expect(entries).toContain("run-cq-new.qi.json.corrupt.2026-07-01T00:00:00.000Z");
+    expect(entries).not.toContain("run-cq-old.qi.json.corrupt.2026-01-01T00:00:00.000Z");
+  });
+
+  it("purges oldest quarantined manifests beyond the count cap", async () => {
+    for (let i = 0; i < 3; i += 1) {
+      const runId = `run-cq-count-${String(i)}`;
+      await writeCorruptManifest(runId, String(i));
+      quarantineCorruptQualityIntelligenceManifest(evidenceDir, runId, {
+        now: () => Date.parse(`2026-06-0${String(i + 1)}T00:00:00.000Z`),
+      });
+    }
+
+    const result = enforceQualityIntelligenceQuarantineRetention({
+      evidenceDir,
+      now: () => Date.parse("2026-06-10T00:00:00.000Z"),
+      retainedDays: 365,
+      maxQuarantinedManifests: 2,
+    });
+
+    expect(result.removed).toEqual([
+      expect.objectContaining({ runId: "run-cq-count-0", reason: "count-exceeded" }),
+    ]);
+  });
+
+  it("skips malformed quarantine names instead of deleting them", async () => {
+    const dir = join(evidenceDir, QI_SUBDIR);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "not-a-run!.qi.json.corrupt.2026-01-01T00:00:00.000Z"), "bad");
+
+    const result = enforceQualityIntelligenceQuarantineRetention({
+      evidenceDir,
+      now: () => Date.parse("2026-07-15T00:00:00.000Z"),
+      retainedDays: 30,
+    });
+
+    expect(result.removed).toEqual([]);
+    expect(result.skippedPaths.join("\n")).toContain(
+      "not-a-run!.qi.json.corrupt.2026-01-01T00:00:00.000Z",
+    );
+    expect((await readdir(dir)).join("\n")).toContain(
+      "not-a-run!.qi.json.corrupt.2026-01-01T00:00:00.000Z",
+    );
   });
 });

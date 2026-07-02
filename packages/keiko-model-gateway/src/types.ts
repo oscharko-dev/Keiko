@@ -108,6 +108,7 @@ export interface OutboundHttpEgressConfig {
   readonly httpsProxy?: string | undefined;
   readonly noProxy?: readonly string[] | undefined;
   readonly caBundlePath?: string | undefined;
+  readonly allowPrivateNetwork?: boolean | undefined;
 }
 
 export interface CircuitBreakerConfig {

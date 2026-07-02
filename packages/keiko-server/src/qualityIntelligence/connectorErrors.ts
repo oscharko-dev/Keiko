@@ -7,6 +7,8 @@
 // The shape matches the existing BFF `ApiError` envelope (`{ error: { code, message } }`)
 // so the gateway/router serialises it consistently with the other route groups.
 
+import { objectContainsCredentialKey } from "@oscharko-dev/keiko-security";
+
 export type QiConnectorErrorCode =
   | "QI_BAD_REQUEST"
   | "QI_CONNECTOR_DISABLED"
@@ -90,4 +92,5 @@ const valueContainsForbiddenSecretShape = (value: unknown, seen: WeakSet<object>
 
 export const payloadContainsForbiddenSecretShape = (
   payload: Readonly<Record<string, unknown>>,
-): boolean => valueContainsForbiddenSecretShape(payload, new WeakSet());
+): boolean =>
+  objectContainsCredentialKey(payload) || valueContainsForbiddenSecretShape(payload, new WeakSet());

@@ -106,6 +106,7 @@ jobs:
         run: |
           npm run build
           npm run prepare:bin
+          npm run prune:package-build-artifacts
           npm run prune:package-native-optionals
           npm run check:package-surface
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
@@ -292,6 +293,7 @@ jobs:
           npm run build
           npm run prepare:bin
           npm run build:ui
+          npm run prune:package-build-artifacts
           npm run prune:package-native-optionals
       - name: Verify package surface
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}

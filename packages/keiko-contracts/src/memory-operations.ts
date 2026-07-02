@@ -32,6 +32,26 @@ import type {
   MemoryValidityInterval,
 } from "./memory-records.js";
 
+export const MEMORY_FORGET_REASON_USER_REQUEST = "user-request";
+export const MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST = "explicit-user-request";
+export const MEMORY_FORGET_REASON_EXPIRE_AGE = "expire-age";
+export const MEMORY_FORGET_REASON_EXPIRE_PROPOSAL = "expire-proposal";
+export const MEMORY_FORGET_REASON_EVICT_OVERFLOW = "evict-overflow";
+export const MEMORY_FORGET_REASON_VALIDITY_EXPIRED = "validity-expired";
+export const MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT = "proposed-faint-aged-out";
+
+export const MEMORY_FORGET_REASONS = [
+  MEMORY_FORGET_REASON_USER_REQUEST,
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+  MEMORY_FORGET_REASON_EXPIRE_AGE,
+  MEMORY_FORGET_REASON_EXPIRE_PROPOSAL,
+  MEMORY_FORGET_REASON_EVICT_OVERFLOW,
+  MEMORY_FORGET_REASON_VALIDITY_EXPIRED,
+  MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT,
+] as const;
+
+export type MemoryForgetReason = (typeof MEMORY_FORGET_REASONS)[number];
+
 // ─── Proposal ─────────────────────────────────────────────────────────────────
 // A candidate memory that has been captured but not yet reviewed. The capture layer
 // (#207) emits these; the conversation center (#212) or MemoriaViva UI (#211) presents
@@ -160,15 +180,16 @@ export interface MemoryArchive {
 // ─── Forget ───────────────────────────────────────────────────────────────────
 // Destructive delete. The storage layer is required to preserve an audit tombstone that
 // records ONLY: the original MemoryId, the original scope (for governance reporting),
-// the original status at deletion time, the reviewer, and the deletion timestamp. No
-// body, no payload, no provenance content. The `MemoryAuditRecord` carries the
-// scope and reason; this envelope pins the inputs.
+// the original status at deletion time, the reviewer, the deletion timestamp, and a
+// content-free reason code. No body, no selector phrase, no operator prose, no payload,
+// no provenance content. The `MemoryAuditRecord` carries the scope and reason; this
+// envelope pins the inputs.
 export interface MemoryForget {
   readonly schemaVersion: "1";
   readonly memoryId: MemoryId;
   readonly reviewerId: MemoryReviewerId;
   readonly forgottenAt: number;
-  readonly reason: string;
+  readonly reason: MemoryForgetReason;
   // Whether the user has acknowledged the destructive nature. The BFF layer is required
   // to refuse a forget operation where this flag is `false`. Pinning it on the contract
   // keeps the obligation non-bypassable at the type level.

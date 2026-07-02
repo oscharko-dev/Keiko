@@ -35,23 +35,23 @@ import {
   chmodSync,
   linkSync,
   lstatSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join, sep } from "node:path";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import { join } from "node:path";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { EvidenceReadError, EvidenceWriteError } from "../../errors.js";
+import {
+  existingOwnedDirectory,
+  ownedChildPath,
+  prepareOwnedDirectory,
+  removeOwnedRunDirectory,
+} from "../../fs-safety.js";
 import { writeSideFile } from "../../side-file.js";
 import { redactQualityIntelligenceEvidence } from "../redaction.js";
 import { QI_SUBDIR } from "../store.js";
@@ -406,53 +406,33 @@ function verifyOptionalArtifactHashes(
 // ─── Helpers ─────────────────────────────────────────────────────────────────────────────────
 
 function realBaseForWrite(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    mkdirSync(baseDir, { recursive: true, mode: QI_DIR_MODE });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create Figma snapshot directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "Figma snapshot directory", { mode: QI_DIR_MODE });
 }
 
 function realBaseForRead(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) return undefined;
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read Figma snapshot directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "Figma snapshot directory");
 }
 
-function containedRecordPath(runId: string, realBase: string, fs: WorkspaceFs): string {
+function containedRecordPath(runId: string, realBase: string, _fs: WorkspaceFs): string {
   assertValidRunId(runId);
   const name = `${runId}${SNAPSHOT_SUFFIX}`;
-  const lexical = resolveWithinWorkspace(realBase, name);
-  return assertContainedRealPath(fs, realBase, lexical, name);
+  return ownedChildPath(realBase, name);
 }
 
-function containedManagementPath(runId: string, realBase: string, fs: WorkspaceFs): string {
+function containedManagementPath(runId: string, realBase: string, _fs: WorkspaceFs): string {
   assertValidRunId(runId);
   const name = `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`;
-  const lexical = resolveWithinWorkspace(realBase, name);
-  return assertContainedRealPath(fs, realBase, lexical, name);
+  return ownedChildPath(realBase, name);
 }
 
 function containedSideFileRunDir(ctx: StoreCtx, runId: string): string {
   assertValidRunId(runId);
   const realQiBase = realBaseForRead(ctx.qiDir, ctx.fs) ?? realBaseForWrite(ctx.qiDir, ctx.fs);
-  const sideBaseLexical = resolveWithinWorkspace(realQiBase, SIDE_FILE_SUBDIR);
-  const realSideBase = assertContainedRealPath(
-    ctx.fs,
-    realQiBase,
-    sideBaseLexical,
-    SIDE_FILE_SUBDIR,
-  );
-  const runDirLexical = resolveWithinWorkspace(realSideBase, runId);
-  return assertContainedRealPath(ctx.fs, realSideBase, runDirLexical, runId);
+  const sideBase = ownedChildPath(realQiBase, SIDE_FILE_SUBDIR);
+  const realSideBase = existingOwnedDirectory(sideBase, ctx.fs, "Figma snapshot side-file root", {
+    parentReal: realQiBase,
+  });
+  return ownedChildPath(realSideBase ?? sideBase, runId);
 }
 
 function assertSnapshotAbsent(target: string): void {
@@ -717,6 +697,7 @@ function verifyStructuralScreenIntegrity(
   }
 }
 
+// eslint-disable-next-line max-lines-per-function -- keep side-file path, ownership, and hash checks in one auditable read path.
 function readVerifiedScreenImageSideFile(
   ctx: StoreCtx,
   runId: string,
@@ -728,17 +709,35 @@ function readVerifiedScreenImageSideFile(
       `Figma snapshot integrity check failed for run ${runId}: invalid image side-file path`,
     );
   }
-  const runDir = join(ctx.sideFileBase, runId);
-  let realRunDir: string;
-  try {
-    realRunDir = ctx.fs.realPath(runDir);
-  } catch {
+  const realQiBase = realBaseForRead(ctx.qiDir, ctx.fs);
+  if (realQiBase === undefined) {
     throw new EvidenceReadError(
       `Figma snapshot integrity check failed for run ${runId}: image side-file directory missing`,
     );
   }
-  const lexical = resolveWithinWorkspace(realRunDir, name);
-  const absolute = assertContainedRealPath(ctx.fs, realRunDir, lexical, name);
+  const realSideBase = existingOwnedDirectory(
+    ctx.sideFileBase,
+    ctx.fs,
+    "Figma snapshot side-file root",
+    { parentReal: realQiBase },
+  );
+  if (realSideBase === undefined) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: image side-file directory missing`,
+    );
+  }
+  const realRunDir = existingOwnedDirectory(
+    ownedChildPath(realSideBase, runId),
+    ctx.fs,
+    "Figma snapshot side-file run directory",
+    { parentReal: realSideBase },
+  );
+  if (realRunDir === undefined) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: image side-file directory missing`,
+    );
+  }
+  const absolute = ownedChildPath(realRunDir, name);
   const stat = lstatSync(absolute, { throwIfNoEntry: false });
   if (stat === undefined || !stat.isFile() || stat.isSymbolicLink()) {
     throw new EvidenceReadError(
@@ -877,47 +876,6 @@ function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
   return records.slice(0, boundedLimit).map((record) => record.runId);
 }
 
-function containedPath(path: string, root: string): boolean {
-  return path === root || path.startsWith(root + sep);
-}
-
-function realSideFileBaseForRetention(qiDir: string, sideFileBase: string): string | undefined {
-  const sideStat = lstatSync(sideFileBase, { throwIfNoEntry: false });
-  if (sideStat === undefined) {
-    return undefined;
-  }
-  if (sideStat.isSymbolicLink() || !sideStat.isDirectory()) {
-    throw new EvidenceWriteError("Figma snapshot side-file root is not a real directory");
-  }
-  const realQiDir = realpathSync(qiDir);
-  const realSideFileBase = realpathSync(sideFileBase);
-  if (!containedPath(realSideFileBase, realQiDir)) {
-    throw new EvidenceWriteError("Figma snapshot side-file root escapes the QI evidence directory");
-  }
-  return realSideFileBase;
-}
-
-function sideDirForRetention(
-  realSideFileBase: string | undefined,
-  runId: string,
-): string | undefined {
-  if (realSideFileBase === undefined) {
-    return undefined;
-  }
-  const runDir = join(realSideFileBase, runId);
-  if (!containedPath(runDir, realSideFileBase)) {
-    throw new EvidenceWriteError("Figma snapshot side-file dir escapes retention root");
-  }
-  const stat = lstatSync(runDir, { throwIfNoEntry: false });
-  if (stat?.isSymbolicLink() === true) {
-    throw new EvidenceWriteError("Figma snapshot side-file dir is a symlink");
-  }
-  if (stat !== undefined && !stat.isDirectory()) {
-    throw new EvidenceWriteError("Figma snapshot side-file dir is not a real directory");
-  }
-  return stat === undefined ? undefined : runDir;
-}
-
 // ─── Retention ───────────────────────────────────────────────────────────────────────────────
 
 export interface FigmaSnapshotRetentionProfile {
@@ -940,13 +898,12 @@ export function enforceFigmaSnapshotRetention(
   profile: FigmaSnapshotRetentionProfile,
 ): void {
   const qiDir = join(evidenceDir, QI_SUBDIR);
-  const sideFileBase = join(qiDir, SIDE_FILE_SUBDIR);
-  const dirStat = lstatSync(qiDir, { throwIfNoEntry: false });
-  if (!dirStat?.isDirectory()) return;
-  const realSideFileBase = realSideFileBaseForRetention(qiDir, sideFileBase);
+  const realQiDir = existingOwnedDirectory(qiDir, nodeWorkspaceFs, "Figma snapshot directory");
+  if (realQiDir === undefined) return;
+  const sideFileBase = ownedChildPath(realQiDir, SIDE_FILE_SUBDIR);
   // Scan for snapshot records and sort by fetchedAt ascending so we remove the oldest first.
   const records: { runId: string; fetchedAt: string }[] = [];
-  for (const file of snapshotRecordFiles(qiDir)) {
+  for (const file of snapshotRecordFiles(realQiDir)) {
     const fetchedAt = readFetchedAt(file.path);
     // Unparseable records are skipped — do not evict conservatively.
     if (fetchedAt !== undefined) records.push({ runId: file.runId, fetchedAt });
@@ -955,16 +912,11 @@ export function enforceFigmaSnapshotRetention(
   records.sort((a, b) => (a.fetchedAt < b.fetchedAt ? -1 : a.fetchedAt > b.fetchedAt ? 1 : 0));
   const toEvict = records.slice(0, Math.max(0, records.length - profile.maxRecords));
   for (const { runId } of toEvict) {
-    const sideDir = sideDirForRetention(realSideFileBase, runId);
-    // After side-dir preflight succeeds, delete the record first — after this the side-dir is
-    // unreachable by any normal path.
-    rmSync(join(qiDir, `${runId}${SNAPSHOT_SUFFIX}`), { force: true });
-    rmSync(join(qiDir, `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`), { force: true });
-    // Best-effort: remove the side-file dir; failure is non-fatal for lazy store reads because
-    // ensureSwept catches retention errors and retries on the next store instance.
-    if (sideDir !== undefined) {
-      rmSync(sideDir, { recursive: true, force: true });
-    }
+    removeOwnedRunDirectory(sideFileBase, runId, nodeWorkspaceFs, "Figma snapshot side-file", {
+      containmentRoot: realQiDir,
+    });
+    rmSync(join(realQiDir, `${runId}${SNAPSHOT_SUFFIX}`), { force: true });
+    rmSync(join(realQiDir, `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`), { force: true });
   }
 }
 

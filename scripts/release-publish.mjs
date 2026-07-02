@@ -12,11 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { URL } from "node:url";
 
-import {
-  explicitPrivateWorkspaceExclusions,
-  internalDependencyEntries,
-  scope,
-} from "./release-workspace-policy.mjs";
+import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -209,6 +205,9 @@ function authConfigKey(registry) {
 function createNpmEnvironment(registry) {
   const token = process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken();
   const strictSsl = process.env.NPM_CONFIG_STRICT_SSL ?? readNpmStrictSsl();
+  if (strictSsl !== "true") {
+    fail("npm strict-ssl=false is not allowed for release publishing; configure a CA bundle instead.");
+  }
   const tempDir = mkdtempSync(join(tmpdir(), "keiko-release-npm-"));
   const userConfig = join(tempDir, ".npmrc");
   const lines = [
@@ -267,19 +266,17 @@ function validateWorkspaceIdentity(workspace, expectedVersion, failures) {
       `${relativePath}: version ${manifest.version} does not match root ${expectedVersion}.`,
     );
   }
-  const privateExclusion = explicitPrivateWorkspaceExclusions.get(manifest.name);
-  if (manifest.private === true && privateExclusion === undefined) {
-    failures.push(`${relativePath}: publishable release workspace must not set private: true.`);
-  }
-  if (manifest.private !== true && privateExclusion !== undefined) {
-    failures.push(`${relativePath}: ${manifest.name} must stay private (${privateExclusion}).`);
+  if (manifest.private !== true) {
+    failures.push(
+      `${relativePath}: internal workspace ${manifest.name} must set private: true; only the root package is published.`,
+    );
   }
   return true;
 }
 
 function validateWorkspaceDependency(workspace, entry, context, failures) {
   const { manifest, relativePath } = workspace;
-  const { expectedVersion, publishableByName, workspaceByName } = context;
+  const { expectedVersion, workspaceByName } = context;
   const { field, name, specifier } = entry;
   if (name === undefined) {
     failures.push(`${manifest.name}: ${field} must be an object when present.`);
@@ -287,11 +284,6 @@ function validateWorkspaceDependency(workspace, entry, context, failures) {
   }
   if (!workspaceByName.has(name)) {
     failures.push(`${relativePath}: ${field}.${name} does not refer to a local workspace package.`);
-  }
-  if (manifest.private !== true && !publishableByName.has(name)) {
-    failures.push(
-      `${relativePath}: publishable workspace must not depend on private workspace ${name}.`,
-    );
   }
   if (specifier !== expectedVersion) {
     failures.push(
@@ -306,14 +298,9 @@ function validateReleaseManifests(rootManifest, workspaces) {
   const workspaceByName = new Map(
     workspaces.map((workspace) => [workspace.manifest.name, workspace]),
   );
-  const publishableByName = new Map(
-    workspaces
-      .filter(({ manifest }) => manifest.private !== true)
-      .map((workspace) => [workspace.manifest.name, workspace]),
-  );
 
   validateRootManifest(rootManifest, options, failures);
-  const context = { expectedVersion, publishableByName, workspaceByName };
+  const context = { expectedVersion, workspaceByName };
 
   for (const workspace of workspaces) {
     if (!validateWorkspaceIdentity(workspace, expectedVersion, failures)) continue;
@@ -326,35 +313,7 @@ function validateReleaseManifests(rootManifest, workspaces) {
     fail(`manifest validation failed:\n  - ${failures.join("\n  - ")}`);
   }
 
-  return { publishableByName, workspaceByName };
-}
-
-function sortPublishableWorkspaces(publishableByName) {
-  const visiting = new Set();
-  const visited = new Set();
-  const order = [];
-
-  function visit(name) {
-    if (visited.has(name)) return;
-    if (visiting.has(name)) {
-      fail(`workspace dependency cycle detected at ${name}.`);
-    }
-    visiting.add(name);
-    const workspace = publishableByName.get(name);
-    for (const { name: dependencyName } of internalDependencyEntries(workspace.manifest)) {
-      if (dependencyName !== undefined && publishableByName.has(dependencyName)) {
-        visit(dependencyName);
-      }
-    }
-    visiting.delete(name);
-    visited.add(name);
-    order.push(workspace);
-  }
-
-  for (const name of publishableByName.keys()) {
-    visit(name);
-  }
-  return order;
+  return { workspaceByName };
 }
 
 function ensureTrackedTreeIsClean() {
@@ -578,6 +537,7 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
       options.tag,
       "--registry",
       options.registry,
+      "--provenance",
       "--ignore-scripts",
     ],
     { env: npmEnv, stdio: "inherit" },
@@ -631,17 +591,15 @@ function runRegistrySmoke(rootPackage, options, npmEnv) {
 const options = parseArgs(process.argv.slice(2));
 const rootManifest = readJson("package.json");
 const workspaces = collectWorkspaceManifests();
-const { publishableByName } = validateReleaseManifests(rootManifest, workspaces);
-const orderedWorkspaces = sortPublishableWorkspaces(publishableByName);
-const workspacePackages = orderedWorkspaces.map(({ manifest, packageDir }) =>
-  packageRecord(manifest, packageDir),
-);
+validateReleaseManifests(rootManifest, workspaces);
+const workspacePackages = [];
 const rootPackage = packageRecord(rootManifest, ".");
 const publishPlan = [...workspacePackages, rootPackage];
 
 console.log(
   `release-publish: ${rootPackage.spec} -> ${options.registry} with dist-tag ${options.tag}.`,
 );
+console.log("release-publish: root-only publish; private runtime workspaces are bundled.");
 for (const pkg of publishPlan) {
   console.log(`release-publish: plan ${pkg.spec} from ${pkg.packageDir}`);
 }

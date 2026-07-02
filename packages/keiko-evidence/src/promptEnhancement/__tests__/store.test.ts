@@ -4,7 +4,7 @@
 // — and that persistence is integrity-checked and tamper-evident on read.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
@@ -18,6 +18,7 @@ import {
   createNodePromptEnhancementLocalStore,
   listPromptEnhancementRuns,
   loadPromptEnhancementRun,
+  PE_SUBDIR,
   recordPromptEnhancementRun,
   type PromptEnhancementRecordInput,
 } from "../store.js";
@@ -213,6 +214,15 @@ describe("createNodePromptEnhancementLocalStore", () => {
     expect(listPromptEnhancementRuns({ evidenceDir })).toEqual([]);
     expect(loadPromptEnhancementRun("pe-run-1", { evidenceDir })).toBeUndefined();
     expect(createNodePromptEnhancementLocalStore(evidenceDir).delete("pe-run-1")).toBe(false);
+  });
+
+  it("refuses a symlinked PE evidence sub-store before writing", () => {
+    const evidenceDir = tempEvidenceDir();
+    const outside = tempEvidenceDir();
+    symlinkSync(outside, join(evidenceDir, PE_SUBDIR), "dir");
+
+    expect(() => recordPromptEnhancementRun(recordInput(), { evidenceDir })).toThrow(/symlink/u);
+    expect(() => readFileSync(join(outside, "pe-run-1.pe.json"), "utf8")).toThrow();
   });
 
   it("fails closed on a tampered enhanced-output field (integrity hash mismatch)", () => {

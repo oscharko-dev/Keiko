@@ -40,6 +40,7 @@ function entry(overrides = {}) {
       "version-consistency",
       "publish-manifests",
       "release-impact",
+      "workspace-supply-chain",
       "package-surface",
       "qi-supply-chain",
     ],

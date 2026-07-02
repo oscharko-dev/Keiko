@@ -47,6 +47,7 @@ export function run(command, args, cwd, options = {}) {
   const platform = options.platform ?? process.platform;
   const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
   console.log(`[dev:start] ${command} ${args.join(" ")}`);
+  // SECURITY-SHELL-OK: npm/npm.cmd dev helper on Windows only; command is selected by npmCommand().
   const result = spawnSyncImpl(command, args, {
     cwd,
     stdio: "inherit",

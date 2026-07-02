@@ -253,7 +253,7 @@ export async function readHotExitSnapshotKeys(page: Page): Promise<readonly stri
           };
           keysRequest.onsuccess = (): void => {
             db.close();
-            // Hot-exit keys are the string composite `${root}\u0000${path}` (editorHotExitStore.ts).
+            // Hot-exit keys are v2 SHA-256 locator hashes; raw roots/paths never enter IndexedDB.
             const keys: string[] = keysRequest.result.map((entry: IDBValidKey) =>
               typeof entry === "string" ? entry : JSON.stringify(entry),
             );

@@ -377,11 +377,11 @@ export async function forgetMemory(
   reason?: string,
   fetchImpl = fetchJson<MemoryForgetResponse>,
 ): Promise<MemoryForgetResponse> {
+  void reason;
   return fetchImpl(`/api/memory/${encodeURIComponent(id)}/forget`, {
     method: "POST",
     body: JSON.stringify({
       acknowledged: true,
-      ...(reason !== undefined ? { reason } : {}),
     }),
   });
 }
@@ -395,7 +395,6 @@ export async function forgetMemories(
     body: JSON.stringify({
       acknowledged: true,
       selector: input.selector,
-      ...(input.reason !== undefined ? { reason: input.reason } : {}),
     }),
   });
 }
@@ -409,11 +408,11 @@ export async function deleteMemory(
   reason?: string,
   fetchImpl = fetchJson<MemoryDeleteResponse>,
 ): Promise<MemoryDeleteResponse> {
+  void reason;
   return fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {
     method: "DELETE",
     body: JSON.stringify({
       acknowledged: true,
-      ...(reason !== undefined ? { reason } : {}),
     }),
   });
 }

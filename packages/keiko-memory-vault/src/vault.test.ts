@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -433,21 +434,75 @@ describe("deterministic now/newTombstoneId", () => {
     });
     const userScope = { kind: "user" as const, userId: "u-1" as UserId };
     const tombstones = v.listTombstonesByScope(userScope);
-    expect(tombstones).toEqual([
-      {
-        id: "t-1",
-        memoryId: "m1",
-        scopeKind: "user",
-        scopeCoordinate: "u-1",
-        type: "preference",
-        forgottenAt: 1_700_000_001_000,
-        forgetterSurface: "test",
-        bodyHash: memoryBodySuppressionHash("prefers dark mode"),
-        reviewerId: "reviewer-1",
-        originalStatus: "accepted",
-      },
-    ]);
+    expect(tombstones).toHaveLength(1);
+    const [tombstone] = tombstones;
+    if (tombstone === undefined) throw new Error("expected tombstone");
+    expect(tombstone).toMatchObject({
+      id: "t-1",
+      memoryId: "m1",
+      scopeKind: "user",
+      scopeCoordinate: "u-1",
+      type: "preference",
+      forgottenAt: 1_700_000_001_000,
+      forgetterSurface: "test",
+      reviewerId: "reviewer-1",
+      originalStatus: "accepted",
+    });
+    expect(tombstone.bodyHash).toMatch(/^hmac-sha256:v2:[0-9a-f]{64}$/u);
+    expect(tombstone.bodyHash).not.toBe(memoryBodySuppressionHash("prefers dark mode"));
     v.close();
+  });
+
+  it("uses a vault-local tombstone body hash so identical bodies differ across vaults", () => {
+    const firstDir = freshDir();
+    const secondDir = freshDir();
+    const first = openVault(firstDir);
+    const second = openVault(secondDir);
+    first.insertMemory(makeMemory({ id: "m1" as MemoryId, body: "prefers dark mode" }));
+    second.insertMemory(makeMemory({ id: "m2" as MemoryId, body: "prefers dark mode" }));
+    const options = {
+      tombstone: true,
+      forgetterSurface: "test",
+      nowMs: 1_700_000_001_000,
+    };
+    first.deleteMemory("m1" as MemoryId, options);
+    second.deleteMemory("m2" as MemoryId, options);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    const firstHash = first.listTombstonesByScope(userScope)[0]?.bodyHash;
+    const secondHash = second.listTombstonesByScope(userScope)[0]?.bodyHash;
+    expect(firstHash).toMatch(/^hmac-sha256:v2:[0-9a-f]{64}$/u);
+    expect(secondHash).toMatch(/^hmac-sha256:v2:[0-9a-f]{64}$/u);
+    expect(firstHash).not.toBe(secondHash);
+    expect(first.hasForgetTombstoneForBody(userScope, "Prefers... DARK mode")).toBe(true);
+    first.close();
+    second.close();
+  });
+
+  it("migrates a matching legacy deterministic tombstone hash to the vault-local HMAC", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, body: "prefers dark mode" }));
+    v.deleteMemory("m1" as MemoryId, {
+      tombstone: true,
+      forgetterSurface: "test",
+      nowMs: 1_700_000_001_000,
+    });
+    v.close();
+
+    const legacyHash = memoryBodySuppressionHash("prefers dark mode");
+    const raw = new DatabaseSync(join(dir, "keiko-memory.db"));
+    raw
+      .prepare("UPDATE memory_tombstones SET body_hash = ? WHERE id = ?")
+      .run(legacyHash, "t-1");
+    raw.close();
+
+    const reopened = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    expect(reopened.hasForgetTombstoneForBody(userScope, "Prefers... DARK mode")).toBe(true);
+    const [tombstone] = reopened.listTombstonesByScope(userScope);
+    expect(tombstone?.bodyHash).toMatch(/^hmac-sha256:v2:[0-9a-f]{64}$/u);
+    expect(tombstone?.bodyHash).not.toBe(legacyHash);
+    reopened.close();
   });
 });
 

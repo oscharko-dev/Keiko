@@ -41,6 +41,7 @@ const publishGates = new Set([
   "version-consistency",
   "publish-manifests",
   "release-impact",
+  "workspace-supply-chain",
   "package-surface",
   "qi-supply-chain",
   "install-smoke",
@@ -49,6 +50,7 @@ const requiredStablePublishGates = [
   "version-consistency",
   "publish-manifests",
   "release-impact",
+  "workspace-supply-chain",
   "package-surface",
   "qi-supply-chain",
 ];

@@ -12,6 +12,8 @@
 // redactor. No new safety primitives — every guard is reused.
 
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { basename, resolve, sep } from "node:path";
 import { CdpClient, type CdpClientOptions, type CdpEventListener } from "./cdp-client.js";
 import { BrowserToolError } from "./errors.js";
 import {
@@ -51,6 +53,8 @@ const MAX_PENDING_SCREENSHOTS = 1;
 const DEFAULT_VIEWPORT: BrowserViewportPx = { width: 1280, height: 800 };
 const FRAGMENT_RECHECK_TIMEOUT_MS = 5000;
 const VERSION_PATH = "/json/version";
+const CHROME_USER_DATA_DIR_SWITCH = "--user-data-dir";
+const EPHEMERAL_PROFILE_PREFIXES = ["keiko-browser-", "keiko-cdp-"] as const;
 
 export type BrowserEventKind =
   | "session-opened"
@@ -135,6 +139,9 @@ interface SessionRecord {
 
 interface AttachResult {
   readonly sessionId: string;
+}
+interface BrowserCommandLineResult {
+  readonly arguments?: unknown;
 }
 interface CreateTargetResult {
   readonly targetId: string;
@@ -273,6 +280,60 @@ function isChromiumUserAgent(userAgent: string | null): boolean {
   );
 }
 
+function stripWrappingQuotes(value: string): string {
+  if (value.length < 2) return value;
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === `"` && last === `"`) || (first === `'` && last === `'`)) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function commandLineArguments(value: BrowserCommandLineResult): readonly string[] {
+  if (!Array.isArray(value.arguments)) {
+    return [];
+  }
+  return value.arguments.filter((entry): entry is string => typeof entry === "string");
+}
+
+function userDataDirFromCommandLine(args: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) continue;
+    if (arg === CHROME_USER_DATA_DIR_SWITCH) {
+      const next = args[i + 1];
+      return typeof next === "string" ? stripWrappingQuotes(next) : undefined;
+    }
+    const withEquals = `${CHROME_USER_DATA_DIR_SWITCH}=`;
+    if (arg.startsWith(withEquals)) {
+      return stripWrappingQuotes(arg.slice(withEquals.length));
+    }
+  }
+  return undefined;
+}
+
+function isContainedPath(parent: string, child: string): boolean {
+  const resolvedParent = resolve(parent);
+  const resolvedChild = resolve(child);
+  if (resolvedChild === resolvedParent) {
+    return true;
+  }
+  const prefix = resolvedParent.endsWith(sep) ? resolvedParent : `${resolvedParent}${sep}`;
+  return resolvedChild.startsWith(prefix);
+}
+
+function isKeikoEphemeralBrowserProfile(path: string | undefined): boolean {
+  if (path === undefined || path.length === 0) {
+    return false;
+  }
+  const resolved = resolve(path);
+  if (!isContainedPath(tmpdir(), resolved)) {
+    return false;
+  }
+  return EPHEMERAL_PROFILE_PREFIXES.some((prefix) => basename(resolved).startsWith(prefix));
+}
+
 function safeOrigin(url: string): string | null {
   try {
     return new URL(url).origin;
@@ -409,6 +470,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       ...evidenceStringField("warning", p.warning),
       ...evidenceStringField("code", p.code),
       ...evidenceStringField("message", p.message),
+      ...evidenceBooleanField("profileEphemeral", p.profileEphemeral),
     };
   }
 
@@ -609,6 +671,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     reservedId: string,
   ): Promise<BrowserSessionMeta> {
     await client.connect();
+    await this.assertEphemeralBrowserProfile(client);
     const target = await client.send<CreateTargetResult>("Target.createTarget", {
       url: "about:blank",
     });
@@ -625,8 +688,11 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     await client.send("Page.enable", {}, attach.sessionId);
     this.sessions.set(record.id, record);
     this.touch(record);
-    await this.emitTrustWarningForProfileMetadata(client, record);
-    this.emitRecord(record, "session-opened", { cdpPort, targetId: target.targetId });
+    this.emitRecord(record, "session-opened", {
+      cdpPort,
+      targetId: target.targetId,
+      profileEphemeral: true,
+    });
     return {
       sessionId: record.id,
       cdpPort,
@@ -634,6 +700,25 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       status: "open",
       createdAt: this.nowMs(),
     };
+  }
+
+  private async assertEphemeralBrowserProfile(client: CdpClient): Promise<void> {
+    let commandLine: BrowserCommandLineResult;
+    try {
+      commandLine = await client.send<BrowserCommandLineResult>("Browser.getBrowserCommandLine");
+    } catch {
+      throw new BrowserToolError(
+        "BROWSER_PROFILE_NOT_EPHEMERAL",
+        "Chrome must expose a Keiko-owned ephemeral browser profile.",
+      );
+    }
+    const userDataDir = userDataDirFromCommandLine(commandLineArguments(commandLine));
+    if (!isKeikoEphemeralBrowserProfile(userDataDir)) {
+      throw new BrowserToolError(
+        "BROWSER_PROFILE_NOT_EPHEMERAL",
+        "Chrome must use a Keiko-owned ephemeral browser profile.",
+      );
+    }
   }
 
   private buildRecord(
@@ -672,30 +757,6 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       removeCdpListener: (): void => undefined,
       removeCdpCloseListener: (): void => undefined,
     };
-  }
-
-  private async emitTrustWarningForProfileMetadata(
-    client: CdpClient,
-    record: SessionRecord,
-  ): Promise<void> {
-    const browser = await client
-      .send<Record<string, unknown>>("Browser.getVersion")
-      .catch(() => null);
-    const commandLine = browser?.commandLine;
-    if (typeof commandLine === "string" && commandLine.includes("--user-data-dir=")) {
-      return;
-    }
-    const warning =
-      browser !== null &&
-      typeof browser.userAgent === "string" &&
-      browser.userAgent.includes("Headless")
-        ? "Headless Chromium detected; verify ephemeral --user-data-dir."
-        : "Chrome command-line metadata unavailable; verify ephemeral --user-data-dir.";
-    if (warning.length > 0) {
-      this.emitRecord(record, "trust-warning", {
-        warning,
-      });
-    }
   }
 
   public readonly closeSession = async (sessionId: string): Promise<void> => {

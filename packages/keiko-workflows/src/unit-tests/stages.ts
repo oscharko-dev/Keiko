@@ -12,7 +12,7 @@ import {
   type PatchApplyResult,
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
-import { nodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
+import { createContainedNodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { createScopedWriter } from "../governed-handoff.js";
@@ -170,7 +170,7 @@ function resolveApplyWriter(
     return state.deps.writer;
   }
   return createScopedWriter(
-    state.deps.writer ?? nodeWorkspaceWriter,
+    state.deps.writer ?? createContainedNodeWorkspaceWriter(workspace.root),
     workspace.root,
     state.deps.workflowHandoff.patchScope.editablePaths,
   );

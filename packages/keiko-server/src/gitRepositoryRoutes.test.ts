@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCloneRepositoryHandler } from "./gitRepositoryRoutes.js";
@@ -71,6 +71,54 @@ describe("git repository routes", () => {
     );
   });
 
+  it("uses the shared hardened network git env for the clone spawn boundary", async () => {
+    const destination = join(tmp, "app");
+    const capturePath = join(tmp, "clone-env.json");
+    const fakeGit = join(tmp, "git");
+    writeFileSync(
+      fakeGit,
+      [
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        `fs.writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }));`,
+        "fs.mkdirSync(process.argv.at(-1), { recursive: true });",
+        "process.exit(0);",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(fakeGit, 0o755);
+    vi.stubEnv("PATH", `${tmp}${delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
+    vi.stubEnv("GIT_ASKPASS", "/tmp/unsafe-askpass");
+    vi.stubEnv("SSH_ASKPASS", "/tmp/unsafe-ssh-askpass");
+    try {
+      const result = await createCloneRepositoryHandler()(
+        ctx({
+          repositoryUrl: "https://github.com/acme/app.git",
+          destinationPath: destination,
+        }),
+        deps(),
+      );
+
+      expect(result.status).toBe(201);
+      const capture = JSON.parse(readFileSync(capturePath, "utf8")) as {
+        readonly args: readonly string[];
+        readonly env: NodeJS.ProcessEnv;
+      };
+      expect(capture.args).toEqual(["clone", "--", "https://github.com/acme/app.git", destination]);
+      expect(capture.env.GIT_TERMINAL_PROMPT).toBe("0");
+      expect(capture.env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
+      expect(capture.env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");
+      expect(capture.env.GIT_ASKPASS).not.toBe("/tmp/unsafe-askpass");
+      expect(capture.env.SSH_ASKPASS).not.toBe("/tmp/unsafe-ssh-askpass");
+      expect(capture.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(capture.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("rejects repository URLs that embed credentials", async () => {
     const cloneRunner = vi.fn(() => Promise.resolve(null));
     const handler = createCloneRepositoryHandler(cloneRunner);
@@ -78,6 +126,31 @@ describe("git repository routes", () => {
     const result = await handler(
       ctx({
         repositoryUrl: "https://token@example.test/acme/app.git",
+        destinationPath: join(tmp, "app"),
+      }),
+      deps(),
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({
+      error: { code: "BAD_REQUEST" },
+    });
+    expect(cloneRunner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://169.254.169.254/acme/app.git",
+    "https://10.0.0.5/acme/app.git",
+    "ssh://git@192.168.1.10/acme/app.git",
+    "git@172.16.0.9:acme/app.git",
+    "https://localhost/acme/app.git",
+  ])("rejects private or local repository clone target %s", async (repositoryUrl) => {
+    const cloneRunner = vi.fn(() => Promise.resolve(null));
+    const handler = createCloneRepositoryHandler(cloneRunner);
+
+    const result = await handler(
+      ctx({
+        repositoryUrl,
         destinationPath: join(tmp, "app"),
       }),
       deps(),

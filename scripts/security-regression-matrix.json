@@ -1,0 +1,212 @@
+[
+  {
+    "id": "AUDIT-SEC-001",
+    "verification": ["npx vitest run packages/keiko-server/src/gitDelivery/approvalStore.test.ts packages/keiko-server/src/gitDelivery/routes.test.ts"],
+    "notes": "Approval id/token binding, one-time consume, and forged-delivery rejection."
+  },
+  {
+    "id": "AUDIT-FS-001",
+    "verification": ["npx vitest run packages/keiko-evidence/src/promptEnhancement/__tests__/store.test.ts packages/keiko-evidence/src/qualityIntelligence/__tests__/candidatesArtifact.test.ts packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/__tests__/store.test.ts"],
+    "notes": "Evidence companion sub-store symlink refusal before side-file writes."
+  },
+  {
+    "id": "AUDIT-EVID-001",
+    "verification": ["npx vitest run packages/keiko-evidence/src/store.test.ts packages/keiko-evidence/src/retention.test.ts"],
+    "notes": "Per-run side-file cleanup on manifest delete and retention."
+  },
+  {
+    "id": "AUDIT-MEMSEC-001",
+    "verification": ["npx vitest run packages/keiko-memory-governance/src/forget.test.ts packages/keiko-server/src/memory-routes.test.ts"],
+    "notes": "Forget reasons are classified/redacted before durable storage."
+  },
+  {
+    "id": "AUDIT-UISEC-001",
+    "verification": ["npx vitest run packages/keiko-server/src/editor/hotExitRoutes.test.ts packages/keiko-server/src/editor/hotExitStore.test.ts", "cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/widgets/cards/editorHotExitStore.test.ts"],
+    "notes": "Hot-exit recovery uses server vault references and suppresses secret-shaped buffers."
+  },
+  {
+    "id": "AUDIT-CRED-001",
+    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/rerankerConfig.test.ts packages/keiko-server/src/qualityIntelligence/rerankerRoutes.test.ts"],
+    "notes": "Reranker API keys stay in the credential vault and are not returned to the browser."
+  },
+  {
+    "id": "AUDIT-SUPPLYSEC-001",
+    "verification": ["npm run check:publish-manifests", "npx vitest run scripts/__tests__/check-publish-manifests.test.mjs"],
+    "notes": "Only the root package is publishable; runtime workspaces remain private bundled dependencies."
+  },
+  {
+    "id": "AUDIT-SUPPLYSEC-002",
+    "verification": ["npm run check:workspace-supply-chain", "npm run check:qi-supply-chain", "npm run check:publish-manifests"],
+    "notes": "Release path includes supply-chain, license, and manifest gates."
+  },
+  {
+    "id": "AUDIT-CMD-001",
+    "verification": ["npx vitest run packages/keiko-server/src/command-runner.test.ts packages/keiko-server/src/command-runner-routes.test.ts"],
+    "notes": "Trusted repository scripts run through the sandboxed command runner with network disabled."
+  },
+  {
+    "id": "AUDIT-EVID-002",
+    "verification": ["npx vitest run packages/keiko-server/src/command-runner.test.ts packages/keiko-server/src/runtime/containerRunner.test.ts"],
+    "notes": "Command and container results fail closed when evidence persistence fails."
+  },
+  {
+    "id": "AUDIT-FS-002",
+    "verification": ["npx vitest run packages/keiko-server/src/files.test.ts"],
+    "notes": "Workspace writes, copies, and renames re-check realpath containment after mutation."
+  },
+  {
+    "id": "AUDIT-PRIV-001",
+    "verification": ["npm run check:local-state", "npx vitest run scripts/__tests__/check-local-state.test.mjs"],
+    "notes": "Local Knowledge encryption audit documents and scans plaintext lexical projection residual risk."
+  },
+  {
+    "id": "AUDIT-MODEL-001",
+    "verification": ["npm run check:publish-manifests", "npx vitest run scripts/__tests__/check-publish-manifests.test.mjs"],
+    "notes": "Model Gateway provider adapter internals are denied from the workspace export surface."
+  },
+  {
+    "id": "AUDIT-FS-003",
+    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/modelPolicyStore.test.ts"],
+    "notes": "Quality Intelligence model-policy storage rejects symlinked policy directories."
+  },
+  {
+    "id": "AUDIT-FS-004",
+    "verification": ["npx vitest run packages/keiko-tools/src/exec.test.ts"],
+    "notes": "runCommand spawns from the resolved contained cwd rather than a stale lexical path."
+  },
+  {
+    "id": "AUDIT-MODEL-002",
+    "verification": ["npx vitest run packages/keiko-server/src/gatewayReadinessRoutes.test.ts packages/keiko-model-gateway/src/readiness.test.ts"],
+    "notes": "Gateway readiness probes route through approved gateway abstractions."
+  },
+  {
+    "id": "AUDIT-NET-001",
+    "verification": ["npx vitest run packages/keiko-model-gateway/src/http.test.ts"],
+    "notes": "HTTP egress rejects redirects and private/link-local destinations under gateway policy."
+  },
+  {
+    "id": "AUDIT-NET-002",
+    "verification": ["npx vitest run packages/keiko-server/src/gitRepositoryRoutes.test.ts packages/keiko-server/src/gitRoutes.test.ts"],
+    "notes": "Git network commands use hardened env and reject private/link-local repository hosts."
+  },
+  {
+    "id": "AUDIT-NET-003",
+    "verification": ["npx vitest run packages/keiko-server/src/voice-control-ws.test.ts packages/keiko-server/src/voice-realtime.test.ts"],
+    "notes": "Voice WebSocket control frames are size-capped before JSON parsing."
+  },
+  {
+    "id": "AUDIT-EVID-003",
+    "verification": ["npx vitest run packages/keiko-evidence/src/qualityIntelligence/__tests__/candidatesArtifact.test.ts"],
+    "notes": "QI export attestation is bound to the candidates artifact hash."
+  },
+  {
+    "id": "AUDIT-EVID-004",
+    "verification": ["npx vitest run packages/keiko-evidence/src/qualityIntelligence/__tests__/corruptionQuarantine.test.ts packages/keiko-evidence/src/qualityIntelligence/__tests__/retention.test.ts"],
+    "notes": "Corrupt/quarantined QI manifests are covered by retention and local-state accounting."
+  },
+  {
+    "id": "AUDIT-MEMSEC-002",
+    "verification": ["npx vitest run packages/keiko-memory-vault/src/vault.test.ts packages/keiko-memory-vault/src/tombstones.test.ts"],
+    "notes": "Legacy deterministic tombstone hashes are lazily migrated to vault-local HMACs."
+  },
+  {
+    "id": "AUDIT-UISEC-002",
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/editor-layout-reducer.test.ts"],
+    "notes": "Editor layout v2 activeFile values pass containment/sanitization before restore."
+  },
+  {
+    "id": "AUDIT-SUPPLYSEC-003",
+    "verification": ["npm run prune:package-build-artifacts", "npm run check:package-surface", "npx vitest run scripts/__tests__/package-surface-rules.test.mjs scripts/__tests__/prune-package-build-artifacts.test.mjs"],
+    "notes": "Package surface rejects tsbuildinfo, compiled tests, fixtures, and stale build metadata."
+  },
+  {
+    "id": "AUDIT-SUPPLYSEC-004",
+    "verification": ["npm run smoke:registry-install", "npx vitest run scripts/__tests__/registry-install-smoke-security.test.mjs"],
+    "notes": "Registry install smoke enforces TLS verification for npm, yarn, and Node."
+  },
+  {
+    "id": "AUDIT-SUPPLYSEC-005",
+    "verification": ["npm run release:plan", "npx vitest run scripts/__tests__/registry-install-smoke-security.test.mjs scripts/__tests__/release-impact-governance.test.mjs"],
+    "notes": "Publish path requires npm provenance and GitHub Actions id-token permission."
+  },
+  {
+    "id": "AUDIT-SUPPLYSEC-006",
+    "verification": ["npm run smoke:install:optional", "npx vitest run scripts/__tests__/registry-install-smoke-security.test.mjs"],
+    "notes": "Install smoke has an explicit optional-dependency mode for native optional packages."
+  },
+  {
+    "id": "AUDIT-CRED-002",
+    "verification": ["npx vitest run packages/keiko-server/src/qualityIntelligence/connectorPayloadScanner.test.ts"],
+    "notes": "QI connector payload scanner detects key-based credential shapes, not only values."
+  },
+  {
+    "id": "AUDIT-SECDOC-001",
+    "verification": ["rg -n \"tamper-evident, not tamper-proof|Most are not encrypted\" docs/security-and-audit-boundaries.md docs/local-runtime-state-contract.md"],
+    "notes": "Security docs distinguish tamper-evident reads from encryption and tamper-proofing."
+  },
+  {
+    "id": "AUDIT-SECTEST-001",
+    "verification": ["npm run check:security-regression-matrix"],
+    "notes": "Every audit finding is mapped to at least one regression or verification command."
+  },
+  {
+    "id": "AUDIT-UISEC-003",
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/widgets/cards/QiRunCard.test.tsx"],
+    "notes": "QI reviewer label uses session storage and clears legacy durable localStorage."
+  },
+  {
+    "id": "AUDIT-UISEC-004",
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/hooks/workspace-persistence.test.ts"],
+    "notes": "Browser-local connection persistence omits raw root/scope path metadata."
+  },
+  {
+    "id": "AUDIT-PRIV-002",
+    "verification": ["npx vitest run packages/keiko-tools/src/browser/session.test.ts packages/keiko-tools/src/browser/cdp-client.test.ts"],
+    "notes": "Browser CDP sessions require a Keiko-owned ephemeral profile before target creation."
+  },
+  {
+    "id": "AUDIT-FS-005",
+    "verification": ["npx vitest run packages/keiko-local-knowledge/src/discovery/walk.test.ts packages/keiko-contracts/src/local-knowledge.test.ts"],
+    "notes": "Local Knowledge explicit files use the contract storage-reference path predicate."
+  },
+  {
+    "id": "AUDIT-SECDOC-002",
+    "verification": ["rg -n \"separately governed process surfaces|Release/helper scripts\" docs/command-runner/security-notes.md"],
+    "notes": "Command-boundary docs enumerate runCommand and separately governed process surfaces."
+  },
+  {
+    "id": "AUDIT-SECDOC-003",
+    "verification": ["npm run arch:check", "npm run arch:check:negative"],
+    "notes": "Architecture rules and docs permit the intentional Local Knowledge security dependency."
+  },
+  {
+    "id": "AUDIT-CMD-002",
+    "verification": ["npx vitest run packages/keiko-verification/src/orchestrator.test.ts packages/keiko-workflows/src/qualityIntelligence/verification.test.ts"],
+    "notes": "Workflow verification inherits the no-network sandbox policy unless explicitly overridden."
+  },
+  {
+    "id": "AUDIT-CMD-003",
+    "verification": ["npm run check:shell-spawn-guardrails"],
+    "notes": "Release/helper script shell usage requires a nearby SECURITY-SHELL-OK rationale."
+  },
+  {
+    "id": "AUDIT-HARDEN-001",
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/lib/safe-event-source.test.ts src/app/components/desktop/hooks/useAgentEditorBridge.test.tsx"],
+    "notes": "UI EventSource creation is centralized through a same-origin helper and static scan."
+  },
+  {
+    "id": "AUDIT-HARDEN-002",
+    "verification": ["npm run arch:check", "npm run arch:check:negative"],
+    "notes": "Provider SDK deny rules cover broad package scopes and subpath imports."
+  },
+  {
+    "id": "AUDIT-HARDEN-003",
+    "verification": ["npm run check:publish-manifests", "npx vitest run scripts/__tests__/check-publish-manifests.test.mjs"],
+    "notes": "Local Knowledge ./testing export is rejected if the workspace ever becomes public."
+  },
+  {
+    "id": "AUDIT-HARDEN-004",
+    "verification": ["cd packages/keiko-ui && npx vitest run --config vitest.config.ts src/app/components/desktop/hooks/voice-rtc-transport.test.ts", "rg -n \"APPROVED_VOICE_RTC_CONFIGURATION\" docs/voice/protocol.md packages/keiko-ui/src/app/components/desktop/hooks/voice-rtc-transport.ts"],
+    "notes": "Browser WebRTC uses an explicit no-ICE-server configuration linked to the voice protocol."
+  }
+]

@@ -83,6 +83,7 @@ describe("CdpClient permit list", () => {
   it("exposes the permit list as the exact ADR-0017 D4 set", () => {
     expect([...PERMITTED_CDP_METHODS].sort()).toEqual(
       [
+        "Browser.getBrowserCommandLine",
         "Browser.getVersion",
         "DOM.getDocument",
         "DOM.getOuterHTML",

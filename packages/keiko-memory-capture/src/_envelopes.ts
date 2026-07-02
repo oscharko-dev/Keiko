@@ -7,6 +7,7 @@
 
 import type {
   MemoryForget,
+  MemoryForgetReason,
   MemoryId,
   MemoryProposal,
   MemoryReviewerId,
@@ -79,7 +80,7 @@ const CAPTURE_REVIEWER_ID = "capture:proposed" as MemoryReviewerId;
 interface ForgetBuildInput {
   readonly context: CaptureContext;
   readonly memoryId: MemoryId;
-  readonly reason: string;
+  readonly reason: MemoryForgetReason;
 }
 
 export function buildForget(input: ForgetBuildInput): MemoryForget {

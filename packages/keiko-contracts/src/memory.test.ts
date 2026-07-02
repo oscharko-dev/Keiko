@@ -928,11 +928,14 @@ describe("operation validators", () => {
       memoryId: "mem-1",
       reviewerId: "rev-1",
       forgottenAt: 0,
-      reason: "GDPR",
+      reason: "user-request",
       userAcknowledgedDestructive: true,
     };
     expect(validateMemoryForget(happy).ok).toBe(true);
     expect(validateMemoryForget({ ...happy, userAcknowledgedDestructive: false }).ok).toBe(false);
+    expect(validateMemoryForget({ ...happy, reason: "forget dark mode preference" }).ok).toBe(
+      false,
+    );
   });
 
   it("validateMemoryRetrievalRequest requires a non-empty scopes array", () => {
@@ -1228,7 +1231,7 @@ describe("type-level scope coordinate invariants", () => {
       memoryId: mem("m-1"),
       reviewerId: reviewer("rev-1"),
       forgottenAt: 0,
-      reason: "GDPR",
+      reason: "user-request",
       userAcknowledgedDestructive: true,
     };
     expect(happy.userAcknowledgedDestructive).toBe(true);

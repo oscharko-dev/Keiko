@@ -57,6 +57,7 @@ const fetchOk = (
 describe("QiRunCard — a11y (WCAG 2.2 AA)", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("has no violations with mixed coverage states (covered / weakly-covered / uncovered)", async () => {
@@ -133,7 +134,7 @@ describe("QiRunCard — a11y (WCAG 2.2 AA)", () => {
   // live regions — not only as the isolated form scanned in CandidatesPane.a11y.test.tsx.
   it("has no violations with the inline edit form open on the full composed run card", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const candidate: QualityIntelligenceUiCandidate = {
       id: "tc-a11y-edit",
       derivedFromAtomIds: [],

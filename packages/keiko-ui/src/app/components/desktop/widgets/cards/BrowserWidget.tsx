@@ -18,6 +18,7 @@ import {
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
+import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   BrowserEventEnvelope,
   BrowserScreenshotResult,
@@ -137,7 +138,8 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       eventSourceRef.current = null;
       return;
     }
-    const source = new EventSource(browserEventsUrl(session.sessionId));
+    const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
+    if (source === null) return;
     const kinds: BrowserEventEnvelope["kind"][] = [
       "session-opened",
       "navigated",

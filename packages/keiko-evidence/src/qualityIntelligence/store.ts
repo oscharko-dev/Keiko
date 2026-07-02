@@ -25,7 +25,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmodSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   lstatSync,
@@ -38,6 +37,7 @@ import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-wo
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
+import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
 import {
   QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
   validateQualityIntelligenceEvidenceManifest,
@@ -100,27 +100,11 @@ export function createInMemoryQualityIntelligenceLocalStore(): QualityIntelligen
 // ─── Node adapter ──────────────────────────────────────────────────────────────────
 
 function prepareQiBaseDir(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    mkdirSync(baseDir, { recursive: true, mode: QI_DIR_MODE });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create QI evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "QI evidence directory", { mode: QI_DIR_MODE });
 }
 
 function existingQiBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) {
-    return undefined;
-  }
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read QI evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "QI evidence directory");
 }
 
 function lexicalQiManifestPath(runId: string, realBase: string): string {

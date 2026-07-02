@@ -182,13 +182,16 @@ describe("buildForgetOperations", () => {
     expect(must(envelopes[1]).memoryId).toBe(b.id);
   });
 
-  it("threads the caller-supplied reason onto every envelope", () => {
+  it("threads the caller-supplied reason code onto every envelope", () => {
     const a = makeRecord({ id: "m-a" });
     const envelopes = buildForgetOperations([a], ctx(), {
       writeTombstone: true,
-      reason: "GDPR erasure request",
+      reason: "user-request",
     });
-    expect(must(envelopes[0]).reason).toBe("GDPR erasure request");
+    expect(must(envelopes[0]).reason).toBe("user-request");
+    expect(validateMemoryForget({ ...must(envelopes[0]), reason: "GDPR erasure request" }).ok).toBe(
+      false,
+    );
   });
 
   it("returns the empty array when given the empty selection", () => {

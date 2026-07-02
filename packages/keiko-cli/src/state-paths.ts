@@ -100,6 +100,7 @@ export function classifyPid(
 //     evidence/figma/*.vault, *.key         keiko-server  figmaTokenStore.ts (sealed Figma PAT + keyfile)
 //     evidence/qi/<runId>.qi.json|…         keiko-evidence qualityIntelligence/*
 //     evidence/qi/figma-snapshots/<runId>/… keiko-evidence figmaSnapshot side files
+//     editor-hot-exit/*.vault, *.key        keiko-server  editor/hotExitStore.ts
 //     updates/runtime-state.json            keiko-server  update-local-state.ts
 //     updates/update-audit.jsonl            keiko-server  update-local-state.ts
 //     updates/snapshots/<id>/manifest.json  keiko-server  update-local-state.ts
@@ -133,11 +134,15 @@ const UPDATE_SUBDIR = "updates"; // keiko-server/src/update-local-state.ts (UPDA
 const FIGMA_VAULT_SUBDIR = "figma"; // keiko-server figmaTokenStore.ts (Figma PAT vault dir, under evidence)
 const QI_SUBDIR = "qi"; // keiko-evidence/src/qualityIntelligence/store.ts (QI_SUBDIR)
 const FIGMA_SNAPSHOTS_SUBDIR = "figma-snapshots"; // keiko-evidence figmaSnapshot/store.ts (SIDE_FILE_SUBDIR)
+const QI_RETENTION_AUDIT_FILE = "retention-deletion-audit.jsonl"; // keiko-evidence qualityIntelligence/deletionAuditStore.ts
+const EDITOR_HOT_EXIT_SUBDIR = "editor-hot-exit"; // keiko-server/src/editor/hotExitStore.ts (HOT_EXIT_SUBDIR)
 
 const PROVIDER_CREDENTIALS_VAULT = "provider-credentials.vault"; // keiko-server/src/credentialVault.ts
 const PROVIDER_CREDENTIALS_KEYFILE = "provider-credentials-vault.key"; // keiko-server/src/credentialVault.ts
 const FIGMA_TOKEN_VAULT = "figma-token.vault"; // keiko-server figmaTokenStore.ts
 const FIGMA_TOKEN_KEYFILE = "figma-vault.key"; // keiko-server figmaTokenStore.ts
+const EDITOR_HOT_EXIT_VAULT = "snapshots.vault"; // keiko-server/src/editor/hotExitStore.ts
+const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key"; // keiko-server/src/editor/hotExitStore.ts
 
 const EVIDENCE_MANIFEST_SUFFIX = ".json"; // keiko-evidence/src/store.ts
 const EVIDENCE_LOCK_SUFFIX = ".lock"; // keiko-evidence/src/store.ts
@@ -162,6 +167,7 @@ export type RuntimeStateCategory =
   | "ui-database"
   | "gateway-config"
   | "credential-vault"
+  | "editor-hot-exit"
   | "memory-vault"
   | "local-knowledge"
   | "evidence"
@@ -262,7 +268,10 @@ function isToolResultArtifact(name: string): boolean {
 }
 
 function isQiRecord(name: string): boolean {
-  return QI_OWNED_SUFFIXES.some((suffix) => hasRunIdArtifactSuffix(name, suffix));
+  return (
+    name === QI_RETENTION_AUDIT_FILE ||
+    QI_OWNED_SUFFIXES.some((suffix) => hasRunIdArtifactSuffix(name, suffix))
+  );
 }
 
 // Sealed credential material: the AES-256-GCM `*.vault` ciphertext and the `*.key` keyfile
@@ -277,6 +286,14 @@ function isProviderCredentialVaultFile(name: string): boolean {
 
 function isFigmaVaultFile(name: string): boolean {
   return name === FIGMA_TOKEN_VAULT || name === FIGMA_TOKEN_KEYFILE;
+}
+
+function isEditorHotExitVaultFile(name: string): boolean {
+  return (
+    name === EDITOR_HOT_EXIT_VAULT ||
+    name === EDITOR_HOT_EXIT_KEYFILE ||
+    SECRET_VAULT_TEMP_FILE.test(name)
+  );
 }
 
 function dirHasSqliteFamilyArtifact(absDir: string, base: string): boolean {
@@ -360,6 +377,13 @@ const credentialsSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+const editorHotExitSubtree: OwnedSubtree = {
+  category: "editor-hot-exit",
+  whole: false,
+  ownsFile: isEditorHotExitVaultFile,
+  childSubtree: NO_CHILD,
+};
+
 const memorySubtree: OwnedSubtree = {
   category: "memory-vault",
   whole: false,
@@ -413,6 +437,7 @@ function topLevelChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === MEMORY_SUBDIR) return memorySubtree;
   if (name === LOCAL_KNOWLEDGE_SUBDIR) return localKnowledgeSubtree;
   if (name === EVIDENCE_SUBDIR) return evidenceSubtree;
+  if (name === EDITOR_HOT_EXIT_SUBDIR) return editorHotExitSubtree;
   if (name === UPDATE_SUBDIR) return updateSubtree;
   if (name.startsWith(LAUNCHER_STATE_TMP_PREFIX)) return launcherTmpSubtree;
   return undefined;

@@ -9,7 +9,10 @@ import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workf
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { PatchChangeKind, SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
+import type {
+  NetworkEnforcementMode,
+  VerificationAuditSummary,
+} from "@oscharko-dev/keiko-verification";
 import type { BugWorkflowEventSink } from "./events.js";
 
 // ─── Status (D4) ─────────────────────────────────────────────────────────────────
@@ -68,7 +71,7 @@ export interface BugInvestigationDeps {
   readonly model: ModelPort;
   // Workspace filesystem. Defaults to nodeWorkspaceFs.
   readonly fs?: WorkspaceFs | undefined;
-  // Filesystem WRITE port used by applyPatch in apply mode. Defaults to nodeWorkspaceWriter.
+  // Filesystem WRITE port used by applyPatch in apply mode. Defaults to the contained node writer.
   readonly writer?: WorkspaceWriter | undefined;
   // Spawn function for runVerification. Defaults to nodeSpawnFn.
   readonly spawn?: SpawnFn | undefined;
@@ -80,6 +83,10 @@ export interface BugInvestigationDeps {
   readonly sink?: BugWorkflowEventSink | undefined;
   // Process environment for runCommand env isolation. Defaults to process.env.
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  // Optional verification egress policy override. Defaults to the verification orchestrator's
+  // fail-closed policy unless a test/fake spawn is injected by the caller.
+  readonly verificationNetworkEnforcement?: NetworkEnforcementMode | undefined;
+  readonly verificationEnforcedNetworkAvailable?: boolean | undefined;
   // AbortSignal for cancellation.
   readonly signal?: AbortSignal | undefined;
   // Optional Governed Enterprise Memory Vault port (Issue #213). When provided, the workflow

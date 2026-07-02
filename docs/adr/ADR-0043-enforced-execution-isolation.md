@@ -127,11 +127,12 @@ ADR introduced. It records the consuming decisions; it relaxes nothing in D1–D
 D2 left `keiko-verification`'s `policyForStep` hardcoded to `network:"inherit"` with a comment that
 "enforced verification isolation is owned by #1204". #1204 makes the orchestrator **backend-aware**:
 `VerificationDeps` gains a `networkEnforcement` mode (`"inherit"` | `"enforce-or-degrade"` |
-`"enforce-or-fail-closed"`, default `"inherit"`) and an injected `enforcedNetworkAvailable` flag, and
-`policyForStep` honours the resolved per-step network. The default mode preserves the historical
-behaviour byte-for-byte for every existing caller (the harness, the CLI, the run engine); only an
-explicit enforce mode on a `network:"none"` step requests enforcement. The honest `enforced` flag in
-`appliedLimits` is now derived from the run's `SandboxAttestation` (D4) rather than left `false`.
+`"enforce-or-fail-closed"`, default `"enforce-or-fail-closed"`) and an injected
+`enforcedNetworkAvailable` flag, and `policyForStep` honours the resolved per-step network. A
+`network:"none"` verification step now fails closed by default unless the caller attests an enforcing
+backend; callers that intentionally need inherited network must pass `"inherit"` explicitly. The
+honest `enforced` flag in `appliedLimits` is now derived from the run's `SandboxAttestation` (D4)
+rather than left `false`.
 
 keiko-verification stays free of a keiko-sandbox dependency: the caller (keiko-server, which already
 depends on keiko-sandbox) probes once via `probeNetworkIsolation` and injects the boolean. The editor

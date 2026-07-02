@@ -28,6 +28,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts";
+import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -382,7 +383,8 @@ export function useRelationshipActivityStream(
           : EVENTS_URL;
 
       try {
-        es = new EventSource(url);
+        es = createSameOriginApiEventSource(url);
+        if (es === null) return;
       } catch {
         scheduleReconnect();
         return;

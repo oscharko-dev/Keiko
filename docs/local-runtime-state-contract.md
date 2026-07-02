@@ -153,10 +153,12 @@ at rest. The compensating controls are owner-only `0o600` permissions, determini
 retention, and redaction-before-persist. This deferral is explicit and documented in
 [ADR-0048](adr/ADR-0048-evidence-artifact-confidentiality.md); the atomic write boundary in every
 evidence writer is preserved as the seam to introduce a cipher later. By contrast, local
-credentials ([ADR-0046](adr/ADR-0046-local-credential-vault.md)) and Local Knowledge extracted text
-and vectors ([ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)) are sealed with
+credentials ([ADR-0046](adr/ADR-0046-local-credential-vault.md)) and Local Knowledge configured
+content columns ([ADR-0047](adr/ADR-0047-local-knowledge-content-encryption.md)) are sealed with
 AES-256-GCM, because those stores hold reconstructive content with no redaction or short-retention
-mitigation available.
+mitigation available. Local Knowledge's `chunk_lexical_index.text` and `exact_text` columns are the
+documented exception: they remain a plaintext lexical retrieval projection, are treated as
+reconstructive residual data, and are scanned by the local-state auditor for secret-shaped material.
 
 ## Local-state verification audit
 

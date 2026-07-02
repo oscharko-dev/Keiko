@@ -9,6 +9,15 @@ export const FORBIDDEN_TARBALL_PATH_RULES = [
   // sources). `.d.ts.map` is a declaration map — relative-only and used by editors to resolve
   // "go to definition" across bundled workspace packages, so it stays.
   { test: (p) => p.endsWith(".js.map"), label: "a JS source map" },
+  { test: (p) => p.endsWith(".tsbuildinfo"), label: "TypeScript incremental build metadata" },
+  {
+    test: (p) =>
+      p.includes("/__tests__/") ||
+      p.startsWith("__tests__/") ||
+      /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) ||
+      /\.(test|spec)\.d\.ts$/.test(p),
+    label: "compiled test or spec artifact",
+  },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
   {
     test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),

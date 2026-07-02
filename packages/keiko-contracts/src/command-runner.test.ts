@@ -6,6 +6,8 @@ import {
   COMMAND_TASK_KINDS,
   COMMAND_TASK_RULES,
   COMMAND_TASK_SOURCES,
+  COMMAND_TASK_TRUST_REASONS,
+  COMMAND_TASK_TRUST_STATES,
   parseCommandTaskRunRequest,
   validateCommandTaskCatalog,
   validateCommandTaskRunResult,
@@ -26,6 +28,8 @@ function baseTask(): CommandTask {
     executable: "npm",
     args: ["run", "test"],
     source: "package-json-script",
+    trustState: "trusted",
+    trustReason: "repository-authored-script",
   };
 }
 
@@ -73,6 +77,8 @@ describe("command-runner constants", () => {
       "run-cancelled",
     ]);
     expect(COMMAND_TASK_SOURCES).toEqual(["package-json-script"]);
+    expect(COMMAND_TASK_TRUST_STATES).toEqual(["trusted", "approval-required"]);
+    expect(COMMAND_TASK_TRUST_REASONS).toEqual(["repository-authored-script"]);
   });
 
   it("keeps the executor allowlist narrow and separate from read-only rules", () => {
@@ -190,7 +196,18 @@ describe("validateCommandTaskCatalog", () => {
     const parsed = validateCommandTaskCatalog({
       schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
       projectId: "/work/project",
-      tasks: [{ id: "", kind: "deploy", label: 3, executable: "", source: "x", args: "no" }],
+      tasks: [
+        {
+          id: "",
+          kind: "deploy",
+          label: 3,
+          executable: "",
+          source: "x",
+          trustState: "x",
+          trustReason: "x",
+          args: "no",
+        },
+      ],
     });
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {
@@ -201,6 +218,8 @@ describe("validateCommandTaskCatalog", () => {
           "tasks[0].executable must be a non-empty string",
           "tasks[0].kind is invalid",
           "tasks[0].source is invalid",
+          "tasks[0].trustState is invalid",
+          "tasks[0].trustReason is invalid",
           "tasks[0].args must be an array",
         ]),
       );

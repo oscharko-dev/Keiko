@@ -368,6 +368,29 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(adapter.creates()).toBe(0);
   });
 
+  it("rejects a forged browser-supplied approval object before creating a PR", async () => {
+    const adapter = recordingPrAdapter();
+    const handler = createHandlePrExecute({
+      execution: seams({ prAdapterFactory: () => adapter.adapter }),
+    });
+    const res = await handler(
+      ctxFor(
+        EXECUTE,
+        createBody({
+          approval: {
+            required: true,
+            approvalTokenHash: "a".repeat(64),
+            approvedByUserId: "u-1",
+            approvedAtMs: 1_700_000_000_000,
+          },
+        }),
+      ),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(adapter.creates()).toBe(0);
+  });
+
   it("routes a pr-update through the update adapter method", async () => {
     const adapter = recordingPrAdapter();
     const handler = createHandlePrExecute({

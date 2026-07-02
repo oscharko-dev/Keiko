@@ -33,5 +33,6 @@
     "@oscharko-dev/keiko-verification": "0.2.11",
     "@oscharko-dev/keiko-workflows": "0.2.11",
     "@oscharko-dev/keiko-workspace": "0.2.11"
-  }
+  },
+  "private": true
 }

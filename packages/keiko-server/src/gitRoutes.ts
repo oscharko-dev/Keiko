@@ -109,22 +109,59 @@ export function gitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-// Network-sync env: a fetch/pull MUST be able to authenticate to a private/SSH remote, so it
-// inherits the real environment (the user's global `~/.gitconfig` credential.helper, the macOS
-// osxkeychain helper, and the real `~/.ssh` identities). It still never prompts — GIT_TERMINAL_PROMPT
-// is forced off and SSH runs in BatchMode — so it fails closed if no stored credential satisfies the
-// remote rather than hanging on an interactive prompt. Used ONLY for the actual fetch/pull command;
-// local reads keep the hardened, config-isolated `gitEnv` above.
-export function networkGitEnv(): NodeJS.ProcessEnv {
+const GIT_NETWORK_ENV_PASSTHROUGH = [
+  "PATH",
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "XDG_CONFIG_HOME",
+  "XDG_RUNTIME_DIR",
+  "SSH_AUTH_SOCK",
+  "SSH_AGENT_PID",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "TMPDIR",
+  "TEMP",
+  "TMP",
+  "USER",
+  "USERNAME",
+  "SystemRoot",
+  "WINDIR",
+] as const;
+
+function inheritAllowedGitNetworkEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of GIT_NETWORK_ENV_PASSTHROUGH) {
+    const value = source[key];
+    if (value !== undefined && value.length > 0) env[key] = value;
+  }
+  env.PATH ??= process.env.PATH ?? "";
+  return env;
+}
+
+// Network-sync env: clone/fetch/pull MUST be able to authenticate to private/SSH remotes, so they
+// preserve only the account and SSH-agent state needed for normal git credentials. They do not inherit
+// arbitrary ambient secrets or caller-provided GIT_* overrides. Prompts remain disabled at every
+// layer, so missing credentials fail closed rather than opening a terminal, GUI askpass, or first-use
+// host-key flow. Local reads keep the fully config-isolated `gitEnv` above.
+export function networkGitEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...inheritAllowedGitNetworkEnv(source),
     GIT_TERMINAL_PROMPT: "0", // never prompt — fail closed
+    GIT_ASKPASS: devNullPath(),
+    SSH_ASKPASS: devNullPath(),
+    SSH_ASKPASS_REQUIRE: "never",
+    GCM_INTERACTIVE: "never",
     GIT_PAGER: "cat",
     PAGER: "cat",
+    GIT_CONFIG_NOSYSTEM: "1",
     GIT_OPTIONAL_LOCKS: "0",
     // No SSH credential prompt and no implicit first-use trust. Unknown or changed host keys fail
     // closed and are surfaced by the sync outcome classifier.
-    GIT_SSH_COMMAND: "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes",
+    GIT_SSH_COMMAND:
+      "ssh -oBatchMode=yes -oStrictHostKeyChecking=yes -oNumberOfPasswordPrompts=0 -oKbdInteractiveAuthentication=no -oPasswordAuthentication=no",
   };
 }
 

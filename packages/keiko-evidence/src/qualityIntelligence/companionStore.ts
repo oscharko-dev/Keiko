@@ -14,7 +14,6 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
-  mkdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -25,6 +24,7 @@ import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-wo
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
+import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
 import { QI_SUBDIR } from "./store.js";
 
 const QI_DIR_MODE = 0o700;
@@ -44,25 +44,11 @@ export interface ContainedJsonArtifactStoreOptions<T> {
 }
 
 function realBaseForWrite(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    mkdirSync(baseDir, { recursive: true, mode: QI_DIR_MODE });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create QI companion directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "QI companion directory", { mode: QI_DIR_MODE });
 }
 
 function realBaseForRead(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) return undefined;
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read QI companion directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "QI companion directory");
 }
 
 function lexicalArtifactPath(runId: string, suffix: string, realBase: string): string {

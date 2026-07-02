@@ -13,13 +13,14 @@
 // type are enforced centrally by server.ts.
 
 import type { IncomingMessage } from "node:http";
-import {
-  isGitDeliveryApprovalRequirement,
-  type GitDeliveryApprovalRequirement,
-} from "@oscharko-dev/keiko-contracts";
 import type { GitMutationCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  parseGitDeliveryApprovalRequest,
+  resolveGitDeliveryApprovalRequirement,
+  type ParsedGitDeliveryApprovalRequest,
+} from "./approvalStore.js";
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
@@ -148,17 +149,12 @@ const UNSTAGE_SPEC: LocalMutationSpec = {
 interface ValidatedRequest {
   readonly projectId: string;
   readonly command: GitMutationCommand;
-  readonly approval: GitDeliveryApprovalRequirement;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
 }
 
 type Validation =
   | { readonly kind: "ok"; readonly value: ValidatedRequest }
   | { readonly kind: "err"; readonly result: RouteResult };
-
-function parseApproval(value: unknown): GitDeliveryApprovalRequirement | undefined {
-  if (value === undefined) return { required: false };
-  return isGitDeliveryApprovalRequirement(value) ? value : undefined;
-}
 
 function validate(spec: LocalMutationSpec, parsed: unknown): Validation {
   const bad: Validation = {
@@ -172,7 +168,7 @@ function validate(spec: LocalMutationSpec, parsed: unknown): Validation {
   }
   if (scanUnsafeFormatChars(parsed)) return bad;
   if (!isNonEmptyString(parsed.projectId)) return bad;
-  const approval = parseApproval(parsed.approval);
+  const approval = parseGitDeliveryApprovalRequest(parsed.approval);
   if (approval === undefined) return bad;
   const command = spec.parse(parsed);
   if (!command.ok) return bad;
@@ -220,9 +216,17 @@ export const createHandleLocalMutation = (
     const { projectId, command, approval } = validation.value;
     const workspace = resolveProjectWorkspace(deps, projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT");
+    const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
+      store: seams.approvalStore,
+      binding: { projectId, operation: "local-mutation", command },
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    if (verifiedApproval === undefined) {
+      return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
+    }
     let result;
     try {
-      result = await executeGovernedMutation(command, approval, workspace, deps, seams);
+      result = await executeGovernedMutation(command, verifiedApproval, workspace, deps, seams);
     } catch {
       // The live worktree could not be read (not a git repository, git unavailable). The kernel itself
       // never throws — only the read-only snapshot step can — so this is a precondition failure, not a

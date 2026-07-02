@@ -56,11 +56,13 @@ The execution boundary (Review Addendum / owner addendum):
 | Process tree / memory | Bounded by the orchestrator's resource monitor.                                                                                                                                                                                                                |
 
 **Backend-aware enforcement.** The keiko-verification orchestrator's `policyForStep` is now backend-aware
-(`VerificationDeps.networkEnforcement` + `enforcedNetworkAvailable`). The default mode (`"inherit"`)
-preserves the historical behaviour byte-for-byte for every existing caller. The editor post-apply path
-runs in `"enforce-or-fail-closed"`: it probes keiko-sandbox once (`probeNetworkIsolation`), requests an
-enforced `network:"none"` run when a backend exists, and **denies the step before spawning** when none
-does — untrusted, model-generated code never runs without an enforced egress boundary. The
+(`VerificationDeps.networkEnforcement` + `enforcedNetworkAvailable`). The default mode is
+`"enforce-or-fail-closed"`: a `network:"none"` step is denied before spawning unless the caller attests
+an enforcing backend. The editor post-apply path uses the same mode after probing keiko-sandbox once
+(`probeNetworkIsolation`), requests an enforced `network:"none"` run when a backend exists, and
+**denies the step before spawning** when none does — untrusted, model-generated code never runs without
+an enforced egress boundary. Callers that intentionally need inherited network must pass `"inherit"`
+explicitly. The
 `appliedLimits` network dimension reports the enforcement honestly from the run's sandbox attestation
 (ADR-0043 D4).
 

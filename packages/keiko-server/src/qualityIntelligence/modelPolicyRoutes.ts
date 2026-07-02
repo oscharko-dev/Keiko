@@ -4,8 +4,16 @@
 // Provider URLs, headers, keys, and raw provider errors never cross this surface.
 
 import type { IncomingMessage } from "node:http";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import {
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   Gateway,
   listConfiguredCapabilities,
@@ -69,6 +77,61 @@ class BodyTooLargeError extends Error {
 
 export function resolveQiPolicyPath(evidenceDir: string): string {
   return join(dirname(evidenceDir), QI_POLICY_DIR, QI_POLICY_FILE);
+}
+
+function sameNativePath(a: string, b: string): boolean {
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function pathIsContained(realRoot: string, candidate: string): boolean {
+  const root = resolve(realRoot);
+  const target = resolve(candidate);
+  const rel = relative(root, target);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function policyStorageError(): QiModelPolicyError {
+  return new QiModelPolicyError(
+    "QI_MODEL_POLICY_STORAGE_UNSAFE",
+    "The Quality Intelligence model-policy store is not a safe owned directory.",
+  );
+}
+
+function resolveQiPolicyLocation(
+  evidenceDir: string,
+  options: { readonly create: boolean },
+): { readonly dir: string; readonly target: string } | undefined {
+  let evidenceRoot: string;
+  try {
+    evidenceRoot = realpathSync(evidenceDir);
+  } catch {
+    if (!options.create) return undefined;
+    throw policyStorageError();
+  }
+  const parent = dirname(evidenceRoot);
+  const dir = join(parent, QI_POLICY_DIR);
+  if (options.create) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  const dirStats = lstatSync(dir, { throwIfNoEntry: false });
+  if (dirStats === undefined) return undefined;
+  if (dirStats.isSymbolicLink() || !dirStats.isDirectory()) {
+    throw policyStorageError();
+  }
+  const realDir = realpathSync(dir);
+  if (!sameNativePath(dir, realDir) || !pathIsContained(parent, realDir)) {
+    throw policyStorageError();
+  }
+  return { dir: realDir, target: join(realDir, QI_POLICY_FILE) };
+}
+
+function storedPolicyFileExists(target: string): boolean {
+  const stats = lstatSync(target, { throwIfNoEntry: false });
+  if (stats === undefined) return false;
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw policyStorageError();
+  }
+  return true;
 }
 
 function errorResult(status: number, code: string, message: string): RouteResult {
@@ -150,20 +213,27 @@ function loadStoredPolicy(
 ): QualityIntelligenceModelPolicy | undefined {
   if (evidenceDir === undefined) return undefined;
   try {
-    const raw = readFileSync(resolveQiPolicyPath(evidenceDir), "utf8");
+    const location = resolveQiPolicyLocation(evidenceDir, { create: false });
+    if (location === undefined || !storedPolicyFileExists(location.target)) return undefined;
+    const raw = readFileSync(location.target, "utf8");
     return parsePolicyValue(JSON.parse(raw));
-  } catch {
+  } catch (error) {
+    if (error instanceof QiModelPolicyError) throw error;
     return undefined;
   }
 }
 
 function savePolicy(evidenceDir: string, policy: QualityIntelligenceModelPolicy): void {
-  const target = resolveQiPolicyPath(evidenceDir);
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  const temp = `${target}.${process.pid.toString()}.${Date.now().toString()}.tmp`;
+  const location = resolveQiPolicyLocation(evidenceDir, { create: true });
+  if (location === undefined) throw policyStorageError();
+  const temp = `${location.target}.${process.pid.toString()}.${Date.now().toString()}.tmp`;
   try {
     writeFileSync(temp, `${JSON.stringify(policy, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-    renameSync(temp, target);
+    const tempStats = lstatSync(temp);
+    if (tempStats.isSymbolicLink() || !tempStats.isFile()) {
+      throw policyStorageError();
+    }
+    renameSync(temp, location.target);
   } catch (error) {
     rmSync(temp, { force: true });
     throw error;
@@ -395,9 +465,17 @@ export async function buildQiModelRoutingForRun(
 }
 
 export function handleGetQiModelPolicy(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  return { status: 200, body: getQiModelPolicyResponse(deps) };
+  try {
+    return { status: 200, body: getQiModelPolicyResponse(deps) };
+  } catch (error) {
+    if (error instanceof QiModelPolicyError) {
+      return errorResult(500, error.code, error.message);
+    }
+    throw error;
+  }
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity -- policy update keeps parse, validation, preflight, and persistence failure shaping together.
 export async function handlePutQiModelPolicy(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -436,8 +514,19 @@ export async function handlePutQiModelPolicy(
     );
   }
   const saved = { ...policy, updatedAt: new Date().toISOString() };
-  savePolicy(deps.evidenceDir, saved);
-  return { status: 200, body: getQiModelPolicyResponse(deps) };
+  try {
+    savePolicy(deps.evidenceDir, saved);
+    return { status: 200, body: getQiModelPolicyResponse(deps) };
+  } catch (error) {
+    if (error instanceof QiModelPolicyError) {
+      return errorResult(500, error.code, error.message);
+    }
+    return errorResult(
+      500,
+      "QI_MODEL_POLICY_STORAGE_FAILED",
+      "The Quality Intelligence model policy could not be saved.",
+    );
+  }
 }
 
 export async function handlePreflightQiModelPolicy(
