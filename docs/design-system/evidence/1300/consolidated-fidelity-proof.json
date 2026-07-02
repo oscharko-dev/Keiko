@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "postCssSha256": "6e4ff7dba8765edad499ccebdd25d5b6b737a631a537e269a5bf652fd042aed1",
+  "postCssSha256": "95f997cb2ed8f6d356e4cf618de47ac772e7c268fd01f040ef670ebb0d217950",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
