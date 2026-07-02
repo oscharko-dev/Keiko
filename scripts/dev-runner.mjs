@@ -15,6 +15,7 @@ const requireFromRepo = createRequire(join(repoRoot, "package.json"));
 const requireFromUi = createRequire(join(uiDir, "package.json"));
 
 const host = "127.0.0.1";
+const publicBrowserHost = "localhost";
 const publicPort = Number(process.env.KEIKO_DEV_UI_PORT ?? process.env.KEIKO_UI_PORT ?? "1983");
 const bffPort = Number(process.env.KEIKO_DEV_BFF_PORT ?? "1984");
 const nextPort = Number(process.env.KEIKO_DEV_NEXT_PORT ?? "3000");
@@ -55,6 +56,53 @@ self.addEventListener("activate", (event) => {
   })());
 });
 `.trimStart();
+
+export function publicBrowserUrl(port) {
+  return `http://${publicBrowserHost}:${String(port)}`;
+}
+
+function headerValue(req, name) {
+  const value = req.headers?.[name];
+  if (Array.isArray(value)) return value[0];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isDocumentPath(pathname) {
+  if (pathname === "/" || pathname === "") return true;
+  if (pathname === "/api" || pathname.startsWith("/api/")) return false;
+  if (pathname.startsWith("/_next/")) return false;
+  if (pathname.startsWith("/assets/")) return false;
+  if (pathname.startsWith("/fonts/")) return false;
+  return !pathname.split("/").pop()?.includes(".");
+}
+
+function acceptsDocument(req) {
+  const destination = headerValue(req, "sec-fetch-dest")?.toLowerCase();
+  if (destination === "document") return true;
+  const accept = headerValue(req, "accept")?.toLowerCase();
+  return accept === undefined || accept.includes("text/html") || accept.includes("*/*");
+}
+
+export function canonicalLocalhostRedirectLocation(req, port) {
+  const method = (req.method ?? "GET").toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return undefined;
+  const requestHost = headerValue(req, "host")?.toLowerCase();
+  if (requestHost !== `${host}:${String(port)}`) return undefined;
+  const url = new URL(req.url ?? "/", `http://${host}:${String(port)}`);
+  if (!isDocumentPath(url.pathname) || !acceptsDocument(req)) return undefined;
+  return `${publicBrowserUrl(port)}${url.pathname}${url.search}`;
+}
+
+function redirectToCanonicalLocalhost(req, res) {
+  const location = canonicalLocalhostRedirectLocation(req, publicPort);
+  if (location === undefined) return false;
+  res.writeHead(307, {
+    "cache-control": "no-store",
+    location,
+  });
+  res.end();
+  return true;
+}
 
 if (!["auto", "turbopack", "webpack"].includes(nextBundlerPreference)) {
   console.error(
@@ -128,6 +176,7 @@ function writeState(extra = {}) {
         nextPort,
         stateDir,
         nextBundler,
+        appUrl: publicBrowserUrl(publicPort),
         children: Array.from(children.values())
           .map((child) => child.pid)
           .filter((pid) => pid !== undefined),
@@ -236,7 +285,7 @@ async function waitForPublicReadiness() {
         if (consecutiveReadyProbes >= requiredReadyProbeSuccesses) {
           publicReady = true;
           writeState({ ready: true });
-          console.log(`[dev] ready on http://${host}:${String(publicPort)}`);
+          console.log(`[dev] ready on ${publicBrowserUrl(publicPort)}`);
           return;
         }
         writeState({ ready: false, starting: "stabilizing UI" });
@@ -433,6 +482,9 @@ if (invokedDirectly) {
 
   server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://${host}:${String(publicPort)}`);
+    if (redirectToCanonicalLocalhost(req, res)) {
+      return;
+    }
     if (url.pathname === "/sw.js") {
       serveDevServiceWorker(res);
       return;
@@ -460,7 +512,7 @@ if (invokedDirectly) {
 
   server.listen(publicPort, host, () => {
     writeState({ ready: false, starting: "waiting for API and UI" });
-    console.log(`[dev] listening on http://${host}:${String(publicPort)} (warming up)`);
+    console.log(`[dev] listening on ${publicBrowserUrl(publicPort)} (warming up)`);
     void waitForPublicReadiness();
   });
 

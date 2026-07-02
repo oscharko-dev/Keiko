@@ -795,7 +795,7 @@ async function readBoundedRawText(
 async function readUtf8TextForScan(
   runner: SearchTextRunner,
   relativePath: string,
-  absolutePath: string | undefined,
+  absolutePath: string,
   sizeBytes: number,
   state: RunState,
   candidates: CandidateFile[],
@@ -807,15 +807,13 @@ async function readUtf8TextForScan(
       { maxBytes: runner.limits.maxBytesPerFileScanned },
       runner.fs,
     ).text;
-    if (absolutePath !== undefined) {
-      persistWorkspaceIndexRecord(runner, {
-        kind: "text",
-        scopePath: relativePath,
-        absolutePath,
-        sizeBytes,
-        content: text,
-      });
-    }
+    persistWorkspaceIndexRecord(runner, {
+      kind: "text",
+      scopePath: relativePath,
+      absolutePath,
+      sizeBytes,
+      content: text,
+    });
     return text;
   } catch (err) {
     if (err instanceof FileTooLargeError) {
@@ -841,28 +839,23 @@ async function readUtf8TextForScan(
 async function readOversizedUtf8Text(
   runner: SearchTextRunner,
   relativePath: string,
-  absolutePath: string | undefined,
+  absolutePath: string,
   sizeBytes: number,
   state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
-  if (absolutePath !== undefined) {
-    return await readOversizedRawText(runner, relativePath, absolutePath, sizeBytes, state, candidates);
-  }
-  markTruncated(state, "file-cap");
-  recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
-  return undefined;
+  return await readOversizedRawText(runner, relativePath, absolutePath, sizeBytes, state, candidates);
 }
 
 async function readForScan(
   runner: SearchTextRunner,
   relativePath: string,
-  absolutePath: string | undefined,
+  absolutePath: string,
   sizeBytes: number,
   state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
-  if (absolutePath !== undefined && runner.fs.readFileBytes !== undefined) {
+  if (runner.fs.readFileBytes !== undefined) {
     return await readRawTextForScan(
       runner,
       relativePath,

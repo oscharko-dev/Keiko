@@ -22,6 +22,7 @@ const pidFile = join(stateDir, "dev-ui.pid.json");
 const logFile = join(stateDir, "dev-ui.log");
 const devGatewayConfigFile = join(stateDir, "ui", "keiko.config.json");
 const host = "127.0.0.1";
+const publicBrowserHost = "localhost";
 const explicitPublicPort = process.env.KEIKO_DEV_UI_PORT ?? process.env.KEIKO_UI_PORT;
 let publicPort = Number(explicitPublicPort ?? "1983");
 const runnerScript = join(repoRoot, "scripts", "dev-runner.mjs");
@@ -36,6 +37,10 @@ export function npmCommand(platform = process.platform) {
 
 export function shouldShellNpmCommand(command, platform = process.platform) {
   return platform === "win32" && /^(?:npm|npm\.cmd)$/i.test(command);
+}
+
+function publicBrowserUrl(port) {
+  return `http://${publicBrowserHost}:${String(port)}`;
 }
 
 export function run(command, args, cwd, options = {}) {
@@ -215,7 +220,7 @@ async function restartExistingRunnerIfNeeded() {
   const health = await devServerHealth(runningPort);
   if (health === "ok") {
     console.log(
-      `Keiko dev UI already running on http://${host}:${String(runningPort)} (pid ${String(
+      `Keiko dev UI already running on ${publicBrowserUrl(runningPort)} (pid ${String(
         state.runnerPid,
       )}).`,
     );
@@ -296,7 +301,7 @@ async function launchDevelopmentRunner() {
   }
 
   console.log(
-    `Keiko dev UI running on http://${host}:${String(publicPort)} (pid ${String(child.pid)}).`,
+    `Keiko dev UI running on ${publicBrowserUrl(publicPort)} (pid ${String(child.pid)}).`,
   );
   console.log(`State: ${stateDir}`);
   console.log(`Logs: ${logFile}`);

@@ -143,7 +143,7 @@ npm run dev:start
 This checks whether dependencies are installed, runs the root build needed by the Node BFF, starts
 the UI through `next dev`, and exposes the app through one loopback URL. If the default port
 `1983` is already in use and no port was explicitly configured, the script chooses the next free
-loopback port.
+loopback port. The dev server binds the loopback interface and prints a `localhost` browser URL.
 
 Stop the development UI:
 
