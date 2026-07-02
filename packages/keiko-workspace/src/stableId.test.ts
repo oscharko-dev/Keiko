@@ -7,6 +7,7 @@ import {
   connectedContextPackStableId,
   evidenceAtomStableId,
   importEdgeStableId,
+  symbolGraphRecordStableId,
 } from "./stableId.js";
 
 function atomInput(overrides: Partial<EvidenceAtomStableIdInput> = {}): EvidenceAtomStableIdInput {
@@ -164,6 +165,39 @@ describe("importEdgeStableId", () => {
   it("returns the 'ie-' prefix and 67 chars", () => {
     const id = importEdgeStableId(input);
     expect(id.startsWith("ie-")).toBe(true);
+    expect(id.length).toBe(67);
+  });
+});
+
+describe("symbolGraphRecordStableId", () => {
+  const input = {
+    symbol: "parseConfig",
+    scopePath: "src/config.ts",
+    kind: "definition",
+    line: 3,
+    ordinal: 0,
+    enclosingSymbol: undefined,
+  };
+
+  it("is deterministic across invocations", () => {
+    expect(symbolGraphRecordStableId(input)).toBe(symbolGraphRecordStableId(input));
+  });
+
+  it("changes when record kind changes", () => {
+    expect(symbolGraphRecordStableId(input)).not.toBe(
+      symbolGraphRecordStableId({ ...input, kind: "reference" }),
+    );
+  });
+
+  it("distinguishes same-line records by ordinal", () => {
+    expect(symbolGraphRecordStableId(input)).not.toBe(
+      symbolGraphRecordStableId({ ...input, ordinal: 1 }),
+    );
+  });
+
+  it("returns the 'sg-' prefix and 67 chars", () => {
+    const id = symbolGraphRecordStableId(input);
+    expect(id.startsWith("sg-")).toBe(true);
     expect(id.length).toBe(67);
   });
 });

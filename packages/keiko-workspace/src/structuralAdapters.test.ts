@@ -102,6 +102,7 @@ describe("createDefaultStructuralRegistry", () => {
     const registry = createDefaultStructuralRegistry();
     expect(registry.adapters.map((a) => a.name)).toEqual([
       "test-source-pairing",
+      "symbol-graph",
       "import-graph",
       "git-history",
     ]);
@@ -111,6 +112,7 @@ describe("createDefaultStructuralRegistry", () => {
     expect(createEcosystemStructureAdapters()).toEqual([]);
     expect(createDefaultStructuralRegistry().adapters.map((adapter) => adapter.name)).toEqual([
       "test-source-pairing",
+      "symbol-graph",
       "import-graph",
       "git-history",
     ]);
@@ -131,6 +133,7 @@ describe("createDefaultStructuralRegistry", () => {
 
     expect(registry.adapters.map((adapter) => adapter.name)).toEqual([
       "test-source-pairing",
+      "symbol-graph",
       "import-graph",
       "ecosystem-structure:java:packages",
       "ecosystem-structure:go:modules",
@@ -288,8 +291,7 @@ describe("runStructuralAdapters", () => {
           structure: {
             extractor: {
               name: "packages",
-              isAvailable: ({ scope: searchScope }) =>
-                searchScope.workspace.root === MEM_ROOT,
+              isAvailable: ({ scope: searchScope }) => searchScope.workspace.root === MEM_ROOT,
               extract: ({ ecosystem, query }) =>
                 Promise.resolve([
                   fakeAtom(`src/main/java/${ecosystem.id}/${query.text}.java`, "java-packages"),

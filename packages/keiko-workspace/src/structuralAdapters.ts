@@ -9,6 +9,7 @@ import { RepoSearchInvalidQueryError, RepoSearchInvalidRangeError } from "./erro
 import type { WorkspaceFs } from "./fs.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import { testSourcePairingAdapter } from "./testSourcePairing.js";
+import { symbolGraphAdapter } from "./symbolGraph.js";
 import { importGraphAdapter } from "./importGraph.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
 import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
@@ -64,9 +65,7 @@ function createEcosystemStructureAdapter(ecosystem: Ecosystem): StructuralAdapte
   return {
     name: `ecosystem-structure:${ecosystem.id}:${extractor.name}`,
     isAvailable: (scope, fs): Promise<boolean> =>
-      Promise.resolve(
-        extractor.isAvailable?.({ ecosystem, scope, fs }) ?? true,
-      ).catch(() => false),
+      Promise.resolve(extractor.isAvailable?.({ ecosystem, scope, fs }) ?? true).catch(() => false),
     lookup: (scope, query, limits, fs, deps): Promise<readonly EvidenceAtom[]> =>
       extractor.extract(
         deps === undefined
@@ -89,7 +88,13 @@ export function createDefaultStructuralRegistry(
 ): StructuralAdapterRegistry {
   const ecosystemAdapters = createEcosystemStructureAdapters(options.ecosystems ?? ECOSYSTEMS);
   return {
-    adapters: [testSourcePairingAdapter, importGraphAdapter, ...ecosystemAdapters, gitHistoryAdapter],
+    adapters: [
+      testSourcePairingAdapter,
+      symbolGraphAdapter,
+      importGraphAdapter,
+      ...ecosystemAdapters,
+      gitHistoryAdapter,
+    ],
   };
 }
 
