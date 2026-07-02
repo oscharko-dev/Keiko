@@ -72,6 +72,7 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
       "adr-0019-trust-5-patch-routes-through-tools": 1,
       "adr-0019-trust-9-local-knowledge-no-egress": 1,
+      "adr-0100-provider-runtime-no-internal-bypass": 1,
     });
   });
 });
