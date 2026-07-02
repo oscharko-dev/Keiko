@@ -318,6 +318,8 @@ function mergeSearchAtoms(
 // (sync walk is load-bearing for importGraph/testSourcePairing callers); the yield here covers
 // the already-async per-file scan pass where the loop overhead is measurable.
 const SCAN_YIELD_INTERVAL = 64;
+const PROJECT_METADATA_SCAN_MIN_FILES = 256;
+const PROJECT_METADATA_SCAN_MAX_FILES = 512;
 
 type SearchTextRunnerWithSemantic = SearchTextRunner & {
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
@@ -327,6 +329,25 @@ interface SearchTextCollection {
   readonly atoms: readonly EvidenceAtom[];
   readonly candidates: readonly CandidateFile[];
   readonly state: RunState;
+}
+
+function effectiveScanCandidateLimit(
+  runner: SearchTextRunner,
+  candidateCount: number,
+): number {
+  if (runner.policy.intent !== "project-metadata") {
+    return candidateCount;
+  }
+  const matchScaledLimit = Math.max(
+    PROJECT_METADATA_SCAN_MIN_FILES,
+    runner.limits.maxMatchesReturned * 4,
+  );
+  return Math.min(
+    candidateCount,
+    runner.limits.maxFilesScanned,
+    PROJECT_METADATA_SCAN_MAX_FILES,
+    matchScaledLimit,
+  );
 }
 
 function buildSearchTextRunner(
@@ -363,7 +384,11 @@ async function runScanLoop(
 ): Promise<void> {
   const matches: FileMatches[] = [];
   let loopIndex = 0;
-  for (const file of candidateSet.files) {
+  const scanLimit = effectiveScanCandidateLimit(runner, candidateSet.files.length);
+  if (scanLimit < candidateSet.files.length) {
+    state.truncated = true;
+  }
+  for (const file of candidateSet.files.slice(0, scanLimit)) {
     if (hitScanLimit(runner, state)) {
       break;
     }

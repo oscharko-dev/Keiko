@@ -1030,6 +1030,33 @@ describe("searchText (memFs)", () => {
     expect(r.diagnostics?.intent).toBe("project-metadata");
   });
 
+  it("bounds project metadata scans to the ranked candidate prefix", async () => {
+    const files: Record<string, string> = {
+      "pom.xml":
+        "<project>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n",
+    };
+    for (let i = 0; i < 700; i += 1) {
+      files[`src/mod${String(i % 20)}/file${String(i)}.ts`] =
+        `export function handler${String(i)}(): string { return "handler"; }\n`;
+    }
+    const { scope, fs } = memScope(files);
+
+    const r = await searchText(
+      scope,
+      nlq("Which Java version does this project use and where is the handler function?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "project-metadata" },
+      },
+    );
+
+    expect(r.atoms.map((atom) => atom.scopePath)).toContain("pom.xml");
+    expect(r.filesScanned).toBeLessThan(700);
+    expect(r.truncated).toBe(true);
+  });
+
   it("prioritizes symbol implementation files over docs for targeted questions", async () => {
     const { scope, fs } = memScope({
       "docs/window-frame.md": "WindowFrame is documented here.\n",
