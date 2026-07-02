@@ -25,6 +25,11 @@ describe("keiko-workspace public surface", () => {
     expect(typeof workspace.buildWorkspaceIndexSnapshot).toBe("function");
     expect(typeof workspace.prepareWorkspaceIndexSnapshot).toBe("function");
     expect(typeof workspace.workspaceIndexCandidateSet).toBe("function");
+    expect(typeof workspace.buildImportGraph).toBe("function");
+    expect(typeof workspace.collectImportSpecifiers).toBe("function");
+    expect(typeof workspace.importsFromSource).toBe("function");
+    expect(typeof workspace.importersForTarget).toBe("function");
+    expect(typeof workspace.importEdgeStableId).toBe("function");
     expect(typeof workspace.resolveWithinWorkspace).toBe("function");
     expect(typeof workspace.isWithinWorkspace).toBe("function");
     expect(typeof workspace.compileIgnore).toBe("function");

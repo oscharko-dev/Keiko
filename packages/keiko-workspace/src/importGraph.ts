@@ -1,19 +1,14 @@
-// Import-graph adapter (Epic #177, Issue #180). Pure-JS regex extractor: scans discovered
-// files for ESM imports/re-exports and CJS requires, emits an EvidenceAtom for each file
-// whose specifier matches the query text. Fixed, anchored, non-nested-quantifier regexes
-// keep the scan ReDoS-safe; the binary probe and read cap come from the shared workspace
-// primitives. Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts,
-// sibling workspace modules, and Node stdlib (node:crypto).
+// Import-graph adapter (Epic #177, Issue #180; hardened in #1737). The public adapter still
+// emits EvidenceAtom values for connected-context callers, but the scan now flows through the
+// resolved import-edge graph so reverse dependency queries and package-boundary resolution share
+// one bounded implementation.
 
 import { createHash } from "node:crypto";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
-import { looksBinary } from "./binaryDetect.js";
-import { readWorkspaceFile } from "./discovery.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
+import { buildImportGraph, type ResolvedImportEdge } from "./importGraphEdges.js";
 import type { WorkspaceFs } from "./fs.js";
-import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
-import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
+import { buildAtom } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
 
@@ -22,124 +17,53 @@ function queryFingerprint(query: RetrievalQuery): string {
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 
-// ESM static imports: import X from "y"; import * as X from "y"; import "y"; import { X } from "y".
-// [ \t]+\S+ tokens in the import clause avoid ReDoS: [ \t] and \S are complementary so the engine
-// never tries alternative splits. [ \t] (not \s) prevents the clause from crossing newlines.
-const ESM_IMPORT = /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+)*[ \t]+from)?\s+["']([^"'\n]+)["']/gm;
-// ESM re-exports: export * from "y"; export { X } from "y".
-const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
-// CommonJS: require("y").
-const CJS_REQUIRE = /\brequire\s*\(\s*["']([^"'\n]+)["']\s*\)/g;
-const BINARY_PROBE_BYTES = 512;
-
 interface ScanContext {
   readonly scope: SearchScope;
-  readonly fs: WorkspaceFs;
-  readonly limits: SearchLimits;
   readonly query: RetrievalQuery;
   readonly fingerprint: string;
-  readonly startMs: number;
   readonly nowMs: () => number;
 }
 
-async function probeBinary(fs: WorkspaceFs, abs: string, size: number): Promise<boolean> {
-  const cap = Math.min(BINARY_PROBE_BYTES, size);
-  if (cap === 0) {
-    return false;
-  }
-  if (fs.readFileBytes !== undefined) {
-    return looksBinary(await fs.readFileBytes(abs, cap));
-  }
-  const text = fs.readFileUtf8(abs);
-  return looksBinary(new TextEncoder().encode(text.slice(0, cap)));
-}
-
-function specifierMatches(specifier: string, query: RetrievalQuery): boolean {
+function textMatches(value: string, query: RetrievalQuery): boolean {
   if (query.kind === "exact-symbol") {
-    return specifier === query.text;
+    return value === query.text;
   }
-  return specifier.toLowerCase().includes(query.text.toLowerCase());
+  return value.toLowerCase().includes(query.text.toLowerCase());
 }
 
-function scoreFor(specifier: string, query: RetrievalQuery): number {
-  return specifier === query.text ? 1.0 : 0.7;
+function edgeMatches(edge: ResolvedImportEdge, query: RetrievalQuery): boolean {
+  return (
+    textMatches(edge.specifier, query) ||
+    (edge.targetPath !== undefined && textMatches(edge.targetPath, query))
+  );
 }
 
-function lineNumberOf(text: string, charIndex: number): number {
-  let line = 1;
-  for (let i = 0; i < charIndex && i < text.length; i += 1) {
-    if (text.charCodeAt(i) === 10) {
-      line += 1;
-    }
+function queryRelevance(edge: ResolvedImportEdge, query: RetrievalQuery): number {
+  if (edge.specifier === query.text || edge.targetPath === query.text) {
+    return 1.0;
   }
-  return line;
+  return 0.7;
 }
 
-interface Hit {
-  readonly specifier: string;
-  readonly line: number;
+function scoreFor(edge: ResolvedImportEdge, query: RetrievalQuery): number {
+  return Number((edge.score * queryRelevance(edge, query)).toFixed(3));
 }
 
-function collectHits(text: string, query: RetrievalQuery): readonly Hit[] {
-  const hits: Hit[] = [];
-  for (const regex of [ESM_IMPORT, ESM_REEXPORT, CJS_REQUIRE]) {
-    regex.lastIndex = 0;
-    let m: RegExpExecArray | null = regex.exec(text);
-    while (m !== null) {
-      const specifier = m[1] ?? "";
-      if (specifierMatches(specifier, query)) {
-        hits.push({ specifier, line: lineNumberOf(text, m.index) });
-      }
-      m = regex.exec(text);
-    }
-  }
-  return hits;
-}
-
-function emitHitAtom(ctx: ScanContext, relativePath: string, hit: Hit): EvidenceAtom {
+function emitEdgeAtom(ctx: ScanContext, edge: ResolvedImportEdge): EvidenceAtom {
   return buildAtom({
     scopeId: ctx.scope.scopeId,
-    scopePath: relativePath,
-    lineRange: { startLine: hit.line, endLine: hit.line },
+    scopePath: edge.importerPath,
+    lineRange: { startLine: edge.line, endLine: edge.line },
     provenanceKind: "structural",
     tool: "import-graph",
     queryFingerprint: ctx.fingerprint,
-    score: scoreFor(hit.specifier, ctx.query),
+    score: scoreFor(edge, ctx.query),
     emittedAtMs: ctx.nowMs(),
   });
 }
 
-function elapsedOver(ctx: ScanContext): boolean {
-  return ctx.nowMs() - ctx.startMs > ctx.limits.elapsedMsMax;
-}
-
-async function scanFileForImports(
-  ctx: ScanContext,
-  relativePath: string,
-  atoms: EvidenceAtom[],
-): Promise<void> {
-  const abs = resolveWithinWorkspace(ctx.scope.workspace.root, relativePath);
-  const containedAbs = assertContainedRealPath(ctx.fs, ctx.scope.workspace.root, abs, "scope");
-  const stat = ctx.fs.stat(containedAbs);
-  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
-    return;
-  }
-  if (await probeBinary(ctx.fs, containedAbs, stat.size)) {
-    return;
-  }
-  const content = readWorkspaceFile(
-    ctx.scope.workspace,
-    relativePath,
-    { maxBytes: ctx.limits.maxBytesPerFileScanned },
-    ctx.fs,
-  );
-  const hits = collectHits(content.text, ctx.query);
-  for (const hit of hits) {
-    if (atoms.length >= ctx.limits.maxMatchesReturned) {
-      return;
-    }
-    atoms.push(emitHitAtom(ctx, relativePath, hit));
-  }
+function elapsedOver(nowMs: () => number, startMs: number, limits: SearchLimits): boolean {
+  return nowMs() - startMs > limits.elapsedMsMax;
 }
 
 export const importGraphAdapter: StructuralAdapter = {
@@ -157,22 +81,23 @@ export const importGraphAdapter: StructuralAdapter = {
         `import-graph adapter does not accept query kind: ${query.kind}`,
       );
     }
+    const nowMs = deps?.nowMs ?? Date.now;
+    const startMs = nowMs();
     const ctx: ScanContext = {
       scope,
-      fs,
-      limits,
       query,
       fingerprint: queryFingerprint(query),
-      startMs: (deps?.nowMs ?? Date.now)(),
-      nowMs: deps?.nowMs ?? Date.now,
+      nowMs,
     };
-    const candidateSet = gatherCandidates(scope, limits, fs);
+    const graph = await buildImportGraph(scope, limits, fs);
     const atoms: EvidenceAtom[] = [];
-    for (const file of candidateSet.files) {
-      if (atoms.length >= limits.maxMatchesReturned || elapsedOver(ctx)) {
+    for (const edge of graph.edges) {
+      if (atoms.length >= limits.maxMatchesReturned || elapsedOver(nowMs, startMs, limits)) {
         break;
       }
-      await scanFileForImports(ctx, file.relativePath, atoms);
+      if (edgeMatches(edge, query)) {
+        atoms.push(emitEdgeAtom(ctx, edge));
+      }
     }
     return atoms;
   },
