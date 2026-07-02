@@ -81,6 +81,45 @@ describe("importGraphAdapter", () => {
     await expect(importGraphAdapter.isAvailable(scope, fs)).resolves.toBe(true);
   });
 
+  it("exercises in-memory workspace fs range and error paths", async () => {
+    const fs = memFs(MEM_ROOT, {
+      [MEM_ROOT]: undefined as unknown as string,
+      "dir/a.txt": "hello",
+      "dir/sub/b.txt": "world",
+    });
+    const decode = (bytes: Uint8Array): string => new TextDecoder().decode(bytes);
+    const readFileBytes = present(fs.readFileBytes);
+    const readFileUtf8Prefix = present(fs.readFileUtf8Prefix);
+    const readFileRange = present(fs.readFileRange);
+    const openFileReader = present(fs.openFileReader);
+
+    expect(fs.readFileUtf8(MEM_ROOT)).toBe("");
+    expect(fs.stat(MEM_ROOT)).toMatchObject({ isFile: true, size: 0 });
+    expect(fs.stat(`${MEM_ROOT}/dir`)).toMatchObject({ isDirectory: true, isFile: false });
+    expect(fs.exists(MEM_ROOT)).toBe(true);
+    expect(fs.readDir(MEM_ROOT).map((entry) => [entry.name, entry.isDirectory])).toEqual([
+      ["dir", true],
+    ]);
+    expect(fs.readDir(`${MEM_ROOT}/dir`).map((entry) => [entry.name, entry.isDirectory])).toEqual([
+      ["sub", true],
+      ["a.txt", false],
+    ]);
+    expect(decode(await readFileBytes(MEM_ROOT, 10))).toBe("");
+    expect(readFileUtf8Prefix(`${MEM_ROOT}/dir/a.txt`, 4)).toBe("hell");
+    expect(decode(await readFileRange(`${MEM_ROOT}/dir/a.txt`, 1.9, 3.2))).toBe("ell");
+    expect(decode(await readFileRange(`${MEM_ROOT}/dir/a.txt`, -2, 99))).toBe("hello");
+
+    await expect(readFileBytes(`${MEM_ROOT}/missing.txt`, 10)).rejects.toThrow("ENOENT");
+    expect(() => readFileUtf8Prefix(`${MEM_ROOT}/missing.txt`, 10)).toThrow("ENOENT");
+    await expect(readFileRange(`${MEM_ROOT}/missing.txt`, 0, 10)).rejects.toThrow("ENOENT");
+    await expect(openFileReader(`${MEM_ROOT}/missing.txt`)).rejects.toThrow("ENOENT");
+
+    const reader = await openFileReader(`${MEM_ROOT}/dir/a.txt`);
+    expect(decode(await reader.readRange(1, 3))).toBe("ell");
+    await reader.close();
+    await expect(reader.readRange(0, 1)).rejects.toThrow("EBADF");
+  });
+
   it("picks up ESM static imports and reports the matching line", async () => {
     const { scope, fs } = makeScope({
       "src/a.ts": ["// header", 'import { foo } from "./bar";', "const x = 1;"].join("\n"),
@@ -203,9 +242,15 @@ describe("importGraphAdapter", () => {
       },
     ]);
 
-    const atoms = await importGraphAdapter.lookup(scope, nlq("@acme/api"), DEFAULT_SEARCH_LIMITS, fs, {
-      nowMs: FIXED_NOW,
-    });
+    const atoms = await importGraphAdapter.lookup(
+      scope,
+      nlq("@acme/api"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      {
+        nowMs: FIXED_NOW,
+      },
+    );
     const edge = atoms.find((atom) => atom.edge?.kind === "package-dependency")?.edge;
     expect(edge).toMatchObject({
       kind: "package-dependency",
@@ -214,6 +259,368 @@ describe("importGraphAdapter", () => {
       label: "@acme/web -> @acme/api (dependencies)",
       confidence: "resolved",
     });
+  });
+
+  it("indexes mixed resolver fallbacks across manifests and polyglot imports", () => {
+    const { scope, fs } = makeScope({
+      "broken/package.json": "{",
+      "empty/package.json": JSON.stringify({ version: "1.0.0" }),
+      "node_modules/@acme/ignored/package.json": JSON.stringify({ name: "@acme/ignored" }),
+      "packages/core/package.json": JSON.stringify({
+        name: "@acme/core",
+        exports: {
+          ".": { import: "./dist/index.js", types: "./dist/index.d.ts" },
+          "./feature": { require: "./dist/feature.cjs" },
+          "./wild/*": { default: "./dist/*.js" },
+          "./ignored": 42,
+        },
+        main: "./dist/main.cjs",
+        module: "./dist/module.js",
+        types: "./dist/index.d.ts",
+        dependencies: {
+          "@acme/shared": "workspace:*",
+          react: "^19.0.0",
+        },
+        devDependencies: {
+          "@acme/tools": "workspace:*",
+        },
+        peerDependencies: {
+          "@acme/plugin": "workspace:*",
+        },
+        optionalDependencies: {
+          "@acme/optional": "workspace:*",
+        },
+      }),
+      "packages/shared/package.json": JSON.stringify({ name: "@acme/shared" }),
+      "packages/tools/package.json": JSON.stringify({ name: "@acme/tools" }),
+      "packages/plugin/package.json": JSON.stringify({ name: "@acme/plugin" }),
+      "packages/optional/package.json": JSON.stringify({ name: "@acme/optional" }),
+      "packages/core/dist/index.ts": "export default function coreEntry() { return 1; }",
+      "packages/core/dist/feature.ts": "export function featureEntry() { return 1; }",
+      "packages/core/dist/widget.ts": "export function widgetEntry() { return 1; }",
+      "tsconfig.build.json": JSON.stringify({
+        compilerOptions: {
+          baseUrl: ".",
+          paths: {
+            "alias-exact": ["src/alias-target.ts"],
+            "@shared/*": ["packages/shared/src/*"],
+            "bad-targets/*": [42],
+          },
+        },
+      }),
+      "bad/tsconfig.json": "{",
+      "plain/tsconfig.json": JSON.stringify({}),
+      "go.mod": "module github.com/acme/shop\n\ngo 1.22\n",
+      "src/consumer.ts": [
+        'import core from "@acme/core";',
+        'import { featureEntry } from "@acme/core/feature";',
+        'import { widgetEntry } from "@acme/core/wild/widget";',
+        'import exact from "alias-exact";',
+        'import { SharedDto } from "@shared/dto";',
+        'import rootStore from "@/store";',
+        'import absolute from "/src/absolute";',
+        'import legacy = require("@acme/core/feature");',
+        "export async function run() {",
+        "  await import(`./lazy`);",
+        '  require("./required");',
+        "  return [core, featureEntry(), widgetEntry(), exact(), SharedDto, rootStore, absolute, legacy];",
+        "}",
+      ].join("\n"),
+      "src/alias-target.ts": "export default function aliasTarget() { return 1; }",
+      "packages/shared/src/dto.ts": "export interface SharedDto { id: string }",
+      "src/store.ts": "export default { ready: true };",
+      "src/absolute.ts": "export default 1;",
+      "src/lazy.ts": "export const lazy = 1;",
+      "src/required.ts": "export const required = 1;",
+      "backend/src/main/java/com/acme/OrderService.java": [
+        "package com.acme;",
+        "import static com.acme.util.OrderUtil.*;",
+        "import com.acme.dto.OrderDto;",
+        "import com.acme.missing.MissingDto;",
+        "public class OrderService {",
+        '  @JsonProperty("order_id")',
+        '  private final String orderId = "1";',
+        "  private List<String> tags = List.of();",
+        "  OrderDto loadOrder() { return helper(); }",
+        "}",
+      ].join("\n"),
+      "backend/src/main/java/com/acme/util/OrderUtil.java":
+        "package com.acme.util; public class OrderUtil { public static OrderDto helper() { return null; } }",
+      "backend/src/main/java/com/acme/dto/OrderDto.java":
+        'package com.acme.dto; public record OrderDto(@JsonProperty(value = "order_id") String orderId, String status) {}',
+      "backend/src/main/kotlin/com/acme/KOrder.kt": [
+        "package com.acme",
+        "import com.acme.dto.KotlinDto",
+        'data class KOrder(@JsonProperty("order_id") val orderId: String, val total: Double)',
+        'fun makeKOrder(): KOrder { return KOrder("1", 2.0) }',
+      ].join("\n"),
+      "backend/src/main/kotlin/com/acme/dto/KotlinDto.kt":
+        "package com.acme.dto\ndata class KotlinDto(val id: String)",
+      "backend/src/main/scala/com/acme/ScalaService.scala": [
+        "package com.acme",
+        "import com.acme.dto.ScalaDto",
+        "trait ScalaPort",
+        "class ScalaService { def loadScala() = ScalaDto() }",
+      ].join("\n"),
+      "backend/src/main/scala/com/acme/dto/ScalaDto.scala":
+        "package com.acme.dto\ncase class ScalaDto(id: String)",
+      "backend/src/main/groovy/com/acme/GroovyService.groovy": [
+        "package com.acme",
+        "import com.acme.dto.GroovyDto",
+        "class GroovyService { def loadGroovy() { return new GroovyDto() } }",
+      ].join("\n"),
+      "backend/src/main/groovy/com/acme/dto/GroovyDto.groovy":
+        "package com.acme.dto\nclass GroovyDto {}",
+      "root.go": ["package shop", "func Root() int { return 1 }"].join("\n"),
+      "root_test.go": ["package shop", "func RootTest() int { return 1 }"].join("\n"),
+      "cmd/api/main.go": [
+        "package main",
+        "import (",
+        '  json "encoding/json"',
+        '  "github.com/acme/shop"',
+        '  "github.com/acme/shop/pkg/orders"',
+        ")",
+        "type Payload struct {",
+        '  OrderID string `json:"order_id,omitempty"`',
+        '  Ignored string `json:"-"`',
+        "}",
+        "func main() { shop.Root(); orders.Load(); json.Marshal(nil) }",
+      ].join("\n"),
+      "pkg/orders/orders.go": ["package orders", "func Load() int { return 1 }"].join("\n"),
+      "src/lib.rs": [
+        "pub use crate::orders::load_order;",
+        "mod orders;",
+        "fn run() { load_order(); }",
+      ].join("\n"),
+      "src/orders.rs": "pub fn load_order() {}",
+      "backend/Controllers/OrdersController.cs": [
+        "using Acme.Dto;",
+        'public record OrderRecord([property: JsonPropertyName("order_id")] string OrderId, decimal Total);',
+        "public class OrdersController {",
+        '  [Route("api/orders")]',
+        '  [HttpGet("{id}")]',
+        '  public OrderRecord GetOrder() { return new OrderRecord("1", 2); }',
+        "}",
+      ].join("\n"),
+      "backend/Dto.cs": "namespace Acme.Dto { public class Dto {} }",
+      "frontend/src/Widget.vue": [
+        '<script setup lang="ts">',
+        'import helper from "./helper";',
+        "export const vueThing = helper();",
+        "</script>",
+      ].join("\n"),
+      "frontend/src/helper.ts": "export default function helper() { return 1; }",
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+
+    expect(index.packageDependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourcePackage: "@acme/core",
+          targetPackage: "@acme/shared",
+          dependencyKind: "dependencies",
+        }),
+        expect.objectContaining({
+          sourcePackage: "@acme/core",
+          targetPackage: "@acme/tools",
+          dependencyKind: "devDependencies",
+        }),
+        expect.objectContaining({
+          sourcePackage: "@acme/core",
+          targetPackage: "@acme/plugin",
+          dependencyKind: "peerDependencies",
+        }),
+        expect.objectContaining({
+          sourcePackage: "@acme/core",
+          targetPackage: "@acme/optional",
+          dependencyKind: "optionalDependencies",
+        }),
+      ]),
+    );
+    expect(index.imports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          specifier: "@acme/core",
+          targetPath: "packages/core/dist/index.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "@acme/core/feature",
+          targetPath: "packages/core/dist/feature.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "@acme/core/wild/widget",
+          targetPath: "packages/core/dist/widget.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "alias-exact",
+          targetPath: "src/alias-target.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "@/store",
+          targetPath: "src/store.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "/src/absolute",
+          targetPath: "src/absolute.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "./lazy",
+          targetPath: "src/lazy.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          specifier: "com.acme.missing.MissingDto",
+          confidence: "heuristic",
+        }),
+        expect.objectContaining({
+          specifier: "github.com/acme/shop",
+          confidence: "heuristic",
+        }),
+        expect.objectContaining({
+          specifier: "orders",
+          targetPath: "src/orders.rs",
+          confidence: "resolved",
+        }),
+      ]),
+    );
+    expect(index.symbols).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "OrderService",
+          fields: expect.arrayContaining(["order_id", "tags"]),
+          parser: "polyglot-regex",
+        }),
+        expect.objectContaining({
+          name: "KOrder",
+          fields: expect.arrayContaining(["order_id", "total"]),
+          parser: "polyglot-regex",
+        }),
+        expect.objectContaining({
+          name: "Payload",
+          fields: expect.arrayContaining(["order_id", "Ignored"]),
+          parser: "polyglot-regex",
+        }),
+        expect.objectContaining({
+          name: "vueThing",
+          kind: "constant",
+          scopePath: "frontend/src/Widget.vue",
+        }),
+      ]),
+    );
+    expect(index.calls).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          calleeName: "Load",
+          targetPath: "pkg/orders/orders.go",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          calleeName: "load_order",
+          targetPath: "src/orders.rs",
+          confidence: "resolved",
+        }),
+      ]),
+    );
+    expect(index.parserCoverage).toEqual(
+      expect.arrayContaining([
+        { parser: "polyglot-regex", filesIndexed: expect.any(Number) },
+        { parser: "typescript-compiler-ast", filesIndexed: expect.any(Number) },
+      ]),
+    );
+  });
+
+  it("indexes declaration and schema edge cases used by structural contracts", () => {
+    const { scope, fs } = makeScope({
+      "src/declarations.ts": [
+        "export default class {",
+        "  ready = true;",
+        "  methodName() { return this.ready; }",
+        "}",
+        "export default function namedDefault() { return 1; }",
+        "const assignedDefault = 1;",
+        "export default assignedDefault;",
+        "export { assignedDefault as default };",
+        "export enum Mode { One }",
+        "export namespace Internal { export const value = 1; }",
+        "export type TypeDto = { orderId: string; total?: number };",
+        "export interface InterfaceDto { status: string }",
+      ].join("\n"),
+      "openapi.yaml": [
+        "openapi: 3.1.0",
+        "components:",
+        "  # comments and blank lines are ignored",
+        "",
+        "  schemas:",
+        "    Empty:",
+        "      type: object",
+        "    OrderYaml:",
+        "      type: object",
+        "      properties:",
+        "        order_id:",
+        "          type: string",
+        "        total:",
+        "          type: number",
+        "      required: [order_id]",
+        "paths:",
+        "  /api/orders:",
+        "    get:",
+        "      operationId: listOrders",
+      ].join("\n"),
+      "openapi.json": JSON.stringify({
+        openapi: "3.1.0",
+        components: {
+          schemas: {
+            Empty: { type: "object" },
+            OrderJson: {
+              type: "object",
+              properties: {
+                orderId: { type: "string" },
+                total: { type: "number" },
+              },
+            },
+          },
+        },
+      }),
+      "swagger.json": "{",
+    });
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+    });
+
+    expect(index.symbols).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "default", kind: "class" }),
+        expect.objectContaining({ name: "namedDefault", kind: "function" }),
+        expect.objectContaining({ name: "assignedDefault", kind: "constant" }),
+        expect.objectContaining({ name: "Mode", kind: "enum" }),
+        expect.objectContaining({ name: "Internal", kind: "module" }),
+        expect.objectContaining({
+          name: "TypeDto",
+          kind: "type",
+          fields: expect.arrayContaining(["orderId", "total"]),
+        }),
+        expect.objectContaining({
+          name: "OrderYaml",
+          scopePath: "openapi.yaml",
+          fields: expect.arrayContaining(["order_id", "total"]),
+        }),
+        expect.objectContaining({
+          name: "OrderJson",
+          scopePath: "openapi.json",
+          fields: expect.arrayContaining(["orderId", "total"]),
+        }),
+      ]),
+    );
   });
 
   it("picks up ESM re-exports", async () => {
@@ -509,9 +916,15 @@ describe("importGraphAdapter", () => {
     expect(reference?.referencerPath).toBe("backend/src/main/java/com/acme/OrderService.java");
     expect(reference?.targetPath).toBe("backend/src/main/java/com/acme/OrderDto.java");
 
-    const atoms = await importGraphAdapter.lookup(scope, nlq("OrderDto"), DEFAULT_SEARCH_LIMITS, fs, {
-      nowMs: FIXED_NOW,
-    });
+    const atoms = await importGraphAdapter.lookup(
+      scope,
+      nlq("OrderDto"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      {
+        nowMs: FIXED_NOW,
+      },
+    );
     const atom = atoms.find((candidate) => candidate.edge?.kind === "reference");
     expect(atom?.edge?.target.scopePath).toBe("backend/src/main/java/com/acme/OrderDto.java");
   });
@@ -664,9 +1077,10 @@ describe("importGraphAdapter", () => {
 
   it("weights structural scores by edge confidence and graph distance", async () => {
     const { scope, fs } = makeScope({
-      "src/confidence.ts": ['import resolved from "./alpha";', 'import missing from "./alpha-missing";'].join(
-        "\n",
-      ),
+      "src/confidence.ts": [
+        'import resolved from "./alpha";',
+        'import missing from "./alpha-missing";',
+      ].join("\n"),
       "src/alpha.ts": "export default 1;",
       "src/consumer.ts": [
         'import { fetchOrder as load } from "./api";',
@@ -827,7 +1241,8 @@ describe("importGraphAdapter", () => {
         "  HealthDto health() { return null; }",
         "}",
       ].join("\n"),
-      "frontend/src/api/health.ts": 'export async function health() { return fetch("/api/health"); }',
+      "frontend/src/api/health.ts":
+        'export async function health() { return fetch("/api/health"); }',
     });
     const atoms = await importGraphAdapter.lookup(
       scope,
@@ -952,7 +1367,7 @@ describe("importGraphAdapter", () => {
         "}",
       ].join("\n"),
       "frontend/src/api/orders.ts": [
-        'const docs = \'fetch("/api/orders/:id")\';',
+        "const docs = 'fetch(\"/api/orders/:id\")';",
         '// fetch("/api/orders/:id");',
       ].join("\n"),
     });
@@ -1045,9 +1460,9 @@ describe("importGraphAdapter", () => {
     const dtoContract = atoms.find((atom) => atom.edge?.kind === "dto-contract");
     expect(apiContract.edge?.source.scopePath).toBe("frontend/src/services/client.ts");
     expect(apiContract.edge?.target.scopePath).toBe("openapi.json");
-    expect([dtoContract?.edge?.source.scopePath, dtoContract?.edge?.target.scopePath].sort()).toEqual(
-      ["frontend/src/services/client.ts", "openapi.json"],
-    );
+    expect(
+      [dtoContract?.edge?.source.scopePath, dtoContract?.edge?.target.scopePath].sort(),
+    ).toEqual(["frontend/src/services/client.ts", "openapi.json"]);
     expect(dtoContract?.score).toBeLessThanOrEqual(0.88);
   });
 
@@ -1809,9 +2224,9 @@ describe("importGraphAdapter", () => {
         "package orders",
         "",
         "type BackendOrderResponse struct {",
-        "  OrderStatus string `json:\"status\"`",
-        "  OrderTotal string `json:\"total\"`",
-        "  InternalNotes string `json:\"-\"`",
+        '  OrderStatus string `json:"status"`',
+        '  OrderTotal string `json:"total"`',
+        '  InternalNotes string `json:"-"`',
         "}",
       ].join("\n"),
       "frontend/src/types.ts": [

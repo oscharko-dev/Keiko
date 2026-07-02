@@ -182,6 +182,7 @@ const DEFAULT_GATHER_QUERY: RetrievalQuery = {
 
 const CONTENT_PRESCORE_MAX_BYTES = 65_536;
 const CONTENT_PRESCORE_MAX_FILES = 5_000;
+const PROJECT_METADATA_CONTENT_PRESCORE_MAX_FILES = 256;
 
 function isRetrievalQuery(value: unknown): value is RetrievalQuery {
   return typeof value === "object" && value !== null && "kind" in value && "text" in value;
@@ -199,8 +200,19 @@ function shouldPrescoreContent(query: RetrievalQuery): boolean {
   return query.kind === "natural-language" || query.kind === "exact-symbol";
 }
 
-function contentPrescoreLimit(limits: LimitsShape, fileCount: number): number {
-  return Math.min(fileCount, CONTENT_PRESCORE_MAX_FILES, Math.max(limits.maxFilesScanned * 25, 0));
+function contentPrescoreLimit(
+  limits: LimitsShape,
+  fileCount: number,
+  policy: SearchPolicy,
+): number {
+  const defaultLimit = Math.min(
+    fileCount,
+    CONTENT_PRESCORE_MAX_FILES,
+    Math.max(limits.maxFilesScanned * 25, 0),
+  );
+  return policy.intent === "project-metadata"
+    ? Math.min(defaultLimit, PROJECT_METADATA_CONTENT_PRESCORE_MAX_FILES)
+    : defaultLimit;
 }
 
 function readContentPreview(
@@ -232,8 +244,12 @@ function contentScoresForOrdering(
     return undefined;
   }
   const scores = new Map<string, number>();
-  const limit = contentPrescoreLimit(inputs.limits, files.length);
-  for (const file of files.slice(0, limit)) {
+  const limit = contentPrescoreLimit(inputs.limits, files.length, inputs.policy);
+  const prescoreFiles =
+    inputs.policy.intent === "project-metadata" && files.length > limit
+      ? orderCandidatesForSearch(files, inputs.query, inputs.policy, 0, 0).files.slice(0, limit)
+      : files.slice(0, limit);
+  for (const file of prescoreFiles) {
     const preview = readContentPreview(scope, file, inputs.fs);
     if (preview === undefined) {
       continue;

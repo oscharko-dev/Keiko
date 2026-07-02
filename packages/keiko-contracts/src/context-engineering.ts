@@ -353,6 +353,10 @@ const TOKEN_WHITESPACE_CODE_POINTS: readonly number[] = [
   0x0d,
   0x20,
 ] as const;
+const TOKEN_ESTIMATE_CACHE_MAX_ENTRIES = 4_096;
+const tokenEstimateCache = new Map<string, number>();
+const tokenTextEncoder: TextEncoder | undefined =
+  typeof TextEncoder === "undefined" ? undefined : new TextEncoder();
 
 interface TokenShapeStats {
   readonly cjkChars: number;
@@ -365,8 +369,8 @@ interface TokenShapeStats {
 // Uses TextEncoder when available, with a manual UTF-8 byte counter for any legacy harness
 // without it. Never throws.
 function utf8ByteLength(text: string): number {
-  if (typeof TextEncoder !== "undefined") {
-    return new TextEncoder().encode(text).length;
+  if (tokenTextEncoder !== undefined) {
+    return tokenTextEncoder.encode(text).length;
   }
   let bytes = 0;
   for (const char of text) {
@@ -424,12 +428,21 @@ function requiresDenseTokenizerFloor(text: string): boolean {
 }
 
 export function estimateTokens(text: string): number {
+  const cached = tokenEstimateCache.get(text);
+  if (cached !== undefined) {
+    return cached;
+  }
   const bytes = utf8ByteLength(text);
   const baseline = Math.ceil(bytes / TOKEN_BASE_BYTES_PER_TOKEN_DIVISOR);
   const denseFloor = requiresDenseTokenizerFloor(text)
     ? Math.ceil(bytes / TOKEN_WORST_CASE_BYTES_PER_TOKEN_DIVISOR)
     : baseline;
-  return TOKEN_STRUCTURAL_OVERHEAD + Math.max(baseline, denseFloor);
+  const tokens = TOKEN_STRUCTURAL_OVERHEAD + Math.max(baseline, denseFloor);
+  if (tokenEstimateCache.size >= TOKEN_ESTIMATE_CACHE_MAX_ENTRIES) {
+    tokenEstimateCache.clear();
+  }
+  tokenEstimateCache.set(text, tokens);
+  return tokens;
 }
 
 // Sum estimateTokens over a set of segments (e.g. messages). The per-segment overhead models
