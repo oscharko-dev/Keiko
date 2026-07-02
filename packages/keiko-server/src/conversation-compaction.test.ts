@@ -10,6 +10,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  countContextTokens,
+  countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
   type ContextProfile,
@@ -276,6 +278,41 @@ describe("conversationForGatewayWithCompaction — slow path (compaction)", () =
     expect(
       estimateTokensForSegments(outcome.messages.map((message) => message.content)),
     ).toBeLessThanOrEqual(smallProfile.effectiveInputBudget);
+  });
+
+  it("uses calibrated token accounting for compaction budgets and record counts", () => {
+    const calibratedProfile = deriveContextProfile({
+      maxInputTokens: 45_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+      tokenAccounting: {
+        source: "calibrated",
+        counterId: "conversation-compaction-calibrated-fixture-v1",
+        scaleMilli: 1_150,
+        offsetTokens: 1,
+      },
+    });
+    const outcome = conversationForGatewayWithCompaction(multiDropMessages, {
+      contextProfile: calibratedProfile,
+      redactionSecrets: [NON_PATTERN_SECRET],
+    });
+    const finalTokens = countContextTokensForSegments(
+      outcome.messages.map((message) => message.content),
+      calibratedProfile.tokenAccounting,
+    );
+    const systemContent = requiredSystemContent(outcome);
+    const summaryStart = systemContent.indexOf("[Automated structured summary");
+    const footerStart = systemContent.indexOf("\nAttribution: Keiko generated", summaryStart);
+    const summaryContent = systemContent.slice(summaryStart, footerStart);
+
+    expect(outcome.compaction).toBeDefined();
+    expect(finalTokens).toBeLessThanOrEqual(calibratedProfile.effectiveInputBudget);
+    expect(outcome.compaction?.tokensAfter).toBe(
+      countContextTokens(summaryContent, calibratedProfile.tokenAccounting),
+    );
+    expect(finalTokens).toBeGreaterThan(
+      estimateTokensForSegments(outcome.messages.map((message) => message.content)),
+    );
   });
 
   it("fewOversizedTurnsCompact: the current (latest) user turn is preserved exactly", () => {

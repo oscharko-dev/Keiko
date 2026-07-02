@@ -6,7 +6,7 @@
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  estimateTokens,
+  countContextTokens,
   validateContextPreservedFact,
   type ContextAssumption,
   type ContextCommandOutcome,
@@ -15,6 +15,7 @@ import {
   type ContextPreservedFact,
   type ContextProvenanceRef,
   type ContextRehydrationHandle,
+  type ContextTokenAccounting,
   type ContextUserConstraint,
 } from "@oscharko-dev/keiko-contracts";
 import { hashExcerptContent } from "@oscharko-dev/keiko-workspace";
@@ -161,10 +162,13 @@ export function projectDigest(digest: CompactionDigest): DigestProjection {
   return { ...projectStructured(digest), ...projectPlain(digest) };
 }
 
-export function tokensForItems(items: readonly ContextLaneItemInput[]): number {
+export function tokensForItems(
+  items: readonly ContextLaneItemInput[],
+  tokenAccounting: ContextTokenAccounting | undefined,
+): number {
   let total = 0;
   for (const item of items) {
-    total += estimateTokens(item.text);
+    total += countContextTokens(item.text, tokenAccounting);
   }
   return total;
 }
@@ -281,10 +285,7 @@ function singleToolResultFields(
 function directRehydrationFields(
   spans: readonly ContextProvenanceRef[],
 ): Partial<
-  Pick<
-    ContextRehydrationHandle,
-    "kind" | "scopePath" | "lineRange" | "contentHash" | "artifactId"
-  >
+  Pick<ContextRehydrationHandle, "kind" | "scopePath" | "lineRange" | "contentHash" | "artifactId">
 > {
   const repoFile = singleRepoFileFields(spans);
   if (repoFile.kind !== undefined) {

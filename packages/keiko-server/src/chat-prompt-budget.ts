@@ -1,4 +1,4 @@
-import { estimateTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import { countContextTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
@@ -254,7 +254,9 @@ function selectPromptLanes(input: {
   };
 }
 
-function promptLaneSelectionVariants(selection: PromptLaneSelection): readonly PromptLaneSelection[] {
+function promptLaneSelectionVariants(
+  selection: PromptLaneSelection,
+): readonly PromptLaneSelection[] {
   const variants: PromptLaneSelection[] = [];
   const seen = new Set<string>();
   const pushVariant = (
@@ -279,12 +281,12 @@ function promptLaneSelectionVariants(selection: PromptLaneSelection): readonly P
     });
   };
 
-  pushVariant(
-    selection.memoryEntries,
-    selection.compactionContextText,
-    selection.documentContext,
-  );
-  for (let documentCount = selection.documentContext.length - 1; documentCount >= 0; documentCount -= 1) {
+  pushVariant(selection.memoryEntries, selection.compactionContextText, selection.documentContext);
+  for (
+    let documentCount = selection.documentContext.length - 1;
+    documentCount >= 0;
+    documentCount -= 1
+  ) {
     pushVariant(
       selection.memoryEntries,
       selection.compactionContextText,
@@ -330,7 +332,10 @@ function assembleGatewayPromptCandidate(
     memoryText,
     input.request.discussionMode,
   );
-  const latestTurnTokens = estimateTokensForSegments([latestTurn]);
+  const latestTurnTokens = countContextTokensForSegments(
+    [latestTurn],
+    input.profile.tokenAccounting,
+  );
   if (latestTurnTokens > input.profile.effectiveInputBudget) {
     return undefined;
   }
@@ -339,8 +344,10 @@ function assembleGatewayPromptCandidate(
   if (historyOutcome === undefined) return undefined;
   const messages = [...historyOutcome.messages, { role: "user" as const, content: latestTurn }];
   if (
-    estimateTokensForSegments(messages.map((message) => message.content)) >
-    input.profile.effectiveInputBudget
+    countContextTokensForSegments(
+      messages.map((message) => message.content),
+      input.profile.tokenAccounting,
+    ) > input.profile.effectiveInputBudget
   ) {
     return undefined;
   }

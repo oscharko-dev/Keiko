@@ -49,7 +49,9 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import { fileContentHash } from "@oscharko-dev/keiko-workspace";
 import {
+  countContextTokens,
   DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
   MAX_OBSERVATION_EXCERPT_BYTES,
   MAX_TOP_RANGES,
   validateContextCompactionRecord,
@@ -82,6 +84,18 @@ const LATENCY_ITERATIONS = 200;
 const LATENCY_WARMUP = 20;
 const CHAT_LATENCY_ITERATIONS = 120;
 const CHAT_LATENCY_WARMUP = 20;
+
+const CALIBRATED_CONTEXT_PROFILE = deriveContextProfile({
+  maxInputTokens: DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+  reservedOutputTokens: DEFAULT_CONTEXT_PROFILE.reservedOutputTokens,
+  safetyMarginTokens: DEFAULT_CONTEXT_PROFILE.safetyMarginTokens,
+  tokenAccounting: {
+    source: "calibrated",
+    counterId: "context-quality-calibrated-fixture-v1",
+    scaleMilli: 1_250,
+    offsetTokens: 1,
+  },
+});
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -253,6 +267,47 @@ export function buildAggregateSummary(result) {
     budgetPressure: result.diagnostics.budgetPressure,
     laneCounts,
   };
+}
+
+function budgetForProfile(profile) {
+  return { ...DEFAULT_CONTEXT_BUDGET, profile };
+}
+
+function inputItemsByLane(lanes, laneId) {
+  const lane = lanes.find((candidate) => candidate.laneId === laneId);
+  return new Map((lane?.items ?? []).map((item) => [item.id, item]));
+}
+
+function laneMatchesTokenAccounting(resultLane, inputLanes, tokenAccounting) {
+  const byId = inputItemsByLane(inputLanes, resultLane.laneId);
+  let expected = 0;
+  for (const id of resultLane.includedItemIds) {
+    const item = byId.get(id);
+    if (item !== undefined) {
+      expected += countContextTokens(item.text, tokenAccounting);
+    }
+  }
+  return expected === resultLane.estimatedTokens;
+}
+
+export function evaluateCalibratedTokenAccounting(scenario) {
+  const redacted = redactLanes(scenario.lanes);
+  const accounting = CALIBRATED_CONTEXT_PROFILE.tokenAccounting;
+  const calibrated = allocateContext({
+    profile: CALIBRATED_CONTEXT_PROFILE,
+    budget: budgetForProfile(CALIBRATED_CONTEXT_PROFILE),
+    lanes: redacted,
+  });
+  const sourceReported = calibrated.diagnostics.profile.tokenAccounting?.source === "calibrated";
+  const countsDifferFromFallback = redacted.some((lane) =>
+    lane.items.some(
+      (item) => countContextTokens(item.text, accounting) !== countContextTokens(item.text),
+    ),
+  );
+  const lanesMatch = calibrated.lanes.every((lane) =>
+    laneMatchesTokenAccounting(lane, redacted, accounting),
+  );
+  return sourceReported && countsDifferFromFallback && lanesMatch;
 }
 
 const PATH_LIKE = /\/corpus\/|services\/|src\/|app\/|docs\//u;
@@ -699,6 +754,7 @@ function evaluateScenario(scenario) {
     injectionIsolationRate: injection.rate,
     redactionCorrectness: evaluateRedactionCorrectness(scenario, redacted),
     pathFree: evaluatePathFree(aggregate, scenario),
+    calibratedTokenAccounting: evaluateCalibratedTokenAccounting(scenario),
     estimatedTokensByLane: Object.fromEntries(
       result.lanes.map((lane) => [lane.laneId, lane.estimatedTokens]),
     ),
@@ -804,6 +860,7 @@ function aggregateScenarioMetrics(perScenario) {
     promptInjectionIsolationRate: minOf(perScenario.map((s) => s.injectionIsolationRate)),
     redactionCorrectness: minOf(perScenario.map((s) => s.redactionCorrectness)),
     pathFreeComplianceRate: minOf(perScenario.map((s) => s.pathFree)),
+    calibratedTokenAccounting: perScenario.every((s) => s.calibratedTokenAccounting),
   };
 }
 
@@ -897,6 +954,7 @@ function buildMeasuredSummary(metrics, determinism, rehydration, shaping, chat) 
     toolObservationShapingFidelity: shaping.fidelity,
     shapingRedactionClean: shaping.shapingRedactionClean,
     shapingInjectionFlagged: shaping.shapingInjectionFlagged,
+    calibratedTokenAccounting: metrics.calibratedTokenAccounting,
     chatLongSessionCompaction: chat.chatLongSessionCompaction,
     chatManyShortBudgetSafeUnchanged: chat.chatManyShortBudgetSafeUnchanged,
     chatCurrentInstructionPreserved: chat.chatCurrentInstructionPreserved,
@@ -1026,6 +1084,12 @@ const BUDGET_CHECKS = [
     kind: "flag",
   },
   {
+    metric: "calibratedTokenAccounting",
+    observed: (s) => s.measured.calibratedTokenAccounting,
+    threshold: (b) => b.requireCalibratedTokenAccounting,
+    kind: "flag",
+  },
+  {
     metric: "chatLongSessionCompaction",
     observed: (s) => s.measured.chatLongSessionCompaction,
     threshold: (b) => b.requireChatLongSessionCompaction,
@@ -1136,13 +1200,7 @@ function logSummary(onLog, summary, vacuity) {
       vacuity.required,
     )}).`,
   );
-  onLog(
-    `context-quality measured (PR3 load-bearing): tool-shaping-fidelity=${formatPct(
-      m.toolObservationShapingFidelity,
-    )} shaping-redaction-clean=${String(
-      m.shapingRedactionClean,
-    )} shaping-injection-flagged=${String(m.shapingInjectionFlagged)}.`,
-  );
+  logToolShapingAndTokenAccounting(onLog, m);
   onLog(
     `context-quality measured (PR4 load-bearing chat-compaction splice): long-session-compaction=${String(
       m.chatLongSessionCompaction,
@@ -1155,6 +1213,18 @@ function logSummary(onLog, summary, vacuity) {
     )} no-profile-unchanged=${String(
       m.chatNoProfileUnchanged,
     )} no-profile-overflow-compaction=${String(m.chatNoProfileOverflowCompaction)}.`,
+  );
+}
+
+function logToolShapingAndTokenAccounting(onLog, m) {
+  onLog(
+    `context-quality measured (PR3 load-bearing): tool-shaping-fidelity=${formatPct(
+      m.toolObservationShapingFidelity,
+    )} shaping-redaction-clean=${String(
+      m.shapingRedactionClean,
+    )} shaping-injection-flagged=${String(
+      m.shapingInjectionFlagged,
+    )} calibrated-token-accounting=${String(m.calibratedTokenAccounting)}.`,
   );
 }
 

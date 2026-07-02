@@ -28,6 +28,7 @@ import type {
   ModelCapability,
   ModelKind,
   ModelProviderConfig,
+  ModelTokenAccounting,
   OutboundHttpEgressConfig,
   ProviderEndpointStyle,
   RealtimeAuthMode,
@@ -63,6 +64,13 @@ const PROVIDER_ENDPOINT_STYLES: readonly ProviderEndpointStyle[] = [
 ];
 const REALTIME_AUTH_MODES: readonly RealtimeAuthMode[] = ["api-key", "ephemeral-session"];
 const API_VERSION_RE = /^\d{4}-\d{2}-\d{2}(?:-preview)?$/u;
+const MODEL_TOKEN_ACCOUNTING_SOURCES: readonly ModelTokenAccounting["source"][] = ["calibrated"];
+const TOKEN_ACCOUNTING_KNOWN_KEYS: ReadonlySet<string> = new Set([
+  "source",
+  "counterId",
+  "scaleMilli",
+  "offsetTokens",
+]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
@@ -116,6 +124,17 @@ function requireNonEmptyString(value: unknown, path: string): string {
     throw new ConfigInvalidError(`${path} must be a non-empty string`);
   }
   return value;
+}
+
+function requireNonEmptyTrimmedString(value: unknown, path: string): string {
+  if (typeof value !== "string") {
+    throw new ConfigInvalidError(`${path} must be a non-empty string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new ConfigInvalidError(`${path} must be a non-empty string`);
+  }
+  return trimmed;
 }
 
 function optionalStringArray(
@@ -381,6 +400,46 @@ function requireEnum<T extends string>(value: unknown, path: string, allowed: re
     throw new ConfigInvalidError(`${path} must be one of ${allowed.join(", ")}`);
   }
   return value as T;
+}
+
+function assertKnownTokenAccountingKeys(value: Record<string, unknown>, path: string): void {
+  for (const key of Object.keys(value)) {
+    if (!TOKEN_ACCOUNTING_KNOWN_KEYS.has(key)) {
+      throw new ConfigInvalidError(`${path}.${key} is not a recognised token accounting field`);
+    }
+  }
+}
+
+function parseTokenAccounting(value: unknown, path: string): ModelTokenAccounting | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  assertKnownTokenAccountingKeys(value, path);
+  const source = requireEnum<ModelTokenAccounting["source"]>(
+    value.source,
+    `${path}.source`,
+    MODEL_TOKEN_ACCOUNTING_SOURCES,
+  );
+  const counterId = requireNonEmptyTrimmedString(value.counterId, `${path}.counterId`);
+  const scaleMilli = requirePositiveInt(value.scaleMilli, `${path}.scaleMilli`);
+  const offsetTokens = optionalNonNegativeInt(value.offsetTokens, `${path}.offsetTokens`, 0);
+  return {
+    source,
+    counterId,
+    scaleMilli,
+    ...(value.offsetTokens === undefined ? {} : { offsetTokens }),
+  };
+}
+
+function optionalTokenAccountingField(
+  value: unknown,
+  path: string,
+): Partial<Pick<ModelCapability, "tokenAccounting">> {
+  const tokenAccounting = parseTokenAccounting(value, path);
+  return tokenAccounting === undefined ? {} : { tokenAccounting };
 }
 
 // Model id → KEIKO_MODEL_<UPPER>_ form: non-alphanumerics become "_", uppercased.
@@ -684,6 +743,18 @@ function resolveInfillingAlignment(
   };
 }
 
+function assertWorkflowEligibleForKind(
+  kind: ModelKind,
+  workflowEligible: boolean,
+  path: string,
+): void {
+  if (kind !== "chat" && workflowEligible) {
+    throw new ConfigInvalidError(
+      `${path}.workflowEligible must be false when ${path}.kind is not "chat"`,
+    );
+  }
+}
+
 // ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ─────────────────────
 // Shared by both the lenient inline parser and the strict top-level parser so the voice invariants
 // are enforced identically. Voice fields are preserved only when declared, so a non-voice capability
@@ -835,11 +906,13 @@ function buildProviderCapabilityBody(
   workflowEligible: boolean,
 ): ModelCapability {
   const flags = providerCapabilityFlags(raw, path);
+  const tokenAccounting = parseTokenAccounting(raw.tokenAccounting, `${path}.tokenAccounting`);
   return {
     id,
     kind,
     contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
+    ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     ...parseVoiceCapabilityFields(raw, path, kind),
@@ -894,11 +967,7 @@ function parseProviderCapability(
   // `capabilities` array. Workflow eligibility is also gated by the chat invariant
   // here so an inline embedding/ocr-vision declaration cannot opt itself in.
   const workflowEligible = optionalBoolean(raw.workflowEligible, `${path}.workflowEligible`, false);
-  if (kind !== "chat" && workflowEligible) {
-    throw new ConfigInvalidError(
-      `${path}.workflowEligible must be false when ${path}.kind is not "chat"`,
-    );
-  }
+  assertWorkflowEligibleForKind(kind, workflowEligible, path);
   return buildProviderCapabilityBody(raw, path, id, kind, workflowEligible);
 }
 
@@ -932,6 +1001,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "throughputHint",
   "preferredUseCases",
   "knownLimitations",
+  "tokenAccounting",
 ]);
 
 function requireBoolean(value: unknown, path: string): boolean {
@@ -1017,11 +1087,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     "voice",
   ]);
   const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
-  if (kind !== "chat" && workflowEligible) {
-    throw new ConfigInvalidError(
-      `${path}.workflowEligible must be false when ${path}.kind is not "chat"`,
-    );
-  }
+  assertWorkflowEligibleForKind(kind, workflowEligible, path);
   return {
     id,
     kind,
@@ -1030,6 +1096,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
     toolCalling: requireBoolean(value.toolCalling, `${path}.toolCalling`),
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
     streaming: requireBoolean(value.streaming, `${path}.streaming`),
+    ...optionalTokenAccountingField(value.tokenAccounting, `${path}.tokenAccounting`),
     supportsImageInput: requireBoolean(value.supportsImageInput, `${path}.supportsImageInput`),
     supportsDocumentInput: requireBoolean(
       value.supportsDocumentInput,
@@ -1489,8 +1556,7 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
       : {
           reranker: {
             modelId: config.reranker.modelId,
-            credentialHeaderName:
-              config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+            credentialHeaderName: config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
             timeoutMs: config.reranker.timeoutMs,
           },
         }),

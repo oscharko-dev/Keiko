@@ -13,6 +13,7 @@ import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
   type ContextProfile,
@@ -274,9 +275,17 @@ describe("buildGatewayAssembly", () => {
 
     const outcome = buildGatewayAssembly(deps, request, makeMemoryResult([]), CHAT_MODEL);
     const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
+    const historyLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
+    const promptLaneTokens = outcome.diagnostics.lanes
+      .filter((lane) => lane.laneId !== "verification-evidence")
+      .reduce((sum, lane) => sum + lane.estimatedTokens, 0);
 
     expect(outcome.compaction?.itemsBefore).toBe(1);
     expect(totalTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect(historyLane?.estimatedTokens).toBeGreaterThan(0);
+    expect(historyLane?.includedItems).toBe(1);
+    expect(historyLane?.excludedItems).toBe(1);
+    expect(promptLaneTokens).toBe(outcome.diagnostics.totalEstimatedTokens);
     expect(outcome.messages.at(-1)?.content).toBe("Keep the current request exact.");
     expect(outcome.messages.map((message) => message.content).join("\n")).not.toContain(
       "x".repeat(1_000),
@@ -308,6 +317,44 @@ describe("buildGatewayAssembly", () => {
     expect(
       outcome.diagnostics.lanes.find((lane) => lane.laneId === "user-task")?.includedItems,
     ).toBe(1);
+  });
+
+  it("reports calibrated token accounting in prompt diagnostics", () => {
+    const { store, chatId } = createStore();
+    seedHistory(chatId, store, ["prior chat context"]);
+    store.createMessage(createMessage(chatId, "user", "Calibrated prompt", NOW + 99));
+
+    const profile = deriveContextProfile({
+      maxInputTokens: 8_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+      tokenAccounting: {
+        source: "calibrated",
+        counterId: "chat-assembly-calibrated-fixture-v1",
+        scaleMilli: 1_200,
+        offsetTokens: 1,
+      },
+    });
+    const deps = createDeps(store, profile);
+    const memory = makeMemoryResult([makeMemoryEntry("mem-1", "memory accounting fixture")]);
+    const request = makeRequest(chatId, "Calibrated prompt", {
+      documentContext: [makeDocument("doc-1", "doc.txt", "document accounting fixture")],
+    });
+
+    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const messages = assemblyMessages(outcome);
+    const calibratedTotal = countContextTokensForSegments(messages, profile.tokenAccounting);
+    const fallbackTotal = estimateTokensForSegments(messages);
+
+    expect(outcome.diagnostics.profile.tokenAccounting?.source).toBe("calibrated");
+    expect(outcome.diagnostics.profile.tokenAccounting?.counterId).toBe(
+      "chat-assembly-calibrated-fixture-v1",
+    );
+    expect(outcome.diagnostics.totalEstimatedTokens).toBe(calibratedTotal);
+    expect(calibratedTotal).toBeGreaterThan(fallbackTotal);
+    expect(outcome.diagnostics.totalEstimatedTokens).toBeLessThanOrEqual(
+      profile.effectiveInputBudget,
+    );
   });
 
   it("drops whole document entries in order and preserves included content unchanged", () => {

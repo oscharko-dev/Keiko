@@ -27,6 +27,16 @@ export type CostClass = "low" | "medium" | "high";
 
 export type LatencyClass = "fast" | "standard" | "slow";
 
+export type ModelTokenAccountingSource = "calibrated";
+
+export interface ModelTokenAccounting {
+  readonly source: ModelTokenAccountingSource;
+  readonly counterId: string;
+  // 1000 == 1.0x the deterministic fallback estimate. Integer-only for stable JSON configs.
+  readonly scaleMilli: number;
+  readonly offsetTokens?: number | undefined;
+}
+
 // ─── Infilling (fill-in-the-middle) alignment posture (Issue #1210, ADR-0042 D5) ───
 // Editor inline completion is an infilling task: the cursor almost always has code after it, so a
 // prefix-only model duplicates code and breaks closing context (Bavarian et al. 2022,
@@ -101,6 +111,12 @@ export interface ModelCapability {
   readonly throughputHint: string;
   readonly preferredUseCases: readonly string[];
   readonly knownLimitations: readonly string[];
+  /**
+   * Optional content-free token accounting metadata for prompt budgeting. Calibrated counters are
+   * deterministic local adjustments over Keiko's fallback estimate; tokenizer dependencies remain
+   * out of the wire contract and must be governed separately before an exact source is advertised.
+   */
+  readonly tokenAccounting?: ModelTokenAccounting | undefined;
   /** Whether the model supports a `seed` parameter for deterministic sampling (Epic #761). */
   readonly supportsSeeding?: boolean | undefined;
   /** Whether the model supports a `responseFormat` parameter for JSON output (Epic #761). */
