@@ -12,12 +12,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { nodeWorkspaceFs, type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./fs.js";
 import {
-  DEFAULT_SEARCH_LIMITS,
-  searchText,
-  type SearchScope,
-} from "./repoSearch.js";
+  nodeWorkspaceFs,
+  type WorkspaceDirEntry,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "./fs.js";
+import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
 import { resolveSearchPolicy } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
 import {
@@ -152,7 +153,9 @@ function parentDirectory(scopePath: string): string {
 
 function fileAncestorDirectories(scopePath: string): readonly string[] {
   const ancestors = [""];
-  const parts = parentDirectory(scopePath).split("/").filter((part) => part.length > 0);
+  const parts = parentDirectory(scopePath)
+    .split("/")
+    .filter((part) => part.length > 0);
   let current = "";
   for (const part of parts) {
     current = current.length === 0 ? part : `${current}/${part}`;
@@ -213,13 +216,19 @@ function createTrackedFs(
     isSymbolicLink: false,
     mtimeMs: directoryMtimes.get(scopePath) ?? 0,
   });
-  const fileAt = (absolutePath: string): { readonly scopePath: string; readonly content: string; readonly mtimeMs: number } | undefined => {
+  const fileAt = (
+    absolutePath: string,
+  ):
+    | { readonly scopePath: string; readonly content: string; readonly mtimeMs: number }
+    | undefined => {
     const scopePath = absoluteToRelative(absolutePath);
     if (scopePath === undefined) {
       return undefined;
     }
     const file = files.get(scopePath);
-    return file === undefined ? undefined : { scopePath, content: file.content, mtimeMs: file.mtimeMs };
+    return file === undefined
+      ? undefined
+      : { scopePath, content: file.content, mtimeMs: file.mtimeMs };
   };
   const directoryExists = (absolutePath: string): boolean => {
     const scopePath = absoluteToRelative(absolutePath);
@@ -295,9 +304,7 @@ function createTrackedFs(
           throw makeErrnoError("ENOENT", absolutePath);
         }
         return Promise.resolve(
-          new TextEncoder()
-            .encode(file.content)
-            .subarray(0, Math.max(0, Math.trunc(maxBytes))),
+          new TextEncoder().encode(file.content).subarray(0, Math.max(0, Math.trunc(maxBytes))),
         );
       },
     },
@@ -325,7 +332,10 @@ function createTrackedFs(
   };
 }
 
-async function snapshotFor(index: WorkspaceIndex, currentScope: SearchScope): Promise<WorkspaceIndexSnapshot | undefined> {
+async function snapshotFor(
+  index: WorkspaceIndex,
+  currentScope: SearchScope,
+): Promise<WorkspaceIndexSnapshot | undefined> {
   const policy = resolveSearchPolicy(currentScope.relativePaths.length > 0, undefined);
   return await index.loadSnapshot(
     buildWorkspaceIndexScopeKey(
@@ -442,8 +452,8 @@ describe("workspaceIndex", () => {
       staleRecords: 1,
     });
     expect(tracked.counters.readDir).toBeGreaterThan(0);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(2);
   });
 
   it("detects newly added files on warm searches before reusing cached candidates", async () => {
@@ -470,10 +480,13 @@ describe("workspaceIndex", () => {
     const snapshot = await snapshotFor(index, currentScope);
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
-    expect(snapshot?.discovery.files.map((file) => file.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
+    expect(snapshot?.discovery.files.map((file) => file.scopePath)).toEqual([
+      "src/a.ts",
+      "src/c.ts",
+    ]);
     expect(tracked.counters.readDir).toBeGreaterThan(0);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(2);
   });
 
   it("discovers files added after an empty workspace snapshot", async () => {
@@ -487,7 +500,9 @@ describe("workspaceIndex", () => {
       workspaceIndex: index,
     });
     expect(empty.atoms).toEqual([]);
-    expect((await snapshotFor(index, currentScope))?.discovery.directories.map((dir) => dir.scopePath)).toEqual([""]);
+    expect(
+      (await snapshotFor(index, currentScope))?.discovery.directories.map((dir) => dir.scopePath),
+    ).toEqual([""]);
 
     tracked.writeFile("src/app.ts", "export const app = 'needle';\n");
     tracked.resetCounters();
@@ -499,8 +514,8 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(2);
   });
 
   it("discovers files added inside an existing empty tracked directory", async () => {
@@ -518,7 +533,9 @@ describe("workspaceIndex", () => {
       nowMs: FIXED_NOW,
       workspaceIndex: index,
     });
-    expect((await snapshotFor(index, currentScope))?.discovery.directories.map((dir) => dir.scopePath)).toContain("docs");
+    expect(
+      (await snapshotFor(index, currentScope))?.discovery.directories.map((dir) => dir.scopePath),
+    ).toContain("docs");
 
     tracked.writeFile("docs/readme.md", "needle in docs\n");
     tracked.resetCounters();
@@ -530,8 +547,8 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["docs/readme.md", "src/a.ts"]);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(2);
   });
 
   it("aggregates stale diagnostics across multiple directory deltas", async () => {
@@ -568,8 +585,8 @@ describe("workspaceIndex", () => {
       reusedRecords: 2,
       staleRecords: 2,
     });
-    expect(tracked.counters.readFileUtf8).toBe(2);
-    expect(tracked.counters.readFileBytes).toBe(2);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(4);
   });
 
   it("does not fingerprint selected directories that resolve to denied real paths", async () => {
@@ -626,8 +643,8 @@ describe("workspaceIndex", () => {
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
     expect(tracked.counters.readDir).toBeGreaterThan(0);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(2);
   });
 
   it("keys snapshots by maxFilesScanned so narrow scans cannot poison broader queries", async () => {
@@ -654,8 +671,8 @@ describe("workspaceIndex", () => {
     });
 
     expect(second.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(tracked.counters.readFileUtf8).toBe(2);
-    expect(tracked.counters.readFileBytes).toBe(2);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(4);
   });
 
   it("surfaces path-free workspace index diagnostics on cold and warm results", async () => {
@@ -902,7 +919,9 @@ describe("workspaceIndex", () => {
   });
 
   it("falls back to live reads when cached lexical chunks are intentionally truncated", async () => {
-    const leadingTerms = Array.from({ length: 32 }, (_, index) => `term${index.toString()}`).join(" ");
+    const leadingTerms = Array.from({ length: 32 }, (_, index) => `term${index.toString()}`).join(
+      " ",
+    );
     const tracked = createTrackedFs({
       "src/app.ts": `${leadingTerms} needle\n`,
     });
@@ -925,8 +944,8 @@ describe("workspaceIndex", () => {
     });
 
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/app.ts"]);
-    expect(tracked.counters.readFileUtf8).toBe(1);
-    expect(tracked.counters.readFileBytes).toBe(1);
+    expect(tracked.counters.readFileUtf8).toBe(0);
+    expect(tracked.counters.readFileBytes).toBe(2);
   });
 
   it("persists a file-backed snapshot across index instances and reuses warm data", async () => {
@@ -937,9 +956,7 @@ describe("workspaceIndex", () => {
         "src/a.ts": "export const alpha = 'needle';\n",
       });
       const currentScope = scope();
-      const firstIndex = createWorkspaceIndex(
-        createFileWorkspaceIndexStore({ runtimeDir }),
-      );
+      const firstIndex = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
 
       await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
         fs: tracked.fs,
@@ -948,9 +965,7 @@ describe("workspaceIndex", () => {
       });
 
       tracked.resetCounters();
-      const secondIndex = createWorkspaceIndex(
-        createFileWorkspaceIndexStore({ runtimeDir }),
-      );
+      const secondIndex = createWorkspaceIndex(createFileWorkspaceIndexStore({ runtimeDir }));
       const result = await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
         fs: tracked.fs,
         nowMs: FIXED_NOW,
@@ -1241,7 +1256,8 @@ describe("workspaceIndex", () => {
       });
 
       expect(tracked.counters.readDir).toBeGreaterThan(0);
-      expect(tracked.counters.readFileUtf8).toBeGreaterThan(0);
+      expect(tracked.counters.readFileUtf8).toBe(0);
+      expect(tracked.counters.readFileBytes).toBeGreaterThan(0);
     } finally {
       removeRuntimeDir(runtimeDir);
     }
@@ -1301,7 +1317,8 @@ describe("workspaceIndex", () => {
       });
 
       expect(tracked.counters.readDir).toBeGreaterThan(0);
-      expect(tracked.counters.readFileUtf8).toBeGreaterThan(0);
+      expect(tracked.counters.readFileUtf8).toBe(0);
+      expect(tracked.counters.readFileBytes).toBeGreaterThan(0);
     } finally {
       removeRuntimeDir(runtimeDir);
     }
