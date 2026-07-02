@@ -41,6 +41,7 @@ import {
   buildMultiSourceGatewayMessages,
   mergeContextPackSummaries,
   sourceLabels,
+  splitExplorationBudgets,
   splitExplorationBudget,
   type GroundedRetriever,
   type MultiSourceAnswerer,
@@ -281,6 +282,25 @@ describe("splitExplorationBudget", () => {
   });
 });
 
+describe("splitExplorationBudgets", () => {
+  it("allocates more retrieval budget to a strongly referenced source", () => {
+    const scopes: ChatConnectedScope[] = [
+      { kind: "directory", relativePaths: ["src/api.ts"], connectedAtMs: NOW, root: "/repo/api" },
+      { kind: "directory", relativePaths: ["src/web.ts"], connectedAtMs: NOW, root: "/repo/web" },
+      { kind: "directory", relativePaths: ["src/docs.ts"], connectedAtMs: NOW, root: "/repo/docs" },
+    ];
+    const budgets = splitExplorationBudgets(
+      { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 30 },
+      scopes,
+      "Trace the api payment flow",
+    );
+
+    expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
+    expect(budgets[0]?.searchCallsMax).toBeGreaterThan(budgets[2]?.searchCallsMax ?? 0);
+    expect(budgets.reduce((sum, budget) => sum + budget.filesReadMax, 0)).toBe(30);
+  });
+});
+
 describe("sourceLabels", () => {
   it("uses the root basename and 'project' when root is undefined", () => {
     const scopes: ChatConnectedScope[] = [
@@ -341,9 +361,7 @@ describe("buildMultiSourceGatewayMessages", () => {
       ],
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual(
-      maxUtf8BytesForTokenBudget(512 + 512),
-    );
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(512 + 512));
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
   });

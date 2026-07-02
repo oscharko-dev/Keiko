@@ -56,6 +56,7 @@ import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
+import { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -85,31 +86,14 @@ import {
 } from "./grounded-qa.js";
 import type { WorkspaceIndexProvider } from "./workspace-index-provider.js";
 
+export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
+
 // ─── Canonical reader + label/budget helpers ──────────────────────────────────
 
 // Canonical reader rule (Epic #532 contract): `connectedScopes` supersedes the legacy single
 // `connectedScope`. Readers must NOT mix the two — the list, when present, is authoritative.
 export function buildConnectedScopes(chat: Chat): readonly ChatConnectedScope[] {
   return chat.connectedScopes ?? (chat.connectedScope ? [chat.connectedScope] : []);
-}
-
-// Splits a base budget across n sources so total fan-out work stays bounded regardless of N.
-// Per-source dimensions floor-divide with a Math.max(1, …) floor so a source is never starved to
-// zero. `rerankCallsMax` is left UNCHANGED (it is 0 by default and is a per-source cap, not a
-// shared pool). n=1 returns the base unchanged so the single path is unaffected if it ever routes
-// through here.
-export function splitExplorationBudget(base: ExplorationBudget, n: number): ExplorationBudget {
-  if (n <= 1) return base;
-  const split = (value: number): number => Math.max(1, Math.floor(value / n));
-  return {
-    searchCallsMax: split(base.searchCallsMax),
-    filesReadMax: split(base.filesReadMax),
-    excerptBytesMax: split(base.excerptBytesMax),
-    modelInputTokensMax: split(base.modelInputTokensMax),
-    modelOutputTokensMax: split(base.modelOutputTokensMax),
-    elapsedMsMax: split(base.elapsedMsMax),
-    rerankCallsMax: base.rerankCallsMax,
-  };
 }
 
 function rawSourceLabel(cs: ChatConnectedScope): string {
@@ -288,7 +272,10 @@ function mergeCoverageSummaries(
     incomplete: coverageSummaries.some((coverage) => coverage.incomplete),
     reasons,
     filesDiscovered: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesDiscovered, 0),
-    filesAfterPolicy: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesAfterPolicy, 0),
+    filesAfterPolicy: coverageSummaries.reduce(
+      (sum, coverage) => sum + coverage.filesAfterPolicy,
+      0,
+    ),
     filesScanned: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesScanned, 0),
     filesSkipped: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesSkipped, 0),
     ignoredByDiscovery: coverageSummaries.reduce(
@@ -440,11 +427,7 @@ function packExcerptCount(pack: ConnectedContextPack): number {
   return pack.files.reduce((count, file) => count + file.excerpts.length, 0);
 }
 
-function sourceBudgetBytes(
-  totalBytes: number,
-  index: number,
-  weights: readonly number[],
-): number {
+function sourceBudgetBytes(totalBytes: number, index: number, weights: readonly number[]): number {
   const equalPool = totalBytes * 0.35;
   const weightedPool = totalBytes - equalPool;
   const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
@@ -675,7 +658,7 @@ async function retrieveOneSource(
 async function retrieveAllSources(
   ctx: MultiSourceAskInput,
   query: RetrievalQuery,
-  perScopeBudget: ExplorationBudget,
+  perScopeBudgets: readonly ExplorationBudget[],
   labels: readonly string[],
 ): Promise<RetrievalOutcome | RouteResult> {
   const acc: RetrieveAccumulator = {
@@ -690,7 +673,14 @@ async function retrieveAllSources(
       const i = nextIndex;
       nextIndex += 1;
       if (i >= ctx.scopes.length) return;
-      await retrieveOneSource(ctx, query, perScopeBudget, labels, acc, i);
+      await retrieveOneSource(
+        ctx,
+        query,
+        perScopeBudgets[i] ?? splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, ctx.scopes.length),
+        labels,
+        acc,
+        i,
+      );
     }
   }
 
@@ -820,10 +810,14 @@ function assembleMultiSourceAnswer(
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
   const query = buildQuery(ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
-  const perScopeBudget = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, ctx.scopes.length);
+  const perScopeBudgets = splitExplorationBudgets(
+    DEFAULT_EXPLORATION_BUDGET,
+    ctx.scopes,
+    ctx.content,
+  );
   let outcome: RetrievalOutcome | RouteResult;
   try {
-    outcome = await retrieveAllSources(ctx, query, perScopeBudget, labels);
+    outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps);
   }
