@@ -29,10 +29,12 @@ class FakeEventSource {
   public readonly listeners = new Map<string, EsListener[]>();
   public closed = false;
   public static last: FakeEventSource | null = null;
+  public static instances: FakeEventSource[] = [];
 
   public constructor(url: string) {
     this.url = url;
     FakeEventSource.last = this;
+    FakeEventSource.instances.push(this);
   }
 
   public addEventListener(type: string, listener: EsListener): void {
@@ -92,6 +94,7 @@ beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "req-own") });
   FakeEventSource.last = null;
+  FakeEventSource.instances = [];
   vi.mocked(fetchCommandCatalog).mockResolvedValue(CATALOG);
 });
 
@@ -202,8 +205,10 @@ describe("CommandsWidget", () => {
   });
 
   it("labels run-failed and run-cancelled SSE events", async () => {
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
     render(<CommandsWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /task/i });
+    await userEvent.click(screen.getByRole("button", { name: /run task/i }));
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     FakeEventSource.last?.dispatch(
       "command:run-failed",
@@ -233,8 +238,11 @@ describe("CommandsWidget", () => {
   });
 
   it("appends SSE events to the recent events list in live order", async () => {
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
     render(<CommandsWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /task/i });
+    expect(FakeEventSource.last).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /run task/i }));
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     FakeEventSource.last?.dispatch(
       "command:run-started",
@@ -254,12 +262,38 @@ describe("CommandsWidget", () => {
     expect(items[1]).toHaveTextContent(/started/);
   });
 
+  it("shares one command EventSource across concurrent running cards", async () => {
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
+    render(
+      <>
+        <CommandsWidget projectPath="/proj" />
+        <CommandsWidget projectPath="/proj" />
+      </>,
+    );
+    const runButtons = await screen.findAllByRole("button", { name: /run task/i });
+    await waitFor(() => {
+      for (const button of runButtons) {
+        expect(button).toHaveAttribute("aria-disabled", "false");
+      }
+    });
+
+    await userEvent.click(runButtons[0]!);
+    await userEvent.click(runButtons[1]!);
+
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1));
+    expect(FakeEventSource.instances[0]?.url).toBe("/api/commands/events");
+  });
+
   it("closes the EventSource when unmounted", async () => {
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
     const { unmount } = render(<CommandsWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /task/i });
+    expect(FakeEventSource.last).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /run task/i }));
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    const source = FakeEventSource.last;
     unmount();
-    expect(FakeEventSource.last?.closed).toBe(true);
+    expect(source?.closed).toBe(true);
   });
 
   it("enables Cancel after the owned run-started SSE arrives and aborts on click", async () => {
@@ -269,8 +303,9 @@ describe("CommandsWidget", () => {
     vi.mocked(cancelCommandRun).mockResolvedValue(undefined);
     render(<CommandsWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /task/i });
-    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(FakeEventSource.last).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /run task/i }));
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     const cancel = await screen.findByRole("button", { name: /cancel/i });
     expect(cancel).toHaveAttribute("aria-disabled", "true");
     FakeEventSource.last?.dispatch(
@@ -291,8 +326,9 @@ describe("CommandsWidget", () => {
     vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
     render(<CommandsWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /task/i });
-    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(FakeEventSource.last).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /run task/i }));
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     await screen.findByRole("button", { name: /cancel/i });
     FakeEventSource.last?.dispatch(
       "command:run-started",

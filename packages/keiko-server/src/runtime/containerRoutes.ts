@@ -16,7 +16,7 @@ import type { ContainerRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { SSE_HEADERS, readyMessage } from "../sse.js";
+import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import {
   errorBody,
   STREAMING,
@@ -228,6 +228,7 @@ function openContainerSseStream(
   redactor: UiHandlerDeps["redactor"],
 ): void {
   res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
   let seq = 0;
   const unsubscribe = manager.subscribe((event) => {
     seq += 1;

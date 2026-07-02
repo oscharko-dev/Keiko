@@ -70,7 +70,7 @@ import {
 import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
   fetchCapsules,
@@ -115,6 +115,11 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
+const CHAT_TURN_WINDOW_THRESHOLD = 120;
+const CHAT_TURN_WINDOW_SIZE = 80;
+const CHAT_TURN_WINDOW_OVERSCAN = 8;
+const CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX = 132;
+
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -128,9 +133,9 @@ function timeLabel(timestamp: number): string {
 // RunSummaryCards (the chat-side projection of the run). Other system messages keep
 // the historical "filtered out of the visible log" behaviour.
 function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
-  // Issue #152 — the streaming path inserts an empty assistant bubble before the first token
-  // arrives; while it is empty the pending turn is represented by the TypingBubble, so an empty
-  // assistant turn is hidden here to avoid a duplicate "Keiko" bubble during the contacting wait.
+  // Issue #152 — while the stream is empty, the pending turn is represented by
+  // TypingBubble; empty assistant turns are hidden to avoid a duplicate "Keiko"
+  // bubble during the contacting wait.
   // Persisted assistant turns are never empty; empty provider responses fail before persistence.
   return messages.filter(
     (m) =>
@@ -165,6 +170,47 @@ function conversationTurns(messages: readonly ChatMessage[]): readonly Conversat
   }
 
   return turns;
+}
+
+interface ConversationTurnWindow {
+  readonly turns: readonly ConversationTurn[];
+  readonly beforeCount: number;
+  readonly afterCount: number;
+}
+
+function turnContainsMessage(turn: ConversationTurn, messageId: string): boolean {
+  if (turn.user?.id === messageId) return true;
+  return turn.responses.some((response) => response.id === messageId);
+}
+
+function conversationTurnWindow(
+  turns: readonly ConversationTurn[],
+  focusedMessageId: string | null,
+): ConversationTurnWindow {
+  if (turns.length <= CHAT_TURN_WINDOW_THRESHOLD) {
+    return { turns, beforeCount: 0, afterCount: 0 };
+  }
+
+  let start = Math.max(0, turns.length - CHAT_TURN_WINDOW_SIZE);
+  if (focusedMessageId !== null) {
+    const focusedIndex = turns.findIndex((turn) => turnContainsMessage(turn, focusedMessageId));
+    if (
+      focusedIndex >= 0 &&
+      (focusedIndex < start || focusedIndex >= start + CHAT_TURN_WINDOW_SIZE)
+    ) {
+      start = Math.max(0, focusedIndex - CHAT_TURN_WINDOW_OVERSCAN);
+    }
+  }
+  const end = Math.min(turns.length, start + CHAT_TURN_WINDOW_SIZE);
+  return {
+    turns: turns.slice(start, end),
+    beforeCount: start,
+    afterCount: turns.length - end,
+  };
+}
+
+function conversationTurnSpacerStyle(hiddenTurns: number): CSSProperties {
+  return { blockSize: `${String(hiddenTurns * CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX)}px` };
 }
 
 // No fallback to a placeholder model id — when no eligible models are
@@ -253,7 +299,7 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
 // non-secure contexts and announced status (WCAG 4.1.3).
 function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
@@ -367,7 +413,7 @@ function ChatBubbleImpl({
   readonly streaming?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { activeChat } = useChatSessionContext();
   const contentId = useId();
   const bubbleRef = useRef<HTMLElement | null>(null);
@@ -380,7 +426,8 @@ function ChatBubbleImpl({
     windowId,
     windows: previewWindows,
   });
-  const canCollapse = !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
+  const canCollapse =
+    !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
 
   useEffect(() => {
     const assistantMessageId = message.groundedAnswer?.assistantMessageId ?? message.id;
@@ -429,11 +476,14 @@ function ChatBubbleImpl({
           data-collapsed={!isUser && collapsed ? "true" : "false"}
           data-collapsible={canCollapse ? "true" : "false"}
         >
-          {isUser ? (
+          {isUser || streaming ? (
             message.content
           ) : (
             // AC #1 / #2: assistant responses render as safe markdown.
             // User messages remain plain text — no markdown interpretation.
+            // The live streaming assistant turn also stays plain text until the
+            // canonical message arrives, avoiding full Markdown parse/highlight
+            // work on every token while retaining React's escaping guarantees.
             // SM-1: wrapped in a per-message boundary so a parser/render defect
             // degrades this one bubble to plain text instead of crashing the view.
             <SafeMarkdownBoundary
@@ -507,7 +557,7 @@ function ChatBubbleImpl({
 const ChatBubble = memo(ChatBubbleImpl);
 
 function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div
       className="chat-msg-brand"
@@ -521,7 +571,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
 }
 
 function TypingBubble(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
@@ -541,6 +591,7 @@ function TypingBubble(): ReactNode {
 
 interface ConversationThreadProps {
   readonly messages: readonly ChatMessage[];
+  readonly streamingAssistantMessage?: ChatMessage | undefined;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
@@ -555,10 +606,12 @@ interface ConversationThreadProps {
   readonly onCancelRegenerate: () => void;
   readonly showRegenerateControls: boolean;
   readonly registerQuestionAnchor?: (messageId: string, node: HTMLDivElement | null) => void;
+  readonly focusedMessageId: string | null;
 }
 
 function ConversationThreadImpl({
   messages,
+  streamingAssistantMessage,
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
@@ -573,9 +626,19 @@ function ConversationThreadImpl({
   onCancelRegenerate,
   showRegenerateControls,
   registerQuestionAnchor,
+  focusedMessageId,
 }: ConversationThreadProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const turns = useMemo(() => conversationTurns(messages), [messages]);
+  const turnWindow = useMemo(
+    () => conversationTurnWindow(turns, focusedMessageId),
+    [focusedMessageId, turns],
+  );
+  const liveAssistant =
+    streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0
+      ? streamingAssistantMessage
+      : undefined;
+  const lastTurnId = turns[turns.length - 1]?.id;
   const latestAssistantId = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -584,9 +647,22 @@ function ConversationThreadImpl({
     return undefined;
   }, [messages]);
   return (
-    <div className="chatw-thread">
-      {turns.map((turn) => {
+    <div
+      className="chatw-thread"
+      data-windowed={turnWindow.beforeCount > 0 || turnWindow.afterCount > 0 ? "true" : "false"}
+    >
+      {turnWindow.beforeCount > 0 ? (
+        <div
+          className="chat-turn-spacer"
+          aria-hidden="true"
+          data-position="before"
+          data-hidden-turns={turnWindow.beforeCount}
+          style={conversationTurnSpacerStyle(turnWindow.beforeCount)}
+        />
+      ) : null}
+      {turnWindow.turns.map((turn) => {
         const userMessage = turn.user;
+        const isLastTurn = turn.id === lastTurnId;
         return (
           <div className="chat-turn" key={turn.id}>
             <div
@@ -626,17 +702,57 @@ function ConversationThreadImpl({
                   showRegenerate={showRegenerateControls && latestAssistantId === response.id}
                   regenerating={regeneratingMessageId === response.id}
                   streaming={
+                    liveAssistant === undefined &&
                     sendStatus === "streaming" &&
                     response.role === "assistant" &&
-                    turn === turns[turns.length - 1] &&
+                    isLastTurn &&
                     index === turn.responses.length - 1
                   }
                 />
               ))}
+              {liveAssistant !== undefined && isLastTurn ? (
+                <ChatBubble
+                  key={liveAssistant.id}
+                  message={liveAssistant}
+                  onOpenRunResult={onOpenRunResult}
+                  repositoryRoots={repositoryRoots}
+                  openRepositoryReference={openRepositoryReference}
+                  previewWindows={previewWindows}
+                  windowId={windowId}
+                  layout="turn"
+                  streaming={sendStatus === "streaming"}
+                />
+              ) : null}
             </div>
           </div>
         );
       })}
+      {turnWindow.afterCount > 0 ? (
+        <div
+          className="chat-turn-spacer"
+          aria-hidden="true"
+          data-position="after"
+          data-hidden-turns={turnWindow.afterCount}
+          style={conversationTurnSpacerStyle(turnWindow.afterCount)}
+        />
+      ) : null}
+      {liveAssistant !== undefined && turns.length === 0 ? (
+        <div className="chat-turn" key={liveAssistant.id}>
+          <div className="chat-turn-cell chat-turn-prompt" />
+          <div className="chat-turn-cell chat-turn-answer">
+            <ChatBubble
+              message={liveAssistant}
+              onOpenRunResult={onOpenRunResult}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+              previewWindows={previewWindows}
+              windowId={windowId}
+              layout="turn"
+              streaming={sendStatus === "streaming"}
+            />
+          </div>
+        </div>
+      ) : null}
       {sending && sendStatus !== "streaming" ? (
         <div className="chat-turn chat-turn-pending">
           <div className="chat-turn-cell chat-turn-prompt" />
@@ -681,7 +797,7 @@ function ConversationQuestionMap({
   readonly items: readonly ConversationQuestionMapItem[];
   readonly onJump: (messageId: string) => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
   const setWaveFromPointer = useCallback((clientY: number): void => {
     const buttons = Array.from(buttonRefs.current.values());
@@ -1455,7 +1571,7 @@ function ComposerContextControls({
   onAttachFiles,
   controlsNarrow = false,
 }: ComposerContextControlsProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
@@ -1591,7 +1707,7 @@ function ComposerBar({
   onToggleVoiceDialog,
   voiceDialogButtonRef,
 }: ComposerBarProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { draft, noEligibleModels, loading, sending, cancelSend } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
@@ -1710,7 +1826,7 @@ function ComposerBar({
 // CSS class (var(--fg) text) for WCAG AA contrast compliance.
 // Stable id enables aria-describedby wiring from disabled controls (AC #2).
 function NoModelAlert(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div id={NO_MODEL_ALERT_ID} role="alert" className="gw-error cmp-no-model">
       {t("chat.noModelAlert")}
@@ -1722,7 +1838,7 @@ function NoModelAlert(): ReactNode {
 // screen-reader users hear the state without interruption. No fake progress
 // percentage — engineering note forbids it.
 function LoadingStatus(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div id={LOADING_STATUS_ID} role="status" className="cmp-loading-status">
       <span className="cmp-loading-dot" aria-hidden="true" />
@@ -1759,7 +1875,7 @@ export function sendStatusLabel(status: SendStatus): string {
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const label =
     status === "queued"
       ? t("chat.send.statusQueued")
@@ -1807,7 +1923,7 @@ function ComposerCore({
   controlsNarrow = false,
   barCompact = false,
 }: ComposerCoreProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const {
     draft,
     loading,
@@ -2386,7 +2502,7 @@ interface EmptyComposerStateProps {
 }
 
 function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (minimal) {
     return (
       <div
@@ -2408,7 +2524,7 @@ function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): React
 // Rendered when no chat has been selected yet (activeChat is undefined).
 // Instructs the user to pick or start a chat from the project sidebar.
 function NoChatState(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div className="chatw-empty-no-chat">
       <div className="chatw-empty-no-chat-icon" aria-hidden="true">
@@ -2511,7 +2627,7 @@ function voiceSessionGroundingContext(
   return { enabled: true, sourceCount, kind };
 }
 
-function formatScopeUpdateError(error: unknown, t: ReturnType<typeof useI18n>["t"]): string {
+function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
   return formatUserError(error, t("chat.error.scopeUpdate"));
 }
@@ -2524,7 +2640,7 @@ interface ScopeOption {
 function capsuleOptions(
   chat: Chat,
   capsules: readonly CapsuleListEntry[],
-  t: ReturnType<typeof useI18n>["t"],
+  t: I18nTranslate,
 ): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
@@ -2554,7 +2670,7 @@ function capsuleOptions(
 function capsuleSetOptions(
   chat: Chat,
   capsuleSets: readonly CapsuleSetListEntry[],
-  t: ReturnType<typeof useI18n>["t"],
+  t: I18nTranslate,
 ): readonly ScopeOption[] {
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
@@ -2587,44 +2703,94 @@ interface KnowledgeCatalog {
   readonly loadError: string | null;
 }
 
+interface KnowledgeCatalogSnapshot {
+  readonly capsules: readonly CapsuleListEntry[];
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly loadError: unknown | null;
+}
+
+const EMPTY_KNOWLEDGE_CATALOG: KnowledgeCatalogSnapshot = {
+  capsules: [],
+  capsuleSets: [],
+  loadError: null,
+};
+const KNOWLEDGE_CATALOG_TTL_MS = 30_000;
+const KNOWLEDGE_CATALOG_ERROR_TTL_MS = 5_000;
+let knowledgeCatalogCache:
+  | {
+      readonly expiresAt: number;
+      readonly snapshot: KnowledgeCatalogSnapshot;
+    }
+  | undefined;
+let knowledgeCatalogPending: Promise<KnowledgeCatalogSnapshot> | undefined;
+
+function cachedKnowledgeCatalogSnapshot(now: number): KnowledgeCatalogSnapshot | undefined {
+  if (knowledgeCatalogCache === undefined || knowledgeCatalogCache.expiresAt <= now) {
+    return undefined;
+  }
+  return knowledgeCatalogCache.snapshot;
+}
+
+async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+  const now = Date.now();
+  const cached = cachedKnowledgeCatalogSnapshot(now);
+  if (cached !== undefined) return cached;
+  if (knowledgeCatalogPending !== undefined) return knowledgeCatalogPending;
+
+  knowledgeCatalogPending = Promise.allSettled([fetchCapsules(), fetchCapsuleSets()])
+    .then(([capsuleResult, capsuleSetResult]) => {
+      if (capsuleResult.status !== "fulfilled") {
+        return {
+          ...EMPTY_KNOWLEDGE_CATALOG,
+          loadError: capsuleResult.reason,
+        };
+      }
+      const snapshot: KnowledgeCatalogSnapshot = {
+        capsules: capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
+        capsuleSets:
+          capsuleSetResult.status === "fulfilled" ? capsuleSetResult.value.capsuleSets : [],
+        loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
+      };
+      return snapshot;
+    })
+    .then((snapshot) => {
+      const ttl =
+        snapshot.loadError === null ? KNOWLEDGE_CATALOG_TTL_MS : KNOWLEDGE_CATALOG_ERROR_TTL_MS;
+      knowledgeCatalogCache = { expiresAt: Date.now() + ttl, snapshot };
+      return snapshot;
+    })
+    .finally(() => {
+      knowledgeCatalogPending = undefined;
+    });
+  return knowledgeCatalogPending;
+}
+
+export function clearKnowledgeCatalogCacheForTests(): void {
+  knowledgeCatalogCache = undefined;
+  knowledgeCatalogPending = undefined;
+}
+
 function useKnowledgeCatalog(): KnowledgeCatalog {
-  const { t } = useI18n();
-  const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
-  const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const t = useTranslate();
+  const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
+    cachedKnowledgeCatalogSnapshot(Date.now()) ?? EMPTY_KNOWLEDGE_CATALOG,
+  );
 
   useEffect(() => {
     let cancelled = false;
-    async function load(): Promise<void> {
-      try {
-        const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
-          fetchCapsules(),
-          fetchCapsuleSets(),
-        ]);
-        if (capsuleResult.status !== "fulfilled") {
-          throw capsuleResult.reason;
-        }
-        if (cancelled) return;
-        setCapsules(
-          capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
-        );
-        if (capsuleSetResult.status === "fulfilled") {
-          setCapsuleSets(capsuleSetResult.value.capsuleSets);
-        } else {
-          setCapsuleSets([]);
-          setLoadError(formatScopeUpdateError(capsuleSetResult.reason, t));
-        }
-      } catch (caught) {
-        if (!cancelled) setLoadError(formatScopeUpdateError(caught, t));
-      }
-    }
-    void load();
+    void loadKnowledgeCatalogSnapshot().then((next) => {
+      if (!cancelled) setSnapshot(next);
+    });
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, []);
 
-  return { capsules, capsuleSets, loadError };
+  return {
+    capsules: snapshot.capsules,
+    capsuleSets: snapshot.capsuleSets,
+    loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
+  };
 }
 
 function LocalKnowledgeScopeControl({
@@ -2638,7 +2804,7 @@ function LocalKnowledgeScopeControl({
   readonly catalog: KnowledgeCatalog;
   readonly connected: boolean;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2856,7 +3022,7 @@ function MemoryActionCard({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly onActionSettled: (message: string) => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirmForget, setConfirmForget] = useState(false);
@@ -3077,7 +3243,7 @@ interface MemoryDisclosureState {
 function useMemoryDisclosureState(
   latestMemory: ConversationMemoryResultWire | undefined,
 ): MemoryDisclosureState {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
   const generatedId = useId();
@@ -3150,7 +3316,7 @@ function MemoryPanel({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly disclosure: MemoryDisclosureState;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (!disclosure.open) return null;
 
   return (
@@ -3241,10 +3407,11 @@ export function ChatWindow({
   previewWindows,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const session = useChatSessionContext();
   const {
     messages,
+    streamingAssistantMessage,
     draft,
     loading,
     sending,
@@ -3267,7 +3434,9 @@ export function ChatWindow({
   } = session;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
-  const visible = visibleOnly(messages);
+  const visible = useMemo(() => visibleOnly(messages), [messages]);
+  const hasLiveStreamingAssistant =
+    streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const repositoryRoots = useMemo(() => {
     return repositoryReferenceRoots(
@@ -3286,7 +3455,11 @@ export function ChatWindow({
   // history. Starting an own send (sending false→true) always jumps down.
   const stickRef = useRef(true);
   const prevSendingRef = useRef(false);
-  const lastVisible = visible.length > 0 ? visible[visible.length - 1] : undefined;
+  const lastVisible = hasLiveStreamingAssistant
+    ? streamingAssistantMessage
+    : visible.length > 0
+      ? visible[visible.length - 1]
+      : undefined;
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   const effectiveMinimal = minimalChat;
   const effectiveCompact = compact || mini;
@@ -3294,6 +3467,8 @@ export function ChatWindow({
   const effectiveBarCompact = barCompact || effectiveMinimal;
   const memoryDisclosure = useMemoryDisclosureState(latestMemory);
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
+  const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
+  const pendingQuestionScrollRef = useRef<string | null>(null);
   const questionMapItems = useMemo<readonly ConversationQuestionMapItem[]>(() => {
     return visible
       .filter((message) => message.role === "user")
@@ -3316,16 +3491,42 @@ export function ChatWindow({
     [],
   );
   const scrollToQuestion = useCallback((messageId: string): void => {
+    setFocusedQuestionId(messageId);
     const node = questionAnchorsRef.current.get(messageId);
-    if (node === undefined) return;
+    if (node === undefined) {
+      pendingQuestionScrollRef.current = messageId;
+      return;
+    }
     stickRef.current = false;
     node.scrollIntoView({ block: "start", behavior: "smooth" });
   }, []);
   useEffect(() => {
+    const pending = pendingQuestionScrollRef.current;
+    if (pending === null) return;
+    const node = questionAnchorsRef.current.get(pending);
+    if (node === undefined) return;
+    pendingQuestionScrollRef.current = null;
+    stickRef.current = false;
+    node.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focusedQuestionId, visible.length]);
+  useEffect(() => {
+    if (!sending) return;
+    pendingQuestionScrollRef.current = null;
+    setFocusedQuestionId(null);
+  }, [sending]);
+  useEffect(() => {
+    pendingQuestionScrollRef.current = null;
+    setFocusedQuestionId(null);
+  }, [activeChat?.id]);
+  useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
-    const el = scrollRef.current;
-    if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+    if (!stickRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [visible.length, sending, lastContent]);
 
   return (
@@ -3373,10 +3574,15 @@ export function ChatWindow({
         tabIndex={0}
         onScroll={(event) => {
           const el = event.currentTarget;
-          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+          stickRef.current = nearBottom;
+          if (nearBottom && focusedQuestionId !== null) {
+            pendingQuestionScrollRef.current = null;
+            setFocusedQuestionId(null);
+          }
         }}
       >
-        {visible.length === 0 ? (
+        {visible.length === 0 && !hasLiveStreamingAssistant ? (
           activeChat !== undefined ? (
             <EmptyComposerState minimal={effectiveMinimal} />
           ) : (
@@ -3390,6 +3596,7 @@ export function ChatWindow({
             <div className="chatw-log">
               <ConversationThread
                 messages={visible}
+                streamingAssistantMessage={streamingAssistantMessage}
                 onOpenRunResult={onOpenRunResult}
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
@@ -3404,6 +3611,7 @@ export function ChatWindow({
                 onCancelRegenerate={cancelSend}
                 showRegenerateControls={!effectiveMinimal}
                 registerQuestionAnchor={registerQuestionAnchor}
+                focusedMessageId={focusedQuestionId}
               />
               <GroundedAnswerPanel chat={activeChat} busy={sending} />
               {/* Issue #148 — disclose which attached documents contributed extracted context. */}

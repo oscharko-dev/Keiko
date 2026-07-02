@@ -27,6 +27,23 @@ import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { invalidateVectorIndexStateForCapsule } from "./vector-index-state.js";
 
+type PreparedStatement = ReturnType<DatabaseSync["prepare"]>;
+const STATEMENTS = new WeakMap<DatabaseSync, Map<string, PreparedStatement>>();
+
+function statement(db: DatabaseSync, sql: string): PreparedStatement {
+  let bySql = STATEMENTS.get(db);
+  if (bySql === undefined) {
+    bySql = new Map();
+    STATEMENTS.set(db, bySql);
+  }
+  let prepared = bySql.get(sql);
+  if (prepared === undefined) {
+    prepared = db.prepare(sql);
+    bySql.set(sql, prepared);
+  }
+  return prepared;
+}
+
 const INSERT_VECTOR_SQL = [
   "INSERT INTO vectors (",
   "  id, capsule_id, source_id, document_id, chunk_id,",
@@ -115,7 +132,7 @@ export function insertVectorRow(
   // Validate the PLAINTEXT shape (dimensions * 4 bytes) before sealing, so the identity check stays
   // meaningful; the embedding is content (ADR-0047) and is sealed before it touches the BLOB column.
   assertEmbeddingShape(row);
-  db.prepare(INSERT_VECTOR_SQL).run({
+  statement(db, INSERT_VECTOR_SQL).run({
     id: String(row.id),
     capsule_id: String(row.capsuleId),
     source_id: String(row.sourceId),
@@ -142,12 +159,12 @@ export function deleteVectorsForDocument(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): void {
-  db.prepare(DELETE_VECTORS_FOR_DOCUMENT_SQL).run({ c: capsuleId, d: documentId });
+  statement(db, DELETE_VECTORS_FOR_DOCUMENT_SQL).run({ c: capsuleId, d: documentId });
   invalidateVectorIndexStateForCapsule(db, capsuleId);
 }
 
 export function deleteVectorsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): void {
-  db.prepare(DELETE_VECTORS_FOR_CAPSULE_SQL).run({ c: capsuleId });
+  statement(db, DELETE_VECTORS_FOR_CAPSULE_SQL).run({ c: capsuleId });
   invalidateVectorIndexStateForCapsule(db, capsuleId);
 }
 
@@ -160,13 +177,15 @@ export function countVectorsForDocument(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): number {
-  const row = db.prepare(COUNT_VECTORS_FOR_DOCUMENT_SQL).get({ c: capsuleId, d: documentId }) as
-    CountRow | undefined;
+  const row = statement(db, COUNT_VECTORS_FOR_DOCUMENT_SQL).get({
+    c: capsuleId,
+    d: documentId,
+  }) as CountRow | undefined;
   return typeof row?.n === "number" ? row.n : 0;
 }
 
 export function countVectorsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): number {
-  const row = db.prepare(COUNT_VECTORS_FOR_CAPSULE_SQL).get({ c: capsuleId }) as
+  const row = statement(db, COUNT_VECTORS_FOR_CAPSULE_SQL).get({ c: capsuleId }) as
     CountRow | undefined;
   return typeof row?.n === "number" ? row.n : 0;
 }
@@ -176,7 +195,10 @@ export function selectChunksForDocument(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): readonly ChunkRow[] {
-  const rows = db.prepare(SELECT_CHUNKS_FOR_DOCUMENT_SQL).all({ c: capsuleId, d: documentId });
+  const rows = statement(db, SELECT_CHUNKS_FOR_DOCUMENT_SQL).all({
+    c: capsuleId,
+    d: documentId,
+  });
   return rows as unknown as readonly ChunkRow[];
 }
 

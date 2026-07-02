@@ -374,6 +374,7 @@ function completionArg(
     });
   return {
     resolve,
+    isCurrentDocument: () => true,
     triggerCharacters: ["."],
     contextBudgetBytes: 4096,
     streamId: "stream",
@@ -474,6 +475,7 @@ function inlineCompletionArg(
     Promise.resolve({ request: query.request.request, items: [] });
   return {
     resolve,
+    isCurrentDocument: () => true,
     contextBudgetBytes: 8192,
     streamId: "inline-stream",
     newRequestId: () => "ireq-1",

@@ -39,7 +39,7 @@ import {
   totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
-import { I18nProvider, useI18n } from "@/lib/i18n";
+import { I18nProvider, useTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -358,7 +358,7 @@ export function buildAppShellCommands(
 }
 
 function AppShellInner(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
   const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
@@ -567,8 +567,8 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     if (ws.wins === null) return;
     for (const conn of ws.conns) {
-      const a = ws.wins.find((win) => win.id === conn.a);
-      const b = ws.wins.find((win) => win.id === conn.b);
+      const a = ws.winsById.get(conn.a);
+      const b = ws.winsById.get(conn.b);
       if (a === undefined || b === undefined) continue;
       const chatWindowId =
         conn.boundChatWindowId ?? (a.type === "chat" ? a.id : b.type === "chat" ? b.id : null);
@@ -581,7 +581,7 @@ function AppShellInner(): ReactNode {
         if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
       });
     }
-  }, [replaceFilesScope, ws.api, ws.conns, ws.wins]);
+  }, [replaceFilesScope, ws.api, ws.conns, ws.wins, ws.winsById]);
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
@@ -592,8 +592,8 @@ function AppShellInner(): ReactNode {
   const active = topWindow(ws.wins);
   const openTools = useMemo(() => deriveOpenTools(ws.wins), [ws.wins]);
   const wsContextValue: WsContextValue = useMemo(
-    () => ({ wins: ws.wins ?? [], active, winCount }),
-    [ws.wins, active, winCount],
+    () => ({ active, winCount }),
+    [active, winCount],
   );
 
   const openPalette = useCallback((): void => setPalOpen(true), []);

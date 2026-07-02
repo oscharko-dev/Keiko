@@ -89,6 +89,7 @@ export interface MountMonaco {
 /** Host-injected completion wiring (Issue #1199); absent when the host supplies no resolver. */
 export interface WireEditorCompletion {
   readonly resolve: EditorCompletionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly triggerCharacters: readonly string[];
   readonly contextBudgetBytes: number;
   readonly streamId: string;
@@ -100,6 +101,7 @@ export interface WireEditorCompletion {
 /** Host-injected inline-completion (ghost-text) wiring (Issue #1200); absent when unsupported. */
 export interface WireEditorInlineCompletion {
   readonly resolve: EditorInlineCompletionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly contextBudgetBytes: number;
   readonly streamId: string;
   readonly newRequestId: () => string;
@@ -304,6 +306,7 @@ function installCompletionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   return registerKeikoCompletionProvider({
     languages,
     resolve: completion.resolve,
+    isCurrentDocument: completion.isCurrentDocument,
     documentLanguages: completion.languages ?? COMPLETION_ELIGIBLE_LANGUAGES,
     triggerCharacters: completion.triggerCharacters,
     contextBudgetBytes: completion.contextBudgetBytes,
@@ -329,6 +332,7 @@ function installInlineCompletionProvider(args: WireEditorOnMountArgs): MonacoDis
   return registerKeikoInlineCompletionProvider({
     languages: registrar,
     resolve: inlineCompletion.resolve,
+    isCurrentDocument: inlineCompletion.isCurrentDocument,
     documentLanguages: inlineCompletion.languages ?? INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
     contextBudgetBytes: inlineCompletion.contextBudgetBytes,
     streamId: inlineCompletion.streamId,

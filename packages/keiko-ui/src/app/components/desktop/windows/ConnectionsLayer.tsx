@@ -6,7 +6,7 @@ import { Icons } from "../Icons";
 import { connPath, relLabel } from "./connectionUtils";
 import type { AppWindow, Connection, ConnectingState } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
-import { useOptionalChatSessionContext } from "../context/ChatSessionContext";
+import { useOptionalChatSessionActivity } from "../context/ChatSessionContext";
 
 interface ConnectionsLayerProps {
   readonly wins: readonly AppWindow[];
@@ -115,6 +115,15 @@ export function shouldRenderConnectionBadge(
 ): boolean {
   const badge = estimatedBadgeRect(item, active);
   return !wins.some((win) => win.minimized !== true && rectsIntersect(badge, windowRect(win)));
+}
+
+function shouldRenderConnectionBadgeAgainstRects(
+  item: ResolvedConn,
+  windowRects: readonly Rect[],
+  active: boolean,
+): boolean {
+  const badge = estimatedBadgeRect(item, active);
+  return !windowRects.some((rect) => rectsIntersect(badge, rect));
 }
 
 // Heavy vs light data exchange, derived from the last grounded answer. The clearest proxy for "how
@@ -288,19 +297,32 @@ function FlowParticles({
 }
 
 function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayerProps): ReactNode {
-  const session = useOptionalChatSessionContext();
+  const activity = useOptionalChatSessionActivity();
   const reducedMotion = usePrefersReducedMotion();
   const { armedId, arm, disarm } = useArmedRemove();
   // A data exchange is live whenever the chat session has a request in flight. We only light up
   // chat↔data-source edges (dataChannel), so an ungrounded reply over a chat with no source edge
   // animates nothing. Heavy/light intensity is remembered from the last settled answer (see useChannelFlow).
-  const { flowing, intensity } = useChannelFlow(session?.sending === true, session?.latestGrounded);
+  const { flowing, intensity } = useChannelFlow(
+    activity?.sending === true,
+    activity?.latestGrounded,
+  );
 
   // Issue #1580 — edge geometry depends only on window rects + the connection set,
   // never on the pan/zoom view (the SVG lives inside the CSS-transformed .ws-scene),
   // so recompute only when those actually change. Combined with the memo wrapper
   // below this keeps the connections layer idle during pan/zoom.
   const items = useMemo(() => resolveConnections(wins, conns), [wins, conns]);
+  const visibleBadgeIds = useMemo(() => {
+    const windowRects = wins.filter((win) => win.minimized !== true).map(windowRect);
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (shouldRenderConnectionBadgeAgainstRects(item, windowRects, flowing && item.dataChannel)) {
+        ids.add(item.c.id);
+      }
+    }
+    return ids;
+  }, [flowing, items, wins]);
   const temp = connecting !== null ? tempPath(connecting, wins) : null;
   return (
     <>
@@ -342,7 +364,7 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
       <div className="conn-badge-layer">
         {items.map((it) => {
           const active = flowing && it.dataChannel;
-          if (!shouldRenderConnectionBadge(it, wins, active)) return null;
+          if (!visibleBadgeIds.has(it.c.id)) return null;
           const armed = armedId === it.c.id;
           const metadataLabel = connectionMetadataLabel(it);
           return (

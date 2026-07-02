@@ -66,8 +66,10 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
 }
 
 function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
+  const wins = partial.wins ?? [];
   return {
-    wins: [],
+    wins,
+    winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
     palOpen: false,
     setPalOpen: vi.fn(),
@@ -87,7 +89,6 @@ describe("Workspace shell accessibility", () => {
       cfg: { runId: "run-123" },
     });
     const wsContextValue: WsContextValue = {
-      wins: [reviewWindow],
       active: reviewWindow,
       winCount: 1,
     };

@@ -75,6 +75,8 @@ export interface RunRegistry {
   get: (runId: string) => RunRecord | undefined;
   // Bounded inspection snapshot for read-only projections such as local activity streams.
   snapshot?: (limit?: number) => readonly RunRecord[];
+  // Notifies aggregate event streams when a new run record is registered.
+  subscribe?: (listener: (record: RunRecord) => void) => () => void;
   // Marks a run terminal, captures its final report + appliable snapshot, and starts the TTL clock.
   complete: (
     runId: string,
@@ -94,6 +96,7 @@ function isTerminal(status: RunStatus): boolean {
 
 interface RegistryState {
   readonly records: Map<string, RunRecord>;
+  readonly subscribers: Set<(record: RunRecord) => void>;
   readonly maxActive: number;
   readonly ttlMs: number;
   readonly now: () => number;
@@ -137,6 +140,13 @@ function registerRun(state: RegistryState, input: RegisterRunInput): RunRecord {
     terminatedAt: undefined,
   };
   state.records.set(input.runId, record);
+  for (const subscriber of state.subscribers) {
+    try {
+      subscriber(record);
+    } catch {
+      // A broken aggregate stream subscriber must not prevent run creation.
+    }
+  }
   return record;
 }
 
@@ -160,6 +170,7 @@ function completeRun(
 export function createRunRegistry(options: RunRegistryOptions = {}): RunRegistry {
   const state: RegistryState = {
     records: new Map<string, RunRecord>(),
+    subscribers: new Set(),
     maxActive: options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
     ttlMs: options.terminatedTtlMs ?? DEFAULT_TERMINATED_TTL_MS,
     now: options.now ?? Date.now,
@@ -180,6 +191,12 @@ export function createRunRegistry(options: RunRegistryOptions = {}): RunRegistry
         return records;
       }
       return records.slice(Math.max(0, records.length - limit));
+    },
+    subscribe: (listener): (() => void) => {
+      state.subscribers.add(listener);
+      return (): void => {
+        state.subscribers.delete(listener);
+      };
     },
     activeCount: (): number => {
       evictExpired(state);

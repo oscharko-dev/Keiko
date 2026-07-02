@@ -44,6 +44,49 @@ const HISTORY_PRETTY_FORMAT = `format:${HISTORY_RECORD_SEP}%H${HISTORY_FIELD_SEP
 const HISTORY_LIMIT_DEFAULT = 50;
 const HISTORY_LIMIT_MAX = 200;
 const HISTORY_SKIP_MAX = 100_000;
+const GIT_SUMMARY_CACHE_TTL_MS = 2_000;
+
+interface GitSummaryCacheEntry {
+  readonly expiresAt: number;
+  readonly value: Promise<RouteResult>;
+}
+
+const gitSummaryCache = new WeakMap<UiHandlerDeps, Map<string, GitSummaryCacheEntry>>();
+const gitRunnerCacheIds = new WeakMap<NormalizedGitRouteOptions["runner"], number>();
+let nextGitRunnerCacheId = 1;
+
+function gitRunnerCacheId(runner: NormalizedGitRouteOptions["runner"]): number {
+  const existing = gitRunnerCacheIds.get(runner);
+  if (existing !== undefined) return existing;
+  const id = nextGitRunnerCacheId;
+  nextGitRunnerCacheId += 1;
+  gitRunnerCacheIds.set(runner, id);
+  return id;
+}
+
+function gitSummaryCacheKey(ctx: RouteContext, options: NormalizedGitRouteOptions): string {
+  return JSON.stringify({
+    root: ctx.url.searchParams.get("root") ?? "",
+    runner: gitRunnerCacheId(options.runner),
+    maxStatusBytes: options.maxStatusBytes,
+    timeoutMs: options.timeoutMs,
+  });
+}
+
+function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntry | undefined {
+  const byKey = gitSummaryCache.get(deps);
+  const cached = byKey?.get(key);
+  if (cached === undefined) return undefined;
+  if (cached.expiresAt > Date.now()) return cached;
+  byKey?.delete(key);
+  return undefined;
+}
+
+function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteResult>): void {
+  const byKey = gitSummaryCache.get(deps) ?? new Map<string, GitSummaryCacheEntry>();
+  byKey.set(key, { expiresAt: Date.now() + GIT_SUMMARY_CACHE_TTL_MS, value });
+  gitSummaryCache.set(deps, byKey);
+}
 
 function redacted<T>(deps: UiHandlerDeps, value: T): T {
   return deps.redactor(value) as T;
@@ -196,30 +239,48 @@ export async function handleGitSummary(
 ): Promise<RouteResult> {
   return runFilesHandler(async () => {
     const options = optionsWithDefaults(rawOptions ?? deps.gitRouteOptions);
-    const repo = await resolveRepository(ctx, deps, options);
-    if (isUnavailable(repo)) {
-      const body = unavailableSummary(repo.root, repo.repositoryRoot, repo.reason);
-      return { status: 200, body: redacted(deps, body) };
-    }
-    const status = await runGit(repo, options, [
+    const cacheKey = gitSummaryCacheKey(ctx, options);
+    const cached = cachedGitSummary(deps, cacheKey);
+    if (cached !== undefined) return cached.value;
+    const value = computeGitSummary(ctx, deps, options).catch((error: unknown) => {
+      gitSummaryCache.get(deps)?.delete(cacheKey);
+      throw error;
+    });
+    storeGitSummary(deps, cacheKey, value);
+    return value;
+  });
+}
+
+async function computeGitSummary(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  options: NormalizedGitRouteOptions,
+): Promise<RouteResult> {
+  const repo = await resolveRepository(ctx, deps, options);
+  if (isUnavailable(repo)) {
+    const body = unavailableSummary(repo.root, repo.repositoryRoot, repo.reason);
+    return { status: 200, body: redacted(deps, body) };
+  }
+  const [status, remotesResult, lastSync] = await Promise.all([
+    runGit(repo, options, [
       "status",
       "--porcelain=v2",
       "--branch",
       "-z",
       "--untracked-files=all",
-    ]);
-    if (status.exitCode !== 0) {
-      const reason = classifyFailure(status);
-      return {
-        status: 200,
-        body: redacted(deps, unavailableSummary(repo.root, repo.repositoryRoot, reason)),
-      };
-    }
-    const remotesResult = await runGit(repo, options, ["remote", "-v"]);
-    const remotes = remotesResult.exitCode === 0 ? parseRemotes(remotesResult.stdout) : [];
-    const lastSync = await readLastSync(repo, options);
-    return { status: 200, body: redacted(deps, buildSummary(repo, status, remotes, lastSync)) };
-  });
+    ]),
+    runGit(repo, options, ["remote", "-v"]),
+    readLastSync(repo, options),
+  ]);
+  if (status.exitCode !== 0) {
+    const reason = classifyFailure(status);
+    return {
+      status: 200,
+      body: redacted(deps, unavailableSummary(repo.root, repo.repositoryRoot, reason)),
+    };
+  }
+  const remotes = remotesResult.exitCode === 0 ? parseRemotes(remotesResult.stdout) : [];
+  return { status: 200, body: redacted(deps, buildSummary(repo, status, remotes, lastSync)) };
 }
 
 // --- remotes route ----------------------------------------------------------

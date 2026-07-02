@@ -90,8 +90,28 @@ function requireArray(
   return value;
 }
 
-export function handleGetWorkspaceState(): RouteResult {
-  return { status: 200, body: { workspace: workspaceState } };
+function workspaceStateEtag(revision: number): string {
+  return `"workspace-state-${String(revision)}"`;
+}
+
+function requestMatchesWorkspaceState(req: IncomingMessage): boolean {
+  const header = req.headers["if-none-match"];
+  const value = Array.isArray(header) ? header.join(",") : header;
+  if (value === undefined) return false;
+  const current = workspaceStateEtag(workspaceState.revision);
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .some((item) => item === current || item === "*");
+}
+
+export function handleGetWorkspaceState(ctx: RouteContext): RouteResult {
+  const etag = workspaceStateEtag(workspaceState.revision);
+  const headers = { ETag: etag, "Cache-Control": "no-store" };
+  if (requestMatchesWorkspaceState(ctx.req)) {
+    return { status: 304, body: null, headers };
+  }
+  return { status: 200, body: { workspace: workspaceState }, headers };
 }
 
 export async function handlePutWorkspaceState(ctx: RouteContext): Promise<RouteResult> {

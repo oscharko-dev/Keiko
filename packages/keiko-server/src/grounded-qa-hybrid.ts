@@ -1245,12 +1245,15 @@ async function runHybridWithStore(
   const resolved = resolveConnectorScopes(capped.connectorScopes, store);
   if ("status" in resolved) return resolved;
   const query = buildQuery(ctx.content, () => Date.now());
-  const rawFolderResult = await retrieveFolderPacks(
-    ctx,
-    capped.folderScopes,
-    query,
-    ctx.folderRetriever ?? defaultRetriever(ctx.signal),
-  );
+  const [rawFolderResult, connectorResult] = await Promise.all([
+    retrieveFolderPacks(
+      ctx,
+      capped.folderScopes,
+      query,
+      ctx.folderRetriever ?? defaultRetriever(ctx.signal),
+    ),
+    retrieveConnectors(ctx, store, capped.connectorScopes, resolved),
+  ]);
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.
   const folderResult: FolderRetrieval = {
@@ -1261,7 +1264,6 @@ async function runHybridWithStore(
       ...rawFolderResult.skipped,
     ],
   };
-  const connectorResult = await retrieveConnectors(ctx, store, capped.connectorScopes, resolved);
   if ("status" in connectorResult) return connectorResult;
   const connectorResultWithOverCap: ConnectorRetrieval =
     capped.overCapConnectorSkipped.length > 0

@@ -19,6 +19,11 @@ function trackBasicLanguageImport(languageId: string): Record<string, never> {
   basicLanguageImports.add(languageId);
   return {};
 }
+const optionalLanguageImports = new Set<string>();
+function trackOptionalLanguageImport(languageId: string): Record<string, never> {
+  optionalLanguageImports.add(languageId);
+  return {};
+}
 
 vi.mock("@monaco-editor/react", () => ({ loader: { config } }));
 vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({
@@ -28,14 +33,22 @@ vi.mock("monaco-editor/esm/vs/editor/editor.api.js", () => ({
     register: registerLanguage,
   },
 }));
-vi.mock("monaco-editor/esm/vs/basic-languages/go/go.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/java/java.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/basic-languages/go/go.contribution.js", () =>
+  trackOptionalLanguageImport("go"),
+);
+vi.mock("monaco-editor/esm/vs/basic-languages/java/java.contribution.js", () =>
+  trackOptionalLanguageImport("java"),
+);
 vi.mock("monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/python/python.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js", () => ({}));
-vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () => ({}));
+vi.mock("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js", () =>
+  trackOptionalLanguageImport("shell"),
+);
+vi.mock("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js", () =>
+  trackOptionalLanguageImport("sql"),
+);
 vi.mock("monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js", () => ({}));
 vi.mock("monaco-editor/esm/vs/basic-languages/css/css.contribution.js", () =>
@@ -122,6 +135,32 @@ describe("ensureMonacoRuntime", () => {
     expect(basicLanguageImports.has("scss")).toBe(true);
     expect(basicLanguageImports.has("less")).toBe(true);
     expect(basicLanguageImports.has("html")).toBe(true);
+  });
+
+  it("keeps rare Monaco language contributions out of the eager editor runtime chunk", async () => {
+    await import("./editorMonacoRuntime");
+    expect(optionalLanguageImports.size).toBe(0);
+  });
+
+  it("loads optional Monaco language contributions on demand and dedupes in-flight loads", async () => {
+    const {
+      ensureMonacoLanguage,
+      ensureMonacoLanguages,
+      isMonacoLanguageReady,
+      areMonacoLanguagesReady,
+    } = await import("./editorMonacoRuntime");
+
+    expect(isMonacoLanguageReady("go")).toBe(false);
+    expect(isMonacoLanguageReady("typescript")).toBe(true);
+    expect(areMonacoLanguagesReady(["typescript", "go"])).toBe(false);
+
+    await Promise.all([ensureMonacoLanguage("go"), ensureMonacoLanguage("go")]);
+    expect(optionalLanguageImports).toEqual(new Set(["go"]));
+    expect(isMonacoLanguageReady("go")).toBe(true);
+
+    await ensureMonacoLanguages(["go", "sql", "typescript"]);
+    expect(optionalLanguageImports).toEqual(new Set(["go", "sql"]));
+    expect(areMonacoLanguagesReady(["go", "sql", "typescript"])).toBe(true);
   });
 
   it("does not register JSON twice when Monaco already has it", async () => {

@@ -2292,6 +2292,37 @@ describe("EditorWidget — agent bridge", () => {
     expect(source.close).toHaveBeenCalledOnce();
   });
 
+  it("multiplexes multiple active agent sessions over one live event stream", async () => {
+    const FakeSource = installFakeEventSource();
+
+    const view = render(
+      <>
+        <EditorRuntimeWidget windowId="agent-mux-1" root="/repo" file="src/app.ts" />
+        <EditorRuntimeWidget windowId="agent-mux-2" root="/repo" file="README.md" />
+      </>,
+    );
+
+    await screen.findAllByTestId("editor-surface");
+    await waitFor(() => {
+      expect(postEditorAgentSessionSnapshot).toHaveBeenCalledTimes(2);
+    });
+    const sessionIds = vi
+      .mocked(postEditorAgentSessionSnapshot)
+      .mock.calls.map(([snapshot]) => snapshot.sessionId);
+
+    await waitFor(() => {
+      const liveSources = FakeSource.instances.filter((source) => source.close.mock.calls.length === 0);
+      expect(liveSources).toHaveLength(1);
+      const [source] = liveSources;
+      for (const sessionId of sessionIds) {
+        expect(source?.url).toContain(`sessionId=${encodeURIComponent(sessionId)}`);
+      }
+    });
+
+    view.unmount();
+    expect(FakeSource.instances.every((source) => source.close.mock.calls.length > 0)).toBe(true);
+  });
+
   it("rounds fractional modifiedAt values before posting agent snapshots", async () => {
     installFakeEventSource();
     const loadedVersion = { ...BASE_VERSION, modifiedAt: 12.75 };

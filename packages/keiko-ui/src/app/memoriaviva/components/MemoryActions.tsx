@@ -21,7 +21,7 @@ import {
   rejectMemoryProposal,
   unpinMemory,
 } from "@/lib/memory-api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
@@ -51,7 +51,7 @@ export function MemoryActions({
   deleteImpl = deleteMemory,
   correctImpl = correctMemory,
 }: MemoryActionsProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

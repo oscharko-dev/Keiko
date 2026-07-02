@@ -4,7 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { VOICE_PERSONAS } from "@oscharko-dev/keiko-contracts";
 import { fetchConfig, fetchModels, runGatewayReadiness } from "@/lib/api";
-import { LOCALE_LABELS, useI18n, type I18nTranslate } from "@/lib/i18n";
+import {
+  LOCALE_LABELS,
+  useLocale,
+  useSetLocale,
+  useTranslate,
+  type I18nTranslate,
+} from "@/lib/i18n";
 import type {
   ConversationIneligibilityReason,
   GatewayReadinessProbeResult,
@@ -137,7 +143,7 @@ function conversationIneligibilityShortLabel(
 }
 
 function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const reason = explainConversationIneligibility(model);
   // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
   // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
@@ -304,7 +310,7 @@ function ReadinessReportCopyButton({
 }: {
   readonly report: GatewayReadinessReport;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [copyState, setCopyState] = useState<ReportCopyState>("idle");
   const [status, setStatus] = useState("");
 
@@ -345,7 +351,7 @@ function ReadinessReportCopyButton({
 }
 
 function ReadinessSummary({ state }: { readonly state: ReadinessRunState | undefined }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (state === undefined || state.status === "idle") return null;
   if (state.status === "running") {
     return (
@@ -421,7 +427,7 @@ function ModelCapabilityRow({
   readonly readiness: ReadinessRunState | undefined;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const voiceReady = isConfiguredVoiceProvider(model);
@@ -491,7 +497,9 @@ interface GeneralPrefsProps {
 }
 
 function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): ReactNode {
-  const { locale, setLocale, t } = useI18n();
+  const locale = useLocale();
+  const setLocale = useSetLocale();
+  const t = useTranslate();
   const voicePersonaOptions = useMemo(
     () => (voicePersonas.length > 0 ? voicePersonas : VOICE_PERSONAS),
     [voicePersonas],
@@ -919,7 +927,7 @@ export function SettingsPanel({
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
 } = {}): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [config, setConfig] = useState<SafeGatewayConfig | null>(null);

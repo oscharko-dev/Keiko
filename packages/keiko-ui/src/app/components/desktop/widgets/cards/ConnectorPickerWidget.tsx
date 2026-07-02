@@ -13,6 +13,7 @@
 // Color contrast follows the design system tokens (ink on surface — all ≥4.5:1).
 
 import { useEffect, useState, type ReactNode } from "react";
+import styles from "./ConnectorPickerWidget.module.css";
 import {
   fetchCapsules,
   fetchCapsuleSets,
@@ -304,7 +305,7 @@ export function ConnectorPickerWidget({
   }
 
   return (
-    <div className="connector-picker">
+    <div className={`connector-picker ${styles.lazyWidgetScope}`}>
       <SelectedBadge
         capsules={capsules}
         capsuleSets={capsuleSets}

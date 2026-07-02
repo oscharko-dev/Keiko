@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
@@ -133,6 +133,7 @@ const CHAT_UPSERT_EVENT = "keiko:chat-upsert";
 const CHAT_DELETE_EVENT = "keiko:chat-delete";
 const RUN_SUMMARY_SYNC_INTERVAL_MS = 1_000;
 const RUN_SUMMARY_SYNC_MAX_ATTEMPTS = 120;
+const RUN_SUMMARY_SYNC_MAX_INTERVAL_MS = 15_000;
 const VOICE_TURN_APPEND_MAX_ATTEMPTS = 2;
 
 // Issue #152 — conversation request lifecycle states (memory keiko-issue66).
@@ -262,12 +263,66 @@ function isChatDeletePayload(value: unknown): value is { readonly chatId: string
   );
 }
 
+type ChatMutation =
+  | { readonly type: "upsert"; readonly chat: Chat }
+  | { readonly type: "delete"; readonly chatId: string };
+
+type ChatMutationSubscriber = (mutation: ChatMutation) => void;
+
+const chatMutationSubscribers = new Set<ChatMutationSubscriber>();
+let chatMutationListenersAttached = false;
+
+function emitChatMutation(mutation: ChatMutation): void {
+  for (const subscriber of chatMutationSubscribers) {
+    subscriber(mutation);
+  }
+}
+
+function onChatUpsertEvent(event: Event): void {
+  const chat = (event as CustomEvent<unknown>).detail;
+  if (!isChatPayload(chat)) return;
+  invalidateSharedBootstrap();
+  emitChatMutation({ type: "upsert", chat });
+}
+
+function onChatDeleteEvent(event: Event): void {
+  const payload = (event as CustomEvent<unknown>).detail;
+  if (!isChatDeletePayload(payload)) return;
+  invalidateSharedBootstrap();
+  emitChatMutation({ type: "delete", chatId: payload.chatId });
+}
+
+function ensureChatMutationListeners(): void {
+  if (chatMutationListenersAttached || typeof window === "undefined") return;
+  window.addEventListener(CHAT_UPSERT_EVENT, onChatUpsertEvent);
+  window.addEventListener(CHAT_DELETE_EVENT, onChatDeleteEvent);
+  chatMutationListenersAttached = true;
+}
+
+function removeChatMutationListenersIfIdle(): void {
+  if (!chatMutationListenersAttached || chatMutationSubscribers.size > 0) return;
+  window.removeEventListener(CHAT_UPSERT_EVENT, onChatUpsertEvent);
+  window.removeEventListener(CHAT_DELETE_EVENT, onChatDeleteEvent);
+  chatMutationListenersAttached = false;
+}
+
+function subscribeChatMutations(subscriber: ChatMutationSubscriber): () => void {
+  chatMutationSubscribers.add(subscriber);
+  ensureChatMutationListeners();
+  return () => {
+    chatMutationSubscribers.delete(subscriber);
+    removeChatMutationListenersIfIdle();
+  };
+}
+
 export function notifyChatUpsert(chat: Chat): void {
+  invalidateSharedBootstrap();
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(CHAT_UPSERT_EVENT, { detail: chat }));
 }
 
 export function notifyChatDeleted(chatId: string): void {
+  invalidateSharedBootstrap();
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(CHAT_DELETE_EVENT, { detail: { chatId } }));
 }
@@ -331,6 +386,9 @@ export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
   messages: ChatMessage[];
+  // Live assistant text for the active streaming turn. Kept outside `messages`
+  // so token deltas do not rewrite or scan the full conversation history.
+  readonly streamingAssistantMessage?: ChatMessage | undefined;
   models: ModelCapability[];
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
@@ -432,6 +490,87 @@ const INITIAL_STATE: SessionState = {
   selectedModel: undefined,
 };
 
+const SHARED_BOOTSTRAP_TTL_MS = 2_000;
+
+interface SharedBootstrapCacheEntry {
+  readonly expiresAt: number;
+  readonly value: Partial<SessionState>;
+}
+
+let sharedBootstrapCache: SharedBootstrapCacheEntry | undefined;
+let sharedBootstrapInflight: Promise<Partial<SessionState>> | undefined;
+let sharedBootstrapVersion = 0;
+const sharedChatListInflight = new Map<string, Promise<{ readonly chats: readonly Chat[] }>>();
+const sharedChatMessagesInflight = new Map<
+  string,
+  Promise<{ readonly messages: readonly ChatMessage[] }>
+>();
+
+function cloneSessionPatch(patch: Partial<SessionState>): Partial<SessionState> {
+  const cloned: Partial<SessionState> = { ...patch };
+  if (patch.projects !== undefined) cloned.projects = [...patch.projects];
+  if (patch.chats !== undefined) cloned.chats = [...patch.chats];
+  if (patch.messages !== undefined) cloned.messages = [...patch.messages];
+  if (patch.models !== undefined) cloned.models = [...patch.models];
+  return cloned;
+}
+
+function invalidateSharedBootstrap(): void {
+  sharedBootstrapVersion += 1;
+  sharedBootstrapCache = undefined;
+  sharedBootstrapInflight = undefined;
+}
+
+function cloneChatListPayload(payload: { readonly chats: readonly Chat[] }): {
+  readonly chats: readonly Chat[];
+} {
+  return { chats: Array.from(payload.chats) };
+}
+
+function cloneChatMessagesPayload(payload: { readonly messages: readonly ChatMessage[] }): {
+  readonly messages: readonly ChatMessage[];
+} {
+  return { messages: Array.from(payload.messages) };
+}
+
+function sharedFetchChats(projectPath: string): Promise<{ readonly chats: readonly Chat[] }> {
+  const existing = sharedChatListInflight.get(projectPath);
+  if (existing !== undefined) return existing.then(cloneChatListPayload);
+  const pending = fetchChats(projectPath)
+    .then(cloneChatListPayload)
+    .finally(() => {
+      if (sharedChatListInflight.get(projectPath) === pending) {
+        sharedChatListInflight.delete(projectPath);
+      }
+    });
+  sharedChatListInflight.set(projectPath, pending);
+  return pending.then(cloneChatListPayload);
+}
+
+function sharedFetchChatMessages(
+  chatId: string,
+  projectPath: string,
+): Promise<{ readonly messages: readonly ChatMessage[] }> {
+  const key = `${projectPath}\u0000${chatId}`;
+  const existing = sharedChatMessagesInflight.get(key);
+  if (existing !== undefined) return existing.then(cloneChatMessagesPayload);
+  const pending = fetchChatMessages(chatId, projectPath)
+    .then(cloneChatMessagesPayload)
+    .finally(() => {
+      if (sharedChatMessagesInflight.get(key) === pending) {
+        sharedChatMessagesInflight.delete(key);
+      }
+    });
+  sharedChatMessagesInflight.set(key, pending);
+  return pending.then(cloneChatMessagesPayload);
+}
+
+export function clearChatSessionBootstrapCacheForTests(): void {
+  invalidateSharedBootstrap();
+  sharedChatListInflight.clear();
+  sharedChatMessagesInflight.clear();
+}
+
 function isPendingRunSummaryMessage(message: ChatMessage): boolean {
   return (
     message.role === "system" &&
@@ -458,6 +597,97 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+function runSummarySyncDelayMs(attempt: number): number {
+  return Math.min(
+    RUN_SUMMARY_SYNC_INTERVAL_MS * 2 ** Math.min(attempt, 4),
+    RUN_SUMMARY_SYNC_MAX_INTERVAL_MS,
+  );
+}
+
+interface RunSummarySyncResult {
+  readonly chatId: string;
+  readonly messageId: string;
+  readonly message: ChatMessage;
+}
+
+const sharedRunSummarySyncs = new Map<string, Promise<RunSummarySyncResult | undefined>>();
+
+function runSummarySharedSyncKey(chat: Chat, projectPath: string, message: ChatMessage): string {
+  return `${chat.id}:${projectPath}:${message.id}:${message.runId ?? ""}`;
+}
+
+async function pollRunSummaryPatch(
+  chat: Chat,
+  projectPath: string,
+  message: ChatMessage,
+): Promise<RunSummarySyncResult | undefined> {
+  const runId = message.runId;
+  if (runId === undefined) return undefined;
+  const fallbackKind = runSummaryFallbackKind(message);
+
+  for (let attempt = 0; attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS; attempt += 1) {
+    let summary:
+      | {
+          readonly workflowStatus: "completed" | "failed" | "cancelled";
+          readonly shortResult: string;
+        }
+      | undefined;
+
+    try {
+      const response = await fetchRunReport(runId);
+      const outcome = classifyRunReport(response.report, fallbackKind);
+      if (outcome.kind === "terminal") summary = outcome.summary;
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 404) {
+        try {
+          const response = await fetchEvidenceManifest(runId);
+          const manifestSummary = formatRunSummaryFromManifest(response.manifest, fallbackKind);
+          summary = {
+            workflowStatus:
+              manifestSummary.workflowStatus === "failed" ||
+              manifestSummary.workflowStatus === "cancelled"
+                ? manifestSummary.workflowStatus
+                : "completed",
+            shortResult: manifestSummary.shortResult,
+          };
+        } catch {
+          // Evidence may not exist yet while the worker is still settling; keep polling.
+        }
+      } else {
+        return undefined;
+      }
+    }
+
+    if (summary !== undefined) {
+      const patched = await patchChatMessage(message.id, chat.id, projectPath, summary);
+      return { chatId: chat.id, messageId: message.id, message: patched.message };
+    }
+
+    if (attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS - 1) {
+      await sleep(runSummarySyncDelayMs(attempt));
+    }
+  }
+
+  return undefined;
+}
+
+function sharedRunSummaryPatch(
+  chat: Chat,
+  projectPath: string,
+  message: ChatMessage,
+): Promise<RunSummarySyncResult | undefined> {
+  const key = runSummarySharedSyncKey(chat, projectPath, message);
+  const existing = sharedRunSummarySyncs.get(key);
+  if (existing !== undefined) return existing;
+  const pending = pollRunSummaryPatch(chat, projectPath, message).finally(() => {
+    if (sharedRunSummarySyncs.get(key) === pending) {
+      sharedRunSummarySyncs.delete(key);
+    }
+  });
+  sharedRunSummarySyncs.set(key, pending);
+  return pending;
+}
+
 async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
   const modelPayload = await fetchModels();
   // Issue #144: source of truth is the helper, not an inline kind check. Pin
@@ -470,11 +700,11 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   const project = projects.find((item) => item.available) ?? projects[0];
 
   if (project !== undefined) {
-    const chatPayload = await fetchChats(project.path).catch(() => ({ chats: [] }));
+    const chatPayload = await sharedFetchChats(project.path).catch(() => ({ chats: [] }));
     const sortedChats = sortChats(chatPayload.chats);
     const latestChat = sortedChats[0];
     if (latestChat !== undefined) {
-      const messagePayload = await fetchChatMessages(latestChat.id, project.path);
+      const messagePayload = await sharedFetchChatMessages(latestChat.id, project.path);
       const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
       return {
         models: chatModels,
@@ -519,6 +749,34 @@ async function bootstrapSession(autoCreate: boolean): Promise<Partial<SessionSta
   };
 }
 
+function sharedBootstrapSession(autoCreate: boolean): Promise<Partial<SessionState>> {
+  if (autoCreate) return bootstrapSession(autoCreate);
+  const now = Date.now();
+  if (sharedBootstrapCache !== undefined && sharedBootstrapCache.expiresAt > now) {
+    return Promise.resolve(cloneSessionPatch(sharedBootstrapCache.value));
+  }
+  if (sharedBootstrapInflight !== undefined) {
+    return sharedBootstrapInflight.then(cloneSessionPatch);
+  }
+  const version = sharedBootstrapVersion;
+  const pending = bootstrapSession(false)
+    .then((patch) => {
+      const value = cloneSessionPatch(patch);
+      if (sharedBootstrapVersion === version) {
+        sharedBootstrapCache = {
+          expiresAt: Date.now() + SHARED_BOOTSTRAP_TTL_MS,
+          value,
+        };
+      }
+      return cloneSessionPatch(value);
+    })
+    .finally(() => {
+      if (sharedBootstrapInflight === pending) sharedBootstrapInflight = undefined;
+    });
+  sharedBootstrapInflight = pending;
+  return pending.then(cloneSessionPatch);
+}
+
 export interface UseChatSessionOptions {
   readonly autoCreate?: boolean;
 }
@@ -526,6 +784,9 @@ export interface UseChatSessionOptions {
 export function useChatSession(options: UseChatSessionOptions = {}): UseChatSessionResult {
   const autoCreate = options.autoCreate ?? true;
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
+  const [streamingAssistantMessage, setStreamingAssistantMessage] = useState<
+    ChatMessage | undefined
+  >();
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   // Issue #152 — lifecycle is the source of truth; `sending` is derived.
@@ -722,71 +983,20 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const syncRunSummaryMessage = useCallback(
     async (chat: Chat, projectPath: string, message: ChatMessage, syncKey: string) => {
-      const runId = message.runId;
-      if (runId === undefined) {
-        runSummarySyncingRef.current.delete(syncKey);
-        return;
-      }
-      const fallbackKind = runSummaryFallbackKind(message);
       try {
-        for (let attempt = 0; attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS; attempt += 1) {
-          if (!mountedRef.current || activeChatIdRef.current !== chat.id) return;
-
-          let summary:
-            | {
-                readonly workflowStatus: "completed" | "failed" | "cancelled";
-                readonly shortResult: string;
-              }
-            | undefined;
-
-          try {
-            const response = await fetchRunReport(runId);
-            const outcome = classifyRunReport(response.report, fallbackKind);
-            if (outcome.kind === "terminal") summary = outcome.summary;
-          } catch (caught) {
-            if (caught instanceof ApiError && caught.status === 404) {
-              try {
-                const response = await fetchEvidenceManifest(runId);
-                const manifestSummary = formatRunSummaryFromManifest(
-                  response.manifest,
-                  fallbackKind,
-                );
-                summary = {
-                  workflowStatus:
-                    manifestSummary.workflowStatus === "failed" ||
-                    manifestSummary.workflowStatus === "cancelled"
-                      ? manifestSummary.workflowStatus
-                      : "completed",
-                  shortResult: manifestSummary.shortResult,
-                };
-              } catch {
-                // Evidence may not exist yet while the worker is still settling; keep polling.
-              }
-            } else {
-              return;
-            }
-          }
-
-          if (summary !== undefined) {
-            const patched = await patchChatMessage(message.id, chat.id, projectPath, summary);
-            if (!mountedRef.current || activeChatIdRef.current !== chat.id) return;
-            setState((previous) =>
-              previous.activeChat?.id !== chat.id
-                ? previous
-                : {
-                    ...previous,
-                    messages: previous.messages.map((existing) =>
-                      existing.id === message.id ? patched.message : existing,
-                    ),
-                  },
-            );
-            return;
-          }
-
-          if (attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS - 1) {
-            await sleep(RUN_SUMMARY_SYNC_INTERVAL_MS);
-          }
-        }
+        const patched = await sharedRunSummaryPatch(chat, projectPath, message);
+        if (patched === undefined) return;
+        if (!mountedRef.current || activeChatIdRef.current !== chat.id) return;
+        setState((previous) =>
+          previous.activeChat?.id !== chat.id
+            ? previous
+            : {
+                ...previous,
+                messages: previous.messages.map((existing) =>
+                  existing.id === patched.messageId ? patched.message : existing,
+                ),
+              },
+        );
       } finally {
         runSummarySyncingRef.current.delete(syncKey);
       }
@@ -808,7 +1018,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLoading(true);
       setError(undefined);
       try {
-        const patch = await bootstrapSession(autoCreate);
+        const patch = await sharedBootstrapSession(autoCreate);
         if (!cancelled) setState((previous) => ({ ...previous, ...patch }));
       } catch (caught) {
         if (!cancelled) setError(errorMessage(caught));
@@ -823,35 +1033,27 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, [autoCreate]);
 
   useEffect(() => {
-    const onUpsert = (event: Event): void => {
-      const chat = (event as CustomEvent<unknown>).detail;
-      if (!isChatPayload(chat)) return;
+    return subscribeChatMutations((mutation) => {
+      if (mutation.type === "upsert") {
+        const { chat } = mutation;
+        setState((previous) => ({
+          ...previous,
+          chats: sortChats([chat, ...previous.chats.filter((existing) => existing.id !== chat.id)]),
+          activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
+          selectedModel:
+            previous.activeChat?.id === chat.id
+              ? resolveSelectedModelId(chat.selectedModel, previous.models)
+              : previous.selectedModel,
+        }));
+        return;
+      }
       setState((previous) => ({
         ...previous,
-        chats: sortChats([chat, ...previous.chats.filter((existing) => existing.id !== chat.id)]),
-        activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
-        selectedModel:
-          previous.activeChat?.id === chat.id
-            ? resolveSelectedModelId(chat.selectedModel, previous.models)
-            : previous.selectedModel,
+        chats: previous.chats.filter((chat) => chat.id !== mutation.chatId),
+        activeChat: previous.activeChat?.id === mutation.chatId ? undefined : previous.activeChat,
+        messages: previous.activeChat?.id === mutation.chatId ? [] : previous.messages,
       }));
-    };
-    const onDelete = (event: Event): void => {
-      const payload = (event as CustomEvent<unknown>).detail;
-      if (!isChatDeletePayload(payload)) return;
-      setState((previous) => ({
-        ...previous,
-        chats: previous.chats.filter((chat) => chat.id !== payload.chatId),
-        activeChat: previous.activeChat?.id === payload.chatId ? undefined : previous.activeChat,
-        messages: previous.activeChat?.id === payload.chatId ? [] : previous.messages,
-      }));
-    };
-    window.addEventListener(CHAT_UPSERT_EVENT, onUpsert);
-    window.addEventListener(CHAT_DELETE_EVENT, onDelete);
-    return () => {
-      window.removeEventListener(CHAT_UPSERT_EVENT, onUpsert);
-      window.removeEventListener(CHAT_DELETE_EVENT, onDelete);
-    };
+    });
   }, []);
 
   useEffect(() => {
@@ -972,6 +1174,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         return undefined;
       }
       setError(undefined);
+      setStreamingAssistantMessage(undefined);
       try {
         const trimmedTitle = title?.trim();
         const input: { modelId: string; title: string; projectPath?: string } = {
@@ -1007,16 +1210,17 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const openProject = useCallback(
     async (project: ProjectWithAvailability): Promise<void> => {
       setError(undefined);
+      setStreamingAssistantMessage(undefined);
       setState((previous) => ({ ...previous, activeProject: project }));
       try {
-        const chatPayload = await fetchChats(project.path);
+        const chatPayload = await sharedFetchChats(project.path);
         const sorted = sortChats(chatPayload.chats);
         const latest = sorted[0];
         if (latest === undefined) {
           await openNewChat(project);
           return;
         }
-        const messagePayload = await fetchChatMessages(latest.id, project.path);
+        const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
         activeChatIdRef.current = latest.id;
         const selectedModel = resolveSelectedModelId(latest.selectedModel, state.models);
         setState((previous) => ({
@@ -1037,6 +1241,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const openChat = useCallback(
     async (chat: Chat): Promise<void> => {
       setError(undefined);
+      setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
       // a late response from the prior chat never lands here.
       sendControllerRef.current?.abort();
@@ -1049,7 +1254,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       // Issue #148 — clear the document-disclosure note so it never bleeds across chats.
       setLastSentDocuments([]);
       try {
-        const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
+        const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
         const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
         setState((previous) => {
           const project = previous.projects.find((item) => item.path === chat.projectPath);
@@ -1087,6 +1292,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   // Removes a temp optimistic message from state by id (AC#3 — no partial kept).
   const removeTempMessage = useCallback((id: string): void => {
+    setStreamingAssistantMessage((current) => (current?.id === id ? undefined : current));
     setState((previous) => ({
       ...previous,
       messages: previous.messages.filter((m) => m.id !== id),
@@ -1108,14 +1314,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             updateSendStatus("streaming");
             statusFlippedToStreaming = true;
           }
-          setState((previous) => ({
-            ...previous,
-            messages: previous.messages.map((m) =>
-              m.id === tempAssistantId ? { ...m, content: m.content + text } : m,
-            ),
-          }));
+          setStreamingAssistantMessage((current) =>
+            current?.id === tempAssistantId
+              ? { ...current, content: current.content + text }
+              : current,
+          );
         },
         onDone: (payload: SseDonePayload): void => {
+          setStreamingAssistantMessage((current) =>
+            current?.id === tempAssistantId ? undefined : current,
+          );
           setState((previous) => ({
             ...previous,
             activeChat: payload.chat,
@@ -1161,24 +1369,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       documentContext: readonly ConversationDocumentContextWire[],
     ): Promise<SendStatus> => {
       const tempAssistantId = `stream-${String(Date.now())}`;
-      setState((previous) => ({
-        ...previous,
-        messages: [
-          ...previous.messages,
-          {
-            id: tempAssistantId,
-            chatId: chat.id,
-            role: "assistant" as const,
-            content: "",
-            timestamp: Date.now(),
-            runId: undefined,
-            workflowId: undefined,
-            workflowStatus: undefined,
-            shortResult: undefined,
-            taskType: undefined,
-          },
-        ],
-      }));
+      setStreamingAssistantMessage({
+        id: tempAssistantId,
+        chatId: chat.id,
+        role: "assistant" as const,
+        content: "",
+        timestamp: Date.now(),
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
       const requestBody = {
         chatId: chat.id,
         projectPath: project.path,
@@ -1704,50 +1906,100 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     setError(undefined);
   }, []);
 
-  return {
-    projects: state.projects,
-    chats: state.chats,
-    messages: state.messages,
-    models: state.models,
-    activeProject: state.activeProject,
-    activeChat: state.activeChat,
-    selectedModel: state.selectedModel,
-    noEligibleModels:
-      !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined,
-    draft,
-    loading,
-    sending,
-    sendStatus,
-    regeneratingMessageId,
-    error,
-    clearError,
-    setDraft,
-    setSelectedModel,
-    openNewChat,
-    openProject,
-    openChat,
-    addProject,
-    sendMessage,
-    regenerateMessage,
-    appendVoiceTurn,
-    runRealtimeGroundedTool,
-    cancelSend,
-    replaceChat,
-    latestGrounded,
-    cancelGrounded,
-    pendingAttachments,
-    addPendingAttachment,
-    removePendingAttachment,
-    clearPendingAttachments,
-    lastSentDocuments,
-    memoryEnabled,
-    setMemoryEnabled,
-    memoryBudgetTokens,
-    setMemoryBudgetTokens,
-    latestMemory,
-    clearLatestMemory,
-    acceptMemoryCandidate,
-    rejectMemoryCandidate,
-    forgetMemoryAction,
-  };
+  const noEligibleModels =
+    !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined;
+
+  return useMemo<UseChatSessionResult>(
+    () => ({
+      projects: state.projects,
+      chats: state.chats,
+      messages: state.messages,
+      streamingAssistantMessage,
+      models: state.models,
+      activeProject: state.activeProject,
+      activeChat: state.activeChat,
+      selectedModel: state.selectedModel,
+      noEligibleModels,
+      draft,
+      loading,
+      sending,
+      sendStatus,
+      regeneratingMessageId,
+      error,
+      clearError,
+      setDraft,
+      setSelectedModel,
+      openNewChat,
+      openProject,
+      openChat,
+      addProject,
+      sendMessage,
+      regenerateMessage,
+      appendVoiceTurn,
+      runRealtimeGroundedTool,
+      cancelSend,
+      replaceChat,
+      latestGrounded,
+      cancelGrounded,
+      pendingAttachments,
+      addPendingAttachment,
+      removePendingAttachment,
+      clearPendingAttachments,
+      lastSentDocuments,
+      memoryEnabled,
+      setMemoryEnabled,
+      memoryBudgetTokens,
+      setMemoryBudgetTokens,
+      latestMemory,
+      clearLatestMemory,
+      acceptMemoryCandidate,
+      rejectMemoryCandidate,
+      forgetMemoryAction,
+    }),
+    [
+      state.projects,
+      state.chats,
+      state.messages,
+      streamingAssistantMessage,
+      state.models,
+      state.activeProject,
+      state.activeChat,
+      state.selectedModel,
+      noEligibleModels,
+      draft,
+      loading,
+      sending,
+      sendStatus,
+      regeneratingMessageId,
+      error,
+      clearError,
+      setSelectedModel,
+      openNewChat,
+      openProject,
+      openChat,
+      addProject,
+      sendMessage,
+      regenerateMessage,
+      appendVoiceTurn,
+      runRealtimeGroundedTool,
+      cancelSend,
+      replaceChat,
+      latestGrounded,
+      cancelGrounded,
+      pendingAttachments,
+      addPendingAttachment,
+      removePendingAttachment,
+      clearPendingAttachments,
+      lastSentDocuments,
+      memoryEnabled,
+      setMemoryEnabled,
+      memoryBudgetTokens,
+      setMemoryBudgetTokens,
+      latestMemory,
+      clearLatestMemory,
+      acceptMemoryCandidate,
+      rejectMemoryCandidate,
+      forgetMemoryAction,
+    ],
+  );
 }

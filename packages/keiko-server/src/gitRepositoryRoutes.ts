@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import { dirname, isAbsolute, normalize } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -105,14 +105,14 @@ function containsControlCharacter(input: string): boolean {
   return false;
 }
 
-function assertDestination(candidate: string): RouteResult | string {
+async function assertDestination(candidate: string): Promise<RouteResult | string> {
   if (!isAbsolute(candidate)) return invalid("Destination path must be absolute.");
   const normalized = normalize(candidate);
   if (pathIsDenied(normalized)) {
     return forbidden("The destination path is excluded from Keiko's safe repository surface.");
   }
   try {
-    statSync(normalized);
+    await stat(normalized);
     return invalid("Destination path already exists.");
   } catch {
     // Expected: git clone creates the final directory.
@@ -122,7 +122,7 @@ function assertDestination(candidate: string): RouteResult | string {
     return forbidden("The destination parent is excluded from Keiko's safe repository surface.");
   }
   try {
-    const info = statSync(parent);
+    const info = await stat(parent);
     if (!info.isDirectory()) return invalid("Destination parent must be a directory.");
   } catch {
     return invalid("Destination parent must exist.");
@@ -227,7 +227,7 @@ export function createCloneRepositoryHandler(
           "Repository URL must be HTTPS, SSH, or git@host:path without embedded secrets.",
         );
       }
-      const destination = assertDestination(destinationInput);
+      const destination = await assertDestination(destinationInput);
       if (typeof destination !== "string") return destination;
       assertUiDbOutsideProject(deps.uiDbPath, destination);
       const cloneResult = await cloneRunner(repositoryUrl, destination);

@@ -162,6 +162,8 @@ const EMPTY_INLINE_COMPLETIONS: MonacoInlineCompletions = { items: [] };
 export interface KeikoInlineCompletionProviderDeps {
   /** The host-injected resolver that actually produces ghost text (BFF call lives here). */
   readonly resolve: EditorInlineCompletionResolver;
+  /** True only for the document owned by this editor instance. */
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly languages: MonacoInlineCompletionsRegistrar;
   /** The editor language id (e.g. "typescript"); also the registration selector. */
   readonly documentLanguage: EditorLanguageId;
@@ -226,6 +228,7 @@ function controllerForToken(token: MonacoCancellationToken): {
 }
 
 // The provider's `provideInlineCompletions` body, extracted so the factory stays a thin assembler.
+// eslint-disable-next-line complexity
 async function provideInline(
   deps: KeikoInlineCompletionProviderDeps,
   state: InlineProviderState,
@@ -234,6 +237,10 @@ async function provideInline(
   context: MonacoInlineCompletionContext,
   token: MonacoCancellationToken,
 ): Promise<MonacoInlineCompletions | undefined> {
+  const documentUri = model.uri.toString();
+  if (!deps.isCurrentDocument(documentUri)) {
+    return undefined;
+  }
   state.sequence += 1;
   const request = buildRequest(deps, model, position, context, state.sequence);
   state.latest = request.request;
@@ -251,6 +258,9 @@ async function provideInline(
     // it was in flight; `latest` holds the newest identity, so a superseded response renders nothing
     // (Acceptance Criterion 3).
     if (shouldDiscardResponse(response.request, state.latest)) {
+      return undefined;
+    }
+    if (!deps.isCurrentDocument(documentUri)) {
       return undefined;
     }
     const mapped = responseToInlineCompletions(response);
@@ -325,6 +335,7 @@ export function createKeikoInlineCompletionProvider(
 export interface RegisterKeikoInlineCompletionProviderArgs {
   readonly languages: MonacoInlineCompletionsRegistrar;
   readonly resolve: EditorInlineCompletionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   /**
    * The languages to register a provider for. One provider is registered per language with that
    * language fixed, mirroring the completion bridge so a buffer that switches language within a
@@ -359,6 +370,7 @@ export function registerKeikoInlineCompletionProvider(
   const disposers = args.documentLanguages.map((documentLanguage) => {
     const provider = createKeikoInlineCompletionProvider({
       resolve: args.resolve,
+      isCurrentDocument: args.isCurrentDocument,
       languages: args.languages,
       documentLanguage,
       contextBudgetBytes: args.contextBudgetBytes,

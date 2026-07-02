@@ -219,6 +219,7 @@ function buildCompletionWiring(
     return undefined;
   }
   return {
+    isCurrentDocument: isCurrentDocument(latestProps),
     resolve: (query, signal): Promise<EditorCompletionResponse> => {
       const live = latestProps.current.provideCompletions;
       return live === undefined
@@ -246,6 +247,7 @@ function buildInlineCompletionWiring(
     return undefined;
   }
   return {
+    isCurrentDocument: isCurrentDocument(latestProps),
     resolve: (query, signal): Promise<EditorInlineCompletionResponse> => {
       const live = latestProps.current.provideInlineCompletions;
       return live === undefined

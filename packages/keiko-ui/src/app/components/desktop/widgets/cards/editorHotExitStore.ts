@@ -10,6 +10,9 @@ const DB_NAME = "keiko-editor-hot-exit";
 const DB_VERSION = 1;
 const STORE_NAME = "snapshots";
 const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+const PRUNE_MIN_INTERVAL_MS = 30_000;
+const PRUNE_BYTE_BUDGET = 1 * 1024 * 1024;
+const SNAPSHOT_ENCODER = new TextEncoder();
 
 function key(root: string, path: string): string {
   return `${root}\u0000${path}`;
@@ -30,21 +33,63 @@ function txDone(tx: IDBTransaction): Promise<void> {
   });
 }
 
+let cachedIndexedDb: IDBFactory | undefined;
+let cachedDb: IDBDatabase | null = null;
+let cachedDbPromise: Promise<IDBDatabase | null> | null = null;
+let lastPruneAt = 0;
+let bytesSinceLastPrune = 0;
+let forceNextPrune = false;
+
+function resetCachedDb(): void {
+  const db = cachedDb;
+  cachedDb = null;
+  cachedDbPromise = null;
+  cachedIndexedDb = undefined;
+  lastPruneAt = 0;
+  bytesSinceLastPrune = 0;
+  forceNextPrune = false;
+  try {
+    db?.close();
+  } catch {
+    // closing a stale or already-closed IDB connection is best-effort cleanup
+  }
+}
+
 async function openDb(): Promise<IDBDatabase | null> {
-  if (typeof indexedDB === "undefined") return null;
-  return new Promise<IDBDatabase>((resolve, reject) => {
+  if (typeof indexedDB === "undefined") {
+    resetCachedDb();
+    return null;
+  }
+  if (cachedIndexedDb !== indexedDB) {
+    resetCachedDb();
+    cachedIndexedDb = indexedDB;
+  }
+  if (cachedDb !== null) return cachedDb;
+  if (cachedDbPromise !== null) return cachedDbPromise;
+  const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        if (cachedDb === db) resetCachedDb();
+      };
+      cachedDb = db;
+      resolve(db);
+    };
     request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed."));
   }).catch(() => null);
+  cachedDbPromise = opening;
+  const db = await opening;
+  if (db === null && cachedDbPromise === opening) cachedDbPromise = null;
+  return db;
 }
 
 function snapshotBytes(snapshot: EditorHotExitSnapshotV1): number {
-  return new TextEncoder().encode(JSON.stringify(snapshot)).length;
+  return SNAPSHOT_ENCODER.encode(JSON.stringify(snapshot)).length;
 }
 
 // All writes and deletes are funnelled through one promise chain so a delete dispatched after a
@@ -105,6 +150,28 @@ async function prune(
   await txDone(tx);
 }
 
+function shouldPrune(now: number, incomingBytes: number): boolean {
+  return (
+    forceNextPrune ||
+    lastPruneAt === 0 ||
+    now - lastPruneAt >= PRUNE_MIN_INTERVAL_MS ||
+    bytesSinceLastPrune + incomingBytes >= PRUNE_BYTE_BUDGET ||
+    incomingBytes >= PRUNE_BYTE_BUDGET
+  );
+}
+
+async function pruneIfNeeded(db: IDBDatabase, snapshot: EditorHotExitSnapshotV1): Promise<void> {
+  const incomingBytes = snapshotBytes(snapshot);
+  if (!shouldPrune(snapshot.updatedAt, incomingBytes)) {
+    bytesSinceLastPrune += incomingBytes;
+    return;
+  }
+  await prune(db, snapshot.updatedAt, snapshot);
+  lastPruneAt = snapshot.updatedAt;
+  bytesSinceLastPrune = 0;
+  forceNextPrune = incomingBytes >= MAX_TOTAL_BYTES;
+}
+
 export async function readEditorHotExitSnapshot(
   workspaceRoot: string,
   relativePath: string,
@@ -112,17 +179,13 @@ export async function readEditorHotExitSnapshot(
 ): Promise<EditorHotExitSnapshotV1 | null> {
   const db = await openDb();
   if (db === null) return null;
-  try {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const raw = await requestToPromise<unknown>(
-      tx.objectStore(STORE_NAME).get(key(workspaceRoot, relativePath)),
-    );
-    await txDone(tx);
-    if (!isEditorHotExitSnapshotV1(raw) || editorHotExitSnapshotExpired(raw, now)) return null;
-    return raw;
-  } finally {
-    db.close();
-  }
+  const tx = db.transaction(STORE_NAME, "readonly");
+  const raw = await requestToPromise<unknown>(
+    tx.objectStore(STORE_NAME).get(key(workspaceRoot, relativePath)),
+  );
+  await txDone(tx);
+  if (!isEditorHotExitSnapshotV1(raw) || editorHotExitSnapshotExpired(raw, now)) return null;
+  return raw;
 }
 
 export async function writeEditorHotExitSnapshot(snapshot: EditorHotExitSnapshotV1): Promise<void> {
@@ -130,14 +193,10 @@ export async function writeEditorHotExitSnapshot(snapshot: EditorHotExitSnapshot
   return serializeMutation(async () => {
     const db = await openDb();
     if (db === null) return;
-    try {
-      await prune(db, snapshot.updatedAt, snapshot);
-      const tx = db.transaction(STORE_NAME, "readwrite");
-      tx.objectStore(STORE_NAME).put(snapshot, key(snapshot.workspaceRoot, snapshot.relativePath));
-      await txDone(tx);
-    } finally {
-      db.close();
-    }
+    await pruneIfNeeded(db, snapshot);
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).put(snapshot, key(snapshot.workspaceRoot, snapshot.relativePath));
+    await txDone(tx);
   });
 }
 
@@ -148,13 +207,9 @@ export async function deleteEditorHotExitSnapshot(
   return serializeMutation(async () => {
     const db = await openDb();
     if (db === null) return;
-    try {
-      const tx = db.transaction(STORE_NAME, "readwrite");
-      tx.objectStore(STORE_NAME).delete(key(workspaceRoot, relativePath));
-      await txDone(tx);
-    } finally {
-      db.close();
-    }
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).delete(key(workspaceRoot, relativePath));
+    await txDone(tx);
   });
 }
 

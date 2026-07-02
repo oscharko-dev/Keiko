@@ -9,8 +9,7 @@ import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
 
 export function InspectorPanel(): ReactNode {
-  const { wins, active, winCount } = useContext(WsContext);
-  void wins; // available for future use
+  const { active, winCount } = useContext(WsContext);
 
   const t = active !== null ? WIN_TYPES[active.type] : null;
   const cfgRows =

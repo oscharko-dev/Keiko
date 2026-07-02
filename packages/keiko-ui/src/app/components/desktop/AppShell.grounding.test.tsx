@@ -254,6 +254,7 @@ function workspaceApi(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
 function workspaceResult(wins: AppWindow[], conns: Connection[] = []): UseWorkspaceResult {
   return {
     wins,
+    winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
     palOpen: false,
     setPalOpen: vi.fn(),

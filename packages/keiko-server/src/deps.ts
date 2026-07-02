@@ -789,11 +789,17 @@ function runtimeRedactString(
   runtimeConfig: RuntimeGatewayConfig,
   egress: GatewayConfig["egress"],
 ): (value: string) => string {
-  return (value: string): string =>
-    createAuditRedactor(
-      { additionalSecrets: runtimeRedactionSecrets(env, runtimeConfig, egress) },
-      env,
-    )(value);
+  let cachedSecretsKey: string | undefined;
+  let cachedRedactor: ((value: string) => string) | undefined;
+  return (value: string): string => {
+    const secrets = runtimeRedactionSecrets(env, runtimeConfig, egress);
+    const secretsKey = JSON.stringify(secrets);
+    if (cachedRedactor === undefined || cachedSecretsKey !== secretsKey) {
+      cachedSecretsKey = secretsKey;
+      cachedRedactor = createAuditRedactor({ additionalSecrets: secrets }, env);
+    }
+    return cachedRedactor(value);
+  };
 }
 
 // Builds the live-payload redactor from the configured redaction settings + env. No new regex: this

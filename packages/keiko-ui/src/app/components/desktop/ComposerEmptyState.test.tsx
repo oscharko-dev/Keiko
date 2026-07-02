@@ -7,12 +7,17 @@
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { ChatWindow } from "./ChatWindow";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatWindow, clearKnowledgeCatalogCacheForTests } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 import { isConversationEligibleModel } from "@/lib/types";
+
+vi.mock("@/lib/local-knowledge-api", () => ({
+  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+}));
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -121,6 +126,10 @@ function renderWindow(session: ChatSessionApi): void {
     </ChatSessionProvider>,
   );
 }
+
+beforeEach(() => {
+  clearKnowledgeCatalogCacheForTests();
+});
 
 // ── AC #1 — voice button is absent everywhere ─────────────────────────────────
 

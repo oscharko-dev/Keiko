@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import type { ReactNode } from "react";
+import styles from "./FigmaImageSourceWindow.module.css";
 
 export interface FigmaImageSourceWindowProps {
   readonly imageSrc?: string | undefined;
@@ -20,7 +21,7 @@ export function FigmaImageSourceWindow({
   const label = labelFrom(screenName);
   if (imageSrc === undefined || imageSrc.trim().length === 0) {
     return (
-      <section className="figma-image-window" aria-label={label}>
+      <section className={`figma-image-window ${styles.lazyWidgetScope}`} aria-label={label}>
         <div className="figma-image-missing" role="alert">
           Image preview is unavailable.
         </div>
@@ -29,14 +30,13 @@ export function FigmaImageSourceWindow({
   }
 
   return (
-    <section className="figma-image-window" aria-label={label}>
+    <section className={`figma-image-window ${styles.lazyWidgetScope}`} aria-label={label}>
       <Image
         className="figma-image-preview"
         src={imageSrc}
         alt={label}
         width={720}
         height={480}
-        unoptimized
         priority
       />
     </section>

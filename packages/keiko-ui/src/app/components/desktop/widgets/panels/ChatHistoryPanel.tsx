@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "rea
 import type { Chat } from "@/lib/types";
 import { updateChat } from "@/lib/api";
 import { Icons } from "../../Icons";
-import { useChatSessionContext } from "../../context/ChatSessionContext";
+import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
 
 interface ChatHistoryPanelProps {
@@ -37,7 +37,8 @@ function chatMatches(chat: Chat, query: string): boolean {
 }
 
 export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): ReactNode {
-  const session = useChatSessionContext();
+  const session = useChatSessionCatalog();
+  const actions = useChatSessionActions();
   const [query, setQuery] = useState("");
   const [view, setView] = useState<HistoryView>("active");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
 
   const createNew = async (): Promise<void> => {
     setError(null);
-    const created = await session.openNewChat(undefined, "New chat");
+    const created = await actions.openNewChat(undefined, "New chat");
     if (created !== undefined) openChatWindow(created);
   };
 
@@ -105,7 +106,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     setRenameError(null);
     try {
       const response = await updateChat(chat.id, { title });
-      session.replaceChat(response.chat);
+      actions.replaceChat(response.chat);
       setEditingId(null);
     } catch {
       setError("Rename failed.");
@@ -119,7 +120,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     setError(null);
     try {
       const response = await updateChat(chat.id, { status: "closed" });
-      session.replaceChat(response.chat);
+      actions.replaceChat(response.chat);
       setDeleteConfirmId(null);
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "Request failed.";
@@ -134,7 +135,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     setError(null);
     try {
       const response = await updateChat(chat.id, { status: "open" });
-      session.replaceChat(response.chat);
+      actions.replaceChat(response.chat);
       setDeleteConfirmId(null);
     } catch (caught) {
       const detail = caught instanceof Error ? caught.message : "Request failed.";

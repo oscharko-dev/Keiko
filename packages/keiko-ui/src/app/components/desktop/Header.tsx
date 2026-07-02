@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { memo } from "react";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 
 export type HeaderStatusTone = "ok" | "warn" | "danger";
@@ -24,7 +24,7 @@ function HeaderImpl({
   onCascade,
   contextControl,
 }: HeaderProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
 
   return (
     <header className="header">

@@ -99,7 +99,7 @@ import {
   selectGatewayPromptAssembly,
   type GatewayPromptAssembly,
 } from "./chat-prompt-budget.js";
-import { usableGatewayMessages } from "./conversation-gateway.js";
+import { MAX_CONTEXT_MESSAGES, usableGatewayMessages } from "./conversation-gateway.js";
 import type { GatewayConversationMessage } from "./conversation-gateway.js";
 export {
   MAX_CONTEXT_MESSAGES,
@@ -110,6 +110,8 @@ export type { GatewayConversationMessage } from "./conversation-gateway.js";
 export type { GatewayPromptAssembly } from "./chat-prompt-budget.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
+const CHAT_HISTORY_READ_LIMIT = MAX_CONTEXT_MESSAGES * 2;
+const CHAT_SIDEBAR_LIST_LIMIT = 100;
 const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
@@ -252,7 +254,8 @@ function ensureProject(deps: UiHandlerDeps, path: string): Project {
 }
 
 function findChat(deps: UiHandlerDeps, projectPath: string, chatId: string): Chat | undefined {
-  return deps.store.listChats(projectPath).find((chat) => chat.id === chatId);
+  const chat = deps.store.findChatById(chatId);
+  return chat?.projectPath === projectPath ? chat : undefined;
 }
 
 function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record<string, unknown> {
@@ -260,9 +263,9 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
     ...item,
     available: isProjectAvailable(item),
   }));
-  const chats = deps.store.listChats(project.path);
+  const chats = deps.store.listChats(project.path, CHAT_SIDEBAR_LIST_LIMIT);
   const messages = deps.store
-    .listMessages(chat.id)
+    .listMessages(chat.id, CHAT_HISTORY_READ_LIMIT)
     .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
   return {
     project: { ...project, available: isProjectAvailable(project) },
@@ -987,10 +990,13 @@ export function deriveCompactionOutcome(
   modelId: string | undefined,
 ): ConversationCompactionOutcome {
   const contextProfile = currentContextProfileForModel(deps, modelId);
-  return conversationForGatewayWithCompaction(deps.store.listMessages(request.chatId), {
-    contextProfile: contextProfile ?? DEFAULT_CONTEXT_PROFILE,
-    redactionSecrets: currentRedactionSecrets(deps),
-  });
+  return conversationForGatewayWithCompaction(
+    deps.store.listMessages(request.chatId, CHAT_HISTORY_READ_LIMIT),
+    {
+      contextProfile: contextProfile ?? DEFAULT_CONTEXT_PROFILE,
+      redactionSecrets: currentRedactionSecrets(deps),
+    },
+  );
 }
 
 export function buildGatewayAssembly(
@@ -999,7 +1005,7 @@ export function buildGatewayAssembly(
   memory: ConversationMemoryResultWire,
   modelId: string | undefined,
 ): GatewayPromptAssembly {
-  const history = deps.store.listMessages(request.chatId);
+  const history = deps.store.listMessages(request.chatId, CHAT_HISTORY_READ_LIMIT);
   const historyPrefix = history.slice(0, Math.max(0, history.length - 1));
   const selected = selectGatewayPromptAssembly({
     historyPrefix,
@@ -1180,7 +1186,7 @@ async function persistModelChatTurn(
   }
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage stores the turn, so the
   // compaction-evidence runId is collision-free and matches the streaming path's lifecycle moment.
-  const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
+  const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
   const startedAt = Date.now();
   try {
     const memory =

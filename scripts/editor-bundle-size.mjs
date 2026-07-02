@@ -52,6 +52,16 @@ export function evaluateOwnCodeBudget({ files, ceilingBytes }) {
   };
 }
 
+export function evaluateInitialPageChunkBudget({ files, ceilingBytes }) {
+  const totalGzipBytes = files.reduce((sum, file) => sum + gzipSizeBytes(file.content), 0);
+  return {
+    fileCount: files.length,
+    totalGzipBytes,
+    ceilingBytes,
+    ok: totalGzipBytes <= ceilingBytes,
+  };
+}
+
 /** True when an import specifier resolves to the `monaco-editor` package or any of its subpaths. */
 export function isMonacoSpecifier(specifier) {
   return (
@@ -255,7 +265,8 @@ function staticExportScriptPath(outDir, src) {
   return join(outDir, withoutLeadingSlash);
 }
 
-function checkStaticExportFirstLoad(repoRoot, fail) {
+// eslint-disable-next-line max-lines-per-function, complexity
+function checkStaticExportFirstLoad(repoRoot, budget, fail) {
   const outDir = join(repoRoot, "packages", "keiko-ui", "out");
   const indexHtml = join(outDir, "index.html");
   if (!existsSync(indexHtml)) {
@@ -298,7 +309,28 @@ function checkStaticExportFirstLoad(repoRoot, fail) {
     );
   }
 
-  return { scannedScriptCount: files.length };
+  const initialPageBudget =
+    budget.initialPageChunkGzipBytesCeiling === undefined
+      ? undefined
+      : evaluateInitialPageChunkBudget({
+          files,
+          ceilingBytes: budget.initialPageChunkGzipBytesCeiling,
+        });
+  if (initialPageBudget !== undefined && !initialPageBudget.ok) {
+    fail(
+      `Static-export first-load JavaScript gzip footprint ${String(
+        initialPageBudget.totalGzipBytes,
+      )} B exceeds the initial-page ceiling ${String(initialPageBudget.ceilingBytes)} B across ` +
+        `${String(initialPageBudget.fileCount)} scripts. Split non-critical desktop widgets before ` +
+        "raising scripts/editor-bundle-size.budget.json.",
+    );
+  }
+
+  return {
+    scannedScriptCount: files.length,
+    initialPageGzipBytes: initialPageBudget?.totalGzipBytes,
+    initialPageGzipCeilingBytes: initialPageBudget?.ceilingBytes,
+  };
 }
 
 function readBudget(root, budgetOverride) {
@@ -361,7 +393,7 @@ export function runEditorBundleSizeCheck({
   checkFirstLoadIsolation(root, firstLoadRuntimeAllowlist(budget), onFail);
 
   const staticExport = requireStaticExport
-    ? checkStaticExportFirstLoad(root, onFail)
+    ? checkStaticExportFirstLoad(root, budget, onFail)
     : { scannedScriptCount: 0 };
 
   onLog(successMessage(ownCode, budget, requireStaticExport, staticExport));

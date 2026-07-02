@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { postEditorAgentActionResult } from "../../../../../lib/api";
 import type {
   EditorAgentAction,
+  EditorAgentEvent,
   EditorAgentActionResult,
   EditorAgentActionResultRequest,
   EditorAgentConflictCode,
@@ -264,6 +265,104 @@ export interface UseEditorAgentBridgeResult {
   readonly consumeSelectionRequest: () => void;
 }
 
+interface EditorAgentSessionHandlers {
+  readonly onAction: (action: EditorAgentAction) => void;
+  readonly onResult: (result: EditorAgentActionResult) => void;
+}
+
+const editorAgentSubscribersBySession = new Map<string, Set<EditorAgentSessionHandlers>>();
+let editorAgentEventSource: EventSource | null = null;
+let editorAgentActionListener: EventListener | null = null;
+let editorAgentResultListener: EventListener | null = null;
+
+function editorAgentEventUrl(): string {
+  const params = new URLSearchParams();
+  for (const sessionId of editorAgentSubscribersBySession.keys()) {
+    params.append("sessionId", sessionId);
+  }
+  const query = params.toString();
+  return query.length > 0 ? `/api/editor/agent/events?${query}` : "/api/editor/agent/events";
+}
+
+function eventSessionId(event: EditorAgentEvent): string | undefined {
+  switch (event.type) {
+    case "action":
+      return event.action.sessionId;
+    case "result":
+      return event.result.sessionId;
+    case "session":
+      return event.snapshot.sessionId;
+    case "heartbeat":
+      return undefined;
+  }
+}
+
+function dispatchEditorAgentEvent(event: EditorAgentEvent): void {
+  const sessionId = eventSessionId(event);
+  if (sessionId === undefined) return;
+  const subscribers = editorAgentSubscribersBySession.get(sessionId);
+  if (subscribers === undefined) return;
+  for (const subscriber of subscribers) {
+    if (event.type === "action") {
+      subscriber.onAction(event.action);
+    } else if (event.type === "result") {
+      subscriber.onResult(event.result);
+    }
+  }
+}
+
+function handleEditorAgentFrame(event: Event): void {
+  try {
+    const parsed: unknown = JSON.parse((event as MessageEvent<string>).data);
+    if (!isEditorAgentEvent(parsed)) return;
+    dispatchEditorAgentEvent(parsed);
+  } catch {
+    // Ignore malformed SSE frames; the server owns validation before enqueueing.
+  }
+}
+
+function closeEditorAgentEventSource(): void {
+  if (editorAgentEventSource === null) return;
+  if (editorAgentActionListener !== null) {
+    editorAgentEventSource.removeEventListener("editor-agent:action", editorAgentActionListener);
+  }
+  if (editorAgentResultListener !== null) {
+    editorAgentEventSource.removeEventListener("editor-agent:result", editorAgentResultListener);
+  }
+  editorAgentEventSource.close();
+  editorAgentEventSource = null;
+  editorAgentActionListener = null;
+  editorAgentResultListener = null;
+}
+
+function restartEditorAgentEventSource(): void {
+  closeEditorAgentEventSource();
+  if (editorAgentSubscribersBySession.size === 0 || typeof EventSource === "undefined") return;
+  const source = new EventSource(editorAgentEventUrl());
+  editorAgentActionListener = handleEditorAgentFrame;
+  editorAgentResultListener = handleEditorAgentFrame;
+  source.addEventListener("editor-agent:action", editorAgentActionListener);
+  source.addEventListener("editor-agent:result", editorAgentResultListener);
+  editorAgentEventSource = source;
+}
+
+function subscribeEditorAgentSession(
+  sessionId: string,
+  handlers: EditorAgentSessionHandlers,
+): () => void {
+  const existing = editorAgentSubscribersBySession.get(sessionId) ?? new Set();
+  existing.add(handlers);
+  editorAgentSubscribersBySession.set(sessionId, existing);
+  restartEditorAgentEventSource();
+  return (): void => {
+    const subscribers = editorAgentSubscribersBySession.get(sessionId);
+    if (subscribers === undefined) return;
+    subscribers.delete(handlers);
+    if (subscribers.size === 0) editorAgentSubscribersBySession.delete(sessionId);
+    restartEditorAgentEventSource();
+  };
+}
+
 /**
  * The single React artifact of the bridge: owns the snapshot-register effect, the SSE connection
  * (action + result listeners, both validated with `isEditorAgentEvent`), result posting, conflict
@@ -312,52 +411,23 @@ export function useEditorAgentBridge(
   }, [registerSnapshot]);
 
   useEffect(() => {
-    if (typeof EventSource === "undefined") return;
     if (!enabled) return;
-    // Issue #1392 — carry the session id so the BFF registers this connection as the session's live
-    // browser bridge. The client-side session filter below remains as defense in depth.
-    const source = new EventSource(
-      `/api/editor/agent/events?sessionId=${encodeURIComponent(agentSessionId)}`,
-    );
-    const onAction = (event: MessageEvent<string>): void => {
-      try {
-        const parsed: unknown = JSON.parse(event.data);
-        // Validate at the trust boundary with the public contract guard (#1391).
-        if (!isEditorAgentEvent(parsed) || parsed.type !== "action") return;
-        const action = parsed.action;
-        if (action.sessionId !== agentSessionId) return;
+    return subscribeEditorAgentSession(agentSessionId, {
+      onAction: (action): void => {
         const descriptor = dispatchEditorAgentAction(action, dispatchControllersRef.current);
         reportDescriptor(action, descriptor);
         // Issue #1395 — an action for this session was dispatched; refresh the audit panel.
         onAgentActivityRef.current?.();
-      } catch {
-        // Ignore malformed SSE frames; the server owns validation before enqueueing.
-      }
-    };
-    const onResult = (event: MessageEvent<string>): void => {
-      try {
-        const parsed: unknown = JSON.parse(event.data);
-        if (!isEditorAgentEvent(parsed)) return;
-        if (parsed.type !== "result") return;
-        // F6: filter by sessionId so a result for another pane does not pop this banner.
-        if (parsed.result.sessionId !== agentSessionId) return;
+      },
+      onResult: (result): void => {
         // Issue #1395 — any result for this session is audit-relevant; refresh the audit panel.
         onAgentActivityRef.current?.();
-        if (parsed.result.status !== "conflict") return;
-        const { conflict } = parsed.result;
+        if (result.status !== "conflict") return;
+        const { conflict } = result;
         if (conflict === undefined) return;
         onConflictRef.current({ code: conflict.code, message: conflict.message });
-      } catch {
-        // Ignore malformed SSE frames.
-      }
-    };
-    source.addEventListener("editor-agent:action", onAction);
-    source.addEventListener("editor-agent:result", onResult);
-    return () => {
-      source.removeEventListener("editor-agent:action", onAction);
-      source.removeEventListener("editor-agent:result", onResult);
-      source.close();
-    };
+      },
+    });
   }, [agentSessionId, enabled]);
 
   return { agentSelectionRequest, consumeSelectionRequest };

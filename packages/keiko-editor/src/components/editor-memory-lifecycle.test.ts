@@ -83,6 +83,7 @@ function fullProviderArgs(): Partial<WireEditorOnMountArgs> {
     onSelectionChange: () => undefined,
     completion: {
       resolve: completionResolver,
+      isCurrentDocument: () => true,
       triggerCharacters: ["."],
       contextBudgetBytes: 4096,
       streamId: "s",
@@ -90,6 +91,7 @@ function fullProviderArgs(): Partial<WireEditorOnMountArgs> {
     },
     inlineCompletion: {
       resolve: inlineResolver,
+      isCurrentDocument: () => true,
       contextBudgetBytes: 8192,
       streamId: "s",
       newRequestId: id,

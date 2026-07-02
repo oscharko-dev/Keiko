@@ -21,6 +21,98 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
+const pdfViewerModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const pdfViewerComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx"),
+  "utf8",
+);
+const browserWidgetModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/BrowserWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const browserWidgetComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/BrowserWidget.tsx"),
+  "utf8",
+);
+const connectorPickerModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/ConnectorPickerWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const connectorPickerComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/ConnectorPickerWidget.tsx"),
+  "utf8",
+);
+const terminalWidgetModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/TerminalWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const terminalWidgetComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/TerminalWidget.tsx"),
+  "utf8",
+);
+const terminalStyleConsumerComponents = [
+  terminalWidgetComponent,
+  readFileSync(resolve(here, "components/desktop/widgets/cards/CommandsWidget.tsx"), "utf8"),
+  readFileSync(resolve(here, "components/desktop/widgets/cards/RuntimeHubWidget.tsx"), "utf8"),
+  readFileSync(resolve(here, "components/desktop/widgets/cards/ContainerStatusWidget.tsx"), "utf8"),
+];
+const integrationsWidgetModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const integrationsWidgetComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.tsx"),
+  "utf8",
+);
+const figmaImageSourceModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/figma/FigmaImageSourceWindow.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const figmaImageSourceComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/figma/FigmaImageSourceWindow.tsx"),
+  "utf8",
+);
+const timelinePanelModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/TimelinePanel.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const timelinePanelComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/TimelinePanel.tsx"),
+  "utf8",
+);
+const notificationsPanelModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/NotificationsPanel.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const notificationsPanelComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/NotificationsPanel.tsx"),
+  "utf8",
+);
+const mobilePanelModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/MobilePanel.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const mobilePanelComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/MobilePanel.tsx"),
+  "utf8",
+);
+const lazyWidgetCss = [
+  pdfViewerModuleCss,
+  browserWidgetModuleCss,
+  connectorPickerModuleCss,
+  terminalWidgetModuleCss,
+  integrationsWidgetModuleCss,
+  figmaImageSourceModuleCss,
+  timelinePanelModuleCss,
+  notificationsPanelModuleCss,
+  mobilePanelModuleCss,
+]
+  .map(unwrapCssModuleGlobals)
+  .join("\n");
+const auditedProductCss = `${css}\n${lazyWidgetCss}`;
 const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
   "utf8",
@@ -72,11 +164,120 @@ function indexOfNth(haystack: string, needle: string, n: number): number {
   return idx;
 }
 
-function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
-  const idx = opts.fromLast === true ? css.lastIndexOf(selector) : css.indexOf(selector);
-  expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
-  return css.slice(idx, css.indexOf("}", idx) + 1);
+function unwrapCssModuleGlobals(source: string): string {
+  return source
+    .replace(/:global\(([^()]+)\)/g, "$1")
+    .replace(/\.lazyWidgetScope\s*/g, "");
 }
+
+function expectLazyCssModuleImport(component: string, fileName: string): void {
+  expect(component).toContain(`import styles from "./${fileName}";`);
+  expect(component).toContain("styles.lazyWidgetScope");
+}
+
+function cssBlockFrom(
+  source: string,
+  selector: string,
+  opts: { readonly fromLast?: boolean } = {},
+): string {
+  const idx = opts.fromLast === true ? source.lastIndexOf(selector) : source.indexOf(selector);
+  expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
+  return source.slice(idx, source.indexOf("}", idx) + 1);
+}
+
+function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
+  return cssBlockFrom(css, selector, opts);
+}
+
+describe("BUNDLE-09 — lazy widget CSS split", () => {
+  it("keeps PDF viewer window styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".pdfv-shell");
+    expect(css).not.toContain(".pdfv-page-frame");
+    expect(pdfViewerModuleCss).toContain(":global(.pdfv-shell)");
+    expect(pdfViewerModuleCss).toContain(":global(.pdfv-page-frame)");
+    expectLazyCssModuleImport(pdfViewerComponent, "PdfCitationPreviewWindow.module.css");
+  });
+
+  it("keeps Browser widget styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".browser {");
+    expect(css).not.toContain(".bw-btn-danger");
+    expect(browserWidgetModuleCss).toContain(":global(.browser)");
+    expect(browserWidgetModuleCss).toContain(":global(.bw-btn-danger)");
+    expectLazyCssModuleImport(browserWidgetComponent, "BrowserWidget.module.css");
+  });
+
+  it("keeps Connector Picker styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".connector-picker {");
+    expect(css).not.toContain(".connector-picker-retry {");
+    expect(css).not.toContain(".connector-node {");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-picker)");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-picker-retry)");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-node)");
+    expectLazyCssModuleImport(connectorPickerComponent, "ConnectorPickerWidget.module.css");
+  });
+
+  it("keeps shared Terminal/runtime styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.terminal {");
+    expect(css).not.toContain("\n.tm-action {");
+    expect(css).not.toContain(".tm-action[aria-disabled");
+    expect(terminalWidgetModuleCss).toContain(":global(.terminal)");
+    expect(terminalWidgetModuleCss).toContain(":global(.tm-action)");
+    expect(terminalWidgetModuleCss).toContain(':global(.tm-action[aria-disabled="true"])');
+    for (const component of terminalStyleConsumerComponents) {
+      expectLazyCssModuleImport(component, "TerminalWidget.module.css");
+    }
+  });
+
+  it("keeps Integrations widget styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.integ {");
+    expect(css).not.toContain("\nul.integ {");
+    expect(css).not.toContain(".integ-status");
+    expect(integrationsWidgetModuleCss).toContain(":global(.integ)");
+    expect(integrationsWidgetModuleCss).toContain(":global(ul.integ)");
+    expect(integrationsWidgetModuleCss).toContain(":global(.integ-status)");
+    expectLazyCssModuleImport(integrationsWidgetComponent, "IntegrationsWidget.module.css");
+  });
+
+  it("keeps Figma image source styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".figma-image-window");
+    expect(css).not.toContain(".figma-image-preview");
+    expect(css).not.toContain(".figma-image-missing");
+    expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-window)");
+    expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-preview)");
+    expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-missing)");
+    expectLazyCssModuleImport(figmaImageSourceComponent, "FigmaImageSourceWindow.module.css");
+  });
+
+  it("keeps Timeline panel styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.tl {");
+    expect(css).not.toContain("\n.tl-row {");
+    expect(css).not.toContain(".tl-empty");
+    expect(timelinePanelModuleCss).toContain(":global(.tl)");
+    expect(timelinePanelModuleCss).toContain(":global(.tl-row)");
+    expect(timelinePanelModuleCss).toContain(":global(.tl-empty)");
+    expectLazyCssModuleImport(timelinePanelComponent, "TimelinePanel.module.css");
+  });
+
+  it("keeps Notification panel row styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.nt-row {");
+    expect(css).not.toContain("\n.nt-text {");
+    expect(css).not.toContain("\n.nt-time {");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-row)");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-text)");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-time)");
+    expectLazyCssModuleImport(notificationsPanelComponent, "NotificationsPanel.module.css");
+  });
+
+  it("keeps Mobile panel styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.mob {");
+    expect(css).not.toContain("\n.mob-qr {");
+    expect(css).not.toContain("\n.mob-sub {");
+    expect(mobilePanelModuleCss).toContain(":global(.mob)");
+    expect(mobilePanelModuleCss).toContain(":global(.mob-qr)");
+    expect(mobilePanelModuleCss).toContain(":global(.mob-sub)");
+    expectLazyCssModuleImport(mobilePanelComponent, "MobilePanel.module.css");
+  });
+});
 
 describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
   it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
@@ -1084,7 +1285,8 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(memoryBlock).toContain("border-color: var(--line-soft) !important");
     expect(memoryBlock).toContain("box-shadow: none !important");
 
-    const templateBlock = cssBlock(
+    const templateBlock = cssBlockFrom(
+      auditedProductCss,
       ':root[data-input-modality="pointer"] .tm-field input:focus,\n:root[data-input-modality="pointer"] .tm-field select:focus',
     );
     expect(templateBlock).toContain("border-color: var(--line-strong) !important");
@@ -1092,7 +1294,7 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
   });
 
   it("renders connector create actions as buttons, not text links", () => {
-    const block = cssBlock(".connector-picker-create-link");
+    const block = cssBlockFrom(auditedProductCss, ".connector-picker-create-link");
     expect(block).toContain("height: 36px");
     expect(block).toContain("padding: 0 18px");
     expect(block).toContain("border-radius: 10px");
@@ -1145,7 +1347,6 @@ describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL
     ".arun-prog i",
     ".pal-card",
     ".mc-row",
-    ".connector-picker-retry",
     ".files-retry",
     ".scope-grounding-select",
   ];
@@ -1187,6 +1388,12 @@ describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL
     expect(cssBlock(".cmp-box {")).not.toContain("transition");
     expect(cssBlock(".cmp-send {")).not.toContain("transition");
     expect(cssBlock(".pal-card {")).not.toContain("transition");
+  });
+
+  it("keeps Connector Picker retry motion gated in its lazy stylesheet", () => {
+    expect(connectorPickerModuleCss).toContain("@media (prefers-reduced-motion: no-preference)");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-picker-retry) {");
+    expect(connectorPickerModuleCss).toContain("transition: border-color 0.15s ease");
   });
 });
 
@@ -2598,7 +2805,7 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
 
   // AC: danger affordances consume --feedback-danger; never the bare primitive.
   it("routes danger affordances through --feedback-danger", () => {
-    const block = cssBlock("\n.bw-btn-danger {");
+    const block = cssBlockFrom(auditedProductCss, "\n.bw-btn-danger {");
     expect(block).toContain("var(--feedback-danger)");
     expect(block).not.toMatch(/var\(--danger\)/);
   });
@@ -2653,7 +2860,7 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
   });
 
   it("does not leave undefined --focus references in reusable-control focus states", () => {
-    expect(css).not.toContain("var(--focus)");
+    expect(auditedProductCss).not.toContain("var(--focus)");
 
     const jsonButtonFocus = cssBlock(".figma-view-json-btn:focus-visible,");
     expect(jsonButtonFocus).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
@@ -2845,7 +3052,7 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
     );
     // #1295-owned Light shadow/scrim rows + hand-built popover drop-shadows (new-no-token)
     const scrim = /(overlay|backdrop|scrim)/i;
-    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const source = auditedProductCss.replace(/\/\*[\s\S]*?\*\//g, "");
     const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
     let match: RegExpExecArray | null;
     let controlRulesChecked = 0;
@@ -2989,7 +3196,7 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
   });
 
   it("routes connector-graph nodes through the text token", () => {
-    const block = cssBlock("\n.connector-node {");
+    const block = cssBlockFrom(auditedProductCss, "\n.connector-node {");
     expect(block).toContain("color: var(--text-primary)");
     expect(block).not.toContain("var(--fg)");
   });

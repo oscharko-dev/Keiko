@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icons } from "./Icons";
 import { toUserErrorNotice, type UserErrorNotice } from "./format-error";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 
 interface ErrorNoticeProps {
   readonly error: unknown;
@@ -25,7 +25,7 @@ export function ErrorNotice({
   readonly id?: string | undefined;
   readonly onDismiss?: (() => void) | undefined;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const noticeKey = `${notice.title}\n${notice.message}\n${notice.code ?? ""}\n${notice.remediation ?? ""}`;
   const [dismissedKey, setDismissedKey] = useState<string | undefined>();
   if (dismissedKey === noticeKey) return null;

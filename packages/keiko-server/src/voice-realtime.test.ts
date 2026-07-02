@@ -65,6 +65,7 @@ interface TestSession {
   hostSeq: number;
   lastClientSeq: number;
   replay: VoiceControlMessage[];
+  replayStart: number;
   detachedAt: number | undefined;
 }
 
@@ -80,6 +81,7 @@ function makeSession(overrides: Partial<TestSession> = {}): TestSession {
     hostSeq: 0,
     lastClientSeq: 0,
     replay: [],
+    replayStart: 0,
     detachedAt: undefined,
     ...overrides,
   };
@@ -328,6 +330,26 @@ describe("VoiceControlConnection.start", () => {
       "session.created",
       "capability.offer",
     ]);
+  });
+
+  it("keeps replay overflow ordered without shifting the replay array", async () => {
+    const session = makeSession();
+    const c1 = connect({ session });
+    c1.conn.start(false);
+
+    for (let i = 0; i < 205; i += 1) {
+      await c1.conn.receive(clientMessage("control.interrupt", i + 1));
+    }
+
+    expect(session.replay).toHaveLength(200);
+    expect(session.replayStart).toBeGreaterThan(0);
+
+    const c2 = connect({ session });
+    c2.conn.start(true);
+    const replayed = c2.socket.sent.slice(0, 200);
+    expect(replayed.map((message) => message.seq)).toEqual(
+      Array.from({ length: 200 }, (_unused, index) => index + 7),
+    );
   });
 });
 
@@ -632,6 +654,33 @@ describe("realtime voice memory context", () => {
       );
       expect(instructions).toContain("Use pnpm for installs.");
       expect(instructions).not.toContain("MemoriaViva context available for this voice session");
+    } finally {
+      cleanupVoiceMemoryHarness(harness);
+    }
+  });
+
+  it("reuses assembled realtime instructions across quick reconnects", async () => {
+    const harness = makeVoiceMemoryHarness(false);
+    try {
+      harness.store.createMessage({
+        chatId: harness.chatId,
+        role: "user",
+        content: "Give me the current voice context.",
+        timestamp: 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      const listMessages = vi.spyOn(harness.deps.store, "listMessages");
+      const chatContext = { chatId: harness.chatId, memory: { enabled: false } };
+
+      const first = await _realtimeInstructionsForTests(harness.deps, chatContext, false);
+      const second = await _realtimeInstructionsForTests(harness.deps, chatContext, false);
+
+      expect(second).toBe(first);
+      expect(listMessages).toHaveBeenCalledTimes(1);
     } finally {
       cleanupVoiceMemoryHarness(harness);
     }

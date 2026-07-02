@@ -419,7 +419,15 @@ function ScreenCard({
   } | null>(null);
   const suppressNextMouseDropRef = useRef(false);
   const suppressNextClickRef = useRef(false);
+  const mouseDragCleanupRef = useRef<(() => void) | null>(null);
   const canDrag = dragPayload !== undefined && onAddSource !== undefined && !isSourceSelected;
+  useEffect(
+    () => () => {
+      mouseDragCleanupRef.current?.();
+      mouseDragCleanupRef.current = null;
+    },
+    [],
+  );
   const previewLabel = isSourceSelected
     ? `${name} preview is already the active scoped source`
     : `Drag screen ${name} to the workspace, or click to add it as a Quality Intelligence source`;
@@ -485,15 +493,21 @@ function ScreenCard({
   };
   const handleMouseDown = (event: MouseEvent<HTMLElement>): void => {
     if (!canDrag || event.button !== 0 || dragPayload === undefined) return;
+    const payload = dragPayload;
+    mouseDragCleanupRef.current?.();
     const startX = event.clientX;
     const startY = event.clientY;
-    const handleMove = (moveEvent: globalThis.MouseEvent): void => {
+    function handleMove(moveEvent: globalThis.MouseEvent): void {
       const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
       if (moved >= JSON_DRAG_THRESHOLD_PX) moveEvent.preventDefault();
-    };
-    const handleUp = (upEvent: globalThis.MouseEvent): void => {
+    }
+    function cleanup(): void {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
+      if (mouseDragCleanupRef.current === cleanup) mouseDragCleanupRef.current = null;
+    }
+    function handleUp(upEvent: globalThis.MouseEvent): void {
+      cleanup();
       if (suppressNextMouseDropRef.current) {
         suppressNextMouseDropRef.current = false;
         return;
@@ -505,11 +519,12 @@ function ScreenCard({
       ) {
         upEvent.preventDefault();
         suppressNextClickRef.current = true;
-        dispatchFigmaViewDrop(dragPayload, upEvent);
+        dispatchFigmaViewDrop(payload, upEvent);
       }
-    };
+    }
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
+    mouseDragCleanupRef.current = cleanup;
   };
   const preview =
     imageSrc !== undefined ? (
@@ -520,7 +535,6 @@ function ScreenCard({
         loading="lazy"
         width={72}
         height={54}
-        unoptimized
       />
     ) : (
       <div
@@ -626,7 +640,15 @@ function FigmaViewSourceCard({
     readonly startY: number;
   } | null>(null);
   const suppressNextMouseDropRef = useRef(false);
+  const imageMouseDragCleanupRef = useRef<(() => void) | null>(null);
   const canDragImage = imageSrc !== undefined && imageDragPayload !== undefined;
+  useEffect(
+    () => () => {
+      imageMouseDragCleanupRef.current?.();
+      imageMouseDragCleanupRef.current = null;
+    },
+    [],
+  );
 
   const handleImageDragStart = (event: DragEvent<HTMLElement>): void => {
     if (!canDragImage) return;
@@ -689,16 +711,22 @@ function FigmaViewSourceCard({
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
   const handleImageMouseDown = (event: MouseEvent<HTMLElement>): void => {
-    if (!canDragImage || event.button !== 0) return;
+    if (!canDragImage || event.button !== 0 || imageDragPayload === undefined) return;
+    const payload = imageDragPayload;
+    imageMouseDragCleanupRef.current?.();
     const startX = event.clientX;
     const startY = event.clientY;
-    const handleMove = (moveEvent: globalThis.MouseEvent): void => {
+    function handleMove(moveEvent: globalThis.MouseEvent): void {
       const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
       if (moved >= JSON_DRAG_THRESHOLD_PX) moveEvent.preventDefault();
-    };
-    const handleUp = (upEvent: globalThis.MouseEvent): void => {
+    }
+    function cleanup(): void {
       window.removeEventListener("mousemove", handleMove);
       window.removeEventListener("mouseup", handleUp);
+      if (imageMouseDragCleanupRef.current === cleanup) imageMouseDragCleanupRef.current = null;
+    }
+    function handleUp(upEvent: globalThis.MouseEvent): void {
+      cleanup();
       if (suppressNextMouseDropRef.current) {
         suppressNextMouseDropRef.current = false;
         return;
@@ -709,11 +737,12 @@ function FigmaViewSourceCard({
         isWorkspaceDropTarget(upEvent.clientX, upEvent.clientY)
       ) {
         upEvent.preventDefault();
-        dispatchFigmaImageDrop(imageDragPayload, upEvent);
+        dispatchFigmaImageDrop(payload, upEvent);
       }
-    };
+    }
     window.addEventListener("mousemove", handleMove);
     window.addEventListener("mouseup", handleUp);
+    imageMouseDragCleanupRef.current = cleanup;
   };
   const previewContent =
     imageSrc !== undefined ? (
@@ -721,11 +750,10 @@ function FigmaViewSourceCard({
         className="figma-view-preview-image"
         src={imageSrc}
         alt={`Captured preview for ${name}`}
-        loading="eager"
+        loading="lazy"
         width={360}
         height={240}
         draggable={false}
-        unoptimized
       />
     ) : (
       <div
@@ -917,6 +945,7 @@ export function FigmaSnapshotWindow({
     readonly startY: number;
   } | null>(null);
   const suppressNextMouseDropRef = useRef(false);
+  const jsonMouseDragCleanupRef = useRef<(() => void) | null>(null);
 
   const flagConsentRequired = useCallback((): void => {
     setConsentInvalid(true);
@@ -1020,6 +1049,8 @@ export function FigmaSnapshotWindow({
       screenJsonAbortRef.current?.abort();
       dashboardAbortRef.current?.abort();
       snapshotManagementAbortRef.current?.abort();
+      jsonMouseDragCleanupRef.current?.();
+      jsonMouseDragCleanupRef.current = null;
     };
   }, []);
 
@@ -1435,15 +1466,21 @@ export function FigmaSnapshotWindow({
   const handleJsonMouseDown = useCallback(
     (event: MouseEvent<HTMLElement>): void => {
       if (jsonDragPayload === null || event.button !== 0) return;
+      const payload = jsonDragPayload;
+      jsonMouseDragCleanupRef.current?.();
       const startX = event.clientX;
       const startY = event.clientY;
-      const handleMove = (moveEvent: globalThis.MouseEvent): void => {
+      function handleMove(moveEvent: globalThis.MouseEvent): void {
         const moved = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
         if (moved >= JSON_DRAG_THRESHOLD_PX) moveEvent.preventDefault();
-      };
-      const handleUp = (upEvent: globalThis.MouseEvent): void => {
+      }
+      function cleanup(): void {
         window.removeEventListener("mousemove", handleMove);
         window.removeEventListener("mouseup", handleUp);
+        if (jsonMouseDragCleanupRef.current === cleanup) jsonMouseDragCleanupRef.current = null;
+      }
+      function handleUp(upEvent: globalThis.MouseEvent): void {
+        cleanup();
         if (suppressNextMouseDropRef.current) {
           suppressNextMouseDropRef.current = false;
           return;
@@ -1454,11 +1491,12 @@ export function FigmaSnapshotWindow({
           isWorkspaceDropTarget(upEvent.clientX, upEvent.clientY)
         ) {
           upEvent.preventDefault();
-          dispatchFigmaJsonDrop(jsonDragPayload, upEvent);
+          dispatchFigmaJsonDrop(payload, upEvent);
         }
-      };
+      }
       window.addEventListener("mousemove", handleMove);
       window.addEventListener("mouseup", handleUp);
+      jsonMouseDragCleanupRef.current = cleanup;
     },
     [jsonDragPayload],
   );

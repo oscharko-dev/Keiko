@@ -15,6 +15,12 @@ export function preparedDatabase(target: string): DatabaseSync {
   return db;
 }
 
+function configureWalDatabase(db: DatabaseSync): void {
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA synchronous = NORMAL");
+  db.exec("PRAGMA wal_autocheckpoint = 1000");
+}
+
 export function ensureDirHardened(dir: string): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -68,9 +74,7 @@ export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher):
   ensureDirHardened(dirname(dbPath));
   let db = preparedDatabase(dbPath);
   try {
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA synchronous = NORMAL");
-    db.exec("PRAGMA wal_autocheckpoint = 1000");
+    configureWalDatabase(db);
     runMigrations(db, cipher);
   } catch {
     // SQLite's close() on a WAL-enabled handle may checkpoint and unlink -wal/-shm,
@@ -82,9 +86,7 @@ export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher):
     db.close();
     quarantineCorruptDb(dbPath, { hadWal, hadShm });
     db = preparedDatabase(dbPath);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA synchronous = NORMAL");
-    db.exec("PRAGMA wal_autocheckpoint = 1000");
+    configureWalDatabase(db);
     runMigrations(db, cipher);
   }
   chmodIfPresent(dbPath, 0o600);
