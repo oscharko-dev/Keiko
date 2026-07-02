@@ -37,12 +37,14 @@ import {
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
+  countMessages as sqlCountMessages,
   findMessageById as sqlFindMessageById,
   attachGroundedAnswer as sqlAttachGroundedAnswer,
   findGroundedPreviewCitations as sqlFindGroundedPreviewCitations,
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
   listMessagesLimited as sqlListMessagesLimited,
+  listMessagesPrefixLimited as sqlListMessagesPrefixLimited,
   updateMessage as sqlUpdateMessage,
 } from "./messages.js";
 import { validateProjectPath } from "./validation.js";
@@ -187,6 +189,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     },
     listMessages: (chatId: string, limit?: number): readonly ChatMessage[] =>
       limit === undefined ? sqlListMessages(db, chatId) : sqlListMessagesLimited(db, chatId, limit),
+    listMessagesPrefix: (chatId: string, limit: number): readonly ChatMessage[] =>
+      sqlListMessagesPrefixLimited(db, chatId, limit),
+    countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);

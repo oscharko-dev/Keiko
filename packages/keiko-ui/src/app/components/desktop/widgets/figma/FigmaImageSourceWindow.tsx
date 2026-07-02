@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import type { ReactNode } from "react";
+import "./FigmaImageSourceWindow.module.css";
 
 export interface FigmaImageSourceWindowProps {
   readonly imageSrc?: string | undefined;
@@ -36,7 +37,6 @@ export function FigmaImageSourceWindow({
         alt={label}
         width={720}
         height={480}
-        unoptimized
         priority
       />
     </section>

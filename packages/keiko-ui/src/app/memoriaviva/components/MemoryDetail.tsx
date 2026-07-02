@@ -12,7 +12,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 import { MemoryActions } from "./MemoryActions";
 
@@ -296,7 +296,7 @@ export function MemoryDetail({
   fetchMemoryImpl = fetchMemory,
   onBack,
 }: MemoryDetailProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [record, setRecord] = useState<MemoryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

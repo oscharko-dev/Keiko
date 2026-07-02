@@ -287,11 +287,15 @@ export async function fetchConfig(): Promise<{
   configPresent: boolean;
   effectiveGroundingLimits: GroundingLimits;
 }> {
-  const raw = await fetchJson<{
+  configRequest ??= fetchJson<{
     config: SafeGatewayConfig | null;
     configPresent: boolean;
     effectiveGroundingLimits?: GroundingLimits;
-  }>("/api/config");
+  }>("/api/config").catch((error: unknown) => {
+    configRequest = undefined;
+    throw error;
+  });
+  const raw = await configRequest;
   return {
     config: raw.config,
     configPresent: raw.configPresent,
@@ -303,7 +307,18 @@ export async function fetchConfig(): Promise<{
 // Route 3 — models
 // ---------------------------------------------------------------------------
 
+let configRequest:
+  | Promise<{
+      config: SafeGatewayConfig | null;
+      configPresent: boolean;
+      effectiveGroundingLimits?: GroundingLimits;
+    }>
+  | undefined;
 let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
+
+export function clearConfigCacheForTests(): void {
+  configRequest = undefined;
+}
 
 export function clearModelCacheForTests(): void {
   modelsRequest = undefined;
@@ -466,6 +481,7 @@ export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetu
     method: "POST",
     body: JSON.stringify(body),
   });
+  clearConfigCacheForTests();
   clearModelCacheForTests();
   return response;
 }
@@ -631,16 +647,37 @@ export async function fetchWorkspaceSummary(
 // ADR-0013 — UI-local persistence client (routes 13–22)
 // ---------------------------------------------------------------------------
 
+const PROJECTS_CACHE_TTL_MS = 2000;
+
 let projectsRequest: Promise<ProjectsResponse> | undefined;
+let projectsCache: { readonly value: ProjectsResponse; readonly expiresAt: number } | undefined;
+
+function clearProjectCache(): void {
+  projectsRequest = undefined;
+  projectsCache = undefined;
+}
 
 export function clearProjectRequestForTests(): void {
-  projectsRequest = undefined;
+  clearProjectCache();
 }
 
 export async function fetchProjects(): Promise<ProjectsResponse> {
-  projectsRequest ??= fetchJson<ProjectsResponse>("/api/projects").finally(() => {
-    projectsRequest = undefined;
-  });
+  const now = Date.now();
+  if (projectsCache !== undefined && projectsCache.expiresAt > now) {
+    return projectsCache.value;
+  }
+  projectsRequest ??= fetchJson<ProjectsResponse>("/api/projects")
+    .then((value) => {
+      projectsCache = { value, expiresAt: Date.now() + PROJECTS_CACHE_TTL_MS };
+      return value;
+    })
+    .catch((error: unknown) => {
+      projectsCache = undefined;
+      throw error;
+    })
+    .finally(() => {
+      projectsRequest = undefined;
+    });
   return projectsRequest;
 }
 
@@ -650,7 +687,12 @@ export interface CreateProjectInput {
 }
 
 export async function createProject(input: CreateProjectInput): Promise<ProjectResponse> {
-  return fetchJson("/api/projects", { method: "POST", body: JSON.stringify(input) });
+  const response = await fetchJson<ProjectResponse>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  clearProjectCache();
+  return response;
 }
 
 export interface CloneRepositoryInput {
@@ -660,7 +702,12 @@ export interface CloneRepositoryInput {
 }
 
 export async function cloneRepository(input: CloneRepositoryInput): Promise<ProjectResponse> {
-  return fetchJson("/api/repositories/clone", { method: "POST", body: JSON.stringify(input) });
+  const response = await fetchJson<ProjectResponse>("/api/repositories/clone", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  clearProjectCache();
+  return response;
 }
 
 export interface UpdateProjectInput {
@@ -672,10 +719,15 @@ export async function updateProject(
   path: string,
   patch: UpdateProjectInput,
 ): Promise<ProjectResponse> {
-  return fetchJson(`/api/projects?path=${encodeURIComponent(path)}`, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
+  const response = await fetchJson<ProjectResponse>(
+    `/api/projects?path=${encodeURIComponent(path)}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    },
+  );
+  clearProjectCache();
+  return response;
 }
 
 export async function deleteProject(path: string): Promise<void> {
@@ -683,6 +735,7 @@ export async function deleteProject(path: string): Promise<void> {
     method: "DELETE",
     body: "{}",
   });
+  clearProjectCache();
 }
 
 export async function fetchChats(projectPath: string): Promise<ChatsResponse> {
@@ -1728,9 +1781,7 @@ export async function closePdfCitationPreviewSession(
     `/api/local-knowledge/citation-preview/sessions/${encodeURIComponent(sessionHandle)}`,
     {
       method: "DELETE",
-      body: JSON.stringify(
-        expectedExpiresAt === undefined ? {} : { expectedExpiresAt },
-      ),
+      body: JSON.stringify(expectedExpiresAt === undefined ? {} : { expectedExpiresAt }),
     },
   );
 }
@@ -1782,11 +1833,7 @@ export async function fetchGitDeliveryActionSheet(
 // block returns `{ status: "blocked", blockReason: "message-policy", messageViolations }`.
 
 export type GitDeliveryMutationStatus =
-  | "succeeded"
-  | "blocked"
-  | "approval-required"
-  | "failed"
-  | "recovery-required";
+  "succeeded" | "blocked" | "approval-required" | "failed" | "recovery-required";
 
 // Shared mutation response shape for branch + staging + commit execution. Optional fields appear only
 // for the matching outcome (block reason, preflight codes, required approvers, execution error code).

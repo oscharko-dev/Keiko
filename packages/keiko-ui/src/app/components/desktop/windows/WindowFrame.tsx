@@ -918,20 +918,21 @@ function WindowFrameImpl({
     () =>
       enableContentVisibility
         ? {
-            contain: "layout style",
+            contain: "layout style paint",
             contentVisibility: "auto",
             containIntrinsicSize: `${String(Math.round(ew))}px ${String(Math.round(eh))}px`,
           }
-        : { contain: "layout style" },
+        : { contain: "layout style paint" },
     [enableContentVisibility, ew, eh],
   );
   const sectionStyle = useMemo<CSSProperties>(
     () => ({
-      left: win.x,
-      top: win.y,
+      left: 0,
+      top: 0,
       width: win.w,
       height: win.h,
       zIndex: win.z,
+      transform: `translate3d(${String(win.x)}px, ${String(win.y)}px, 0)`,
     }),
     [win.x, win.y, win.w, win.h, win.z],
   );

@@ -14,6 +14,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
+import "./TerminalWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import { formatBytes, formatMs } from "../../../../../lib/format";
 import {
@@ -30,6 +31,7 @@ import type {
   TerminalPolicySummary,
 } from "../../../../../lib/types";
 import KeikoSelect from "../../KeikoSelect";
+import { subscribeSharedEventSource } from "./sharedEventSource";
 
 interface TerminalWidgetProps {
   readonly projectPath?: string;
@@ -42,6 +44,12 @@ interface ErrorState {
 }
 
 const MAX_EVENT_LOG = 30;
+const TERMINAL_EVENT_SOURCE_TYPES = [
+  "terminal:execution-started",
+  "terminal:execution-completed",
+  "terminal:execution-failed",
+  "terminal:execution-cancelled",
+] as const;
 
 function errorFromUnknown(value: unknown): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
@@ -107,7 +115,6 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   const [result, setResult] = useState<TerminalExecutionResult | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [events, setEvents] = useState<readonly TerminalEventEnvelope[]>([]);
-  const eventSourceRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
   const pendingRequestIdRef = useRef<string | null>(null);
   const [cwdSuggestions, setCwdSuggestions] = useState<readonly TerminalDirectoryEntry[]>([]);
@@ -150,8 +157,9 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   }, [projectInput, cwdInput]);
 
   useEffect(() => {
-    const es = new EventSource(terminalEventsUrl());
-    eventSourceRef.current = es;
+    if (!running) {
+      return;
+    }
     const onMessage = (ev: MessageEvent<string>): void => {
       try {
         const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
@@ -191,19 +199,8 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         // Ignore unparsable frames; the BFF never emits malformed JSON.
       }
     };
-    for (const kind of [
-      "execution-started",
-      "execution-completed",
-      "execution-failed",
-      "execution-cancelled",
-    ] as const) {
-      es.addEventListener(`terminal:${kind}`, onMessage as EventListener);
-    }
-    return (): void => {
-      es.close();
-      eventSourceRef.current = null;
-    };
-  }, []);
+    return subscribeSharedEventSource(terminalEventsUrl(), TERMINAL_EVENT_SOURCE_TYPES, onMessage);
+  }, [running]);
 
   const onSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>): Promise<void> => {

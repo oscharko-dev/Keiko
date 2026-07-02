@@ -802,7 +802,31 @@ describe("listMessages", () => {
     expect(store.listMessages(chatId).map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
+  it("returns the latest limited messages in chronological order", () => {
+    for (let i = 0; i < 5; i += 1) {
+      store.createMessage({
+        chatId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${String(i)}`,
+        timestamp: i,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+
+    expect(store.listMessages(chatId, 3).map((m) => m.content)).toEqual([
+      "message 2",
+      "message 3",
+      "message 4",
+    ]);
+    expect(store.countMessages(chatId)).toBe(5);
+  });
+
   it("returns an empty array for an unknown chatId (no throw)", () => {
     expect(store.listMessages("nope")).toEqual([]);
+    expect(store.countMessages("nope")).toBe(0);
   });
 });

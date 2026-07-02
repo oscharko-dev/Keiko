@@ -26,6 +26,8 @@ import type {
   ContainerTask,
 } from "../../../../../lib/types";
 import KeikoSelect from "../../KeikoSelect";
+import { subscribeSharedEventSource } from "./sharedEventSource";
+import "./TerminalWidget.module.css";
 
 interface ContainerStatusWidgetProps {
   readonly projectPath?: string;
@@ -37,6 +39,12 @@ interface ErrorState {
 }
 
 const MAX_EVENT_LOG = 30;
+const CONTAINER_EVENT_SOURCE_TYPES = [
+  "container:run-started",
+  "container:run-completed",
+  "container:run-failed",
+  "container:run-cancelled",
+] as const;
 
 // Localized, human-readable label per ContainerEngineState. Exhaustive over the (aliased)
 // RuntimeCapabilityState union so adding a member is a compile error, not a silent fallthrough.
@@ -251,7 +259,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
   // Subscribe to the shared container run event channel. Ownership is gated on the echoed requestId
   // so a foreign run-started can never arm this card's Cancel.
   useEffect(() => {
-    const es = new EventSource(containerEventsUrl());
+    if (!running) return;
     const onMessage = (ev: MessageEvent<string>): void => {
       let parsed: ContainerRunnerEvent;
       try {
@@ -271,13 +279,8 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       }
       setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
     };
-    for (const kind of ["run-started", "run-completed", "run-failed", "run-cancelled"] as const) {
-      es.addEventListener(`container:${kind}`, onMessage as EventListener);
-    }
-    return (): void => {
-      es.close();
-    };
-  }, []);
+    return subscribeSharedEventSource(containerEventsUrl(), CONTAINER_EVENT_SOURCE_TYPES, onMessage);
+  }, [running]);
 
   // Return focus to Run when the Cancel button unmounts at run end so keyboard users keep their place.
   useEffect(() => {

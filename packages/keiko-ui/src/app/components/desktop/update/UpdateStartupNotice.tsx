@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchStartupUpdatePreflight } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
 import { hasStartupUpdateSignal } from "./update-copy";
@@ -55,7 +55,7 @@ export function UpdateStartupNotice({
   openUpdates,
   fetchReport = fetchStartupUpdatePreflight,
 }: UpdateStartupNoticeProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [state, setState] = useState<NoticeState>({ status: "idle" });
 
   useEffect(() => {

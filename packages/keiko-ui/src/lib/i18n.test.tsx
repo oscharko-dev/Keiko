@@ -1,13 +1,16 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_LOCALE,
   I18N_STORAGE_KEY,
   I18nProvider,
+  loadLocaleMessages,
   resolveLocale,
   translate,
   useI18n,
+  useSetLocale,
+  useTranslate,
 } from "./i18n";
 
 function Probe(): ReactNode {
@@ -20,6 +23,21 @@ function Probe(): ReactNode {
         German
       </button>
     </div>
+  );
+}
+
+function TranslationProbe(): ReactNode {
+  const t = useTranslate();
+  return <p data-testid="split-label">{t("settings.title")}</p>;
+}
+
+function SetLocaleOnlyProbe(props: { readonly onRender: () => void }): ReactNode {
+  const setLocale = useSetLocale();
+  props.onRender();
+  return (
+    <button type="button" onClick={() => setLocale("de")}>
+      Switch language
+    </button>
   );
 }
 
@@ -44,14 +62,18 @@ describe("resolveLocale", () => {
 });
 
 describe("translate", () => {
-  it("interpolates named values", () => {
+  it("interpolates named values from the default catalog", () => {
     expect(translate("en", "settings.models.modelCount", { count: 3 })).toBe("3 models");
+  });
+
+  it("loads the non-default catalog on demand", async () => {
+    await expect(loadLocaleMessages("de")).resolves.toBeTruthy();
     expect(translate("de", "settings.models.modelCount", { count: 3 })).toBe("3 Modelle");
   });
 });
 
 describe("I18nProvider", () => {
-  it("uses the stored locale, updates document metadata, and persists changes", () => {
+  it("uses the stored locale, updates document metadata, and persists changes", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de-DE");
 
     render(
@@ -61,13 +83,13 @@ describe("I18nProvider", () => {
     );
 
     expect(screen.getByTestId("locale")).toHaveTextContent("de");
-    expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
+    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
     expect(document.documentElement.lang).toBe("de");
     expect(document.documentElement.dataset.locale).toBe("de");
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
   });
 
-  it("applies user language changes immediately", () => {
+  it("persists user language changes immediately and applies the catalog when ready", async () => {
     render(
       <I18nProvider>
         <Probe />
@@ -78,8 +100,33 @@ describe("I18nProvider", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "German" }));
 
-    expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen");
+    expect(screen.getByTestId("locale")).toHaveTextContent("de");
     expect(document.documentElement.lang).toBe("de");
     expect(window.localStorage.getItem(I18N_STORAGE_KEY)).toBe("de");
+    await waitFor(() => expect(screen.getByTestId("label")).toHaveTextContent("Einstellungen"));
+  });
+
+  it("keeps locale setter consumers stable when only translated text changes", async () => {
+    let setterRenders = 0;
+    render(
+      <I18nProvider>
+        <SetLocaleOnlyProbe
+          onRender={() => {
+            setterRenders += 1;
+          }}
+        />
+        <TranslationProbe />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByTestId("split-label")).toHaveTextContent("Settings");
+    expect(setterRenders).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Switch language" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("split-label")).toHaveTextContent("Einstellungen"),
+    );
+    expect(setterRenders).toBe(1);
   });
 });

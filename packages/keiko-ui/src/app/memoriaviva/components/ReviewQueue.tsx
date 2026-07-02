@@ -17,7 +17,7 @@ import {
   rejectMemoryProposal,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 
 function typeLabel(type: MemoryRecord["type"], t: I18nTranslate): string {
@@ -267,7 +267,7 @@ export function ReviewQueue({
   onBack,
   onOpenDetail,
 }: ReviewQueueProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

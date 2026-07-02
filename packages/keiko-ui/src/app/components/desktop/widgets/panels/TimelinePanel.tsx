@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useActivitySubscription } from "../shared/activityBus";
 import type { ActivityEvent } from "../shared/activityBus";
+import "./TimelinePanel.module.css";
 
 const KIND_COLOR: Record<ActivityEvent["type"], string> = {
   step: "var(--fg-dim)",

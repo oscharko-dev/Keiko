@@ -635,10 +635,19 @@ function readPersistedWorkspaceSnapshot(): {
   }
 }
 
-async function fetchServerWorkspaceSnapshot(): Promise<ServerWorkspaceSnapshot | null> {
+function workspaceStateEtag(revision: number): string {
+  return `"workspace-state-${String(revision)}"`;
+}
+
+async function fetchServerWorkspaceSnapshot(
+  knownRevision: number,
+): Promise<ServerWorkspaceSnapshot | null> {
   if (typeof fetch !== "function") return null;
   try {
-    const response = await fetch(WORKSPACE_STATE_API, { headers: { Accept: "application/json" } });
+    const headers: Record<string, string> = { Accept: "application/json" };
+    headers["If-None-Match"] = workspaceStateEtag(knownRevision);
+    const response = await fetch(WORKSPACE_STATE_API, { headers });
+    if (response.status === 304) return null;
     if (!response.ok) return null;
     const body: unknown = await response.json();
     if (typeof body !== "object" || body === null || !("workspace" in body)) return null;
@@ -703,7 +712,7 @@ function applyPersistedWorkspaceSnapshot(
   setConns: Dispatch<SetStateAction<Connection[]>>,
   zc: MutableRefObject<number>,
 ): void {
-  zc.current = snapshot.wins.length === 0 ? 1 : Math.max(1, ...snapshot.wins.map((w) => w.z));
+  zc.current = snapshot.wins.reduce((maxZ, win) => Math.max(maxZ, win.z), 1);
   setWins(snapshot.wins);
   setConns(snapshot.conns);
 }
@@ -810,7 +819,7 @@ function useWorkspaceServerSync({
     let stopped = false;
     let interval: number | null = null;
     const pull = async (): Promise<void> => {
-      const serverSnapshot = await fetchServerWorkspaceSnapshot();
+      const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current);
       if (stopped || serverSnapshot === null) return;
       if (serverSnapshot.revision <= revisionRef.current) return;
       if (
@@ -1024,12 +1033,9 @@ function useConnectionPrune(
 ): void {
   useEffect(() => {
     if (wins === null) return;
+    const windowIds = new Set(wins.map((win) => win.id));
     setConns((cs) => {
-      const filtered = cs.filter(
-        (c) =>
-          wins.find((w) => w.id === c.a) !== undefined &&
-          wins.find((w) => w.id === c.b) !== undefined,
-      );
+      const filtered = cs.filter((c) => windowIds.has(c.a) && windowIds.has(c.b));
       return filtered.length === cs.length ? cs : filtered;
     });
   }, [wins, setConns]);
@@ -1140,19 +1146,17 @@ export function useWorkspace(
     suppressNextPersistRef: suppressNextServerPersistRef,
   });
 
-  // Debounced localStorage persistence (issue #1580): a drag/resize mutates wins
-  // every frame; without this each frame ran a synchronous sanitize + JSON.stringify
-  // + setItem. The sanitize pipeline still runs in full on the eventual write, so
-  // multi-tab byte-identity is preserved.
-  useDebouncedPersist(() => {
-    if (wins !== null) persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
-  }, [conns, wins]);
-
   useConnectionPrune(wins, setConns);
 
+  // Debounced localStorage persistence (issue #1580): a drag/resize mutates wins
+  // every frame; without this each frame ran a synchronous sanitize + JSON.stringify
+  // + setItem. Sanitize windows once and reuse the result for connection pruning/persistence.
   useDebouncedPersist(() => {
-    if (wins !== null) persistList(WS_LS, sanitizePersistedWindows(wins));
-  }, [wins]);
+    if (wins === null) return;
+    const persistedWins = sanitizePersistedWindows(wins);
+    persistList(WS_LS, persistedWins);
+    persistList(CONN_LS, sanitizePersistedConnections(conns, persistedWins));
+  }, [conns, wins]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
@@ -1345,5 +1349,5 @@ export function useWorkspace(
     ],
   );
 
-  return { wins, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
+  return { wins, winsById, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
 }

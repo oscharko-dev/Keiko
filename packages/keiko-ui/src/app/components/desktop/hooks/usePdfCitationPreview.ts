@@ -48,6 +48,35 @@ export interface CitationPreviewController {
   ) => Promise<string | null>;
 }
 
+const PDF_STATUS_CACHE_TTL_MS = 2000;
+type PdfStatusResponse = Awaited<ReturnType<typeof fetchPdfCitationPreviewStatus>>;
+const pdfStatusCache = new Map<
+  string,
+  { readonly expiresAt: number; readonly promise: Promise<PdfStatusResponse> }
+>();
+
+export function clearPdfCitationPreviewStatusCacheForTests(): void {
+  pdfStatusCache.clear();
+}
+
+function fetchCachedPdfCitationPreviewStatus(input: {
+  readonly chatId: string;
+  readonly assistantMessageId: string;
+}): Promise<PdfStatusResponse> {
+  const key = `${input.chatId}\u0000${input.assistantMessageId}`;
+  const now = Date.now();
+  const cached = pdfStatusCache.get(key);
+  if (cached !== undefined && cached.expiresAt > now) {
+    return cached.promise;
+  }
+  const promise = fetchPdfCitationPreviewStatus(input).catch((error: unknown) => {
+    pdfStatusCache.delete(key);
+    throw error;
+  });
+  pdfStatusCache.set(key, { promise, expiresAt: now + PDF_STATUS_CACHE_TTL_MS });
+  return promise;
+}
+
 interface CitationPreviewRenderSnapshot {
   readonly affordances: Record<string, CitationPreviewAffordance>;
   readonly answer: GroundedAnswer | undefined;
@@ -183,6 +212,7 @@ export function usePdfCitationPreviewController({
   readonly windowId?: string | undefined;
   readonly windows: PdfCitationPreviewWindowApi | undefined;
 }): CitationPreviewController | undefined {
+  const assistantMessageId = answer?.assistantMessageId;
   const citations = useMemo(() => knowledgeCitationsForAnswer(answer), [answer]);
   const [affordances, setAffordances] = useState<Record<string, CitationPreviewAffordance>>({});
   const [openingKeys, setOpeningKeys] = useState<ReadonlySet<string>>(new Set());
@@ -205,15 +235,15 @@ export function usePdfCitationPreviewController({
   };
 
   useEffect(() => {
-    if (chatId === undefined || answer === undefined || citations.length === 0) {
+    if (chatId === undefined || assistantMessageId === undefined || citations.length === 0) {
       setAffordances({});
       return;
     }
 
     let cancelled = false;
-    void fetchPdfCitationPreviewStatus({
+    void fetchCachedPdfCitationPreviewStatus({
       chatId,
-      assistantMessageId: answer.assistantMessageId,
+      assistantMessageId,
     }).then(
       (response) => {
         if (cancelled) return;
@@ -228,7 +258,7 @@ export function usePdfCitationPreviewController({
     return () => {
       cancelled = true;
     };
-  }, [answer, chatId, citations]);
+  }, [assistantMessageId, chatId, citations]);
 
   const forCitation = useCallback(
     (citation: LocalKnowledgeEvidenceCitation): CitationPreviewAffordance | undefined =>

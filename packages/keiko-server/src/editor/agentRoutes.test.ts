@@ -89,7 +89,7 @@ function action(overrides: Partial<EditorAgentAction> = {}): EditorAgentAction {
 // Connect a session-scoped SSE bridge so the session is "live" (Issue #1392). Returns the captured
 // frames plus a close() that drops the bridge. Bridge liveness gates action queueing: without a live
 // bridge a queued action is answered NO_ACTIVE_BRIDGE (AC1).
-function connectBridge(sessionId: string | undefined): {
+function connectBridge(sessionId: string | readonly string[] | undefined): {
   readonly frames: () => string;
   readonly close: () => void;
 } {
@@ -108,7 +108,12 @@ function connectBridge(sessionId: string | undefined): {
     destroy: vi.fn(),
   } as unknown as ServerResponse;
   const req = { on: vi.fn() } as unknown as IncomingMessage;
-  const query = sessionId === undefined ? "" : `?sessionId=${encodeURIComponent(sessionId)}`;
+  const sessionIds: readonly string[] =
+    sessionId === undefined ? [] : Array.isArray(sessionId) ? sessionId : [sessionId];
+  const query =
+    sessionIds.length === 0
+      ? ""
+      : `?${sessionIds.map((id) => `sessionId=${encodeURIComponent(id)}`).join("&")}`;
   handleEditorAgentEvents({
     req,
     res,
@@ -990,6 +995,43 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     bridge.close();
     const afterClose = await handleEditorAgentActions(
       context(action({ idempotencyKey: "ik-after-close", actionId: "a-after-close" })),
+    );
+    expect(afterClose.status).toBe(409);
+    expect(actionConflictCode(afterClose.body)).toBe("NO_ACTIVE_BRIDGE");
+  });
+
+  it("treats one multi-session SSE stream as a live bridge for each listed session", async () => {
+    await registerSnapshotOnly();
+    await registerSnapshotOnly({ sessionId: "session-2" });
+    const bridge = connectBridge(["session-1", "session-2"]);
+
+    const queued1 = await handleEditorAgentActions(
+      context(navAction({ actionId: "a-mux-1", idempotencyKey: "k-mux-1" })),
+    );
+    const queued2 = await handleEditorAgentActions(
+      context(
+        navAction({
+          sessionId: "session-2",
+          actionId: "a-mux-2",
+          idempotencyKey: "k-mux-2",
+        }),
+      ),
+    );
+
+    expect(queued1.status).toBe(202);
+    expect(queued2.status).toBe(202);
+    expect(bridge.frames()).toContain("a-mux-1");
+    expect(bridge.frames()).toContain("a-mux-2");
+
+    bridge.close();
+    const afterClose = await handleEditorAgentActions(
+      context(
+        navAction({
+          sessionId: "session-2",
+          actionId: "a-mux-after-close",
+          idempotencyKey: "k-mux-after-close",
+        }),
+      ),
     );
     expect(afterClose.status).toBe(409);
     expect(actionConflictCode(afterClose.body)).toBe("NO_ACTIVE_BRIDGE");

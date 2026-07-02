@@ -1,7 +1,7 @@
 // Issue #153 — workflow evidence remains visible in chat, but workflow launches live exclusively
 // in the Agent widget surface.
 
-import { render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -410,5 +410,47 @@ describe("useChatSession run-summary patching", () => {
         shortResult: "Investigation complete; root cause documented.",
       }),
     );
+  });
+
+  it("deduplicates run-summary polling across hook instances for the same run", async () => {
+    const pending = systemRunSummaryMessage({ id: "m-shared", runId: "run-shared" });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [pending] });
+    const report = vi.spyOn(api, "fetchRunReport").mockResolvedValue({
+      report: {
+        status: "dry-run",
+        addedTestFiles: [{ path: "tests/shared.test.ts", estimatedTestCount: 1 }],
+      },
+    });
+
+    let resolvePatch:
+      | ((value: { readonly message: ReturnType<typeof systemRunSummaryMessage> }) => void)
+      | undefined;
+    const patch = vi.spyOn(api, "patchChatMessage").mockReturnValue(
+      new Promise<{ readonly message: ReturnType<typeof systemRunSummaryMessage> }>((resolve) => {
+        resolvePatch = resolve;
+      }),
+    );
+
+    const first = renderHook(() => useChatSession());
+    const second = renderHook(() => useChatSession());
+
+    await waitFor(() => expect(patch).toHaveBeenCalledTimes(1));
+    expect(report).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      resolvePatch?.({
+        message: systemRunSummaryMessage({
+          id: "m-shared",
+          runId: "run-shared",
+          workflowStatus: "completed",
+          shortResult: "Generated 1 test files; 1 tests proposed.",
+        }),
+      });
+    });
+
+    await waitFor(() => {
+      expect(first.result.current.messages[0]?.workflowStatus).toBe("completed");
+      expect(second.result.current.messages[0]?.workflowStatus).toBe("completed");
+    });
   });
 });

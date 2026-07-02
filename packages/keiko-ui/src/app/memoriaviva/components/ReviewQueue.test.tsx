@@ -158,7 +158,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Deutscher Review-Vorschlag")).toBeInTheDocument();
     });
-    expect(screen.getByRole("heading", { name: "Review-Warteschlange" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Review-Warteschlange" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Akzeptieren" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ablehnen" })).toBeInTheDocument();
     expect(screen.getByText("Sensitivitaet: Oeffentlich")).toBeInTheDocument();

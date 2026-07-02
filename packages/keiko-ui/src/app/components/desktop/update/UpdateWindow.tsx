@@ -21,7 +21,7 @@ import {
   startUpdateSession,
   verifyUpdateRestart,
 } from "@/lib/api";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
   UpdatePreflightReport,
   UpdateRemediationAction,
@@ -168,7 +168,7 @@ function SummaryCard({
   readonly manualInstallVerified: boolean;
   readonly titleRef: RefObject<HTMLHeadingElement>;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const visibleSession = sessionForDisplay(session, report);
   const tone = updateTone(report, visibleSession, remediation);
   return (
@@ -216,7 +216,7 @@ function PrimaryActions({
   readonly manualInstructionsOpen: boolean;
   readonly canVerifyRestart: boolean;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const visibleSession = sessionForDisplay(session, report);
   const disabled = busy !== undefined;
   const manual = isManualUpdatePath(report, session);
@@ -293,7 +293,7 @@ function PrimaryActions({
 }
 
 function ProgressPanel({ session }: { readonly session: ReturnType<typeof sessionForDisplay> }) {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (session === undefined || !isSessionInProgress(session)) return null;
   return (
     <section className="upd-panel" role="status" aria-live="polite">
@@ -313,7 +313,7 @@ function SessionOutcomePanel({
   readonly session: ReturnType<typeof sessionForDisplay>;
   readonly patchNotesReport: UpdatePreflightReport;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (session === undefined || isSessionInProgress(session)) return null;
   if (
     session.phase !== "restart-required" &&
@@ -362,7 +362,7 @@ function ImpactPanel({
   readonly report: UpdatePreflightReport;
   readonly remediation: UpdateRemediationStatusReport;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const impacts = report.impact?.stateImpact ?? [];
   if (remediation.actions.length > 0) return null;
   if (impacts.length === 0 && remediation.affectedFeatures.length === 0) return null;
@@ -412,7 +412,7 @@ function PlannedRemediationPanel({
 }: {
   readonly remediation: UpdateRemediationStatusReport;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const visibleActions = remediation.actions.filter(actionVisible);
   if (visibleActions.length === 0) return null;
   return (
@@ -451,7 +451,7 @@ function RemediationPanel({
   readonly busy: BusyAction;
   readonly onAction: (action: UpdateRemediationAction, decision: "run" | "defer") => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (remediation.actions.length === 0 && remediation.affectedFeatures.length === 0) return null;
   const visibleActions = remediation.actions.filter(actionVisible);
   if (remediation.actions.length > 0 && visibleActions.length === 0) return null;
@@ -550,7 +550,7 @@ function ManualPath({
   readonly onInstructionsOpenChange: (open: boolean) => void;
   readonly onCheck: () => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (!isManualUpdatePath(report, session)) return null;
   const instructions = session.installMode.manualInstructions ?? t("updates.manual.default");
   return (
@@ -612,7 +612,7 @@ function PatchNotesContent({ report }: { readonly report: UpdatePreflightReport 
 }
 
 function PatchNotes({ report }: { readonly report: UpdatePreflightReport }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const notes = report.patchNotes;
   if (notes === undefined && report.release === undefined) return null;
   return (
@@ -632,7 +632,7 @@ function TechnicalDetails({
   readonly session: UpdateSessionStatus;
   readonly remediation: UpdateRemediationStatusReport;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const visibleSession = sessionForDisplay(session, report);
   return (
     <details className="upd-details">
@@ -677,7 +677,7 @@ function TechnicalDetails({
 }
 
 export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [busy, setBusy] = useState<BusyAction>();
   const [checkFeedback, setCheckFeedback] = useState<string>();

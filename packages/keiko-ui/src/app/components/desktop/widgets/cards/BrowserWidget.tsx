@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import "./BrowserWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import {
   browserApplyScreenshot,

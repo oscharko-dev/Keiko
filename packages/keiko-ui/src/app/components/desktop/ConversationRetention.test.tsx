@@ -11,11 +11,16 @@
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { ChatWindow } from "./ChatWindow";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatWindow, clearKnowledgeCatalogCacheForTests } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ChatMessage } from "@/lib/types";
+
+vi.mock("@/lib/local-knowledge-api", () => ({
+  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+}));
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -99,6 +104,10 @@ function renderWindow(session: ChatSessionApi): void {
     </ChatSessionProvider>,
   );
 }
+
+beforeEach(() => {
+  clearKnowledgeCatalogCacheForTests();
+});
 
 describe("conversation retention and audit-leak regression (#154)", () => {
   it("does not render a credential-shaped string verbatim when session.error carries one", () => {

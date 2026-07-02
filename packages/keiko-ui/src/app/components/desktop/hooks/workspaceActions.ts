@@ -921,14 +921,28 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const initial: ConnectingState = { from: fromId, x: toWX(e.clientX), y: toWY(e.clientY) };
     connectingRef.current = initial;
     setConnecting(initial);
-    const move = (ev: PointerEvent): void => {
+    let latestMove: PointerEvent | null = null;
+    let frame: number | null = null;
+    const flushMove = (): void => {
+      frame = null;
+      const ev = latestMove;
+      if (ev === null) return;
       const next: ConnectingState = { from: fromId, x: toWX(ev.clientX), y: toWY(ev.clientY) };
       connectingRef.current = next;
       setConnecting(next);
     };
+    const move = (ev: PointerEvent): void => {
+      latestMove = ev;
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(flushMove);
+    };
     window.addEventListener("pointermove", move);
     connectCleanupRef.current = (): void => {
       window.removeEventListener("pointermove", move);
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        frame = null;
+      }
     };
   };
 

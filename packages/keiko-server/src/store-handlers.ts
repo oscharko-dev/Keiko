@@ -1029,7 +1029,7 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
       return notFoundResult("Chat not found.");
     }
     const messages = deps.store
-      .listMessages(chatId, limit)
+      .listMessagesPrefix(chatId, limit)
       .filter((message) => !isLegacyEmptyAssistantPlaceholder(message));
     return {
       status: 200,

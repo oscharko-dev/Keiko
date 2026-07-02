@@ -6,6 +6,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../Icons";
+import "./TerminalWidget.module.css";
 
 interface RuntimeHubWidgetProps {
   readonly projectPath?: string | undefined;

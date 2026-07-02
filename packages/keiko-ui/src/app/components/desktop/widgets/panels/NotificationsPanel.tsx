@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import "./NotificationsPanel.module.css";
 
 interface NotificationItem {
   t: string;

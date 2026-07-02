@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import "./IntegrationsWidget.module.css";
 
 interface App {
   readonly name: string;

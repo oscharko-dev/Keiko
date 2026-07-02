@@ -1181,6 +1181,7 @@ describe("fetchProjects", () => {
   afterEach(() => {
     clearProjectRequestForTests();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("reuses the in-flight project list request", async () => {
@@ -1198,7 +1199,9 @@ describe("fetchProjects", () => {
     );
   });
 
-  it("does not cache a resolved project list response", async () => {
+  it("caches a resolved project list briefly and refreshes after the TTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ projects: [{ path: "/repo/a" }] }))
@@ -1206,6 +1209,8 @@ describe("fetchProjects", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/a" }] });
+    await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/a" }] });
+    vi.setSystemTime(1_700_000_002_001);
     await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/b" }] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);

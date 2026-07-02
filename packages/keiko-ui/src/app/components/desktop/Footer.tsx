@@ -3,7 +3,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchHealth } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 import type { TwinMode } from "./hooks/useTwinMode";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
@@ -37,7 +37,7 @@ function FooterImpl({
   onCloseWindowPalette,
   statusRef,
 }: FooterProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
   const [installedVersion, setInstalledVersion] = useState(t("footer.versionLoading"));
   const windowLabel =

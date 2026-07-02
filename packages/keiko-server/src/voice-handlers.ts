@@ -566,6 +566,7 @@ function resolveSpeechTarget(
 // which lowers both the synth-to-first-audio wait and the base64 inflation of the JSON envelope. The
 // MIME stays inside the server ALLOWED_SPEECH_MIME allowlist (audio/ogg).
 const INTERACTIVE_SPEECH_FORMAT = "opus" as const;
+const INTERACTIVE_MAX_SPEECH_AUDIO_BYTES = 1_500_000;
 
 function buildTtsRequest(
   provider: ModelProviderConfig,
@@ -585,6 +586,7 @@ function buildTtsRequest(
     modelId: provider.modelId,
     input: validated.text,
     responseFormat: INTERACTIVE_SPEECH_FORMAT,
+    maxAudioBytes: INTERACTIVE_MAX_SPEECH_AUDIO_BYTES,
     ...(target.voiceId !== undefined ? { voice: target.voiceId } : {}),
     ...(egress !== undefined ? { egress } : {}),
     timeoutMs: provider.timeoutMs,

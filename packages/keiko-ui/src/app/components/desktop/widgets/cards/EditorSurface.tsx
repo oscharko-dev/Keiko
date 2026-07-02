@@ -10,7 +10,7 @@
  * every BFF call and the file/save lifecycle; this surface adds no I/O of its own (Engineering Note:
  * workspace API clients stay in the host, never in the editor tier).
  */
-import { memo, type ReactElement } from "react";
+import { memo, useEffect, useState, type ReactElement } from "react";
 import {
   KeikoCodeEditor,
   type EditorBuffer,
@@ -34,7 +34,11 @@ import {
   type KeikoEditorLoadState,
 } from "@oscharko-dev/keiko-editor";
 
-import { ensureMonacoRuntime } from "./editorMonacoRuntime";
+import {
+  ensureMonacoLanguage,
+  ensureMonacoRuntime,
+  isMonacoLanguageReady,
+} from "./editorMonacoRuntime";
 
 export interface EditorSurfaceProps {
   readonly buffer: EditorBuffer;
@@ -98,8 +102,40 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
   // Idempotent and cheap after the first call; computing it in render means the very first paint
   // already reflects an unsupported runtime instead of flashing an editor that cannot mount.
   const runtime = ensureMonacoRuntime();
+  const languageId = props.fileModel.identity.language;
+  const onRuntimeError = props.onRuntimeError;
+  const [languageReady, setLanguageReady] = useState(() => isMonacoLanguageReady(languageId));
+
+  useEffect(() => {
+    if (!runtime.supported) {
+      setLanguageReady(true);
+      return;
+    }
+    if (isMonacoLanguageReady(languageId)) {
+      setLanguageReady(true);
+      return;
+    }
+    let cancelled = false;
+    setLanguageReady(false);
+    void ensureMonacoLanguage(languageId)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        onRuntimeError?.(`Failed to load Monaco language '${languageId}': ${message}`);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLanguageReady(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [languageId, onRuntimeError, runtime.supported]);
+
   const loadState: KeikoEditorLoadState = runtime.supported
-    ? props.fileLoadState
+    ? languageReady
+      ? props.fileLoadState
+      : { status: "loading" }
     : { status: "error", message: runtime.message };
 
   return (
@@ -118,7 +154,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
       onSelectionChange={props.onSelectionChange}
       onCursorChange={props.onCursorChange}
       revealRequest={props.revealRequest}
-      onRuntimeError={props.onRuntimeError}
+      onRuntimeError={onRuntimeError}
       provideCompletions={props.provideCompletions}
       completionTriggerCharacters={props.completionTriggerCharacters}
       provideInlineCompletions={props.provideInlineCompletions}

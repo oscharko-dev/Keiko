@@ -20,6 +20,8 @@ import type {
   CommandTaskRunResult,
 } from "../../../../../lib/types";
 import KeikoSelect from "../../KeikoSelect";
+import { subscribeSharedEventSource } from "./sharedEventSource";
+import "./TerminalWidget.module.css";
 
 interface CommandsWidgetProps {
   readonly projectPath?: string;
@@ -31,6 +33,12 @@ interface ErrorState {
 }
 
 const MAX_EVENT_LOG = 30;
+const COMMAND_EVENT_SOURCE_TYPES = [
+  "command:run-started",
+  "command:run-completed",
+  "command:run-failed",
+  "command:run-cancelled",
+] as const;
 
 function errorFromUnknown(value: unknown): ErrorState {
   if (value instanceof ApiError) return { code: value.code, message: value.message };
@@ -133,7 +141,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   // Subscribe to the global command event channel. Cancel is only armed for the run that echoes the
   // current requestId, so a foreign run-started on the shared channel can never hijack ownership.
   useEffect(() => {
-    const es = new EventSource(commandEventsUrl());
+    if (!running) return;
     const onMessage = (ev: MessageEvent<string>): void => {
       let parsed: CommandRunnerEvent;
       try {
@@ -153,13 +161,8 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
       }
       setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
     };
-    for (const kind of ["run-started", "run-completed", "run-failed", "run-cancelled"] as const) {
-      es.addEventListener(`command:${kind}`, onMessage as EventListener);
-    }
-    return (): void => {
-      es.close();
-    };
-  }, []);
+    return subscribeSharedEventSource(commandEventsUrl(), COMMAND_EVENT_SOURCE_TYPES, onMessage);
+  }, [running]);
 
   // Return focus to Run when the Cancel button unmounts at run end so keyboard users keep their place.
   useEffect(() => {

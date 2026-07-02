@@ -46,6 +46,15 @@ export const APP_BOOT_RECOVERY_BOOTSTRAP = `try{var k="keiko.app-boot-recovery-r
 export default function RootLayout({ children }: { children: ReactNode }): ReactNode {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <head>
+        <link
+          rel="preload"
+          href="/fonts/jetbrains-mono-latin-wght-normal.woff2"
+          as="font"
+          type="font/woff2"
+          crossOrigin="anonymous"
+        />
+      </head>
       <body>
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
         <script dangerouslySetInnerHTML={{ __html: LOCALE_BOOTSTRAP }} />

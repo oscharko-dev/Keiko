@@ -72,6 +72,7 @@ export type RetrievalNoEvidenceReason =
   | "no-scope"
   | "no-vectors"
   | "incompatible-embedding-identity"
+  | "dense-scan-too-large"
   | "below-min-score"
   | "answer-grounding-rejected"
   | "no-evidence-stated"
@@ -94,6 +95,7 @@ export interface RetrievalDiagnostics {
   readonly denseCandidateCount: number;
   readonly lexicalCandidateCount: number;
   readonly fusedCandidateCount: number;
+  readonly denseIndex: "available" | "guided" | "ann" | "missing" | "skipped-too-large";
   readonly lexicalIndex: "available" | "missing" | "query-error";
   readonly vectorIndex: RetrievalVectorIndexDiagnostics;
 }

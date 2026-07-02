@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `21`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `22`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 21 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 22 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -690,6 +690,8 @@ CREATE TABLE document_text_windows (
 
 const CREATE_DOCUMENT_TEXT_WINDOWS_SPAN_INDEX =
   "CREATE INDEX idx_document_text_windows_span ON document_text_windows(capsule_id, document_id, character_start);";
+const CREATE_PAGES_CAPSULE_DOC_SPAN_INDEX =
+  "CREATE INDEX idx_pages_capsule_doc_span ON pages(capsule_id, document_id, character_start, character_end, page_number, page_label);";
 
 const CREATE_SECTIONS_SECTION_PATH_HASH_INDEX =
   "CREATE UNIQUE INDEX idx_sections_document_section_path_hash ON sections(document_id, section_path_hash) WHERE section_path_hash IS NOT NULL;";
@@ -731,6 +733,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_capsule_set_members_capsule ON capsule_set_members(capsule_id);",
   "CREATE INDEX idx_document_texts_capsule ON document_texts(capsule_id);",
   "CREATE INDEX idx_pages_capsule ON pages(capsule_id);",
+  CREATE_PAGES_CAPSULE_DOC_SPAN_INDEX,
   "CREATE INDEX idx_sections_capsule ON sections(capsule_id);",
   CREATE_SECTIONS_SECTION_PATH_HASH_INDEX,
   "CREATE INDEX idx_documents_capsule_source ON documents(capsule_id, source_id, status);",
@@ -1119,6 +1122,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
       "Persist optional runtime vector-index state so sqlite-vec dense search can be invalidated by reindex/delete flows and diagnosed independently from the vectors table.",
     up: [CREATE_VECTOR_INDEX_STATE, CREATE_VECTOR_INDEX_STATE_STATUS_INDEX],
   },
+  {
+    version: 22,
+    reason:
+      "Add a covering page-span index for citation page hops during scoped vector retrieval.",
+    up: [CREATE_PAGES_CAPSULE_DOC_SPAN_INDEX],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -1162,6 +1171,7 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_capsule_set_members_capsule",
   "idx_document_texts_capsule",
   "idx_pages_capsule",
+  "idx_pages_capsule_doc_span",
   "idx_sections_capsule",
   "idx_sections_document_section_path_hash",
   "idx_documents_capsule_source",

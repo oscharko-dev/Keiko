@@ -186,6 +186,34 @@ describe("FilesWidget", () => {
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
   });
 
+  it("progressively reveals large folders instead of rendering every row at once", async () => {
+    const entries = Array.from({ length: 250 }, (_, index) => ({
+      ...treeEntryBase,
+      name: `file-${String(index).padStart(3, "0")}.ts`,
+      path: `file-${String(index).padStart(3, "0")}.ts`,
+      kind: "file" as const,
+      extension: "ts",
+    }));
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries,
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByRole("treeitem", { name: /file-000\.ts/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("treeitem")).toHaveLength(200);
+    expect(screen.queryByRole("treeitem", { name: /file-249\.ts/i })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show 50 more entries" }));
+
+    expect(screen.getAllByRole("treeitem")).toHaveLength(250);
+    expect(screen.getByRole("treeitem", { name: /file-249\.ts/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /show more entries/i })).toBeNull();
+  });
+
   it("shows Git status badges and opens a bounded diff view", async () => {
     vi.mocked(fetchGitStatus).mockResolvedValue({
       schemaVersion: "1",

@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist";
+import "./PdfCitationPreviewWindow.module.css";
 import {
   ApiError,
   fetchPdfCitationPreviewDocument,
@@ -42,6 +43,9 @@ import {
 const MAX_SCALE = 2;
 const MIN_SCALE = 0.5;
 const PAGE_FRAME_PX = 32;
+const PAGE_OUTER_CHROME_PX = 64;
+const PAGE_SCROLL_GAP_PX = 18;
+const PAGE_WINDOW_RADIUS = 3;
 const RENDER_RADIUS = 1;
 const SLOW_LOAD_MS = 900;
 const ZOOM_STEP = 0.1;
@@ -518,13 +522,17 @@ export function PdfCitationPreviewWindow({
   readonly updateCfg: (patch: AppWindow["cfg"]) => void;
   readonly windowId: string;
 }): ReactNode {
+  const subscribeWindowRegistry = useCallback(
+    (listener: () => void) => subscribePdfCitationPreviewRegistry(windowId, listener),
+    [windowId],
+  );
   const sessionEntry = useSyncExternalStore(
-    subscribePdfCitationPreviewRegistry,
+    subscribeWindowRegistry,
     () => getPdfCitationPreviewSession(windowId),
     () => getPdfCitationPreviewSession(windowId),
   );
   const backToChatReason = useSyncExternalStore(
-    subscribePdfCitationPreviewRegistry,
+    subscribeWindowRegistry,
     () => getPdfCitationPreviewBackToChatAvailability(windowId).reason ?? "",
     () => getPdfCitationPreviewBackToChatAvailability(windowId).reason ?? "",
   );
@@ -632,6 +640,56 @@ export function PdfCitationPreviewWindow({
     }
     return zoomValue;
   }, [containerSize.height, containerSize.width, currentPageSize, rotation, zoomMode, zoomValue]);
+
+  const estimatedPageOuterHeight = useCallback(
+    (pageNumber: number): number => {
+      const pageSize = rotatedSize(
+        measuredSizes[pageNumber] ?? defaultPageSize ?? { width: 612, height: 792 },
+        rotation,
+      );
+      return (
+        Math.max(220, Math.round(pageSize.height * effectiveScale)) +
+        PAGE_OUTER_CHROME_PX +
+        PAGE_SCROLL_GAP_PX
+      );
+    },
+    [defaultPageSize, effectiveScale, measuredSizes, rotation],
+  );
+
+  const estimatedPageOffset = useCallback(
+    (pageNumber: number): number => {
+      let offset = 0;
+      for (let page = 1; page < pageNumber; page += 1) {
+        offset += estimatedPageOuterHeight(page);
+      }
+      return offset;
+    },
+    [estimatedPageOuterHeight],
+  );
+
+  const pageAtScrollOffset = useCallback(
+    (offset: number): number => {
+      let cursor = 0;
+      for (let page = 1; page <= numPages; page += 1) {
+        cursor += estimatedPageOuterHeight(page);
+        if (offset <= cursor) return page;
+      }
+      return numPages;
+    },
+    [estimatedPageOuterHeight, numPages],
+  );
+
+  const scrollToPageNumber = useCallback(
+    (pageNumber: number): void => {
+      const element = pageRefs.current.get(pageNumber);
+      if (element !== undefined) {
+        element.scrollIntoView({ block: "start" });
+        return;
+      }
+      scrollRef.current?.scrollTo({ top: estimatedPageOffset(pageNumber) });
+    },
+    [estimatedPageOffset],
+  );
 
   const reopenPreview = useCallback(
     async (fallbackFailure?: PreviewFailure): Promise<boolean> => {
@@ -822,16 +880,16 @@ export function PdfCitationPreviewWindow({
     if (doc === null || numPages === 0 || didInitialScrollRef.current) return;
     didInitialScrollRef.current = true;
     requestAnimationFrame(() => {
-      pageRefs.current.get(currentPage)?.scrollIntoView({ block: "start" });
+      scrollToPageNumber(currentPage);
     });
-  }, [currentPage, doc, numPages]);
+  }, [currentPage, doc, numPages, scrollToPageNumber]);
 
   useEffect(() => {
     if (doc === null || numPages === 0) return;
     requestAnimationFrame(() => {
-      pageRefs.current.get(currentPageRef.current)?.scrollIntoView({ block: "start" });
+      scrollToPageNumber(currentPageRef.current);
     });
-  }, [doc, effectiveScale, numPages, rotation]);
+  }, [doc, effectiveScale, numPages, rotation, scrollToPageNumber]);
 
   useEffect(() => {
     const scroller = scrollRef.current;
@@ -840,18 +898,7 @@ export function PdfCitationPreviewWindow({
     let frame = 0;
     const syncPage = (): void => {
       frame = 0;
-      const rootRect = scroller.getBoundingClientRect();
-      let bestPage = currentPage;
-      let bestDistance = Number.POSITIVE_INFINITY;
-
-      for (const [page, element] of pageRefs.current) {
-        const rect = element.getBoundingClientRect();
-        const distance = Math.abs(rect.top - rootRect.top - rootRect.height * 0.2);
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          bestPage = page;
-        }
-      }
+      const bestPage = pageAtScrollOffset(scroller.scrollTop + scroller.clientHeight * 0.2);
 
       if (bestPage !== currentPage) {
         updateCfg({ currentPage: bestPage });
@@ -870,12 +917,19 @@ export function PdfCitationPreviewWindow({
         window.cancelAnimationFrame(frame);
       }
     };
-  }, [currentPage, numPages, updateCfg]);
+  }, [currentPage, numPages, pageAtScrollOffset, updateCfg]);
 
-  const pageNumbers = useMemo(
-    () => Array.from({ length: numPages }, (_, index) => index + 1),
-    [numPages],
-  );
+  const pageWindow = useMemo(() => {
+    const start = Math.max(1, currentPage - PAGE_WINDOW_RADIUS);
+    const end = Math.min(numPages, currentPage + PAGE_WINDOW_RADIUS);
+    const pages = Array.from({ length: Math.max(0, end - start + 1) }, (_, index) => start + index);
+    return {
+      pages,
+      topSpacerHeight: estimatedPageOffset(start),
+      bottomSpacerHeight:
+        numPages === 0 ? 0 : estimatedPageOffset(numPages + 1) - estimatedPageOffset(end + 1),
+    };
+  }, [currentPage, estimatedPageOffset, numPages]);
   const showToolbar = doc !== null && failure === null;
   const failureActionLabel =
     failure?.action === "reopen"
@@ -883,11 +937,24 @@ export function PdfCitationPreviewWindow({
       : failure?.action === "retry"
         ? "Retry preview"
         : "";
+  const handlePageRenderError = useCallback((page: number, error: unknown): void => {
+    setPageRenderFailures((previous) => ({
+      ...previous,
+      [page]: previewFailure(error),
+    }));
+  }, []);
+  const handlePageMeasured = useCallback((page: number, size: PageSize): void => {
+    setMeasuredSizes((previous) =>
+      previous[page]?.width === size.width && previous[page]?.height === size.height
+        ? previous
+        : { ...previous, [page]: size },
+    );
+  }, []);
 
   const goToPage = (page: number): void => {
     const next = clampPage(page, numPages);
     updateCfg({ currentPage: next });
-    pageRefs.current.get(next)?.scrollIntoView({ block: "start" });
+    requestAnimationFrame(() => scrollToPageNumber(next));
   };
 
   const activateContextCitation = (stableId: string): void => {
@@ -913,11 +980,7 @@ export function PdfCitationPreviewWindow({
     });
     if (nextCitation.display.pageNumber !== undefined) {
       requestAnimationFrame(() => {
-        pageRefs.current
-          .get(nextCitation.display.pageNumber ?? currentPageRef.current)
-          ?.scrollIntoView({
-            block: "start",
-          });
+        scrollToPageNumber(nextCitation.display.pageNumber ?? currentPageRef.current);
       });
     }
   };
@@ -1050,8 +1113,8 @@ export function PdfCitationPreviewWindow({
                 pattern="[0-9]*"
                 value={pageInput}
                 onChange={(event) => setPageInput(event.target.value)}
-                onBlur={() => {
-                  const parsed = Number.parseInt(pageInput, 10);
+                onBlur={(event) => {
+                  const parsed = Number.parseInt(event.currentTarget.value, 10);
                   if (Number.isInteger(parsed)) {
                     goToPage(parsed);
                     return;
@@ -1061,7 +1124,7 @@ export function PdfCitationPreviewWindow({
                 onKeyDown={(event) => {
                   if (event.key !== "Enter") return;
                   event.preventDefault();
-                  const parsed = Number.parseInt(pageInput, 10);
+                  const parsed = Number.parseInt(event.currentTarget.value, 10);
                   if (Number.isInteger(parsed)) {
                     goToPage(parsed);
                     return;
@@ -1192,7 +1255,14 @@ export function PdfCitationPreviewWindow({
           role="region"
           aria-label={`${display.documentLabel} PDF preview`}
         >
-          {pageNumbers.map((pageNumber) => {
+          {pageWindow.topSpacerHeight > 0 ? (
+            <div
+              className="pdfv-page-spacer"
+              style={{ height: `${String(pageWindow.topSpacerHeight)}px` }}
+              aria-hidden="true"
+            />
+          ) : null}
+          {pageWindow.pages.map((pageNumber) => {
             const pageSize = rotatedSize(
               measuredSizes[pageNumber] ?? defaultPageSize ?? { width: 612, height: 792 },
               rotation,
@@ -1247,20 +1317,8 @@ export function PdfCitationPreviewWindow({
                   ) : shouldRender ? (
                     <PdfCanvasPage
                       active
-                      onError={(page, error) =>
-                        setPageRenderFailures((previous) => ({
-                          ...previous,
-                          [page]: previewFailure(error),
-                        }))
-                      }
-                      onMeasured={(page, size) => {
-                        setMeasuredSizes((previous) =>
-                          previous[page]?.width === size.width &&
-                          previous[page]?.height === size.height
-                            ? previous
-                            : { ...previous, [page]: size },
-                        );
-                      }}
+                      onError={handlePageRenderError}
+                      onMeasured={handlePageMeasured}
                       pageNumber={pageNumber}
                       pdf={doc}
                       rotation={rotation}
@@ -1273,6 +1331,13 @@ export function PdfCitationPreviewWindow({
               </section>
             );
           })}
+          {pageWindow.bottomSpacerHeight > 0 ? (
+            <div
+              className="pdfv-page-spacer"
+              style={{ height: `${String(pageWindow.bottomSpacerHeight)}px` }}
+              aria-hidden="true"
+            />
+          ) : null}
         </div>
       )}
     </div>

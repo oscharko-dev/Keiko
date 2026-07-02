@@ -1,0 +1,27 @@
+:global(.mob) {
+  text-align: center;
+}
+
+:global(.mob-qr) {
+  width: 130px;
+  height: 130px;
+  margin: 8px auto 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  position: relative;
+}
+
+:global(.mob-title) {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+:global(.mob-sub) {
+  font-size: 12px;
+  color: var(--fg-muted); /* --fg-faint 2.3-3.1:1, AA fail (uiux-fix F012) */
+  margin-top: 4px;
+  line-height: 1.4;
+}

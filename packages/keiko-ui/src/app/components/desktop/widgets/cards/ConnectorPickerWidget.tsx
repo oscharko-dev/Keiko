@@ -13,6 +13,7 @@
 // Color contrast follows the design system tokens (ink on surface — all ≥4.5:1).
 
 import { useEffect, useState, type ReactNode } from "react";
+import "./ConnectorPickerWidget.module.css";
 import {
   fetchCapsules,
   fetchCapsuleSets,

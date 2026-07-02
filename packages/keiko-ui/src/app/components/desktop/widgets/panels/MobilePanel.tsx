@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
+import "./MobilePanel.module.css";
 
 export function MobilePanel(): ReactNode {
   return (

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { deleteMemory, forgetMemory } from "@/lib/memory-api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 
 const FOCUSABLE_SELECTOR =
@@ -33,7 +33,7 @@ export function ForgetConfirmDialog({
   forgetMemoryImpl = forgetMemory,
   deleteMemoryImpl = deleteMemory,
 }: ForgetConfirmDialogProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

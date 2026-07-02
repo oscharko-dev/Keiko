@@ -88,6 +88,7 @@ const PREVIEW = {
 describe("PdfCitationPreviewWindow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pdfDocument.numPages = 3;
     page.getViewport.mockImplementation(({ scale }: { scale: number }) => ({
       width: 612 * scale,
       height: 792 * scale,
@@ -408,6 +409,38 @@ describe("PdfCitationPreviewWindow", () => {
     expect(await screen.findByText("Near cited passage")).toBeInTheDocument();
   });
 
+  it("windows mounted page sections for large PDF previews", async () => {
+    pdfDocument.numPages = 50;
+    const largePreview = {
+      ...PREVIEW,
+      display: {
+        ...PREVIEW.display,
+        pageNumber: 25,
+        pageLabel: "Page 25",
+      },
+    };
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, largePreview);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+
+    const { container } = render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    expect(await screen.findByText("Page 25")).toBeInTheDocument();
+    expect(container.querySelectorAll(".pdfv-page")).toHaveLength(7);
+    expect(screen.queryByText("Page 1")).not.toBeInTheDocument();
+    expect(screen.getByText("Page 22")).toBeInTheDocument();
+    expect(screen.getByText("Page 28")).toBeInTheDocument();
+  });
+
   it("uses the range URL path above the server no-range cap", async () => {
     const aboveNoRangeCapPreview = {
       ...PREVIEW,
@@ -622,8 +655,10 @@ describe("PdfCitationPreviewWindow", () => {
     expect(updateCfg).toHaveBeenCalledWith({ rotation: 90 });
 
     const pageInput = screen.getByDisplayValue("2");
-    await userEvent.clear(pageInput);
-    await userEvent.type(pageInput, "1{enter}");
+    await act(async () => {
+      fireEvent.change(pageInput, { target: { value: "1" } });
+      fireEvent.keyDown(pageInput, { key: "Enter", code: "Enter" });
+    });
     expect(updateCfg).toHaveBeenCalledWith({ currentPage: 1 });
 
     expect(await axe(container)).toHaveNoViolations();
