@@ -305,12 +305,13 @@ describe("detectRuntimeCapabilities", () => {
 
   it("classifies PATH probing edge cases without executing workspace binaries", async () => {
     const bin = await makeTempDir("keiko-runtime-path-");
-    const cachedTool = await makeExecutable(bin, "cached-tool");
+    const cachedTool = await makeExecutable(bin, "cached-tool.CMD");
     const deniedTool = join(bin, "denied-tool");
     await writeFile(deniedTool, "#!/bin/sh\nexit 0\n", "utf8");
     await chmod(deniedTool, 0o644);
 
     const probe = new PathHostExecutableProbe({ PATH: bin }, "linux");
+    const cacheProbe = new PathHostExecutableProbe({ PATH: bin, PATHEXT: ".CMD" }, "win32");
 
     expect(probe.probe("", undefined)).toEqual({
       state: "policy-blocked",
@@ -324,10 +325,10 @@ describe("detectRuntimeCapabilities", () => {
       state: "permission-denied",
       unavailableReason: "executable-not-runnable",
     });
-    expect(probe.probe("cached-tool", undefined)).toEqual({ state: "available" });
+    expect(cacheProbe.probe("cached-tool", undefined)).toEqual({ state: "available" });
 
     await chmod(cachedTool, 0o644);
-    expect(probe.probe("cached-tool", undefined)).toEqual({ state: "available" });
+    expect(cacheProbe.probe("cached-tool", undefined)).toEqual({ state: "available" });
   });
 
   it("honors Windows executable extensions from PATHEXT", async () => {
