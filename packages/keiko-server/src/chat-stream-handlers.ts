@@ -8,7 +8,7 @@
 // is scrubbed before it ever reaches the wire. Guardrail/validation/model errors are returned as a
 // JSON RouteResult BEFORE any SSE header so the client can fall back to the buffered route.
 
-import { SSE_HEADERS } from "./sse.js";
+import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
 import { writeOrDestroy } from "./sse-write.js";
 import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -164,7 +164,7 @@ async function streamAndPersist(
   const memory = await resolveMemory(deps, request, memoryContext);
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage, mirroring the buffered
   // path's lifecycle moment so the compaction-evidence runId is identical across both paths.
-  const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
+  const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
   const startedAt = Date.now();
   const userMessage = createUserMessage(deps, request);
   const assembly = buildGatewayAssembly(deps, request, memory, modelId);
@@ -211,6 +211,7 @@ export async function handleSendDesktopChatStream(
   const callStream = model.callStream.bind(model);
   const controller = abortOnDisconnect(ctx);
   ctx.res.writeHead(200, SSE_HEADERS);
+  const stopHeartbeat = startSseHeartbeat(ctx.res);
   try {
     await streamAndPersist(ctx, deps, prepared, callStream, controller);
   } catch (error) {
@@ -220,6 +221,7 @@ export async function handleSendDesktopChatStream(
       ctx.res.write(sseMessage("error", errorEvent(error, deps)));
     }
   } finally {
+    stopHeartbeat();
     ctx.res.end();
   }
   return STREAMING;

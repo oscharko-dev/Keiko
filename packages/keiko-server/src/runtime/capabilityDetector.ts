@@ -22,6 +22,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 export const DEFAULT_RUNTIME_CAPABILITY_DEADLINE_MS = 250 as const;
 const PACKAGE_READ_BYTES = 262_144;
+const HOST_EXECUTABLE_PROBE_CACHE_TTL_MS = 60_000;
 
 type CapabilityWithoutState = Omit<RuntimeCapability, "state" | "unavailableReason">;
 
@@ -256,6 +257,11 @@ function unavailableProbeResult(
 }
 
 export class PathHostExecutableProbe implements HostExecutableProbe {
+  private static readonly resultCache = new Map<
+    string,
+    { readonly expiresAt: number; readonly result: HostExecutableProbeResult }
+  >();
+
   private readonly env: NodeJS.ProcessEnv;
   private readonly platform: NodeJS.Platform;
 
@@ -267,26 +273,47 @@ export class PathHostExecutableProbe implements HostExecutableProbe {
     this.platform = platform;
   }
 
+  // eslint-disable-next-line complexity
   public probe(executable: string, workspaceRoot: string | undefined): HostExecutableProbeResult {
     if (hasUnsafeExecutableName(executable)) {
       return { state: "policy-blocked", unavailableReason: "policy-blocked" };
+    }
+    const cacheKey = [
+      this.platform,
+      this.env.PATH ?? "",
+      this.env.PATHEXT ?? "",
+      workspaceRoot ?? "",
+      executable,
+    ].join("\0");
+    const now = Date.now();
+    const cached = PathHostExecutableProbe.resultCache.get(cacheKey);
+    if (cached !== undefined && cached.expiresAt > now) {
+      return cached.result;
     }
     const pathValue = this.env.PATH ?? "";
     const extensions = executableExtensions(this.platform, this.env.PATHEXT);
     let sawPermissionDenied = false;
     let sawUnsafePath = false;
+    let result: HostExecutableProbeResult | undefined;
     for (const dir of pathValue.split(delimiter).filter(Boolean)) {
       for (const ext of extensions) {
         const candidate = resolve(resolve(dir), executable + ext);
         const outcome = candidateProbeOutcome(candidate, workspaceRoot, this.platform);
         if (outcome.found) {
-          return { state: "available" };
+          result = { state: "available" };
+          break;
         }
         sawUnsafePath ||= outcome.unsafePath;
         sawPermissionDenied ||= outcome.permissionDenied;
       }
+      if (result !== undefined) break;
     }
-    return unavailableProbeResult(sawUnsafePath, sawPermissionDenied);
+    result ??= unavailableProbeResult(sawUnsafePath, sawPermissionDenied);
+    PathHostExecutableProbe.resultCache.set(cacheKey, {
+      expiresAt: now + HOST_EXECUTABLE_PROBE_CACHE_TTL_MS,
+      result,
+    });
+    return result;
   }
 }
 

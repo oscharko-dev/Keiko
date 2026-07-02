@@ -15,7 +15,7 @@ import {
   type StartMemoryConsolidationInput,
 } from "@/lib/memory-api";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -315,7 +315,7 @@ export function MemoryConsolidation({
   onBack,
   onOpenDetail,
 }: MemoryConsolidationProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [settings, setSettings] = useState<StartMemoryConsolidationInput>(DEFAULT_SETTINGS);
   const [jobRecord, setJobRecord] = useState<MemoryConsolidationJobEnvelope | null>(null);
   const [submitting, setSubmitting] = useState(false);

@@ -1460,25 +1460,45 @@ export function EditorWidget({
   const openQuickOpen = useCallback((): void => setPaletteState({ mode: "files" }), []);
   const openCommandPalette = useCallback((): void => setPaletteState({ mode: "commands" }), []);
 
-  // Content-free host snapshot consumed by the palette + keybinding layer. Rebuilt each render and
-  // mirrored into a ref so the document-level keydown listener always dispatches against current state.
-  const commandHost: EditorPaletteHost = {
-    root: workspaceRoot,
-    activePaneId: layout.activePaneId,
-    paneCount: editorLayoutPaneIds(layout).length,
-    activeFile: activeFile.length > 0 ? activeFile : null,
-    closedTabCount: closedTabsRef.current.length,
-    dirtyCount: dirtyFileList.length,
-    openQuickOpen,
-    openCommandPalette,
-    splitActive: splitActivePane,
-    closeActiveSplit: closeActivePane,
-    closeActiveTab,
-    nextTab: () => cycleActiveTab(1),
-    prevTab: () => cycleActiveTab(-1),
-    reopenClosed: reopenClosedTab,
-    saveAll: saveAllDirty,
-  };
+  const nextTab = useCallback((): void => cycleActiveTab(1), [cycleActiveTab]);
+  const prevTab = useCallback((): void => cycleActiveTab(-1), [cycleActiveTab]);
+
+  // Content-free host snapshot consumed by the palette + keybinding layer. Memoized so the command
+  // palette does not receive a new object on unrelated editor chrome renders.
+  const commandHost: EditorPaletteHost = useMemo(
+    () => ({
+      root: workspaceRoot,
+      activePaneId: layout.activePaneId,
+      paneCount: editorLayoutPaneIds(layout).length,
+      activeFile: activeFile.length > 0 ? activeFile : null,
+      closedTabCount: closedTabsRef.current.length,
+      dirtyCount: dirtyFileList.length,
+      openQuickOpen,
+      openCommandPalette,
+      splitActive: splitActivePane,
+      closeActiveSplit: closeActivePane,
+      closeActiveTab,
+      nextTab,
+      prevTab,
+      reopenClosed: reopenClosedTab,
+      saveAll: saveAllDirty,
+    }),
+    [
+      activeFile,
+      closeActivePane,
+      closeActiveTab,
+      dirtyFileList.length,
+      layout,
+      nextTab,
+      openCommandPalette,
+      openQuickOpen,
+      prevTab,
+      reopenClosedTab,
+      saveAllDirty,
+      splitActivePane,
+      workspaceRoot,
+    ],
+  );
   const commandHostRef = useRef(commandHost);
   commandHostRef.current = commandHost;
 

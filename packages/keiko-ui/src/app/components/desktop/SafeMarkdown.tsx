@@ -11,7 +11,14 @@
  * - Links always carry rel="noopener noreferrer" target="_blank".
  */
 
-import { Component, useCallback, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  Component,
+  useCallback,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 import {
   highlightLines,
@@ -536,8 +543,11 @@ export function SafeMarkdown({
   openRepositoryReference,
   citationPreview,
 }: SafeMarkdownProps): ReactNode {
-  const tree = parseSafeMarkdown(source);
-  const options: RenderOptions = { citationPreview, repositoryRoots, openRepositoryReference };
+  const tree = useMemo(() => parseSafeMarkdown(source), [source]);
+  const options = useMemo<RenderOptions>(
+    () => ({ citationPreview, repositoryRoots, openRepositoryReference }),
+    [citationPreview, openRepositoryReference, repositoryRoots],
+  );
   return (
     <div className="sm-root">{tree.map((node, i) => renderNode(node, String(i), options))}</div>
   );

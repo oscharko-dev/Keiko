@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
@@ -20,7 +21,6 @@ import {
   isTextEntryTarget,
   workspaceInteractionLocked,
 } from "./interactionGuards";
-import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { WIN_TYPES } from "./windows/WindowsRegistry";
@@ -53,6 +53,14 @@ import {
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
 import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
+
+const WorkspaceShader = dynamic(
+  () => import("./WorkspaceShader").then((mod) => mod.WorkspaceShader),
+  {
+    ssr: false,
+    loading: () => null,
+  },
+);
 
 interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
@@ -271,8 +279,16 @@ function useLinkRevision(wins: readonly AppWindow[] | null, conns: readonly Conn
     readonly keys: string;
     readonly cfgs: readonly object[];
   } | null>(null);
-  const keys = wins === null ? "" : wins.map((w) => `${w.id}:${w.type}`).join("|");
-  const cfgs = wins === null ? EMPTY_CFGS : wins.map((w) => w.cfg);
+  const { keys, cfgs } = useMemo(
+    () =>
+      wins === null
+        ? { keys: "", cfgs: EMPTY_CFGS }
+        : {
+            keys: wins.map((w) => `${w.id}:${w.type}`).join("|"),
+            cfgs: wins.map((w) => w.cfg),
+          },
+    [wins],
+  );
   const prev = prevRef.current;
   const changed =
     prev === null ||
@@ -335,12 +351,21 @@ export function Workspace({
     connecting !== null && visibleWins !== null
       ? (visibleWins.find((w) => w.id === connecting.from) ?? null)
       : null;
-
-  const connStateFor = (w: AppWindow): ConnState => {
-    if (connFrom === null) return null;
-    if (w.id === connFrom.id) return "source";
-    return canConnect(connFrom.type, w.type) ? "valid" : "invalid";
-  };
+  const connStateById = useMemo(() => {
+    const stateById = new Map<string, ConnState>();
+    if (connFrom === null || visibleWins === null) return stateById;
+    for (const win of visibleWins) {
+      stateById.set(
+        win.id,
+        win.id === connFrom.id
+          ? "source"
+          : canConnect(connFrom.type, win.type)
+            ? "valid"
+            : "invalid",
+      );
+    }
+    return stateById;
+  }, [connFrom, visibleWins]);
 
   const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;
@@ -797,7 +822,7 @@ export function Workspace({
                 key={w.id}
                 win={w}
                 top={top !== null && w.id === top.id}
-                connState={connStateFor(w)}
+                connState={connStateById.get(w.id) ?? null}
                 api={api}
                 wsRef={wsRef}
                 linkRevision={linkRevision}

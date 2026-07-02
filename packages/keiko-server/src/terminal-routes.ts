@@ -13,7 +13,7 @@ import {
   type TerminalExecutionManager,
 } from "./terminal.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { SSE_HEADERS, readyMessage } from "./sse.js";
+import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import {
   errorBody,
   STREAMING,
@@ -235,6 +235,7 @@ function openTerminalSseStream(
   redactor: UiHandlerDeps["redactor"],
 ): void {
   res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
   let seq = 0;
   const unsubscribe = manager.subscribe((event) => {
     seq += 1;

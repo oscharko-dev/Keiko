@@ -792,13 +792,30 @@ async function retrieveAllSources(
   return { retrieved: sources, skipped, firstError };
 }
 
-function mergedCitations(
+interface SourceCitationBundle {
+  readonly source: RetrievedSource;
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly labeledCitations: readonly GroundedEvidenceCitation[];
+}
+
+function sourceCitationBundles(
   sources: readonly RetrievedSource[],
   redactor: Redactor,
+): readonly SourceCitationBundle[] {
+  return sources.map((source) => {
+    const citations = buildCitations(source.pack, redactor);
+    return {
+      source,
+      citations,
+      labeledCitations: citations.map((citation) => ({ ...citation, source: source.label })),
+    };
+  });
+}
+
+function mergedCitations(
+  bundles: readonly SourceCitationBundle[],
 ): readonly GroundedEvidenceCitation[] {
-  const citations = sources.flatMap((src) =>
-    buildCitations(src.pack, redactor).map((c) => ({ ...c, source: src.label })),
-  );
+  const citations = bundles.flatMap((bundle) => bundle.labeledCitations);
   return [...citations].sort((a, b) => b.score - a.score);
 }
 
@@ -827,14 +844,14 @@ function mergedUncertainty(
 // answer surfaces as its primary evidenceRunId, plus the full set for audit discovery.
 function persistPerSourceEvidence(
   ctx: MultiSourceAskInput,
-  sources: readonly RetrievedSource[],
+  bundles: readonly SourceCitationBundle[],
 ): {
   readonly firstRunId: string | undefined;
   readonly runIds: readonly string[];
 } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
-  for (const src of sources) {
+  for (const { source: src, citations } of bundles) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
     const runId = `grounded-${randomUUID()}`;
@@ -846,7 +863,7 @@ function persistPerSourceEvidence(
         chatId: ctx.chat.id,
         plan: src.plan,
         pack: src.pack,
-        citationCount: buildCitations(src.pack, ctx.deps.redactor).length,
+        citationCount: citations.length,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
@@ -873,17 +890,18 @@ function assembleMultiSourceAnswer(
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
-  const citations = mergedCitations(sources, redactor);
-  const summaries = sources.map((src) =>
+  const citationBundles = sourceCitationBundles(sources, redactor);
+  const citations = mergedCitations(citationBundles);
+  const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
       src.pack,
-      buildCitations(src.pack, redactor).length,
+      sourceCitations.length,
       src.elapsedMs,
       groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
     ),
   );
   const mergedSummary = mergeContextPackSummaries(summaries);
-  const { firstRunId, runIds } = persistPerSourceEvidence(ctx, sources);
+  const { firstRunId, runIds } = persistPerSourceEvidence(ctx, citationBundles);
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,

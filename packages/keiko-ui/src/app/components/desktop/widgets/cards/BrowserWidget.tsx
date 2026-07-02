@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import styles from "./BrowserWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import {
   browserApplyScreenshot,
@@ -291,7 +292,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
               : "";
 
   return (
-    <div className="browser">
+    <div className={`browser ${styles.lazyWidgetScope}`}>
       <div className="bw-bar">
         <span
           className="bw-dot"

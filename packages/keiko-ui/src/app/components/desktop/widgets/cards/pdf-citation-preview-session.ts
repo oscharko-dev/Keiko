@@ -102,11 +102,19 @@ const pendingBackNavigationByChatWindowId = new Map<
   PdfCitationPreviewBackNavigationRequest
 >();
 const highlightTimersByElement = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-const registryListeners = new Set<() => void>();
+const registryListenersByWindowId = new Map<string, Set<() => void>>();
 
-function emitRegistryChange(): void {
-  for (const listener of registryListeners) {
+function emitRegistryChange(windowId: string): void {
+  for (const listener of registryListenersByWindowId.get(windowId) ?? []) {
     listener();
+  }
+}
+
+function emitRegistryChangeForChatWindow(chatWindowId: string): void {
+  for (const [windowId, entry] of previewSessionsByWindowId) {
+    if (entry.context?.origin?.chatWindowId === chatWindowId) {
+      emitRegistryChange(windowId);
+    }
   }
 }
 
@@ -365,7 +373,7 @@ function consumePendingBackNavigation(chatWindowId: string): void {
 
 function removeRenderedChatWindow(windowId: string): void {
   if (!renderedChatWindowsById.delete(windowId)) return;
-  emitRegistryChange();
+  emitRegistryChangeForChatWindow(windowId);
 }
 
 function workspaceChatWindowForOrigin(
@@ -428,7 +436,7 @@ export function openPdfCitationPreviewWindow(
       display: preview.display,
       session: preview.session,
     });
-    emitRegistryChange();
+    emitRegistryChange(windowId);
   }
   return windowId;
 }
@@ -446,7 +454,7 @@ export function replacePdfCitationPreviewWindowSession(
     display: preview.display,
     session: preview.session,
   });
-  emitRegistryChange();
+  emitRegistryChange(windowId);
   return baseSafeWindowCfg(preview.display, options?.currentPage, options?.context);
 }
 
@@ -455,7 +463,7 @@ export function replacePdfCitationPreviewWindowFailure(
   preview: Extract<PdfCitationPreviewOpenResponse, { readonly outcome: "rejected" }>,
 ): PdfCitationPreviewSafeWindowCfg {
   previewSessionsByWindowId.delete(windowId);
-  emitRegistryChange();
+  emitRegistryChange(windowId);
   return failureSafeWindowCfg(preview);
 }
 
@@ -465,10 +473,22 @@ export function getPdfCitationPreviewSession(
   return previewSessionsByWindowId.get(windowId);
 }
 
-export function subscribePdfCitationPreviewRegistry(listener: () => void): () => void {
-  registryListeners.add(listener);
+export function subscribePdfCitationPreviewRegistry(
+  windowId: string,
+  listener: () => void,
+): () => void {
+  let listeners = registryListenersByWindowId.get(windowId);
+  if (listeners === undefined) {
+    listeners = new Set();
+    registryListenersByWindowId.set(windowId, listeners);
+  }
+  listeners.add(listener);
   return () => {
-    registryListeners.delete(listener);
+    const current = registryListenersByWindowId.get(windowId);
+    current?.delete(listener);
+    if (current?.size === 0) {
+      registryListenersByWindowId.delete(windowId);
+    }
   };
 }
 
@@ -500,7 +520,7 @@ export function activatePdfCitationPreviewContext(
       activeStableId: stableId,
     },
   });
-  emitRegistryChange();
+  emitRegistryChange(windowId);
   return nextCitation;
 }
 
@@ -552,7 +572,7 @@ export function registerPdfCitationPreviewMessageTarget(args: {
       });
     }
   }
-  emitRegistryChange();
+  emitRegistryChangeForChatWindow(args.chatWindowId);
   consumePendingBackNavigation(args.chatWindowId);
 
   return () => {
@@ -563,7 +583,7 @@ export function registerPdfCitationPreviewMessageTarget(args: {
       removeRenderedChatWindow(args.chatWindowId);
       return;
     }
-    emitRegistryChange();
+    emitRegistryChangeForChatWindow(args.chatWindowId);
   };
 }
 
@@ -593,14 +613,15 @@ export function showPdfCitationPreviewFailure(
 }
 
 export function syncPdfCitationPreviewWindowRegistry(wins: readonly AppWindow[] | null): void {
-  let changed = false;
+  const changedPreviewWindowIds = new Set<string>();
+  const changedChatWindowIds = new Set<string>();
   const activeWindowIds = new Set(
     (wins ?? []).filter((win) => win.type === "pdfCitationPreview").map((win) => win.id),
   );
   for (const [windowId, entry] of previewSessionsByWindowId) {
     if (activeWindowIds.has(windowId)) continue;
     previewSessionsByWindowId.delete(windowId);
-    changed = true;
+    changedPreviewWindowIds.add(windowId);
     closePreviewSessionWhenOrphaned(entry.session.handle, entry.session.expiresAt);
   }
   const nextWorkspaceChatWindows = new Map<string, PdfCitationPreviewWorkspaceChatWindow>();
@@ -615,16 +636,19 @@ export function syncPdfCitationPreviewWindowRegistry(wins: readonly AppWindow[] 
     workspaceChatWindowsById.delete(windowId);
     renderedChatWindowsById.delete(windowId);
     pendingBackNavigationByChatWindowId.delete(windowId);
-    changed = true;
+    changedChatWindowIds.add(windowId);
   }
   for (const [windowId, entry] of nextWorkspaceChatWindows) {
     const previous = workspaceChatWindowsById.get(windowId);
     if (previous?.chatId === entry.chatId && previous.minimized === entry.minimized) continue;
     workspaceChatWindowsById.set(windowId, entry);
-    changed = true;
+    changedChatWindowIds.add(windowId);
   }
-  if (changed) {
-    emitRegistryChange();
+  for (const windowId of changedPreviewWindowIds) {
+    emitRegistryChange(windowId);
+  }
+  for (const chatWindowId of changedChatWindowIds) {
+    emitRegistryChangeForChatWindow(chatWindowId);
   }
 }
 
@@ -633,4 +657,5 @@ export function clearPdfCitationPreviewWindowRegistryForTests(): void {
   renderedChatWindowsById.clear();
   workspaceChatWindowsById.clear();
   pendingBackNavigationByChatWindowId.clear();
+  registryListenersByWindowId.clear();
 }

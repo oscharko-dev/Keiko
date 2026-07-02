@@ -102,6 +102,42 @@ function setChunkVectorAt(
     .run({ embedding: blob, created_at: createdAt, capsule_id: capsuleId, chunk_id: chunkId });
 }
 
+function duplicateFirstVectorRows(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  copies: number,
+  sourceId?: KnowledgeSourceId,
+): void {
+  const insert = store._internal.db.prepare(
+    [
+      "INSERT INTO vectors (",
+      "  id, capsule_id, source_id, document_id, chunk_id, embedding,",
+      "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
+      "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
+      "  embedding_dimensions_param, vector_dimensions, vector_metric, storage_reference, created_at",
+      ")",
+      "SELECT :id, capsule_id, source_id, document_id, chunk_id, embedding,",
+      "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
+      "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
+      "  embedding_dimensions_param, vector_dimensions, vector_metric, :storage_reference,",
+      "  created_at + :offset",
+      "FROM vectors",
+      "WHERE capsule_id = :capsule_id AND (:source_id IS NULL OR source_id = :source_id)",
+      "ORDER BY id ASC",
+      "LIMIT 1",
+    ].join(" "),
+  );
+  for (let i = 0; i < copies; i += 1) {
+    insert.run({
+      id: `vec:${String(capsuleId)}:duplicate:${String(i)}`,
+      capsule_id: String(capsuleId),
+      source_id: sourceId === undefined ? null : String(sourceId),
+      storage_reference: `duplicate-${String(i)}`,
+      offset: i + 1,
+    });
+  }
+}
+
 describe("searchVectorsForScope — empty capsule", () => {
   it("returns noEvidenceReason 'no-vectors' when the capsule has zero vectors", async () => {
     const { store } = getFixture();
@@ -1438,6 +1474,138 @@ describe("searchVectorsForScope — citation fields", () => {
 });
 
 describe("searchVectorsForScope — embeddingDegraded", () => {
+  it("reranks lexical candidates when an exact vector scan is oversized", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-large-lexical",
+      text: "treasury evidence controls",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    duplicateFirstVectorRows(store, seeded.capsuleId, 1);
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "treasury evidence",
+      { topK: 5, maxExactVectorScanRows: 1 },
+    );
+
+    expect(embeddingCalls).toBe(1);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+    expect(outcome.diagnostics.mode).toBe("hybrid");
+    expect(outcome.diagnostics.denseIndex).toBe("guided");
+    expect(outcome.diagnostics.denseCandidateCount).toBeGreaterThan(0);
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+  });
+
+  it("uses ANN when an oversized dense scan has no lexical fallback", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-large-no-lexical",
+      text: "legacy treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    duplicateFirstVectorRows(store, seeded.capsuleId, 1);
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id = :c")
+      .run({ c: String(seeded.capsuleId) });
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "treasury evidence",
+      { topK: 5, maxExactVectorScanRows: 1 },
+    );
+
+    expect(embeddingCalls).toBe(1);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+    expect(outcome.diagnostics.mode).toBe("dense-only");
+    expect(outcome.diagnostics.denseIndex).toBe("ann");
+    expect(outcome.diagnostics.denseCandidateCount).toBeGreaterThan(0);
+    expect(outcome.diagnostics.lexicalIndex).toBe("missing");
+  });
+
+  it("applies the exact-scan cap to the filtered source scope instead of the whole capsule", async () => {
+    const { store } = getFixture();
+    const scoped = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-source-filter-cap",
+      sourceId: "src-small",
+      documentId: "doc-small",
+      contentHash: "1".repeat(64),
+      text: "small source treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const large = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-source-filter-cap",
+      sourceId: "src-large",
+      documentId: "doc-large",
+      contentHash: "2".repeat(64),
+      text: "large source unrelated evidence",
+      unitId: "unit-source-filter-large",
+      skipCapsule: true,
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    duplicateFirstVectorRows(store, large.capsuleId, 2, large.sourceId);
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [scoped.capsuleId], sourceFilter: [scoped.sourceId] },
+      "small source treasury evidence",
+      { topK: 5, maxExactVectorScanRows: 1 },
+    );
+
+    expect(embeddingCalls).toBe(1);
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.diagnostics.denseIndex).toBe("available");
+    expect(new Set(outcome.references.map((ref) => String(ref.citation.sourceId)))).toEqual(
+      new Set(["src-small"]),
+    );
+  });
+
   it("reports dense-only when an existing capsule has vectors but no FTS rows", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {

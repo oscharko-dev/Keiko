@@ -25,10 +25,13 @@ function ok(body: unknown): Response {
   });
 }
 
-function bodyToText(init: RequestInit): string {
+async function bodyToText(init: RequestInit): Promise<string> {
   const body = init.body;
   if (body instanceof Uint8Array) {
     return Buffer.from(body).toString("latin1");
+  }
+  if (body instanceof Blob) {
+    return Buffer.from(await body.arrayBuffer()).toString("latin1");
   }
   return typeof body === "string" ? body : "";
 }
@@ -38,15 +41,19 @@ describe("requestSpeechToText", () => {
     let seenUrl = "";
     let seenMethod = "";
     let seenContentType = "";
+    let seenContentLength = "";
     let seenAuth = "";
+    let seenBlobBody = false;
     let seenBody = "";
-    const fetchImpl = mockFetch((url, init) => {
+    const fetchImpl = mockFetch(async (url, init) => {
       seenUrl = url;
       seenMethod = init.method ?? "";
       const headers = init.headers as Record<string, string>;
       seenContentType = headers["content-type"] ?? "";
+      seenContentLength = headers["content-length"] ?? "";
       seenAuth = headers.authorization ?? "";
-      seenBody = bodyToText(init);
+      seenBlobBody = init.body instanceof Blob;
+      seenBody = await bodyToText(init);
       return ok({ text: "hello world" });
     });
 
@@ -63,7 +70,9 @@ describe("requestSpeechToText", () => {
     expect(seenUrl).toBe("https://stt.example.invalid/v1/audio/transcriptions");
     expect(seenMethod).toBe("POST");
     expect(seenContentType).toMatch(/^multipart\/form-data; boundary=keiko-stt-/);
+    expect(Number(seenContentLength)).toBeGreaterThan(AUDIO.byteLength);
     expect(seenAuth).toBe(`Bearer ${SECRET_API_KEY}`);
+    expect(seenBlobBody).toBe(true);
     // The binary file part, its declared content type, and the model field are all present.
     expect(seenBody).toContain('name="file"; filename="audio.webm"');
     expect(seenBody).toContain("Content-Type: audio/webm");
@@ -76,9 +85,9 @@ describe("requestSpeechToText", () => {
   it("supports a custom apiKeyHeaderName (Azure api-key) and an optional language field", async () => {
     let header: string | null = null;
     let body = "";
-    const fetchImpl = mockFetch((_url, init) => {
+    const fetchImpl = mockFetch(async (_url, init) => {
       header = (init.headers as Record<string, string>)["api-key"] ?? null;
-      body = bodyToText(init);
+      body = await bodyToText(init);
       return ok({ text: "hallo" });
     });
     const outcome = await requestSpeechToText({
@@ -101,10 +110,10 @@ describe("requestSpeechToText", () => {
     let seenUrl = "";
     let seenHeader: string | null = null;
     let seenBody = "";
-    const fetchImpl = mockFetch((url, init) => {
+    const fetchImpl = mockFetch(async (url, init) => {
       seenUrl = url;
       seenHeader = (init.headers as Record<string, string>)["api-key"] ?? null;
-      seenBody = bodyToText(init);
+      seenBody = await bodyToText(init);
       return ok({ text: "azure transcript" });
     });
 
@@ -329,8 +338,8 @@ describe("requestSpeechToText", () => {
 
   it("sanitizes CR/LF/quote out of textual multipart fields (injection defense)", async () => {
     let body = "";
-    const fetchImpl = mockFetch((_url, init) => {
-      body = bodyToText(init);
+    const fetchImpl = mockFetch(async (_url, init) => {
+      body = await bodyToText(init);
       return ok({ text: "x" });
     });
     await requestSpeechToText({
@@ -349,8 +358,8 @@ describe("requestSpeechToText", () => {
 
   it("strips embedded CRLF from a field so no extra multipart part is injected (boundary count intact)", async () => {
     let body = "";
-    const fetchImpl = mockFetch((_url, init) => {
-      body = bodyToText(init);
+    const fetchImpl = mockFetch(async (_url, init) => {
+      body = await bodyToText(init);
       return ok({ text: "x" });
     });
     await requestSpeechToText({

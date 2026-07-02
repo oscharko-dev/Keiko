@@ -198,16 +198,12 @@ function assertCwdInsideProject(
   }
 }
 
-function projectRootOrThrow(project: Project): string {
+async function projectRootOrThrow(project: Project): Promise<string> {
   try {
-    return realpathSyncCompat(project.path);
+    return await realpath(project.path);
   } catch {
     throw new TerminalToolError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
   }
-}
-
-function realpathSyncCompat(pathValue: string): string {
-  return nodeWorkspaceFs.realPath(pathValue);
 }
 
 function requestIdPayload(input: TerminalExecutionInput): Record<string, string> {
@@ -722,7 +718,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         "Too many in-flight terminal executions.",
       );
     }
-    const projectRoot = projectRootOrThrow(project);
+    const projectRoot = await projectRootOrThrow(project);
     const fs = this.runDeps.fs ?? nodeWorkspaceFs;
     const cwd = assertCwdInsideProject(project.path, projectRoot, input.cwd, fs);
     validateCommandOperands(projectRoot, cwd, input, fs);

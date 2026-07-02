@@ -238,13 +238,18 @@ describe("ContainerStatusWidget", () => {
     expect(screen.getByRole("status", { name: /container engine status/i })).toBeInTheDocument();
   });
 
-  it("closes the EventSource when unmounted", async () => {
-    vi.mocked(fetchContainerCapability).mockResolvedValue(UNAVAILABLE);
+  it("opens the EventSource only while a diagnostic is running and closes it when unmounted", async () => {
+    vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
+    vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
+    vi.mocked(createContainerRun).mockImplementation(() => new Promise<never>(() => undefined));
     const { unmount } = render(<ContainerStatusWidget projectPath="/proj" />);
-    await screen.findByRole("status", { name: /container engine status/i });
+    const runButton = await screen.findByRole("button", { name: /run diagnostic/i });
+    expect(FakeEventSource.last).toBeNull();
+    await userEvent.click(runButton);
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    const source = FakeEventSource.last;
     unmount();
-    expect(FakeEventSource.last?.closed).toBe(true);
+    expect(source?.closed).toBe(true);
   });
 
   it("has no axe violations in the unavailable state", async () => {

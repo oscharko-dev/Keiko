@@ -286,8 +286,38 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
     expect(res.headers.get("cache-control")).toBe("no-store");
     const text = await res.text();
     expect(text).toContain("event: ready");
-    expect(text).toContain("event: workflow:started");
+    expect(text).not.toContain("event: workflow:started");
+    expect(text).toContain('"type":"workflow:started"');
     expect(text).toContain("data: ");
+  });
+
+  it("streams recent run events on the shared aggregate SSE route", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+
+    const controller = new AbortController();
+    const res = await fetch(`${base()}/api/runs/events`, { signal: controller.signal });
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const reader = res.body?.getReader();
+    expect(reader).toBeDefined();
+    if (reader === undefined) {
+      throw new Error("expected an SSE reader");
+    }
+
+    let text = "";
+    for (let i = 0; i < 5 && !text.includes("event: ready"); i += 1) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      text += new TextDecoder().decode(chunk.value);
+    }
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+
+    expect(text).toContain("event: ready");
+    expect(text).toContain('"type":"workflow:started"');
+    expect(text).toContain(`"runId":"${body.runId}"`);
   });
 
   it("returns 404 for an unknown run", async () => {

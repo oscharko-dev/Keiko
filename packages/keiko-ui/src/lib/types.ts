@@ -1,10 +1,9 @@
 // Browser-safe contract seam for the UI (ADR-0019 rule 8). Every name in this file
 // is a pure re-export; zero type definitions live here. The wire entity shapes come from
 // @oscharko-dev/keiko-contracts/bff-wire; evidence and verification-summary shapes come from
-// their respective subpaths; everything else comes from the contracts root barrel. The SSE
-// stream aggregation (HarnessEvent/SseStatus/ALL_SSE_EVENT_TYPES/TERMINAL_EVENT_TYPES) is
-// UI-internal because no orchestration package knows about the union of all three sources, so
-// it lives in ./sse-types and is re-exported here for ergonomic `@/lib/types` consumers.
+// their respective subpaths; everything else comes from the contracts root barrel. The SSE stream
+// aggregation is UI-internal because no orchestration package knows about the union of all three
+// sources, so it lives in ./sse-types and is re-exported here for ergonomic `@/lib/types` consumers.
 
 // ─── Gateway + workflow descriptor canonical types (contracts root barrel) ─────────
 export type {

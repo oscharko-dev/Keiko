@@ -588,7 +588,7 @@ function promptBudgetedMessages(
   ) => readonly GatewayChatMessage[],
 ): readonly GatewayChatMessage[] {
   const limit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax);
-  let messages = build(question, pack, redactor);
+  const messages = build(question, pack, redactor);
   if (promptByteLength(messages) <= limit) return messages;
 
   const emptyPack = withPromptExcerptByteLimit(pack, 0);
@@ -604,15 +604,20 @@ function promptBudgetedMessages(
   }
   const excerptCount = packExcerptCount(pack);
   if (excerptCount === 0) return messages;
-  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
-  while (maxExcerptBytes >= 0) {
-    messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
-    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
-      return messages;
+  let low = 0;
+  let high = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
+  let best = emptyMessages;
+  while (low <= high) {
+    const maxExcerptBytes = Math.floor((low + high) / 2);
+    const candidate = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
+    if (promptByteLength(candidate) <= limit) {
+      best = candidate;
+      low = maxExcerptBytes + 1;
+    } else {
+      high = maxExcerptBytes - 1;
     }
-    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
   }
-  return emptyMessages;
+  return best;
 }
 
 export function packBudgetSummary(pack: ConnectedContextPack): string {

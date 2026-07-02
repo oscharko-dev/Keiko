@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import styles from "./NotificationsPanel.module.css";
 
 interface NotificationItem {
   t: string;
@@ -16,7 +17,7 @@ const ITEMS: NotificationItem[] = [
 
 export function NotificationsPanel(): ReactNode {
   return (
-    <ul className="tw-list">
+    <ul className={`tw-list ${styles.lazyWidgetScope}`}>
       {ITEMS.map((n, i) => (
         <li className="nt-row" key={i}>
           <span className="dot" style={{ background: n.c, marginTop: 6 }} aria-hidden="true" />

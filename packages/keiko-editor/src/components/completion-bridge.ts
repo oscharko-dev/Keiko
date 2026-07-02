@@ -241,6 +241,8 @@ const EMPTY_LIST: MonacoCompletionList = { suggestions: [], incomplete: false };
 export interface KeikoCompletionProviderDeps {
   /** The host-injected resolver that actually produces completions (BFF call lives here). */
   readonly resolve: EditorCompletionResolver;
+  /** True only for the document owned by this editor instance. */
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly languages: MonacoLanguagesRegistrar;
   readonly triggerCharacters: readonly string[];
   // The editor language id (e.g. "typescript"); for the governed TS/JS set this equals the Monaco
@@ -291,6 +293,7 @@ function buildRequest(
  *  - discards a response that a later request has superseded (Acceptance Criterion 3), and
  *  - returns an empty list on any failure so a completion error never breaks editing (AC4).
  */
+// eslint-disable-next-line max-lines-per-function
 export function createKeikoCompletionProvider(
   deps: KeikoCompletionProviderDeps,
 ): MonacoCompletionItemProvider {
@@ -301,6 +304,10 @@ export function createKeikoCompletionProvider(
   return {
     triggerCharacters: deps.triggerCharacters,
     async provideCompletionItems(model, position, context, token): Promise<MonacoCompletionList> {
+      const documentUri = model.uri.toString();
+      if (!deps.isCurrentDocument(documentUri)) {
+        return EMPTY_LIST;
+      }
       sequence += 1;
       const request = buildRequest(deps, model, position, context, sequence);
       latest = request.request;
@@ -326,6 +333,9 @@ export function createKeikoCompletionProvider(
         if (shouldDiscardResponse(response.request, latest)) {
           return EMPTY_LIST;
         }
+        if (!deps.isCurrentDocument(documentUri)) {
+          return EMPTY_LIST;
+        }
         return responseToCompletionList(
           response,
           wordRangeAt(model, position),
@@ -347,6 +357,7 @@ export function createKeikoCompletionProvider(
 export interface RegisterKeikoCompletionProviderArgs {
   readonly languages: MonacoLanguagesRegistrar;
   readonly resolve: EditorCompletionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   /**
    * The languages to register a provider for. One provider is registered per language with that
    * language fixed, so a buffer that switches language within a single editor mount (e.g. opening a
@@ -380,6 +391,7 @@ export function registerKeikoCompletionProvider(
   const disposers = args.documentLanguages.map((documentLanguage) => {
     const provider = createKeikoCompletionProvider({
       resolve: args.resolve,
+      isCurrentDocument: args.isCurrentDocument,
       languages: args.languages,
       triggerCharacters: args.triggerCharacters,
       documentLanguage,

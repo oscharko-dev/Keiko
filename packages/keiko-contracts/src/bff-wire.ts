@@ -1116,7 +1116,7 @@ export type FilesPreviewResponse =
     })
   | (FilesPreviewBase & {
       readonly kind: "image";
-      readonly dataUrl: string;
+      readonly url: string;
       readonly maxBytes: number;
     })
   | (FilesPreviewBase & {

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { memo } from "react";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
@@ -60,7 +60,7 @@ function LeftRailImpl({
   readonly theme: Theme;
   readonly onToggleTheme: () => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const themeLabel = theme === "light" ? t("rail.darkMode") : t("rail.lightMode");
 
   return (

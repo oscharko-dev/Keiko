@@ -155,6 +155,20 @@ function collect(manager: TerminalExecutionManager): TerminalEventEnvelope[] {
   return events;
 }
 
+async function waitForCondition(
+  predicate: () => boolean,
+  message: string,
+  timeoutMs = 1_000,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(message);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
 describe("TerminalExecutionManager — happy path", () => {
@@ -360,7 +374,10 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
     const manager = makeManager(makeSpawn({ hangs: true }));
     const events = collect(manager);
     const pending = manager.execute({ projectId: workspaceRoot, command: "ls", args: [] });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForCondition(
+      () => events.some((e) => e.kind === "execution-started"),
+      "terminal execution did not start",
+    );
     const started = events.find((e) => e.kind === "execution-started");
     expect(started).toBeDefined();
     expect(manager.abort(started?.executionId ?? "")).toBe(true);
@@ -409,7 +426,10 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
           .catch(() => undefined),
       );
     }
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await waitForCondition(
+      () => manager.inFlightCount() === 8,
+      "terminal executions did not reach the concurrency cap",
+    );
     await expect(
       manager.execute({ projectId: workspaceRoot, command: "ls", args: [] }),
     ).rejects.toMatchObject({ code: "EXECUTION_LIMIT_EXCEEDED" });

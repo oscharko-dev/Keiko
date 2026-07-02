@@ -144,8 +144,11 @@ describe("TerminalWidget", () => {
   });
 
   it("appends SSE events to the recent events list in live order", async () => {
+    vi.mocked(createTerminalExecution).mockImplementation(() => new Promise<never>(() => undefined));
     render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
+    expect(FakeEventSource.last).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
     await waitFor(() => {
       expect(FakeEventSource.last).not.toBeNull();
     });
@@ -180,13 +183,17 @@ describe("TerminalWidget", () => {
   });
 
   it("closes the EventSource when unmounted", async () => {
-    const { unmount } = render(<TerminalWidget />);
+    vi.mocked(createTerminalExecution).mockImplementation(() => new Promise<never>(() => undefined));
+    const { unmount } = render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
+    expect(FakeEventSource.last).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
     await waitFor(() => {
       expect(FakeEventSource.last).not.toBeNull();
     });
+    const source = FakeEventSource.last;
     unmount();
-    expect(FakeEventSource.last?.closed).toBe(true);
+    expect(source?.closed).toBe(true);
   });
 
   it("Finding 1 — Cancel becomes enabled after SSE execution-started arrives, triggers abort on click", async () => {
@@ -196,10 +203,11 @@ describe("TerminalWidget", () => {
     vi.mocked(abortTerminalExecution).mockResolvedValue(undefined);
     render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
-    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(FakeEventSource.last).toBeNull();
     // Submit — running becomes true, Cancel appears (aria-disabled until started event;
     // uiux-fix F018 C124: aria-disabled keeps the button focusable so focus never drops).
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     const cancel = await screen.findByRole("button", { name: /cancel/i });
     expect(cancel).toHaveAttribute("aria-disabled", "true");
     // Dispatch the SSE execution-started event — Cancel should become enabled.
@@ -235,8 +243,9 @@ describe("TerminalWidget", () => {
     vi.mocked(abortTerminalExecution).mockResolvedValue(undefined);
     render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
-    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    expect(FakeEventSource.last).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     const cancel = await screen.findByRole("button", { name: /cancel/i });
     expect(cancel).toHaveAttribute("aria-disabled", "true");
     FakeEventSource.last?.dispatch(

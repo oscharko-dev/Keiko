@@ -252,7 +252,9 @@ function providerCapability(
   config: GatewayConfig,
   provider: ModelProviderConfig,
 ): ModelCapability | undefined {
-  return listConfiguredCapabilities(config).find((capability) => capability.id === provider.modelId);
+  return listConfiguredCapabilities(config).find(
+    (capability) => capability.id === provider.modelId,
+  );
 }
 
 function chooseEmbeddingProvider(config: GatewayConfig): ModelProviderConfig | undefined {
@@ -997,9 +999,7 @@ function verifiedCapabilities(
     tokenMatch === undefined || tokenMatch === null
       ? undefined
       : Number.parseInt(tokenMatch[1] ?? "0", 10);
-  const embedding = probes.find(
-    (probe) => probe.name === "embedding" && probe.status === "passed",
-  );
+  const embedding = probes.find((probe) => probe.name === "embedding" && probe.status === "passed");
   const embeddingMatch = embedding?.evidence.match(
     /returned (\d+) dimensions with L2 norm ([0-9.]+)/u,
   );
@@ -1040,9 +1040,13 @@ export async function runGatewayReadiness(
       probes.push(skipped(name, "Skipped because basic chat was not verified."));
     }
   } else {
-    for (const name of names.filter((candidate) => candidate !== "chat")) {
-      probes.push(await runProbe(name, deps, selection, request.options));
-    }
+    probes.push(
+      ...(await Promise.all(
+        names
+          .filter((candidate) => candidate !== "chat")
+          .map((name) => runProbe(name, deps, selection, request.options)),
+      )),
+    );
   }
   return {
     modelId: selection.provider.modelId,

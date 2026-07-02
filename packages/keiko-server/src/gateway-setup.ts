@@ -62,6 +62,7 @@ const EMBEDDING_ID_PATTERN =
   /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
 const IMAGE_INPUT_ID_PATTERN =
   /(?:^|[-_/. ])(?:vision|multimodal|multi-modal|llava|pixtral|omni|gpt-4o)(?:$|[-_/. ])|(?:^|[-_/. ])vl(?:$|[-_/. ])|qwen(?:2(?:\.5)?|3)?[-_/. ]?vl(?:$|[-_/. ])/i;
+const ALLOW_LINK_LOCAL_GATEWAY_ENV = "KEIKO_ALLOW_LINK_LOCAL_GATEWAY";
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
@@ -116,6 +117,70 @@ function normalizeBaseUrl(raw: string): string {
     value = value.slice(0, -"/chat/completions".length).replace(/\/+$/u, "");
   }
   return value;
+}
+
+function envFlagEnabled(env: EnvSource, key: string): boolean {
+  const value = env[key];
+  return typeof value === "string" && /^(?:1|true|yes)$/iu.test(value.trim());
+}
+
+function unbracketHostname(hostname: string): string {
+  return hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+}
+
+function isIpv4LinkLocal(hostname: string): boolean {
+  const parts = hostname.split(".");
+  if (parts.length !== 4) return false;
+  const octets = parts.map((part) => Number(part));
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false;
+  }
+  return octets[0] === 169 && octets[1] === 254;
+}
+
+function parseIpv4MappedHextet(value: string | undefined): number | undefined {
+  const parsed = Number.parseInt(value ?? "", 16);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed <= 0xffff ? parsed : undefined;
+}
+
+function ipv4MappedBytes(hostname: string): readonly number[] | undefined {
+  const lower = hostname.toLowerCase();
+  if (!lower.startsWith("::ffff:")) return undefined;
+  const hextets = lower.slice("::ffff:".length).split(":");
+  if (hextets.length !== 2) return undefined;
+  const high = parseIpv4MappedHextet(hextets[0]);
+  const low = parseIpv4MappedHextet(hextets[1]);
+  if (high === undefined || low === undefined) return undefined;
+  return [high >> 8, high & 0xff, low >> 8, low & 0xff];
+}
+
+function isIpv6LinkLocal(hostname: string): boolean {
+  const lower = hostname.toLowerCase();
+  const mapped = ipv4MappedBytes(lower);
+  if (mapped !== undefined) return mapped[0] === 169 && mapped[1] === 254;
+  const first = Number.parseInt(lower.split(":", 1)[0] ?? "", 16);
+  return Number.isInteger(first) && first >= 0xfe80 && first <= 0xfebf;
+}
+
+function isLinkLocalGatewayBaseUrl(baseUrl: string): boolean {
+  try {
+    const hostname = unbracketHostname(new URL(baseUrl).hostname);
+    return isIpv4LinkLocal(hostname) || isIpv6LinkLocal(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function validateLinkLocalGatewayBaseUrl(baseUrl: string, env: EnvSource): RouteResult | undefined {
+  if (!isLinkLocalGatewayBaseUrl(baseUrl)) return undefined;
+  if (envFlagEnabled(env, ALLOW_LINK_LOCAL_GATEWAY_ENV)) return undefined;
+  return {
+    status: 400,
+    body: errorBody(
+      "BAD_REQUEST",
+      `Gateway baseUrl may not target link-local metadata addresses unless ${ALLOW_LINK_LOCAL_GATEWAY_ENV}=1 is set.`,
+    ),
+  };
 }
 
 function candidateBaseUrls(baseUrl: string): readonly string[] {
@@ -801,6 +866,8 @@ function validateSetupConnection(
   apiKeyHeaderName: string,
   env: EnvSource,
 ): RouteResult | undefined {
+  const linkLocalError = validateLinkLocalGatewayBaseUrl(baseUrl, env);
+  if (linkLocalError !== undefined) return linkLocalError;
   try {
     parseGatewayConfig(
       buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
@@ -1158,6 +1225,8 @@ function validateVoiceProviderConnection(
   provider: SetupVoiceProvider,
   env: EnvSource,
 ): RouteResult | undefined {
+  const linkLocalError = validateLinkLocalGatewayBaseUrl(provider.baseUrl, env);
+  if (linkLocalError !== undefined) return linkLocalError;
   try {
     parseGatewayConfig(
       {

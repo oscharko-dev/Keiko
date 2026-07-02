@@ -51,15 +51,22 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   figmaImage: ["quality"],
 };
 
+const CONNECTABLE_SETS: Readonly<Record<string, ReadonlySet<string>>> = Object.fromEntries(
+  Object.entries(CONNECTABLE).map(([type, peers]) => [type, new Set(peers)]),
+);
+const CONNECTABLE_PEERS = new Set<string>([
+  ...Object.keys(CONNECTABLE),
+  ...Object.values(CONNECTABLE).flat(),
+]);
+
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined || a === b) return false;
-  return (CONNECTABLE[a] ?? []).includes(b) || (CONNECTABLE[b] ?? []).includes(a);
+  return CONNECTABLE_SETS[a]?.has(b) === true || CONNECTABLE_SETS[b]?.has(a) === true;
 }
 
 export function hasConnectablePeer(type: string | undefined): boolean {
   if (type === undefined) return false;
-  if ((CONNECTABLE[type] ?? []).length > 0) return true;
-  return Object.values(CONNECTABLE).some((peers) => peers.includes(type));
+  return CONNECTABLE_PEERS.has(type);
 }
 
 // uiux-fix F008 C074 — never invent a path: prefer the resolved root persisted by the Files

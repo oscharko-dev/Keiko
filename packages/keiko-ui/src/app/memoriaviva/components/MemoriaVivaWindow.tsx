@@ -7,7 +7,7 @@ import { NumberControlStepper } from "@/app/components/desktop/NumberControlStep
 import { useConversationMemorySettings } from "@/app/components/desktop/hooks/memorySettings";
 import { Toggle } from "@/app/components/desktop/widgets/shared/Toggle";
 import type { fetchMemories } from "@/lib/memory-api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { MemoryConsolidation } from "./MemoryConsolidation";
 import { MemoryDetail } from "./MemoryDetail";
 import { MemoryListContent } from "./MemoryList";
@@ -29,7 +29,7 @@ const EMPTY_FILTERS: MemoryFilterState = {
 };
 
 function MemoriaVivaRequestSettings(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { memoryEnabled, setMemoryEnabled, memoryBudgetTokens, setMemoryBudgetTokens } =
     useConversationMemorySettings();
   const generatedId = useId();

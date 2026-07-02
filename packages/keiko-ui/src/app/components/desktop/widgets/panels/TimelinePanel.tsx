@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useActivitySubscription } from "../shared/activityBus";
 import type { ActivityEvent } from "../shared/activityBus";
+import styles from "./TimelinePanel.module.css";
 
 const KIND_COLOR: Record<ActivityEvent["type"], string> = {
   step: "var(--fg-dim)",
@@ -28,7 +29,7 @@ export function TimelinePanel(): ReactNode {
 
   return (
     // role="log" implies aria-live="polite": streamed entries are announced to assistive tech.
-    <div className="tl" role="log" aria-label="Activity timeline">
+    <div className={`tl ${styles.lazyWidgetScope}`} role="log" aria-label="Activity timeline">
       {items.length === 0 && (
         <div className="tl-empty">
           No activity yet.

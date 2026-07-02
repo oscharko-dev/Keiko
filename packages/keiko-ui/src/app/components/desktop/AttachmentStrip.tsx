@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Icons } from "./Icons";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
   AttachmentRejectionReason,
   PendingAttachment,
@@ -99,7 +99,7 @@ interface AttachmentChipProps {
 }
 
 function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const label = t("attachment.remove", { name: attachment.name });
   const displayName = truncateName(attachment.name);
 
@@ -146,7 +146,7 @@ interface AttachmentStripProps {
 }
 
 export function AttachmentStrip({ attachments, onRemove }: AttachmentStripProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (attachments.length === 0) return null;
   return (
     <div className="attach-strip" role="list" aria-label={t("attachment.pending")}>
@@ -165,7 +165,7 @@ interface AttachDropZoneProps {
 }
 
 export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [dragOver, setDragOver] = useState(false);
 
   // uiux-fix F040 C207 — the zone is revealed only while a file drag is in
@@ -274,7 +274,7 @@ export function AttachButton({
   onFiles,
   anyModelSupportsAttachments = true,
 }: AttachButtonProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const supportsAny =
@@ -339,7 +339,7 @@ interface AttachRejectionAlertProps {
 }
 
 export function AttachRejectionAlert({ reason, mimeType }: AttachRejectionAlertProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (reason === undefined) return null;
   return (
     <div role="alert" className="attach-rejection-alert">
@@ -362,7 +362,7 @@ interface SentDocumentsNoteProps {
 }
 
 export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (documents.length === 0) return null;
   const anyTruncated = documents.some((doc) => doc.truncated);
   return (
