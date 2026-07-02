@@ -75,6 +75,7 @@ import {
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { normalizeGroundedAnswerPayload, type GroundedAnswerPayload } from "./grounded-answer.js";
+import { collectFollowSymbolTraceEvidence } from "./grounded-symbol-trace.js";
 import {
   collectConnectedDocumentEvidence,
   isConnectedDocumentPath,
@@ -1567,18 +1568,30 @@ async function withDeterministicContextAtoms(
   signal: AbortSignal | undefined,
 ): Promise<RingRunSummary> {
   const symbolDiscovery = await symbolFileAtoms(input, plan, searchScope, fs, nowMs, signal);
+  const traceEvidence = await collectFollowSymbolTraceEvidence({
+    scope: input.scope,
+    query: input.query,
+    anchors: plan.anchors,
+    retrievalIntent: plan.retrievalIntent,
+    searchScope,
+    fs,
+    nowMs,
+    signal,
+  });
   const deterministicAtoms = [
     ...symbolDiscovery.atoms,
+    ...traceEvidence.atoms,
     ...projectMetadataAtoms(input, searchScope, fs, nowMs),
     ...repositoryOverviewAtoms(input, searchScope, fs, nowMs),
   ];
-  if (deterministicAtoms.length === 0 && symbolDiscovery.uncertainty.length === 0) {
+  const uncertainty = [...symbolDiscovery.uncertainty, ...traceEvidence.uncertainty];
+  if (deterministicAtoms.length === 0 && uncertainty.length === 0) {
     return rings;
   }
   return {
     ...rings,
     atoms: [...rings.atoms, ...deterministicAtoms],
-    uncertainty: [...rings.uncertainty, ...symbolDiscovery.uncertainty],
+    uncertainty: [...rings.uncertainty, ...uncertainty],
   };
 }
 

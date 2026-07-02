@@ -30,6 +30,7 @@ describe("keiko-workspace public surface", () => {
     expect(typeof workspace.definitionsForSymbol).toBe("function");
     expect(typeof workspace.referencesForSymbol).toBe("function");
     expect(typeof workspace.callsToSymbol).toBe("function");
+    expect(typeof workspace.followSymbolTrace).toBe("function");
     expect(typeof workspace.collectImportSpecifiers).toBe("function");
     expect(typeof workspace.importsFromSource).toBe("function");
     expect(typeof workspace.importersForTarget).toBe("function");

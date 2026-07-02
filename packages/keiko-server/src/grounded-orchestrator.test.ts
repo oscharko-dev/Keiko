@@ -729,6 +729,50 @@ describe("runGroundedExploration", () => {
     }
   });
 
+  it("adds follow-symbol trace evidence across a three-package TypeScript chain", async () => {
+    mkdirSync(join(ROOT, "packages/a/src"), { recursive: true });
+    mkdirSync(join(ROOT, "packages/b/src"), { recursive: true });
+    mkdirSync(join(ROOT, "packages/c/src"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "packages/a/src/app.ts"),
+      'import { runPayment } from "../../b/src/service";\nexport function start(): void {\n  runPayment();\n}\n',
+    );
+    writeFileSync(
+      join(ROOT, "packages/b/src/service.ts"),
+      'import { settlePayment } from "../../c/src/domain";\nexport function runPayment(): string {\n  return settlePayment();\n}\n',
+    );
+    writeFileSync(
+      join(ROOT, "packages/c/src/domain.ts"),
+      'export function settlePayment(): string {\n  return "settled";\n}\n',
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Trace settlePayment through packages" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining([
+        "packages/a/src/app.ts",
+        "packages/b/src/service.ts",
+        "packages/c/src/domain.ts",
+      ]),
+    );
+    expect(
+      out.pack.files.some((file) =>
+        file.excerpts.some((excerpt) => excerpt.content.includes("settlePayment")),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
     const term = "OverflowProbe";
     for (let index = 0; index < 65; index += 1) {

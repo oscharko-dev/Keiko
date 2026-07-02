@@ -211,6 +211,14 @@ export {
   referencesForSymbol,
   symbolGraphAdapter,
 } from "./symbolGraph.js";
+export type {
+  FollowSymbolTrace,
+  FollowSymbolTraceDiagnostics,
+  FollowSymbolTraceRecord,
+  FollowSymbolTraceRelation,
+  FollowSymbolTraceRequest,
+} from "./followSymbolTrace.js";
+export { followSymbolTrace } from "./followSymbolTrace.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";
