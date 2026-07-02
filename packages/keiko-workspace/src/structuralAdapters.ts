@@ -11,6 +11,7 @@ import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import { testSourcePairingAdapter } from "./testSourcePairing.js";
 import { symbolGraphAdapter } from "./symbolGraph.js";
 import { importGraphAdapter } from "./importGraph.js";
+import { endpointContractAdapter } from "./endpointContractAdapter.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
 import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
 
@@ -92,6 +93,7 @@ export function createDefaultStructuralRegistry(
       testSourcePairingAdapter,
       symbolGraphAdapter,
       importGraphAdapter,
+      endpointContractAdapter,
       ...ecosystemAdapters,
       gitHistoryAdapter,
     ],

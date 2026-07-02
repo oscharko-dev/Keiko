@@ -198,6 +198,23 @@ export {
   importersForTarget,
 } from "./importGraphEdges.js";
 export type {
+  EndpointClientCallContract,
+  EndpointClientKind,
+  EndpointContractDiagnostics,
+  EndpointContractGraph,
+  EndpointContractLink,
+  EndpointDtoEvidence,
+  EndpointDtoShape,
+  EndpointHttpMethod,
+  EndpointRouteContract,
+  EndpointServerFramework,
+} from "./endpointContracts.js";
+export {
+  buildEndpointContractGraph,
+  endpointContractAdapter,
+  normalizeEndpointPath,
+} from "./endpointContracts.js";
+export type {
   SymbolDefinitionKind,
   SymbolGraph,
   SymbolGraphDiagnostics,

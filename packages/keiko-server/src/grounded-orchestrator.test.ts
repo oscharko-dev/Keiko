@@ -773,6 +773,44 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("adds endpoint contract evidence for Java routes linked to TypeScript clients", async () => {
+    mkdirSync(join(ROOT, "src/main/java/com/acme"), { recursive: true });
+    mkdirSync(join(ROOT, "src/client"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/main/java/com/acme/OrderController.java"),
+      '@RestController\n@RequestMapping("/api")\nclass OrderController {\n' +
+        '  @GetMapping("/orders/{id}")\n' +
+        "  public OrderDto getOrder(String id) { return null; }\n" +
+        "}\nrecord OrderDto(String status) {}\n",
+    );
+    writeFileSync(
+      join(ROOT, "src/client/orders.ts"),
+      'import axios from "axios";\n' +
+        "interface OrderDto { status: string; }\n" +
+        "export const loadOrder = (id: string) => axios.get<OrderDto>(`/api/orders/${id}`);\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which frontend client calls the OrderDto API route?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining([
+        "src/main/java/com/acme/OrderController.java",
+        "src/client/orders.ts",
+      ]),
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
     const term = "OverflowProbe";
     for (let index = 0; index < 65; index += 1) {

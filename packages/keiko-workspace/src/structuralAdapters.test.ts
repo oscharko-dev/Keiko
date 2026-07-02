@@ -98,12 +98,13 @@ function ecosystemFixture(id: "java" | "go", extractorName: string): Ecosystem {
 }
 
 describe("createDefaultStructuralRegistry", () => {
-  it("contains the three v1 adapters in expected order", () => {
+  it("contains the default adapters in expected order", () => {
     const registry = createDefaultStructuralRegistry();
     expect(registry.adapters.map((a) => a.name)).toEqual([
       "test-source-pairing",
       "symbol-graph",
       "import-graph",
+      "endpoint-contract-linker",
       "git-history",
     ]);
   });
@@ -114,6 +115,7 @@ describe("createDefaultStructuralRegistry", () => {
       "test-source-pairing",
       "symbol-graph",
       "import-graph",
+      "endpoint-contract-linker",
       "git-history",
     ]);
   });
@@ -135,6 +137,7 @@ describe("createDefaultStructuralRegistry", () => {
       "test-source-pairing",
       "symbol-graph",
       "import-graph",
+      "endpoint-contract-linker",
       "ecosystem-structure:java:packages",
       "ecosystem-structure:go:modules",
       "git-history",
