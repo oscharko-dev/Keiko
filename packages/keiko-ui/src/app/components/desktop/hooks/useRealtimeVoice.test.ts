@@ -175,6 +175,7 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
         expect.objectContaining({
           type: "session.update",
           session: expect.objectContaining({
+            type: "realtime",
             instructions: expect.stringContaining(
               "connected repository, files, documents, knowledge capsules, or project context",
             ),
@@ -209,12 +210,8 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
   it("configures grounded sessions without realtime tools to wait for client-side retrieval", async () => {
     vi.useFakeTimers();
     try {
-      const {
-        session,
-        fireConnectionState,
-        fireDataChannelState,
-        sendDataChannelEvent,
-      } = makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+      const { session, fireConnectionState, fireDataChannelState, sendDataChannelEvent } =
+        makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
       const transport = makeFakeTransport({ session });
       const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
 
@@ -238,6 +235,7 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
         expect.objectContaining({
           type: "session.update",
           session: expect.objectContaining({
+            type: "realtime",
             instructions: expect.stringContaining("Keiko will retrieve the grounded answer"),
             audio: expect.objectContaining({
               input: expect.objectContaining({
