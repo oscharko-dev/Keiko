@@ -35,9 +35,20 @@ export interface RankingHints {
 // True when this candidate is reachable via an inbound import edge or a test↔source pairing, derived
 // from atoms already present (the structural ring's provenance tools). No extra IO.
 const STRUCTURAL_TOOLS: ReadonlySet<string> = new Set(["import-graph", "test-source-pairing"]);
+const SEMANTIC_TOOL_PREFIX = "repo.semanticSearch";
 
 function hasStructuralEdge(atoms: readonly EvidenceAtom[]): boolean {
   return atoms.some((atom) => STRUCTURAL_TOOLS.has(atom.provenance.tool));
+}
+
+function bestLexicalScore(atoms: readonly EvidenceAtom[]): number {
+  return computeBestScoreByTool(atoms, (atom) => atom.provenance.kind === "lexical-search");
+}
+
+function bestSemanticScore(atoms: readonly EvidenceAtom[]): number {
+  return computeBestScoreByTool(atoms, (atom) =>
+    atom.provenance.tool.startsWith(SEMANTIC_TOOL_PREFIX),
+  );
 }
 
 export const DEFAULT_GENERATED_PATTERNS: readonly string[] = [
@@ -88,12 +99,19 @@ function detectGenerated(scopePath: string, patterns: readonly string[]): boolea
 }
 
 function computeProvenanceBestScore(atoms: readonly EvidenceAtom[]): number {
+  return computeBestScoreByTool(atoms, () => true);
+}
+
+function computeBestScoreByTool(
+  atoms: readonly EvidenceAtom[],
+  predicate: (atom: EvidenceAtom) => boolean,
+): number {
   if (atoms.length === 0) {
     return 0;
   }
   let best = 0;
   for (const candidate of atoms) {
-    if (candidate.score > best) {
+    if (predicate(candidate) && candidate.score > best) {
       best = candidate.score;
     }
   }
@@ -186,6 +204,8 @@ export function extractSignals(
   const scopePath = deriveScopePath(atomsForPath);
   const generatedHint = detectGenerated(scopePath, hints.generatedPathPatterns);
   const provBest = computeProvenanceBestScore(atomsForPath);
+  const lexicalScore = bestLexicalScore(atomsForPath);
+  const semanticScore = bestSemanticScore(atomsForPath);
   const provCount = computeProvenanceCount(atomsForPath);
   const overlap = computeAnchorOverlap(scopePath, anchors);
   const depthAff = computePathDepthAffinity(scopePath);
@@ -194,6 +214,8 @@ export function extractSignals(
   const penalty = generatedHint ? -1 : 0;
   const baseSignals: CandidateSignal[] = [
     { name: "provenance-best-score", value: provBest },
+    { name: "lexical-score", value: lexicalScore },
+    { name: "semantic-score", value: semanticScore },
     { name: "provenance-count", value: provCount },
     { name: "anchor-overlap", value: overlap },
     { name: "path-depth-affinity", value: depthAff },

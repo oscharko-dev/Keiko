@@ -100,6 +100,20 @@ export type {
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
+export { candidateBucketForPath } from "./repoSearchPolicy.js";
+export type {
+  SemanticFusionSignals,
+  SemanticSearchDocument,
+  SemanticSearchInput,
+  SemanticSearchMatch,
+  SemanticSearchProvider,
+} from "./repoSearchSemantic.js";
+export {
+  fuseLexicalAndSemanticRanks,
+  SEMANTIC_RRF_K,
+  SEMANTIC_SEARCH_TOOL_PREFIX,
+  semanticSearchTool,
+} from "./repoSearchSemantic.js";
 export type {
   FileWorkspaceIndexStoreOptions,
   PreparedWorkspaceIndexEntry,

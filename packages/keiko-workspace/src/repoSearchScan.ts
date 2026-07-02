@@ -27,6 +27,7 @@ import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js"
 import { evidenceAtomStableId } from "./stableId.js";
 import type { LineMatcher } from "./repoSearchMatchers.js";
 import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import { collectSemanticSearchDocument, type SemanticSearchSession } from "./repoSearchSemantic.js";
 import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import {
   extraIgnoreLinesForSearch,
@@ -320,6 +321,7 @@ export interface SearchTextRunner {
         readonly onStale: (scopePath: string) => void;
       }
     | undefined;
+  readonly semantic?: SemanticSearchSession | undefined;
 }
 
 export interface RunState {
@@ -457,10 +459,15 @@ function bestCachedLines(
   return best
     .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine))
     .slice(0, 3)
-    .sort((a, b) => (a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine));
+    .sort((a, b) =>
+      a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+    );
 }
 
-function safeStat(runner: SearchTextRunner, absolutePath: string): ReturnType<WorkspaceFs["stat"]> | undefined {
+function safeStat(
+  runner: SearchTextRunner,
+  absolutePath: string,
+): ReturnType<WorkspaceFs["stat"]> | undefined {
   try {
     return runner.fs.stat(absolutePath);
   } catch {
@@ -515,10 +522,26 @@ function recordCandidateOmission(
 function persistWorkspaceIndexRecord(
   runner: SearchTextRunner,
   record:
-    | { readonly kind: "binary" | "size-exceeded"; readonly scopePath: string; readonly absolutePath: string; readonly sizeBytes: number }
-    | { readonly kind: "text"; readonly scopePath: string; readonly absolutePath: string; readonly sizeBytes: number; readonly content: string },
+    | {
+        readonly kind: "binary" | "size-exceeded";
+        readonly scopePath: string;
+        readonly absolutePath: string;
+        readonly sizeBytes: number;
+      }
+    | {
+        readonly kind: "text";
+        readonly scopePath: string;
+        readonly absolutePath: string;
+        readonly sizeBytes: number;
+        readonly content: string;
+      },
 ): void {
-  const metadata = currentRecordMetadata(runner, record.scopePath, record.absolutePath, record.sizeBytes);
+  const metadata = currentRecordMetadata(
+    runner,
+    record.scopePath,
+    record.absolutePath,
+    record.sizeBytes,
+  );
   if (record.kind === "text") {
     runner.workspaceIndex?.onRecord({
       ...metadata,
@@ -672,11 +695,17 @@ async function binaryOmission(
 function cachedLexicalRecord(
   runner: SearchTextRunner,
   cached: WorkspaceIndexRecord,
-): {
-  readonly lexical: WorkspaceIndexLexicalRecord;
-  readonly queryTermHashes: ReadonlySet<string>;
-} | undefined {
-  if (runner.query.kind === "regex" || runner.query.kind === "file-pattern" || runner.query.caseSensitive) {
+):
+  | {
+      readonly lexical: WorkspaceIndexLexicalRecord;
+      readonly queryTermHashes: ReadonlySet<string>;
+    }
+  | undefined {
+  if (
+    runner.query.kind === "regex" ||
+    runner.query.kind === "file-pattern" ||
+    runner.query.caseSensitive
+  ) {
     return undefined;
   }
   const lexical = cached.lexical;
@@ -701,6 +730,9 @@ function handleCachedRecord(
   if (cached.kind === "binary" || cached.kind === "size-exceeded") {
     recordCandidateOmission(candidates, file.relativePath, cached.kind);
     return true;
+  }
+  if (runner.semantic !== undefined) {
+    return false;
   }
   if (abortScanFile(runner, state)) {
     return true;
@@ -731,7 +763,8 @@ async function handleLiveRecord(
   candidates: CandidateFile[],
   absolutePath: string | undefined,
 ): Promise<void> {
-  const binary = absolutePath === undefined ? "binary" : await binaryOmission(runner, file, absolutePath);
+  const binary =
+    absolutePath === undefined ? "binary" : await binaryOmission(runner, file, absolutePath);
   if (binary !== undefined) {
     if (binary === "binary" && absolutePath !== undefined) {
       persistWorkspaceIndexRecord(runner, {
@@ -749,7 +782,11 @@ async function handleLiveRecord(
   }
   state.filesScanned += 1;
   const text = readForScan(runner, file.relativePath, absolutePath, file.sizeBytes, candidates);
-  if (text === undefined || !shouldScoreContent(runner.query, text, runner.policy)) {
+  if (text === undefined) {
+    return;
+  }
+  collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
+  if (!shouldScoreContent(runner.query, text, runner.policy)) {
     return;
   }
   scanLines(runner, file.relativePath, text, state, atoms);

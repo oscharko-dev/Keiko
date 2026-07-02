@@ -22,6 +22,7 @@ import {
   type SearchLimits,
   type SearchScope,
 } from "./repoSearch.js";
+import type { SemanticSearchProvider } from "./repoSearchSemantic.js";
 import type { WorkspaceInfo } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -116,6 +117,70 @@ describe("searchText (memFs)", () => {
     expect(result.coverage.reasons).toEqual([]);
     expect(result.coverage.filesScanned).toBe(1);
     expect(result.coverage.matchesReturned).toBe(1);
+  });
+
+  it("keeps semantic retrieval disabled unless an approved provider is injected", async () => {
+    const { scope, fs } = memScope({
+      "README.md": "CheckoutMismatch reports the wrong purchase sum.\n",
+      "src/billing/calculateCharge.ts":
+        "export function deriveCharge(amount: number, tax: number): number {\n  return amount + tax;\n}\n",
+    });
+
+    const result = await searchText(
+      scope,
+      nlq("Investigate CheckoutMismatch purchase sum"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+      },
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).not.toContain(
+      "src/billing/calculateCharge.ts",
+    );
+  });
+
+  it("adds semantic-only evidence and explanations through an injected provider", async () => {
+    const { scope, fs } = memScope({
+      "README.md": "CheckoutMismatch reports the wrong purchase sum.\n",
+      "src/billing/calculateCharge.ts":
+        "export function deriveCharge(amount: number, tax: number): number {\n  return amount + tax;\n}\n",
+    });
+    const provider: SemanticSearchProvider = {
+      name: "local fixture",
+      search: ({ documents }) =>
+        Promise.resolve(
+          documents.some((document) => document.scopePath === "src/billing/calculateCharge.ts")
+            ? [{ scopePath: "src/billing/calculateCharge.ts", score: 0.97, line: 1 }]
+            : [],
+        ),
+    };
+
+    const result = await searchText(
+      scope,
+      nlq("Investigate CheckoutMismatch purchase sum"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        semanticSearchProvider: provider,
+      },
+    );
+
+    const semantic = result.atoms.find(
+      (atom) => atom.scopePath === "src/billing/calculateCharge.ts",
+    );
+    expect(semantic?.provenance.kind).toBe("model-rerank");
+    expect(semantic?.provenance.tool).toBe("repo.semanticSearch:local-fixture");
+    expect(semantic?.score).toBe(0.97);
+    expect(result.diagnostics?.rankedCandidates[0]?.scopePath).toBe(
+      "src/billing/calculateCharge.ts",
+    );
+    expect(result.diagnostics?.rankedCandidates[0]?.signals.map((signal) => signal.name)).toContain(
+      "semantic-score",
+    );
+    expect(JSON.stringify(result.diagnostics)).not.toContain("embedding");
   });
 
   it("honors an already-aborted signal before scanning files", async () => {
