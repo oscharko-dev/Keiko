@@ -35,21 +35,68 @@ function replaceTemplateExpressions(rawPath: string): string {
   return normalized;
 }
 
+function endpointPathBeforeQuery(rawPath: string): string {
+  const queryStart = rawPath.indexOf("?");
+  return queryStart === -1 ? rawPath : rawPath.slice(0, queryStart);
+}
+
+function isAsciiAlpha(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isParamIdentifierStart(code: number): boolean {
+  return isAsciiAlpha(code) || code === 95 || code === 36;
+}
+
+function isParamIdentifierPart(code: number): boolean {
+  return isParamIdentifierStart(code) || (code >= 48 && code <= 57) || code === 45;
+}
+
+function isBraceParamSegment(segment: string): boolean {
+  return segment.length > 2 && segment.startsWith("{") && segment.endsWith("}");
+}
+
+function isColonParamSegment(segment: string): boolean {
+  if (segment.length < 2 || segment.charCodeAt(0) !== 58) {
+    return false;
+  }
+  if (!isParamIdentifierStart(segment.charCodeAt(1))) {
+    return false;
+  }
+  for (let index = 2; index < segment.length; index += 1) {
+    if (!isParamIdentifierPart(segment.charCodeAt(index))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeEndpointSegment(segment: string): string {
+  return isBraceParamSegment(segment) || isColonParamSegment(segment) ? ":param" : segment;
+}
+
 export function normalizeEndpointPath(rawPath: string): string {
-  const withoutQuery = replaceTemplateExpressions(rawPath).split("?")[0] ?? "";
-  const prefixed = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-  const normalized = prefixed
-    .replace(/\{[^}/]+\}/gu, ":param")
-    .replace(/:[A-Za-z_$][\w$-]*/gu, ":param")
-    .replace(/\/+/gu, "/")
-    .replace(/\/$/u, "");
-  return normalized.length === 0 ? "/" : normalized.toLowerCase();
+  const withoutQuery = endpointPathBeforeQuery(replaceTemplateExpressions(rawPath));
+  const segments: string[] = [];
+  let segment = "";
+  for (const char of withoutQuery) {
+    if (char === "/") {
+      if (segment.length > 0) {
+        segments.push(normalizeEndpointSegment(segment));
+        segment = "";
+      }
+    } else {
+      segment += char;
+    }
+  }
+  if (segment.length > 0) {
+    segments.push(normalizeEndpointSegment(segment));
+  }
+  return segments.length === 0 ? "/" : `/${segments.join("/")}`.toLowerCase();
 }
 
 export function joinEndpointPaths(basePath: string, childPath: string): string {
-  const base = basePath === "/" ? "" : basePath.replace(/\/$/u, "");
-  const child = childPath === "/" ? "" : childPath.replace(/^\//u, "");
-  return normalizeEndpointPath(`${base}/${child}`);
+  return normalizeEndpointPath(`${basePath}/${childPath}`);
 }
 
 export function unquote(value: string): string {
