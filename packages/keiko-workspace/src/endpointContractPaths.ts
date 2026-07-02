@@ -17,8 +17,26 @@ export function normalizeScopePath(scopePath: string): string {
   return path.normalize(scopePath.split("\\").join("/")).replace(/^\.\//u, "");
 }
 
+function replaceTemplateExpressions(rawPath: string): string {
+  let normalized = "";
+  let cursor = 0;
+  while (cursor < rawPath.length) {
+    if (rawPath.charCodeAt(cursor) === 36 && rawPath.charCodeAt(cursor + 1) === 123) {
+      const end = rawPath.indexOf("}", cursor + 2);
+      if (end !== -1) {
+        normalized += "{param}";
+        cursor = end + 1;
+        continue;
+      }
+    }
+    normalized += rawPath[cursor] ?? "";
+    cursor += 1;
+  }
+  return normalized;
+}
+
 export function normalizeEndpointPath(rawPath: string): string {
-  const withoutQuery = rawPath.replace(/\$\{[^}]+\}/gu, "{param}").split("?")[0] ?? "";
+  const withoutQuery = replaceTemplateExpressions(rawPath).split("?")[0] ?? "";
   const prefixed = withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
   const normalized = prefixed
     .replace(/\{[^}/]+\}/gu, ":param")

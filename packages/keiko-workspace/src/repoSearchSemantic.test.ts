@@ -11,6 +11,10 @@ describe("repoSearchSemantic", () => {
     expect(semanticSearchTool("Local Fixture Provider")).toBe(
       "repo.semanticSearch:local-fixture-provider",
     );
+    expect(semanticSearchTool("---Enterprise@@Provider---")).toBe(
+      "repo.semanticSearch:enterprise-provider",
+    );
+    expect(semanticSearchTool("!!!")).toBe("repo.semanticSearch:unnamed");
   });
 
   it("fuses lexical and semantic ranks deterministically without comparing raw scores", () => {

@@ -40,6 +40,9 @@ describe("normalizeEndpointPath", () => {
   it("normalizes framework and template placeholders to one comparable shape", () => {
     expect(normalizeEndpointPath("/api/orders/{id}?expand=true")).toBe("/api/orders/:param");
     expect(normalizeEndpointPath("api/orders/${id}")).toBe("/api/orders/:param");
+    expect(normalizeEndpointPath("api/${tenant}/orders/${id}?expand=true")).toBe(
+      "/api/:param/orders/:param",
+    );
   });
 });
 

@@ -31,6 +31,15 @@ describe("resolveSearchPolicy", () => {
     expect(explicit.applyGitignore).toBe(false);
     expect(explicit.omitLowValueWorkspaceFiles).toBe(false);
   });
+
+  it("normalizes hint paths without accepting traversal or denied paths", () => {
+    const policy = resolveSearchPolicy(false, {
+      lowValuePathAllowlist: ["./vendor/generated///", "../outside", ".env"],
+      recentPaths: ["src\\payments\\PaymentService.ts///"],
+    });
+    expect(policy.lowValuePathAllowlist).toEqual(["vendor/generated"]);
+    expect(policy.recentPaths).toEqual(["src/payments/PaymentService.ts"]);
+  });
 });
 
 describe("legacyDiscoveryPolicy", () => {

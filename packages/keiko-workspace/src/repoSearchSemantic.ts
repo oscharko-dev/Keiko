@@ -74,11 +74,38 @@ function pathRanks(paths: readonly RankedPath[]): ReadonlyMap<string, number> {
   return new Map(sorted.map((entry, index) => [entry.scopePath, index + 1]));
 }
 
+function isSafeProviderNameChar(char: string): boolean {
+  return (
+    (char >= "a" && char <= "z") ||
+    (char >= "0" && char <= "9") ||
+    char === "_" ||
+    char === "." ||
+    char === ":" ||
+    char === "-"
+  );
+}
+
+function stripEdgeHyphens(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value.charCodeAt(start) === 45) start += 1;
+  while (end > start && value.charCodeAt(end - 1) === 45) end -= 1;
+  return value.slice(start, end);
+}
+
 function safeProviderName(name: string): string {
-  const cleaned = name
-    .toLowerCase()
-    .replace(/[^a-z0-9_.:-]+/gu, "-")
-    .replace(/^-+|-+$/gu, "");
+  let cleaned = "";
+  let pendingSeparator = false;
+  for (const char of name.toLowerCase()) {
+    if (isSafeProviderNameChar(char)) {
+      if (pendingSeparator && cleaned.length > 0) cleaned += "-";
+      cleaned += char;
+      pendingSeparator = false;
+    } else {
+      pendingSeparator = true;
+    }
+  }
+  cleaned = stripEdgeHyphens(cleaned);
   return cleaned.length === 0 ? "unnamed" : cleaned;
 }
 

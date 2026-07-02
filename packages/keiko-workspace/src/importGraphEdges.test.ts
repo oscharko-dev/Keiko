@@ -87,6 +87,22 @@ describe("buildImportGraph", () => {
     });
   });
 
+  it("substitutes every wildcard occurrence in tsconfig alias targets", async () => {
+    const { scope, fs } = makeScope({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@app/*": ["src/*/bar/*"] } },
+      }),
+      "src/a.ts": 'import { lib } from "@app/lib";',
+      "src/lib/bar/lib.ts": "export const lib = 1;",
+    });
+    const graph = await buildImportGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(graph.edges[0]).toMatchObject({
+      specifier: "@app/lib",
+      targetPath: "src/lib/bar/lib.ts",
+      resolutionKind: "tsconfig-path",
+    });
+  });
+
   it("resolves barrel re-exports", async () => {
     const { scope, fs } = makeScope({
       "src/index.ts": 'export * from "./feature";',

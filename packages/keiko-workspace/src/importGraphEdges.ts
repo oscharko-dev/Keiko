@@ -237,7 +237,7 @@ function resolveAlias(
     const capture =
       star === -1 ? "" : specifier.slice(prefix.length, specifier.length - suffix.length);
     for (const target of alias.targets) {
-      const candidate = path.join(alias.baseUrl, target.replace("*", capture));
+      const candidate = path.join(alias.baseUrl, target.split("*").join(capture));
       const resolved = resolveModuleCandidate(scope, fs, candidate);
       if (resolved !== undefined) return resolved;
     }

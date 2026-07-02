@@ -216,8 +216,24 @@ function normalizedPath(scopePath: string): string {
   return scopePath.split("\\").join("/").toLowerCase();
 }
 
+function stripDotSlashPrefix(path: string): string {
+  let normalized = path;
+  while (normalized.startsWith("./")) {
+    normalized = normalized.slice(2);
+  }
+  return normalized;
+}
+
+function stripTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return path.slice(0, end);
+}
+
 function normalizedScopePath(scopePath: string): string | undefined {
-  const normalized = scopePath.replace(/\\/g, "/").replace(/^\.\//u, "").replace(/\/+$/u, "");
+  const normalized = stripTrailingSlashes(stripDotSlashPrefix(scopePath.split("\\").join("/")));
   if (normalized.length === 0 || !isValidScopePath(normalized, { mustBeRelative: true })) {
     return undefined;
   }
