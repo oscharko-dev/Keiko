@@ -1634,15 +1634,19 @@ function repositoryOverviewAtoms(
   return atoms;
 }
 
-async function withDeterministicContextAtoms(
-  rings: RingRunSummary,
+interface DeterministicContextEvidence {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly uncertainty: readonly UncertaintyMarker[];
+}
+
+async function deterministicContextEvidence(
   input: OrchestratorInput,
   plan: ExplorationPlan,
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
   signal: AbortSignal | undefined,
-): Promise<RingRunSummary> {
+): Promise<DeterministicContextEvidence> {
   const existsCache = createFileExistenceCache();
   const metadataQueryFingerprint = projectMetadataQueryFingerprint(input.query);
   const [symbolDiscovery, traceEvidence] = await Promise.all([
@@ -1658,36 +1662,50 @@ async function withDeterministicContextAtoms(
       signal,
     }),
   ]);
-  const deterministicAtoms = [
-    ...symbolDiscovery.atoms,
-    ...traceEvidence.atoms,
-    ...projectMetadataAtoms(
-      input,
-      plan.retrievalIntent,
-      searchScope,
-      fs,
-      nowMs,
-      metadataQueryFingerprint,
-      existsCache,
-    ),
-    ...repositoryOverviewAtoms(
-      input,
-      plan.retrievalIntent,
-      searchScope,
-      fs,
-      nowMs,
-      metadataQueryFingerprint,
-      existsCache,
-    ),
-  ];
-  const uncertainty = [...symbolDiscovery.uncertainty, ...traceEvidence.uncertainty];
-  if (deterministicAtoms.length === 0 && uncertainty.length === 0) {
+  return {
+    atoms: [
+      ...symbolDiscovery.atoms,
+      ...traceEvidence.atoms,
+      ...projectMetadataAtoms(
+        input,
+        plan.retrievalIntent,
+        searchScope,
+        fs,
+        nowMs,
+        metadataQueryFingerprint,
+        existsCache,
+      ),
+      ...repositoryOverviewAtoms(
+        input,
+        plan.retrievalIntent,
+        searchScope,
+        fs,
+        nowMs,
+        metadataQueryFingerprint,
+        existsCache,
+      ),
+    ],
+    uncertainty: [...symbolDiscovery.uncertainty, ...traceEvidence.uncertainty],
+  };
+}
+
+async function withDeterministicContextAtoms(
+  rings: RingRunSummary,
+  input: OrchestratorInput,
+  plan: ExplorationPlan,
+  searchScope: SearchScope,
+  fs: WorkspaceFs,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+): Promise<RingRunSummary> {
+  const deterministic = await deterministicContextEvidence(input, plan, searchScope, fs, nowMs, signal);
+  if (deterministic.atoms.length === 0 && deterministic.uncertainty.length === 0) {
     return rings;
   }
   return {
     ...rings,
-    atoms: [...rings.atoms, ...deterministicAtoms],
-    uncertainty: [...rings.uncertainty, ...uncertainty],
+    atoms: [...rings.atoms, ...deterministic.atoms],
+    uncertainty: [...rings.uncertainty, ...deterministic.uncertainty],
   };
 }
 
