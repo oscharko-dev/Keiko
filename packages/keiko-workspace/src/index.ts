@@ -165,8 +165,9 @@ export {
   hashExcerptContent,
   importEdgeStableId,
   MAX_HASH_FILE_BYTES,
+  symbolGraphRecordStableId,
 } from "./stableId.js";
-export type { ImportEdgeStableIdInput } from "./stableId.js";
+export type { ImportEdgeStableIdInput, SymbolGraphRecordStableIdInput } from "./stableId.js";
 
 // ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
 export type {
@@ -196,6 +197,20 @@ export {
   importsFromSource,
   importersForTarget,
 } from "./importGraphEdges.js";
+export type {
+  SymbolDefinitionKind,
+  SymbolGraph,
+  SymbolGraphDiagnostics,
+  SymbolGraphRecord,
+  SymbolGraphRecordKind,
+} from "./symbolGraph.js";
+export {
+  buildSymbolGraph,
+  callsToSymbol,
+  definitionsForSymbol,
+  referencesForSymbol,
+  symbolGraphAdapter,
+} from "./symbolGraph.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";

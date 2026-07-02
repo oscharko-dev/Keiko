@@ -26,6 +26,15 @@ export interface ImportEdgeStableIdInput {
   readonly ordinal: number;
 }
 
+export interface SymbolGraphRecordStableIdInput {
+  readonly symbol: string;
+  readonly scopePath: string;
+  readonly kind: string;
+  readonly line: number;
+  readonly ordinal: number;
+  readonly enclosingSymbol?: string | undefined;
+}
+
 function canonicalize(value: JsonValue | undefined): string {
   if (value === undefined) {
     return "null";
@@ -84,6 +93,18 @@ export function importEdgeStableId(input: ImportEdgeStableIdInput): string {
     ordinal: input.ordinal,
   };
   return `ie-${sha256Hex(canonicalize(shape))}`;
+}
+
+export function symbolGraphRecordStableId(input: SymbolGraphRecordStableIdInput): string {
+  const shape: JsonObject = {
+    symbol: input.symbol,
+    scopePath: input.scopePath,
+    kind: input.kind,
+    line: input.line,
+    ordinal: input.ordinal,
+    enclosingSymbol: input.enclosingSymbol,
+  };
+  return `sg-${sha256Hex(canonicalize(shape))}`;
 }
 
 // Coarse byte cap (128 KiB) for the file-level invalidation hash. Matches the exploration budget's

@@ -61,6 +61,7 @@ import {
   resolveWithinWorkspace,
   runStructuralAdapters,
   searchText,
+  symbolGraphAdapter,
   type SearchScope,
   type StructuralAdapterRegistry,
   testSourcePairingAdapter,
@@ -115,7 +116,8 @@ export interface OrchestratorDeps {
   readonly contextProfile?: ContextProfile | undefined;
   // Issue #1736 — optional production index provider. Tests and unsupported runtime dirs omit it;
   // the lexical ring falls back to bounded live scans.
-  readonly workspaceIndexForRoot?: ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
+  readonly workspaceIndexForRoot?:
+    ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
 }
 
 export interface OrchestratorOutput {
@@ -504,6 +506,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
       ? {
           adapters: [
             testSourcePairingAdapter,
+            symbolGraphAdapter,
             importGraphAdapter,
             ...createEcosystemStructureAdapters(),
           ],
@@ -1063,9 +1066,6 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
       seen.add(anchor.term);
       terms.push(anchor.term);
     }
-    if (terms.length >= 3) {
-      break;
-    }
   }
   return terms;
 }
@@ -1323,7 +1323,13 @@ function pushSymbolLineAtom(
   pushUniqueAtom(
     atoms,
     seen,
-    symbolLineAtom(input.scope, atom.scopePath, lineNumber, atom.provenance.queryFingerprint, nowMs),
+    symbolLineAtom(
+      input.scope,
+      atom.scopePath,
+      lineNumber,
+      atom.provenance.queryFingerprint,
+      nowMs,
+    ),
   );
 }
 

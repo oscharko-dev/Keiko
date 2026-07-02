@@ -28,6 +28,7 @@ import {
 import {
   gitHistoryAdapter,
   importGraphAdapter,
+  symbolGraphAdapter,
   testSourcePairingAdapter,
   type WorkspaceFs,
   type WorkspaceDirEntry,
@@ -603,10 +604,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("surfaces incomplete coverage when workspace discovery prunes deep directories", async () => {
-    const deepDir = join(
-      ROOT,
-      ...Array.from({ length: 14 }, (_, i) => `depth-${String(i)}`),
-    );
+    const deepDir = join(ROOT, ...Array.from({ length: 14 }, (_, i) => `depth-${String(i)}`));
     mkdirSync(deepDir, { recursive: true });
     writeFileSync(join(deepDir, "deep.ts"), "export const DepthProbe = 'hidden';\n");
     writeFileSync(join(ROOT, "src/top.ts"), "export const DepthProbe = 'visible';\n");
@@ -692,19 +690,20 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it(
-    "surfaces symbol line-read overflow after prioritized definition lookup",
-    async () => {
-      const term = "OverflowProbe";
-      for (let index = 0; index < 65; index += 1) {
-        const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(
-          join(dir, `${term}.ts`),
-          `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
-        );
-      }
+  it("keeps deterministic symbol-file discovery beyond the first three identifier anchors", async () => {
+    for (const symbol of ["AlphaOne", "BetaTwo", "GammaThree", "ZetaFour"]) {
+      writeFileSync(
+        join(ROOT, "src", `${symbol}.ts`),
+        `export function ${symbol}(): string {\n  return "${symbol}";\n}\n`,
+      );
+    }
 
+    const adapter = symbolGraphAdapter as {
+      isAvailable: typeof symbolGraphAdapter.isAvailable;
+    };
+    const originalIsAvailable = adapter.isAvailable;
+    adapter.isAvailable = (): Promise<boolean> => Promise.resolve(false);
+    try {
       const out = await retrieveConnectedContextPack(
         input({
           scope: happyScope({
@@ -712,7 +711,9 @@ describe("runGroundedExploration", () => {
             relativePaths: [],
             explicitConnection: true,
           }),
-          query: happyQuery({ text: "Trace OverflowProbe implementations" }),
+          query: happyQuery({
+            text: "Trace AlphaOne BetaTwo GammaThree ZetaFour implementations",
+          }),
         }),
         {
           answerer: echoAnswerer,
@@ -721,17 +722,48 @@ describe("runGroundedExploration", () => {
         },
       );
 
-      const marker = out.pack.uncertainty.find(
-        (entry) =>
-          entry.kind === "scope-incomplete" &&
-          entry.claim.includes("Symbol line lookup skipped"),
-      );
-      expect(marker?.claim).toContain("prioritized line reads");
-      expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
+      expect(out.pack.files.map((file) => file.scopePath)).toContain("src/ZetaFour.ts");
       expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-    },
-    15_000,
-  );
+    } finally {
+      adapter.isAvailable = originalIsAvailable;
+    }
+  });
+
+  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
+    const term = "OverflowProbe";
+    for (let index = 0; index < 65; index += 1) {
+      const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, `${term}.ts`),
+        `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+      );
+    }
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Trace OverflowProbe implementations" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" && entry.claim.includes("Symbol line lookup skipped"),
+    );
+    expect(marker?.claim).toContain("prioritized line reads");
+    expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  }, 15_000);
 
   it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
     writeFileSync(
@@ -1572,9 +1604,9 @@ describe("isSymbolDefinitionPath", () => {
     );
     expect(isSymbolDefinitionPath("src/windowFrame.ts", "WindowFrame")).toBe(true);
     expect(isSymbolDefinitionPath("a/b/Foo.vue", "foo")).toBe(true);
-    expect(isSymbolDefinitionPath("src/main/java/com/acme/PaymentService.java", "PaymentService")).toBe(
-      true,
-    );
+    expect(
+      isSymbolDefinitionPath("src/main/java/com/acme/PaymentService.java", "PaymentService"),
+    ).toBe(true);
     expect(isSymbolDefinitionPath("app/payment_service.py", "payment_service")).toBe(true);
     expect(isSymbolDefinitionPath("cmd/api/payment_service.go", "payment_service")).toBe(true);
   });
@@ -1585,8 +1617,8 @@ describe("isSymbolDefinitionPath", () => {
     expect(isSymbolDefinitionPath("src/PaymentService.stories.tsx", "PaymentService")).toBe(false);
     expect(isSymbolDefinitionPath("docs/PaymentService.md", "PaymentService")).toBe(false);
     expect(isSymbolDefinitionPath("src/PaymentService.d.ts", "PaymentService")).toBe(false);
-    expect(isSymbolDefinitionPath("src/test/java/com/acme/PaymentServiceTest.java", "PaymentService")).toBe(
-      false,
-    );
+    expect(
+      isSymbolDefinitionPath("src/test/java/com/acme/PaymentServiceTest.java", "PaymentService"),
+    ).toBe(false);
   });
 });
