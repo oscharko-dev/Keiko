@@ -24,8 +24,7 @@ const HEAD_SOURCE_TURNS = 4;
 const MAX_TURN_SOURCE_CHARS = 1_200;
 const MAX_MODEL_SOURCE_CHARS = 14_000;
 const ABSOLUTE_PATH_PATTERN = /(?:^|\s)(?:\/[\w.-]+(?:\/[\w.-]+)+|[A-Za-z]:\\[^\s]+)/u;
-const ABSOLUTE_PATH_GLOBAL_PATTERN =
-  /(?:^|\s)(?:\/[\w.-]+(?:\/[\w.-]+)+|[A-Za-z]:\\[^\s]+)/gu;
+const ABSOLUTE_PATH_GLOBAL_PATTERN = /(?:^|\s)(?:\/[\w.-]+(?:\/[\w.-]+)+|[A-Za-z]:\\[^\s]+)/gu;
 
 type ModelSummaryFailureReason = NonNullable<ContextCompactionModelSummary["failureReason"]>;
 type ModelSummaryValidationState = ContextCompactionModelSummary["validationState"];
@@ -207,7 +206,9 @@ function modelSummaryFromPayload(
     ...(payload.decisions.length === 0 ? {} : { decisions: payload.decisions }),
     ...(payload.constraints.length === 0 ? {} : { constraints: payload.constraints }),
     ...(payload.filesAndSymbols.length === 0 ? {} : { filesAndSymbols: payload.filesAndSymbols }),
-    ...(payload.debuggingContext.length === 0 ? {} : { debuggingContext: payload.debuggingContext }),
+    ...(payload.debuggingContext.length === 0
+      ? {}
+      : { debuggingContext: payload.debuggingContext }),
     ...(payload.openThreads.length === 0 ? {} : { openThreads: payload.openThreads }),
   });
 }
@@ -286,9 +287,21 @@ function buildSummaryPrompt(
 
 function recordSignalLines(record: ContextCompactionRecord): string[] {
   const lines = ["Structured deterministic signals:"];
-  addList(lines, "Facts", record.preservedFacts?.map((fact) => fact.statement));
-  addList(lines, "Constraints", record.userConstraints?.map((item) => item.statement));
-  addList(lines, "Assumptions", record.assumptions?.map((item) => item.statement));
+  addList(
+    lines,
+    "Facts",
+    record.preservedFacts?.map((fact) => fact.statement),
+  );
+  addList(
+    lines,
+    "Constraints",
+    record.userConstraints?.map((item) => item.statement),
+  );
+  addList(
+    lines,
+    "Assumptions",
+    record.assumptions?.map((item) => item.statement),
+  );
   addList(lines, "Decisions", record.decisions);
   addList(lines, "Open questions", record.openQuestions);
   addList(lines, "Errors", record.failingTests);
@@ -486,8 +499,15 @@ function sanitizeSummaryContent(
   if (typeof raw !== "string") {
     return undefined;
   }
-  const safe = normalizeSummaryText(raw, redactor, CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS, true);
-  return safe === undefined ? undefined : { value: safe.value, changed: safe.changed };
+  const safe = normalizeSummaryText(
+    raw,
+    redactor,
+    CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+    true,
+  );
+  return safe === undefined
+    ? { value: "", changed: true }
+    : { value: safe.value, changed: safe.changed };
 }
 
 function sanitizeSummaryItems(raw: unknown, redactor: Redactor): SanitizedSummaryItems | undefined {
@@ -539,9 +559,7 @@ function normalizeSummaryText(
   if (redacted.includes("```")) {
     return undefined;
   }
-  const normalized = stripUnsafeFormatChars(redacted)
-    .normalize("NFKC")
-    .replace(/\r\n?/gu, "\n");
+  const normalized = stripUnsafeFormatChars(redacted).normalize("NFKC").replace(/\r\n?/gu, "\n");
   const compacted = allowMultiline
     ? normalized
         .split("\n")
@@ -554,7 +572,9 @@ function normalizeSummaryText(
     return undefined;
   }
   const clamped = clampText(compacted, maxChars);
-  return { value: clamped, changed: clamped !== raw };
+  const changed =
+    redacted !== raw || stripUnsafeFormatChars(redacted) !== redacted || clamped !== compacted;
+  return { value: clamped, changed };
 }
 
 function synthesizeSummaryContent(fields: {

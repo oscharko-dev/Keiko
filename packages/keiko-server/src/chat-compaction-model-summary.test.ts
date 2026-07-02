@@ -272,6 +272,68 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(persisted.content).toBe("");
   });
 
+  it("accepts a structured summary needing no safety redaction despite cosmetic whitespace", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    const model: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        calls.push(request);
+        return Promise.resolve(
+          response("", {
+            content: "  Keep the compaction plan active.  \n\n  Nothing sensitive here.  ",
+            decisions: ["  use structured running-summary evidence  "],
+            constraints: [],
+            filesAndSymbols: [],
+            debuggingContext: [],
+            openThreads: [],
+          }),
+        );
+      },
+    };
+
+    await enrichChatCompactionWithModelSummary(deps(store, model), defaultEnrichmentInput(7));
+
+    const persisted = requireModelSummary(store, 7);
+    expect(persisted.status).toBe("valid");
+    expect(persisted.validationState).toBe("accepted");
+    expect(persisted.content).toContain("Keep the compaction plan active.");
+    expect(requireStrings(persisted.decisions, "decisions")).toContain(
+      "use structured running-summary evidence",
+    );
+  });
+
+  it("synthesizes content from structured fields when the model returns blank content", async () => {
+    const store = createInMemoryEvidenceStore();
+    const model: ModelPort = {
+      call(): Promise<NormalizedResponse> {
+        return Promise.resolve(
+          response("", {
+            content: "   ",
+            decisions: ["use structured running-summary evidence"],
+            constraints: [`Do not persist ${SECRET}`],
+            filesAndSymbols: [],
+            debuggingContext: [],
+            openThreads: [],
+          }),
+        );
+      },
+    };
+
+    await enrichChatCompactionWithModelSummary(deps(store, model), defaultEnrichmentInput(8));
+
+    const persisted = requireModelSummary(store, 8);
+    expect(persisted.status).toBe("valid");
+    expect(persisted.validationState).toBe("redacted");
+    expect(persisted.content).not.toHaveLength(0);
+    expect(persisted.content.startsWith("Decisions:")).toBe(true);
+    expect(persisted.content).toContain("use structured running-summary evidence");
+    expect(persisted.content).not.toContain(SECRET);
+    expect(requireStrings(persisted.decisions, "decisions")).toContain(
+      "use structured running-summary evidence",
+    );
+    expect(requireStrings(persisted.constraints, "constraints").join("\n")).not.toContain(SECRET);
+  });
+
   it("persists timed-out metadata when the summary call does not settle", async () => {
     vi.useFakeTimers();
     const store = createInMemoryEvidenceStore();
