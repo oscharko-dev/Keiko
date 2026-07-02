@@ -27,7 +27,7 @@ import type {
 } from "../../../../../lib/types";
 import KeikoSelect from "../../KeikoSelect";
 import { subscribeSharedEventSource } from "./sharedEventSource";
-import "./TerminalWidget.module.css";
+import styles from "./TerminalWidget.module.css";
 
 interface ContainerStatusWidgetProps {
   readonly projectPath?: string;
@@ -326,7 +326,7 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
   }, [inFlightRunId]);
 
   return (
-    <div className="terminal commands">
+    <div className={`terminal commands ${styles.lazyWidgetScope}`}>
       {/* Graceful-degradation status panel — ALWAYS rendered (never an error boundary, never
           blocks). polite live region carrying the structured engine state + remediation hint. */}
       <section role="status" aria-live="polite" aria-label="Container engine status">

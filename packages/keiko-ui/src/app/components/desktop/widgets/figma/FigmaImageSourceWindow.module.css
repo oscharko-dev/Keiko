@@ -1,4 +1,8 @@
-:global(.figma-image-window) {
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope:global(.figma-image-window) {
   min-height: 100%;
   height: 100%;
   display: grid;
@@ -8,14 +12,14 @@
   overflow: hidden;
 }
 
-:global(.figma-image-preview) {
+.lazyWidgetScope :global(.figma-image-preview) {
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: color-mix(in oklch, var(--background-primary) 92%, black);
 }
 
-:global(.figma-image-missing) {
+.lazyWidgetScope :global(.figma-image-missing) {
   margin: 16px;
   padding: 12px;
   border: 1px solid color-mix(in oklch, var(--feedback-danger) 42%, var(--border-default));

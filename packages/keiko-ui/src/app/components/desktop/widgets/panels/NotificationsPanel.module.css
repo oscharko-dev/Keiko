@@ -1,27 +1,31 @@
-:global(.nt-row) {
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope :global(.nt-row) {
   display: flex;
   gap: 9px;
   padding: 10px;
   border-radius: 9px;
 }
 
-:global(.nt-row:hover) {
+.lazyWidgetScope :global(.nt-row:hover) {
   background: var(--card-2);
 }
 
-:global(.nt-text) {
+.lazyWidgetScope :global(.nt-text) {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-:global(.nt-title) {
+.lazyWidgetScope :global(.nt-title) {
   font-size: 12.5px;
   color: var(--fg);
   line-height: 1.35;
 }
 
-:global(.nt-time) {
+.lazyWidgetScope :global(.nt-time) {
   font-size: 10.5px;
   color: var(--fg-muted); /* --fg-faint 2.3-3.1:1, AA fail (uiux-fix F012) */
 }

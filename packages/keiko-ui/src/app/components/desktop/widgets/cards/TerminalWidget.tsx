@@ -14,7 +14,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from "react";
-import "./TerminalWidget.module.css";
+import styles from "./TerminalWidget.module.css";
 import { ApiError } from "../../../../../lib/api";
 import { formatBytes, formatMs } from "../../../../../lib/format";
 import {
@@ -260,7 +260,7 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   }, [running]);
 
   return (
-    <div className="terminal">
+    <div className={`terminal ${styles.lazyWidgetScope}`}>
       <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
         <label className="tm-field">
           <span>Project path</span>

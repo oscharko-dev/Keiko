@@ -1,4 +1,8 @@
-:global(.terminal) {
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope:global(.terminal) {
   padding: 12px 14px;
   font-size: 12.5px;
   line-height: 1.75;
@@ -11,13 +15,13 @@
   gap: 8px;
 }
 
-:global(.tm-form) {
+.lazyWidgetScope :global(.tm-form) {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-:global(.tm-field) {
+.lazyWidgetScope :global(.tm-field) {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -26,8 +30,8 @@
   color: var(--fg-muted);
 }
 
-:global(.tm-field input),
-:global(.tm-field select) {
+.lazyWidgetScope :global(.tm-field input),
+.lazyWidgetScope :global(.tm-field select) {
   background: var(--card);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
@@ -38,43 +42,43 @@
   font-family: var(--font-ui);
 }
 
-:global(:root[data-input-modality="keyboard"] .tm-field input:focus),
-:global(:root[data-input-modality="keyboard"] .tm-field select:focus) {
+:global(:root[data-input-modality="keyboard"]) .lazyWidgetScope :global(.tm-field input:focus),
+:global(:root[data-input-modality="keyboard"]) .lazyWidgetScope :global(.tm-field select:focus) {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-:global(:root[data-input-modality="pointer"] .tm-field input:focus),
-:global(:root[data-input-modality="pointer"] .tm-field select:focus) {
+:global(:root[data-input-modality="pointer"]) .lazyWidgetScope :global(.tm-field input:focus),
+:global(:root[data-input-modality="pointer"]) .lazyWidgetScope :global(.tm-field select:focus) {
   outline: none !important;
   border-color: var(--line-strong) !important;
   box-shadow: none !important;
 }
 
-:global(.tm-field input):focus-visible,
-:global(.tm-field select):focus-visible {
+.lazyWidgetScope :global(.tm-field input):focus-visible,
+.lazyWidgetScope :global(.tm-field select):focus-visible {
   outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 1px;
 }
 
-:global(.tm-field input):disabled,
-:global(.tm-field select):disabled {
+.lazyWidgetScope :global(.tm-field input):disabled,
+.lazyWidgetScope :global(.tm-field select):disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-:global(.tm-field input::placeholder) {
+.lazyWidgetScope :global(.tm-field input::placeholder) {
   color: var(--fg-muted);
 }
 
-:global(.tm-actions) {
+.lazyWidgetScope :global(.tm-actions) {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 2px;
 }
 
-:global(.tm-action) {
+.lazyWidgetScope :global(.tm-action) {
   padding: 6px 14px;
   min-height: 28px;
   min-width: 56px;
@@ -87,31 +91,31 @@
   cursor: pointer;
 }
 
-:global(.tm-action):hover:not(:disabled) {
+.lazyWidgetScope :global(.tm-action):hover:not(:disabled) {
   background: var(--button-secondary-surface-hover);
   color: var(--button-secondary-text);
   border-color: var(--border-strong);
 }
 
-:global(.tm-action):disabled {
+.lazyWidgetScope :global(.tm-action):disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-:global(.tm-action):focus-visible {
+.lazyWidgetScope :global(.tm-action):focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  :global(.tm-field input),
-  :global(.tm-field select) {
+  .lazyWidgetScope :global(.tm-field input),
+  .lazyWidgetScope :global(.tm-field select) {
     transition:
       border-color 0.12s,
       box-shadow 0.12s;
   }
 
-  :global(.tm-action) {
+  .lazyWidgetScope :global(.tm-action) {
     transition:
       background 0.12s,
       color 0.12s,
@@ -119,41 +123,41 @@
   }
 }
 
-:global(.tm-action[data-primary="true"]) {
+.lazyWidgetScope :global(.tm-action[data-primary="true"]) {
   background: var(--accent);
   color: var(--button-primary-text);
   border-color: var(--accent);
 }
 
-:global(.tm-action[data-primary="true"]):hover:not(:disabled) {
+.lazyWidgetScope :global(.tm-action[data-primary="true"]):hover:not(:disabled) {
   filter: brightness(1.06);
 }
 
-:global(.tm-action[aria-disabled="true"]) {
+.lazyWidgetScope :global(.tm-action[aria-disabled="true"]) {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-:global(.tm-action[aria-disabled="true"]):hover {
+.lazyWidgetScope :global(.tm-action[aria-disabled="true"]):hover {
   background: var(--button-secondary-surface);
   color: var(--text-secondary);
   border-color: var(--button-secondary-border);
 }
 
-:global(.tm-action[data-primary="true"][aria-disabled="true"]):hover {
+.lazyWidgetScope :global(.tm-action[data-primary="true"][aria-disabled="true"]):hover {
   background: var(--accent);
   color: var(--button-primary-text);
   border-color: var(--accent);
   filter: none;
 }
 
-:global(.tm-limits) {
+.lazyWidgetScope :global(.tm-limits) {
   font-size: 11px;
   color: var(--fg-dim);
   margin: 0;
 }
 
-:global(.tm-error) {
+.lazyWidgetScope :global(.tm-error) {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -165,11 +169,11 @@
   font-size: 12.5px;
 }
 
-:global(.tm-error-text) {
+.lazyWidgetScope :global(.tm-error-text) {
   flex: 1;
 }
 
-:global(.tm-error-dismiss) {
+.lazyWidgetScope :global(.tm-error-dismiss) {
   flex: none;
   min-height: 24px;
   min-width: 24px;
@@ -179,30 +183,30 @@
   color: var(--fg-dim);
 }
 
-:global(.tm-error-dismiss):hover {
+.lazyWidgetScope :global(.tm-error-dismiss):hover {
   color: var(--fg);
   background: var(--card-2);
 }
 
-:global(.tm-error-dismiss):focus-visible {
+.lazyWidgetScope :global(.tm-error-dismiss):focus-visible {
   outline: var(--focus-width, 2px) solid var(--accent-text);
   outline-offset: 2px;
 }
 
-:global(.tm-result) {
+.lazyWidgetScope :global(.tm-result) {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-:global(.tm-badges) {
+.lazyWidgetScope :global(.tm-badges) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
-:global(.tm-badge) {
+.lazyWidgetScope :global(.tm-badge) {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
@@ -214,26 +218,26 @@
   color: var(--fg-muted);
 }
 
-:global(.tm-badge-ok) {
+.lazyWidgetScope :global(.tm-badge-ok) {
   background: color-mix(in oklch, var(--ok) 18%, var(--inset));
   border-color: var(--accent-line);
   color: var(--accent-text);
 }
 
-:global(.tm-badge-fail) {
+.lazyWidgetScope :global(.tm-badge-fail) {
   background: color-mix(in oklch, var(--danger) 18%, var(--inset));
   border-color: color-mix(in oklch, var(--danger) 45%, transparent);
   color: var(--danger);
 }
 
-:global(.tm-badge-warn) {
+.lazyWidgetScope :global(.tm-badge-warn) {
   background: color-mix(in oklch, var(--warn) 18%, var(--inset));
   border-color: color-mix(in oklch, var(--warn) 45%, transparent);
   color: var(--warn);
 }
 
-:global(.tm-stdout),
-:global(.tm-stderr) {
+.lazyWidgetScope :global(.tm-stdout),
+.lazyWidgetScope :global(.tm-stderr) {
   margin: 0;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
@@ -249,12 +253,12 @@
   max-height: 16rem;
 }
 
-:global(.tm-stderr) {
+.lazyWidgetScope :global(.tm-stderr) {
   border-color: color-mix(in oklch, var(--danger) 40%, transparent);
   color: var(--fg-muted);
 }
 
-:global(.tm-events) {
+.lazyWidgetScope :global(.tm-events) {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -263,7 +267,7 @@
   gap: 2px;
 }
 
-:global(.tm-event) {
+.lazyWidgetScope :global(.tm-event) {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -272,11 +276,11 @@
   font-size: 11.5px;
 }
 
-:global(.tm-event):hover {
+.lazyWidgetScope :global(.tm-event):hover {
   background: var(--card);
 }
 
-:global(.tm-event-kind) {
+.lazyWidgetScope :global(.tm-event-kind) {
   font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
@@ -285,7 +289,7 @@
   min-width: 72px;
 }
 
-:global(.tm-event-detail) {
+.lazyWidgetScope :global(.tm-event-detail) {
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;

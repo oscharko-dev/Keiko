@@ -1,4 +1,8 @@
-:global(.connector-picker) {
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope:global(.connector-picker) {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -9,7 +13,7 @@
   font-size: 12.5px;
 }
 
-:global(.connector-picker-label) {
+.lazyWidgetScope :global(.connector-picker-label) {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -17,7 +21,7 @@
   color: var(--text-secondary);
 }
 
-:global(.connector-picker-select) {
+.lazyWidgetScope :global(.connector-picker-select) {
   min-height: 28px;
   padding: 6px 9px;
   border: 1px solid var(--border-strong);
@@ -28,14 +32,14 @@
   font-family: var(--font-ui);
 }
 
-:global(.connector-picker-select):focus-visible {
+.lazyWidgetScope :global(.connector-picker-select):focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
 /* status/empty/error are early-return roots without the .connector-picker container. */
-:global(.connector-picker-status),
-:global(.connector-picker-empty) {
+.lazyWidgetScope :global(.connector-picker-status),
+.lazyWidgetScope :global(.connector-picker-empty) {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -45,11 +49,11 @@
   color: var(--text-secondary);
 }
 
-:global(.connector-picker-empty p) {
+.lazyWidgetScope :global(.connector-picker-empty p) {
   margin: 0;
 }
 
-:global(.connector-picker-error) {
+.lazyWidgetScope :global(.connector-picker-error) {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -63,11 +67,11 @@
   font-size: 12.5px;
 }
 
-:global(.connector-picker-error p) {
+.lazyWidgetScope :global(.connector-picker-error p) {
   margin: 0;
 }
 
-:global(.connector-picker-retry) {
+.lazyWidgetScope :global(.connector-picker-retry) {
   min-height: 24px;
   padding: 3px 10px;
   border: 1px solid var(--border-strong);
@@ -78,22 +82,22 @@
   cursor: pointer;
 }
 
-:global(.connector-picker-retry):hover {
+.lazyWidgetScope :global(.connector-picker-retry):hover {
   border-color: var(--accent-line);
 }
 
-:global(.connector-picker-retry):focus-visible {
+.lazyWidgetScope :global(.connector-picker-retry):focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  :global(.connector-picker-retry) {
+  .lazyWidgetScope :global(.connector-picker-retry) {
     transition: border-color 0.15s ease;
   }
 }
 
-:global(.connector-picker-selected) {
+.lazyWidgetScope :global(.connector-picker-selected) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -101,18 +105,18 @@
   color: var(--text-accent);
 }
 
-:global(.connector-picker-notice) {
+.lazyWidgetScope :global(.connector-picker-notice) {
   margin: 0;
   font-size: 11.5px;
   color: var(--feedback-warning);
 }
 
-:global(.connector-picker-footer) {
+.lazyWidgetScope :global(.connector-picker-footer) {
   margin-top: auto;
   padding-top: 4px;
 }
 
-:global(.connector-picker-create-link) {
+.lazyWidgetScope :global(.connector-picker-create-link) {
   height: 36px;
   padding: 0 18px;
   border-radius: 10px;
@@ -120,16 +124,16 @@
   font-weight: 650;
 }
 
-:global(.connector-picker-create-link):hover {
+.lazyWidgetScope :global(.connector-picker-create-link):hover {
   filter: brightness(1.06);
 }
 
-:global(.connector-picker-create-link):focus-visible {
+.lazyWidgetScope :global(.connector-picker-create-link):focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-:global(.connector-node) {
+.lazyWidgetScope :global(.connector-node) {
   height: 100%;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -141,7 +145,7 @@
     var(--background-secondary);
 }
 
-:global(.connector-node-icon) {
+.lazyWidgetScope :global(.connector-node-icon) {
   width: 64px;
   height: 64px;
   display: grid;
@@ -153,12 +157,12 @@
   box-shadow: var(--shadow-card);
 }
 
-:global(.connector-node-copy) {
+.lazyWidgetScope :global(.connector-node-copy) {
   min-width: 0;
   align-self: center;
 }
 
-:global(.connector-node-kicker) {
+.lazyWidgetScope :global(.connector-node-kicker) {
   margin: 0 0 5px;
   font-size: 11px;
   font-weight: 700;
@@ -167,7 +171,7 @@
   color: var(--text-accent);
 }
 
-:global(.connector-node-title) {
+.lazyWidgetScope :global(.connector-node-title) {
   margin: 0;
   font-size: 18px;
   line-height: 1.2;
@@ -176,7 +180,7 @@
   overflow-wrap: anywhere;
 }
 
-:global(.connector-node-meta) {
+.lazyWidgetScope :global(.connector-node-meta) {
   margin: 8px 0 0;
   color: var(--text-secondary);
   font-size: 11px;
@@ -184,7 +188,7 @@
   line-height: 1.35;
 }
 
-:global(.connector-node-manage) {
+.lazyWidgetScope :global(.connector-node-manage) {
   justify-self: start;
   min-height: 28px;
   padding: 4px 10px;
@@ -196,11 +200,11 @@
   cursor: pointer;
 }
 
-:global(.connector-node-manage):hover {
+.lazyWidgetScope :global(.connector-node-manage):hover {
   border-color: var(--accent-line);
 }
 
-:global(.connector-node-manage):focus-visible {
+.lazyWidgetScope :global(.connector-node-manage):focus-visible {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }

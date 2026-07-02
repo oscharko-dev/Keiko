@@ -21,7 +21,7 @@ import type {
 } from "../../../../../lib/types";
 import KeikoSelect from "../../KeikoSelect";
 import { subscribeSharedEventSource } from "./sharedEventSource";
-import "./TerminalWidget.module.css";
+import styles from "./TerminalWidget.module.css";
 
 interface CommandsWidgetProps {
   readonly projectPath?: string;
@@ -208,7 +208,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   }, [inFlightRunId]);
 
   return (
-    <div className="terminal commands">
+    <div className={`terminal commands ${styles.lazyWidgetScope}`}>
       <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
         <label className="tm-field">
           <span>Project path</span>

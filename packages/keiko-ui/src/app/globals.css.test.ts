@@ -165,7 +165,14 @@ function indexOfNth(haystack: string, needle: string, n: number): number {
 }
 
 function unwrapCssModuleGlobals(source: string): string {
-  return source.replace(/:global\(([^()]+)\)/g, "$1");
+  return source
+    .replace(/:global\(([^()]+)\)/g, "$1")
+    .replace(/\.lazyWidgetScope\s*/g, "");
+}
+
+function expectLazyCssModuleImport(component: string, fileName: string): void {
+  expect(component).toContain(`import styles from "./${fileName}";`);
+  expect(component).toContain("styles.lazyWidgetScope");
 }
 
 function cssBlockFrom(
@@ -188,7 +195,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(css).not.toContain(".pdfv-page-frame");
     expect(pdfViewerModuleCss).toContain(":global(.pdfv-shell)");
     expect(pdfViewerModuleCss).toContain(":global(.pdfv-page-frame)");
-    expect(pdfViewerComponent).toContain('import "./PdfCitationPreviewWindow.module.css";');
+    expectLazyCssModuleImport(pdfViewerComponent, "PdfCitationPreviewWindow.module.css");
   });
 
   it("keeps Browser widget styles out of render-blocking globals.css", () => {
@@ -196,7 +203,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(css).not.toContain(".bw-btn-danger");
     expect(browserWidgetModuleCss).toContain(":global(.browser)");
     expect(browserWidgetModuleCss).toContain(":global(.bw-btn-danger)");
-    expect(browserWidgetComponent).toContain('import "./BrowserWidget.module.css";');
+    expectLazyCssModuleImport(browserWidgetComponent, "BrowserWidget.module.css");
   });
 
   it("keeps Connector Picker styles out of render-blocking globals.css", () => {
@@ -206,7 +213,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(connectorPickerModuleCss).toContain(":global(.connector-picker)");
     expect(connectorPickerModuleCss).toContain(":global(.connector-picker-retry)");
     expect(connectorPickerModuleCss).toContain(":global(.connector-node)");
-    expect(connectorPickerComponent).toContain('import "./ConnectorPickerWidget.module.css";');
+    expectLazyCssModuleImport(connectorPickerComponent, "ConnectorPickerWidget.module.css");
   });
 
   it("keeps shared Terminal/runtime styles out of render-blocking globals.css", () => {
@@ -217,7 +224,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(terminalWidgetModuleCss).toContain(":global(.tm-action)");
     expect(terminalWidgetModuleCss).toContain(':global(.tm-action[aria-disabled="true"])');
     for (const component of terminalStyleConsumerComponents) {
-      expect(component).toContain('import "./TerminalWidget.module.css";');
+      expectLazyCssModuleImport(component, "TerminalWidget.module.css");
     }
   });
 
@@ -228,7 +235,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(integrationsWidgetModuleCss).toContain(":global(.integ)");
     expect(integrationsWidgetModuleCss).toContain(":global(ul.integ)");
     expect(integrationsWidgetModuleCss).toContain(":global(.integ-status)");
-    expect(integrationsWidgetComponent).toContain('import "./IntegrationsWidget.module.css";');
+    expectLazyCssModuleImport(integrationsWidgetComponent, "IntegrationsWidget.module.css");
   });
 
   it("keeps Figma image source styles out of render-blocking globals.css", () => {
@@ -238,7 +245,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-window)");
     expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-preview)");
     expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-missing)");
-    expect(figmaImageSourceComponent).toContain('import "./FigmaImageSourceWindow.module.css";');
+    expectLazyCssModuleImport(figmaImageSourceComponent, "FigmaImageSourceWindow.module.css");
   });
 
   it("keeps Timeline panel styles out of render-blocking globals.css", () => {
@@ -248,7 +255,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(timelinePanelModuleCss).toContain(":global(.tl)");
     expect(timelinePanelModuleCss).toContain(":global(.tl-row)");
     expect(timelinePanelModuleCss).toContain(":global(.tl-empty)");
-    expect(timelinePanelComponent).toContain('import "./TimelinePanel.module.css";');
+    expectLazyCssModuleImport(timelinePanelComponent, "TimelinePanel.module.css");
   });
 
   it("keeps Notification panel row styles out of render-blocking globals.css", () => {
@@ -258,7 +265,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(notificationsPanelModuleCss).toContain(":global(.nt-row)");
     expect(notificationsPanelModuleCss).toContain(":global(.nt-text)");
     expect(notificationsPanelModuleCss).toContain(":global(.nt-time)");
-    expect(notificationsPanelComponent).toContain('import "./NotificationsPanel.module.css";');
+    expectLazyCssModuleImport(notificationsPanelComponent, "NotificationsPanel.module.css");
   });
 
   it("keeps Mobile panel styles out of render-blocking globals.css", () => {
@@ -268,7 +275,7 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expect(mobilePanelModuleCss).toContain(":global(.mob)");
     expect(mobilePanelModuleCss).toContain(":global(.mob-qr)");
     expect(mobilePanelModuleCss).toContain(":global(.mob-sub)");
-    expect(mobilePanelComponent).toContain('import "./MobilePanel.module.css";');
+    expectLazyCssModuleImport(mobilePanelComponent, "MobilePanel.module.css");
   });
 });
 

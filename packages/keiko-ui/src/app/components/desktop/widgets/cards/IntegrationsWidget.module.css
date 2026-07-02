@@ -1,16 +1,20 @@
-:global(.integ) {
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope:global(.integ) {
   padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-:global(ul.integ) {
+.lazyWidgetScope:global(ul.integ) {
   list-style: none;
   margin: 0;
 }
 
-:global(.integ-row) {
+.lazyWidgetScope :global(.integ-row) {
   display: flex;
   align-items: center;
   gap: 11px;
@@ -20,7 +24,7 @@
   text-align: left;
 }
 
-:global(.integ-glyph) {
+.lazyWidgetScope :global(.integ-glyph) {
   width: 30px;
   height: 30px;
   border-radius: 8px;
@@ -32,7 +36,7 @@
   flex: none;
 }
 
-:global(.integ-text) {
+.lazyWidgetScope :global(.integ-text) {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -40,18 +44,18 @@
   min-width: 0;
 }
 
-:global(.integ-name) {
+.lazyWidgetScope :global(.integ-name) {
   font-size: 13px;
   color: var(--fg);
   font-weight: 500;
 }
 
-:global(.integ-desc) {
+.lazyWidgetScope :global(.integ-desc) {
   font-size: 11.5px;
   color: var(--fg-muted);
 }
 
-:global(.integ-status) {
+.lazyWidgetScope :global(.integ-status) {
   flex: none;
   font-size: 11px;
   color: var(--fg-muted);

@@ -1,4 +1,8 @@
-:global(.pdfv-shell) {
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope:global(.pdfv-shell) {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -11,7 +15,7 @@
   color: var(--text-primary);
 }
 
-:global(.pdfv-header) {
+.lazyWidgetScope :global(.pdfv-header) {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -21,11 +25,11 @@
   background: color-mix(in oklch, var(--surface-primary) 78%, var(--surface-inset));
 }
 
-:global(.pdfv-heading) {
+.lazyWidgetScope :global(.pdfv-heading) {
   min-width: 0;
 }
 
-:global(.pdfv-eyebrow) {
+.lazyWidgetScope :global(.pdfv-eyebrow) {
   margin: 0 0 3px;
   color: var(--text-secondary);
   font-size: 11px;
@@ -34,7 +38,7 @@
   text-transform: uppercase;
 }
 
-:global(.pdfv-title) {
+.lazyWidgetScope :global(.pdfv-title) {
   margin: 0;
   color: var(--text-primary);
   font-size: 16.5px;
@@ -42,14 +46,14 @@
   font-weight: 650;
 }
 
-:global(.pdfv-meta) {
+.lazyWidgetScope :global(.pdfv-meta) {
   margin: 3px 0 0;
   color: var(--text-secondary);
   font-size: 12.5px;
   line-height: 1.35;
 }
 
-:global(.pdfv-chip) {
+.lazyWidgetScope :global(.pdfv-chip) {
   display: inline-flex;
   align-items: center;
   min-height: 24px;
@@ -63,7 +67,7 @@
   white-space: nowrap;
 }
 
-:global(.pdfv-context) {
+.lazyWidgetScope :global(.pdfv-context) {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -72,18 +76,18 @@
   background: color-mix(in oklch, var(--surface-primary) 84%, var(--surface-inset));
 }
 
-:global(.pdfv-context-head) {
+.lazyWidgetScope :global(.pdfv-context-head) {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-5);
 }
 
-:global(.pdfv-context-copy) {
+.lazyWidgetScope :global(.pdfv-context-copy) {
   min-width: 0;
 }
 
-:global(.pdfv-context-eyebrow) {
+.lazyWidgetScope :global(.pdfv-context-eyebrow) {
   margin: 0 0 2px;
   color: var(--text-secondary);
   font-size: var(--text-caption);
@@ -92,7 +96,7 @@
   text-transform: uppercase;
 }
 
-:global(.pdfv-context-title) {
+.lazyWidgetScope :global(.pdfv-context-title) {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -103,27 +107,27 @@
   font-weight: var(--weight-strong);
 }
 
-:global(.pdfv-context-marker) {
+.lazyWidgetScope :global(.pdfv-context-marker) {
   flex: none;
   color: var(--text-accent);
   font-family: var(--font-mono);
 }
 
-:global(.pdfv-context-document) {
+.lazyWidgetScope :global(.pdfv-context-document) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-:global(.pdfv-context-page) {
+.lazyWidgetScope :global(.pdfv-context-page) {
   flex: none;
   color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 11px;
 }
 
-:global(.pdfv-context-message) {
+.lazyWidgetScope :global(.pdfv-context-message) {
   margin: 2px 0 0;
   color: var(--text-secondary);
   font-size: 11px;
@@ -133,7 +137,7 @@
   white-space: nowrap;
 }
 
-:global(.pdfv-context-actions) {
+.lazyWidgetScope :global(.pdfv-context-actions) {
   display: flex;
   flex-direction: row;
   align-items: flex-end;
@@ -141,7 +145,7 @@
   flex: none;
 }
 
-:global(.pdfv-back-to-chat) {
+.lazyWidgetScope :global(.pdfv-back-to-chat) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -149,23 +153,23 @@
   padding: 0 10px;
 }
 
-:global(.pdfv-back-to-chat[aria-disabled="true"]) {
+.lazyWidgetScope :global(.pdfv-back-to-chat[aria-disabled="true"]) {
   cursor: not-allowed;
 }
 
-:global(.pdfv-back-to-chat-hint) {
+.lazyWidgetScope :global(.pdfv-back-to-chat-hint) {
   color: var(--text-secondary);
   font-size: var(--text-caption);
   line-height: var(--leading-normal);
   text-align: right;
 }
 
-:global(.pdfv-context-details) {
+.lazyWidgetScope :global(.pdfv-context-details) {
   border-top: 1px solid color-mix(in oklch, var(--border-subtle) 70%, transparent);
   padding-top: var(--space-2);
 }
 
-:global(.pdfv-context-summary) {
+.lazyWidgetScope :global(.pdfv-context-summary) {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -180,24 +184,24 @@
   user-select: none;
 }
 
-:global(.pdfv-context-summary:focus-visible) {
+.lazyWidgetScope :global(.pdfv-context-summary:focus-visible) {
   outline: var(--focus-ring);
   outline-offset: var(--focus-ring-offset);
 }
 
-:global(.pdfv-context-summary::-webkit-details-marker) {
+.lazyWidgetScope :global(.pdfv-context-summary::-webkit-details-marker) {
   display: none;
 }
 
-:global(.pdfv-context-summary svg) {
+.lazyWidgetScope :global(.pdfv-context-summary svg) {
   transition: transform var(--dur-fast, 120ms) var(--ease-standard, ease);
 }
 
-:global(.pdfv-context-details[open] .pdfv-context-summary svg) {
+.lazyWidgetScope :global(.pdfv-context-details[open] .pdfv-context-summary svg) {
   transform: rotate(180deg);
 }
 
-:global(.pdfv-context-count) {
+.lazyWidgetScope :global(.pdfv-context-count) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -213,14 +217,14 @@
   letter-spacing: 0;
 }
 
-:global(.pdfv-context-list) {
+.lazyWidgetScope :global(.pdfv-context-list) {
   gap: var(--space-2);
   max-height: 92px;
   overflow: auto;
   padding-top: var(--space-2);
 }
 
-:global(.pdfv-context-citation) {
+.lazyWidgetScope :global(.pdfv-context-citation) {
   gap: var(--space-2);
   min-height: 22px;
   max-width: min(100%, 16ch);
@@ -229,25 +233,25 @@
   font-size: 10px;
 }
 
-:global(.pdfv-context-citation[data-active="true"]) {
+.lazyWidgetScope :global(.pdfv-context-citation[data-active="true"]) {
   border-color: var(--border-accent);
   background: color-mix(in oklch, var(--surface-accent-subtle) 72%, var(--surface-primary));
 }
 
-:global(.pdfv-context-citation[data-active="true"] .grounded-citation-action-label) {
+.lazyWidgetScope :global(.pdfv-context-citation[data-active="true"] .grounded-citation-action-label) {
   color: var(--text-accent);
 }
 
-:global(.pdfv-context-citation .grounded-citation-range) {
+.lazyWidgetScope :global(.pdfv-context-citation .grounded-citation-range) {
   max-width: 5ch;
 }
 
-:global(.pdfv-context-citation .grounded-citation-action-label) {
+.lazyWidgetScope :global(.pdfv-context-citation .grounded-citation-action-label) {
   font-size: 9px;
   letter-spacing: 0.02em;
 }
 
-:global(.pdfv-toolbar) {
+.lazyWidgetScope :global(.pdfv-toolbar) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -258,26 +262,26 @@
   background: color-mix(in oklch, var(--surface-primary) 68%, var(--surface-inset));
 }
 
-:global(.pdfv-group) {
+.lazyWidgetScope :global(.pdfv-group) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
 
-:global(.pdfv-btn) {
+.lazyWidgetScope :global(.pdfv-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
 }
 
-:global(.pdfv-page-field) {
+.lazyWidgetScope :global(.pdfv-page-field) {
   display: inline-flex;
   align-items: center;
 }
 
-:global(.pdfv-page-input) {
+.lazyWidgetScope :global(.pdfv-page-input) {
   width: 72px;
   min-height: 30px;
   padding: 4px 9px;
@@ -290,31 +294,31 @@
   text-align: right;
 }
 
-:global(.pdfv-page-input:focus-visible) {
+.lazyWidgetScope :global(.pdfv-page-input:focus-visible) {
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
   border-color: var(--input-border-focus);
 }
 
-:global(.pdfv-page-input:disabled) {
+.lazyWidgetScope :global(.pdfv-page-input:disabled) {
   opacity: 0.55;
 }
 
-:global(.pdfv-page-count),
-:global(.pdfv-zoom) {
+.lazyWidgetScope :global(.pdfv-page-count),
+.lazyWidgetScope :global(.pdfv-zoom) {
   color: var(--text-secondary);
   font-size: 12px;
 }
 
-:global(.pdfv-status) {
+.lazyWidgetScope :global(.pdfv-status) {
   margin: 20px;
 }
 
-:global(.pdfv-retry) {
+.lazyWidgetScope :global(.pdfv-retry) {
   margin-top: 8px;
 }
 
-:global(.pdfv-scroll) {
+.lazyWidgetScope :global(.pdfv-scroll) {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -328,20 +332,20 @@
     var(--surface-inset);
 }
 
-:global(.pdfv-page) {
+.lazyWidgetScope :global(.pdfv-page) {
   display: flex;
   justify-content: center;
   align-items: flex-start;
   margin: 0 auto 18px;
 }
 
-:global(.pdfv-page-spacer) {
+.lazyWidgetScope :global(.pdfv-page-spacer) {
   width: 1px;
   margin: 0;
   pointer-events: none;
 }
 
-:global(.pdfv-page-frame) {
+.lazyWidgetScope :global(.pdfv-page-frame) {
   width: fit-content;
   max-width: 100%;
   padding: 12px;
@@ -351,22 +355,22 @@
   box-shadow: var(--shadow-card);
 }
 
-:global(.pdfv-page-meta) {
+.lazyWidgetScope :global(.pdfv-page-meta) {
   margin: 0 0 8px;
   color: var(--text-secondary);
   font-size: 11px;
   letter-spacing: 0.04em;
 }
 
-:global(.pdfv-page-canvas),
-:global(.pdfv-page-skeleton) {
+.lazyWidgetScope :global(.pdfv-page-canvas),
+.lazyWidgetScope :global(.pdfv-page-skeleton) {
   display: block;
   max-width: 100%;
   border-radius: var(--radius-md);
   background: var(--surface-primary);
 }
 
-:global(.pdfv-page-skeleton) {
+.lazyWidgetScope :global(.pdfv-page-skeleton) {
   width: min(100%, 680px);
   min-height: 460px;
   border: 1px dashed var(--border-subtle);
@@ -377,7 +381,7 @@
   );
 }
 
-:global(.pdfv-page-error) {
+.lazyWidgetScope :global(.pdfv-page-error) {
   width: min(100%, 680px);
   min-height: 220px;
   margin: 0;
@@ -388,38 +392,38 @@
 }
 
 @media (max-width: 720px) {
-  :global(.pdfv-header),
-  :global(.pdfv-context),
-  :global(.pdfv-toolbar),
-  :global(.pdfv-scroll) {
+  .lazyWidgetScope :global(.pdfv-header),
+  .lazyWidgetScope :global(.pdfv-context),
+  .lazyWidgetScope :global(.pdfv-toolbar),
+  .lazyWidgetScope :global(.pdfv-scroll) {
     padding-left: 12px;
     padding-right: 12px;
   }
 
-  :global(.pdfv-header) {
+  .lazyWidgetScope :global(.pdfv-header) {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  :global(.pdfv-chip) {
+  .lazyWidgetScope :global(.pdfv-chip) {
     min-height: 26px;
   }
 
-  :global(.pdfv-context-head) {
+  .lazyWidgetScope :global(.pdfv-context-head) {
     flex-direction: column;
     align-items: flex-start;
   }
 
-  :global(.pdfv-context-actions) {
+  .lazyWidgetScope :global(.pdfv-context-actions) {
     align-items: flex-start;
     min-width: 0;
   }
 
-  :global(.pdfv-back-to-chat-hint) {
+  .lazyWidgetScope :global(.pdfv-back-to-chat-hint) {
     text-align: left;
   }
 
-  :global(.pdfv-page-frame) {
+  .lazyWidgetScope :global(.pdfv-page-frame) {
     width: 100%;
     padding: 10px;
   }

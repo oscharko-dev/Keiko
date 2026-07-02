@@ -2,11 +2,11 @@
 
 import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
-import "./MobilePanel.module.css";
+import styles from "./MobilePanel.module.css";
 
 export function MobilePanel(): ReactNode {
   return (
-    <div className="tw-pad mob">
+    <div className={`tw-pad mob ${styles.lazyWidgetScope}`}>
       <div className="mob-qr">
         <div className="ph-stripes" />
         <Icons.mobile size={28} style={{ position: "relative", color: "var(--fg-dim)" }} />

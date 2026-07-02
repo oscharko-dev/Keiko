@@ -15,7 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import type { PDFDocumentProxy as PdfJsDocumentProxy } from "pdfjs-dist";
-import "./PdfCitationPreviewWindow.module.css";
+import styles from "./PdfCitationPreviewWindow.module.css";
 import {
   ApiError,
   fetchPdfCitationPreviewDocument,
@@ -986,7 +986,7 @@ export function PdfCitationPreviewWindow({
   };
 
   return (
-    <div className="pdfv-shell">
+    <div className={`pdfv-shell ${styles.lazyWidgetScope}`}>
       <div className="pdfv-header">
         <div className="pdfv-heading">
           <p className="pdfv-eyebrow">Verified preview</p>
