@@ -5,28 +5,31 @@
 
 // ─── Detected workspace ─────────────────────────────────────────────────────────
 
-export type WorkspaceLanguage =
-  | "typescript"
-  | "javascript"
-  | "java"
-  | "kotlin"
-  | "scala"
-  | "groovy"
-  | "go"
-  | "rust"
-  | "python"
-  | "csharp"
-  | "fsharp"
-  | "vb"
-  | "cpp"
-  | "swift"
-  | "ruby"
-  | "php"
-  | "terraform"
-  | "sql"
-  | "protobuf"
-  | "openapi"
-  | "graphql";
+export const WORKSPACE_LANGUAGES = [
+  "typescript",
+  "javascript",
+  "java",
+  "kotlin",
+  "scala",
+  "groovy",
+  "go",
+  "rust",
+  "python",
+  "csharp",
+  "fsharp",
+  "vb",
+  "cpp",
+  "swift",
+  "ruby",
+  "php",
+  "terraform",
+  "sql",
+  "protobuf",
+  "openapi",
+  "graphql",
+] as const;
+
+export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
 export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
 

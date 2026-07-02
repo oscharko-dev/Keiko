@@ -20,10 +20,12 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import {
   buildGroundedGatewayMessages,
+  groundedPromptInputTokensForCapability,
   handleGroundedAsk,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
   promptByteLength,
+  withPromptExcerptBudget,
   withPromptExcerptByteLimit,
   type GroundedRunner,
 } from "./grounded-qa.js";
@@ -63,6 +65,8 @@ type ConnectedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "connec
 type TestEvidenceStore = ReturnType<typeof createInMemoryEvidenceStore>;
 type TestEvidenceManifest = NonNullable<ReturnType<typeof loadEvidence>>;
 type TestConnectedContextAudit = NonNullable<TestEvidenceManifest["connectedContext"]>;
+type ContextPackFile = ConnectedContextPack["files"][number];
+type ContextPackExcerpt = ContextPackFile["excerpts"][number];
 
 function asConnectedAnswer(answer: GroundedAnswer): ConnectedAnswer {
   expect(answer.groundingKind).toBe("connected-context");
@@ -226,7 +230,7 @@ function expectGroundedGatewayRequest(request: GatewayRequest): void {
   expect(userMessage.content).toContain("Repository evidence excerpts:");
   expect(userMessage.content).toContain("src/foo.ts");
   expect(userMessage.content).toContain("MyClass");
-  expect(userMessage.content).toContain("model input tokens");
+  expect(userMessage.content).toContain("model input tokens 0/59904");
 }
 
 function emptyPack(): ConnectedContextPack {
@@ -350,6 +354,18 @@ function packWithCitations(): ConnectedContextPack {
   };
 }
 
+function requirePackExcerpt(
+  pack: ConnectedContextPack,
+  fileIndex: number,
+): { readonly file: ContextPackFile; readonly excerpt: ContextPackExcerpt } {
+  const file = pack.files[fileIndex];
+  const excerpt = file?.excerpts[0];
+  if (file === undefined || excerpt === undefined) {
+    throw new Error(`expected citation fixture to contain excerpt at file index ${String(fileIndex)}`);
+  }
+  return { file, excerpt };
+}
+
 function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     void input;
@@ -455,6 +471,57 @@ async function runHandler(
 }
 
 describe("buildGroundedGatewayMessages", () => {
+  it("derives prompt input budget from chat model context window minus output reserve", () => {
+    const capability = customModelConfig(CHAT_MODEL).capabilities?.[0];
+    expect(groundedPromptInputTokensForCapability(capability)).toBe(59_904);
+  });
+
+  it("accepts a model-derived prompt budget override without mutating the pack default", () => {
+    const base = packWithCitations();
+    const tinyBudgetPack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, modelInputTokensMax: 1 },
+    };
+    const messages = buildGroundedGatewayMessages(
+      GROUNDED_FIXTURE_QUESTION,
+      tinyBudgetPack,
+      buildRedactor({}, undefined),
+      { modelInputTokensMax: 1024 },
+    );
+
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(1024 * 4);
+    expect(tinyBudgetPack.budget.modelInputTokensMax).toBe(1);
+    expect(messages[1]?.content).toContain("model input tokens 0/1024");
+  });
+
+  it("preserves high-relevance excerpts whole before trimming lower-relevance excerpts", () => {
+    const base = packWithCitations();
+    const low = requirePackExcerpt(base, 0);
+    const high = requirePackExcerpt(base, 1);
+    const highValue = "important diagnostic root cause";
+    const lowValue = "low relevance filler ".repeat(20);
+    const pack: ConnectedContextPack = {
+      ...base,
+      files: [
+        {
+          ...low.file,
+          excerpts: [{ ...low.excerpt, content: lowValue }],
+        },
+        {
+          ...high.file,
+          excerpts: [{ ...high.excerpt, content: highValue }],
+        },
+      ],
+    };
+
+    const trimmed = withPromptExcerptBudget(pack, Buffer.byteLength(highValue, "utf8") + 8);
+
+    const highFile = trimmed.files.find((file) => file.scopePath === high.file.scopePath);
+    const lowFile = trimmed.files.find((file) => file.scopePath === low.file.scopePath);
+    expect(highFile?.excerpts[0]?.content).toBe(highValue);
+    expect(lowFile?.excerpts[0]?.content).toBe("low rele");
+  });
+
   it("derives prompt byte limits from the canonical contracts estimator", () => {
     expect(modelInputPromptByteLimit(1_024)).toBe(maxUtf8BytesForTokenBudget(1_024));
   });
@@ -519,6 +586,32 @@ describe("buildGroundedGatewayMessages", () => {
         buildRedactor({}, undefined),
       ),
     ).toThrow(ContextOverflowError);
+  });
+
+  it("includes incomplete repository coverage warnings in the model prompt", () => {
+    const pack: ConnectedContextPack = {
+      ...emptyPack(),
+      uncertainty: [
+        {
+          kind: "scope-incomplete",
+          claim:
+            "Incomplete repository coverage: reasons=file-cap; filesScanned=1, filesSkipped=3.",
+          impactedAtomIds: [],
+          emittedAtMs: NOW,
+        },
+      ],
+    };
+
+    const messages = buildGroundedGatewayMessages(
+      GROUNDED_FIXTURE_QUESTION,
+      pack,
+      buildRedactor({}, undefined),
+    );
+
+    expect(messages[1]?.content).toContain("Known uncertainty from retrieval:");
+    expect(messages[1]?.content).toContain("scope-incomplete");
+    expect(messages[1]?.content).toContain("Incomplete repository coverage");
+    expect(messages[1]?.content).toContain("reasons=file-cap");
   });
 });
 

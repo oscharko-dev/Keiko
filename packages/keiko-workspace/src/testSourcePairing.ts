@@ -287,7 +287,7 @@ function emitPairAtom(
       label: "test-source",
       confidence,
     },
-    score: confidence === "resolved" ? 0.92 : 0.8,
+    score: confidence === "resolved" ? 0.95 : 0.8,
     emittedAtMs: ctx.nowMs(),
   });
 }
@@ -387,10 +387,6 @@ export const testSourcePairingAdapter: StructuralAdapter = {
     fs: WorkspaceFs,
     deps?: StructuralAdapterDeps,
   ): Promise<readonly EvidenceAtom[]> => {
-    // Wrap the synchronous body so that throws from assertContainedRealPath surface as a
-    // rejected Promise (which the registry runner and `await expect(...).rejects.…` tests
-    // can observe). Without this wrapper the throw escapes the call site before the Promise
-    // is built.
     try {
       return Promise.resolve(runLookup(scope, query, limits, fs, deps));
     } catch (err) {
@@ -407,6 +403,9 @@ function runLookup(
   deps: StructuralAdapterDeps | undefined,
 ): readonly EvidenceAtom[] {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
+    return [];
+  }
+  if (limits.maxMatchesReturned <= 0) {
     return [];
   }
   const ctx: PairContext = {

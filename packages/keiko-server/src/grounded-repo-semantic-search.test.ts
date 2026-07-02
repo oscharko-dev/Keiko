@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import {
-  DEFAULT_SEARCH_LIMITS,
-  type SemanticSearchHit,
+  type SemanticSearchMatch,
   type SemanticSearchProvider,
   type WorkspaceDirEntry,
   type WorkspaceFs,
-  type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import type {
@@ -96,19 +94,6 @@ function testFs(files: Record<string, string>): WorkspaceFs {
   };
 }
 
-function workspace(): WorkspaceInfo {
-  return {
-    root: ROOT,
-    name: "repo",
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: ["src"],
-    testDirs: [],
-    languages: ["typescript"],
-    ignoreLines: [],
-  };
-}
-
 function embeddingCapability(
   contextWindow = 8_191,
 ): NonNullable<GatewayConfig["capabilities"]>[number] {
@@ -176,25 +161,30 @@ function vectorFor(input: string): Float32Array {
   return new Float32Array([0.2, 0.2]);
 }
 
-async function search(provider: SemanticSearchProvider): Promise<readonly SemanticSearchHit[]> {
+const SEARCH_DOCUMENTS = [
+  {
+    scopePath: "src/auth.ts",
+    text: "export function renewSession() {\n  return refresh token rotation;\n}\n",
+  },
+  {
+    scopePath: "src/billing.ts",
+    text: "export function reconcile() {\n  return invoice ledger totals;\n}\n",
+  },
+] as const;
+
+async function search(provider: SemanticSearchProvider): Promise<readonly SemanticSearchMatch[]> {
   return provider.search({
-    scope: { workspace: workspace(), scopeId: "scope-1", relativePaths: [] },
     query: QUERY,
-    limits: DEFAULT_SEARCH_LIMITS,
-    candidatePaths: ["src/auth.ts", "src/billing.ts"],
-    maxResults: 1,
+    documents: SEARCH_DOCUMENTS,
   });
 }
 
 async function searchMissingCandidate(
   provider: SemanticSearchProvider,
-): Promise<readonly SemanticSearchHit[]> {
+): Promise<readonly SemanticSearchMatch[]> {
   return provider.search({
-    scope: { workspace: workspace(), scopeId: "scope-1", relativePaths: [] },
     query: QUERY,
-    limits: DEFAULT_SEARCH_LIMITS,
-    candidatePaths: ["src/missing.ts"],
-    maxResults: 1,
+    documents: [],
   });
 }
 
@@ -230,7 +220,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
       scopePath: "src/auth.ts",
-      lineRange: { startLine: 1, endLine: 4 },
+      line: 1,
     });
     expect(hits[0]?.score).toBeGreaterThan(0.99);
     expect(embeddingRequest).toHaveBeenCalledWith(
@@ -264,7 +254,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     deps.store.close();
   });
 
-  it("persists candidate document vectors and reuses them across provider instances", async () => {
+  it("reuses candidate document vectors within a provider instance", async () => {
     const files: Record<string, string> = {
       "src/auth.ts": "export function renewSession() {\n  return refresh token rotation;\n}\n",
       "src/billing.ts": "export function reconcile() {\n  return invoice ledger totals;\n}\n",
@@ -287,32 +277,15 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     const firstHits = await search(firstProvider);
 
     expect(firstHits[0]?.scopePath).toBe("src/auth.ts");
-    expect(Object.keys(files).some((key) => key.startsWith(".keiko/repo-semantic-search/"))).toBe(
-      true,
-    );
-
-    const secondEmbeddingRequest = vi.fn(
-      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
-        Promise.resolve({
-          ok: true,
-          value: { vector: vectorFor(request.input), modelId: request.modelId },
-        }),
-    );
-    const secondDeps = depsWith(config(true), secondEmbeddingRequest);
-    const secondProvider = configuredRepoSemanticSearchProviderFor(secondDeps, undefined, {
-      fs,
-      maxCandidates: 8,
-    });
-    if (secondProvider === undefined) throw new Error("expected second semantic provider");
-
-    const secondHits = await search(secondProvider);
-    const secondInputs = secondEmbeddingRequest.mock.calls.map(([request]) => request.input);
+    const secondHits = await search(firstProvider);
+    const secondInputs = firstEmbeddingRequest.mock.calls
+      .slice(3)
+      .map(([request]) => request.input);
 
     expect(secondHits).toEqual(firstHits);
     expect(secondInputs).toEqual([QUERY.text]);
     expect(secondInputs.some((input) => input.includes("Path:"))).toBe(false);
     firstDeps.store.close();
-    secondDeps.store.close();
   });
 
   it("clamps query and candidate document inputs to the embedding model context window", async () => {
@@ -338,11 +311,13 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     if (provider === undefined) throw new Error("expected semantic provider");
 
     await provider.search({
-      scope: { workspace: workspace(), scopeId: "scope-1", relativePaths: [] },
       query: { ...QUERY, text: `session renewal ${"query ".repeat(2_000)}` },
-      limits: DEFAULT_SEARCH_LIMITS,
-      candidatePaths: ["src/long.ts"],
-      maxResults: 1,
+      documents: [
+        {
+          scopePath: "src/long.ts",
+          text: `export const value = "${"document ".repeat(2_000)}";`,
+        },
+      ],
     });
 
     expect(capturedInputs).toHaveLength(2);

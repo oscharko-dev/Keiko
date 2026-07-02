@@ -28,6 +28,7 @@ import {
 import {
   gitHistoryAdapter,
   importGraphAdapter,
+  symbolGraphAdapter,
   testSourcePairingAdapter,
   type SemanticSearchProvider,
   type WorkspaceFs,
@@ -379,13 +380,14 @@ describe("runGroundedExploration", () => {
   it("threads an injected repository semantic-search provider into lexical retrieval", async () => {
     let semanticCalls = 0;
     const semanticProvider: SemanticSearchProvider = {
+      name: "local fixture",
       search: (request) => {
         semanticCalls += 1;
-        expect(request.candidatePaths).toContain("src/bar.ts");
+        expect(request.documents.map((document) => document.scopePath)).toContain("src/bar.ts");
         return Promise.resolve([
           {
             scopePath: "src/bar.ts",
-            lineRange: { startLine: 2, endLine: 2 },
+            line: 2,
             score: 0.99,
           },
         ]);
@@ -775,6 +777,30 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("surfaces incomplete coverage when workspace discovery prunes deep directories", async () => {
+    const deepDir = join(ROOT, ...Array.from({ length: 45 }, (_, i) => `depth-${String(i)}`));
+    mkdirSync(deepDir, { recursive: true });
+    writeFileSync(join(deepDir, "deep.ts"), "export const DepthProbe = 'hidden';\n");
+    writeFileSync(join(ROOT, "src/top.ts"), "export const DepthProbe = 'visible';\n");
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Investigate DepthProbe repository coverage" }),
+      }),
+      { answerer: echoAnswerer, nowMs: () => NOW, detectWorkspace: () => fakeWorkspace() },
+    );
+
+    const coverage = out.pack.diagnostics?.coverage;
+    const marker = out.pack.uncertainty.find((entry) => entry.kind === "scope-incomplete");
+    expect(coverage?.incomplete).toBe(true);
+    expect(coverage?.reasons).toContain("depth-pruned");
+    expect(coverage?.depthPrunedByDiscovery).toBeGreaterThan(0);
+    expect(marker?.claim).toContain("repository search coverage was incomplete");
+    expect(marker?.claim).toContain("depth-pruned");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("promotes lexical scan truncation to model-facing uncertainty", async () => {
     writeFileSync(join(ROOT, "src/coverage-a.ts"), "export const coverageMarker = 'alpha';\n");
     writeFileSync(join(ROOT, "src/coverage-b.ts"), "export const coverageMarker = 'beta';\n");
@@ -924,6 +950,204 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("keeps deterministic symbol-file discovery beyond the first three identifier anchors", async () => {
+    for (const symbol of ["AlphaOne", "BetaTwo", "GammaThree", "ZetaFour"]) {
+      writeFileSync(
+        join(ROOT, "src", `${symbol}.ts`),
+        `export function ${symbol}(): string {\n  return "${symbol}";\n}\n`,
+      );
+    }
+
+    const adapter = symbolGraphAdapter as {
+      isAvailable: typeof symbolGraphAdapter.isAvailable;
+    };
+    const originalIsAvailable = adapter.isAvailable;
+    adapter.isAvailable = (): Promise<boolean> => Promise.resolve(false);
+    try {
+      const out = await retrieveConnectedContextPack(
+        input({
+          scope: happyScope({
+            kind: "workspace-root",
+            relativePaths: [],
+            explicitConnection: true,
+          }),
+          query: happyQuery({
+            text: "Trace AlphaOne BetaTwo GammaThree ZetaFour implementations",
+          }),
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+
+      expect(out.pack.files.map((file) => file.scopePath)).toContain("src/ZetaFour.ts");
+      expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+    } finally {
+      adapter.isAvailable = originalIsAvailable;
+    }
+  });
+
+  it("adds follow-symbol trace evidence across a three-package TypeScript chain", async () => {
+    mkdirSync(join(ROOT, "packages/a/src"), { recursive: true });
+    mkdirSync(join(ROOT, "packages/b/src"), { recursive: true });
+    mkdirSync(join(ROOT, "packages/c/src"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "packages/a/src/app.ts"),
+      'import { runPayment } from "../../b/src/service";\nexport function start(): void {\n  runPayment();\n}\n',
+    );
+    writeFileSync(
+      join(ROOT, "packages/b/src/service.ts"),
+      'import { settlePayment } from "../../c/src/domain";\nexport function runPayment(): string {\n  return settlePayment();\n}\n',
+    );
+    writeFileSync(
+      join(ROOT, "packages/c/src/domain.ts"),
+      'export function settlePayment(): string {\n  return "settled";\n}\n',
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Trace settlePayment through packages" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining([
+        "packages/a/src/app.ts",
+        "packages/b/src/service.ts",
+        "packages/c/src/domain.ts",
+      ]),
+    );
+    expect(
+      out.pack.files.some((file) =>
+        file.excerpts.some((excerpt) => excerpt.content.includes("settlePayment")),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("adds endpoint contract evidence for Java routes linked to TypeScript clients", async () => {
+    mkdirSync(join(ROOT, "src/main/java/com/acme"), { recursive: true });
+    mkdirSync(join(ROOT, "src/client"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "src/main/java/com/acme/OrderController.java"),
+      '@RestController\n@RequestMapping("/api")\nclass OrderController {\n' +
+        '  @GetMapping("/orders/{id}")\n' +
+        "  public OrderDto getOrder(String id) { return null; }\n" +
+        "}\nrecord OrderDto(String status) {}\n",
+    );
+    writeFileSync(
+      join(ROOT, "src/client/orders.ts"),
+      'import axios from "axios";\n' +
+        "interface OrderDto { status: string; }\n" +
+        "export const loadOrder = (id: string) => axios.get<OrderDto>(`/api/orders/${id}`);\n",
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Which frontend client calls the OrderDto API route?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toEqual(
+      expect.arrayContaining([
+        "src/main/java/com/acme/OrderController.java",
+        "src/client/orders.ts",
+      ]),
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("adds approved semantic provider evidence without direct token overlap", async () => {
+    mkdirSync(join(ROOT, "src/billing"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "README.md"),
+      "CheckoutMismatch reports the wrong purchase sum in production.\n",
+    );
+    writeFileSync(
+      join(ROOT, "src/billing/calculateCharge.ts"),
+      "export function deriveCharge(amount: number, tax: number): number {\n  return amount + tax;\n}\n",
+    );
+    const semanticSearchProvider: SemanticSearchProvider = {
+      name: "local fixture",
+      search: ({ documents }) =>
+        Promise.resolve(
+          documents.some((document) => document.scopePath === "src/billing/calculateCharge.ts")
+            ? [{ scopePath: "src/billing/calculateCharge.ts", score: 0.98, line: 1 }]
+            : [],
+        ),
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Investigate CheckoutMismatch purchase sum" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        semanticSearchProvider,
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/billing/calculateCharge.ts");
+    expect(out.pack.diagnostics?.rankedCandidates[0]?.signals.map((signal) => signal.name)).toEqual(
+      expect.arrayContaining(["semantic-score", "rrf:semantic"]),
+    );
+    expect(JSON.stringify(out.pack.diagnostics)).not.toContain("embedding");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("surfaces symbol line-read overflow after prioritized definition lookup", async () => {
+    const term = "OverflowProbe";
+    for (let index = 0; index < 65; index += 1) {
+      const dir = join(ROOT, "packages", `overflow-${index.toString()}`, "src");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, `${term}.ts`),
+        `export function ${term}(): number {\n  return ${index.toString()};\n}\n`,
+      );
+    }
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        }),
+        query: happyQuery({ text: "Trace OverflowProbe implementations" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" && entry.claim.includes("Symbol line lookup skipped"),
+    );
+    expect(marker?.claim).toContain("prioritized line reads");
+    expect(out.pack.files.some((file) => file.scopePath.endsWith("/OverflowProbe.ts"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  }, 15_000);
+
   it("keeps large lockfiles bounded when grounding package-manager metadata", async () => {
     writeFileSync(
       join(ROOT, "package.json"),
@@ -948,6 +1172,35 @@ describe("runGroundedExploration", () => {
     const totalLockfileBytes =
       lockfile?.excerpts.reduce((sum, excerpt) => sum + excerpt.contentBytes, 0) ?? 0;
     expect(totalLockfileBytes).toBeLessThanOrEqual(8192);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("adds truncation evidence when a selected code window exceeds excerpt bytes", async () => {
+    const body = Array.from(
+      { length: 100 },
+      (_, index) => `  const line${index.toString()} = "needle ${"x".repeat(180)}";`,
+    ).join("\n");
+    writeFileSync(join(ROOT, "src/large-trace.ts"), `export function LargeTrace() {\n${body}\n}\n`);
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "directory", relativePaths: ["src"], explicitConnection: true }),
+        query: happyQuery({ text: "Inspect the needle handling in LargeTrace" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" &&
+        entry.claim.includes("excerpt byte limit truncated") &&
+        entry.claim.includes("src/large-trace.ts"),
+    );
+    expect(marker).toBeDefined();
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1769,6 +2022,11 @@ describe("isSymbolDefinitionPath", () => {
     expect(isSymbolDefinitionPath("src/windowFrame.ts", "WindowFrame")).toBe(true);
     expect(isSymbolDefinitionPath("a/b/Foo.vue", "foo")).toBe(true);
     expect(
+      isSymbolDefinitionPath("src/main/java/com/acme/PaymentService.java", "PaymentService"),
+    ).toBe(true);
+    expect(isSymbolDefinitionPath("app/payment_service.py", "payment_service")).toBe(true);
+    expect(isSymbolDefinitionPath("cmd/api/payment_service.go", "payment_service")).toBe(true);
+    expect(
       isSymbolDefinitionPath("backend/src/main/java/com/acme/OrderService.java", "OrderService"),
     ).toBe(true);
     expect(isSymbolDefinitionPath("services/api/order_service.py", "order_service")).toBe(true);
@@ -1783,5 +2041,8 @@ describe("isSymbolDefinitionPath", () => {
     expect(isSymbolDefinitionPath("src/PaymentService.stories.tsx", "PaymentService")).toBe(false);
     expect(isSymbolDefinitionPath("docs/PaymentService.md", "PaymentService")).toBe(false);
     expect(isSymbolDefinitionPath("src/PaymentService.d.ts", "PaymentService")).toBe(false);
+    expect(
+      isSymbolDefinitionPath("src/test/java/com/acme/PaymentServiceTest.java", "PaymentService"),
+    ).toBe(false);
   });
 });

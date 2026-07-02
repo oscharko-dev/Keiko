@@ -496,8 +496,55 @@ function clampUtf8Bytes(value: string, maxBytes: number): string {
   return value.slice(0, low);
 }
 
+function positiveInteger(value: number): number | undefined {
+  const n = Math.floor(value);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+export function groundedPromptInputTokensForCapability(
+  capability: ModelCapability | undefined,
+): number | undefined {
+  if (capability?.kind !== "chat") return undefined;
+  const contextWindow = positiveInteger(capability.contextWindow);
+  if (contextWindow === undefined) return undefined;
+  const outputReserve = positiveInteger(capability.maxOutputTokens) ?? 0;
+  return outputReserve < contextWindow ? contextWindow - outputReserve : contextWindow;
+}
+
+export interface GroundedGatewayPromptOptions {
+  readonly modelInputTokensMax?: number | undefined;
+}
+
+function withPromptModelInputBudget(
+  pack: ConnectedContextPack,
+  modelInputTokensMax: number | undefined,
+): ConnectedContextPack {
+  const effective = modelInputTokensMax === undefined ? undefined : positiveInteger(modelInputTokensMax);
+  if (effective === undefined || effective === pack.budget.modelInputTokensMax) return pack;
+  return { ...pack, budget: { ...pack.budget, modelInputTokensMax: effective } };
+}
+
 function packExcerptCount(pack: ConnectedContextPack): number {
   return pack.files.reduce((count, file) => count + file.excerpts.length, 0);
+}
+
+const PROMPT_PROVENANCE_PRIORITY: Record<EvidenceAtom["provenance"]["kind"], number> = {
+  "model-rerank": 7,
+  "semantic-search": 7,
+  structural: 6,
+  "excerpt-read": 5,
+  "lexical-search": 4,
+  "document-extract": 4,
+  "git-history": 3,
+  "file-listing": 2,
+};
+
+function promptExcerptScore(excerpt: ContextExcerpt): number {
+  return Number.isFinite(excerpt.atom.score) ? excerpt.atom.score : 0;
+}
+
+function promptExcerptProvenancePriority(excerpt: ContextExcerpt): number {
+  return PROMPT_PROVENANCE_PRIORITY[excerpt.atom.provenance.kind];
 }
 
 export function withPromptExcerptByteLimit(
@@ -527,7 +574,8 @@ function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPrompt
   }
   ranked.sort(
     (a, b) =>
-      b.excerpt.atom.score - a.excerpt.atom.score ||
+      promptExcerptScore(b.excerpt) - promptExcerptScore(a.excerpt) ||
+      promptExcerptProvenancePriority(b.excerpt) - promptExcerptProvenancePriority(a.excerpt) ||
       a.fileIndex - b.fileIndex ||
       a.excerptIndex - b.excerptIndex,
   );
@@ -562,9 +610,13 @@ function withPromptExcerptTotalByteBudget(
   }
   const files = [...byFile.entries()]
     .sort((a, b) => {
-      const bestA = a[1][0]?.atom.score ?? 0;
-      const bestB = b[1][0]?.atom.score ?? 0;
-      return bestB - bestA || a[0] - b[0];
+      const bestA = a[1][0];
+      const bestB = b[1][0];
+      const scoreA = bestA === undefined ? 0 : promptExcerptScore(bestA);
+      const scoreB = bestB === undefined ? 0 : promptExcerptScore(bestB);
+      const provenanceA = bestA === undefined ? 0 : promptExcerptProvenancePriority(bestA);
+      const provenanceB = bestB === undefined ? 0 : promptExcerptProvenancePriority(bestB);
+      return scoreB - scoreA || provenanceB - provenanceA || a[0] - b[0];
     })
     .map(([fileIndex, excerpts]) => {
       const file = pack.files[fileIndex];
@@ -577,6 +629,13 @@ function withPromptExcerptTotalByteBudget(
   };
 }
 
+export function withPromptExcerptBudget(
+  pack: ConnectedContextPack,
+  totalExcerptBytes: number,
+): ConnectedContextPack {
+  return withPromptExcerptTotalByteBudget(pack, totalExcerptBytes);
+}
+
 function promptBudgetedMessages(
   question: string,
   pack: ConnectedContextPack,
@@ -586,12 +645,16 @@ function promptBudgetedMessages(
     pack: ConnectedContextPack,
     redactor: Redactor,
   ) => readonly GatewayChatMessage[],
+  options: GroundedGatewayPromptOptions = {},
 ): readonly GatewayChatMessage[] {
-  const limit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax);
-  const messages = build(question, pack, redactor);
+  const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
+  const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
+  const messages = build(question, budgetedPack, redactor);
   if (promptByteLength(messages) <= limit) return messages;
+  const excerptCount = packExcerptCount(budgetedPack);
+  if (excerptCount === 0) return messages;
 
-  const emptyPack = withPromptExcerptByteLimit(pack, 0);
+  const emptyPack = withPromptExcerptBudget(budgetedPack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
   const overheadBytes = promptByteLength(emptyMessages);
   // When overhead alone (system prompt + question + framing) exceeds the limit, no amount of
@@ -602,19 +665,17 @@ function promptBudgetedMessages(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  const excerptCount = packExcerptCount(pack);
-  if (excerptCount === 0) return messages;
   let low = 0;
-  let high = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
+  let high = Math.max(0, limit - overheadBytes);
   let best = emptyMessages;
   while (low <= high) {
-    const maxExcerptBytes = Math.floor((low + high) / 2);
-    const candidate = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
+    const totalExcerptBytes = Math.floor((low + high) / 2);
+    const candidate = build(question, withPromptExcerptBudget(budgetedPack, totalExcerptBytes), redactor);
     if (promptByteLength(candidate) <= limit) {
       best = candidate;
-      low = maxExcerptBytes + 1;
+      low = totalExcerptBytes + 1;
     } else {
-      high = maxExcerptBytes - 1;
+      high = totalExcerptBytes - 1;
     }
   }
   return best;
@@ -739,8 +800,15 @@ export function buildGroundedGatewayMessages(
   question: string,
   pack: ConnectedContextPack,
   redactor: Redactor,
+  options?: GroundedGatewayPromptOptions,
 ): readonly GatewayChatMessage[] {
-  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages);
+  return promptBudgetedMessages(
+    question,
+    pack,
+    redactor,
+    buildRawGroundedGatewayMessages,
+    options,
+  );
 }
 
 function createGatewayAnswerer(
@@ -748,14 +816,17 @@ function createGatewayAnswerer(
   modelId: string,
   redactor: Redactor,
   signal: AbortSignal,
+  modelInputTokensMax: number | undefined,
 ): GroundedAnswerer {
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
+      const promptOptions =
+        modelInputTokensMax === undefined ? undefined : { modelInputTokensMax };
       const response = await model.call(
         {
           modelId,
-          messages: buildGroundedGatewayMessages(question, pack, redactor),
+          messages: buildGroundedGatewayMessages(question, pack, redactor, promptOptions),
           stream: false,
         },
         signal,
@@ -783,6 +854,7 @@ function defaultRunner(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
+  const modelInputTokensMax = groundedPromptInputTokensForCapability(chatCapability(deps, modelId));
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     const nowMs = Date.now;
     const budgetedInput =
@@ -796,10 +868,11 @@ function defaultRunner(
     );
     const repoSemanticSearchProvider = configuredRepoSemanticSearchProviderFor(deps, signal);
     return runGroundedExploration(budgetedInput, {
-      answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal),
+      answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+      workspaceIndexForRoot: deps.workspaceIndexForRoot,
       ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
       ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires

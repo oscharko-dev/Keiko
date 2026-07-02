@@ -245,24 +245,29 @@ describe("scanFile – binaryOmission re-throws non-IO errors", () => {
 // ─── hitEmissionLimit – AbortSignal during emission (lines 316-317) ─────────
 
 describe("hitEmissionLimit – AbortSignal fires during emission loop", () => {
-  it("stops emitting atoms and marks truncated when signal is aborted during readFileUtf8", async () => {
+  it("stops emitting atoms and marks truncated when signal is aborted during full byte read", async () => {
     // The controller is not aborted at scanFile entry (first guard at line 447 passes).
-    // It aborts inside readFileUtf8, which executes after the binary probe (line 455) and
-    // the second isRunnerAborted check (line 461 passes because we abort INSIDE readFileUtf8,
-    // not before it). After readForScan returns the text, scanLines/emitBestLines runs and the
-    // first hitEmissionLimit call sees the aborted signal → truncated=true, emission stops.
+    // It aborts inside the full-file raw-byte read, which executes after the binary probe and
+    // after the second isRunnerAborted check. After readForScan returns the text,
+    // scanLines/emitBestLines runs and the first hitEmissionLimit call sees the aborted signal,
+    // so truncated=true and emission stops.
     const controller = new AbortController();
     const manyLines = Array.from({ length: 10 }, (_, i) => `needle match${i.toString()}`).join(
       "\n",
     );
     const base = memFs(MEM_ROOT, { "src/a.ts": manyLines + "\n" });
+    const baseReadFileBytes = base.readFileBytes;
+    if (baseReadFileBytes === undefined) throw new Error("memFs always provides readFileBytes");
+    let byteReads = 0;
     const interceptedFs: WorkspaceFs = {
       ...base,
-      readFileUtf8: (abs: string): string => {
-        // Abort here — this runs after the binary probe and after the second isRunnerAborted
-        // guard. By the time emitBestLines runs, signal.aborted === true.
-        controller.abort();
-        return base.readFileUtf8(abs);
+      readFileBytes: async (abs, max): Promise<Uint8Array> => {
+        byteReads += 1;
+        const result = await baseReadFileBytes(abs, max);
+        if (byteReads === 2) {
+          controller.abort();
+        }
+        return result;
       },
     };
     const runner = buildRunner(interceptedFs, {

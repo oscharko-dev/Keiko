@@ -254,6 +254,9 @@ async function searchHitExcerpts(
   try {
     hits = await searchText(scope, buildQuery(term, symbol, ctx.nowMs), DEFAULT_SEARCH_LIMITS, {
       signal: ctx.signal,
+      ...(ctx.deps.workspaceIndexForRoot === undefined
+        ? {}
+        : { workspaceIndex: ctx.deps.workspaceIndexForRoot(scope.workspace.root) }),
     });
   } catch {
     return "unavailable";

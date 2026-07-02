@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -22,8 +22,8 @@ import {
   searchText,
   type SearchLimits,
   type SearchScope,
-  type SemanticSearchProvider,
 } from "./repoSearch.js";
+import type { SemanticSearchProvider } from "./repoSearchSemantic.js";
 import type { WorkspaceInfo } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -114,6 +114,74 @@ describe("searchText (memFs)", () => {
     expect(atom?.redactionState).toBe("redacted");
     expect(atom?.score).toBeGreaterThan(0);
     expect(atom?.score).toBeLessThanOrEqual(1);
+    expect(result.coverage.incomplete).toBe(false);
+    expect(result.coverage.reasons).toEqual([]);
+    expect(result.coverage.filesScanned).toBe(1);
+    expect(result.coverage.matchesReturned).toBe(1);
+  });
+
+  it("keeps semantic retrieval disabled unless an approved provider is injected", async () => {
+    const { scope, fs } = memScope({
+      "README.md": "CheckoutMismatch reports the wrong purchase sum.\n",
+      "src/billing/calculateCharge.ts":
+        "export function deriveCharge(amount: number, tax: number): number {\n  return amount + tax;\n}\n",
+    });
+
+    const result = await searchText(
+      scope,
+      nlq("Investigate CheckoutMismatch purchase sum"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+      },
+    );
+
+    expect(result.atoms.map((atom) => atom.scopePath)).not.toContain(
+      "src/billing/calculateCharge.ts",
+    );
+  });
+
+  it("adds semantic-only evidence and explanations through an injected provider", async () => {
+    const { scope, fs } = memScope({
+      "README.md": "CheckoutMismatch reports the wrong purchase sum.\n",
+      "src/billing/calculateCharge.ts":
+        "export function deriveCharge(amount: number, tax: number): number {\n  return amount + tax;\n}\n",
+    });
+    const provider: SemanticSearchProvider = {
+      name: "local fixture",
+      search: ({ documents }) =>
+        Promise.resolve(
+          documents.some((document) => document.scopePath === "src/billing/calculateCharge.ts")
+            ? [{ scopePath: "src/billing/calculateCharge.ts", score: 0.97, line: 1 }]
+            : [],
+        ),
+    };
+
+    const result = await searchText(
+      scope,
+      nlq("Investigate CheckoutMismatch purchase sum"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        semanticSearchProvider: provider,
+      },
+    );
+
+    const semantic = result.atoms.find(
+      (atom) => atom.scopePath === "src/billing/calculateCharge.ts",
+    );
+    expect(semantic?.provenance.kind).toBe("model-rerank");
+    expect(semantic?.provenance.tool).toBe("repo.semanticSearch:local-fixture");
+    expect(semantic?.score).toBe(0.97);
+    expect(result.diagnostics?.rankedCandidates[0]?.scopePath).toBe(
+      "src/billing/calculateCharge.ts",
+    );
+    expect(result.diagnostics?.rankedCandidates[0]?.signals.map((signal) => signal.name)).toContain(
+      "semantic-score",
+    );
+    expect(JSON.stringify(result.diagnostics)).not.toContain("embedding");
   });
 
   it("honors an already-aborted signal before scanning files", async () => {
@@ -128,6 +196,8 @@ describe("searchText (memFs)", () => {
     expect(result.atoms).toHaveLength(0);
     expect(result.filesScanned).toBe(0);
     expect(result.truncated).toBe(true);
+    expect(result.coverage.incomplete).toBe(true);
+    expect(result.coverage.reasons).toContain("aborted");
   });
 
   it("scans files in sorted relative-path order", async () => {
@@ -182,6 +252,32 @@ describe("searchText (memFs)", () => {
       nowMs: FIXED_NOW,
     });
     expect(result.atoms.map((a) => a.lineRange?.startLine)).toEqual([1, 3]);
+  });
+
+  it("expands a matched line to the enclosing function window when available", async () => {
+    const { scope, fs } = memScope({
+      "src/payment.ts":
+        "import { audit } from './audit';\n" +
+        "\n" +
+        "export function reconcilePayment(): string {\n" +
+        "  const status = 'pending';\n" +
+        "  if (status === 'pending') {\n" +
+        "    return audit(status);\n" +
+        "  }\n" +
+        "  return 'done';\n" +
+        "}\n" +
+        "\n" +
+        "export function unrelated(): string {\n" +
+        "  return 'ok';\n" +
+        "}\n",
+    });
+    const result = await searchText(scope, nlq("pending"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms).toHaveLength(1);
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 3, endLine: 9 });
+    expect(result.coverage.matchesReturned).toBe(1);
   });
 
   it("expands code matches to the enclosing function range when one is clear", async () => {
@@ -437,15 +533,15 @@ describe("searchText (memFs)", () => {
       ].join("\n"),
       "docs/noise.md": "checkout mentioned in a support note\n",
     });
-    const observedCandidatePaths: string[][] = [];
+    const observedDocumentPaths: string[][] = [];
     const semanticSearchProvider: SemanticSearchProvider = {
-      search: (request) => {
-        observedCandidatePaths.push([...request.candidatePaths]);
-        expect(request.maxResults).toBe(1);
+      name: "local fixture",
+      search: ({ documents }) => {
+        observedDocumentPaths.push(documents.map((document) => document.scopePath));
         return Promise.resolve([
           {
             scopePath: "src/discount.ts",
-            lineRange: { startLine: 1, endLine: 3 },
+            line: 1,
             score: 1,
           },
         ]);
@@ -459,12 +555,12 @@ describe("searchText (memFs)", () => {
       { fs, nowMs: FIXED_NOW, semanticSearchProvider },
     );
 
-    expect(observedCandidatePaths[0]).toEqual(expect.arrayContaining(["src/discount.ts"]));
+    expect(observedDocumentPaths[0]).toEqual(expect.arrayContaining(["src/discount.ts"]));
     expect(result.atoms).toHaveLength(1);
     expect(result.atoms[0]?.scopePath).toBe("src/discount.ts");
-    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 3 });
-    expect(result.atoms[0]?.provenance.kind).toBe("semantic-search");
-    expect(result.atoms[0]?.provenance.tool).toBe("repo.semanticSearch");
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(result.atoms[0]?.provenance.kind).toBe("model-rerank");
+    expect(result.atoms[0]?.provenance.tool).toBe("repo.semanticSearch:local-fixture");
     expect(result.truncated).toBe(true);
   });
 
@@ -473,10 +569,11 @@ describe("searchText (memFs)", () => {
       "src/visible.ts": "checkout price bug\n",
     });
     const semanticSearchProvider: SemanticSearchProvider = {
+      name: "local fixture",
       search: () =>
         Promise.resolve([
-          { scopePath: "../escape.ts", lineRange: { startLine: 1, endLine: 1 }, score: 1 },
-          { scopePath: "src/missing.ts", lineRange: { startLine: 1, endLine: 1 }, score: 1 },
+          { scopePath: "../escape.ts", line: 1, score: 1 },
+          { scopePath: "src/missing.ts", line: 1, score: 1 },
         ]),
     };
 
@@ -602,6 +699,26 @@ describe("searchText (memFs)", () => {
     expect(r.atoms[0]?.score).toBeGreaterThan(
       r.atoms.find((a) => a.scopePath === "docs/routes.md")?.score ?? 0,
     );
+  });
+
+  it("keeps short identifier terms in the content gate for natural-language queries", async () => {
+    const { scope, fs } = memScope({
+      "src/http/ApiIdUrlMapper.ts":
+        'export const API_ID_URL = "/api/id";\nexport function mapApiIdUrl(): string { return API_ID_URL; }\n',
+      "docs/api.md": "The API id url constant is discussed in this document.\n",
+    });
+    const r = await searchText(
+      scope,
+      nlq("Which API id url constant is defined in source?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "targeted-code-search" },
+      },
+    );
+    expect(r.atoms[0]?.scopePath).toBe("src/http/ApiIdUrlMapper.ts");
+    expect(r.atoms.map((atom) => atom.scopePath)).toContain("src/http/ApiIdUrlMapper.ts");
   });
 
   // Issue #188 Case 2: exact-symbol question across a two-file scope where the named
@@ -826,6 +943,10 @@ describe("searchText (memFs)", () => {
     const r = await searchText(scope, nlq("x"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(2);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["match-cap"]);
+    expect(r.coverage.matchesReturned).toBe(2);
+    expect(r.coverage.limits.maxMatchesReturned).toBe(2);
   });
 
   it("respects maxFilesScanned with truncated=true", async () => {
@@ -839,6 +960,11 @@ describe("searchText (memFs)", () => {
     expect(r.filesScanned).toBeLessThanOrEqual(1);
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/f0.ts"]);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["file-cap"]);
+    expect(r.coverage.filesScanned).toBe(1);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
+    expect(r.coverage.limits.maxFilesScanned).toBe(1);
   });
 
   it("reports truncated when whole-workspace discovery hits maxFilesScanned without matches", async () => {
@@ -852,6 +978,9 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
     expect(r.filesScanned).toBe(1);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.reasons).toEqual(["file-cap"]);
+    expect(r.coverage.matchesReturned).toBe(0);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
   it("includes safe gitignored files from explicit-scope text search", async () => {
@@ -886,6 +1015,8 @@ describe("searchText (memFs)", () => {
     ]);
     expect(r.diagnostics?.policyMode).toBe("explicit-scope");
     expect(r.truncated).toBe(false);
+    expect(r.coverage.incomplete).toBe(false);
+    expect(r.coverage.reasons).toEqual([]);
   });
 
   it("respects elapsedMsMax via injected nowMs (truncated=true)", async () => {
@@ -899,6 +1030,27 @@ describe("searchText (memFs)", () => {
     const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, elapsedMsMax: 0 };
     const r = await searchText(scope, nlq("match"), limits, { fs, nowMs });
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["timeout"]);
+    expect(r.coverage.elapsedMs).toBeGreaterThan(r.coverage.limits.elapsedMsMax);
+  });
+
+  it("surfaces max-depth pruning as incomplete coverage without implying a file-cap hit", async () => {
+    const deepPath = `${Array.from({ length: 45 }, (_, i) => `d${String(i)}`).join("/")}/deep.ts`;
+    const { scope, fs } = memScope({
+      "src/top.ts": "match\n",
+      [deepPath]: "match\n",
+    });
+    const r = await searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/top.ts"]);
+    expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["depth-pruned"]);
+    expect(r.coverage.depthPrunedByDiscovery).toBeGreaterThan(0);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
   it("scans the bounded prefix of oversize files and marks coverage truncated", async () => {
@@ -941,6 +1093,8 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
     expect(r.candidates).toHaveLength(0);
     expect(r.truncated).toBe(false);
+    expect(r.coverage.incomplete).toBe(false);
+    expect(r.coverage.reasons).toEqual([]);
   });
 
   it("can be driven by an injected fs (port-driven proof)", async () => {
@@ -1155,6 +1309,46 @@ describe("searchText (memFs)", () => {
     expect(r.diagnostics?.ignoredByDiscovery).toBeGreaterThan(0);
     expect(r.truncated).toBe(false);
   });
+
+  it("includes allowlisted generated source without relaxing denied secret paths", async () => {
+    const { scope, fs } = memScope({
+      "generated/contracts/OrderClient.java": "class OrderClient { String auditNeedle; }\n",
+      "src/ordinary.ts": "export const ordinary = 'auditNeedle';\n",
+      ".env": "auditNeedle=secret\n",
+    });
+    const r = await searchText(scope, nlq("auditNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: {
+        retrievalIntent: "targeted-code-search",
+        lowValuePathAllowlist: ["generated/contracts/OrderClient.java", ".env"],
+      },
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toContain("generated/contracts/OrderClient.java");
+    expect(r.atoms.map((a) => a.scopePath)).not.toContain(".env");
+    expect(r.coverage.deniedByDiscovery).toBeGreaterThan(0);
+  });
+
+  it("boosts injected git-recent files in candidate ranking diagnostics", async () => {
+    const { scope, fs } = memScope({
+      "src/old.ts": "export const sharedNeedle = 1;\n",
+      "src/recent.ts": "export const sharedNeedle = 2;\n",
+    });
+    const r = await searchText(scope, nlq("sharedNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: {
+        retrievalIntent: "targeted-code-search",
+        recentPaths: ["src/recent.ts"],
+      },
+    });
+    expect(r.atoms[0]?.scopePath).toBe("src/recent.ts");
+    expect(r.diagnostics?.rankedCandidates[0]?.scopePath).toBe("src/recent.ts");
+    expect(r.diagnostics?.rankedCandidates[0]?.signals).toContainEqual({
+      name: "git-recency",
+      value: 28,
+    });
+  });
 });
 
 describe("findFiles (memFs)", () => {
@@ -1216,6 +1410,8 @@ describe("findFiles (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
     expect(r.filesScanned).toBe(0);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toContain("aborted");
   });
 
   it("rejects non-file-pattern queries", async () => {
@@ -1270,6 +1466,9 @@ describe("findFiles (memFs)", () => {
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(2);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["match-cap"]);
+    expect(r.coverage.matchesReturned).toBe(2);
   });
 
   it("reports truncated when whole-workspace file discovery hits maxFilesScanned", async () => {
@@ -1282,6 +1481,9 @@ describe("findFiles (memFs)", () => {
     const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/f0.ts"]);
     expect(r.truncated).toBe(true);
+    expect(r.coverage.incomplete).toBe(true);
+    expect(r.coverage.reasons).toEqual(["file-cap"]);
+    expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
   it("reports max-file pruning for explicit-scope file discovery", async () => {
@@ -1332,6 +1534,8 @@ describe("findFiles (memFs)", () => {
     ]);
     expect(r.diagnostics?.policyMode).toBe("explicit-scope");
     expect(r.truncated).toBe(false);
+    expect(r.coverage.incomplete).toBe(false);
+    expect(r.coverage.reasons).toEqual([]);
   });
 
   it("walks explicit-scope Java package trees beyond the old depth-12 cap", async () => {
@@ -1825,6 +2029,19 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(r.atoms).toHaveLength(1);
   });
 
+  it("searches UTF-16LE source files instead of classifying them as binary", async () => {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src", "utf16.ts"),
+      Buffer.from("\ufeffexport const utf16Needle = 1;\n", "utf16le"),
+    );
+    const r = await searchText(scope, nlq("utf16Needle"), DEFAULT_SEARCH_LIMITS, {
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/utf16.ts"]);
+    expect(r.candidates.some((candidate) => candidate.scopePath === "src/utf16.ts")).toBe(false);
+  });
+
   it("blocks a symlink that escapes the workspace root", async () => {
     const outside = mkdtempSync(join(tmpdir(), "keiko-outside-"));
     try {
@@ -1926,6 +2143,43 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(byteProbeCalls).toBe(0);
   });
 
+  it("searchText skips a hard-linked alias before the binary probe reads bytes", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-hardlink-"));
+    try {
+      writeFileSync(join(outside, "aliased.ts"), "export const secret = 'do not ingest';\n");
+      mkdirSync(join(tmp, "src"), { recursive: true });
+      linkSync(join(outside, "aliased.ts"), join(tmp, "src/alias.ts"));
+      scope = { ...scope, relativePaths: ["src/alias.ts"] };
+      let byteProbeCalls = 0;
+      const readFileBytes = nodeWorkspaceFs.readFileBytes;
+      if (readFileBytes === undefined) {
+        throw new Error("nodeWorkspaceFs.readFileBytes is required for this test");
+      }
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+          byteProbeCalls += 1;
+          return await readFileBytes(absolutePath, maxBytes);
+        },
+      };
+
+      const result = await searchText(scope, nlq("secret"), DEFAULT_SEARCH_LIMITS, {
+        fs,
+        nowMs: FIXED_NOW,
+      });
+      expect(result.atoms).toHaveLength(0);
+      expect(result.candidates).toContainEqual({
+        scopePath: "src/alias.ts",
+        score: 0,
+        signals: [],
+        omitted: "ignored",
+      });
+      expect(byteProbeCalls).toBe(0);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("readExcerpt refuses a binary file with RepoSearchUnsupportedFileError", async () => {
     const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00]);
     writeFileSync(join(tmp, "img.png"), buf);
@@ -2019,6 +2273,15 @@ describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
           throw makeErrnoError("EACCES");
         }
         return baseFs.readFileUtf8(absolutePath);
+      },
+      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+        if (absolutePath.includes("secret.ts")) {
+          return Promise.reject(makeErrnoError("EACCES"));
+        }
+        if (baseFs.readFileBytes !== undefined) {
+          return baseFs.readFileBytes(absolutePath, maxBytes);
+        }
+        return Promise.resolve(new Uint8Array());
       },
     };
     const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {

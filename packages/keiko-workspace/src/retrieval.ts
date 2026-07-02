@@ -3,8 +3,8 @@
 // scoring first, file-role priority as a tie-breaker, and no clock/RNG input so context packs are
 // reproducible.
 
+import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { SELECTION_REASON_PRIORITY, type DiscoveredFile, type SelectionReason } from "./types.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 
 export interface RankedFile {
   readonly file: DiscoveredFile;
@@ -79,6 +79,15 @@ const DOC_EXTENSIONS: ReadonlySet<string> = new Set([".md", ".mdx", ".rst", ".tx
 const CONFIG_EXTENSIONS: ReadonlySet<string> = new Set([".json", ".yml", ".yaml", ".toml"]);
 
 const CONFIG_BASENAME_HINTS: readonly string[] = [".config.", "eslint", "prettier", "vitest"];
+const IMPLEMENTATION_INTENT_TERMS: ReadonlySet<string> = new Set([
+  "define",
+  "defined",
+  "definition",
+  "implement",
+  "implemented",
+  "implementation",
+  "source",
+]);
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -124,41 +133,39 @@ function priorityIndex(reason: SelectionReason): number {
   return SELECTION_REASON_PRIORITY.indexOf(reason);
 }
 
-function normalizedPath(path: string): string {
-  return path.split("\\").join("/").toLowerCase();
-}
-
-function queryScore(path: string, task: string | undefined): number {
-  if (task === undefined || task.trim().length === 0) {
+function queryIntentBoost(reason: SelectionReason, queryTerms: readonly string[]): number {
+  if (!queryTerms.some((term) => IMPLEMENTATION_INTENT_TERMS.has(term))) {
     return 0;
   }
-  const terms = expandedQueryTerms(task, false);
-  const normalized = normalizedPath(path);
-  const name = normalized.slice(normalized.lastIndexOf("/") + 1);
-  let score = 0;
-  for (const term of terms) {
-    if (name === term || name.startsWith(`${term}.`)) {
-      score += 40;
-    } else if (normalized.includes(`/${term}/`) || normalized.endsWith(`/${term}`)) {
-      score += 25;
-    } else if (normalized.includes(term)) {
-      score += 10;
-    }
+  if (reason === "source" || reason === "entrypoint") {
+    return 24;
   }
-  return score;
+  if (reason === "test" || reason === "documentation") {
+    return -12;
+  }
+  return 0;
 }
 
-// Deterministic lexical ranking: task/path relevance first, then file-role tie-break, then path.
+// Deterministic lexical ranking: query-aware path/identifier overlap first, then the historical
+// selection-reason priority, then path (ascending). When no task terms are available, behavior
+// falls back to the old selection-reason ordering byte-for-byte.
 export const lexicalRetrievalStrategy: RetrievalStrategy = {
   rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
+    const queryTerms = queryRankingTerms(task);
     const ranked = files.map((file) => ({
       file,
       selectionReason: classify(file.relativePath),
-      score: queryScore(file.relativePath, task),
+      queryScore: 0,
     }));
+    for (const item of ranked) {
+      item.queryScore =
+        lexicalPathSignals(item.file.relativePath, queryTerms).score +
+        queryIntentBoost(item.selectionReason, queryTerms);
+    }
     return [...ranked].sort((a, b) => {
-      if (a.score !== b.score) {
-        return b.score - a.score;
+      const queryDelta = b.queryScore - a.queryScore;
+      if (queryDelta !== 0) {
+        return queryDelta;
       }
       const byReason = priorityIndex(a.selectionReason) - priorityIndex(b.selectionReason);
       if (byReason !== 0) {

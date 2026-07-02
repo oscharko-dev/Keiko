@@ -10,14 +10,9 @@ import {
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
-  readExcerpt,
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  WorkspaceError,
-  type SearchScope,
-  type SemanticSearchHit,
+  type SemanticSearchInput,
+  type SemanticSearchMatch,
   type SemanticSearchProvider,
-  type SemanticSearchRequest,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -30,11 +25,8 @@ import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 
 const MAX_SEMANTIC_CANDIDATES = 32;
 const SEMANTIC_CANDIDATE_RESULT_MULTIPLIER = 4;
-const SEMANTIC_EXCERPT_LINES = 240;
 const SEMANTIC_EXCERPT_BYTES = 16_384;
 const SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION = 1;
-const SEMANTIC_VECTOR_CACHE_DIR = ".keiko/repo-semantic-search";
-const MAX_CACHED_VECTOR_DIMS = 16_384;
 const EMBEDDING_INPUT_SAFETY_TOKENS = 16;
 
 interface ProviderCredentials {
@@ -62,18 +54,9 @@ interface EmbeddingContext {
 
 interface CandidateDocument {
   readonly scopePath: string;
-  readonly lineRange: { readonly startLine: number; readonly endLine: number };
   readonly text: string;
   readonly order: number;
 }
-
-interface CachedDocumentVector {
-  readonly schemaVersion: number;
-  readonly key: string;
-  readonly vector: readonly number[];
-}
-
-type PersistentWorkspaceFs = WorkspaceFs & Required<Pick<WorkspaceFs, "makeDir" | "writeFileUtf8">>;
 
 export interface ConfiguredRepoSemanticSearchOptions {
   readonly fs?: WorkspaceFs | undefined;
@@ -111,25 +94,22 @@ function providerCredentials(
   };
 }
 
-function candidateLimit(request: SemanticSearchRequest, configuredLimit: number): number {
+function candidateLimit(request: SemanticSearchInput, configuredLimit: number): number {
   return Math.max(
     0,
     Math.min(
-      request.candidatePaths.length,
-      request.limits.maxFilesScanned,
+      request.documents.length,
       configuredLimit,
-      Math.max(request.maxResults, request.maxResults * SEMANTIC_CANDIDATE_RESULT_MULTIPLIER),
+      Math.max(
+        request.query.maxResults,
+        request.query.maxResults * SEMANTIC_CANDIDATE_RESULT_MULTIPLIER,
+      ),
     ),
   );
 }
 
 function isAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
-}
-
-function lineCount(text: string): number {
-  if (text.length === 0) return 1;
-  return text.split("\n").length;
 }
 
 function clampUtf8(value: string, maxBytes: number): string {
@@ -166,175 +146,28 @@ function embeddingInputByteLimit(
   );
 }
 
-function hasPersistentWorkspaceState(fs: WorkspaceFs): fs is PersistentWorkspaceFs {
-  return fs.makeDir !== undefined && fs.writeFileUtf8 !== undefined;
-}
-
-function semanticCacheKey(ctx: EmbeddingContext, scope: SearchScope, document: CandidateDocument): string {
+function semanticCacheKey(ctx: EmbeddingContext, document: CandidateDocument): string {
   return sha256Hex(
     JSON.stringify({
       schemaVersion: SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION,
       providerEndpoint: ctx.provider.baseUrl,
       modelId: ctx.provider.modelId,
-      workspaceRoot: scope.workspace.root,
       scopePath: document.scopePath,
       textHash: sha256Hex(document.text),
     }),
   );
 }
 
-function persistentCacheDir(scope: SearchScope): string {
-  return resolveWithinWorkspace(scope.workspace.root, SEMANTIC_VECTOR_CACHE_DIR);
-}
-
-function persistentCachePath(scope: SearchScope, key: string): string {
-  return resolveWithinWorkspace(scope.workspace.root, `${SEMANTIC_VECTOR_CACHE_DIR}/${key}.json`);
-}
-
-function vectorFromJson(value: unknown, key: string): Float32Array | undefined {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    Array.isArray(value) ||
-    (value as CachedDocumentVector).schemaVersion !== SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION ||
-    (value as CachedDocumentVector).key !== key ||
-    !Array.isArray((value as CachedDocumentVector).vector)
-  ) {
-    return undefined;
-  }
-  const raw = (value as CachedDocumentVector).vector;
-  if (
-    raw.length === 0 ||
-    raw.length > MAX_CACHED_VECTOR_DIMS ||
-    !raw.every((item): item is number => typeof item === "number" && Number.isFinite(item))
-  ) {
-    return undefined;
-  }
-  return new Float32Array(raw);
-}
-
-function readPersistentVector(
-  ctx: EmbeddingContext,
-  scope: SearchScope,
-  key: string,
-): Float32Array | undefined {
-  try {
-    const cacheFile = assertContainedRealPath(
-      ctx.fs,
-      scope.workspace.root,
-      persistentCachePath(scope, key),
-      "repo semantic vector cache file",
-    );
-    if (!ctx.fs.exists(cacheFile)) {
-      return undefined;
-    }
-    return vectorFromJson(JSON.parse(ctx.fs.readFileUtf8(cacheFile)), key);
-  } catch {
-    return undefined;
-  }
-}
-
-function writePersistentVector(
-  ctx: EmbeddingContext,
-  scope: SearchScope,
-  key: string,
-  vector: Float32Array,
-): void {
-  if (!hasPersistentWorkspaceState(ctx.fs)) {
-    return;
-  }
-  try {
-    const cacheDir = assertContainedRealPath(
-      ctx.fs,
-      scope.workspace.root,
-      persistentCacheDir(scope),
-      "repo semantic vector cache directory",
-    );
-    ctx.fs.makeDir(cacheDir);
-    const cacheFile = assertContainedRealPath(
-      ctx.fs,
-      scope.workspace.root,
-      persistentCachePath(scope, key),
-      "repo semantic vector cache file",
-    );
-    ctx.fs.writeFileUtf8(
-      cacheFile,
-      JSON.stringify({
-        schemaVersion: SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION,
-        key,
-        vector: Array.from(vector),
-      } satisfies CachedDocumentVector),
-    );
-  } catch {
-    // Semantic search must remain best-effort; cache writes never block retrieval.
-  }
-}
-
 function cachedDocumentVector(
   ctx: EmbeddingContext,
-  scope: SearchScope,
   document: CandidateDocument,
 ): { readonly key: string; readonly vector?: Float32Array | undefined } {
-  const key = semanticCacheKey(ctx, scope, document);
+  const key = semanticCacheKey(ctx, document);
   const memory = ctx.documentVectorCache.get(key);
   if (memory !== undefined) {
     return { key, vector: memory };
   }
-  const persisted = readPersistentVector(ctx, scope, key);
-  if (persisted !== undefined) {
-    ctx.documentVectorCache.set(key, persisted);
-    return { key, vector: persisted };
-  }
   return { key };
-}
-
-function isIoError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    typeof (error as { readonly code?: unknown }).code === "string"
-  );
-}
-
-async function readCandidateDocument(
-  ctx: EmbeddingContext,
-  scope: SearchScope,
-  scopePath: string,
-  order: number,
-  maxBytes: number,
-  signal: AbortSignal | undefined,
-): Promise<CandidateDocument | undefined> {
-  if (isAborted(signal)) {
-    return undefined;
-  }
-  try {
-    const excerpt = await readExcerpt(
-      scope,
-      {
-        scopePath,
-        startLine: 1,
-        endLine: SEMANTIC_EXCERPT_LINES,
-        maxBytes,
-      },
-      { fs: ctx.fs, ...(signal !== undefined ? { signal } : {}) },
-    );
-    const text = embeddingText(ctx, `Path: ${scopePath}\n${excerpt.content}`).trim();
-    if (text.length === 0) {
-      return undefined;
-    }
-    return {
-      scopePath,
-      lineRange: { startLine: 1, endLine: Math.max(1, lineCount(excerpt.content)) },
-      text,
-      order,
-    };
-  } catch (error) {
-    if (error instanceof WorkspaceError || isIoError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
 }
 
 async function embedOne(
@@ -381,7 +214,6 @@ async function embedBatch(
 
 async function embedDocuments(
   ctx: EmbeddingContext,
-  scope: SearchScope,
   documents: readonly CandidateDocument[],
   signal: AbortSignal | undefined,
 ): Promise<readonly (Float32Array | undefined)[]> {
@@ -394,7 +226,7 @@ async function embedDocuments(
     if (document === undefined) {
       continue;
     }
-    const cached = cachedDocumentVector(ctx, scope, document);
+    const cached = cachedDocumentVector(ctx, document);
     if (cached.vector !== undefined) {
       vectors[index] = cached.vector;
       continue;
@@ -412,7 +244,6 @@ async function embedDocuments(
       continue;
     }
     ctx.documentVectorCache.set(key, vector);
-    writePersistentVector(ctx, scope, key, vector);
     vectors[originalIndex] = vector;
   }
   return vectors;
@@ -467,8 +298,8 @@ function hitOrderMap(documents: readonly CandidateDocument[]): ReadonlyMap<strin
 
 function compareHits(
   orderByPath: ReadonlyMap<string, number>,
-  a: SemanticSearchHit,
-  b: SemanticSearchHit,
+  a: SemanticSearchMatch,
+  b: SemanticSearchMatch,
 ): number {
   const scoreDelta = b.score - a.score;
   if (scoreDelta !== 0) return scoreDelta;
@@ -479,10 +310,10 @@ function compareHits(
 }
 
 function rankHits(
-  hits: readonly SemanticSearchHit[],
+  hits: readonly SemanticSearchMatch[],
   documents: readonly CandidateDocument[],
   maxResults: number,
-): readonly SemanticSearchHit[] {
+): readonly SemanticSearchMatch[] {
   const orderByPath = hitOrderMap(documents);
   return [...hits].sort((a, b) => compareHits(orderByPath, a, b)).slice(0, maxResults);
 }
@@ -491,7 +322,7 @@ function hitForDocument(
   document: CandidateDocument,
   vector: Float32Array | undefined,
   queryVector: Float32Array,
-): SemanticSearchHit | undefined {
+): SemanticSearchMatch | undefined {
   if (vector === undefined) {
     return undefined;
   }
@@ -501,7 +332,7 @@ function hitForDocument(
   }
   return {
     scopePath: document.scopePath,
-    lineRange: document.lineRange,
+    line: 1,
     score,
   };
 }
@@ -510,8 +341,8 @@ function hitsFromVectors(
   documents: readonly CandidateDocument[],
   vectors: readonly (Float32Array | undefined)[],
   queryVector: Float32Array,
-): readonly SemanticSearchHit[] {
-  const hits: SemanticSearchHit[] = [];
+): readonly SemanticSearchMatch[] {
+  const hits: SemanticSearchMatch[] = [];
   for (let index = 0; index < documents.length; index += 1) {
     const document = documents[index];
     if (document === undefined) {
@@ -525,35 +356,21 @@ function hitsFromVectors(
   return hits;
 }
 
-async function candidateDocuments(
+function candidateDocuments(
   ctx: EmbeddingContext,
-  request: SemanticSearchRequest,
+  request: SemanticSearchInput,
   signal: AbortSignal | undefined,
-): Promise<readonly CandidateDocument[]> {
+): readonly CandidateDocument[] {
   const limit = candidateLimit(request, ctx.maxCandidates);
   const documents: CandidateDocument[] = [];
-  const maxBytes = Math.max(
-    0,
-    Math.min(SEMANTIC_EXCERPT_BYTES, request.limits.maxBytesPerFileScanned),
-  );
-  if (maxBytes <= 0) {
-    return [];
-  }
   for (let index = 0; index < limit; index += 1) {
-    const scopePath = request.candidatePaths[index];
-    if (scopePath === undefined || isAborted(signal)) {
+    const source = request.documents[index];
+    if (source === undefined || isAborted(signal)) {
       break;
     }
-    const document = await readCandidateDocument(
-      ctx,
-      request.scope,
-      scopePath,
-      index,
-      maxBytes,
-      signal,
-    );
-    if (document !== undefined) {
-      documents.push(document);
+    const text = embeddingText(ctx, `Path: ${source.scopePath}\n${source.text}`).trim();
+    if (text.length > 0) {
+      documents.push({ scopePath: source.scopePath, text, order: index });
     }
   }
   return documents;
@@ -561,13 +378,14 @@ async function candidateDocuments(
 
 async function semanticSearch(
   ctx: EmbeddingContext,
-  request: SemanticSearchRequest,
-): Promise<readonly SemanticSearchHit[]> {
+  request: SemanticSearchInput,
+): Promise<readonly SemanticSearchMatch[]> {
   const signal = request.signal ?? ctx.signal;
-  if (request.maxResults <= 0 || request.query.text.trim().length === 0 || isAborted(signal)) {
+  const maxResults = Math.max(0, Math.min(request.query.maxResults, ctx.maxCandidates));
+  if (maxResults <= 0 || request.query.text.trim().length === 0 || isAborted(signal)) {
     return [];
   }
-  const documents = await candidateDocuments(ctx, request, signal);
+  const documents = candidateDocuments(ctx, request, signal);
   if (documents.length === 0 || isAborted(signal)) {
     return [];
   }
@@ -579,8 +397,8 @@ async function semanticSearch(
   if (queryVector === undefined || isAborted(signal)) {
     return [];
   }
-  const vectors = await embedDocuments(ctx, request.scope, documents, signal);
-  return rankHits(hitsFromVectors(documents, vectors, queryVector), documents, request.maxResults);
+  const vectors = await embedDocuments(ctx, documents, signal);
+  return rankHits(hitsFromVectors(documents, vectors, queryVector), documents, maxResults);
 }
 
 export function configuredRepoSemanticSearchProviderFor(
@@ -610,6 +428,7 @@ export function configuredRepoSemanticSearchProviderFor(
     documentVectorCache: new Map(),
   };
   return {
-    search: (request: SemanticSearchRequest) => semanticSearch(ctx, request),
+    name: "configured-repo-semantic-search",
+    search: (request: SemanticSearchInput) => semanticSearch(ctx, request),
   };
 }

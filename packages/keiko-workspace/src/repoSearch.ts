@@ -7,10 +7,12 @@
 
 import type {
   CandidateFile,
+  ContextCoverageDiagnostics,
+  ContextCoverageTruncationReason,
   EvidenceAtom,
-  LineRange,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { createHash } from "node:crypto";
 import {
   isValidScopePath,
   validateRetrievalQuery,
@@ -35,6 +37,7 @@ import {
   emitFileMatches,
   elapsed,
   gatherCandidates,
+  gatherCandidatesWithoutContentPrescore,
   hitScanLimit,
   isImageScopePath,
   isIoError,
@@ -45,14 +48,40 @@ import {
   type SearchTextRunner,
 } from "./repoSearchScan.js";
 import {
+  createSemanticSearchSession,
+  runSemanticSearchSession,
+  semanticSearchTool,
+  type SemanticSearchMatch,
+  type SemanticSearchProvider,
+} from "./repoSearchSemantic.js";
+import {
   lowValueRescuePolicy,
   policyOmissionReason,
   resolveSearchPolicy,
+  withSemanticRankingDiagnostics,
   type SearchDiagnostics,
   type SearchHints,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
+import {
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
+  inspectWorkspaceIndexDirectories,
+  prepareCachedWorkspaceIndexSnapshot,
+  prepareWorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
+  type PreparedWorkspaceIndexEntry,
+  type PreparedWorkspaceIndexSnapshot,
+  type WorkspaceIndexDirectoryDelta,
+  type WorkspaceIndexDirectorySnapshot,
+  type WorkspaceIndexPreparationReport,
+  type WorkspaceIndex,
+  type WorkspaceIndexDiscoverySnapshot,
+  type WorkspaceIndexDiscoveredFile,
+  type WorkspaceIndexRecord,
+  type WorkspaceIndexSnapshot,
+} from "./workspaceIndex.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -93,6 +122,8 @@ export interface SearchResult {
   readonly elapsedMs: number;
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics | undefined;
+  readonly coverage: ContextCoverageDiagnostics;
+  readonly workspaceIndex?: WorkspaceIndexPreparationReport | undefined;
 }
 
 export interface ReadExcerptRequest {
@@ -113,26 +144,8 @@ interface FacadeDeps {
   readonly nowMs?: () => number;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
+  readonly workspaceIndex?: WorkspaceIndex | undefined;
   readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
-}
-
-export interface SemanticSearchRequest {
-  readonly scope: SearchScope;
-  readonly query: RetrievalQuery;
-  readonly limits: SearchLimits;
-  readonly candidatePaths: readonly string[];
-  readonly maxResults: number;
-  readonly signal?: AbortSignal | undefined;
-}
-
-export interface SemanticSearchHit {
-  readonly scopePath: string;
-  readonly lineRange?: LineRange | undefined;
-  readonly score: number;
-}
-
-export interface SemanticSearchProvider {
-  readonly search: (request: SemanticSearchRequest) => Promise<readonly SemanticSearchHit[]>;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -171,7 +184,146 @@ function isAborted(signal?: AbortSignal): boolean {
   return signal?.aborted === true;
 }
 
-function abortedSearchResult(elapsedMs: number): SearchResult {
+function coverageReasons(
+  reasons: ReadonlySet<ContextCoverageTruncationReason>,
+): readonly ContextCoverageTruncationReason[] {
+  const ordered: ContextCoverageTruncationReason[] = [];
+  for (const reason of ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"] as const) {
+    if (reasons.has(reason)) {
+      ordered.push(reason);
+    }
+  }
+  return ordered;
+}
+
+interface CoverageInputs {
+  readonly diagnostics: SearchDiagnostics | undefined;
+  readonly filesScanned: number;
+  readonly oversizedFilesScanned: number;
+  readonly matchesReturned: number;
+  readonly elapsedMs: number;
+  readonly limits: SearchLimits;
+  readonly candidates: readonly CandidateFile[];
+  readonly candidateTruncated: boolean;
+  readonly truncationReasons: ReadonlySet<ContextCoverageTruncationReason>;
+}
+
+interface CoverageStats {
+  readonly filesDiscovered: number;
+  readonly filesAfterPolicy: number;
+  readonly ignoredByDiscovery: number;
+  readonly deniedByDiscovery: number;
+  readonly depthPrunedByDiscovery: number;
+  readonly maxFilesPrunedByDiscovery: number;
+  readonly lowValueRescueFilesDiscovered: number;
+  readonly lowValueRescueFilesScanned: number;
+}
+
+const EMPTY_COVERAGE_STATS: CoverageStats = {
+  filesDiscovered: 0,
+  filesAfterPolicy: 0,
+  ignoredByDiscovery: 0,
+  deniedByDiscovery: 0,
+  depthPrunedByDiscovery: 0,
+  maxFilesPrunedByDiscovery: 0,
+  lowValueRescueFilesDiscovered: 0,
+  lowValueRescueFilesScanned: 0,
+};
+
+function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStats {
+  if (diagnostics === undefined) {
+    return EMPTY_COVERAGE_STATS;
+  }
+  return {
+    filesDiscovered: diagnostics.filesDiscovered,
+    filesAfterPolicy: diagnostics.filesAfterPolicy,
+    ignoredByDiscovery: diagnostics.ignoredByDiscovery,
+    deniedByDiscovery: diagnostics.deniedByDiscovery,
+    depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
+    maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
+    lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
+    lowValueRescueFilesScanned: diagnostics.lowValueRescueFilesScanned ?? 0,
+  };
+}
+
+function inferredCoverageReasons(
+  inputs: CoverageInputs,
+  stats: CoverageStats,
+): Set<ContextCoverageTruncationReason> {
+  const reasons = new Set(inputs.truncationReasons);
+  if (stats.depthPrunedByDiscovery > 0) {
+    reasons.add("depth-pruned");
+  }
+  if (
+    inputs.candidateTruncated &&
+    (stats.depthPrunedByDiscovery === 0 || stats.filesDiscovered >= inputs.limits.maxFilesScanned)
+  ) {
+    reasons.add("file-cap");
+  }
+  if (inputs.elapsedMs > inputs.limits.elapsedMsMax) {
+    reasons.add("timeout");
+  }
+  return reasons;
+}
+
+function omittedCandidateCount(candidates: readonly CandidateFile[]): number {
+  return candidates.filter((candidate) => candidate.omitted !== undefined).length;
+}
+
+function unvisitedCandidateCount(
+  inputs: CoverageInputs,
+  stats: CoverageStats,
+  omittedCount: number,
+): number {
+  return Math.max(0, stats.filesAfterPolicy - inputs.filesScanned - omittedCount);
+}
+
+function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number {
+  const omittedCount = omittedCandidateCount(inputs.candidates);
+  return (
+    omittedCount +
+    unvisitedCandidateCount(inputs, stats, omittedCount) +
+    stats.ignoredByDiscovery +
+    stats.deniedByDiscovery +
+    stats.depthPrunedByDiscovery
+  );
+}
+
+function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagnostics {
+  const stats = coverageStats(inputs.diagnostics);
+  const orderedReasons = coverageReasons(inferredCoverageReasons(inputs, stats));
+  return {
+    incomplete: orderedReasons.length > 0,
+    reasons: orderedReasons,
+    filesDiscovered: stats.filesDiscovered,
+    filesAfterPolicy: stats.filesAfterPolicy,
+    filesScanned: inputs.filesScanned,
+    filesSkipped: skippedFileCount(inputs, stats),
+    oversizedFilesScanned: inputs.oversizedFilesScanned,
+    lowValueRescueFilesDiscovered: stats.lowValueRescueFilesDiscovered,
+    lowValueRescueFilesScanned: stats.lowValueRescueFilesScanned,
+    truncated: orderedReasons.length > 0,
+    ignoredByDiscovery: stats.ignoredByDiscovery,
+    deniedByDiscovery: stats.deniedByDiscovery,
+    depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
+    maxFilesPrunedByDiscovery: stats.maxFilesPrunedByDiscovery,
+    matchesReturned: inputs.matchesReturned,
+    elapsedMs: inputs.elapsedMs,
+    limits: {
+      maxFilesScanned: inputs.limits.maxFilesScanned,
+      maxMatchesReturned: inputs.limits.maxMatchesReturned,
+      elapsedMsMax: inputs.limits.elapsedMsMax,
+    },
+  };
+}
+
+function abortedSearchResult(
+  elapsedMs: number,
+  limits: SearchLimits = DEFAULT_SEARCH_LIMITS,
+  diagnostics?: SearchDiagnostics,
+  candidateTruncated = false,
+): SearchResult {
+  const truncationReasons = new Set<ContextCoverageTruncationReason>(["aborted"]);
   return {
     atoms: [],
     candidates: [],
@@ -179,69 +331,20 @@ function abortedSearchResult(elapsedMs: number): SearchResult {
     oversizedFilesScanned: 0,
     elapsedMs,
     truncated: true,
-    diagnostics: undefined,
+    diagnostics,
+    coverage: buildCoverageDiagnostics({
+      diagnostics,
+      filesScanned: 0,
+      oversizedFilesScanned: 0,
+      matchesReturned: 0,
+      elapsedMs,
+      limits,
+      candidates: [],
+      candidateTruncated,
+      truncationReasons,
+    }),
+    workspaceIndex: undefined,
   };
-}
-
-function isValidLineRange(range: LineRange | undefined): boolean {
-  return (
-    range === undefined ||
-    (Number.isInteger(range.startLine) &&
-      Number.isInteger(range.endLine) &&
-      range.startLine >= 1 &&
-      range.endLine >= range.startLine)
-  );
-}
-
-function clampUnit(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
-function semanticHitAtom(
-  scope: SearchScope,
-  query: RetrievalQuery,
-  nowMs: number,
-  hit: SemanticSearchHit,
-): EvidenceAtom {
-  return buildAtom({
-    scopeId: scope.scopeId,
-    scopePath: hit.scopePath,
-    lineRange: hit.lineRange,
-    provenanceKind: "semantic-search",
-    tool: "repo.semanticSearch",
-    queryFingerprint: fingerprintFor(query),
-    score: clampUnit(hit.score),
-    emittedAtMs: nowMs,
-  });
-}
-
-function isUsableSemanticHit(hit: SemanticSearchHit, allowedPaths: ReadonlySet<string>): boolean {
-  return (
-    Number.isFinite(hit.score) &&
-    hit.score > 0 &&
-    allowedPaths.has(hit.scopePath) &&
-    isValidScopePath(hit.scopePath, { mustBeRelative: true }) &&
-    isValidLineRange(hit.lineRange)
-  );
-}
-
-function appendSemanticHit(inputs: {
-  readonly atoms: EvidenceAtom[];
-  readonly seen: Set<string>;
-  readonly runner: SearchTextRunnerWithSemantic;
-  readonly hit: SemanticSearchHit;
-}): void {
-  const atom = semanticHitAtom(
-    inputs.runner.scope,
-    inputs.runner.query,
-    inputs.runner.nowMs(),
-    inputs.hit,
-  );
-  if (inputs.seen.has(atom.stableId)) {
-    return;
-  }
-  inputs.seen.add(atom.stableId);
-  inputs.atoms.push(atom);
 }
 
 function compareAtoms(a: EvidenceAtom, b: EvidenceAtom): number {
@@ -250,42 +353,6 @@ function compareAtoms(a: EvidenceAtom, b: EvidenceAtom): number {
     a.scopePath.localeCompare(b.scopePath) ||
     a.stableId.localeCompare(b.stableId)
   );
-}
-
-async function semanticAtoms(
-  runner: SearchTextRunnerWithSemantic,
-  candidateSet: CandidateSet,
-): Promise<readonly EvidenceAtom[]> {
-  const provider = runner.semanticSearchProvider;
-  if (provider === undefined || runner.query.kind === "regex") {
-    return [];
-  }
-  const candidatePaths = candidateSet.files.map((file) => file.relativePath);
-  const allowedPaths = new Set(candidatePaths);
-  const maxResults = Math.min(runner.limits.maxMatchesReturned, runner.query.maxResults);
-  if (maxResults <= 0 || isAborted(runner.signal)) {
-    return [];
-  }
-  const hits = await provider.search({
-    scope: runner.scope,
-    query: runner.query,
-    limits: runner.limits,
-    candidatePaths,
-    maxResults,
-    ...(runner.signal !== undefined ? { signal: runner.signal } : {}),
-  });
-  const atoms: EvidenceAtom[] = [];
-  const seen = new Set<string>();
-  for (const hit of hits) {
-    if (atoms.length >= maxResults) {
-      break;
-    }
-    if (!isUsableSemanticHit(hit, allowedPaths)) {
-      continue;
-    }
-    appendSemanticHit({ atoms, seen, runner, hit });
-  }
-  return atoms;
 }
 
 function mergeSearchAtoms(
@@ -321,12 +388,10 @@ const SCAN_YIELD_INTERVAL = 64;
 const PROJECT_METADATA_SCAN_MIN_FILES = 256;
 const PROJECT_METADATA_SCAN_MAX_FILES = 512;
 
-type SearchTextRunnerWithSemantic = SearchTextRunner & {
-  readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
-};
-
 interface SearchTextCollection {
   readonly atoms: readonly EvidenceAtom[];
+  readonly lexicalAtoms: readonly EvidenceAtom[];
+  readonly semanticMatches: readonly SemanticSearchMatch[];
   readonly candidates: readonly CandidateFile[];
   readonly state: RunState;
 }
@@ -354,9 +419,9 @@ function buildSearchTextRunner(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
-  deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> & Pick<FacadeDeps, "searchHints" | "signal">,
-  semanticSearchProvider?: SemanticSearchProvider,
-): SearchTextRunnerWithSemantic {
+  deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> &
+    Pick<FacadeDeps, "searchHints" | "signal" | "semanticSearchProvider">,
+): SearchTextRunner {
   return {
     scope,
     limits: {
@@ -371,8 +436,631 @@ function buildSearchTextRunner(
     fingerprint: fingerprintFor(query),
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
-    ...(semanticSearchProvider !== undefined ? { semanticSearchProvider } : {}),
+    semantic: createSemanticSearchSession(deps.semanticSearchProvider, query),
   };
+}
+
+interface SearchWorkspaceIndexSession {
+  candidateSet: CandidateSet;
+  readonly preparedEntries: Map<string, PreparedWorkspaceIndexEntry>;
+  readonly recordByPath: Map<string, WorkspaceIndexRecord>;
+  readonly discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>;
+  readonly rebuiltCachedRecords: Set<string>;
+  dirty: boolean;
+  report: WorkspaceIndexPreparationReport | undefined;
+  readonly persist: () => Promise<void>;
+}
+
+type SearchWorkspaceIndexSessionState = Omit<SearchWorkspaceIndexSession, "persist">;
+
+function discoveredFileSnapshot(
+  scopePath: string,
+  sizeBytes: number,
+  mtimeMs: number | undefined,
+): WorkspaceIndexDiscoveredFile {
+  return {
+    scopePath,
+    sizeBytes,
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+  };
+}
+
+function candidateSetDiscoverySnapshot(
+  candidateSet: CandidateSet,
+  discoveryFiles: readonly WorkspaceIndexDiscoveredFile[],
+  directories: readonly WorkspaceIndexDirectorySnapshot[],
+): WorkspaceIndexDiscoverySnapshot {
+  return {
+    files: discoveryFiles,
+    directories,
+    filesDiscovered: candidateSet.diagnostics.filesDiscovered,
+    ignoredByDiscovery: candidateSet.diagnostics.ignoredByDiscovery,
+    deniedByDiscovery: candidateSet.diagnostics.deniedByDiscovery,
+    depthPrunedByDiscovery: candidateSet.diagnostics.depthPrunedByDiscovery,
+    truncated: candidateSet.truncated,
+  };
+}
+
+function directoryFingerprint(
+  entries: readonly {
+    readonly name: string;
+    readonly isDirectory: boolean;
+    readonly isFile: boolean;
+  }[],
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        entries
+          .map((entry) => ({
+            name: entry.name,
+            isDirectory: entry.isDirectory,
+            isFile: entry.isFile,
+          }))
+          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+      ),
+    )
+    .digest("hex");
+}
+
+function ancestorDirectoryPaths(scopePath: string): readonly string[] {
+  const normalized = scopePath.split("\\").join("/");
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  const paths: string[] = [""];
+  let current = "";
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = current.length === 0 ? (parts[index] ?? "") : `${current}/${parts[index] ?? ""}`;
+    paths.push(current);
+  }
+  return [...new Set(paths)];
+}
+
+function parentDirectoryPath(scopePath: string): string {
+  const normalized = scopePath.split("\\").join("/");
+  const slash = normalized.lastIndexOf("/");
+  return slash === -1 ? "" : normalized.slice(0, slash);
+}
+
+function selectedDirectoryPath(
+  workspaceRoot: string,
+  scopePath: string,
+  fs: WorkspaceFs,
+): string | undefined {
+  const normalized = scopePath.split("\\").join("/");
+  if (normalized.length === 0) {
+    return "";
+  }
+  if (!isValidScopePath(normalized, { mustBeRelative: true }) || isDenied(normalized)) {
+    return undefined;
+  }
+  const absolutePath = resolveWithinWorkspace(workspaceRoot, normalized);
+  let contained;
+  try {
+    contained = containedRealPathInfo(fs, workspaceRoot, absolutePath);
+  } catch {
+    return undefined;
+  }
+  const realScopePath = normalizeScopePath(contained.realRelative);
+  if (isDenied(realScopePath)) {
+    return undefined;
+  }
+  try {
+    const stat = fs.stat(contained.path);
+    return stat.isDirectory ? realScopePath : parentDirectoryPath(realScopePath);
+  } catch {
+    return parentDirectoryPath(realScopePath);
+  }
+}
+
+function buildWorkspaceIndexDirectories(
+  workspaceRoot: string,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+  fs: WorkspaceFs,
+  relativePaths: readonly string[],
+  visitedDirectories: readonly string[],
+): readonly WorkspaceIndexDirectorySnapshot[] {
+  const directories = new Set<string>();
+  addVisitedWorkspaceIndexDirectories(directories, visitedDirectories);
+  addSelectedWorkspaceIndexDirectories(directories, workspaceRoot, fs, relativePaths);
+  addIndexedWorkspaceIndexAncestors(directories, discoveryByPath);
+  const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
+  for (const scopePath of [...directories].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const absolutePath =
+      scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
+    try {
+      const entries = fs.readDir(absolutePath);
+      const stat = fs.stat(absolutePath);
+      snapshots.push({
+        scopePath,
+        fingerprint: directoryFingerprint(entries),
+        ...(typeof stat.mtimeMs === "number" ? { mtimeMs: stat.mtimeMs } : {}),
+      });
+    } catch {
+      snapshots.push({ scopePath, fingerprint: "unavailable", mtimeMs: undefined });
+    }
+  }
+  return snapshots;
+}
+
+function addVisitedWorkspaceIndexDirectories(
+  directories: Set<string>,
+  visitedDirectories: readonly string[],
+): void {
+  for (const directory of visitedDirectories) {
+    if (isValidScopePath(directory, { mustBeRelative: true }) && !isDenied(directory)) {
+      directories.add(directory);
+    }
+  }
+}
+
+function addSelectedWorkspaceIndexDirectories(
+  directories: Set<string>,
+  workspaceRoot: string,
+  fs: WorkspaceFs,
+  relativePaths: readonly string[],
+): void {
+  if (relativePaths.length === 0) {
+    directories.add("");
+    return;
+  }
+  for (const scopePath of relativePaths) {
+    const directory = selectedDirectoryPath(workspaceRoot, scopePath, fs);
+    if (directory !== undefined) {
+      directories.add(directory);
+    }
+  }
+}
+
+function addIndexedWorkspaceIndexAncestors(
+  directories: Set<string>,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+): void {
+  for (const scopePath of discoveryByPath.keys()) {
+    for (const ancestor of ancestorDirectoryPaths(scopePath)) {
+      directories.add(ancestor);
+    }
+  }
+}
+
+function sameWorkspaceIndexRecord(
+  a: WorkspaceIndexRecord | undefined,
+  b: WorkspaceIndexRecord | undefined,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameDiscoveryFile(
+  a: WorkspaceIndexDiscoveredFile | undefined,
+  b: WorkspaceIndexDiscoveredFile,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function workspaceIndexPolicyShape(runner: SearchTextRunner): {
+  readonly policyMode: SearchTextRunner["policy"]["mode"];
+  readonly applyGitignore: boolean;
+  readonly omitLowValueWorkspaceFiles: boolean;
+} {
+  return {
+    policyMode: runner.policy.mode,
+    applyGitignore: runner.policy.applyGitignore,
+    omitLowValueWorkspaceFiles: runner.policy.omitLowValueWorkspaceFiles,
+  };
+}
+
+function workspaceIndexCompatiblePolicy(runner: SearchTextRunner): boolean {
+  return runner.policy.lowValuePathAllowlist.length === 0 && runner.policy.recentPaths.length === 0;
+}
+
+function workspaceIndexScopeKey(
+  scope: SearchScope,
+  runner: SearchTextRunner,
+): ReturnType<typeof buildWorkspaceIndexScopeKey> {
+  return buildWorkspaceIndexScopeKey(
+    scope,
+    workspaceIndexPolicyShape(runner),
+    runner.limits.maxBytesPerFileScanned,
+    runner.limits.maxFilesScanned,
+  );
+}
+
+function seedWorkspaceIndexCaches(
+  prepared: PreparedWorkspaceIndexSnapshot | undefined,
+  candidateSet: CandidateSet,
+): Pick<SearchWorkspaceIndexSession, "preparedEntries" | "recordByPath" | "discoveryByPath"> {
+  const preparedEntries = new Map<string, PreparedWorkspaceIndexEntry>();
+  const recordByPath = new Map<string, WorkspaceIndexRecord>();
+  const discoveryByPath = new Map<string, WorkspaceIndexDiscoveredFile>();
+  if (prepared === undefined) {
+    for (const file of candidateSet.files) {
+      discoveryByPath.set(
+        file.relativePath,
+        discoveredFileSnapshot(file.relativePath, file.sizeBytes, undefined),
+      );
+    }
+    return { preparedEntries, recordByPath, discoveryByPath };
+  }
+  for (const entry of prepared.entries) {
+    preparedEntries.set(entry.scopePath, entry);
+    discoveryByPath.set(
+      entry.scopePath,
+      discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs),
+    );
+    if (entry.record !== undefined) {
+      recordByPath.set(entry.scopePath, entry.record);
+    }
+  }
+  return { preparedEntries, recordByPath, discoveryByPath };
+}
+
+function sortedDiscoveryFiles(
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+): readonly WorkspaceIndexDiscoveredFile[] {
+  return [...discoveryByPath.values()].sort((a, b) =>
+    a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
+  );
+}
+
+function preparedFromSessionState(
+  discovery: WorkspaceIndexDiscoverySnapshot,
+  preparedEntries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+  report: WorkspaceIndexPreparationReport,
+): PreparedWorkspaceIndexSnapshot {
+  return {
+    valid: true,
+    dirty: false,
+    entries: [...preparedEntries.values()].sort((a, b) =>
+      a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
+    ),
+    discovery: {
+      ...discovery,
+      files: sortedDiscoveryFiles(discoveryByPath),
+      filesDiscovered: discovery.truncated ? discovery.filesDiscovered : discoveryByPath.size,
+    },
+    report,
+  };
+}
+
+function removeWorkspaceIndexPath(
+  scopePath: string,
+  preparedEntries: Map<string, PreparedWorkspaceIndexEntry>,
+  recordByPath: Map<string, WorkspaceIndexRecord>,
+  discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>,
+): boolean {
+  const hadEntry = preparedEntries.delete(scopePath);
+  const hadRecord = recordByPath.delete(scopePath);
+  const hadDiscovery = discoveryByPath.delete(scopePath);
+  return hadEntry || hadRecord || hadDiscovery;
+}
+
+function removeWorkspaceIndexDirectory(
+  directoryScopePath: string,
+  preparedEntries: Map<string, PreparedWorkspaceIndexEntry>,
+  recordByPath: Map<string, WorkspaceIndexRecord>,
+  discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>,
+): number {
+  const paths = [...discoveryByPath.keys()].filter(
+    (scopePath) =>
+      directoryScopePath.length === 0 ||
+      scopePath === directoryScopePath ||
+      scopePath.startsWith(`${directoryScopePath}/`),
+  );
+  let removed = 0;
+  for (const scopePath of paths) {
+    if (removeWorkspaceIndexPath(scopePath, preparedEntries, recordByPath, discoveryByPath)) {
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+function deltaScanPaths(delta: WorkspaceIndexDirectoryDelta): readonly string[] {
+  return delta.rescanDirectory ? [delta.scopePath] : delta.addedPaths;
+}
+
+function prepareAffectedWorkspaceIndexSnapshot(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  scanPaths: readonly string[],
+  records: Iterable<WorkspaceIndexRecord>,
+): PreparedWorkspaceIndexSnapshot | undefined {
+  if (scanPaths.length === 0) {
+    return undefined;
+  }
+  const affectedScope: SearchScope = { ...scope, relativePaths: scanPaths };
+  const candidateSet = gatherCandidatesWithoutContentPrescore(
+    affectedScope,
+    query,
+    limits,
+    runner.fs,
+    runner.policy,
+  );
+  const discoveryFiles = candidateSet.files.map((file) =>
+    discoveredFileSnapshot(file.relativePath, file.sizeBytes, undefined),
+  );
+  return prepareWorkspaceIndexSnapshot(
+    buildWorkspaceIndexSnapshot({
+      scope: affectedScope,
+      policy: workspaceIndexPolicyShape(runner),
+      maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
+      maxFilesScanned: runner.limits.maxFilesScanned,
+      discovery: candidateSetDiscoverySnapshot(candidateSet, discoveryFiles, []),
+      records,
+    }),
+    scope.workspace,
+    runner.fs,
+  );
+}
+
+function applyAffectedPreparedEntries(
+  prepared: PreparedWorkspaceIndexSnapshot | undefined,
+  preparedEntries: Map<string, PreparedWorkspaceIndexEntry>,
+  recordByPath: Map<string, WorkspaceIndexRecord>,
+  discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>,
+): WorkspaceIndexPreparationReport {
+  const empty = {
+    discoveredEntries: 0,
+    retainedEntries: 0,
+    indexedRecords: 0,
+    reusedRecords: 0,
+    staleRecords: 0,
+    skippedEntries: 0,
+    deletedEntries: 0,
+    droppedRecords: 0,
+  };
+  if (prepared === undefined) {
+    return empty;
+  }
+  for (const entry of prepared.entries) {
+    preparedEntries.set(entry.scopePath, entry);
+    discoveryByPath.set(
+      entry.scopePath,
+      discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs),
+    );
+    if (entry.record !== undefined) {
+      recordByPath.set(entry.scopePath, entry.record);
+    }
+  }
+  return prepared.report;
+}
+
+function reconciledWorkspaceIndexReport(inputs: {
+  readonly discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>;
+  readonly recordByPath: ReadonlyMap<string, WorkspaceIndexRecord>;
+  readonly affectedReport: WorkspaceIndexPreparationReport;
+  readonly removedEntries: number;
+}): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: inputs.discoveryByPath.size,
+    retainedEntries: inputs.discoveryByPath.size,
+    indexedRecords: inputs.recordByPath.size,
+    reusedRecords: Math.max(0, inputs.recordByPath.size - inputs.affectedReport.staleRecords),
+    staleRecords: inputs.affectedReport.staleRecords,
+    skippedEntries: inputs.affectedReport.skippedEntries,
+    deletedEntries: inputs.removedEntries + inputs.affectedReport.deletedEntries,
+    droppedRecords: inputs.removedEntries + inputs.affectedReport.droppedRecords,
+  };
+}
+
+function emptyWorkspaceIndexPreparationReport(): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: 0,
+    retainedEntries: 0,
+    indexedRecords: 0,
+    reusedRecords: 0,
+    staleRecords: 0,
+    skippedEntries: 0,
+    deletedEntries: 0,
+    droppedRecords: 0,
+  };
+}
+
+function addWorkspaceIndexPreparationReport(
+  a: WorkspaceIndexPreparationReport,
+  b: WorkspaceIndexPreparationReport,
+): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: a.discoveredEntries + b.discoveredEntries,
+    retainedEntries: a.retainedEntries + b.retainedEntries,
+    indexedRecords: a.indexedRecords + b.indexedRecords,
+    reusedRecords: a.reusedRecords + b.reusedRecords,
+    staleRecords: a.staleRecords + b.staleRecords,
+    skippedEntries: a.skippedEntries + b.skippedEntries,
+    deletedEntries: a.deletedEntries + b.deletedEntries,
+    droppedRecords: a.droppedRecords + b.droppedRecords,
+  };
+}
+
+async function loadWorkspaceIndexSnapshot(
+  workspaceIndex: WorkspaceIndex,
+  scope: SearchScope,
+  runner: SearchTextRunner,
+): Promise<WorkspaceIndexSnapshot | undefined> {
+  try {
+    return await workspaceIndex.loadSnapshot(workspaceIndexScopeKey(scope, runner));
+  } catch {
+    return undefined;
+  }
+}
+
+function initialWorkspaceIndexSessionState(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  prepared: PreparedWorkspaceIndexSnapshot | undefined,
+): SearchWorkspaceIndexSessionState {
+  const candidateSet =
+    prepared === undefined
+      ? gatherCandidatesWithoutContentPrescore(scope, query, limits, runner.fs, runner.policy)
+      : workspaceIndexCandidateSet(prepared, query, runner.policy);
+  return {
+    candidateSet,
+    ...seedWorkspaceIndexCaches(prepared, candidateSet),
+    rebuiltCachedRecords: new Set<string>(),
+    dirty: prepared === undefined,
+    report: prepared?.report,
+  };
+}
+
+function applyWorkspaceIndexDelta(
+  delta: WorkspaceIndexDirectoryDelta,
+  state: SearchWorkspaceIndexSessionState,
+  inputs: {
+    readonly scope: SearchScope;
+    readonly query: RetrievalQuery;
+    readonly runner: SearchTextRunner;
+    readonly limits: SearchLimits;
+  },
+): { readonly removedEntries: number; readonly affectedReport: WorkspaceIndexPreparationReport } {
+  let removedEntries = 0;
+  for (const removedPath of delta.removedPaths) {
+    if (
+      removeWorkspaceIndexPath(
+        removedPath,
+        state.preparedEntries,
+        state.recordByPath,
+        state.discoveryByPath,
+      )
+    ) {
+      removedEntries += 1;
+    }
+  }
+  if (delta.rescanDirectory) {
+    removedEntries += removeWorkspaceIndexDirectory(
+      delta.scopePath,
+      state.preparedEntries,
+      state.recordByPath,
+      state.discoveryByPath,
+    );
+  }
+  const affected = prepareAffectedWorkspaceIndexSnapshot(
+    inputs.scope,
+    inputs.query,
+    inputs.runner,
+    inputs.limits,
+    deltaScanPaths(delta),
+    state.recordByPath.values(),
+  );
+  return {
+    removedEntries,
+    affectedReport: applyAffectedPreparedEntries(
+      affected,
+      state.preparedEntries,
+      state.recordByPath,
+      state.discoveryByPath,
+    ),
+  };
+}
+
+function applyWorkspaceIndexDeltas(
+  state: SearchWorkspaceIndexSessionState,
+  prepared: PreparedWorkspaceIndexSnapshot,
+  deltas: readonly WorkspaceIndexDirectoryDelta[],
+  inputs: {
+    readonly scope: SearchScope;
+    readonly query: RetrievalQuery;
+    readonly runner: SearchTextRunner;
+    readonly limits: SearchLimits;
+  },
+): void {
+  let removedEntries = 0;
+  let affectedReport = emptyWorkspaceIndexPreparationReport();
+  for (const delta of deltas) {
+    const applied = applyWorkspaceIndexDelta(delta, state, inputs);
+    removedEntries += applied.removedEntries;
+    affectedReport = addWorkspaceIndexPreparationReport(affectedReport, applied.affectedReport);
+  }
+  const report = reconciledWorkspaceIndexReport({
+    discoveryByPath: state.discoveryByPath,
+    recordByPath: state.recordByPath,
+    affectedReport,
+    removedEntries,
+  });
+  const reconciled = preparedFromSessionState(
+    prepared.discovery,
+    state.preparedEntries,
+    state.discoveryByPath,
+    report,
+  );
+  state.candidateSet = workspaceIndexCandidateSet(reconciled, inputs.query, inputs.runner.policy);
+  state.report = report;
+  state.dirty = true;
+}
+
+function persistWorkspaceIndexSession(
+  workspaceIndex: WorkspaceIndex,
+  scope: SearchScope,
+  runner: SearchTextRunner,
+  session: Omit<SearchWorkspaceIndexSession, "persist">,
+): () => Promise<void> {
+  const scopeKey = workspaceIndexScopeKey(scope, runner);
+  return async (): Promise<void> => {
+    if (!session.dirty) {
+      return;
+    }
+    const directories = buildWorkspaceIndexDirectories(
+      scope.workspace.root,
+      session.discoveryByPath,
+      runner.fs,
+      scope.relativePaths,
+      session.candidateSet.directories,
+    );
+    try {
+      await workspaceIndex.saveSnapshot(
+        scopeKey,
+        buildWorkspaceIndexSnapshot({
+          scope,
+          policy: workspaceIndexPolicyShape(runner),
+          maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
+          maxFilesScanned: runner.limits.maxFilesScanned,
+          discovery: candidateSetDiscoverySnapshot(
+            session.candidateSet,
+            [...session.discoveryByPath.values()],
+            directories,
+          ),
+          records: session.recordByPath.values(),
+        }),
+      );
+    } catch {
+      // The workspace index is an opportunistic acceleration layer; search correctness must not
+      // depend on the runtime cache directory being writable.
+    }
+  };
+}
+
+async function buildSearchWorkspaceIndexSession(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  workspaceIndex: WorkspaceIndex,
+): Promise<SearchWorkspaceIndexSession> {
+  const snapshot = await loadWorkspaceIndexSnapshot(workspaceIndex, scope, runner);
+  const cached =
+    snapshot === undefined
+      ? undefined
+      : prepareCachedWorkspaceIndexSnapshot(snapshot, scope.workspace);
+  const inspection =
+    snapshot === undefined
+      ? { valid: false, deltas: [] }
+      : inspectWorkspaceIndexDirectories(snapshot, scope.workspace, runner.fs);
+  const prepared = cached?.valid === true && inspection.valid ? cached : undefined;
+  const session = initialWorkspaceIndexSessionState(scope, query, runner, limits, prepared);
+  if (prepared !== undefined && inspection.deltas.length > 0) {
+    applyWorkspaceIndexDeltas(session, prepared, inspection.deltas, {
+      scope,
+      query,
+      runner,
+      limits,
+    });
+  }
+  return Object.assign(session, {
+    persist: persistWorkspaceIndexSession(workspaceIndex, scope, runner, session),
+  });
 }
 
 async function runScanLoop(
@@ -428,43 +1116,28 @@ function buildRunState(candidateSet: CandidateSet): RunState {
   };
 }
 
-function searchResultFromState(inputs: {
-  readonly runner: SearchTextRunnerWithSemantic;
-  readonly candidateSet: CandidateSet;
-  readonly atoms: readonly EvidenceAtom[];
-  readonly candidates: readonly CandidateFile[];
-  readonly state: RunState;
-}): SearchResult {
-  return {
-    atoms: inputs.atoms,
-    candidates: inputs.candidates,
-    filesScanned: inputs.state.filesScanned,
-    oversizedFilesScanned: inputs.state.oversizedFilesScanned ?? 0,
-    elapsedMs: elapsed(inputs.runner),
-    truncated: inputs.state.truncated,
-    diagnostics: inputs.candidateSet.diagnostics,
-  };
-}
-
 async function collectSearchTextAtoms(
-  runner: SearchTextRunnerWithSemantic,
+  runner: SearchTextRunner,
   candidateSet: CandidateSet,
+  state: RunState = buildRunState(candidateSet),
 ): Promise<SearchTextCollection> {
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
-  const state = buildRunState(candidateSet);
   await runScanLoop(runner, candidateSet, state, atoms, candidates);
-  const semantic = await semanticAtoms(runner, candidateSet);
+  const lexicalAtoms = [...atoms];
+  const semanticMatches = await runSemanticSearchSession(runner.semantic, runner.query, runner.signal);
+  const semanticAtoms = semanticMatches.map((match) => semanticAtom(runner, match));
   const cap = Math.min(runner.limits.maxMatchesReturned, runner.query.maxResults);
-  const mergedAtoms = mergeSearchAtoms(atoms, semantic, cap);
-  if (semantic.length > 0 && atoms.length + semantic.length > mergedAtoms.length) {
+  const mergedAtoms = mergeSearchAtoms(lexicalAtoms, semanticAtoms, cap);
+  if (lexicalAtoms.length + semanticAtoms.length > mergedAtoms.length) {
     state.truncated = true;
   }
-  return { atoms: mergedAtoms, candidates, state };
+  state.matchesReturned = mergedAtoms.length;
+  return { atoms: mergedAtoms, lexicalAtoms, semanticMatches, candidates, state };
 }
 
 function shouldConsiderLowValueRescue(
-  runner: SearchTextRunnerWithSemantic,
+  runner: SearchTextRunner,
   primary: SearchTextCollection,
 ): boolean {
   if (!runner.policy.omitLowValueWorkspaceFiles || primary.atoms.length > 0) {
@@ -494,7 +1167,7 @@ function hasLowValueEvidenceSkipped(
 }
 
 function remainingScanLimit(
-  runner: SearchTextRunnerWithSemantic,
+  runner: SearchTextRunner,
   primary: SearchTextCollection,
 ): number {
   return Math.max(0, runner.limits.maxFilesScanned - primary.state.filesScanned);
@@ -513,23 +1186,29 @@ function lowValueOnlyCandidateSet(
 }
 
 function rescueRunner(
-  runner: SearchTextRunnerWithSemantic,
+  runner: SearchTextRunner,
   maxFilesScanned: number,
-): SearchTextRunnerWithSemantic {
+): SearchTextRunner {
   return {
     ...runner,
     limits: { ...runner.limits, maxFilesScanned },
     policy: lowValueRescuePolicy(runner.policy),
+    semantic: createSemanticSearchSession(runner.semantic?.provider, runner.query),
   };
 }
 
 function combineStates(primary: RunState, rescue: RunState): RunState {
+  const truncationReasons = new Set<ContextCoverageTruncationReason>([
+    ...(primary.truncationReasons ?? []),
+    ...(rescue.truncationReasons ?? []),
+  ]);
   return {
     filesScanned: primary.filesScanned + rescue.filesScanned,
     matchesReturned: primary.matchesReturned + rescue.matchesReturned,
     oversizedFilesScanned:
       (primary.oversizedFilesScanned ?? 0) + (rescue.oversizedFilesScanned ?? 0),
     truncated: primary.truncated || rescue.truncated,
+    ...(truncationReasons.size > 0 ? { truncationReasons } : {}),
   };
 }
 
@@ -546,7 +1225,7 @@ function diagnosticsWithLowValueRescue(
 }
 
 function mergeCollections(
-  runner: SearchTextRunnerWithSemantic,
+  runner: SearchTextRunner,
   primary: SearchTextCollection,
   rescue: SearchTextCollection,
 ): SearchTextCollection {
@@ -555,6 +1234,8 @@ function mergeCollections(
   const selectedPaths = new Set(atoms.map((atom) => atom.scopePath));
   return {
     atoms,
+    lexicalAtoms: [...primary.lexicalAtoms, ...rescue.lexicalAtoms],
+    semanticMatches: [...primary.semanticMatches, ...rescue.semanticMatches],
     candidates: [...primary.candidates, ...rescue.candidates].filter(
       (candidate) => !selectedPaths.has(candidate.scopePath),
     ),
@@ -563,7 +1244,7 @@ function mergeCollections(
 }
 
 async function rescueLowValueEvidence(
-  runner: SearchTextRunnerWithSemantic,
+  runner: SearchTextRunner,
   primarySet: CandidateSet,
   primary: SearchTextCollection,
 ): Promise<{ readonly collection: SearchTextCollection; readonly candidateSet: CandidateSet }> {
@@ -584,29 +1265,334 @@ async function rescueLowValueEvidence(
   );
   const lowValueSet = lowValueOnlyCandidateSet(gatheredSet, runner.policy);
   if (lowValueSet.files.length === 0) {
-    return {
-      collection: primary,
-      candidateSet: {
-        ...primarySet,
-        diagnostics: diagnosticsWithLowValueRescue(
-          primarySet.diagnostics,
-          0,
-          0,
-        ),
-      },
-    };
+    return emptyLowValueRescue(primarySet, primary);
   }
-  const rescue = await collectSearchTextAtoms(lowValueRunner, lowValueSet);
+  const rescue = await collectSearchTextAtoms(lowValueRunner, lowValueSet, lowValueRescueState(
+    lowValueSet,
+    primary,
+  ));
   return {
     collection: mergeCollections(runner, primary, rescue),
+    candidateSet: rescueCandidateSet(primarySet, lowValueSet, rescue),
+  };
+}
+
+function emptyLowValueRescue(
+  primarySet: CandidateSet,
+  primary: SearchTextCollection,
+): { readonly collection: SearchTextCollection; readonly candidateSet: CandidateSet } {
+  return {
+    collection: primary,
     candidateSet: {
       ...primarySet,
-      diagnostics: diagnosticsWithLowValueRescue(
-        primarySet.diagnostics,
-        lowValueSet.files.length,
-        rescue.state.filesScanned,
-      ),
+      diagnostics: diagnosticsWithLowValueRescue(primarySet.diagnostics, 0, 0),
     },
+  };
+}
+
+function lowValueRescueState(lowValueSet: CandidateSet, primary: SearchTextCollection): RunState {
+  return {
+    filesScanned: 0,
+    matchesReturned: 0,
+    oversizedFilesScanned: 0,
+    truncated: lowValueSet.truncated,
+    truncationReasons: primary.state.truncationReasons,
+  };
+}
+
+function rescueCandidateSet(
+  primarySet: CandidateSet,
+  lowValueSet: CandidateSet,
+  rescue: SearchTextCollection,
+): CandidateSet {
+  return {
+    ...primarySet,
+    diagnostics: diagnosticsWithLowValueRescue(
+      primarySet.diagnostics,
+      lowValueSet.files.length,
+      rescue.state.filesScanned,
+    ),
+  };
+}
+
+interface CompletedSearchResultInputs {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly candidates: readonly CandidateFile[];
+  readonly filesScanned: number;
+  readonly oversizedFilesScanned: number;
+  readonly matchesReturned: number;
+  readonly elapsedMs: number;
+  readonly truncated: boolean;
+  readonly diagnostics: SearchDiagnostics;
+  readonly limits: SearchLimits;
+  readonly candidateTruncated: boolean;
+  readonly truncationReasons: ReadonlySet<ContextCoverageTruncationReason>;
+  readonly workspaceIndex: WorkspaceIndexPreparationReport | undefined;
+}
+
+function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResult {
+  return {
+    atoms: inputs.atoms,
+    candidates: inputs.candidates,
+    filesScanned: inputs.filesScanned,
+    oversizedFilesScanned: inputs.oversizedFilesScanned,
+    elapsedMs: inputs.elapsedMs,
+    truncated: inputs.truncated,
+    diagnostics: inputs.diagnostics,
+    coverage: buildCoverageDiagnostics({
+      diagnostics: inputs.diagnostics,
+      filesScanned: inputs.filesScanned,
+      oversizedFilesScanned: inputs.oversizedFilesScanned,
+      matchesReturned: inputs.matchesReturned,
+      elapsedMs: inputs.elapsedMs,
+      limits: inputs.limits,
+      candidates: inputs.candidates,
+      candidateTruncated: inputs.candidateTruncated,
+      truncationReasons: inputs.truncationReasons,
+    }),
+    workspaceIndex: inputs.workspaceIndex,
+  };
+}
+
+function buildSearchTextDeps(
+  deps: FacadeDeps,
+): Required<Pick<FacadeDeps, "fs" | "nowMs">> &
+  Pick<FacadeDeps, "searchHints" | "signal" | "semanticSearchProvider"> {
+  return {
+    fs: deps.fs ?? nodeWorkspaceFs,
+    nowMs: deps.nowMs ?? Date.now,
+    ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
+    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    ...(deps.semanticSearchProvider !== undefined
+      ? { semanticSearchProvider: deps.semanticSearchProvider }
+      : {}),
+  };
+}
+
+function searchTextRunner(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  deps: FacadeDeps,
+): SearchTextRunner {
+  return buildSearchTextRunner(scope, query, limits, buildSearchTextDeps(deps));
+}
+
+function candidateSetForSearch(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  runner: SearchTextRunner,
+  session: SearchWorkspaceIndexSession | undefined,
+): CandidateSet {
+  return session?.candidateSet ?? gatherCandidates(scope, query, limits, runner.fs, runner.policy);
+}
+
+function indexedSearchRunner(
+  runner: SearchTextRunner,
+  session: SearchWorkspaceIndexSession | undefined,
+): SearchTextRunner {
+  if (session === undefined) {
+    return runner;
+  }
+  return {
+    ...runner,
+    workspaceIndex: {
+      entries: session.preparedEntries,
+      onRecord: (record: WorkspaceIndexRecord): void => {
+        const previousRecord = session.recordByPath.get(record.scopePath);
+        const discovery = discoveredFileSnapshot(
+          record.scopePath,
+          record.sizeBytes,
+          record.mtimeMs,
+        );
+        const previousDiscovery = session.discoveryByPath.get(record.scopePath);
+        const rebuiltCachedRecord = session.preparedEntries.has(record.scopePath);
+        if (
+          rebuiltCachedRecord ||
+          !sameWorkspaceIndexRecord(previousRecord, record) ||
+          !sameDiscoveryFile(previousDiscovery, discovery)
+        ) {
+          if (rebuiltCachedRecord) {
+            session.rebuiltCachedRecords.add(record.scopePath);
+          }
+          session.dirty = true;
+          session.report = undefined;
+        }
+        session.recordByPath.set(record.scopePath, record);
+        session.discoveryByPath.set(record.scopePath, discovery);
+      },
+      onStale: (scopePath: string): void => {
+        if (session.recordByPath.delete(scopePath) || session.preparedEntries.delete(scopePath)) {
+          session.dirty = true;
+          session.report = undefined;
+        }
+      },
+    },
+  };
+}
+
+function searchRunState(candidateSet: CandidateSet): {
+  readonly state: RunState;
+  readonly truncationReasons: Set<ContextCoverageTruncationReason>;
+} {
+  const truncationReasons = new Set<ContextCoverageTruncationReason>();
+  return {
+    state: {
+      filesScanned: 0,
+      matchesReturned: 0,
+      oversizedFilesScanned: 0,
+      truncated: candidateSet.truncated,
+      truncationReasons,
+    },
+    truncationReasons,
+  };
+}
+
+function completedSearchTextResult(
+  runner: SearchTextRunner,
+  candidateSet: CandidateSet,
+  state: RunState,
+  atoms: readonly EvidenceAtom[],
+  candidates: readonly CandidateFile[],
+  truncationReasons: ReadonlySet<ContextCoverageTruncationReason>,
+  workspaceIndex: WorkspaceIndexPreparationReport | undefined,
+): SearchResult {
+  return completedSearchResult({
+    atoms,
+    candidates,
+    filesScanned: state.filesScanned,
+    oversizedFilesScanned: state.oversizedFilesScanned ?? 0,
+    matchesReturned: state.matchesReturned,
+    elapsedMs: elapsed(runner),
+    truncated: state.truncated,
+    diagnostics: candidateSet.diagnostics,
+    limits: runner.limits,
+    candidateTruncated: candidateSet.truncated,
+    truncationReasons,
+    workspaceIndex,
+  });
+}
+
+async function executeSearchText(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  deps: FacadeDeps,
+  runner: SearchTextRunner,
+): Promise<SearchResult> {
+  const workspaceIndexSession =
+    deps.workspaceIndex === undefined || !workspaceIndexCompatiblePolicy(runner)
+      ? undefined
+      : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
+  const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
+  const candidateSet = candidateSetForSearch(scope, query, limits, runner, workspaceIndexSession);
+  if (isAborted(deps.signal)) {
+    return abortedSearchResult(
+      elapsed(searchRunner),
+      limits,
+      candidateSet.diagnostics,
+      candidateSet.truncated,
+    );
+  }
+  const { state, truncationReasons } = searchRunState(candidateSet);
+  const primary = await collectSearchTextAtoms(searchRunner, candidateSet, state);
+  const rescued = await rescueLowValueEvidence(searchRunner, candidateSet, primary);
+  await persistSearchTextSession(workspaceIndexSession);
+  const diagnostics = withSemanticRankingDiagnostics(
+    rescued.candidateSet.diagnostics,
+    bestLexicalAtomsByPath(rescued.collection.lexicalAtoms),
+    rescued.collection.semanticMatches,
+  );
+  return completedSearchTextResult(
+    searchRunner,
+    { ...rescued.candidateSet, diagnostics },
+    rescued.collection.state,
+    rescued.collection.atoms,
+    rescued.collection.candidates,
+    truncationReasons,
+    workspaceIndexReport(workspaceIndexSession),
+  );
+}
+
+function bestLexicalAtomsByPath(
+  atoms: readonly EvidenceAtom[],
+): readonly { readonly scopePath: string; readonly score: number }[] {
+  const best = new Map<string, number>();
+  for (const atom of atoms) {
+    if (atom.provenance.kind !== "lexical-search") {
+      continue;
+    }
+    best.set(atom.scopePath, Math.max(best.get(atom.scopePath) ?? 0, atom.score));
+  }
+  return [...best.entries()].map(([scopePath, score]) => ({ scopePath, score }));
+}
+
+function semanticAtomLineRange(
+  match: SemanticSearchMatch,
+): { readonly startLine: number; readonly endLine: number } | undefined {
+  return match.line === undefined ? undefined : { startLine: match.line, endLine: match.line };
+}
+
+function semanticAtom(
+  runner: SearchTextRunner,
+  match: SemanticSearchMatch,
+): EvidenceAtom {
+  const tool = semanticSearchTool(runner.semantic?.provider.name ?? "disabled");
+  return buildAtom({
+    scopeId: runner.scope.scopeId,
+    scopePath: match.scopePath,
+    lineRange: semanticAtomLineRange(match),
+    provenanceKind: "model-rerank",
+    tool,
+    queryFingerprint: runner.fingerprint,
+    score: match.score,
+    emittedAtMs: runner.nowMs(),
+  });
+}
+
+async function persistSearchTextSession(
+  session: SearchWorkspaceIndexSession | undefined,
+): Promise<void> {
+  if (session !== undefined) {
+    await session.persist();
+  }
+}
+
+function workspaceIndexReport(
+  session: SearchWorkspaceIndexSession | undefined,
+): WorkspaceIndexPreparationReport | undefined {
+  if (session === undefined) {
+    return undefined;
+  }
+  if (
+    session.report !== undefined &&
+    (!session.dirty ||
+      session.report.deletedEntries > 0 ||
+      session.report.droppedRecords > 0 ||
+      session.report.staleRecords > 0)
+  ) {
+    return session.report;
+  }
+  const reusedRecords = [...session.preparedEntries.values()].filter(
+    (entry) =>
+      entry.record !== undefined &&
+      session.recordByPath.has(entry.scopePath) &&
+      !session.rebuiltCachedRecords.has(entry.scopePath),
+  ).length;
+  const staleRecords = session.rebuiltCachedRecords.size;
+  return {
+    discoveredEntries: session.candidateSet.diagnostics.filesDiscovered,
+    retainedEntries: session.discoveryByPath.size,
+    indexedRecords: session.recordByPath.size,
+    reusedRecords,
+    staleRecords,
+    skippedEntries: Math.max(
+      0,
+      session.candidateSet.diagnostics.filesDiscovered - session.discoveryByPath.size,
+    ),
+    deletedEntries: 0,
+    droppedRecords: 0,
   };
 }
 
@@ -618,34 +1604,11 @@ export async function searchText(
 ): Promise<SearchResult> {
   assertWorkspaceRoot(scope.workspace);
   assertSearchTextQuery(query);
-  const fs = deps.fs ?? nodeWorkspaceFs;
-  const nowMs = deps.nowMs ?? Date.now;
-  const runner = buildSearchTextRunner(
-    scope,
-    query,
-    limits,
-    {
-      fs,
-      nowMs,
-      ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
-      ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-    },
-    deps.semanticSearchProvider,
-  );
+  const runner = searchTextRunner(scope, query, limits, deps);
   if (isAborted(deps.signal)) {
-    return abortedSearchResult(elapsed(runner));
+    return abortedSearchResult(elapsed(runner), limits);
   }
-  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, runner.policy);
-  if (isAborted(deps.signal)) {
-    return { ...abortedSearchResult(elapsed(runner)), diagnostics: candidateSet.diagnostics };
-  }
-  const primary = await collectSearchTextAtoms(runner, candidateSet);
-  const result = await rescueLowValueEvidence(runner, candidateSet, primary);
-  return searchResultFromState({
-    runner,
-    candidateSet: result.candidateSet,
-    ...result.collection,
-  });
+  return executeSearchText(scope, query, limits, deps, runner);
 }
 
 interface FindFilesContext {
@@ -660,6 +1623,7 @@ interface FindFilesState {
   readonly candidates: CandidateFile[];
   filesScanned: number;
   truncated: boolean;
+  readonly truncationReasons: Set<ContextCoverageTruncationReason>;
 }
 
 function emitFileListing(ctx: FindFilesContext, relativePath: string, atoms: EvidenceAtom[]): void {
@@ -685,12 +1649,23 @@ function hitFileListingLimit(
   limits: SearchLimits,
   signal?: AbortSignal,
 ): boolean {
-  return (
-    isAborted(signal) ||
-    state.filesScanned >= limits.maxFilesScanned ||
-    state.atoms.length >= maxMatches ||
-    nowMs() - startMs > limits.elapsedMsMax
-  );
+  if (isAborted(signal)) {
+    state.truncationReasons.add("aborted");
+    return true;
+  }
+  if (state.filesScanned >= limits.maxFilesScanned) {
+    state.truncationReasons.add("file-cap");
+    return true;
+  }
+  if (state.atoms.length >= maxMatches) {
+    state.truncationReasons.add("match-cap");
+    return true;
+  }
+  if (nowMs() - startMs > limits.elapsedMsMax) {
+    state.truncationReasons.add("timeout");
+    return true;
+  }
+  return false;
 }
 
 function collectFileListings(
@@ -709,6 +1684,7 @@ function collectFileListings(
     candidates: [],
     filesScanned: 0,
     truncated: candidateSet.truncated,
+    truncationReasons: new Set<ContextCoverageTruncationReason>(),
   };
   for (const file of candidateSet.files) {
     if (
@@ -772,6 +1748,10 @@ function shouldConsiderLowValueFileListingRescue(
 
 function combineFileListingStates(primary: FindFilesState, rescue: FindFilesState): FindFilesState {
   const atoms = [...primary.atoms, ...rescue.atoms];
+  const truncationReasons = new Set<ContextCoverageTruncationReason>([
+    ...primary.truncationReasons,
+    ...rescue.truncationReasons,
+  ]);
   return {
     atoms,
     candidates: omitSelectedCandidates(
@@ -780,6 +1760,7 @@ function combineFileListingStates(primary: FindFilesState, rescue: FindFilesStat
     ),
     filesScanned: primary.filesScanned + rescue.filesScanned,
     truncated: primary.truncated || rescue.truncated,
+    truncationReasons,
   };
 }
 
@@ -853,16 +1834,22 @@ function fileListingResult(
   state: FindFilesState,
   candidateSet: CandidateSet,
   elapsedMs: number,
+  limits: SearchLimits,
 ): SearchResult {
-  return {
+  return completedSearchResult({
     atoms: state.atoms,
     candidates: state.candidates,
     filesScanned: state.filesScanned,
     oversizedFilesScanned: 0,
+    matchesReturned: state.atoms.length,
     elapsedMs,
     truncated: state.truncated,
     diagnostics: candidateSet.diagnostics,
-  };
+    limits,
+    candidateTruncated: candidateSet.truncated,
+    truncationReasons: state.truncationReasons,
+    workspaceIndex: undefined,
+  });
 }
 
 function findFilesSync(
@@ -876,10 +1863,10 @@ function findFilesSync(
 ): SearchResult {
   const startMs = nowMs();
   if (isAborted(signal)) {
-    return abortedSearchResult(0);
+    return abortedSearchResult(0, limits);
   }
-  // Honor the per-query cap alongside the global limit (Finding 2).
   const effectiveMaxMatches = Math.min(limits.maxMatchesReturned, query.maxResults);
+  const effectiveLimits = { ...limits, maxMatchesReturned: effectiveMaxMatches };
   const ctx: FindFilesContext = {
     scope,
     regex: compileGlob(query.text, query.caseSensitive),
@@ -889,7 +1876,12 @@ function findFilesSync(
   const policy = resolveSearchPolicy(scope.relativePaths.length > 0, hints);
   const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, policy);
   if (isAborted(signal)) {
-    return { ...abortedSearchResult(nowMs() - startMs), diagnostics: candidateSet.diagnostics };
+    return abortedSearchResult(
+      nowMs() - startMs,
+      limits,
+      candidateSet.diagnostics,
+      candidateSet.truncated,
+    );
   }
   const state = collectFileListings(ctx, candidateSet, policy, {
     limits,
@@ -908,7 +1900,7 @@ function findFilesSync(
     startMs,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return fileListingResult(rescued.state, rescued.candidateSet, nowMs() - startMs);
+  return fileListingResult(rescued.state, rescued.candidateSet, nowMs() - startMs, effectiveLimits);
 }
 
 export async function findFiles(

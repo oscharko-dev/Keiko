@@ -40,6 +40,7 @@ import { folderScope, memoryFs } from "./test-support.js";
 import { documentIdFor } from "./types.js";
 
 const ROOT = "/srv/docs";
+const PDF_PARSE_TIMEOUT_MS = 15_000;
 
 interface CountRow {
   readonly n: number;
@@ -298,32 +299,37 @@ describe("extractDocument — parser failure", () => {
 });
 
 describe("extractDocument — normalized binary text", () => {
-  it("persists extracted text for binary parsers that emit normalized content", async () => {
-    const expectedPdfBytes = Buffer.from(PDF_TEXT_LAYER);
-    const fs = memoryFs(ROOT, [{ relativePath: "policy.pdf", content: PDF_TEXT_LAYER }]);
-    const registry = createDefaultParserRegistry();
-    const result = await extractDocument(
-      { fs, store, parserRegistry: registry },
-      {
-        capsuleId,
-        source,
-        file: { relativePath: "policy.pdf", sizeBytes: PDF_TEXT_LAYER.byteLength },
-      },
-    );
-    expect(result.outcome.kind).toBe("persisted");
-    if (result.outcome.kind !== "persisted") return;
-    const row = store._internal.db
-      .prepare(
-        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
-      )
-      .get({ c: capsuleId, d: result.outcome.document.id }) as
-      { readonly normalized_text?: string } | undefined;
-    expect(row?.normalized_text).toContain("Hello PDF");
-    const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
-    expect(blob.kind).toBe("ok");
-    if (blob.kind !== "ok") return;
-    expect(Buffer.from(blob.blob.bytes).equals(expectedPdfBytes)).toBe(true);
-  });
+  it(
+    "persists extracted text for binary parsers that emit normalized content",
+    async () => {
+      const expectedPdfBytes = Buffer.from(PDF_TEXT_LAYER);
+      const fs = memoryFs(ROOT, [{ relativePath: "policy.pdf", content: PDF_TEXT_LAYER }]);
+      const registry = createDefaultParserRegistry();
+      const result = await extractDocument(
+        { fs, store, parserRegistry: registry },
+        {
+          capsuleId,
+          source,
+          file: { relativePath: "policy.pdf", sizeBytes: PDF_TEXT_LAYER.byteLength },
+        },
+      );
+      expect(result.outcome.kind).toBe("persisted");
+      if (result.outcome.kind !== "persisted") return;
+      const row = store._internal.db
+        .prepare(
+          "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+        )
+        .get({ c: capsuleId, d: result.outcome.document.id }) as
+        | { readonly normalized_text?: string }
+        | undefined;
+      expect(row?.normalized_text).toContain("Hello PDF");
+      const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
+      expect(blob.kind).toBe("ok");
+      if (blob.kind !== "ok") return;
+      expect(Buffer.from(blob.blob.bytes).equals(expectedPdfBytes)).toBe(true);
+    },
+    PDF_PARSE_TIMEOUT_MS,
+  );
 
   it("persists XLSX workbook text and row lineage", async () => {
     const fs = memoryFs(ROOT, [{ relativePath: "controls.xlsx", content: XLSX_SIMPLE }]);

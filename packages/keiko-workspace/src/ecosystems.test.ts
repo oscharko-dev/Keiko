@@ -6,12 +6,15 @@ import {
   CANONICAL_MANIFEST_BASENAMES,
   ECOSYSTEMS,
   ecosystemMetadataIntentPatterns,
+  ecosystemPackageBoundary,
+  ecosystemStructureProfiles,
   ecosystemTechnicalPhrases,
   ecosystemVersionDeclarationPatterns,
   isCanonicalMetadataFile,
   isEcosystemLockfile,
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
+  workspaceLanguageForPath,
 } from "./ecosystems.js";
 import { DEFAULT_DENY_PATTERNS, isDenied } from "./ignore.js";
 
@@ -79,6 +82,60 @@ describe("ecosystems registry — source files", () => {
   it("does not classify docs or manifests as source", () => {
     expect(isEcosystemSourceFile("README.md")).toBe(false);
     expect(isEcosystemSourceFile("pom.xml")).toBe(false);
+  });
+
+  it.each([
+    ["pom.xml", "java"],
+    ["src/main/java/A.java", "java"],
+    ["build.gradle.kts", "kotlin"],
+    ["src/App.kt", "kotlin"],
+    ["pyproject.toml", "python"],
+    ["app/service.py", "python"],
+    ["go.mod", "go"],
+    ["cmd/main.go", "go"],
+    ["Cargo.toml", "rust"],
+    ["src/lib.rs", "rust"],
+    ["src/Controller.cs", "csharp"],
+    ["src/index.ts", "typescript"],
+    ["src/index.js", "javascript"],
+  ] as const)("maps %s to WorkspaceLanguage %s", (path, language) => {
+    expect(workspaceLanguageForPath(path)).toBe(language);
+  });
+});
+
+describe("ecosystems registry — structure capability profiles", () => {
+  it("derives package boundary metadata from the same ecosystem registry fields by default", () => {
+    const profiles = ecosystemStructureProfiles();
+    const java = profiles.find((profile) => profile.ecosystem === "java");
+    const dotnet = profiles.find((profile) => profile.ecosystem === "dotnet");
+
+    expect(java?.sourceExtensions).toContain("java");
+    expect(java?.manifestNames).toContain("pom.xml");
+    expect(dotnet?.manifestSuffixes).toContain(".csproj");
+    expect(profiles.every((profile) => profile.extractorName === undefined)).toBe(true);
+  });
+
+  it("allows an ecosystem to override package boundaries without a parallel registry", () => {
+    const java = ECOSYSTEMS.find((ecosystem) => ecosystem.id === "java");
+    if (java === undefined) {
+      throw new Error("expected Java ecosystem fixture");
+    }
+    const boundary = ecosystemPackageBoundary({
+      ...java,
+      structure: {
+        packageBoundary: {
+          manifestNames: ["module-info.java"],
+          manifestSuffixes: [],
+          sourceRootSegments: ["src/main/java"],
+        },
+      },
+    });
+
+    expect(boundary).toEqual({
+      manifestNames: ["module-info.java"],
+      manifestSuffixes: [],
+      sourceRootSegments: ["src/main/java"],
+    });
   });
 });
 

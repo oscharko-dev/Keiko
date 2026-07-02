@@ -31,6 +31,8 @@ describe("editorLanguageLabel", () => {
     expect(editorLanguageLabel("json")).toBe("JSON");
     expect(editorLanguageLabel("markdown")).toBe("Markdown");
     expect(editorLanguageLabel("python")).toBe("Python");
+    expect(editorLanguageLabel("kotlin")).toBe("Kotlin");
+    expect(editorLanguageLabel("csharp")).toBe("C#");
     expect(editorLanguageLabel("shell")).toBe("Shell");
     expect(editorLanguageLabel("plaintext")).toBe("Plain Text");
   });

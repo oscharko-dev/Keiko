@@ -3,43 +3,22 @@
 // module is wrapped in a single try/catch at this IO boundary (ADR-0005). No clock, no RNG.
 
 import { dirname, join, relative, resolve } from "node:path";
+import { WORKSPACE_LANGUAGES } from "./types.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { WorkspaceNotFoundError } from "./errors.js";
 import { isDenied } from "./ignore.js";
 import { assertContainedRealPath } from "./realpath.js";
 import type { TestFramework, WorkspaceInfo, WorkspaceLanguage } from "./types.js";
+import {
+  CANONICAL_MANIFEST_BASENAMES,
+  isCanonicalMetadataFile,
+  workspaceLanguageForPath,
+} from "./ecosystems.js";
+import { discoverFiles } from "./discovery.js";
 
-const MARKERS = [
-  ".git",
-  "package.json",
-  "jsconfig.json",
-  "tsconfig.json",
-  "tsconfig.base.json",
-  "tsconfig.build.json",
-  "pom.xml",
-  "build.gradle",
-  "build.gradle.kts",
-  "settings.gradle",
-  "settings.gradle.kts",
+const EXTRA_ROOT_MARKERS = [
   ".java-version",
-  "build.sbt",
   ".scala-version",
-  "go.mod",
-  "go.work",
-  "Cargo.toml",
-  "rust-toolchain.toml",
-  "rust-toolchain",
-  "pyproject.toml",
-  "setup.py",
-  "setup.cfg",
-  "requirements.txt",
-  "Pipfile",
-  "global.json",
-  "Directory.Build.props",
-  "CMakeLists.txt",
-  "Package.swift",
-  "Gemfile",
-  "composer.json",
   "schema.sql",
   "main.tf",
   "versions.tf",
@@ -55,8 +34,18 @@ const MARKERS = [
   "schema.graphql",
 ] as const;
 
+const MARKERS: readonly string[] = [".git", ...CANONICAL_MANIFEST_BASENAMES, ...EXTRA_ROOT_MARKERS];
+const LANGUAGE_DISCOVERY = { maxDepth: 8, maxFiles: 2_000, applyGitignore: true } as const;
+
 function isRoot(dir: string, fs: WorkspaceFs): boolean {
-  return MARKERS.some((marker) => fs.exists(join(dir, marker)));
+  if (MARKERS.some((marker) => fs.exists(join(dir, marker)))) {
+    return true;
+  }
+  try {
+    return fs.readDir(dir).some((entry) => entry.isFile && isCanonicalMetadataFile(entry.name));
+  } catch {
+    return false;
+  }
 }
 
 function findRoot(startDir: string, fs: WorkspaceFs): string {
@@ -183,6 +172,25 @@ function detectDirs(
   return candidates.filter((dir) => isExistingDir(join(root, dir), fs));
 }
 
+function discoveryWorkspace(
+  root: string,
+  meta: PackageMeta,
+  sourceDirs: readonly string[],
+  testDirs: readonly string[],
+  ignoreLines: readonly string[],
+): WorkspaceInfo {
+  return {
+    root,
+    name: meta.name,
+    version: meta.version,
+    testFramework: meta.testFramework,
+    sourceDirs,
+    testDirs,
+    languages: [],
+    ignoreLines,
+  };
+}
+
 const LANGUAGE_MARKERS: readonly (readonly [WorkspaceLanguage, readonly string[]])[] = [
   ["typescript", ["tsconfig.json", "tsconfig.base.json", "tsconfig.build.json"]],
   ["javascript", ["package.json", "jsconfig.json"]],
@@ -201,7 +209,10 @@ const LANGUAGE_MARKERS: readonly (readonly [WorkspaceLanguage, readonly string[]
   ["sql", ["schema.sql"]],
   ["terraform", ["main.tf", "versions.tf", "providers.tf"]],
   ["protobuf", ["buf.yaml", "buf.gen.yaml"]],
-  ["openapi", ["openapi.yaml", "openapi.yml", "openapi.json", "swagger.yaml", "swagger.yml", "swagger.json"]],
+  [
+    "openapi",
+    ["openapi.yaml", "openapi.yml", "openapi.json", "swagger.yaml", "swagger.yml", "swagger.json"],
+  ],
   ["graphql", ["schema.graphql"]],
 ];
 
@@ -248,15 +259,8 @@ const FILE_NAME_LANGUAGES: readonly (readonly [RegExp, WorkspaceLanguage])[] = [
   [/^(openapi|swagger)\.(?:ya?ml|json)$/u, "openapi"],
 ];
 
-function addLanguage(
-  languages: WorkspaceLanguage[],
-  seen: Set<WorkspaceLanguage>,
-  language: WorkspaceLanguage,
-): void {
-  if (!seen.has(language)) {
-    seen.add(language);
-    languages.push(language);
-  }
+function addLanguage(languages: Set<WorkspaceLanguage>, language: WorkspaceLanguage): void {
+  languages.add(language);
 }
 
 function extensionOf(name: string): string {
@@ -274,62 +278,36 @@ function languageForFileName(name: string): WorkspaceLanguage | undefined {
   return EXTENSION_LANGUAGES[extensionOf(lower)];
 }
 
-// eslint-disable-next-line complexity -- Bounded directory scan with explicit language heuristics.
-function detectSourceLanguages(
+function detectLanguages(
   root: string,
   fs: WorkspaceFs,
-  languages: WorkspaceLanguage[],
-  seen: Set<WorkspaceLanguage>,
-): void {
-  const queue: readonly string[] = [root];
-  const pending = [...queue];
-  let scanned = 0;
-  while (pending.length > 0 && scanned < 2_000) {
-    const dir = pending.shift();
-    if (dir === undefined) {
-      break;
-    }
-    let entries: ReturnType<WorkspaceFs["readDir"]>;
-    try {
-      entries = fs.readDir(dir);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (scanned >= 2_000) {
-        break;
-      }
-      scanned += 1;
-      const abs = join(dir, entry.name);
-      const rel = toRealRelative(root, fs, abs);
-      if (isDenied(rel) || entry.isSymbolicLink) {
-        continue;
-      }
-      if (entry.isDirectory) {
-        pending.push(abs);
-        continue;
-      }
-      if (!entry.isFile) {
-        continue;
-      }
-      const language = languageForFileName(entry.name);
-      if (language !== undefined) {
-        addLanguage(languages, seen, language);
-      }
-    }
-  }
-}
-
-function detectLanguages(root: string, fs: WorkspaceFs): readonly WorkspaceLanguage[] {
-  const languages: WorkspaceLanguage[] = [];
-  const seen = new Set<WorkspaceLanguage>();
+  meta: PackageMeta,
+  sourceDirs: readonly string[],
+  testDirs: readonly string[],
+  ignoreLines: readonly string[],
+): readonly WorkspaceLanguage[] {
+  const languages = new Set<WorkspaceLanguage>();
   for (const [language, markers] of LANGUAGE_MARKERS) {
     if (markers.some((marker) => fs.exists(join(root, marker)))) {
-      addLanguage(languages, seen, language);
+      addLanguage(languages, language);
     }
   }
-  detectSourceLanguages(root, fs, languages, seen);
-  return languages;
+  try {
+    const workspace = discoveryWorkspace(root, meta, sourceDirs, testDirs, ignoreLines);
+    const files = discoverFiles(workspace, LANGUAGE_DISCOVERY, fs);
+    for (const file of files) {
+      const language = workspaceLanguageForPath(file.relativePath) ?? languageForFileName(file.relativePath);
+      if (language !== undefined) {
+        addLanguage(languages, language);
+      }
+    }
+  } catch {
+    // Detection is advisory metadata. Preserve the previous safe fallback if the bounded scan fails.
+  }
+  if (languages.size === 0) {
+    languages.add("javascript");
+  }
+  return WORKSPACE_LANGUAGES.filter((language) => languages.has(language));
 }
 
 // Build workspace metadata treating `root` as THE workspace root — no walk-up, never throws
@@ -339,15 +317,18 @@ function detectLanguages(root: string, fs: WorkspaceFs): readonly WorkspaceLangu
 export function detectWorkspaceAt(root: string, fs: WorkspaceFs = nodeWorkspaceFs): WorkspaceInfo {
   const resolved = resolve(root);
   const meta = readPackageMeta(resolved, fs);
+  const sourceDirs = detectDirs(resolved, fs, ["src"]);
+  const testDirs = detectDirs(resolved, fs, ["tests", "test", "__tests__"]);
+  const ignoreLines = readIgnoreLines(resolved, fs);
   return {
     root: resolved,
     name: meta.name,
     version: meta.version,
     testFramework: meta.testFramework,
-    sourceDirs: detectDirs(resolved, fs, ["src"]),
-    testDirs: detectDirs(resolved, fs, ["tests", "test", "__tests__"]),
-    languages: detectLanguages(resolved, fs),
-    ignoreLines: readIgnoreLines(resolved, fs),
+    sourceDirs,
+    testDirs,
+    languages: detectLanguages(resolved, fs, meta, sourceDirs, testDirs, ignoreLines),
+    ignoreLines,
   };
 }
 

@@ -29,6 +29,7 @@ export {
   DEFAULT_DISCOVERY_OPTIONS,
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
+  WORKSPACE_LANGUAGES,
 } from "./types.js";
 
 export {
@@ -88,9 +89,6 @@ export type {
   SearchResult,
   ReadExcerptRequest,
   ReadExcerptResult,
-  SemanticSearchHit,
-  SemanticSearchProvider,
-  SemanticSearchRequest,
 } from "./repoSearch.js";
 export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
 export type {
@@ -102,6 +100,45 @@ export type {
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
+export { candidateBucketForPath } from "./repoSearchPolicy.js";
+export type {
+  SemanticFusionSignals,
+  SemanticSearchDocument,
+  SemanticSearchInput,
+  SemanticSearchMatch,
+  SemanticSearchProvider,
+} from "./repoSearchSemantic.js";
+export {
+  fuseLexicalAndSemanticRanks,
+  SEMANTIC_RRF_K,
+  SEMANTIC_SEARCH_TOOL_PREFIX,
+  semanticSearchTool,
+} from "./repoSearchSemantic.js";
+export type {
+  FileWorkspaceIndexStoreOptions,
+  PreparedWorkspaceIndexEntry,
+  WorkspaceIndexPreparationReport,
+  PreparedWorkspaceIndexSnapshot,
+  WorkspaceIndex,
+  WorkspaceIndexCandidateSet,
+  WorkspaceIndexDiscoveredFile,
+  WorkspaceIndexDiscoverySnapshot,
+  WorkspaceIndexRecord,
+  WorkspaceIndexRecordKind,
+  WorkspaceIndexScopeKey,
+  WorkspaceIndexSnapshot,
+  WorkspaceIndexStore,
+} from "./workspaceIndex.js";
+export {
+  WORKSPACE_INDEX_SNAPSHOT_VERSION,
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
+  createFileWorkspaceIndexStore,
+  createInMemoryWorkspaceIndexStore,
+  createWorkspaceIndex,
+  prepareWorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
+} from "./workspaceIndex.js";
 
 // ─── Language / build-system ecosystem registry (enterprise retrieval, Milestone 1) ──
 export {
@@ -115,12 +152,22 @@ export {
   isEcosystemLockfile,
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
+  ecosystemPackageBoundary,
+  ecosystemStructureProfiles,
+  workspaceLanguageForEcosystem,
+  workspaceLanguageForPath,
 } from "./ecosystems.js";
 export type {
   Ecosystem,
   EcosystemId,
+  EcosystemPackageBoundary,
   EcosystemPattern,
   EcosystemPhrase,
+  EcosystemStructureAvailabilityContext,
+  EcosystemStructureCapability,
+  EcosystemStructureExtractor,
+  EcosystemStructureExtractorContext,
+  EcosystemStructureProfile,
   EcosystemVersionDeclaration,
 } from "./ecosystems.js";
 export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
@@ -130,8 +177,11 @@ export {
   connectedContextPackStableId,
   fileContentHash,
   hashExcerptContent,
+  importEdgeStableId,
   MAX_HASH_FILE_BYTES,
+  symbolGraphRecordStableId,
 } from "./stableId.js";
+export type { ImportEdgeStableIdInput, SymbolGraphRecordStableIdInput } from "./stableId.js";
 
 // ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
 export type {
@@ -141,9 +191,67 @@ export type {
   StructuralCoverageDiagnostics,
   StructuralAdapterDeps,
   StructuralAdapterRegistry,
+  StructuralAdapterRegistryOptions,
   StructuralParserCoverage,
 } from "./structuralAdapters.js";
-export { createDefaultStructuralRegistry, runStructuralAdapters } from "./structuralAdapters.js";
+export {
+  createDefaultStructuralRegistry,
+  createEcosystemStructureAdapters,
+  runStructuralAdapters,
+} from "./structuralAdapters.js";
+export type {
+  ImportEdgeKind,
+  ImportGraph,
+  ImportGraphTraversalOptions,
+  ImportResolutionKind,
+  ImportSpecifierHit,
+  ResolvedImportEdge,
+} from "./importGraphEdges.js";
+export {
+  buildImportGraph,
+  collectImportSpecifiers,
+  importsFromSource,
+  importersForTarget,
+} from "./importGraphEdges.js";
+export type {
+  EndpointClientCallContract,
+  EndpointClientKind,
+  EndpointContractDiagnostics,
+  EndpointContractGraph,
+  EndpointContractLink,
+  EndpointDtoEvidence,
+  EndpointDtoShape,
+  EndpointHttpMethod,
+  EndpointRouteContract,
+  EndpointServerFramework,
+} from "./endpointContracts.js";
+export {
+  buildEndpointContractGraph,
+  endpointContractAdapter,
+  normalizeEndpointPath,
+} from "./endpointContracts.js";
+export type {
+  SymbolDefinitionKind,
+  SymbolGraph,
+  SymbolGraphDiagnostics,
+  SymbolGraphRecord,
+  SymbolGraphRecordKind,
+} from "./symbolGraph.js";
+export {
+  buildSymbolGraph,
+  callsToSymbol,
+  definitionsForSymbol,
+  referencesForSymbol,
+  symbolGraphAdapter,
+} from "./symbolGraph.js";
+export type {
+  FollowSymbolTrace,
+  FollowSymbolTraceDiagnostics,
+  FollowSymbolTraceRecord,
+  FollowSymbolTraceRelation,
+  FollowSymbolTraceRequest,
+} from "./followSymbolTrace.js";
+export { followSymbolTrace } from "./followSymbolTrace.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";

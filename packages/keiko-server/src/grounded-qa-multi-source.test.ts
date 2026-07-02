@@ -22,6 +22,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
+  type ContextCoverageDiagnostics,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   ChatConnectedScope,
@@ -189,6 +190,32 @@ function scopePack(scopePath: string, score: number, stableId: string): Connecte
   };
 }
 
+function coverageDiagnostics(
+  overrides: Partial<ContextCoverageDiagnostics> = {},
+): ContextCoverageDiagnostics {
+  return {
+    incomplete: false,
+    reasons: [],
+    filesDiscovered: 3,
+    filesAfterPolicy: 3,
+    filesScanned: 3,
+    filesSkipped: 0,
+    truncated: false,
+    ignoredByDiscovery: 0,
+    deniedByDiscovery: 0,
+    depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
+    matchesReturned: 1,
+    elapsedMs: 10,
+    limits: {
+      maxFilesScanned: 10,
+      maxMatchesReturned: 5,
+      elapsedMsMax: 500,
+    },
+    ...overrides,
+  };
+}
+
 function budgetSum(
   budgets: readonly ConnectedContextPack["budget"][],
 ): ConnectedContextPack["budget"] {
@@ -325,6 +352,31 @@ describe("splitExplorationBudget", () => {
   });
 });
 
+describe("splitExplorationBudgets", () => {
+  it("allocates more retrieval budget to a strongly referenced source", () => {
+    const scopes: ChatConnectedScope[] = [
+      { kind: "directory", relativePaths: ["src/api.ts"], connectedAtMs: NOW, root: "/repo/api" },
+      { kind: "directory", relativePaths: ["src/web.ts"], connectedAtMs: NOW, root: "/repo/web" },
+      { kind: "directory", relativePaths: ["src/docs.ts"], connectedAtMs: NOW, root: "/repo/docs" },
+    ];
+    const budgets = splitExplorationBudgets(
+      { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 30 },
+      scopes,
+      {
+        kind: "natural-language",
+        text: "Trace the api payment flow",
+        caseSensitive: false,
+        maxResults: 5,
+        emittedAtMs: NOW,
+      },
+    );
+
+    expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
+    expect(budgets[0]?.searchCallsMax).toBeGreaterThan(budgets[2]?.searchCallsMax ?? 0);
+    expect(budgets.reduce((sum, budget) => sum + budget.filesReadMax, 0)).toBe(30);
+  });
+});
+
 describe("sourceLabels", () => {
   it("uses the root basename and 'project' when root is undefined", () => {
     const scopes: ChatConnectedScope[] = [
@@ -385,9 +437,7 @@ describe("buildMultiSourceGatewayMessages", () => {
       ],
       buildRedactor({}, undefined),
     );
-    expect(promptByteLength(messages)).toBeLessThanOrEqual(
-      maxUtf8BytesForTokenBudget(512 + 512),
-    );
+    expect(promptByteLength(messages)).toBeLessThanOrEqual(maxUtf8BytesForTokenBudget(512 + 512));
     expect(messages[1]?.content).toContain("Source 1: api");
     expect(messages[1]?.content).toContain("Source 2: web");
   });
@@ -505,6 +555,47 @@ describe("mergeContextPackSummaries", () => {
     expect(mergeContextPackSummaries([a, b]).contextSummary).toStrictEqual(
       mergeContextPackSummaries([a, b]).contextSummary,
     );
+  });
+
+  it("aggregates path-free coverage diagnostics from every source", () => {
+    const aPack = {
+      ...scopePack("src/a.ts", 0.4, "a"),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({
+          incomplete: true,
+          reasons: ["file-cap"],
+          filesScanned: 1,
+          filesSkipped: 2,
+          limits: { maxFilesScanned: 1, maxMatchesReturned: 5, elapsedMsMax: 500 },
+        }),
+      },
+    };
+    const bPack = {
+      ...scopePack("src/b.ts", 0.9, "b"),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({
+          incomplete: true,
+          reasons: ["depth-pruned"],
+          depthPrunedByDiscovery: 1,
+          filesSkipped: 1,
+        }),
+      },
+    };
+
+    const merged = mergeContextPackSummaries([
+      buildGroundedAnswerContextPackSummary(aPack, 1, 11),
+      buildGroundedAnswerContextPackSummary(bPack, 1, 13),
+    ]);
+
+    expect(merged.coverage?.incomplete).toBe(true);
+    expect(merged.coverage?.reasons).toStrictEqual(["file-cap", "depth-pruned"]);
+    expect(merged.coverage?.filesScanned).toBe(4);
+    expect(merged.coverage?.filesSkipped).toBe(3);
+    expect(merged.coverage?.depthPrunedByDiscovery).toBe(1);
+    expect(merged.coverage?.limits.maxFilesScanned).toBe(11);
+    expect(JSON.stringify(merged.coverage)).not.toContain("src/");
   });
 });
 

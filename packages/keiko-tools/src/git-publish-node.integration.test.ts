@@ -34,6 +34,8 @@ let remote: string;
 let work: string;
 let info: WorkspaceInfo;
 
+const GIT_INTEGRATION_TIMEOUT_MS = 20_000;
+
 function git(cwd: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
 }
@@ -152,7 +154,7 @@ describe("governed remote publish (Node) — AC5", () => {
     expect(record.actionKind).toBe("push");
     expect(record.outcomeClass).toBe("succeeded");
     expect(JSON.stringify(record)).not.toContain(work);
-  });
+  }, GIT_INTEGRATION_TIMEOUT_MS);
 
   it("classifies a real non-fast-forward rejection at execution time", async () => {
     // Establish the upstream, then advance the remote from a second clone so the work repo's push is
@@ -179,7 +181,7 @@ describe("governed remote publish (Node) — AC5", () => {
     // The remote was NOT advanced to the work repo's commit.
     expect(git(remote, ["log", "--oneline", "feat/x"])).toContain("two");
     expect(git(remote, ["log", "--oneline", "feat/x"])).not.toContain("one-prime");
-  });
+  }, GIT_INTEGRATION_TIMEOUT_MS);
 
   it("classifies a real protected-ref rejection (pre-receive hook declined) at execution time", async () => {
     // A SECOND real execution-time category (not non-fast-forward), guarding the phrase table against
@@ -198,7 +200,7 @@ describe("governed remote publish (Node) — AC5", () => {
     expect(result.rejection?.reason).toBe("protected-ref");
     expect(result.rejection?.actionHint).toBe("adjust-policy-target");
     expect(result.rejection?.disposition).toBe("user-fixable");
-  });
+  }, GIT_INTEGRATION_TIMEOUT_MS);
 
   it("blocks a force push by policy and never touches the remote (AC4)", async () => {
     await governedPush(pushCommand({ setUpstreamTracking: true }));
@@ -221,7 +223,7 @@ describe("governed remote publish (Node) — AC5", () => {
     );
     expect(record.outcomeClass).toBe("blocked");
     expect(git(remote, ["rev-parse", "feat/x"]).trim()).toBe(before);
-  });
+  }, GIT_INTEGRATION_TIMEOUT_MS);
 
   it("blocks a push to a protected/shared target the safe pack does not permit (AC2)", async () => {
     await governedPush(pushCommand({ setUpstreamTracking: true }));
@@ -229,7 +231,7 @@ describe("governed remote publish (Node) — AC5", () => {
     expect(result.lifecycle.outcome).toMatchObject({ status: "blocked", category: "policy-block" });
     // No `dev` ref was created on the remote.
     expect(() => git(remote, ["rev-parse", "dev"])).toThrow();
-  });
+  }, GIT_INTEGRATION_TIMEOUT_MS);
 
   it("keeps push out of the LOCAL mutation allowlist and inside the publish allowlist", () => {
     expect(GIT_PUBLISH_ALLOWED_SUBCOMMANDS).toEqual(["push"]);

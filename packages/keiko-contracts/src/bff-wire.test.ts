@@ -33,6 +33,7 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   type CandidateOmissionReason,
   type ConnectedContextPack,
+  type ContextCoverageDiagnostics,
   type ExplorationUsage,
   type RetrievalQuery,
   type SelectedScope,
@@ -55,6 +56,32 @@ function emptyOmittedCounts(): Record<CandidateOmissionReason, number> {
     counts[reason] = 0;
   }
   return counts;
+}
+
+function coverageDiagnostics(
+  overrides: Partial<ContextCoverageDiagnostics> = {},
+): ContextCoverageDiagnostics {
+  return {
+    truncated: true,
+    incomplete: true,
+    reasons: ["file-cap"],
+    filesDiscovered: 101,
+    filesAfterPolicy: 100,
+    filesScanned: 50,
+    filesSkipped: 51,
+    ignoredByDiscovery: 1,
+    deniedByDiscovery: 0,
+    depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
+    matchesReturned: 12,
+    elapsedMs: 250,
+    limits: {
+      maxFilesScanned: 50,
+      maxMatchesReturned: 100,
+      elapsedMsMax: 5_000,
+    },
+    ...overrides,
+  };
 }
 
 function scope(kind: SelectedScopeKind, relativePaths: readonly string[]): SelectedScope {
@@ -120,6 +147,26 @@ describe("buildGroundedAnswerContextPackSummary", () => {
   it("omits rankingSummary when the pack carries no diagnostics", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0);
     expect("rankingSummary" in summary).toBe(false);
+  });
+
+  it("projects path-free coverage diagnostics when the pack carries them", () => {
+    const coverage = coverageDiagnostics({ reasons: ["file-cap", "depth-pruned"] });
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack({
+        diagnostics: {
+          rankedCandidates: [],
+          coverage,
+        },
+      }),
+      0,
+      0,
+    );
+
+    expect(summary.coverage).toStrictEqual(coverage);
+    const serialized = JSON.stringify(summary.coverage);
+    expect(serialized).not.toContain("src/");
+    expect(serialized).not.toContain("how does foo work");
+    expect(serialized).not.toContain("/home/dev/keiko");
   });
 
   it("derives a path-free ranking aggregate from pack diagnostics", () => {
