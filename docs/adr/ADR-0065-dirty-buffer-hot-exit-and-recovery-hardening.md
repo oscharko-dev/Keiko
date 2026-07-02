@@ -13,10 +13,11 @@ change, window close, reload, and disk-conflict scenarios. Most of the lifecycle
   `EditorDirtyCloseReason` union (`tab-close | pane-close | root-change | window-close |
   reload-file`), the `save | discard | cancel` decision, and the pure
   `createEditorDirtyCloseIntent` builder.
-- `keiko-contracts/src/editor-hot-exit.ts` defines `EditorHotExitSnapshotV1`, the 7-day TTL, and
+- `keiko-contracts/src/editor-hot-exit.ts` defines `EditorHotExitSnapshotV1`, the 24-hour TTL, and
   the snapshot validator/expiry helpers.
-- `keiko-ui/.../editorHotExitStore.ts` persists snapshots in IndexedDB with TTL pruning and an
-  8&nbsp;MiB total-size cap.
+- `keiko-ui/.../editorHotExitStore.ts` persists only opaque snapshot references and metadata in
+  IndexedDB with TTL pruning and an 8&nbsp;MiB total-size cap; content is stored behind the BFF-owned
+  encrypted hot-exit vault.
 - `keiko-ui/.../EditorWidget.tsx` owns the dirty-close policy: a single `requestDirtyClose` routes
   every wired close action into one modal `DirtyCloseDialog` (Save / Discard / Cancel), keeps the
   dialog open and the buffer non-closeable when a save fails, and guards page unload with a
@@ -85,6 +86,11 @@ when an explicit Discard deletes a snapshot while the runtime's dirty-write effe
 in flight for the same key, serialization makes the delete the last word so the discarded buffer is
 not resurrected. Reads are not serialized.
 
+The BFF write route rejects secret-shaped dirty buffers before they are written to the encrypted
+hot-exit vault. A suppressed write deletes any previous snapshot for the same `(workspaceRoot,
+relativePath)` and returns an explicit `suppressed` response; the UI treats that as a local index
+delete, so a pasted token does not leave a stale recovery offer behind.
+
 ### D3 — Recovery is offered on content difference alone
 
 The recovery-offer gate is the content comparison `snapshot.content !== diskContent`. The redundant
@@ -110,6 +116,8 @@ compare view is open so its actions are not duplicated. No editor close or reloa
 - A single snapshot whose own bytes exceed the 8&nbsp;MiB cap is still written (eviction cannot make
   room for it). The per-file size guard in `EditorRuntimeWidget` blocks oversized writes upstream when
   the server supplies a limit; the cap remains a best-effort multi-file budget.
+- Recovery is best effort for secret-shaped files by design: buffers containing recognized token,
+  key, private-key, or credential-assignment shapes are not hot-exit persisted.
 
 ### D5 — Acceptance criteria gain executable coverage without touching `globals.css`
 
@@ -132,6 +140,8 @@ and markers only and never print buffer contents.
 - Discarded edits no longer reappear as a recovery offer on the next open.
 - Hot-exit storage cannot exceed its cap by a write, and recovery is offered slightly more often
   (whenever content differs), which is the intended, safer direction.
+- Hot-exit recovery is limited to a 24-hour window and excludes recognized secret-shaped dirty
+  buffers; those exclusions trade convenience for the browser-state security boundary.
 - In-app window-chrome close still relies on hot-exit + `beforeunload`; a future issue may wire the
   `window-close` reason once the shell exposes a per-window can-close hook.
 

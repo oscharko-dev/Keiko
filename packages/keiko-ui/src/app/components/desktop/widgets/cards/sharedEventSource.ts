@@ -1,5 +1,7 @@
 "use client";
 
+import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
+
 type SharedEventListener = (event: MessageEvent<string>) => void;
 
 interface SharedEventSourceEntry {
@@ -92,7 +94,8 @@ function openEntrySource(entry: SharedEventSourceEntry): void {
   ) {
     return;
   }
-  const source = new EventSource(entry.url);
+  const source = createSameOriginApiEventSource(entry.url);
+  if (source === null) return;
   entry.source = source;
   source.onopen = () => {
     entry.reconnectAttempts = 0;

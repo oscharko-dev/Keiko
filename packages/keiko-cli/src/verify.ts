@@ -85,7 +85,7 @@ async function runPlan(parsed: VerifyArgs): Promise<VerificationReport> {
   if (plan.steps.length === 0) {
     throw new EmptyPlanError("verification plan contains no runnable or skipped steps");
   }
-  return runVerification(plan, { workspace });
+  return runVerification(plan, { workspace, networkEnforcement: "enforce-or-degrade" });
 }
 
 function renderText(report: VerificationReport, io: CliIo): void {

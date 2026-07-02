@@ -42,5 +42,6 @@
     "@oscharko-dev/keiko-security": "0.2.11",
     "@oscharko-dev/keiko-workspace": "0.2.11",
     "ws": "^8.21.0"
-  }
+  },
+  "private": true
 }

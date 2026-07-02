@@ -313,8 +313,9 @@ interface RunState {
 
 // Resolves the validated cwd. Lexical containment first, then symlink containment via realpath
 // (S-H1): a cwd that is a symlink escaping the root or resolving into an always-denied path must
-// not become the spawn cwd. Both cases surface as workspace path errors, which the host maps to a
-// tool error — the command never spawns.
+// not become the spawn cwd. The returned path is the canonical real path that was checked, so the
+// effectful spawn does not receive a weaker lexical path. Both denial cases surface as workspace path
+// errors, which the host maps to a tool error — the command never spawns.
 function resolveCwd(deps: RunCommandDeps, cwd: string | undefined): string {
   const lexical = resolveWithinWorkspace(deps.workspace.root, cwd ?? ".");
   const fs = deps.fs ?? nodeWorkspaceFs;
@@ -326,7 +327,7 @@ function resolveCwd(deps: RunCommandDeps, cwd: string | undefined): string {
   if (isDenied(info.realRelative)) {
     throw new PathDeniedError("path matches an always-on deny pattern", cwd ?? ".");
   }
-  return lexical;
+  return info.path;
 }
 
 function buildResult(

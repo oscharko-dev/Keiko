@@ -122,6 +122,16 @@ describe("payloadContainsForbiddenSecretShape", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["password", "opaque"],
+    ["client_secret", "opaque"],
+    ["refresh_token", "opaque"],
+    ["connection_string", "postgres://db"],
+    ["aws_secret_access_key", "opaque"],
+  ])("detects credential-bearing key names: %s", (key, value) => {
+    expect(payloadContainsForbiddenSecretShape({ nested: { [key]: value } })).toBe(true);
+  });
+
   it("returns false for empty payload", () => {
     expect(payloadContainsForbiddenSecretShape({})).toBe(false);
   });

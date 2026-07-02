@@ -104,7 +104,7 @@ describe("runMigrations", () => {
     db.close();
   });
 
-  it("creates all five tables", () => {
+  it("creates all six tables", () => {
     const db = openMemDb();
     runMigrations(db, TEST_CIPHER);
     const tables = db
@@ -116,6 +116,7 @@ describe("runMigrations", () => {
       "memory_edges",
       "memory_embeddings",
       "memory_tombstones",
+      "memory_vault_secrets",
     ]);
     db.close();
   });

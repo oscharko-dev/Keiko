@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { createSameOriginApiEventSource } from "./safe-event-source";
 import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
 
 const MAX_VISIBLE_SSE_EVENTS = 500;
@@ -118,7 +119,8 @@ function removeVisibilityListenerIfIdle(): void {
 function openSharedEventSource(): void {
   if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
   closeSharedEventSource();
-  sharedEventSource = new EventSource(RUN_EVENTS_URL);
+  sharedEventSource = createSameOriginApiEventSource(RUN_EVENTS_URL);
+  if (sharedEventSource === null) return;
 
   sharedEventSource.onopen = () => {
     reconnectAttempts = 0;

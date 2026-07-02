@@ -55,6 +55,9 @@ describe("extractCandidatesFromUserText", () => {
       resolver: () => ["m-9" as MemoryId],
     });
     expect(result[0]?.kind).toBe("forget");
+    if (result[0]?.kind !== "forget") return;
+    expect(result[0].operation.reason).toBe("explicit-user-request");
+    expect(result[0].operation.reason).not.toContain("dark mode");
   });
 
   it("emits an update operation for 'update memory about ...'", () => {

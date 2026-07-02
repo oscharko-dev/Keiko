@@ -38,12 +38,19 @@ const rootPackageSurfaceContract = JSON.parse(
 const rootVersion = rootPackageJson.version;
 const bundled = rootPackageJson.bundleDependencies ?? [];
 
+function parseArgs(argv) {
+  return {
+    includeOptional: argv.includes("--include-optional"),
+  };
+}
+
 function fail(message) {
   console.error(`installable-smoke failed: ${message}`);
   process.exit(1);
 }
 
 function run(cmd, args, options = {}) {
+  // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility; node/bin paths stay shell:false.
   // `npm` resolves to `npm.cmd` on Windows, which modern Node refuses to spawn without a shell
   // (CVE-2024-27980 hardening); route npm — and only npm — through the shell so the packaged-artifact
   // smoke is cross-platform (the #284 OS matrix surfaced this). `node` is a real executable and is
@@ -177,7 +184,7 @@ function packRoot() {
   return tarballPath;
 }
 
-function installInto(tmp, tarballPath) {
+function installInto(tmp, tarballPath, options) {
   const initResult = run("npm", ["init", "-y"], { cwd: tmp });
   if (initResult.status !== 0) {
     fail(`npm init -y exited ${String(initResult.status)}: ${initResult.stderr}`);
@@ -187,7 +194,14 @@ function installInto(tmp, tarballPath) {
   // every CI build and developer machine before review (issue #169 security-triage finding L1).
   const installResult = run(
     "npm",
-    ["install", tarballPath, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
+    [
+      "install",
+      tarballPath,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      ...(options.includeOptional ? [] : ["--omit=optional"]),
+    ],
     { cwd: tmp, timeout: NPM_INSTALL_TIMEOUT_MS },
   );
   if (installResult.status !== 0) {
@@ -528,10 +542,11 @@ async function assertPackagedUi(tmp) {
 }
 
 async function main() {
+  const options = parseArgs(process.argv.slice(2));
   const tarballPath = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   try {
-    installInto(tmp, tarballPath);
+    installInto(tmp, tarballPath, options);
     assertCliExecutable(tmp);
     assertBundledPayload(tmp);
     assertCliVersionAndHelp(tmp);
@@ -539,7 +554,7 @@ async function main() {
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     console.log(
-      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI reachable.`,
+      `installable-smoke ok: tarball installed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

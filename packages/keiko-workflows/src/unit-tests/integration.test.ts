@@ -93,7 +93,7 @@ maybe("generateUnitTests — apply + verify integration (AC #7/#8)", () => {
         apply: true,
         modelId: "test-model",
       },
-      { model: model(fenced) },
+      { model: model(fenced), verificationNetworkEnforcement: "enforce-or-degrade" },
     );
 
     // AC #7 — the patch was applied and the test file exists on disk.

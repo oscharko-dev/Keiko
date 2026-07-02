@@ -3,7 +3,7 @@
 // pointing the random suffix at a known location and pre-planting an absolute symlink there: the
 // O_EXCL open must refuse rather than follow.
 
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from "node:fs/promises";
+import { link, mkdtemp, mkdir, realpath, rm, symlink, writeFile, readFile } from "node:fs/promises";
 import { statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -136,6 +136,33 @@ describe("writeSideFile containment", () => {
       writeSideFile(baseDir, "run-dir-link", "browser-1.png", Buffer.from("clean")),
     ).toThrow(EvidenceWriteError);
     const after = await readFile(join(outsideDir, "victim.png"));
+    expect(after.toString()).toBe("OWNED");
+  });
+
+  it("refuses a symlinked side-file base directory", async () => {
+    const linkedBase = join(outsideDir, "base-link");
+    try {
+      await symlink(outsideDir, linkedBase, "dir");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+    expect(() =>
+      writeSideFile(linkedBase, "run-base-link", "browser-1.png", Buffer.from("clean")),
+    ).toThrow(EvidenceWriteError);
+    await expect(readFile(join(outsideDir, "run-base-link", "browser-1.png"))).rejects.toThrow();
+  });
+
+  it("refuses a hardlinked final side-file entry", async () => {
+    const runDir = join(baseDir, "run-hardlink");
+    await mkdir(runDir, { recursive: true });
+    const victim = join(outsideDir, "victim.png");
+    await writeFile(victim, Buffer.from("OWNED"));
+    await link(victim, join(runDir, "browser-1.png"));
+    expect(() =>
+      writeSideFile(baseDir, "run-hardlink", "browser-1.png", Buffer.from("clean")),
+    ).toThrow(EvidenceWriteError);
+    const after = await readFile(victim);
     expect(after.toString()).toBe("OWNED");
   });
 

@@ -1,8 +1,9 @@
 // Issue #1204 — enforced network-egress isolation for verification (ADR-0043). Covers the pure
-// per-step network resolution and the three runtime behaviours: the default "inherit" mode is
-// byte-identical to the historical orchestrator, "enforce-or-degrade" falls back to an honest
-// inherited-network run when no backend is available, and "enforce-or-fail-closed" DENIES the step
-// before spawning so untrusted code never runs without an enforced boundary.
+// per-step network resolution and runtime behaviours: the default mode fails closed for
+// network:"none" steps unless an enforcing backend is attested, explicit "inherit" preserves the
+// compatibility escape hatch, "enforce-or-degrade" falls back to an honest inherited-network run
+// when no backend is available, and "enforce-or-fail-closed" DENIES the step before spawning so
+// untrusted code never runs without an enforced boundary.
 
 import { describe, expect, it } from "vitest";
 import { resolveStepNetwork, runVerification, type VerificationDeps } from "./orchestrator.js";
@@ -15,6 +16,16 @@ const INHERIT_LIMITS: VerificationResourceLimits = {
   ...DEFAULT_VERIFICATION_LIMITS,
   network: "inherit",
 };
+const NO_BACKENDS = {
+  bubblewrap: false,
+  unshare: false,
+  seatbelt: false,
+  docker: false,
+  podman: false,
+} as const;
+const BUBBLEWRAP_BACKEND = { ...NO_BACKENDS, bubblewrap: true } as const;
+const ABS_RESOLVER: NonNullable<VerificationDeps["resolveExecutable"]> = (command) =>
+  `/abs/${command}`;
 
 function targetedStep(limits: VerificationResourceLimits): VerificationStep {
   return {
@@ -39,7 +50,7 @@ function depsWith(
 }
 
 describe("resolveStepNetwork — pure decision", () => {
-  it('default "inherit" mode always resolves to inherit, even for a network:"none" step', () => {
+  it('explicit "inherit" mode always resolves to inherit, even for a network:"none" step', () => {
     expect(resolveStepNetwork(NONE_LIMITS, "inherit", true)).toEqual({
       kind: "run",
       network: "inherit",
@@ -83,18 +94,38 @@ describe("resolveStepNetwork — pure decision", () => {
 });
 
 describe("runVerification — network enforcement modes", () => {
-  it('default mode runs a network:"none" step under inherit and reports it not enforced', async () => {
+  it('default mode DENIES a network:"none" step before spawn when no backend is available', async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const report = await runVerification(
+      planOf([targetedStep(NONE_LIMITS)], ws.info.root),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.results[0]?.detail).toContain("no enforcing sandbox backend");
+    expect(rec.calls()).toHaveLength(0);
+    expect(report.overallStatus).toBe("failed");
+  });
+
+  it('default mode requests an enforced network:"none" run when a backend is attested', async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
     scriptChildClose(rec.child, { stdout: "ok\n", exitCode: 0 });
     const report = await runVerification(
       planOf([targetedStep(NONE_LIMITS)], ws.info.root),
-      depsWith(ws, rec.fn),
+      depsWith(ws, rec.fn, {
+        enforcedNetworkAvailable: true,
+        sandboxAvailability: BUBBLEWRAP_BACKEND,
+        platform: "linux",
+        resolveExecutable: ABS_RESOLVER,
+      }),
     );
     expect(report.results[0]?.status).toBe("passed");
     expect(rec.calls()).toHaveLength(1);
+    expect(rec.calls()[0]?.command).toBe("/abs/bwrap");
+    expect(rec.calls()[0]?.args).toContain("--unshare-net");
     const network = report.results[0]?.appliedLimits.find((l) => l.dimension === "network");
-    expect(network?.enforced).toBe(false);
+    expect(network?.enforced).toBe(true);
   });
 
   it("enforce-or-degrade with no backend runs under inherit (honest enforced:false)", async () => {

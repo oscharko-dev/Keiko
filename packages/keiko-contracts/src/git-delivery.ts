@@ -235,6 +235,14 @@ export interface GitDeliveryApprovalGranted {
 export type GitDeliveryApprovalRequirement =
   GitDeliveryApprovalNotRequired | GitDeliveryApprovalGranted;
 
+export interface GitDeliveryApprovalClaim {
+  readonly schemaVersion: typeof GIT_DELIVERY_SCHEMA_VERSION;
+  readonly approvalId: string;
+  readonly approvalToken: string;
+}
+
+export type GitDeliveryApprovalRequest = GitDeliveryApprovalNotRequired | GitDeliveryApprovalClaim;
+
 // ─── Provider capability (owned here per ADR-0019 cycle-break) ───────────────────
 // Owned by the core atom so both policy.ts (constraint) and provider.ts (descriptor) can import it
 // without a cycle.
@@ -573,6 +581,19 @@ export function isGitDeliveryApprovalRequirement(
     return true;
   }
   return isApprovalGranted(value);
+}
+
+function isOpaqueApprovalClaimPart(value: unknown): value is string {
+  return isNonEmptyString(value) && value.length <= 256 && /^[A-Za-z0-9._~-]+$/.test(value);
+}
+
+export function isGitDeliveryApprovalClaim(value: unknown): value is GitDeliveryApprovalClaim {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === GIT_DELIVERY_SCHEMA_VERSION &&
+    isOpaqueApprovalClaimPart(value.approvalId) &&
+    isOpaqueApprovalClaimPart(value.approvalToken)
+  );
 }
 
 export function isGitDeliveryPolicyDecision(value: unknown): value is GitDeliveryPolicyDecision {

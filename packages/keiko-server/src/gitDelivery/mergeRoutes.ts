@@ -16,13 +16,16 @@
 
 import type { IncomingMessage } from "node:http";
 import {
-  isGitDeliveryApprovalRequirement,
   isGitDeliveryMergeStrategyHint,
-  type GitDeliveryApprovalRequirement,
 } from "@oscharko-dev/keiko-contracts";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  parseGitDeliveryApprovalRequest,
+  resolveGitDeliveryApprovalRequirement,
+  type ParsedGitDeliveryApprovalRequest,
+} from "./approvalStore.js";
 import { resolveProjectWorkspace } from "./execution.js";
 import {
   buildGitDeliveryMergePreview,
@@ -136,19 +139,12 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 interface ValidatedRequest {
   readonly projectId: string;
   readonly command: GitMergeCommand;
-  readonly approval: GitDeliveryApprovalRequirement;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
 }
 
 type Validation =
   | { readonly kind: "ok"; readonly value: ValidatedRequest }
   | { readonly kind: "err"; readonly result: RouteResult };
-
-const NO_APPROVAL: GitDeliveryApprovalRequirement = { required: false };
-
-function parseApproval(value: unknown): GitDeliveryApprovalRequirement | undefined {
-  if (value === undefined) return NO_APPROVAL;
-  return isGitDeliveryApprovalRequirement(value) ? value : undefined;
-}
 
 function optionalBool(value: unknown): boolean | undefined {
   if (value === undefined) return false;
@@ -206,7 +202,7 @@ function validate(parsed: unknown): Validation {
   const scanErr = scanError(parsed);
   if (scanErr !== undefined) return { kind: "err", result: scanErr };
   const command = buildMergeCommand(parsed);
-  const approval = parseApproval(parsed.approval);
+  const approval = parseGitDeliveryApprovalRequest(parsed.approval);
   if (command === undefined || approval === undefined) return bad;
   return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
 }
@@ -252,9 +248,15 @@ export const createHandleMergeExecute = (
     const { projectId, command, approval } = validation.value;
     const workspace = resolveProjectWorkspace(deps, projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_MERGE_UNKNOWN_PROJECT");
+    const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
+      store: seams.approvalStore,
+      binding: { projectId, operation: "merge", command },
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_MERGE_BAD_REQUEST");
     let result;
     try {
-      result = await executeGovernedMerge(command, approval, workspace, deps, seams);
+      result = await executeGovernedMerge(command, verifiedApproval, workspace, deps, seams);
     } catch {
       // Only the read-only snapshot step can throw (not a git repository); the gateway never throws.
       return errResult(409, "GIT_DELIVERY_MERGE_WORKTREE_UNAVAILABLE");

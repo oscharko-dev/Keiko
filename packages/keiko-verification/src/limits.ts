@@ -3,7 +3,7 @@
 // ceiling set; network egress is OS/container-enforced for a `network:"none"` run via keiko-sandbox
 // (ADR-0043) and documented-not-enforced for an inherited-network run. `breached` is set only on the
 // single dimension that actually fired for the step. Pure — no IO; the caller passes the run's
-// network-enforcement attestation (default false preserves the inherited-network behaviour).
+// network-enforcement attestation (false means this particular run had no enforcing attestation).
 
 import type { ResourceLimitDecision, VerificationResourceLimits } from "./types.js";
 

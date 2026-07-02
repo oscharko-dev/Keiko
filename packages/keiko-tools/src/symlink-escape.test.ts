@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,7 +19,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPatch, validatePatch } from "./patch.js";
 import { runCommand } from "./exec.js";
 import { nodeSpawnFn } from "./exec.js";
+import { recordingSpawn } from "./_support.js";
 import { PatchValidationError } from "./errors.js";
+import { createContainedNodeWorkspaceWriter } from "./writer.js";
 import {
   PathDeniedError,
   PathEscapeError,
@@ -114,6 +117,45 @@ describe("S-H1 — patch write through an escaping symlink", () => {
     );
     expect(readFileSync(join(root, ".env"), "utf8")).toBe("SECRET=1\n");
   });
+
+  it("rejects a final symlink swap at the patch write edge", () => {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src/x.txt"), "one\ntwo\n", "utf8");
+    const victim = join(outside, "victim.txt");
+    writeFileSync(victim, "outside\n", "utf8");
+    const base = createContainedNodeWorkspaceWriter(root);
+    const writer = {
+      ...base,
+      writeFileUtf8(absolutePath: string, content: string): void {
+        rmSync(absolutePath, { force: true });
+        symlinkSync(victim, absolutePath);
+        base.writeFileUtf8(absolutePath, content);
+      },
+    };
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+HACKED\n";
+    expect(() =>
+      applyPatch(info, diff, { applyEnabled: true, signal: liveSignal(), writer }),
+    ).toThrow(/symbolic link|rolled back/u);
+    expect(readFileSync(victim, "utf8")).toBe("outside\n");
+  });
+
+  it("rejects a parent directory symlink swap at the patch create edge", () => {
+    mkdirSync(join(root, "src"), { recursive: true });
+    const base = createContainedNodeWorkspaceWriter(root);
+    const writer = {
+      ...base,
+      mkdirp(absoluteDir: string): void {
+        rmSync(absoluteDir, { recursive: true, force: true });
+        symlinkSync(outside, absoluteDir);
+        base.mkdirp(absoluteDir);
+      },
+    };
+    const diff = "--- /dev/null\n+++ b/src/created.txt\n@@ -0,0 +1,1 @@\n+pwned\n";
+    expect(() =>
+      applyPatch(info, diff, { applyEnabled: true, signal: liveSignal(), writer }),
+    ).toThrow(/symbolic link|rolled back|non-directory/u);
+    expect(readdirSync(outside)).not.toContain("created.txt");
+  });
 });
 
 describe("S-H1 — positive control: a normal in-root path still applies", () => {
@@ -182,5 +224,24 @@ describe("S-H1 — run_command cwd through an escaping symlink", () => {
       realDeps(),
     );
     expect(result.stdout).toContain("ok");
+  });
+
+  it("passes the symlink-resolved real cwd to spawn for an in-root cwd alias", async () => {
+    mkdirSync(join(root, "real-cwd"), { recursive: true });
+    symlinkSync(join(root, "real-cwd"), join(root, "cwd-alias"));
+    const rec = recordingSpawn();
+    const pending = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: "cwd-alias",
+        timeoutMs: undefined,
+        signal: liveSignal(),
+      },
+      { ...realDeps(), spawn: rec.fn },
+    );
+    queueMicrotask(() => rec.child.emit("close", 0, null));
+    await pending;
+    expect(rec.calls()[0]?.options.cwd).toBe(realpathSync(join(root, "real-cwd")));
   });
 });

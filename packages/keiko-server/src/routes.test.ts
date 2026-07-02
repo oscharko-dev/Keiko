@@ -56,6 +56,16 @@ describe("API route contract", () => {
     });
   });
 
+  it("includes the encrypted editor hot-exit recovery routes", () => {
+    for (const pattern of [
+      "/api/editor/hot-exit/write",
+      "/api/editor/hot-exit/read",
+      "/api/editor/hot-exit/delete",
+    ]) {
+      expect(matchRoute("POST", pattern)).toMatchObject({ definition: { pattern } });
+    }
+  });
+
   it("includes the governed editor inline-completion routes (#1200)", () => {
     const patterns = [
       { method: "POST", pattern: "/api/editor/inline-completion" },

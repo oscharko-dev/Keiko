@@ -1,4 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
@@ -58,6 +65,7 @@ function depsWith(args: {
         apiKey: "secret-key",
         capability: model,
       })),
+      egress: { allowPrivateNetwork: true },
     },
     {},
   );
@@ -296,6 +304,44 @@ describe("QI model-policy routes", () => {
     expect(stored.testDesignModelId).toBe("generate-chat");
     expect(stored.judgeModelId).toBe("judge-json");
     expect(stored.updatedAt).toEqual(expect.any(String));
+  });
+
+  it("rejects policy writes when the quality-intelligence state directory is a symlink", async () => {
+    stubSuccessfulPreflight();
+    const outside = mkdtempSync(join(tmpdir(), "keiko-qi-policy-outside-"));
+    symlinkSync(outside, join(tempDir, "quality-intelligence"));
+    const deps = depsWith({
+      evidenceDir,
+      capabilities: [
+        capability("generate-chat", { structuredOutput: false }),
+        capability("judge-json", { structuredOutput: true }),
+      ],
+    });
+
+    const result = await handlePutQiModelPolicy(
+      ctx(
+        reqFromJson({
+          modelPolicy: {
+            policyVersion: 1,
+            testDesignModelId: "generate-chat",
+            judgeModelId: "judge-json",
+          },
+        }),
+      ),
+      deps,
+    );
+
+    expect(result).toEqual({
+      status: 500,
+      body: {
+        error: {
+          code: "QI_MODEL_POLICY_STORAGE_UNSAFE",
+          message: "The Quality Intelligence model-policy store is not a safe owned directory.",
+        },
+      },
+    });
+    expect(() => readFileSync(join(outside, "model-policy.json"), "utf8")).toThrow();
+    rmSync(outside, { recursive: true, force: true });
   });
 
   it("does not persist a PUT policy when model preflight fails", async () => {

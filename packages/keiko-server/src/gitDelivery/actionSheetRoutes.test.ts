@@ -204,6 +204,22 @@ describe("POST /api/git-delivery/action-sheet — central enforcement + validati
     expect(body.error.code).toBe("GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST");
   });
 
+  it("rejects browser-supplied approval state at the action-sheet boundary", async () => {
+    const res = await post(
+      validRequest({
+        approval: {
+          required: true,
+          approvalTokenHash: "a".repeat(64),
+          approvedByUserId: "u-1",
+          approvedAtMs: 1_700_000_000_000,
+        },
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as GitDeliveryActionSheetErrorBody;
+    expect(body.error.code).toBe("GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST");
+  });
+
   it("returns 400 for a non-JSON body", async () => {
     const res = await post("{not json", POST_HEADERS);
     expect(res.status).toBe(400);

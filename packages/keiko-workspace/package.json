@@ -32,5 +32,6 @@
     "@oscharko-dev/keiko-contracts": "0.2.11",
     "@oscharko-dev/keiko-security": "0.2.11",
     "typescript": "^6.0.3"
-  }
+  },
+  "private": true
 }

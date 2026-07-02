@@ -324,6 +324,39 @@ function seedFigmaTokenVault(stateDir) {
   );
 }
 
+function seedEditorHotExitVault(stateDir) {
+  const dir = join(stateDir, "editor-hot-exit");
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const snapshotRef = `hot-exit:${"a".repeat(64)}`;
+  const content = "STRENG-VERTRAULICH unsaved editor recovery content";
+  const payload = {
+    schemaVersion: 1,
+    content,
+    baseVersion: null,
+    contentHash: "b".repeat(64),
+    savedContentHash: null,
+    contentSizeBytes: Buffer.byteLength(content, "utf8"),
+    updatedAt: FIXTURE_TS,
+    paneId: "pane-fixture",
+    windowId: "editor-fixture",
+  };
+  writeFileSync(
+    join(dir, "snapshots.vault"),
+    `${JSON.stringify(
+      {
+        version: 1,
+        entries: {
+          [snapshotRef]: sealString(FIXTURE_KEY, JSON.stringify(payload)),
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: 0o600 },
+  );
+  writeFileSync(join(dir, "editor-hot-exit-vault.key"), FIXTURE_KEY_B64, { mode: 0o600 });
+}
+
 // Normalizes every directory to 0o700 and every file to 0o600 — the owner-only end state the
 // contract guarantees via write-time chmod and `keiko repair`. Applying it deterministically makes
 // the healthy fixture independent of any per-store chmod timing or the host umask.
@@ -349,6 +382,7 @@ export function createHealthyFixture(stateDir) {
   seedPromptEnhancement(stateDir);
   seedFigmaSnapshot(stateDir);
   seedFigmaTokenVault(stateDir);
+  seedEditorHotExitVault(stateDir);
   if (process.platform !== "win32") applyOwnerOnlyModes(stateDir);
   return stateDir;
 }

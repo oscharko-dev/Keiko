@@ -15,7 +15,7 @@ the child issues below; this record audits and documents the combined result.
 | ----------- | -------------------------------------------------------------------------- | -------------------- | ----------------------------------------------------------------- |
 | #1320       | Gateway + Figma credentials → AES-256-GCM local vaults, secret refs        | #1350, #1354, #1356  | [ADR-0046](../adr/ADR-0046-local-credential-vault.md)             |
 | #1321       | `keiko repair` / `uninstall --state` runtime-state manifest hardening      | #1355, #1358, #1361  | [ADR-0046](../adr/ADR-0046-local-credential-vault.md)             |
-| #1322       | Local Knowledge extracted text + vectors → AES-256-GCM at rest             | #1363, #1364         | [ADR-0047](../adr/ADR-0047-local-knowledge-content-encryption.md) |
+| #1322       | Local Knowledge source-of-truth extracted text + vectors → AES-256-GCM at rest; declared plaintext FTS projection | #1363, #1364         | [ADR-0047](../adr/ADR-0047-local-knowledge-content-encryption.md) |
 | #1323       | Evidence + Quality-Intelligence artifact confidentiality                   | #1365                | [ADR-0048](../adr/ADR-0048-evidence-artifact-confidentiality.md)  |
 | #1325       | Verification + documentation capstone, then local-state verifier follow-up | #1367, follow-up PR  | —                                                                 |
 
@@ -36,7 +36,7 @@ it is reproduced here as the closure snapshot.
 | Provider credential vault (`*.vault` + `*.key`) | `0o600`         | n/a          | AES-256-GCM         | n/a       | GCM auth                |
 | Figma PAT vault (`figma-token.vault` + key)     | `0o600`         | n/a          | AES-256-GCM         | n/a       | GCM auth                |
 | Memory vault (`keiko-memory.db`)                | `0o600`/`0o700` | audit events | AES-256-GCM content | n/a       | GCM auth                |
-| Local Knowledge (`capsules.db`)                 | `0o600`/`0o700` | n/a          | AES-256-GCM content | n/a       | GCM auth + sealed probe |
+| Local Knowledge (`capsules.db`)                 | `0o600`/`0o700` | lexical projection secret scan | AES-256-GCM reconstructive content; declared plaintext FTS projection | n/a       | GCM auth + sealed probe + scope marker |
 | UI database (`keiko-ui.db`)                     | `0o600`/`0o700` | n/a          | n/a (UI state)      | n/a       | n/a                     |
 | Evidence run manifests (`<runId>.json`)         | `0o600`/`0o700` | yes          | deferred            | n/a       | n/a                     |
 | QI manifests (`<runId>.qi.json`)                | `0o600`/`0o700` | yes          | deferred            | yes       | SHA-256                 |
@@ -69,14 +69,17 @@ Figma token vault), so the audit cannot drift from the implementation it verifie
 content rows, so the audit samples and confirms sealed `body`, `payload_json`, `tags_json`,
 `capture_rationale`, `stale_reason`, `memory_edges.provenance_summary`,
 `memory_tombstones.reason`, and a sealed embedding. The Local Knowledge fixture demonstrates
-**encryption-at-open** — the
-`content_encryption=aes-256-gcm/v1` marker and a sealed key-verification probe written by the real
-store at open — but seeds no content rows, because the public ingest path requires the model-gateway
-embeddings adapter and the row-layer seal helpers are package-internal. The auditor's Local Knowledge
-**content-row sealing** branch (plaintext reconstructive columns must fail) is exercised
-directly by crafted-DB negative tests in `scripts/__tests__/check-local-state.test.mjs`, and the real
-content seal / round-trip / no-plaintext-on-disk guarantee is covered by the `keiko-local-knowledge`
-suite delivered under #1322 / #1364. Each of the five audit classes additionally has a dedicated
+**encryption-at-open** — the `content_encryption=aes-256-gcm/v1` marker, a sealed
+key-verification probe, and the explicit
+`content_encryption_scope=reconstructive-columns/v3` marker written by the real store at open — but
+seeds no content rows, because the public ingest path requires the model-gateway embeddings adapter
+and the row-layer seal helpers are package-internal. The auditor's Local Knowledge **content-row
+sealing** branch (plaintext reconstructive columns must fail), missing-scope branch, and plaintext
+lexical-projection secret scan are exercised directly by crafted-DB negative tests in
+`scripts/__tests__/check-local-state.test.mjs`, and the real content seal / round-trip /
+no-plaintext-in-encrypted-columns guarantee is covered by the `keiko-local-knowledge` suite delivered
+under #1322 / #1364. The plaintext lexical FTS projection is an explicitly documented residual risk,
+not part of the encryption claim. Each of the five audit classes additionally has a dedicated
 negative test that drives it to `fail`, so a weakened check is caught by a red test.
 
 Evidence/QI verification is intentionally precise: the auditor checks owner-only modes and product
@@ -100,7 +103,7 @@ self-test: healthy fixture (expect PASS)
   [PASS] No plaintext credentials
   [PASS] Private file and directory modes
   [PASS] Encrypted Memory Vault content      (11 text values across 7 audited columns + 1 embedding sealed)
-  [PASS] Encrypted Local Knowledge content   (marker + sealed key probe verified; populated audited columns checked)
+  [PASS] Encrypted Local Knowledge content   (marker + sealed key probe + scope verified; plaintext lexical FTS projection scanned)
   [PASS] Protected Evidence / Quality-Intelligence artifacts
         (evidence manifest + QI manifest + candidate artifact + PE manifest + Figma snapshot JSON/PNG + sealed Figma vault)
   => PASS
@@ -108,7 +111,7 @@ self-test: drifted fixture (expect FAIL)
   [FAIL] No plaintext credentials            (plaintext apiKey injected into keiko.config.json)
   [FAIL] Private file and directory modes     (capsules.db loosened to 0o644)
   [PASS] Encrypted Memory Vault content
-  [PASS] Encrypted Local Knowledge content
+  [PASS] Encrypted Local Knowledge content   (scope marker verified; plaintext lexical FTS projection scanned)
   [PASS] Protected Evidence / Quality-Intelligence artifacts
   => FAIL
 self-test: drift detected in classes: credentials, file-modes

@@ -200,20 +200,20 @@ module.exports = {
       },
     },
     {
-      name: "adr-0019-direction-3e-local-knowledge-only-contracts",
+      name: "adr-0019-direction-3e-local-knowledge-only-contracts-security-workspace-model-gateway",
       comment:
         "ADR-0019 direction rule 3 (local-knowledge strict variant): keiko-local-knowledge " +
-        "may depend only on keiko-contracts, keiko-workspace, and keiko-model-gateway. The " +
+        "may depend only on keiko-contracts, keiko-security, keiko-workspace, and " +
+        "keiko-model-gateway. The direct keiko-security edge is intentional: ADR-0047 uses " +
+        "the shared sealed-envelope and redaction primitives for local content encryption and " +
+        "runtime-state audit checks, and scripts/check-package-graph.mjs pins the same edge. The " +
         "dependency on keiko-workspace was added by issue #194 because the discovery layer " +
         "composes the boundary-checked WorkspaceFs port (path containment + symlink " +
         "realpath gate + deny/ignore rules). The dependency on keiko-model-gateway was " +
         "added by issue #196 because the indexing orchestrator composes the typed " +
         "OpenAIEmbeddingAdapter port + assertCompatibleEmbeddingIdentity from #192 — the " +
         "same gateway carve-out the contracts ADR-0019 documents (out-of-band capability " +
-        "probe, NOT a productive chat call). The layer still does NOT depend on " +
-        "keiko-security because the on-disk capsule store performs pure node:sqlite + " +
-        "path arithmetic and never touches a redactor — redaction lives in the consumers " +
-        "that compose this package (workflows, server). Added at error severity by issue " +
+        "probe, NOT a productive chat call). Added at error severity by issue " +
         "#193 (Epic #423 0.2.0 baseline). Also fires on the " +
         "negative-test fixture under tests/architecture/fixtures/local-knowledge/ so the " +
         "gate can be proven live by scripts/arch-check-negative.mjs. The to.path forbids " +
@@ -235,11 +235,11 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|local-knowledge|workspace|model-gateway)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|local-knowledge|workspace|model-gateway)|" +
-          "@oscharko-dev/keiko-(?!contracts|local-knowledge|workspace|model-gateway)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|local-knowledge|workspace|model-gateway)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|local-knowledge|workspace|model-gateway)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|local-knowledge|workspace|model-gateway)|" +
           "src/(gateway|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
-          siblingPackageSourcePattern(["contracts", "workspace", "model-gateway"]) +
+          siblingPackageSourcePattern(["contracts", "security", "workspace", "model-gateway"]) +
           ")",
         pathNot: "^packages/keiko-local-knowledge/src/",
       },

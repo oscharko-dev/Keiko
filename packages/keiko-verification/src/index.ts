@@ -43,7 +43,7 @@ export { buildAppliedLimits } from "./limits.js";
 export type { BreachedDimension } from "./limits.js";
 
 export { runVerification } from "./orchestrator.js";
-export type { VerificationDeps } from "./orchestrator.js";
+export type { NetworkEnforcementMode, VerificationDeps } from "./orchestrator.js";
 
 export { buildVerificationSummary, renderMarkdownSummary, summarizeForAudit } from "./summary.js";
 export type {

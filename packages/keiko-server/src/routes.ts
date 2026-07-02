@@ -167,6 +167,11 @@ import {
 import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
+  handleEditorHotExitDelete,
+  handleEditorHotExitRead,
+  handleEditorHotExitWrite,
+} from "./editor/hotExitRoutes.js";
+import {
   handleEditorAgentActions,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
@@ -603,6 +608,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // retrieval references). No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
   { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  // Editor hot-exit recovery: content is persisted only in the server-owned encrypted local store.
+  // Browser IndexedDB keeps metadata and an opaque ref, never raw file contents or workspace paths.
+  { method: "POST", pattern: "/api/editor/hot-exit/write", handler: handleEditorHotExitWrite },
+  { method: "POST", pattern: "/api/editor/hot-exit/read", handler: handleEditorHotExitRead },
+  { method: "POST", pattern: "/api/editor/hot-exit/delete", handler: handleEditorHotExitDelete },
   // Issue #1199 — governed completion gateway (ADR-0042 D4/D5/D6). Deterministic language-service
   // completion (#1198) always, plus gated model-assisted completion (#1210) over coding context
   // (#1211). Content-free response apart from reviewable insertText; the browser never reaches a model.

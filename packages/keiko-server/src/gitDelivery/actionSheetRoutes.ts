@@ -8,8 +8,8 @@
 // evaluator over TRUSTED packs, and returns a UI-safe GitDeliveryActionSheet projection.
 //
 // AUTHORITY (AC1): the policy decision, approval necessity, and required approvers come from
-// evaluateGitPolicy over the server's trusted packs — NEVER from a client-asserted field. The request
-// may carry a GRANTED approval payload; only its SHAPE is validated (isGitDeliveryApprovalRequirement).
+// evaluateGitPolicy over the server's trusted packs — NEVER from a client-asserted field. Browser
+// requests may not satisfy approval; execution routes consume server-issued approval claims instead.
 // There is no client-supplied policy-decision field, and there must never be one.
 //
 // Hard constraints (mirroring qualityIntelligence/handoffRoutes.ts):
@@ -26,7 +26,6 @@
 import type { IncomingMessage } from "node:http";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
-  isGitDeliveryApprovalRequirement,
   isGitDeliveryBranchProtection,
   isGitDeliveryChecksState,
   isGitDeliveryMergeReadiness,
@@ -129,7 +128,6 @@ const ALLOWED_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
   "resolvedInputs",
   "worktreeSnapshot",
-  "approval",
   "providerState",
   "activeProviderCapabilities",
 ]);
@@ -254,14 +252,6 @@ function validateProviderCapabilities(
   return { ok: true, value: raw };
 }
 
-function validateApproval(
-  raw: unknown,
-): { readonly ok: true; readonly value: GitDeliveryApprovalRequirement } | { readonly ok: false } {
-  if (raw === undefined) return { ok: true, value: { required: false } };
-  if (!isGitDeliveryApprovalRequirement(raw)) return { ok: false };
-  return { ok: true, value: raw };
-}
-
 // ─── Validated request ─────────────────────────────────────────────────────────────
 
 interface ValidatedRequest {
@@ -310,8 +300,6 @@ function validateRequest(parsed: unknown): Validation {
   const inputs = parseGitDeliveryResolvedInputs(obj.resolvedInputs);
   if (!inputs.ok) return badRequest();
   if (!isGitWorktreeSnapshot(obj.worktreeSnapshot)) return badRequest();
-  const approval = validateApproval(obj.approval);
-  if (!approval.ok) return badRequest();
   const providerState = validateProviderState(obj.providerState);
   if (!providerState.ok) return badRequest();
   const capabilities = validateProviderCapabilities(obj.activeProviderCapabilities);
@@ -321,7 +309,7 @@ function validateRequest(parsed: unknown): Validation {
     request: {
       resolvedInputs: inputs.value,
       worktreeSnapshot: obj.worktreeSnapshot,
-      approvalRequirement: approval.value,
+      approvalRequirement: { required: false },
       providerState: providerState.value,
       activeProviderCapabilities: capabilities.value,
     },

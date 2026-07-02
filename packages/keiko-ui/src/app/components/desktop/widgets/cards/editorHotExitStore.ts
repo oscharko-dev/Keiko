@@ -1,22 +1,24 @@
 import {
+  EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
-  editorHotExitSnapshotExpired,
-  isEditorHotExitSnapshotV1,
+  isEditorHotExitIndexRecordV2,
+  type EditorHotExitIndexRecordV2,
   type EditorHotExitSnapshotV1,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  deleteEditorHotExitContent,
+  readEditorHotExitContent,
+  writeEditorHotExitContent,
+} from "../../../../../lib/api";
 
 const DB_NAME = "keiko-editor-hot-exit";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = "snapshots";
 const MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 const PRUNE_MIN_INTERVAL_MS = 30_000;
 const PRUNE_BYTE_BUDGET = 1 * 1024 * 1024;
 const SNAPSHOT_ENCODER = new TextEncoder();
-
-function key(root: string, path: string): string {
-  return `${root}\u0000${path}`;
-}
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -70,6 +72,7 @@ async function openDb(): Promise<IDBDatabase | null> {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      if (db.objectStoreNames.contains(STORE_NAME)) db.deleteObjectStore(STORE_NAME);
       if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
     };
     request.onsuccess = () => {
@@ -88,8 +91,26 @@ async function openDb(): Promise<IDBDatabase | null> {
   return db;
 }
 
-function snapshotBytes(snapshot: EditorHotExitSnapshotV1): number {
-  return SNAPSHOT_ENCODER.encode(JSON.stringify(snapshot)).length;
+function chargedBytes(record: EditorHotExitIndexRecordV2): number {
+  return record.contentSizeBytes;
+}
+
+function hex(bytes: ArrayBuffer): string {
+  return [...new Uint8Array(bytes)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function locatorHash(root: string, path: string): Promise<string | null> {
+  if (globalThis.crypto?.subtle === undefined) return null;
+  const bytes = SNAPSHOT_ENCODER.encode(`${root}\u0000${path}`);
+  return hex(await globalThis.crypto.subtle.digest("SHA-256", bytes));
+}
+
+function recordExpired(
+  record: EditorHotExitIndexRecordV2,
+  now: number,
+  ttlMs = EDITOR_HOT_EXIT_TTL_MS,
+): boolean {
+  return record.updatedAt + ttlMs < now;
 }
 
 // All writes and deletes are funnelled through one promise chain so a delete dispatched after a
@@ -108,44 +129,43 @@ function serializeMutation<T>(op: () => Promise<T>): Promise<T> {
   return run;
 }
 
-async function allSnapshots(db: IDBDatabase): Promise<EditorHotExitSnapshotV1[]> {
+async function allRecords(db: IDBDatabase): Promise<EditorHotExitIndexRecordV2[]> {
   const tx = db.transaction(STORE_NAME, "readonly");
   const raw = await requestToPromise<unknown[]>(tx.objectStore(STORE_NAME).getAll());
   await txDone(tx);
-  return raw.filter(isEditorHotExitSnapshotV1);
+  return raw.filter(isEditorHotExitIndexRecordV2);
 }
 
 async function prune(
   db: IDBDatabase,
   now: number,
-  incoming: EditorHotExitSnapshotV1 | null = null,
+  incoming: EditorHotExitIndexRecordV2 | null = null,
 ): Promise<void> {
-  const snapshots = await allSnapshots(db);
-  const expired = snapshots.filter((snapshot) => editorHotExitSnapshotExpired(snapshot, now));
+  const records = await allRecords(db);
+  const expired = records.filter((record) => recordExpired(record, now));
   if (expired.length > 0) {
     const tx = db.transaction(STORE_NAME, "readwrite");
-    for (const snapshot of expired)
-      tx.objectStore(STORE_NAME).delete(key(snapshot.workspaceRoot, snapshot.relativePath));
+    for (const record of expired) tx.objectStore(STORE_NAME).delete(record.locatorHash);
     await txDone(tx);
   }
   // The caller writes `incoming` immediately after this prune resolves. Its same-key predecessor
   // (if any) is about to be overwritten, so it must not be double-counted, and the new snapshot's
   // own bytes must be reserved against the quota — otherwise the post-write total can exceed the
   // cap by up to one full snapshot.
-  const incomingKey = incoming === null ? null : key(incoming.workspaceRoot, incoming.relativePath);
-  const fresh = snapshots
-    .filter((snapshot) => !editorHotExitSnapshotExpired(snapshot, now))
-    .filter((snapshot) => key(snapshot.workspaceRoot, snapshot.relativePath) !== incomingKey)
+  const incomingKey = incoming?.locatorHash ?? null;
+  const fresh = records
+    .filter((record) => !recordExpired(record, now))
+    .filter((record) => record.locatorHash !== incomingKey)
     .sort((left, right) => left.updatedAt - right.updatedAt);
   let total =
-    (incoming === null ? 0 : snapshotBytes(incoming)) +
-    fresh.reduce((sum, snapshot) => sum + snapshotBytes(snapshot), 0);
+    (incoming === null ? 0 : chargedBytes(incoming)) +
+    fresh.reduce((sum, record) => sum + chargedBytes(record), 0);
   if (total <= MAX_TOTAL_BYTES) return;
   const tx = db.transaction(STORE_NAME, "readwrite");
-  for (const snapshot of fresh) {
+  for (const record of fresh) {
     if (total <= MAX_TOTAL_BYTES) break;
-    tx.objectStore(STORE_NAME).delete(key(snapshot.workspaceRoot, snapshot.relativePath));
-    total -= snapshotBytes(snapshot);
+    tx.objectStore(STORE_NAME).delete(record.locatorHash);
+    total -= chargedBytes(record);
   }
   await txDone(tx);
 }
@@ -160,14 +180,14 @@ function shouldPrune(now: number, incomingBytes: number): boolean {
   );
 }
 
-async function pruneIfNeeded(db: IDBDatabase, snapshot: EditorHotExitSnapshotV1): Promise<void> {
-  const incomingBytes = snapshotBytes(snapshot);
-  if (!shouldPrune(snapshot.updatedAt, incomingBytes)) {
+async function pruneIfNeeded(db: IDBDatabase, record: EditorHotExitIndexRecordV2): Promise<void> {
+  const incomingBytes = chargedBytes(record);
+  if (!shouldPrune(record.updatedAt, incomingBytes)) {
     bytesSinceLastPrune += incomingBytes;
     return;
   }
-  await prune(db, snapshot.updatedAt, snapshot);
-  lastPruneAt = snapshot.updatedAt;
+  await prune(db, record.updatedAt, record);
+  lastPruneAt = record.updatedAt;
   bytesSinceLastPrune = 0;
   forceNextPrune = incomingBytes >= MAX_TOTAL_BYTES;
 }
@@ -177,25 +197,71 @@ export async function readEditorHotExitSnapshot(
   relativePath: string,
   now = Date.now(),
 ): Promise<EditorHotExitSnapshotV1 | null> {
+  const hash = await locatorHash(workspaceRoot, relativePath);
+  if (hash === null) return null;
   const db = await openDb();
   if (db === null) return null;
   const tx = db.transaction(STORE_NAME, "readonly");
-  const raw = await requestToPromise<unknown>(
-    tx.objectStore(STORE_NAME).get(key(workspaceRoot, relativePath)),
-  );
+  const raw = await requestToPromise<unknown>(tx.objectStore(STORE_NAME).get(hash));
   await txDone(tx);
-  if (!isEditorHotExitSnapshotV1(raw) || editorHotExitSnapshotExpired(raw, now)) return null;
-  return raw;
+  if (!isEditorHotExitIndexRecordV2(raw)) return null;
+  if (recordExpired(raw, now)) {
+    await deleteEditorHotExitSnapshot(workspaceRoot, relativePath);
+    return null;
+  }
+  const response = await readEditorHotExitContent({
+    workspaceRoot,
+    relativePath,
+    snapshotRef: raw.snapshotRef,
+  });
+  if (!response.found || response.snapshot === undefined) {
+    await deleteEditorHotExitSnapshot(workspaceRoot, relativePath);
+    return null;
+  }
+  return {
+    schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
+    workspaceRoot,
+    relativePath,
+    content: response.snapshot.content,
+    baseVersion: response.snapshot.baseVersion,
+    contentHash: response.snapshot.contentHash,
+    savedContentHash: response.snapshot.savedContentHash,
+    updatedAt: response.snapshot.updatedAt,
+    paneId: response.snapshot.paneId,
+    windowId: response.snapshot.windowId,
+  };
 }
 
 export async function writeEditorHotExitSnapshot(snapshot: EditorHotExitSnapshotV1): Promise<void> {
   if (snapshot.schemaVersion !== EDITOR_HOT_EXIT_SCHEMA_VERSION) return;
+  const hash = await locatorHash(snapshot.workspaceRoot, snapshot.relativePath);
+  if (hash === null) return;
   return serializeMutation(async () => {
     const db = await openDb();
     if (db === null) return;
-    await pruneIfNeeded(db, snapshot);
+    const stored = await writeEditorHotExitContent(snapshot);
+    if (stored.suppressed === true) {
+      const tx = db.transaction(STORE_NAME, "readwrite");
+      tx.objectStore(STORE_NAME).delete(hash);
+      await txDone(tx);
+      forceNextPrune = true;
+      return;
+    }
+    const record: EditorHotExitIndexRecordV2 = {
+      schemaVersion: EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
+      locatorHash: hash,
+      snapshotRef: stored.snapshotRef,
+      baseVersion: snapshot.baseVersion,
+      contentHash: snapshot.contentHash,
+      savedContentHash: snapshot.savedContentHash,
+      contentSizeBytes: stored.contentSizeBytes,
+      updatedAt: snapshot.updatedAt,
+      paneId: snapshot.paneId,
+      windowId: snapshot.windowId,
+    };
+    await pruneIfNeeded(db, record);
     const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put(snapshot, key(snapshot.workspaceRoot, snapshot.relativePath));
+    tx.objectStore(STORE_NAME).put(record, hash);
     await txDone(tx);
   });
 }
@@ -204,11 +270,23 @@ export async function deleteEditorHotExitSnapshot(
   workspaceRoot: string,
   relativePath: string,
 ): Promise<void> {
+  const hash = await locatorHash(workspaceRoot, relativePath);
+  if (hash === null) return;
   return serializeMutation(async () => {
     const db = await openDb();
     if (db === null) return;
+    const readTx = db.transaction(STORE_NAME, "readonly");
+    const raw = await requestToPromise<unknown>(readTx.objectStore(STORE_NAME).get(hash));
+    await txDone(readTx);
+    if (isEditorHotExitIndexRecordV2(raw)) {
+      await deleteEditorHotExitContent({
+        workspaceRoot,
+        relativePath,
+        snapshotRef: raw.snapshotRef,
+      });
+    }
     const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(key(workspaceRoot, relativePath));
+    tx.objectStore(STORE_NAME).delete(hash);
     await txDone(tx);
   });
 }

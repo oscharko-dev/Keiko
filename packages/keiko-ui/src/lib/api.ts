@@ -102,7 +102,8 @@ import type {
   GitCommitMessageViolationCode,
   GitDeliveryActionSheet,
   GitDeliveryActionSheetRequest,
-  GitDeliveryApprovalRequirement,
+  GitDeliveryApprovalClaim,
+  EditorHotExitSnapshotV1,
   PdfCitationPreviewOpenResponse,
   PdfCitationPreviewSelection,
   PdfCitationPreviewStatusRequest,
@@ -1310,6 +1311,54 @@ export async function saveFilesContent(input: {
   });
 }
 
+export interface EditorHotExitWriteResponse {
+  readonly snapshotRef: string;
+  readonly contentSizeBytes: number;
+  readonly suppressed?: boolean;
+}
+
+export interface EditorHotExitReadResponse {
+  readonly found: boolean;
+  readonly snapshot?: Omit<
+    EditorHotExitSnapshotV1,
+    "schemaVersion" | "workspaceRoot" | "relativePath"
+  > & {
+    readonly schemaVersion: 1;
+    readonly contentSizeBytes: number;
+  };
+}
+
+export async function writeEditorHotExitContent(
+  snapshot: EditorHotExitSnapshotV1,
+): Promise<EditorHotExitWriteResponse> {
+  return fetchJson("/api/editor/hot-exit/write", {
+    method: "POST",
+    body: JSON.stringify({ snapshot }),
+  });
+}
+
+export async function readEditorHotExitContent(input: {
+  readonly workspaceRoot: string;
+  readonly relativePath: string;
+  readonly snapshotRef: string;
+}): Promise<EditorHotExitReadResponse> {
+  return fetchJson("/api/editor/hot-exit/read", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteEditorHotExitContent(input: {
+  readonly workspaceRoot: string;
+  readonly relativePath: string;
+  readonly snapshotRef: string;
+}): Promise<void> {
+  await fetchJson<void>("/api/editor/hot-exit/delete", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 // File-tree mutations. fetchJson adds the CSRF header + JSON content-type for these POSTs and maps a
 // non-2xx envelope to ApiError; the server keeps every mutation inside the selected root.
 export async function createFilesEntry(input: {
@@ -1823,8 +1872,8 @@ export async function fetchPdfCitationPreviewDocument(
 // Issue #473 (Epic #470) — governed Git delivery action sheet
 // ---------------------------------------------------------------------------
 // POSTs the content-free repository facts a caller legitimately holds — the proposed resolved action,
-// the worktree snapshot, an optional granted approval, optional provider PR/merge/branch-protection/
-// checks state, and the active provider capabilities — to the BFF, which establishes policy/approval
+// the worktree snapshot, optional provider PR/merge/branch-protection/checks state, and the active
+// provider capabilities — to the BFF, which establishes policy/approval
 // AUTHORITY server-side and assembles the UI-safe GitDeliveryActionSheet projection. The request
 // carries NO authority fields (policy decision, providerReady, expected blockers); the server rejects
 // any such key. The response carries counts/flags/names/typed codes only — never diff content, file
@@ -1874,7 +1923,7 @@ export interface GitDeliveryLocalBranchCreateInput {
   readonly branchName: string;
   readonly baseBranchName: string;
   readonly startPointRefHash: string;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export async function fetchGitDeliveryLocalBranchCreate(
@@ -1898,7 +1947,7 @@ export async function fetchGitDeliveryLocalBranchCreate(
 export interface GitDeliveryLocalBranchSwitchInput {
   readonly projectId: string;
   readonly branchName: string;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export async function fetchGitDeliveryLocalBranchSwitch(
@@ -1921,7 +1970,7 @@ export interface GitDeliveryStageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];
   readonly includeUntracked: boolean;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export async function fetchGitDeliveryStage(
@@ -1944,7 +1993,7 @@ export async function fetchGitDeliveryStage(
 export interface GitDeliveryUnstageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export async function fetchGitDeliveryUnstage(
@@ -1992,7 +2041,7 @@ export interface GitDeliveryCommitExecuteInput {
   readonly projectId: string;
   readonly message: string;
   readonly allowEmpty?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export async function fetchGitDeliveryCommitExecute(
@@ -2021,7 +2070,7 @@ export interface GitDeliveryPushInput {
   readonly sourceBranchName: string;
   readonly forcePush?: boolean | undefined;
   readonly setUpstreamTracking?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export interface GitDeliveryPushPreviewResponse {
@@ -2142,7 +2191,7 @@ export interface GitDeliveryPrInput {
   readonly prExternalId?: string | undefined;
   readonly convertToDraft?: boolean | undefined;
   readonly convertFromDraft?: boolean | undefined;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 export interface GitDeliveryPrReadiness {
@@ -2234,7 +2283,7 @@ export interface GitDeliveryMergeInput {
   readonly mergeStrategy: GitDeliveryMergeStrategy;
   readonly deleteBranchAfterMerge: boolean;
   readonly expectedHeadRefHash?: string | undefined;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
+  readonly approval?: GitDeliveryApprovalClaim | undefined;
 }
 
 // A per-blocker readiness view carrying the precise code AND its recovery information (remediation class

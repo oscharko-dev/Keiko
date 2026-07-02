@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type {
   GitMergeAdapter,
+  GitMergeCommand,
   GitMergeExecRequest,
   GitMergeExecResult,
   GitMergeProviderReadiness,
@@ -27,7 +28,7 @@ import type {
 } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type {
-  GitDeliveryApprovalRequirement,
+  GitDeliveryApprovalClaim,
   GitDeliveryPullRequestState,
 } from "@oscharko-dev/keiko-contracts";
 import { createUiServer, UI_HOST } from "../server.js";
@@ -36,6 +37,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
 import { createHandleMergeExecute, createHandleMergePreview } from "./mergeRoutes.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type {
   GitDeliveryMergeExecuteResponseBody,
   GitDeliveryMergePreviewBody,
@@ -133,13 +135,6 @@ function capturingEvidenceStore(): {
   };
 }
 
-const GRANTED_APPROVAL: GitDeliveryApprovalRequirement = {
-  required: true,
-  approvalTokenHash: "a".repeat(64),
-  approvedByUserId: "u-1",
-  approvedAtMs: 1,
-};
-
 let server: Server;
 let port: number;
 let staticRoot: string;
@@ -190,6 +185,34 @@ function mergeBody(overrides: Record<string, unknown> = {}): Record<string, unkn
     deleteBranchAfterMerge: false,
     ...overrides,
   };
+}
+
+function mergeCommand(overrides: Record<string, unknown> = {}): GitMergeCommand {
+  const body = mergeBody(overrides);
+  return {
+    kind: "merge",
+    ownerAndRepo: body.ownerAndRepo as string,
+    prExternalId: body.prExternalId as string,
+    baseBranchName: body.baseBranchName as string,
+    headBranchName: body.headBranchName as string,
+    mergeStrategy: body.mergeStrategy as GitMergeCommand["mergeStrategy"],
+    deleteBranchAfterMerge: body.deleteBranchAfterMerge as boolean,
+    ...(typeof body.expectedHeadRefHash === "string"
+      ? { expectedHeadRefHash: body.expectedHeadRefHash }
+      : {}),
+  };
+}
+
+function issueMergeApproval(
+  approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+  overrides: Record<string, unknown> = {},
+): GitDeliveryApprovalClaim {
+  return approvalStore.issue({
+    binding: { projectId, operation: "merge", command: mergeCommand(overrides) },
+    approvedByUserId: "u-1",
+    nowMs: 1_700_000_000_000,
+    ttlMs: 60_000,
+  }).approval;
 }
 
 async function closeServer(): Promise<void> {
@@ -339,6 +362,41 @@ describe("merge execute (governed)", () => {
     expect(evidence.count()).toBeGreaterThan(0);
   });
 
+  it("rejects a forged browser-supplied approval object before merge execution", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const handler = createHandleMergeExecute({
+      execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+    });
+    const res = await handler(
+      ctxFor(
+        EXECUTE,
+        mergeBody({
+          approval: {
+            required: true,
+            approvalTokenHash: "a".repeat(64),
+            approvedByUserId: "u-1",
+            approvedAtMs: 1_700_000_000_000,
+          },
+        }),
+      ),
+      deps(),
+    );
+    expect(res.status).toBe(400);
+    expect(adapter.merges()).toBe(0);
+  });
+
+  it("rejects a server-issued approval claim replayed against a different merge binding", async () => {
+    const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore, { headBranchName: "feat/other" });
+    const handler = createHandleMergeExecute({
+      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
+    expect(res.status).toBe(400);
+    expect(adapter.merges()).toBe(0);
+  });
+
   it("blocks a not-mergeable PR BEFORE calling merge, still recording evidence (AC1/AC5)", async () => {
     const adapter = recordingMergeAdapter({
       pullRequest: prState({
@@ -352,11 +410,13 @@ describe("merge execute (governed)", () => {
       providerCapableStrategies: ["squash"],
     });
     const evidence = capturingEvidenceStore();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
     });
     const res = await handler(
-      ctxFor(EXECUTE, mergeBody({ approval: GRANTED_APPROVAL })),
+      ctxFor(EXECUTE, mergeBody({ approval })),
       deps({ evidenceStore: evidence.store }),
     );
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
@@ -368,10 +428,12 @@ describe("merge execute (governed)", () => {
 
   it("executes the merge when policy, approval, and readiness all pass (AC1)", async () => {
     const adapter = recordingMergeAdapter(READY_PROVIDER);
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
     });
-    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval: GRANTED_APPROVAL })), deps());
+    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.status).toBe("succeeded");
     expect(body.merged).toBe(true);
@@ -386,10 +448,12 @@ describe("merge execute (governed)", () => {
       errorCode: "conflict",
       rejectionReason: "conflict",
     });
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approval = issueMergeApproval(approvalStore);
     const handler = createHandleMergeExecute({
-      execution: seams({ mergeAdapterFactory: () => adapter.adapter }),
+      execution: seams({ mergeAdapterFactory: () => adapter.adapter, approvalStore }),
     });
-    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval: GRANTED_APPROVAL })), deps());
+    const res = await handler(ctxFor(EXECUTE, mergeBody({ approval })), deps());
     const body = res.body as GitDeliveryMergeExecuteResponseBody;
     expect(body.mergeRejectionReason).toBe("conflict");
     expect(body.recoveryDisposition).toBe("user-fixable");

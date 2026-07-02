@@ -6,6 +6,7 @@
 
 import type {
   ConversationId,
+  MemoryForgetReason,
   MemoryId,
   MemoryReviewerId,
   MemoryScope,
@@ -92,7 +93,7 @@ export interface BuildForgetOperationsOptions {
   // (e.g. require the request-level acknowledgement to be threaded into this options
   // bundle rather than hard-coded somewhere downstream).
   readonly writeTombstone: boolean;
-  readonly reason?: string;
+  readonly reason?: MemoryForgetReason;
 }
 
 // ─── Correction options ───────────────────────────────────────────────────────

@@ -217,6 +217,72 @@ describe("parseGatewayConfig", () => {
     });
   });
 
+  it("resolves reranker apiKeySecretRef through the injected secretResolver", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://litellm.local/v1",
+          apiKeySecretRef: "model-gateway:reranker",
+          timeoutMs: 12_000,
+        },
+      },
+      {},
+      {
+        secretResolver: (ref) =>
+          ref === "model-gateway:reranker" ? "reranker-vault-secret" : undefined,
+      },
+    );
+
+    expect(config.reranker?.apiKey).toBe("reranker-vault-secret");
+  });
+
+  it("keeps reranker credential precedence as env over vault over plaintext", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://litellm.local/v1",
+        apiKey: "reranker-file-secret",
+        apiKeySecretRef: "model-gateway:reranker",
+        timeoutMs: 12_000,
+      },
+    };
+    const options: ParseGatewayConfigOptions = {
+      secretResolver: (ref) =>
+        ref === "model-gateway:reranker" ? "reranker-vault-secret" : undefined,
+    };
+
+    expect(parseGatewayConfig(raw, {}, options).reranker?.apiKey).toBe("reranker-vault-secret");
+    expect(
+      parseGatewayConfig(raw, { KEIKO_RERANKER_API_KEY: "reranker-env-secret" }, options).reranker
+        ?.apiKey,
+    ).toBe("reranker-env-secret");
+  });
+
+  it("rejects unresolved reranker apiKeySecretRef without leaking the reference", () => {
+    try {
+      parseGatewayConfig(
+        {
+          ...(validRaw() as Record<string, unknown>),
+          reranker: {
+            modelId: "qwen3-reranker",
+            baseUrl: "https://litellm.local/v1",
+            apiKeySecretRef: "model-gateway:reranker",
+          },
+        },
+        {},
+        { secretResolver: () => undefined },
+      );
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("reranker.apiKey must be set");
+      expect((error as Error).message).not.toContain("model-gateway:reranker");
+    }
+  });
+
   it("rejects malformed reranker config without leaking the token-like value", () => {
     expect(() =>
       parseGatewayConfig({
@@ -269,12 +335,14 @@ describe("parseGatewayConfig", () => {
       KEIKO_HTTPS_PROXY: "http://secure-proxy.env.local:8443",
       KEIKO_NO_PROXY: "localhost,.corp.example",
       KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+      KEIKO_ALLOW_PRIVATE_EGRESS: "true",
     });
     expect(config.egress).toEqual({
       httpProxy: "http://proxy.env.local:8080/",
       httpsProxy: "http://secure-proxy.env.local:8443/",
       noProxy: ["localhost", ".corp.example"],
       caBundlePath: "/etc/keiko/env-ca.pem",
+      allowPrivateNetwork: true,
     });
     expect(config.providers[0]?.egress).toEqual(config.egress);
   });
@@ -855,9 +923,38 @@ describe("parseGatewayConfig", () => {
       }
     });
 
-    it("accepts https regardless of host (host filtering is intentionally not done)", () => {
+    it("accepts an https public DNS name without DNS resolution at parse time", () => {
       const raw = rawWithProvider((p) => ({ ...p, baseUrl: "https://127.evil.com/v1" }));
       expect(() => parseGatewayConfig(raw)).not.toThrow();
+    });
+
+    it("rejects metadata, link-local, and private literal baseUrls by default", () => {
+      for (const baseUrl of [
+        "https://169.254.169.254/v1",
+        "https://169.254.1.2/v1",
+        "https://10.0.0.5/v1",
+        "https://172.20.0.5/v1",
+        "https://192.168.1.10/v1",
+        "https://[fe80::1]/v1",
+        "https://[fd00::1]/v1",
+      ]) {
+        const raw = rawWithProvider((p) => ({ ...p, baseUrl }));
+        expect(() => parseGatewayConfig(raw), baseUrl).toThrow(/allowPrivateNetwork=true/u);
+      }
+    });
+
+    it("allows private literal baseUrls only when the central egress policy opts in", () => {
+      const raw = {
+        ...(validRaw() as Record<string, unknown>),
+        egress: { allowPrivateNetwork: true },
+        providers: [
+          {
+            ...validProvider(),
+            baseUrl: "https://10.0.0.5/v1",
+          },
+        ],
+      };
+      expect(parseGatewayConfig(raw).providers[0]?.baseUrl).toBe("https://10.0.0.5/v1");
     });
   });
 });

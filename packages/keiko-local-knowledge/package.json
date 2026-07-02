@@ -39,5 +39,6 @@
   },
   "optionalDependencies": {
     "@napi-rs/canvas": "^1.0.1"
-  }
+  },
+  "private": true
 }

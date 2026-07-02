@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { postEditorAgentActionResult } from "../../../../../lib/api";
+import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   EditorAgentAction,
   EditorAgentEvent,
@@ -338,7 +339,8 @@ function closeEditorAgentEventSource(): void {
 function restartEditorAgentEventSource(): void {
   closeEditorAgentEventSource();
   if (editorAgentSubscribersBySession.size === 0 || typeof EventSource === "undefined") return;
-  const source = new EventSource(editorAgentEventUrl());
+  const source = createSameOriginApiEventSource(editorAgentEventUrl());
+  if (source === null) return;
   editorAgentActionListener = handleEditorAgentFrame;
   editorAgentResultListener = handleEditorAgentFrame;
   source.addEventListener("editor-agent:action", editorAgentActionListener);

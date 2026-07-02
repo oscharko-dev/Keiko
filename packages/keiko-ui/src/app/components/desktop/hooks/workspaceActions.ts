@@ -961,7 +961,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
     const boundScope =
-      boundScopeOf(conn) ?? (bothLive ? filesChatBindScope(a, b, Date.now()) : null);
+      boundScopeOf(conn) ??
+      (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
     if (boundScope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, boundScope);
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);

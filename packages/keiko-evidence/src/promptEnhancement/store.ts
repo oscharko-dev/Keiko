@@ -17,7 +17,6 @@ import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   lstatSync,
-  mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -30,6 +29,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GroundingDirective } from "@oscharko-dev/keiko-contracts";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
+import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
@@ -370,27 +370,11 @@ function parseAndValidateManifest(json: string): PromptEnhancementEvidenceManife
 
 // ─── Node adapter ──────────────────────────────────────────────────────────────────
 function prepareBaseDir(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    mkdirSync(baseDir, { recursive: true, mode: PE_DIR_MODE });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create PE evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "PE evidence directory", { mode: PE_DIR_MODE });
 }
 
 function existingBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) {
-    return undefined;
-  }
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read PE evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "PE evidence directory");
 }
 
 function lexicalManifestPath(runId: string, realBase: string): string {

@@ -118,6 +118,11 @@ export {
 export { Gateway, type GatewayDeps } from "./gateway.js";
 
 export {
+  requestGatewayReadinessChatCompletion,
+  type GatewayReadinessChatCompletionRequest,
+} from "./readiness-probe.js";
+
+export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,

@@ -103,6 +103,56 @@ describe("gatewayFetch", () => {
     expect(await response.text()).toBe(body);
   });
 
+  it("blocks metadata and private literal targets before fetch unless explicitly allowed", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response("ok")));
+    await expect(
+      gatewayFetch("https://169.254.169.254/latest/meta-data", { fetchImpl }),
+    ).rejects.toMatchObject({
+      code: "PROXY_BLOCKED_BY_POLICY",
+    });
+    await expect(gatewayFetch("https://10.0.0.5/v1/models", { fetchImpl })).rejects.toMatchObject({
+      code: "PROXY_BLOCKED_BY_POLICY",
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows private literal targets only through the central egress opt-in", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(new Response("ok")));
+    const response = await gatewayFetch("https://10.0.0.5/v1/models", {
+      fetchImpl,
+      egress: { allowPrivateNetwork: true },
+    });
+    expect(response.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("forces manual redirects and blocks redirects to metadata/private targets", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://169.254.169.254/latest/meta-data" },
+        }),
+      ),
+    );
+    await expect(
+      gatewayFetch("https://example.com/v1/models", { fetchImpl }),
+    ).rejects.toMatchObject({
+      code: "PROXY_BLOCKED_BY_POLICY",
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  });
+
+  it("checks relative redirects with the same central egress policy", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(null, { status: 307, headers: { location: "/v2/models" } })),
+    );
+    const response = await gatewayFetch("https://example.com/v1/models", { fetchImpl });
+    expect(response.status).toBe(307);
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
+  });
+
   it("propagates a non-issuer fetch error without attempting the CA fallback", async () => {
     const networkError = Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" });
     const fetchImpl: typeof fetch = () => Promise.reject(networkError);
@@ -884,11 +934,11 @@ describe("noProxyRuleMatches (via gatewayFetch bypassing proxy)", () => {
   });
 
   it("bare domain rule bypasses subdomains", async () => {
-    await assertBypassWithStubbedFetch(["corp.example"], "http://api.corp.example/models");
+    await assertBypassWithStubbedFetch(["localhost"], "http://api.localhost/models");
   });
 
   it("leading-dot domain rule bypasses subdomains", async () => {
-    await assertBypassWithStubbedFetch([".corp.example"], "http://api.corp.example/models");
+    await assertBypassWithStubbedFetch([".localhost"], "http://api.localhost/models");
   });
 
   it("host:port form bypasses only the specific port", async () => {

@@ -95,7 +95,7 @@ function runSelectiveForgetting(): { passed: boolean; evidence: string } {
     const envelopes = buildForgetOperations(
       selected,
       { reviewerId: reviewerId("rev-1"), nowMs: FIXED_NOW_MS },
-      { writeTombstone: true, reason: "AC selective-forgetting" },
+      { writeTombstone: true, reason: "user-request" },
     );
     for (const env of envelopes) {
       vault.deleteMemory(env.memoryId, {

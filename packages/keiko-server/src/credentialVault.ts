@@ -37,6 +37,7 @@ const CREDENTIALS_KEYCHAIN_SERVICE = "keiko-provider-credentials-vault";
 // (separately keyed) sealed material. It is derived from the provider modelId — already present in
 // the same config entry — so it is stable across re-saves and migrations and leaks nothing new.
 export const PROVIDER_SECRET_REF_PREFIX = "cred:";
+export const RERANKER_SECRET_REF = "model-gateway:reranker";
 
 export function providerSecretRef(modelId: string): string {
   return `${PROVIDER_SECRET_REF_PREFIX}${modelId}`;
@@ -113,9 +114,28 @@ export function isEnvProvidedApiKey(modelId: string, apiKey: string, env: EnvSou
   return defaultKey !== undefined && defaultKey.length > 0 && defaultKey === apiKey;
 }
 
+export function isEnvProvidedRerankerApiKey(apiKey: string, env: EnvSource): boolean {
+  const rerankerKey = env.KEIKO_RERANKER_API_KEY;
+  if (rerankerKey !== undefined && rerankerKey.length > 0 && rerankerKey === apiKey) {
+    return true;
+  }
+  const defaultKey = env.KEIKO_DEFAULT_API_KEY;
+  return defaultKey !== undefined && defaultKey.length > 0 && defaultKey === apiKey;
+}
+
 function stripCredentialFields(provider: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(provider)) {
+    if (key !== "apiKey" && key !== "apiKeySecretRef") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function stripRerankerCredentialFields(reranker: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(reranker)) {
     if (key !== "apiKey" && key !== "apiKeySecretRef") {
       out[key] = value;
     }
@@ -132,6 +152,7 @@ export interface SealProviderApiKeysOptions {
 
 export interface SealedProviderApiKeys {
   readonly providers: readonly unknown[];
+  readonly reranker?: unknown;
   readonly activeSecretRefs: readonly string[];
 }
 
@@ -145,11 +166,23 @@ interface PlannedProviderCredential {
   readonly activeSecretRef?: string | undefined;
 }
 
+interface PlannedRerankerCredential {
+  readonly reranker: unknown;
+  readonly activeSecretRef?: string | undefined;
+}
+
 function providerWithSecretRef(
   cleaned: Record<string, unknown>,
   reference: string,
 ): PlannedProviderCredential {
   return { provider: { ...cleaned, apiKeySecretRef: reference }, activeSecretRef: reference };
+}
+
+function rerankerWithSecretRef(
+  cleaned: Record<string, unknown>,
+  reference: string,
+): PlannedRerankerCredential {
+  return { reranker: { ...cleaned, apiKeySecretRef: reference }, activeSecretRef: reference };
 }
 
 function planPlaintextProviderCredential(
@@ -223,6 +256,58 @@ function planProviderCredential(
   return planReferenceOnlyProviderCredential(modelId, cleaned, configuredRef, vaultedRefs);
 }
 
+function planPlaintextRerankerCredential(
+  apiKey: string,
+  cleaned: Record<string, unknown>,
+  configuredRef: string | undefined,
+  env: EnvSource,
+  vaultedRefs: ReadonlySet<string>,
+  toSeal: Map<string, string>,
+): PlannedRerankerCredential {
+  if (!isEnvProvidedRerankerApiKey(apiKey, env)) {
+    toSeal.set(RERANKER_SECRET_REF, apiKey);
+    return rerankerWithSecretRef(cleaned, RERANKER_SECRET_REF);
+  }
+  const durableRef = configuredRef ?? RERANKER_SECRET_REF;
+  return vaultedRefs.has(durableRef)
+    ? rerankerWithSecretRef(cleaned, durableRef)
+    : { reranker: cleaned };
+}
+
+function planReferenceOnlyRerankerCredential(
+  cleaned: Record<string, unknown>,
+  configuredRef: string | undefined,
+  vaultedRefs: ReadonlySet<string>,
+): PlannedRerankerCredential {
+  const ref = configuredRef ?? (vaultedRefs.has(RERANKER_SECRET_REF) ? RERANKER_SECRET_REF : undefined);
+  return ref === undefined ? { reranker: cleaned } : rerankerWithSecretRef(cleaned, ref);
+}
+
+function planRerankerCredential(
+  reranker: unknown,
+  env: EnvSource,
+  vaultedRefs: ReadonlySet<string>,
+  toSeal: Map<string, string>,
+): PlannedRerankerCredential {
+  if (!isRecord(reranker)) {
+    return { reranker };
+  }
+  const apiKey = typeof reranker.apiKey === "string" ? reranker.apiKey : "";
+  const cleaned = stripRerankerCredentialFields(reranker);
+  const configuredRef = existingSecretRef(reranker);
+  if (apiKey.length > 0) {
+    return planPlaintextRerankerCredential(
+      apiKey,
+      cleaned,
+      configuredRef,
+      env,
+      vaultedRefs,
+      toSeal,
+    );
+  }
+  return planReferenceOnlyRerankerCredential(cleaned, configuredRef, vaultedRefs);
+}
+
 // Seals each persistable provider apiKey into the credential vault and returns the providers array
 // rewritten to carry an `apiKeySecretRef` instead of the plaintext `apiKey`. Vault writes happen
 // FIRST (before the caller rewrites the config) so a crash leaves the old plaintext config in place
@@ -239,6 +324,7 @@ export function prepareSealedProviderApiKeys(
   const vaultedRefs = new Set(readLocalVaultReferences(credentialStorePath(options.configPath)));
   const vaultEntries = new Map<string, string>();
   const activeSecretRefs = new Set<string>();
+  const hasReranker = Object.hasOwn(options.raw, "reranker");
   const sealedProviders = providersRaw.map((provider) => {
     if (!isRecord(provider)) {
       return provider;
@@ -249,8 +335,18 @@ export function prepareSealedProviderApiKeys(
     }
     return planned.provider;
   });
+  const plannedReranker = hasReranker
+    ? planRerankerCredential(options.raw.reranker, options.env, vaultedRefs, vaultEntries)
+    : undefined;
+  if (plannedReranker?.activeSecretRef !== undefined) {
+    activeSecretRefs.add(plannedReranker.activeSecretRef);
+  }
   persistVaultEntries(options, vaultEntries);
-  return { providers: sealedProviders, activeSecretRefs: [...activeSecretRefs] };
+  return {
+    providers: sealedProviders,
+    ...(hasReranker ? { reranker: plannedReranker?.reranker } : {}),
+    activeSecretRefs: [...activeSecretRefs],
+  };
 }
 
 function persistVaultEntries(
@@ -284,9 +380,10 @@ export function sealProviderApiKeys(options: SealProviderApiKeysOptions): readon
   return sealed.providers;
 }
 
-// Structural detector for an UNMIGRATED or partially migrated config: any provider still carrying a
-// plaintext apiKey, or a figma block still carrying a plaintext accessToken. Pure and read-only —
-// `keiko repair` uses it to flag an incomplete credential migration without opening any vault.
+// Structural detector for an UNMIGRATED or partially migrated config: any provider or reranker
+// still carrying a plaintext apiKey, or a figma block still carrying a plaintext accessToken. Pure
+// and read-only — `keiko repair` uses it to flag an incomplete credential migration without opening
+// any vault.
 export function hasPlaintextGatewayCredentials(raw: unknown): boolean {
   if (!isRecord(raw)) {
     return false;
@@ -299,5 +396,8 @@ export function hasPlaintextGatewayCredentials(raw: unknown): boolean {
   const figma = raw.figma;
   const figmaHasPlaintext =
     isRecord(figma) && typeof figma.accessToken === "string" && figma.accessToken.trim().length > 0;
-  return providerHasPlaintext || figmaHasPlaintext;
+  const reranker = raw.reranker;
+  const rerankerHasPlaintext =
+    isRecord(reranker) && typeof reranker.apiKey === "string" && reranker.apiKey.length > 0;
+  return providerHasPlaintext || figmaHasPlaintext || rerankerHasPlaintext;
 }

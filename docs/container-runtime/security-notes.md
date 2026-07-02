@@ -119,8 +119,11 @@ task kind, engine name, a closed-catalog image **id** (never the raw image refer
 by a caller), argument **count** (never the argv), exit code, duration, `timedOut`, `truncated`, and
 `failureReason`. The constructed argv, the workspace path, and the captured container output are
 deliberately excluded, and `deepRedactStrings` is applied to every string leaf before persistence
-(ADR-0048 content-free invariant). Evidence writes are best-effort process-evidence: a write failure is
-swallowed so it can never corrupt a genuine run result.
+(ADR-0048 content-free invariant). Evidence writes are fail-closed for this governed execution
+surface: after a container run settles, the manager persists the content-free manifest before emitting
+the terminal run event or returning a successful run result. If evidence persistence is unavailable or
+fails, the route returns `EVIDENCE_WRITE_FAILED` (HTTP 500) instead of reporting a successful
+unaudited container run.
 
 ## NIST SP 800-190 mapping
 

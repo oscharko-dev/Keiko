@@ -12,9 +12,11 @@
 // the `.qi.json` suffix, so a half-written run is never surfaced. There is no recovery procedure
 // to call — recovery IS the absence of a code path that surfaces partials.
 
-import { lstatSync, realpathSync, renameSync, rmSync } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { lstatSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { removeOwnedRunDirectory } from "../fs-safety.js";
 import { CANDIDATES_SUFFIX } from "./candidatesArtifact.js";
 import { deleteQualityIntelligenceCompanionArtifact } from "./companionStore.js";
 import type { QualityIntelligenceEvidenceManifest } from "./manifestSchema.js";
@@ -206,69 +208,18 @@ function resolveDeleteStore(
   throw new Error("deleteQualityIntelligenceRun requires options.store or options.evidenceDir");
 }
 
-function containedPath(path: string, root: string): boolean {
-  return path === root || path.startsWith(root + sep);
-}
-
-function realDirectoryForDeletion(path: string, label: string): string | undefined {
-  const lexical = resolve(path);
-  const stat = lstatSync(lexical, { throwIfNoEntry: false });
-  if (stat === undefined) {
-    return undefined;
-  }
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(`${label} is not a real directory, refusing to delete: ${lexical}`);
-  }
-  return realpathSync(lexical);
-}
-
-function realEvidenceRootForContainment(evidenceDir: string): string | undefined {
-  try {
-    return realpathSync(resolve(evidenceDir));
-  } catch {
-    return undefined;
-  }
-}
-
 // Recursively removes a per-run side-file directory if it exists. Missing dir → no-op. Symlinked
 // side-file roots or run dirs are refused before the manifest is deleted so retention cannot rm
-// outside the evidence tree or emit a false successful deletion receipt. The evidence root itself
-// may be a workspace-approved symlink; canonicalize it for containment instead of rejecting it.
+// outside the evidence tree or emit a false successful deletion receipt. The evidence root and
+// side-file root must both be real directories owned by the evidence store.
 function removeSideFileDirIfPresent(
   runId: string,
   sideFileRoot: string,
   evidenceDir: string | undefined,
 ): void {
-  const root = realDirectoryForDeletion(sideFileRoot, "QI side-file root");
-  if (root === undefined) {
-    return;
-  }
-  if (evidenceDir !== undefined) {
-    const evidenceRoot = realEvidenceRootForContainment(evidenceDir);
-    if (evidenceRoot === undefined || !containedPath(root, evidenceRoot)) {
-      throw new Error(
-        `QI side-file root escapes the evidence directory, refusing to delete: ${root}`,
-      );
-    }
-  }
-  const runDir = join(root, runId);
-  // Defence-in-depth: runId is already `assertValidRunId`-checked (no separators, no `..`, no
-  // leading dot) before this is reached. Assert containment against the canonical side-file root so
-  // symlinked roots or future validation drift cannot redirect recursive deletion outside evidence.
-  if (!containedPath(runDir, root)) {
-    throw new Error(`QI side-file dir escapes the side-file root, refusing to delete: ${runDir}`);
-  }
-  const stat = lstatSync(runDir, { throwIfNoEntry: false });
-  if (stat === undefined) {
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    throw new Error(`QI side-file dir is a symlink, refusing to delete: ${runDir}`);
-  }
-  if (!stat.isDirectory()) {
-    throw new Error(`QI side-file dir is not a real directory, refusing to delete: ${runDir}`);
-  }
-  rmSync(runDir, { recursive: true, force: true });
+  removeOwnedRunDirectory(sideFileRoot, runId, nodeWorkspaceFs, "QI side-file", {
+    containmentRoot: evidenceDir,
+  });
 }
 
 // Sweep the run's companion artifacts (evidence-owned + caller-supplied) from the contained `qi/`
@@ -351,6 +302,7 @@ export interface QualityIntelligenceRetentionEnforcementOptions {
 export interface QualityIntelligenceRetentionEnforcementResult {
   readonly receipts: readonly QualityIntelligenceDeletionReceipt[];
   readonly failures: readonly QualityIntelligenceRetentionDeletionFailure[];
+  readonly skipped: readonly QualityIntelligenceRetentionSkippedRun[];
   readonly result: QualityIntelligenceRetentionResult;
 }
 
@@ -359,6 +311,20 @@ export interface QualityIntelligenceRetentionDeletionFailure {
   readonly message: string;
 }
 
+export type QualityIntelligenceRetentionSkippedReason =
+  | "manifest-load-failed"
+  | "manifest-missing"
+  | "timestamp-unparseable";
+
+export interface QualityIntelligenceRetentionSkippedRun {
+  readonly runId: string;
+  readonly reason: QualityIntelligenceRetentionSkippedReason;
+}
+
+type RetentionSnapshotProjection =
+  | { readonly entry: QualityIntelligenceRunSnapshotEntry; readonly skipped?: undefined }
+  | { readonly entry?: undefined; readonly skipped: QualityIntelligenceRetentionSkippedRun };
+
 // Load one run's manifest and project it onto a retention snapshot entry. Returns undefined when the
 // run MUST be skipped: load returned absent/corrupt (undefined or EvidenceReadError) or the
 // manifest's `completedAt ?? planAt` is not a parseable timestamp. Skipping means the run never
@@ -366,43 +332,49 @@ export interface QualityIntelligenceRetentionDeletionFailure {
 function snapshotEntryForRun(
   store: QualityIntelligenceLocalStore,
   runId: string,
-): QualityIntelligenceRunSnapshotEntry | undefined {
+): RetentionSnapshotProjection {
   let manifest: QualityIntelligenceEvidenceManifest | undefined;
   try {
     manifest = store.load(runId);
   } catch {
     // A corrupt / tampered / unreadable manifest fails closed: skip, never delete.
-    return undefined;
+    return { skipped: { runId, reason: "manifest-load-failed" } };
   }
   if (manifest === undefined) {
-    return undefined;
+    return { skipped: { runId, reason: "manifest-missing" } };
   }
   const recordedAt = Date.parse(manifest.completedAt ?? manifest.planAt);
   if (Number.isNaN(recordedAt)) {
     // No usable timestamp → cannot age the run out safely → retain.
-    return undefined;
+    return { skipped: { runId, reason: "timestamp-unparseable" } };
   }
-  return { runId, recordedAt, retentionPolicyId: manifest.retentionPolicyId };
+  return { entry: { runId, recordedAt, retentionPolicyId: manifest.retentionPolicyId } };
 }
 
 function buildRetentionSnapshot(
   store: QualityIntelligenceLocalStore,
-): readonly QualityIntelligenceRunSnapshotEntry[] {
+): {
+  readonly snapshot: readonly QualityIntelligenceRunSnapshotEntry[];
+  readonly skipped: readonly QualityIntelligenceRetentionSkippedRun[];
+} {
   const snapshot: QualityIntelligenceRunSnapshotEntry[] = [];
+  const skipped: QualityIntelligenceRetentionSkippedRun[] = [];
   for (const runId of store.list()) {
-    const entry = snapshotEntryForRun(store, runId);
-    if (entry !== undefined) {
-      snapshot.push(entry);
+    const projection = snapshotEntryForRun(store, runId);
+    if (projection.entry !== undefined) {
+      snapshot.push(projection.entry);
+    } else {
+      skipped.push(projection.skipped);
     }
   }
-  return snapshot;
+  return { snapshot, skipped };
 }
 
 export function enforceQualityIntelligenceRetentionPolicy(
   options: QualityIntelligenceRetentionEnforcementOptions,
 ): QualityIntelligenceRetentionEnforcementResult {
   const store = createNodeQualityIntelligenceLocalStore(options.evidenceDir);
-  const snapshot = buildRetentionSnapshot(store);
+  const { snapshot, skipped } = buildRetentionSnapshot(store);
   const result = applyQualityIntelligenceRetention({
     snapshot,
     now: options.now?.() ?? Date.now(),
@@ -426,7 +398,7 @@ export function enforceQualityIntelligenceRetentionPolicy(
       });
     }
   }
-  return { receipts, failures, result };
+  return { receipts, failures, skipped, result };
 }
 
 // ─── Corrupt-manifest quarantine ───────────────────────────────────────────────────
@@ -451,6 +423,31 @@ export interface QualityIntelligenceQuarantineReceipt {
   readonly status: "quarantined" | "absent";
 }
 
+export interface QualityIntelligenceQuarantineRetentionOptions {
+  readonly evidenceDir: string;
+  readonly now?: (() => number) | undefined;
+  readonly retainedDays?: number | undefined;
+  readonly maxQuarantinedManifests?: number | undefined;
+}
+
+export interface QualityIntelligenceQuarantineRetentionRemoval {
+  readonly path: string;
+  readonly runId: string;
+  readonly quarantinedAt: string;
+  readonly reason: "age-exceeded" | "count-exceeded";
+}
+
+export interface QualityIntelligenceQuarantineRetentionResult {
+  readonly removed: readonly QualityIntelligenceQuarantineRetentionRemoval[];
+  readonly retainedPaths: readonly string[];
+  readonly skippedPaths: readonly string[];
+}
+
+const DEFAULT_QI_QUARANTINE_RETAINED_DAYS = 30;
+const DEFAULT_QI_QUARANTINE_MAX_MANIFESTS = 100;
+const QI_QUARANTINE_FILE_RE =
+  /^(.+)\.qi\.json\.corrupt\.(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/u;
+
 export function quarantineCorruptQualityIntelligenceManifest(
   evidenceDir: string,
   runId: string,
@@ -467,6 +464,116 @@ export function quarantineCorruptQualityIntelligenceManifest(
   const quarantinedPath = `${originalPath}.corrupt.${ts}`;
   renameSync(originalPath, quarantinedPath);
   return { originalPath, quarantinedPath, status: "quarantined" };
+}
+
+interface QuarantinedManifestInfo {
+  readonly path: string;
+  readonly runId: string;
+  readonly quarantinedAt: string;
+  readonly quarantinedAtMs: number;
+}
+
+function quarantinedManifestInfo(
+  evidenceDir: string,
+  fileName: string,
+): QuarantinedManifestInfo | undefined {
+  const match = QI_QUARANTINE_FILE_RE.exec(fileName);
+  if (match === null) return undefined;
+  const runId = match[1];
+  const quarantinedAt = match[2];
+  if (runId === undefined || quarantinedAt === undefined) return undefined;
+  try {
+    assertValidRunId(runId);
+  } catch {
+    return undefined;
+  }
+  const quarantinedAtMs = Date.parse(quarantinedAt);
+  if (Number.isNaN(quarantinedAtMs)) return undefined;
+  const path = join(evidenceDir, QI_SUBDIR, fileName);
+  const stat = lstatSync(path, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return undefined;
+  return { path, runId, quarantinedAt, quarantinedAtMs };
+}
+
+function collectQuarantinedManifests(
+  evidenceDir: string,
+  baseDir: string,
+): { readonly valid: QuarantinedManifestInfo[]; readonly skippedPaths: string[] } {
+  const valid: QuarantinedManifestInfo[] = [];
+  const skippedPaths: string[] = [];
+  for (const entry of readdirSync(baseDir, { withFileTypes: true })) {
+    if (!entry.name.includes(".qi.json.corrupt.")) continue;
+    const info = entry.isFile() ? quarantinedManifestInfo(evidenceDir, entry.name) : undefined;
+    if (info === undefined) {
+      skippedPaths.push(join(baseDir, entry.name));
+      continue;
+    }
+    valid.push(info);
+  }
+  return { valid, skippedPaths };
+}
+
+function quarantineRetentionReason(
+  entry: QuarantinedManifestInfo,
+  index: number,
+  now: number,
+  maxAgeMs: number,
+  maxQuarantinedManifests: number,
+): QualityIntelligenceQuarantineRetentionRemoval["reason"] | undefined {
+  if (now - entry.quarantinedAtMs > maxAgeMs) {
+    return "age-exceeded";
+  }
+  if (index >= maxQuarantinedManifests) {
+    return "count-exceeded";
+  }
+  return undefined;
+}
+
+function removeQuarantinedManifest(
+  entry: QuarantinedManifestInfo,
+  reason: QualityIntelligenceQuarantineRetentionRemoval["reason"],
+): QualityIntelligenceQuarantineRetentionRemoval {
+  rmSync(entry.path, { force: true });
+  return {
+    path: entry.path,
+    runId: entry.runId,
+    quarantinedAt: entry.quarantinedAt,
+    reason,
+  };
+}
+
+export function enforceQualityIntelligenceQuarantineRetention(
+  options: QualityIntelligenceQuarantineRetentionOptions,
+): QualityIntelligenceQuarantineRetentionResult {
+  const baseDir = join(options.evidenceDir, QI_SUBDIR);
+  const retainedDays = options.retainedDays ?? DEFAULT_QI_QUARANTINE_RETAINED_DAYS;
+  const maxQuarantinedManifests =
+    options.maxQuarantinedManifests ?? DEFAULT_QI_QUARANTINE_MAX_MANIFESTS;
+  const now = options.now?.() ?? Date.now();
+  const maxAgeMs = retainedDays * MS_PER_DAY;
+  const baseStat = lstatSync(baseDir, { throwIfNoEntry: false });
+  if (!baseStat?.isDirectory()) {
+    return { removed: [], retainedPaths: [], skippedPaths: [] };
+  }
+  const { valid, skippedPaths } = collectQuarantinedManifests(options.evidenceDir, baseDir);
+  valid.sort((a, b) => b.quarantinedAtMs - a.quarantinedAtMs);
+  const removed: QualityIntelligenceQuarantineRetentionRemoval[] = [];
+  const retainedPaths: string[] = [];
+  for (let index = 0; index < valid.length; index += 1) {
+    const entry = valid[index];
+    if (entry === undefined) continue;
+    const reason = quarantineRetentionReason(entry, index, now, maxAgeMs, maxQuarantinedManifests);
+    if (reason !== undefined) {
+      removed.push(removeQuarantinedManifest(entry, reason));
+      continue;
+    }
+    retainedPaths.push(entry.path);
+  }
+  return {
+    removed,
+    retainedPaths: retainedPaths.sort(),
+    skippedPaths: skippedPaths.sort(),
+  };
 }
 
 // ─── Restart recovery ──────────────────────────────────────────────────────────────

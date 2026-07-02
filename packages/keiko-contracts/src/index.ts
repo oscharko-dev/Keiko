@@ -305,11 +305,13 @@ export {
   resolveWorkspaceFileIdentifier,
   selectWorkspaceFileTarget,
 } from "./editor-workspace-path.js";
-export type { EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
+export type { EditorHotExitIndexRecordV2, EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
 export {
+  EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
   editorHotExitSnapshotExpired,
+  isEditorHotExitIndexRecordV2,
   isEditorHotExitSnapshotV1,
 } from "./editor-hot-exit.js";
 
@@ -625,6 +627,8 @@ export {
 export type {
   CommandTaskKind,
   CommandTaskSource,
+  CommandTaskTrustState,
+  CommandTaskTrustReason,
   CommandTask,
   CommandTaskCatalog,
   CommandFailureReason,
@@ -646,6 +650,8 @@ export {
   COMMAND_RUNNER_SCHEMA_VERSION,
   COMMAND_TASK_KINDS,
   COMMAND_TASK_SOURCES,
+  COMMAND_TASK_TRUST_STATES,
+  COMMAND_TASK_TRUST_REASONS,
   COMMAND_FAILURE_REASONS,
   COMMAND_RUNNER_EVENT_KINDS,
   COMMAND_TASK_RULES,
@@ -1648,6 +1654,7 @@ export type {
   MemoryEdgeId,
   MemoryEdgeKind,
   MemoryForget,
+  MemoryForgetReason,
   MemoryId,
   MemoryModelIdentity,
   MemoryPin,
@@ -1690,6 +1697,14 @@ export {
   MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
   MEMORY_AUDIT_INITIATOR_SURFACES,
   MEMORY_EDGE_KINDS,
+  MEMORY_FORGET_REASON_EVICT_OVERFLOW,
+  MEMORY_FORGET_REASON_EXPIRE_AGE,
+  MEMORY_FORGET_REASON_EXPIRE_PROPOSAL,
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+  MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT,
+  MEMORY_FORGET_REASON_USER_REQUEST,
+  MEMORY_FORGET_REASON_VALIDITY_EXPIRED,
+  MEMORY_FORGET_REASONS,
   MEMORY_SCHEMA_VERSION,
   MEMORY_SCOPE_KINDS,
   MEMORY_SENSITIVITIES,
@@ -2137,6 +2152,8 @@ export type {
   GitDeliveryApprovalNotRequired,
   GitDeliveryApprovalGranted,
   GitDeliveryApprovalRequirement,
+  GitDeliveryApprovalClaim,
+  GitDeliveryApprovalRequest,
   GitDeliveryPolicyDecision,
   GitDeliveryActionPreview,
   GitDeliveryExecutionResult,
@@ -2174,6 +2191,7 @@ export {
   isGitDeliveryExecutionOutcome,
   isGitDeliveryExecutionErrorCode,
   isGitDeliveryApprovalRequirement,
+  isGitDeliveryApprovalClaim,
   isGitDeliveryPolicyDecision,
   isGitDeliveryEvidenceRef,
   isGitDeliveryExecutionResult,

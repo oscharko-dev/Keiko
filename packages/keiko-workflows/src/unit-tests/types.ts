@@ -9,7 +9,10 @@ import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workf
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { TestFramework, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
+import type {
+  NetworkEnforcementMode,
+  VerificationAuditSummary,
+} from "@oscharko-dev/keiko-verification";
 import type { WorkflowEventSink } from "./events.js";
 import type { TestStyle, TestVerification } from "./frontend.js";
 
@@ -82,7 +85,7 @@ export interface UnitTestWorkflowDeps {
   readonly model: ModelPort;
   // Workspace filesystem. Defaults to nodeWorkspaceFs.
   readonly fs?: WorkspaceFs | undefined;
-  // Filesystem WRITE port used by applyPatch in apply mode. Defaults to nodeWorkspaceWriter.
+  // Filesystem WRITE port used by applyPatch in apply mode. Defaults to the contained node writer.
   // Injected as a recording writer in unit tests to assert write behaviour without touching disk.
   readonly writer?: WorkspaceWriter | undefined;
   // Spawn function for runCommand / runVerification. Defaults to nodeSpawnFn.
@@ -95,6 +98,10 @@ export interface UnitTestWorkflowDeps {
   readonly sink?: WorkflowEventSink | undefined;
   // Process environment for runCommand env isolation. Defaults to process.env.
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  // Optional verification egress policy override. Defaults to the verification orchestrator's
+  // fail-closed policy unless a test/fake spawn is injected by the caller.
+  readonly verificationNetworkEnforcement?: NetworkEnforcementMode | undefined;
+  readonly verificationEnforcedNetworkAvailable?: boolean | undefined;
   // AbortSignal for cancellation.
   readonly signal?: AbortSignal | undefined;
   // Optional Governed Enterprise Memory Vault port (Issue #213). Reserved for future use by

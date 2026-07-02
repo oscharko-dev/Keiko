@@ -238,7 +238,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     await waitFor(() => expect(screen.getByTestId("connecting")).toHaveTextContent("null"));
   });
 
-  it("unbinds bind-time Files scopes before closing a connected window", async () => {
+  it("does not unbind the current Files scope when a persisted bind snapshot was elided", async () => {
     const onScopeUnbind = vi.fn();
     persistWorkspace(
       [filesWindow({ cfg: { resolvedRoot: "/repo-now" } }), appWindow()],
@@ -260,14 +260,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     fireEvent.click(screen.getByRole("button", { name: "close files" }));
 
     await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
-    expect(onScopeUnbind).toHaveBeenCalledWith(
-      "chat-1",
-      expect.objectContaining({
-        kind: "files",
-        root: "/repo-bound",
-        relativePaths: ["old/path.ts"],
-      }),
-    );
+    expect(onScopeUnbind).not.toHaveBeenCalled();
   });
 
   it("updates the persisted connection snapshot when a Files window changes visible scope", async () => {

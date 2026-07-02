@@ -74,5 +74,6 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.2.11"
-  }
+  },
+  "private": true
 }

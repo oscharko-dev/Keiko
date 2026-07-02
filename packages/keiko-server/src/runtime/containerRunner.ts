@@ -510,6 +510,7 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
     const deps = this.buildRunDeps(workspace);
     const argv = buildContainerRunArgv(task, this.executionPolicy, workspace.root);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
+    let outcome: SettledOutcome;
     try {
       // Single governed spawn boundary; the injected fake spawn (if any) rides in `deps.spawn`.
       const result = await runCommand(
@@ -522,11 +523,11 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
         },
         deps,
       );
-      return this.finalize(runId, task, argv.length, input, outcomeFromResult(result), startedAt);
+      outcome = outcomeFromResult(result);
     } catch (error) {
-      const outcome = outcomeFromError(error, entry.cancelledByUser, this.now() - startedAt);
-      return this.finalize(runId, task, argv.length, input, outcome, startedAt);
+      outcome = outcomeFromError(error, entry.cancelledByUser, this.now() - startedAt);
     }
+    return this.finalize(runId, task, argv.length, input, outcome, startedAt);
   }
 
   private finalize(
@@ -574,7 +575,12 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
     outcome: SettledOutcome,
     startedAt: number,
   ): void {
-    if (this.evidenceStore === undefined) return;
+    if (this.evidenceStore === undefined) {
+      throw new ContainerRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Container run evidence could not be persisted.",
+      );
+    }
     try {
       const evidence = buildContainerRunEvidenceEntry({
         runId,
@@ -595,7 +601,10 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
       });
       appendContainerRunEvidence(this.evidenceStore, evidence, this.redactor);
     } catch {
-      // Evidence is best-effort process-evidence; a write hiccup must not corrupt a real run result.
+      throw new ContainerRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Container run evidence could not be persisted.",
+      );
     }
   }
 

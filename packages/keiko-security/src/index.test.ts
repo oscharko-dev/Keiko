@@ -10,6 +10,8 @@ import {
   redact,
   createAuditRedactor,
   deepRedactStrings,
+  isCredentialKeyName,
+  objectContainsCredentialKey,
   assertValidRunId,
   isKeikoApiKeyEnvName,
   keikoApiKeySecretValues,
@@ -41,6 +43,8 @@ describe("keiko-security package surface", () => {
     expect(typeof redact).toBe("function");
     expect(typeof createAuditRedactor).toBe("function");
     expect(typeof deepRedactStrings).toBe("function");
+    expect(typeof isCredentialKeyName).toBe("function");
+    expect(typeof objectContainsCredentialKey).toBe("function");
   });
 
   it("exposes the runId validator as a callable function", () => {

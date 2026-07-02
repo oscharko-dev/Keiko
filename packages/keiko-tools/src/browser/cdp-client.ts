@@ -19,6 +19,7 @@ export const PERMITTED_CDP_METHODS: ReadonlySet<string> = new Set([
   "DOM.getDocument",
   "DOM.getOuterHTML",
   "Browser.getVersion",
+  "Browser.getBrowserCommandLine",
 ]);
 
 const DEFAULT_CDP_TIMEOUT_MS = 10_000;
