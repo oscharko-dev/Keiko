@@ -6,7 +6,7 @@
  * tests/e2e/config/playwright.issue-1375-editor-layout.config.ts.
  *
  * These cover the acceptance criteria that the issue asks to prove in a browser:
- *   - Split creation and recursive nested resize via the keyboard splitter (AC5).
+ *   - Two-pane split creation, orientation switching, and keyboard resize (AC5).
  *   - Keyboard tab reorder within a pane and cross-pane move (AC1/AC3 fallback).
  *   - Tab order persists across a reload (AC1).
  *
@@ -79,6 +79,60 @@ async function tabLabels(pane: Locator): Promise<readonly string[]> {
   return pane.locator(".ed-tab-label").allInnerTexts();
 }
 
+async function tabCenter(
+  pane: Locator,
+  file: string,
+): Promise<{
+  readonly x: number;
+  readonly y: number;
+  readonly right: number;
+}> {
+  const tab = pane.locator(`.ed-tab-hit[data-tip="${file}"]`);
+  await expect(tab).toBeVisible();
+  const box = await tab.boundingBox();
+  if (box === null) throw new Error(`tab ${file} must have a browser box`);
+  return {
+    x: box.x + box.width / 2,
+    y: box.y + box.height / 2,
+    right: box.x + box.width,
+  };
+}
+
+async function insertionHighlightStyles(workspace: Locator): Promise<
+  readonly {
+    readonly file: string | null;
+    readonly active: boolean;
+    readonly transition: string;
+    readonly borderTop: string;
+    readonly background: string;
+    readonly boxShadow: string;
+  }[]
+> {
+  return workspace
+    .locator(
+      [
+        '.ed-tab[data-tab-insert-before="true"]',
+        '.ed-tab:has(+ .ed-tab[data-tab-insert-before="true"])',
+        '.ed-tab[data-tab-insert-after="true"]',
+        '.ed-tab[data-tab-insert-after="true"] + .ed-tab',
+      ].join(", "),
+    )
+    .evaluateAll((nodes) =>
+      nodes.map((node) => {
+        const element = node as HTMLElement;
+        const style = window.getComputedStyle(element);
+        return {
+          file: element.dataset.tabFile ?? null,
+          active: element.classList.contains("active"),
+          transition: style.transition,
+          borderTop: style.borderTopColor,
+          background: style.backgroundColor,
+          boxShadow: style.boxShadow,
+        };
+      }),
+    );
+}
+
 async function persistedFirstPaneTabOrder(page: Page): Promise<readonly string[] | null> {
   return page.evaluate(() => {
     const raw = window.localStorage.getItem("keiko.workspace.v4");
@@ -101,7 +155,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
 
-test("splits a pane and resizes the nested split from the keyboard (AC5)", async ({ page }) => {
+test("splits a pane and resizes the two-pane split from the keyboard (AC5)", async ({ page }) => {
   const workspace = await openEditor(page);
   expect(await workspace.locator(".ed-pane").count()).toBe(1);
 
@@ -117,16 +171,17 @@ test("splits a pane and resizes the nested split from the keyboard (AC5)", async
 
   await separator.focus();
   await separator.press("ArrowRight");
-  await separator.press("ArrowRight");
-  await expect(separator).toHaveAttribute("aria-valuenow", "54");
+  await expect(separator).toHaveAttribute("aria-valuenow", "52");
 
-  // A nested split resizes independently and leaves no orphan panes.
+  // The alternate split button switches orientation without creating orphan panes.
   await workspace
     .getByRole("button", { name: `Split ${ACTIVE_FILE} down` })
     .first()
     .click();
-  await expect(workspace.locator(".ed-pane")).toHaveCount(3);
-  await expect(workspace.getByRole("separator", { name: "Resize editor split" })).toHaveCount(2);
+  await expect(workspace.locator(".ed-pane")).toHaveCount(2);
+  await expect(workspace.getByRole("separator", { name: "Resize editor split" })).toHaveCount(1);
+  await expect(separator).toHaveAttribute("aria-orientation", "horizontal");
+  await expect(separator).toHaveAttribute("aria-valuenow", "50");
 });
 
 test("reorders and moves tabs through the keyboard fallback (AC1/AC3)", async ({ page }) => {
@@ -138,17 +193,50 @@ test("reorders and moves tabs through the keyboard fallback (AC1/AC3)", async ({
   await firstPane.locator(`.ed-tab-hit[data-tip="${ACTIVE_FILE}"]`).press("Alt+ArrowRight");
   expect(await tabLabels(firstPane)).toEqual(["src/utils.ts", ACTIVE_FILE, "README.md"]);
 
-  // Alt+Shift+ArrowRight moves the active tab into a new adjacent pane.
+  // Alt+Shift+ArrowLeft moves a tab from the adjacent pane into the first pane.
   await workspace
     .getByRole("button", { name: `Split ${ACTIVE_FILE} right` })
     .first()
     .click();
   await expect(workspace.locator(".ed-pane")).toHaveCount(2);
-  const leftPane = workspace.locator(".ed-pane").first();
-  await leftPane.locator(`.ed-tab-hit[data-tip="${ACTIVE_FILE}"]`).press("Alt+Shift+ArrowRight");
 
+  const leftPane = workspace.locator(".ed-pane").first();
   const rightPane = workspace.locator(".ed-pane").nth(1);
-  await expect(rightPane.locator(`.ed-tab-hit[data-tip="${ACTIVE_FILE}"]`)).toBeVisible();
+  await rightPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`).press("Alt+Shift+ArrowLeft");
+
+  await expect(leftPane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`)).toBeVisible();
+  await expect(workspace.locator(".ed-pane")).toHaveCount(2);
+});
+
+test("keeps pointer-drag tab insertion feedback and next-click focus consistent", async ({
+  page,
+}) => {
+  const workspace = await openEditor(page);
+  const pane = workspace.locator(".ed-pane").first();
+  expect(await tabLabels(pane)).toEqual([...OPEN_FILES]);
+
+  const source = await tabCenter(pane, "README.md");
+  const activeTarget = await tabCenter(pane, ACTIVE_FILE);
+
+  await page.mouse.move(source.x, source.y);
+  await page.mouse.down();
+  await page.mouse.move(source.x + 18, source.y, { steps: 3 });
+  await page.mouse.move(activeTarget.right - 4, activeTarget.y, { steps: 6 });
+
+  await expect.poll(async () => insertionHighlightStyles(workspace)).toHaveLength(2);
+  const highlighted = await insertionHighlightStyles(workspace);
+
+  expect(new Set(highlighted.map((entry) => entry.transition))).toEqual(new Set(["none"]));
+  expect(new Set(highlighted.map((entry) => entry.borderTop)).size).toBe(1);
+  expect(new Set(highlighted.map((entry) => entry.background)).size).toBe(1);
+  expect(new Set(highlighted.map((entry) => entry.boxShadow)).size).toBe(1);
+
+  await page.mouse.up();
+  await pane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`).click();
+  await expect(pane.locator(`.ed-tab-hit[data-tip="src/utils.ts"]`)).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 });
 
 test("persists tab order across a reload (AC1)", async ({ page }) => {

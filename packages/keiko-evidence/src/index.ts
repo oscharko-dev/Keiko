@@ -48,6 +48,13 @@ export {
   type SideFileWriterOptions,
 } from "./side-file.js";
 export {
+  createNodeToolResultArtifactStore,
+  TOOL_RESULT_ARTIFACT_SUBDIR,
+  TOOL_RESULT_ARTIFACT_SUFFIX,
+  type NodeToolResultArtifactStoreOptions,
+  type ToolResultArtifactStore,
+} from "./tool-result-artifact-store.js";
+export {
   AUDIT_CODES,
   AuditError,
   EvidenceReadError,

@@ -1,18 +1,18 @@
 "use client";
 
 /**
- * Hook that opens an EventSource for a run's SSE stream (/api/runs/:runId/events).
- * Accumulates typed HarnessEvents, exposes {events, status, error}.
- * Supports Last-Event-ID resume and closes on terminal events.
+ * Hook that consumes the desktop's shared run-event stream (/api/runs/events).
+ * Accumulates typed HarnessEvents for one runId, exposes {events, status, error}.
  */
 
 import { useEffect, useRef, useState } from "react";
-import {
-  ALL_SSE_EVENT_TYPES,
-  TERMINAL_EVENT_TYPES,
-  type HarnessEvent,
-  type SseStatus,
-} from "./types";
+import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
+
+const MAX_VISIBLE_SSE_EVENTS = 500;
+const RECONNECT_INITIAL_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_JITTER_MS = 500;
+const RUN_EVENTS_URL = "/api/runs/events";
 
 export interface UseSSEResult {
   events: HarnessEvent[];
@@ -20,7 +20,161 @@ export interface UseSSEResult {
   error: string | null;
 }
 
-const MAX_SSE_EVENTS = 500;
+interface RunEventSubscriber {
+  readonly onEvent: (event: HarnessEvent) => void;
+  readonly onStatus: (status: SseStatus, error: string | null) => void;
+}
+
+const subscribersByRunId = new Map<string, Set<RunEventSubscriber>>();
+let sharedEventSource: EventSource | null = null;
+let sharedEventSourceLive = false;
+let reconnectTimer: number | undefined;
+let reconnectAttempts = 0;
+let visibilityListenerInstalled = false;
+
+function subscriberCount(): number {
+  let count = 0;
+  for (const subscribers of subscribersByRunId.values()) {
+    count += subscribers.size;
+  }
+  return count;
+}
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function notifyAll(status: SseStatus, error: string | null): void {
+  for (const subscribers of subscribersByRunId.values()) {
+    for (const subscriber of subscribers) {
+      subscriber.onStatus(status, error);
+    }
+  }
+}
+
+function notifyRun(event: HarnessEvent): void {
+  const subscribers = subscribersByRunId.get(event.runId);
+  if (subscribers === undefined) return;
+  for (const subscriber of subscribers) {
+    subscriber.onEvent(event);
+  }
+}
+
+function clearReconnectTimer(): void {
+  if (reconnectTimer === undefined) return;
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+}
+
+function closeSharedEventSource(): void {
+  sharedEventSource?.close();
+  sharedEventSource = null;
+  sharedEventSourceLive = false;
+}
+
+function reconnectDelay(): number {
+  const base = Math.min(
+    RECONNECT_MAX_DELAY_MS,
+    RECONNECT_INITIAL_DELAY_MS * 2 ** reconnectAttempts,
+  );
+  reconnectAttempts += 1;
+  return base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
+}
+
+function scheduleReconnect(): void {
+  if (subscriberCount() === 0 || documentHidden() || reconnectTimer !== undefined) return;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = undefined;
+    openSharedEventSource();
+  }, reconnectDelay());
+}
+
+function handleVisibilityChange(): void {
+  if (documentHidden()) {
+    clearReconnectTimer();
+    closeSharedEventSource();
+    return;
+  }
+  if (subscriberCount() > 0) {
+    notifyAll("connecting", null);
+    openSharedEventSource();
+  }
+}
+
+function ensureVisibilityListener(): void {
+  if (visibilityListenerInstalled || typeof document === "undefined") return;
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+  visibilityListenerInstalled = true;
+}
+
+function removeVisibilityListenerIfIdle(): void {
+  if (!visibilityListenerInstalled || subscriberCount() > 0 || typeof document === "undefined") {
+    return;
+  }
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  visibilityListenerInstalled = false;
+}
+
+function openSharedEventSource(): void {
+  if (subscriberCount() === 0 || documentHidden() || sharedEventSource !== null) return;
+  closeSharedEventSource();
+  sharedEventSource = new EventSource(RUN_EVENTS_URL);
+
+  sharedEventSource.onopen = () => {
+    reconnectAttempts = 0;
+    sharedEventSourceLive = true;
+    notifyAll("live", null);
+  };
+
+  sharedEventSource.addEventListener("ready", () => {
+    reconnectAttempts = 0;
+    sharedEventSourceLive = true;
+    notifyAll("live", null);
+  });
+
+  sharedEventSource.onerror = () => {
+    notifyAll("error", "Stream disconnected. Attempting to reconnect…");
+    closeSharedEventSource();
+    scheduleReconnect();
+  };
+
+  sharedEventSource.onmessage = (ev: MessageEvent): void => {
+    let parsed: HarnessEvent;
+    try {
+      parsed = JSON.parse(ev.data as string) as HarnessEvent;
+    } catch {
+      return;
+    }
+    notifyRun(parsed);
+  };
+}
+
+function subscribeRunEvents(runId: string, subscriber: RunEventSubscriber): () => void {
+  let subscribers = subscribersByRunId.get(runId);
+  if (subscribers === undefined) {
+    subscribers = new Set();
+    subscribersByRunId.set(runId, subscribers);
+  }
+  subscribers.add(subscriber);
+  ensureVisibilityListener();
+  if (sharedEventSourceLive) {
+    subscriber.onStatus("live", null);
+  } else {
+    openSharedEventSource();
+  }
+  return (): void => {
+    const current = subscribersByRunId.get(runId);
+    current?.delete(subscriber);
+    if (current?.size === 0) {
+      subscribersByRunId.delete(runId);
+    }
+    if (subscriberCount() === 0) {
+      clearReconnectTimer();
+      closeSharedEventSource();
+    }
+    removeVisibilityListenerIfIdle();
+  };
+}
 
 export function useSSE(runId: string | null): UseSSEResult {
   const [events, setEvents] = useState<HarnessEvent[]>([]);
@@ -29,6 +183,7 @@ export function useSSE(runId: string | null): UseSSEResult {
 
   // Track the last seq we've seen for resume
   const lastSeqRef = useRef<number>(-1);
+  const terminalRef = useRef(false);
 
   useEffect(() => {
     if (runId === null) return;
@@ -40,80 +195,32 @@ export function useSSE(runId: string | null): UseSSEResult {
     setStatus("connecting");
     setError(null);
     lastSeqRef.current = -1;
+    terminalRef.current = false;
 
-    let es: EventSource | null = null;
-    let cancelled = false;
-
-    function openStream(): void {
-      const url = `/api/runs/${encodeURIComponent(runId!)}/events`;
-      // EventSource does not natively pass Last-Event-ID from JS; the browser sends it
-      // automatically on reconnect when the server uses `id:` framing. We pass it explicitly
-      // via a query param for the initial deep-link / late-subscribe case.
-      const fullUrl =
-        lastSeqRef.current >= 0 ? `${url}?lastEventId=${lastSeqRef.current.toString()}` : url;
-
-      es = new EventSource(fullUrl);
-
-      es.onopen = () => {
-        if (cancelled) return;
-        setStatus("live");
-        // uiux-fix F018 C026: clear the disconnect message once the automatic
-        // reconnect succeeds, so the error text lives exactly as long as the outage.
-        setError(null);
-      };
-
-      es.onerror = () => {
-        if (cancelled) return;
-        setStatus("error");
-        setError("Stream disconnected. Attempting to reconnect…");
-        // EventSource will reconnect automatically. If the run is terminal the server
-        // closes permanently; the next open attempt will fail cleanly.
-      };
-
-      // FIX C: Register a listener for every named SSE event type the BFF can emit.
-      // Per the SSE spec, `onmessage` only fires for unnamed events (no `event:` field).
-      // Named events require an explicit addEventListener call for each type name.
-      // ALL_SSE_EVENT_TYPES is the single source of truth for the full set — derived from
-      // src/harness/types.ts, src/workflows/unit-tests/events.ts, and
-      // src/workflows/bug-investigation/events.ts. Adding a new workflow event type to
-      // that array is the only change required to cover it here.
-      const handleEvent = (ev: MessageEvent): void => {
-        if (cancelled) return;
-
-        let parsed: HarnessEvent;
-        try {
-          parsed = JSON.parse(ev.data as string) as HarnessEvent;
-        } catch {
-          // malformed event — skip
-          return;
-        }
-
+    return subscribeRunEvents(runId, {
+      onStatus: (nextStatus, nextError): void => {
+        if (terminalRef.current) return;
+        setStatus(nextStatus);
+        setError(nextError);
+      },
+      onEvent: (parsed): void => {
+        if (parsed.seq <= lastSeqRef.current) return;
         lastSeqRef.current = parsed.seq;
-        setEvents((prev) =>
-          prev.length >= MAX_SSE_EVENTS
-            ? [...prev.slice(-(MAX_SSE_EVENTS - 1)), parsed]
-            : [...prev, parsed],
-        );
+        setEvents((prev) => {
+          const next = prev.length >= MAX_VISIBLE_SSE_EVENTS ? prev.slice(1) : prev.slice();
+          next.push(parsed);
+          return next;
+        });
 
         // FIX E: TERMINAL_EVENT_TYPES now includes workflow:completed/failed and
         // bug:completed/failed so workflow and bug runs reach terminal state properly.
         if (TERMINAL_EVENT_TYPES.has(parsed.type)) {
+          terminalRef.current = true;
           setStatus("terminal");
-          es?.close();
+          setError(null);
         }
-      };
-
-      for (const evType of ALL_SSE_EVENT_TYPES) {
-        es.addEventListener(evType, handleEvent as EventListenerOrEventListenerObject);
-      }
-    }
-
-    openStream();
-
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
+      },
+    });
   }, [runId]);
 
   return { events, status, error };

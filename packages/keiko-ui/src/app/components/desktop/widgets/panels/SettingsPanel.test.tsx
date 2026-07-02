@@ -238,6 +238,25 @@ describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1
   });
 });
 
+describe("SettingsPanel Updates entry point (Issue #1696)", () => {
+  it("opens the governed Updates window from the General tab", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const openUpdatesWindow = vi.fn();
+    render(<SettingsPanel openUpdatesWindow={openUpdatesWindow} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+    fireEvent.click(screen.getByRole("button", { name: "Review updates" }));
+
+    expect(openUpdatesWindow).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText("Check for Keiko updates and install them when available."),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 AC #3)", () => {
   it("renders no http(s):// host-name pattern in the model list markup", async () => {
     // A synthetic credential-shape string the test will look for. It is not
@@ -263,6 +282,18 @@ describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 A
 });
 
 describe("SettingsPanel gateway summary semantics", () => {
+  it("places the self-hosted badge with the model gateway actions instead of a duplicate Settings hero", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    const { container } = render(<SettingsPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Update credentials" })).toBeInTheDocument();
+    });
+
+    expect(container.querySelector(".set-hero")).toBeNull();
+    expect(screen.getByText("Self-hosted").closest(".set-sec-actions")).toBeTruthy();
+  });
+
   it("distinguishes a configured gateway with zero models from setup-required state", async () => {
     primeFetches([]);
     render(<SettingsPanel />);
@@ -483,8 +514,8 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     expect(window.localStorage.getItem("keiko.locale")).toBe("de");
     expect(document.documentElement.lang).toBe("de");
     expect(document.documentElement.dataset.locale).toBe("de");
-    expect(screen.getByText("Einstellungen")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Allgemein" })).toHaveAttribute(
+    expect(await screen.findByText("Sprache")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Allgemein" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -580,9 +611,7 @@ describe("SettingsPanel workspace wallpaper controls", () => {
     });
 
     expect(window.localStorage.getItem("keiko.workspace.camera.smoothness")).toBe("72");
-    expect(listener).toHaveBeenLastCalledWith(
-      expect.objectContaining({ detail: 72 }),
-    );
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ detail: 72 }));
     expect(screen.getByRole("slider", { name: "Workspace camera smoothness" })).toHaveValue("72");
 
     window.removeEventListener("keiko:workspace-camera-smoothness", listener);

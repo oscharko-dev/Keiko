@@ -15,6 +15,8 @@ type FakeOpenRequest = FakeIdbRequest<FakeDatabase> & {
   onupgradeneeded: RequestHandler;
 };
 
+let fakeGetAllCount = 0;
+
 class FakeIdbRequest<T = unknown> {
   result!: T;
   error: Error | null = null;
@@ -33,6 +35,7 @@ class FakeObjectStore {
   }
 
   getAll(): IDBRequest<unknown[]> {
+    fakeGetAllCount += 1;
     return this.resolve([...this.records.values()]);
   }
 
@@ -100,8 +103,10 @@ class FakeDatabase {
 
 class FakeIndexedDb {
   private readonly databases = new Map<string, FakeDatabase>();
+  openCount = 0;
 
   open(name: string): IDBOpenDBRequest {
+    this.openCount += 1;
     const request = new FakeIdbRequest<FakeDatabase>() as FakeOpenRequest;
     queueMicrotask(() => {
       let db = this.databases.get(name);
@@ -264,6 +269,7 @@ async function expectRejectedMessage(promise: Promise<unknown>, message: string)
 }
 
 beforeEach(() => {
+  fakeGetAllCount = 0;
   installIndexedDb();
 });
 
@@ -282,6 +288,25 @@ describe("editorHotExitStore", () => {
 
     await deleteEditorHotExitSnapshot("/repo", "src/app.ts");
     await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 1_001)).resolves.toBeNull();
+  });
+
+  it("reuses one IndexedDB connection across hot-exit operations", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const stored = snapshot();
+
+    await writeEditorHotExitSnapshot(stored);
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 1_001)).resolves.toEqual(stored);
+    await deleteEditorHotExitSnapshot("/repo", "src/app.ts");
+
+    expect(indexedDb.openCount).toBe(1);
+  });
+
+  it("does not full-scan the snapshot store for every small debounced write", async () => {
+    await writeEditorHotExitSnapshot(snapshot({ relativePath: "src/one.ts", updatedAt: 10_000 }));
+    await writeEditorHotExitSnapshot(snapshot({ relativePath: "src/two.ts", updatedAt: 10_100 }));
+
+    expect(fakeGetAllCount).toBe(1);
   });
 
   it("ignores unsupported schema versions and unavailable IndexedDB", async () => {

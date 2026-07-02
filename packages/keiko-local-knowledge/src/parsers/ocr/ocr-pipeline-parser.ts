@@ -5,13 +5,14 @@
 // it emits one `ParsedUnit { kind: "page" }` per recognised page; when OCR fails it fires
 // the standard unsupported-media diagnostic consistent with unsupported-parser.ts (#266).
 //
-// No multi-page splitter ships yet — until a real splitter exists the input bytes are treated
-// as page 1. That assumption is isolated here and collapses when a splitter is added.
+// No multi-page splitter ships yet. Callers that already split documents into page images pass
+// `input.pageNumber`; otherwise the single-image fallback remains page 1.
 
 import type { ParsedUnit, ParserResult } from "@oscharko-dev/keiko-contracts";
 
 import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "../_internal.js";
 import type {
+  InternalParserResult,
   ParserAdapter,
   ParserCapability,
   ParserOptions,
@@ -93,12 +94,29 @@ function cancelled(
   ]);
 }
 
+function pageNumberForInput(input: ParserSelectionInput): number {
+  return input.pageNumber !== undefined &&
+    Number.isInteger(input.pageNumber) &&
+    input.pageNumber > 0
+    ? input.pageNumber
+    : 1;
+}
+
+function ocrAdapterInput(
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): Parameters<OcrAdapter["ocrPage"]>[0] {
+  const base = { bytes: input.bytes, pageNumber: pageNumberForInput(input) };
+  return options.signal === undefined ? base : { ...base, signal: options.signal };
+}
+
+// eslint-disable-next-line max-lines-per-function
 function resultFromOcrOutcome(
   ocrResult: OcrPageResult,
   cap: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
-): ParserResult {
+): InternalParserResult {
   if (!ocrResult.ok) {
     const reason =
       ocrResult.reason === "ocr-not-configured"
@@ -119,14 +137,34 @@ function resultFromOcrOutcome(
       [{ kind: "unsupported-media", documentId: input.documentId, reason }],
     );
   }
+  const text = ocrResult.text.trim();
+  if (text.length === 0) {
+    return emptyResult(
+      cap,
+      input.documentId,
+      options,
+      [
+        diagnostic(
+          "UNSUPPORTED_FORMAT",
+          `ocr produced no extractable text for page ${String(pageNumberForInput(input))}`,
+          input.documentId,
+          "info",
+        ),
+      ],
+      [{ kind: "unsupported-media", documentId: input.documentId, reason: "ocr-empty-text" }],
+    );
+  }
   const pageUnit: ParsedUnit = {
     kind: "page",
     documentId: input.documentId,
-    pageNumber: 1,
+    pageNumber: pageNumberForInput(input),
     characterStart: 0,
-    characterEnd: ocrResult.text.length,
+    characterEnd: text.length,
   };
-  return emptyResult(cap, input.documentId, options, [], [pageUnit]);
+  return {
+    ...emptyResult(cap, input.documentId, options, [], [pageUnit]),
+    normalizedText: text,
+  };
 }
 
 function buildSyncParse(cap: ParserCapability) {
@@ -170,7 +208,7 @@ function buildAsyncParse(cap: ParserCapability, adapter: OcrAdapter) {
         diagnostic(preCheck.code, preCheck.message, input.documentId, "info"),
       ]);
     }
-    const ocrResult = await adapter.ocrPage({ bytes: input.bytes, pageNumber: 1 });
+    const ocrResult = await adapter.ocrPage(ocrAdapterInput(input, options));
     if (isAborted(options.signal)) return cancelled(cap, input, options);
     const postCheck = shouldStop(startedAt, options, 0);
     if (postCheck.stop && postCheck.code !== undefined && postCheck.message !== undefined) {

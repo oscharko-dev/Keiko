@@ -13,9 +13,14 @@
 // The copy is deliberately scoped to realtime conversation — never implies dictation/transcription.
 // Reuses the existing `cmp-voice*` CSS classes so globals.css is NOT modified (SHA-pinned by tests).
 
-import { useEffect, useRef, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { Icons } from "./Icons";
-import type { RealtimeVoiceController, RealtimeVoiceErrorReason, RealtimeVoicePhase } from "./hooks/useRealtimeVoice";
+import type {
+  RealtimeVoiceController,
+  RealtimeVoiceErrorReason,
+  RealtimeVoicePhase,
+} from "./hooks/useRealtimeVoice";
+import type { ConversationMemoryActionWire } from "@/lib/types";
 
 // Stable id for the local-only privacy disclosure on the realtime button.
 export const REALTIME_PRIVACY_HINT_ID = "cmp-voice-rt-privacy-hint";
@@ -115,9 +120,116 @@ function realtimeErrorHeadline(reason: RealtimeVoiceErrorReason): string {
 
 interface VoiceRealtimeStatusProps {
   readonly phase: RealtimeVoicePhase;
-  readonly error: { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
+  readonly error:
+    { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
   readonly onRetry: () => void;
   readonly onDismiss: () => void;
+  readonly memoryContextText?: string | undefined;
+  readonly memoryContextCount?: number | undefined;
+  readonly memoryActions?: readonly ConversationMemoryActionWire[] | undefined;
+  readonly onAcceptMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
+  readonly onRejectMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
+}
+
+type CandidateMemoryAction = Extract<ConversationMemoryActionWire, { readonly kind: "candidate" }>;
+
+function candidateActions(
+  actions: readonly ConversationMemoryActionWire[] | undefined,
+): readonly CandidateMemoryAction[] {
+  return actions?.filter((action): action is CandidateMemoryAction => action.kind === "candidate") ?? [];
+}
+
+function memoryActivityLabel(count: number | undefined, hasMemoryContext: boolean): string | null {
+  if (count !== undefined && count > 0) {
+    return count === 1 ? "1 recalled memory active." : `${String(count)} recalled memories active.`;
+  }
+  return hasMemoryContext ? "MemoriaViva context active." : null;
+}
+
+function VoiceMemoryCandidate({
+  action,
+  onAccept,
+  onReject,
+}: {
+  readonly action: CandidateMemoryAction;
+  readonly onAccept: ((proposalId: string) => Promise<void>) | undefined;
+  readonly onReject: ((proposalId: string) => Promise<void>) | undefined;
+}): ReactNode {
+  const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
+  const [error, setError] = useState<string | undefined>();
+  const run = useCallback(
+    (kind: "accept" | "reject", callback: ((proposalId: string) => Promise<void>) | undefined) => {
+      if (callback === undefined || busy !== null) return;
+      setBusy(kind);
+      setError(undefined);
+      void callback(action.proposalId)
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : "Unable to update memory.");
+        })
+        .finally(() => setBusy(null));
+    },
+    [action.proposalId, busy],
+  );
+  return (
+    <div className="cmp-voice-memory-candidate">
+      <span className="cmp-voice-memory-candidate-text">{action.body}</span>
+      <div className="cmp-voice-memory-actions">
+        <button
+          type="button"
+          className="cmp-voice-btn cmp-voice-btn-primary"
+          aria-busy={busy === "accept"}
+          aria-disabled={busy !== null || onAccept === undefined}
+          onClick={() => run("accept", onAccept)}
+        >
+          Approve
+        </button>
+        <button
+          type="button"
+          className="cmp-voice-btn"
+          aria-busy={busy === "reject"}
+          aria-disabled={busy !== null || onReject === undefined}
+          onClick={() => run("reject", onReject)}
+        >
+          Reject
+        </button>
+      </div>
+      {error !== undefined ? <span className="cmp-voice-memory-error">{error}</span> : null}
+    </div>
+  );
+}
+
+function VoiceMemoryActivity({
+  memoryContextText,
+  memoryContextCount,
+  memoryActions,
+  onAcceptMemoryCandidate,
+  onRejectMemoryCandidate,
+}: {
+  readonly memoryContextText?: string | undefined;
+  readonly memoryContextCount?: number | undefined;
+  readonly memoryActions?: readonly ConversationMemoryActionWire[] | undefined;
+  readonly onAcceptMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
+  readonly onRejectMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
+}): ReactNode {
+  const hasMemoryContext = memoryContextText !== undefined && memoryContextText.trim().length > 0;
+  const label = memoryActivityLabel(memoryContextCount, hasMemoryContext);
+  const candidates = candidateActions(memoryActions);
+  if (label === null && candidates.length === 0) {
+    return null;
+  }
+  return (
+    <div className="cmp-voice-memory" aria-label="MemoriaViva voice memory">
+      {label !== null ? <span className="cmp-voice-memory-summary">{label}</span> : null}
+      {candidates.map((action) => (
+        <VoiceMemoryCandidate
+          key={action.proposalId}
+          action={action}
+          onAccept={onAcceptMemoryCandidate}
+          onReject={onRejectMemoryCandidate}
+        />
+      ))}
+    </div>
+  );
 }
 
 export function VoiceRealtimeStatus({
@@ -125,6 +237,11 @@ export function VoiceRealtimeStatus({
   error,
   onRetry,
   onDismiss,
+  memoryContextText,
+  memoryContextCount,
+  memoryActions,
+  onAcceptMemoryCandidate,
+  onRejectMemoryCandidate,
 }: VoiceRealtimeStatusProps): ReactNode {
   const retryRef = useRef<HTMLButtonElement>(null);
 
@@ -147,9 +264,18 @@ export function VoiceRealtimeStatus({
 
   if (phase === "connected") {
     return (
-      <div className="cmp-voice-preview" role="status" aria-live="polite">
-        <span className="cmp-voice-dot" aria-hidden="true" />
-        Realtime voice connected.
+      <div className="cmp-voice-preview" role="group" aria-label="Realtime voice status">
+        <div className="cmp-voice-connected-line" role="status" aria-live="polite">
+          <span className="cmp-voice-dot" aria-hidden="true" />
+          Realtime voice connected.
+        </div>
+        <VoiceMemoryActivity
+          memoryContextText={memoryContextText}
+          memoryContextCount={memoryContextCount}
+          memoryActions={memoryActions}
+          onAcceptMemoryCandidate={onAcceptMemoryCandidate}
+          onRejectMemoryCandidate={onRejectMemoryCandidate}
+        />
       </div>
     );
   }
@@ -179,15 +305,30 @@ export function VoiceRealtimeStatus({
 export function VoiceRealtimeStatusFromController({
   controller,
   onAfterDismiss,
+  memoryContextText,
+  memoryContextCount,
+  memoryActions,
+  onAcceptMemoryCandidate,
+  onRejectMemoryCandidate,
 }: {
   readonly controller: RealtimeVoiceController;
   readonly onAfterDismiss: () => void;
+  readonly memoryContextText?: string | undefined;
+  readonly memoryContextCount?: number | undefined;
+  readonly memoryActions?: readonly ConversationMemoryActionWire[] | undefined;
+  readonly onAcceptMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
+  readonly onRejectMemoryCandidate?: ((proposalId: string) => Promise<void>) | undefined;
 }): ReactNode {
   return (
     <VoiceRealtimeStatus
       phase={controller.phase}
       error={controller.error}
       onRetry={controller.retry}
+      memoryContextText={memoryContextText}
+      memoryContextCount={memoryContextCount}
+      memoryActions={memoryActions}
+      onAcceptMemoryCandidate={onAcceptMemoryCandidate}
+      onRejectMemoryCandidate={onRejectMemoryCandidate}
       onDismiss={() => {
         controller.stop();
         onAfterDismiss();

@@ -26,7 +26,6 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readCitationExcerpt } from "@oscharko-dev/keiko-local-knowledge";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
-import { memoryTextEgressRejectionReason } from "@oscharko-dev/keiko-memory-capture";
 import type { UiHandlerDeps } from "../deps.js";
 import { openStoreForDeps } from "../local-knowledge-grounded-qa.js";
 import { vaultAsQueryPort } from "../memory-conv-handlers.js";
@@ -35,6 +34,7 @@ import { memoryCapturePolicyForDeps } from "../memory-capture-policy.js";
 import {
   buildConversationRetrievalSignals,
   conversationFusionMode,
+  semanticRetrievalGateForText,
 } from "../memory-retrieval-signals.js";
 import {
   buildLocalKnowledgeScope,
@@ -83,7 +83,10 @@ function redactExcerpt(deps: UiHandlerDeps, text: string): string {
   return String(deps.redactor(stripUnsafeFormatChars(text)));
 }
 
-function sanitizeCitationRef(ctx: ProviderContext, citationRef: string | undefined): string | undefined {
+function sanitizeCitationRef(
+  ctx: ProviderContext,
+  citationRef: string | undefined,
+): string | undefined {
   if (citationRef === undefined) {
     return undefined;
   }
@@ -317,12 +320,7 @@ export async function runRepoSearchProvider(
   const focusPaths = [input.documentPath, ...(input.changedFiles ?? [])];
   const focusScope = buildScope(ctx.realRoot, focusPaths);
   const searchScope = buildScope(ctx.realRoot, []);
-  const excerpts = await readFocusExcerpts(
-    ctx,
-    focusScope,
-    input.documentPath,
-    input.changedFiles,
-  );
+  const excerpts = await readFocusExcerpts(ctx, focusScope, input.documentPath, input.changedFiles);
   if (excerpts === "denied") {
     return { excerpts: [], omission: omission("files-focus", "denied") };
   }
@@ -429,18 +427,18 @@ async function runMemoryRetrieval(
   if (isAborted(ctx.signal)) {
     throw new Error("memory retrieval aborted");
   }
-  // Embedding egress gate (#204 O-F4): never send a secret-shaped query to the secondary embedding
-  // model — identical to the conversation memory path.
-  const safeForSecondaryModel =
-    queryText === undefined ||
-    memoryTextEgressRejectionReason(queryText, memoryCapturePolicyForDeps(ctx.deps)) === null;
+  const semanticGate = semanticRetrievalGateForText(
+    ctx.deps,
+    queryText,
+    memoryCapturePolicyForDeps(ctx.deps),
+  );
   const signals = await buildConversationRetrievalSignals(
     ctx.deps,
     vault,
     queryText,
     scopes,
     ctx.nowMs,
-    safeForSecondaryModel,
+    semanticGate,
     ctx.signal,
   );
   if (isAborted(ctx.signal)) {
@@ -457,6 +455,7 @@ async function runMemoryRetrieval(
       ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
       ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
       ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+      ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
     },
     vaultAsQueryPort(vault),
   );

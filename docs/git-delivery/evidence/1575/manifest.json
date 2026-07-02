@@ -43,8 +43,5 @@
     "Staging mutation routes intercepted for determinism; commit is not exercised (no staged files).",
     "The real git fixture is built in a temp dir (execFileSync git init/add/commit/mv/rm/merge)."
   ],
-  "artifacts": [
-    "manifest.json",
-    "git-changes-view.png"
-  ]
+  "artifacts": ["manifest.json", "git-changes-view.png"]
 }

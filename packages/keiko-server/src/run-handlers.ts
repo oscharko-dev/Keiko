@@ -11,7 +11,7 @@ import { parseRunRequest } from "./run-request.js";
 import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type RunRecord } from "./runs.js";
-import { SSE_HEADERS, writeEvent, readyMessage } from "./sse.js";
+import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
@@ -23,6 +23,7 @@ import {
   type VoiceProfile,
 } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createNodeToolResultArtifactStore } from "@oscharko-dev/keiko-evidence";
 import { validateWorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.js";
@@ -31,6 +32,7 @@ import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "./task-workspace/authorization.js";
 
 const MAX_BODY_BYTES = 1_000_000;
+const AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT = 128;
 
 const VERIFY_NOOP_MODEL: ModelPort = {
   call: () => Promise.reject(new Error("verify runs must not call the model")),
@@ -188,6 +190,26 @@ function mapRunStartError(error: unknown): RouteResult {
   throw error;
 }
 
+function buildEngineContext(
+  request: RunRequest,
+  model: ModelPort,
+  deps: UiHandlerDeps,
+): EngineContext {
+  return {
+    request,
+    model,
+    registry: deps.registry,
+    evidence: {
+      store: deps.evidenceStore,
+      env: deps.env,
+      additionalSecrets: currentRedactionSecrets(deps),
+    },
+    ...(deps.evidenceDir === undefined
+      ? {}
+      : { toolArtifacts: createNodeToolResultArtifactStore(deps.evidenceDir) }),
+  };
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -221,18 +243,8 @@ export async function handleCreateRun(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const engineCtx: EngineContext = {
-    request: governed,
-    model,
-    registry: deps.registry,
-    evidence: {
-      store: deps.evidenceStore,
-      env: deps.env,
-      additionalSecrets: currentRedactionSecrets(deps),
-    },
-  };
   try {
-    const started = startRun(engineCtx, deps.redactor);
+    const started = startRun(buildEngineContext(governed, model, deps), deps.redactor);
     return { status: 202, body: { runId: started.runId, fingerprint: started.fingerprint } };
   } catch (error) {
     return mapRunStartError(error);
@@ -264,6 +276,64 @@ export function handleRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Handler
   return STREAMING;
 }
 
+// Shared run-event stream for the desktop. It replays bounded buffers for recent records, then
+// attaches to newly registered runs so multiple AgentRun windows do not consume one SSE slot each.
+export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
+  const detachByRunId = new Map<string, () => void>();
+  let closed = false;
+
+  ctx.res.writeHead(200, SSE_HEADERS);
+  const stopHeartbeat = startSseHeartbeat(ctx.res);
+
+  const detachRun = (runId: string): void => {
+    const detach = detachByRunId.get(runId);
+    if (detach === undefined) return;
+    detachByRunId.delete(runId);
+    detach();
+  };
+
+  const attachRun = (record: RunRecord): void => {
+    if (closed || detachByRunId.has(record.runId)) return;
+    const writer: SseWriter = {
+      write: (event: StreamEvent): boolean => {
+        const accepted = writeMessageEvent(ctx.res, event, deps.redactor);
+        if (!accepted) {
+          ctx.res.destroy();
+        }
+        return accepted;
+      },
+      // A single run reaching terminal must not close the aggregate desktop stream.
+      close: (): void => {
+        detachRun(record.runId);
+      },
+    };
+    const detach = record.sink.attach(writer, -1);
+    detachByRunId.set(record.runId, detach);
+    if (record.sink.isTerminated()) {
+      detachRun(record.runId);
+    }
+  };
+
+  for (const record of deps.registry.snapshot?.(AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT) ?? []) {
+    attachRun(record);
+  }
+  const unsubscribeRegistry = deps.registry.subscribe?.(attachRun) ?? ((): void => undefined);
+  ctx.res.write(readyMessage());
+
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    stopHeartbeat();
+    unsubscribeRegistry();
+    for (const runId of Array.from(detachByRunId.keys())) {
+      detachRun(runId);
+    }
+  };
+  ctx.req.on("close", close);
+  ctx.res.on("close", close);
+  return STREAMING;
+}
+
 function openSseStream(
   res: ServerResponse,
   record: RunRecord,
@@ -271,9 +341,10 @@ function openSseStream(
   redactor: UiHandlerDeps["redactor"],
 ): void {
   res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
   const writer: SseWriter = {
     write: (event: StreamEvent): boolean => {
-      const accepted = writeEvent(res, event, redactor);
+      const accepted = writeMessageEvent(res, event, redactor);
       if (!accepted) {
         res.destroy();
       }

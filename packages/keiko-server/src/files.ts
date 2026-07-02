@@ -4,6 +4,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
+import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import {
   cp,
@@ -37,7 +38,13 @@ import {
   type EditorDocumentVersion,
 } from "@oscharko-dev/keiko-contracts";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
-import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import {
+  STREAMING,
+  errorBody,
+  type HandlerOutcome,
+  type RouteContext,
+  type RouteResult,
+} from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { Project, UiStore } from "./store/index.js";
 
@@ -49,6 +56,9 @@ const MAX_FILE_SEARCH_SCAN = 20_000;
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
 const MAX_IMAGE_PREVIEW_BYTES = 3_000_000;
 const STABLE_CONTENT_READ_ATTEMPTS = 3;
+const TREE_CLASSIFY_CONCURRENCY = 32;
+const FILE_SEARCH_CANDIDATE_CONCURRENCY = 32;
+const STABLE_CONTENT_RETRY_DELAY_MS = 25;
 type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
@@ -113,13 +123,7 @@ export interface FilesSearchResponse {
 }
 
 export type FilesSearchFileRole =
-  | "source"
-  | "test"
-  | "config"
-  | "docs"
-  | "generated"
-  | "asset"
-  | "other";
+  "source" | "test" | "config" | "docs" | "generated" | "asset" | "other";
 
 export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
 
@@ -145,7 +149,7 @@ export type FilesPreviewResponse =
     })
   | (FilesPreviewBase & {
       readonly kind: "image";
-      readonly dataUrl: string;
+      readonly url: string;
       readonly maxBytes: number;
     })
   | (FilesPreviewBase & {
@@ -476,31 +480,13 @@ function extensionOf(name: string): string | null {
   return ext.length > 0 ? ext : null;
 }
 
-async function classifyEntry(
+type FilesTreeEntryBase = Omit<FilesTreeEntry, "kind" | "readable">;
+
+async function classifySymlinkEntry(
   root: string,
-  parentRelativePath: string,
-  parentNativePath: string,
-  entry: Dirent,
-  redactor: FilesMetadataRedactor,
+  entryPath: string,
+  base: FilesTreeEntryBase,
 ): Promise<FilesTreeEntry> {
-  const childRelativePath =
-    parentRelativePath.length === 0 ? entry.name : `${parentRelativePath}/${entry.name}`;
-  assertMetadataSafe(childRelativePath, redactor);
-  const entryPath = join(parentNativePath, entry.name);
-  const linkStats = await lstat(entryPath);
-  const symlink = linkStats.isSymbolicLink();
-  const base = {
-    name: entry.name,
-    path: childRelativePath,
-    sizeBytes: linkStats.size,
-    modifiedAt: linkStats.mtimeMs,
-    extension: extensionOf(entry.name),
-    symlink,
-  };
-  if (!symlink) {
-    const kind: FilesEntryKind = linkStats.isDirectory() ? "directory" : "file";
-    return { ...base, kind, readable: true };
-  }
   try {
     const target = await realpath(entryPath);
     const targetStats = await stat(target);
@@ -517,6 +503,46 @@ async function classifyEntry(
   }
 }
 
+async function classifyEntry(
+  root: string,
+  parentRelativePath: string,
+  parentNativePath: string,
+  entry: Dirent,
+  redactor: FilesMetadataRedactor,
+): Promise<FilesTreeEntry> {
+  const childRelativePath =
+    parentRelativePath.length === 0 ? entry.name : `${parentRelativePath}/${entry.name}`;
+  assertMetadataSafe(childRelativePath, redactor);
+  const entryPath = join(parentNativePath, entry.name);
+  if (entry.isDirectory() && !entry.isSymbolicLink()) {
+    return {
+      name: entry.name,
+      path: childRelativePath,
+      kind: "directory",
+      sizeBytes: 0,
+      modifiedAt: 0,
+      extension: extensionOf(entry.name),
+      symlink: false,
+      readable: true,
+    };
+  }
+  const linkStats = await lstat(entryPath);
+  const symlink = linkStats.isSymbolicLink();
+  const base = {
+    name: entry.name,
+    path: childRelativePath,
+    sizeBytes: linkStats.size,
+    modifiedAt: linkStats.mtimeMs,
+    extension: extensionOf(entry.name),
+    symlink,
+  };
+  if (!symlink) {
+    const kind: FilesEntryKind = linkStats.isDirectory() ? "directory" : "file";
+    return { ...base, kind, readable: true };
+  }
+  return classifySymlinkEntry(root, entryPath, base);
+}
+
 function entryRank(entry: FilesTreeEntry): number {
   if (entry.kind === "directory") return 0;
   if (entry.kind === "file") return 1;
@@ -531,6 +557,18 @@ function skipEntry(rel: string): boolean {
   return pathIsDenied(rel);
 }
 
+async function mapInBatches<T, R>(
+  values: readonly T[],
+  batchSize: number,
+  mapper: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  for (let offset = 0; offset < values.length; offset += batchSize) {
+    results.push(...(await Promise.all(values.slice(offset, offset + batchSize).map(mapper))));
+  }
+  return results;
+}
+
 async function listTreeEntries(
   root: string,
   relativePath: string,
@@ -540,7 +578,7 @@ async function listTreeEntries(
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
 }> {
-  const entries: FilesTreeEntry[] = [];
+  const dirents: Dirent[] = [];
   const dir = await opendir(pathValue);
   let truncated = false;
   try {
@@ -552,15 +590,18 @@ async function listTreeEntries(
       const rel = childRelative(relativePath, entry.name);
       if (!metadataIsSafe(rel, redactor)) continue;
       if (skipEntry(rel)) continue;
-      if (entries.length >= MAX_DIRECTORY_ENTRIES) {
+      if (dirents.length >= MAX_DIRECTORY_ENTRIES) {
         truncated = true;
         break;
       }
-      entries.push(await classifyEntry(root, relativePath, pathValue, entry, redactor));
+      dirents.push(entry);
     }
   } finally {
     await dir.close().catch(() => undefined);
   }
+  const entries = await mapInBatches(dirents, TREE_CLASSIFY_CONCURRENCY, (entry) =>
+    classifyEntry(root, relativePath, pathValue, entry, redactor),
+  );
   entries.sort((a, b) => entryRank(a) - entryRank(b) || a.name.localeCompare(b.name));
   return { entries, truncated };
 }
@@ -1031,7 +1072,18 @@ async function addFileSearchCandidate(args: {
   });
 }
 
-async function collectFileSearchEntry(args: {
+interface PendingFileSearchCandidate {
+  readonly root: ResolvedProjectRoot;
+  readonly query: string;
+  readonly relativePath: string;
+  readonly nativePath: string;
+  readonly entryName: string;
+  readonly tokens: readonly string[];
+  readonly redactor: FilesMetadataRedactor;
+  readonly state: FileSearchState;
+}
+
+function collectFileSearchEntry(args: {
   readonly current: FileSearchStackEntry;
   readonly entry: Dirent;
   readonly root: ResolvedProjectRoot;
@@ -1039,21 +1091,22 @@ async function collectFileSearchEntry(args: {
   readonly tokens: readonly string[];
   readonly redactor: FilesMetadataRedactor;
   readonly state: FileSearchState;
-}): Promise<void> {
+}): PendingFileSearchCandidate | undefined {
   const relativePath = childRelative(args.current.relativePath, args.entry.name);
-  if (!entryVisibleToFileSearch(relativePath, args.entry, args.redactor)) return;
+  if (!entryVisibleToFileSearch(relativePath, args.entry, args.redactor)) return undefined;
   const nativePath = join(args.current.path, args.entry.name);
   if (args.entry.isDirectory()) {
     args.state.stack.push({ path: nativePath, relativePath });
-    return;
+    return undefined;
   }
-  if (!args.entry.isFile()) return;
+  if (!args.entry.isFile()) return undefined;
   args.state.scannedFileCount += 1;
   if (args.state.scannedFileCount > MAX_FILE_SEARCH_SCAN) {
     args.state.scanTruncated = true;
-    return;
+    return undefined;
   }
-  await addFileSearchCandidate({
+  if (!matchesSearch(relativePath, args.tokens)) return undefined;
+  return {
     root: args.root,
     query: args.query,
     relativePath,
@@ -1062,7 +1115,7 @@ async function collectFileSearchEntry(args: {
     tokens: args.tokens,
     redactor: args.redactor,
     state: args.state,
-  });
+  };
 }
 
 async function collectFileSearchDirectory(args: {
@@ -1079,14 +1132,17 @@ async function collectFileSearchDirectory(args: {
   } catch {
     return;
   }
+  const candidates: PendingFileSearchCandidate[] = [];
   try {
     for await (const entry of dir) {
-      await collectFileSearchEntry({ ...args, entry });
+      const candidate = collectFileSearchEntry({ ...args, entry });
+      if (candidate !== undefined) candidates.push(candidate);
       if (args.state.scanTruncated) break;
     }
   } finally {
     await dir.close().catch(() => undefined);
   }
+  await mapInBatches(candidates, FILE_SEARCH_CANDIDATE_CONCURRENCY, addFileSearchCandidate);
 }
 
 async function collectFileSearchResults(args: {
@@ -1307,18 +1363,23 @@ function basePreview(target: ResolvedTarget): FilesPreviewBase {
   };
 }
 
-async function imagePreview(
-  target: ResolvedTarget,
-  base: FilesPreviewBase,
-): Promise<FilesPreviewResponse> {
+function imagePreviewUrl(base: FilesPreviewBase): string {
+  const params = new URLSearchParams({
+    root: base.root,
+    path: base.path,
+    v: `${String(base.sizeBytes)}-${String(Math.floor(base.modifiedAt))}`,
+  });
+  return `/api/files/preview/image?${params.toString()}`;
+}
+
+function imagePreview(target: ResolvedTarget, base: FilesPreviewBase): FilesPreviewResponse {
   if (target.stats.size > MAX_IMAGE_PREVIEW_BYTES) {
     return { ...base, kind: "binary", reason: "too_large", maxBytes: MAX_IMAGE_PREVIEW_BYTES };
   }
-  const buffer = await readFile(target.path);
   return {
     ...base,
     kind: "image",
-    dataUrl: `data:${base.mime};base64,${buffer.toString("base64")}`,
+    url: imagePreviewUrl(base),
     maxBytes: MAX_IMAGE_PREVIEW_BYTES,
   };
 }
@@ -1358,6 +1419,12 @@ function statsMatch(left: Stats, right: Stats): boolean {
   return left.size === right.size && left.mtimeMs === right.mtimeMs;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolveSleep) => {
+    setTimeout(resolveSleep, ms);
+  });
+}
+
 async function readStableEditableContent(
   target: ResolvedTarget,
 ): Promise<{ readonly content: string; readonly stats: Stats }> {
@@ -1374,6 +1441,9 @@ async function readStableEditableContent(
     const after = await stat(target.path);
     if (statsMatch(before, after)) return { content, stats: after };
     before = after;
+    if (attempt < STABLE_CONTENT_READ_ATTEMPTS - 1) {
+      await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
+    }
   }
   throw new FilesError(
     409,
@@ -1940,6 +2010,44 @@ export async function handleFilesPreview(
       deps.redactor,
     ),
   }));
+}
+
+export async function handleFilesPreviewImage(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<HandlerOutcome> {
+  try {
+    const target = await resolveInsideRoot(
+      deps.store,
+      ctx.url.searchParams.get("root"),
+      ctx.url.searchParams.get("path"),
+      deps.redactor,
+    );
+    if (!target.stats.isFile()) {
+      throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
+    }
+    const base = basePreview(target);
+    if (!isImageExtension(base.extension)) {
+      throw new FilesError(400, "UNSUPPORTED", "The requested file is not an image preview.");
+    }
+    if (target.stats.size > MAX_IMAGE_PREVIEW_BYTES) {
+      throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The image exceeds the preview size limit.");
+    }
+    ctx.res.writeHead(200, {
+      "Content-Type": base.mime,
+      "Content-Length": String(target.stats.size),
+      "Cache-Control": "private, max-age=60",
+    });
+    const stream = createReadStream(target.path);
+    stream.on("error", () => {
+      ctx.res.destroy();
+    });
+    stream.pipe(ctx.res);
+    return STREAMING;
+  } catch (error) {
+    if (error instanceof FilesError) return filesErrorResult(error);
+    throw error;
+  }
 }
 
 interface FilesWriteFields {

@@ -25,6 +25,7 @@ import {
 } from "./voice-handlers.js";
 import {
   handleCreateRun,
+  handleAllRunEvents,
   handleRunEvents,
   handleCancelRun,
   handleGetRun,
@@ -47,6 +48,7 @@ import {
 import {
   handleAppendDesktopVoiceTurn,
   handleCreateDesktopChat,
+  handleRegenerateDesktopChat,
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
@@ -81,6 +83,19 @@ import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleRealtimeGroundedVoiceTool } from "./voice-realtime-grounded-tool.js";
 import { handleGatewayReadiness } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
+import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
+import {
+  handleCancelUpdateSession,
+  handleCreateUpdateSession,
+  handleGetUpdateSession,
+  handleRetryUpdateSession,
+  handleVerifyUpdateRestart,
+} from "./update-session-routes.js";
+import {
+  handleGetUpdateRemediation,
+  handlePostUpdateRemediationStatus,
+  handleRunUpdateRemediationAction,
+} from "./update-remediation-routes.js";
 import {
   handleCreateTerminalExecution,
   handleDeleteTerminalExecution,
@@ -127,6 +142,7 @@ import {
   handleFilesDelete,
   handleFilesDirectories,
   handleFilesPreview,
+  handleFilesPreviewImage,
   handleFilesRename,
   handleFilesSearch,
   handleFilesTree,
@@ -177,6 +193,7 @@ import {
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleListLocalKnowledgeCapsuleSets,
+  handleRebindLocalKnowledgeCapsuleSource,
   handleReindexLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
   handleUpdateLocalKnowledgeCapsule,
@@ -252,6 +269,7 @@ export interface ApiError {
 export interface RouteResult {
   readonly status: number;
   readonly body: unknown;
+  readonly headers?: Readonly<Record<string, string>> | undefined;
 }
 
 export const STREAMING = Symbol("streaming");
@@ -301,8 +319,35 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/voice/speak/stream", handler: handleVoiceSpeakStream },
   { method: "POST", pattern: "/api/gateway/readiness", handler: handleGatewayReadiness },
   { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
+  { method: "GET", pattern: "/api/update/preflight", handler: handleGetUpdatePreflight },
+  {
+    method: "POST",
+    pattern: "/api/update/preflight/check",
+    handler: handlePostUpdatePreflightCheck,
+  },
+  { method: "GET", pattern: "/api/update/session", handler: handleGetUpdateSession },
+  { method: "POST", pattern: "/api/update/session", handler: handleCreateUpdateSession },
+  { method: "POST", pattern: "/api/update/session/retry", handler: handleRetryUpdateSession },
+  {
+    method: "POST",
+    pattern: "/api/update/session/verify-restart",
+    handler: handleVerifyUpdateRestart,
+  },
+  { method: "DELETE", pattern: "/api/update/session", handler: handleCancelUpdateSession },
+  { method: "GET", pattern: "/api/update/remediation", handler: handleGetUpdateRemediation },
+  {
+    method: "POST",
+    pattern: "/api/update/remediation/status",
+    handler: handlePostUpdateRemediationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/update/remediation/actions",
+    handler: handleRunUpdateRemediationAction,
+  },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
+  { method: "GET", pattern: "/api/runs/events", handler: handleAllRunEvents },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },
   { method: "POST", pattern: "/api/runs/:runId/cancel", handler: handleCancelRun },
   { method: "GET", pattern: "/api/runs/:runId", handler: handleGetRun },
@@ -342,6 +387,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
+  { method: "POST", pattern: "/api/desktop/chat/regenerate", handler: handleRegenerateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
   {
     method: "POST",
@@ -527,6 +573,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/search", handler: handleFilesSearch },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
+  { method: "GET", pattern: "/api/files/preview/image", handler: handleFilesPreviewImage },
   { method: "GET", pattern: "/api/files/content", handler: handleFilesContent },
   { method: "PATCH", pattern: "/api/files/content", handler: handleFilesContent },
   // File-tree mutations (create / rename / delete). State-changing methods inherit the server CSRF +
@@ -682,6 +729,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "DELETE",
     pattern: "/api/local-knowledge/capsules/:capsuleId/connection",
     handler: handleDisconnectLocalKnowledgeCapsule,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/sources/:sourceId/root",
+    handler: handleRebindLocalKnowledgeCapsuleSource,
   },
   {
     method: "DELETE",
@@ -940,14 +992,39 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   ...GIT_AGENT_OPERATION_ROUTE_GROUP,
 ];
 
-// Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
+interface PreparedRoute {
+  readonly definition: RouteDefinition;
+  readonly parts: readonly string[];
+  readonly specificity: number;
+}
+
+function prepareRoute(definition: RouteDefinition): PreparedRoute {
+  const parts = definition.pattern.split("/");
+  return {
+    definition,
+    parts,
+    specificity: parts.filter((part) => !part.startsWith(":")).length,
+  };
+}
+
+const PREPARED_API_ROUTES: readonly PreparedRoute[] = API_ROUTES.map(prepareRoute);
+const PREPARED_ROUTES_BY_METHOD: ReadonlyMap<string, readonly PreparedRoute[]> = (():
+  ReadonlyMap<string, readonly PreparedRoute[]> => {
+  const routesByMethod = new Map<string, PreparedRoute[]>();
+  for (const route of PREPARED_API_ROUTES) {
+    const routes = routesByMethod.get(route.definition.method) ?? [];
+    routes.push(route);
+    routesByMethod.set(route.definition.method, routes);
+  }
+  return routesByMethod;
+})();
+
+// Matches a concrete path against prepared route parts, capturing `:name` params. Returns the captured
 // params, or undefined when the segment counts differ or a literal segment mismatches.
-function matchPattern(
-  pattern: string,
-  pathname: string,
+function matchPatternParts(
+  patternParts: readonly string[],
+  pathParts: readonly string[],
 ): Readonly<Record<string, string>> | undefined {
-  const patternParts = pattern.split("/");
-  const pathParts = pathname.split("/");
   if (patternParts.length !== pathParts.length) {
     return undefined;
   }
@@ -967,6 +1044,19 @@ function matchPattern(
   return params;
 }
 
+function bestOtherMethodSpecificity(method: string, pathParts: readonly string[]): number {
+  let bestSpecificity = -1;
+  for (const route of PREPARED_API_ROUTES) {
+    if (route.definition.method === method || route.specificity <= bestSpecificity) {
+      continue;
+    }
+    if (matchPatternParts(route.parts, pathParts) !== undefined) {
+      bestSpecificity = route.specificity;
+    }
+  }
+  return bestSpecificity;
+}
+
 export interface RouteMatch {
   readonly definition: RouteDefinition;
   readonly params: Readonly<Record<string, string>>;
@@ -981,30 +1071,22 @@ export function matchRoute(
 ): RouteMatch | "method-not-allowed" | undefined {
   let bestMethodMatch: RouteMatch | undefined;
   let bestMethodSpecificity = -1;
-  let bestOtherMethodSpecificity = -1;
-  for (const definition of API_ROUTES) {
-    const params = matchPattern(definition.pattern, pathname);
+  const pathParts = pathname.split("/");
+  for (const route of PREPARED_ROUTES_BY_METHOD.get(method) ?? []) {
+    const params = matchPatternParts(route.parts, pathParts);
     if (params === undefined) {
       continue;
     }
-    const specificity = definition.pattern
-      .split("/")
-      .filter((part) => !part.startsWith(":")).length;
-    if (definition.method === method) {
-      if (specificity > bestMethodSpecificity) {
-        bestMethodSpecificity = specificity;
-        bestMethodMatch = { definition, params };
-      }
-      continue;
-    }
-    if (specificity > bestOtherMethodSpecificity) {
-      bestOtherMethodSpecificity = specificity;
+    if (route.specificity > bestMethodSpecificity) {
+      bestMethodSpecificity = route.specificity;
+      bestMethodMatch = { definition: route.definition, params };
     }
   }
-  if (bestMethodMatch !== undefined && bestMethodSpecificity >= bestOtherMethodSpecificity) {
+  const otherMethodSpecificity = bestOtherMethodSpecificity(method, pathParts);
+  if (bestMethodMatch !== undefined && bestMethodSpecificity >= otherMethodSpecificity) {
     return bestMethodMatch;
   }
-  return bestOtherMethodSpecificity >= 0 ? "method-not-allowed" : undefined;
+  return otherMethodSpecificity >= 0 ? "method-not-allowed" : undefined;
 }
 
 export function isApiPath(pathname: string): boolean {

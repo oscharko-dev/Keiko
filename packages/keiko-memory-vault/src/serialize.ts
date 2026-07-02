@@ -190,17 +190,30 @@ function parseTagsJson(raw: string): readonly string[] {
   } catch {
     throw new MemoryStorageError("schema-mismatch", "Stored memory tags JSON is invalid.");
   }
-  if (!Array.isArray(parsed)) return [];
-  return parsed.filter((v): v is string => typeof v === "string");
+  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
+    throw new MemoryStorageError(
+      "schema-mismatch",
+      "Stored memory tags JSON must be an array of strings.",
+    );
+  }
+  return parsed as string[];
 }
 
 function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefined {
   if (raw === null) return undefined;
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as MemoryStructuredPayload;
+    parsed = JSON.parse(raw);
   } catch {
     throw new MemoryStorageError("schema-mismatch", "Stored memory payload JSON is invalid.");
   }
+  if (typeof parsed !== "object" || parsed === null || !("kind" in parsed)) {
+    throw new MemoryStorageError(
+      "schema-mismatch",
+      "Stored memory payload JSON must be an object payload.",
+    );
+  }
+  return parsed as MemoryStructuredPayload;
 }
 
 export function rowToMemoryRecord(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {

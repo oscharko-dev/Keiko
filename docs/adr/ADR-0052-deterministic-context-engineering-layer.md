@@ -55,13 +55,13 @@ We will define a single `estimateTokens(text: string): number` in `keiko-contrac
 every lane. Properties:
 
 - **Deterministic**: same input → same output, no clock, no randomness, no locale dependence.
-- **Conservative (over-estimates slightly)**: it computes UTF-8 byte length and divides by a conservative
-  bytes-per-token divisor, then **rounds up** and adds a small fixed per-segment structural overhead so the
-  estimate never under-counts a real provider tokenization for typical source/markdown text. Over-estimation is
-  the safe direction: it makes the allocator fit *fewer* tokens than the provider would, never *more*.
+- **Conservative (over-estimates slightly)**: it computes UTF-8 byte length with a conservative baseline
+  bytes-per-token divisor, applies a stricter dense-text floor for CJK, emoji, short-line, and structural
+  code-shaped content, then **rounds up** and adds a small fixed per-segment structural overhead. Over-estimation
+  is the safe direction: it makes the allocator fit *fewer* tokens than the provider would, never *more*.
 - **Total / never throws**: empty string → a defined small constant (the structural overhead, never `NaN` or a
   divide-by-zero), huge input → a finite integer, non-ASCII / emoji / surrogate pairs → counted by UTF-8 bytes
-  using `TextEncoder` with a `string.length` fallback when `TextEncoder` is absent. It must **never fail a
+  using `TextEncoder` with a manual UTF-8 fallback when `TextEncoder` is absent. It must **never fail a
   workflow** if exact provider tokenization is unavailable — it is the only available token signal.
 - **Test-covered**: empty, ASCII, multi-byte, surrogate-pair, and very large fixtures, plus a monotonicity
   property (appending text never lowers the estimate) and a conservatism property (estimate ≥ a known
@@ -278,7 +278,7 @@ export const CONTEXT_ENGINEERING_SCHEMA_VERSION = "1" as const;
 
 // Provenance string recording which estimator produced a profile's counts (the estimator
 // function itself cannot be a JSON-serializable contract field). Default for estimateTokens.
-export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-utf8-v1" as const;
+export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-content-v2" as const;
 
 // ─── Lane identity (the eight lanes) ──────────────────────────────────────── [PR1]
 export type ContextLaneId =

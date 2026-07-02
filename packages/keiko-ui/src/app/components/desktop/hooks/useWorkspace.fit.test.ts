@@ -68,11 +68,15 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
     expect(next.y).toBe(panned.y);
   });
 
-  it("anchors floating windows fully inside compact workspaces", () => {
+  it("keeps compact viewport clamping per-window instead of collapsing every window to one point", () => {
     const compact: ViewportWorld = { x: 100, y: 50, w: 300, h: 360 };
-    const win = appWindow({ x: 900, y: 900 });
-    const next = fitWindowToViewport(win, compact);
-    expect(next).toMatchObject({ x: 108, y: 58 });
+    const left = fitWindowToViewport(appWindow({ id: "left", x: -400, y: 40 }), compact);
+    const right = fitWindowToViewport(appWindow({ id: "right", x: 900, y: 900 }), compact);
+
+    expect(left).toMatchObject({ x: -400, y: compact.y });
+    expect(right).toMatchObject({ x: 280, y: compact.y + compact.h - 38 });
+    expect(left.x).not.toBe(right.x);
+    expect(left.y).not.toBe(right.y);
   });
 });
 

@@ -115,6 +115,30 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     "extracted",
     "intro.md",
   );
+  if (listSqliteMaster(db, "table").includes("document_blobs")) {
+    db.prepare(
+      `INSERT INTO document_blobs (
+         capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version,
+         blob_bytes, created_at, created_source_id, created_document_id
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      "deadbeef",
+      4,
+      "application/pdf",
+      "plaintext",
+      null,
+      new Uint8Array([1, 2, 3, 4]),
+      1000,
+      sourceId,
+      documentId,
+    );
+    db.prepare("UPDATE documents SET blob_ref = ? WHERE capsule_id = ? AND id = ?").run(
+      "deadbeef",
+      capsuleId,
+      documentId,
+    );
+  }
   db.prepare(
     `INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (?, ?, ?)`,
   ).run(capsuleId, documentId, "normalized body");
@@ -152,6 +176,21 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(chunkId, capsuleId, sourceId, documentId, parsedUnitId, 0, 256, "abc");
   }
+  if (listSqliteMaster(db, "table").includes("chunk_lexical_index")) {
+    db.prepare(
+      `INSERT INTO chunk_lexical_index (
+         capsule_id, source_id, document_id, chunk_id, text, exact_text, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      sourceId,
+      documentId,
+      chunkId,
+      "Überweisung Zahlungsziel BillingService.processPayment_v2",
+      "Überweisung Zahlungsziel BillingService.processPayment_v2",
+      1000,
+    );
+  }
   const embedding = new Uint8Array(1536 * 4);
   db.prepare(
     `INSERT INTO vectors (
@@ -173,7 +212,30 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     "store-ref-1",
     1000,
   );
+  seedVectorIndexState(db, capsuleId);
   return { capsuleId, sourceId, documentId, parsedUnitId, chunkId, vectorId };
+}
+
+function seedVectorIndexState(db: DatabaseSync, capsuleId: string): void {
+  if (listSqliteMaster(db, "table").includes("vector_index_state")) {
+    db.prepare(
+      `INSERT INTO vector_index_state (
+         capsule_id, provider, index_name, vector_dimensions, vector_metric,
+         embedding_identity_key, vector_count, vector_max_created_at, status, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      capsuleId,
+      "sqlite-vec",
+      "keiko_lk_vec_1536_cosine",
+      1536,
+      "cosine",
+      "openai|text-embedding-3-small|1536|cosine|legacy|legacy|unverified|",
+      1,
+      1000,
+      "ready",
+      1000,
+    );
+  }
 }
 
 function countRows(db: DatabaseSync, table: string): number {
@@ -191,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 14 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(14);
+  it("is the integer 22 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(22);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -257,6 +319,32 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
     }
   });
 
+  it("persists optional vector-index runtime state without storing duplicate embeddings", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('vector_index_state')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((column) => [column.name ?? "", column]));
+      expect(byName.get("capsule_id")?.notnull).toBe(1);
+      expect(byName.get("provider")?.type).toBe("TEXT");
+      expect(byName.get("index_name")?.type).toBe("TEXT");
+      expect(byName.get("vector_dimensions")?.type).toBe("INTEGER");
+      expect(byName.get("vector_metric")?.type).toBe("TEXT");
+      expect(byName.get("embedding_identity_key")?.type).toBe("TEXT");
+      expect(byName.get("vector_count")?.type).toBe("INTEGER");
+      expect(byName.get("vector_max_created_at")?.type).toBe("INTEGER");
+      expect(byName.get("status")?.type).toBe("TEXT");
+      expect(byName.has("embedding")).toBe(false);
+      const indexes = listSqliteMaster(db, "index");
+      expect(indexes).toContain("idx_vector_index_state_capsule_status");
+    } finally {
+      db.close();
+    }
+  });
+
   it("persists chunking_strategy_version on chunks for stale-index detection", () => {
     const db = openSchemaDb();
     try {
@@ -304,6 +392,112 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(byName.get("character_start")?.notnull).toBe(0);
       expect(byName.get("character_end")?.type).toBe("INTEGER");
       expect(byName.get("character_end")?.notnull).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists contextual retrieval and augmented indexed text columns on chunks", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('chunks')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("contextual_retrieval_key")?.type).toBe("TEXT");
+      expect(byName.get("context_prefix")?.type).toBe("TEXT");
+      expect(byName.get("augmented_text")?.type).toBe("TEXT");
+      expect(byName.get("context_status")?.type).toBe("TEXT");
+      expect(byName.get("context_updated_at")?.type).toBe("INTEGER");
+      expect(byName.get("augmented_text")?.notnull).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists per-capsule contextual retrieval settings", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('capsules')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("contextual_retrieval_enabled")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_model_id")?.type).toBe("TEXT");
+      expect(byName.get("contextual_retrieval_prompt_version")?.type).toBe("TEXT");
+      expect(byName.get("contextual_retrieval_strict")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_max_context_chars")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_document_context_max_chars")?.type).toBe("INTEGER");
+      expect(byName.get("contextual_retrieval_enabled")?.notnull).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists content-addressed document blobs and nullable document blob references", () => {
+    const db = openSchemaDb();
+    try {
+      const documentColumns = db.prepare("PRAGMA table_info('documents')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const documentByName = new Map(documentColumns.map((column) => [column.name ?? "", column]));
+      expect(documentByName.get("blob_ref")?.type).toBe("TEXT");
+      expect(documentByName.get("blob_ref")?.notnull).toBe(0);
+
+      const blobColumns = db.prepare("PRAGMA table_info('document_blobs')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const blobByName = new Map(blobColumns.map((column) => [column.name ?? "", column]));
+      expect(blobByName.get("capsule_id")?.notnull).toBe(1);
+      expect(blobByName.get("content_hash")?.notnull).toBe(1);
+      expect(blobByName.get("blob_bytes")?.type).toBe("BLOB");
+      expect(blobByName.get("storage_kind")?.type).toBe("TEXT");
+      const indexes = listSqliteMaster(db, "index");
+      expect(indexes).toContain("idx_document_blobs_created_document");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("persists an external-content FTS5 lexical index with unicode61 diacritics preserved", () => {
+    const db = openSchemaDb();
+    try {
+      const handles = seedFullLineage(db);
+      const ftsRow = db
+        .prepare(
+          [
+            "SELECT li.chunk_id AS chunk_id, bm25(chunk_lexical_fts) AS bm25_score",
+            "FROM chunk_lexical_fts",
+            "JOIN chunk_lexical_index AS li ON li.rowid = chunk_lexical_fts.rowid",
+            "WHERE chunk_lexical_fts MATCH ? AND li.capsule_id = ?",
+            "ORDER BY bm25_score ASC",
+          ].join(" "),
+        )
+        .get('"Überweisung"', handles.capsuleId) as
+        | { readonly chunk_id?: string; readonly bm25_score?: number }
+        | undefined;
+      expect(ftsRow?.chunk_id).toBe(handles.chunkId);
+      expect(typeof ftsRow?.bm25_score).toBe("number");
+
+      const folded = db
+        .prepare(
+          [
+            "SELECT COUNT(*) AS n",
+            "FROM chunk_lexical_fts",
+            "JOIN chunk_lexical_index AS li ON li.rowid = chunk_lexical_fts.rowid",
+            "WHERE chunk_lexical_fts MATCH ? AND li.capsule_id = ?",
+          ].join(" "),
+        )
+        .get('"Uberweisung"', handles.capsuleId) as { readonly n: number };
+      expect(folded.n).toBe(0);
     } finally {
       db.close();
     }
@@ -433,12 +627,15 @@ describe("lineage enforcement", () => {
       const dependents = [
         "capsule_sources",
         "documents",
+        "document_blobs",
         "document_texts",
         "pages",
         "sections",
         "parsed_units",
         "chunks",
+        "chunk_lexical_index",
         "vectors",
+        "vector_index_state",
         "parser_diagnostics",
         "indexing_jobs",
       ];
@@ -600,6 +797,131 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: "cap-1" });
       expect(countRows(db, "capsule_membership_changes")).toBe(1);
       expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v15 on top of a v14 database and enables PDF blob metadata plus byte-access audit", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v15 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 15);
+      if (v15 === undefined) {
+        throw new Error("expected v15 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 15) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+
+      for (const stmt of v15.up) db.exec(stmt);
+
+      const documentColumns = db.prepare("PRAGMA table_info('documents')").all() as {
+        readonly name?: string;
+      }[];
+      expect(documentColumns.map((column) => column.name)).toContain("blob_ref");
+      expect(listSqliteMaster(db, "table")).toContain("document_blobs");
+      db.prepare(
+        `INSERT INTO document_blobs (
+           capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version,
+           blob_bytes, created_at, created_source_id, created_document_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        handles.capsuleId,
+        "deadbeef",
+        4,
+        "application/pdf",
+        "plaintext",
+        null,
+        new Uint8Array([1, 2, 3, 4]),
+        1000,
+        handles.sourceId,
+        handles.documentId,
+      );
+      db.prepare("UPDATE documents SET blob_ref = ? WHERE capsule_id = ? AND id = ?").run(
+        "deadbeef",
+        handles.capsuleId,
+        handles.documentId,
+      );
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, details_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(
+        "audit-byte-1",
+        handles.capsuleId,
+        "citation-preview-document-accessed",
+        handles.sourceId,
+        '{"sourceKind":"blob","outcome":"success"}',
+        2000,
+      );
+      expect(countRows(db, "document_blobs")).toBe(1);
+      db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
+      expect(countRows(db, "document_blobs")).toBe(0);
+      expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v19 on top of a v18 database and enables source-rebound audit", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v19 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 19);
+      if (v19 === undefined) {
+        throw new Error("expected v19 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 19) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, occurred_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("audit-before-rebind", handles.capsuleId, "source-added", handles.sourceId, 1000);
+
+      for (const stmt of v19.up) db.exec(stmt);
+
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, details_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run(
+        "audit-rebind",
+        handles.capsuleId,
+        "source-rebound",
+        handles.sourceId,
+        '{"previousScopeKind":"folder","currentScopeKind":"folder"}',
+        2000,
+      );
+      expect(countRows(db, "capsule_audit_events")).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v17 on top of a v16 database and preserves existing chunks", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v17 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 17);
+      if (v17 === undefined) {
+        throw new Error("expected v17 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 17) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      const handles = seedFullLineage(db);
+
+      for (const stmt of v17.up) db.exec(stmt);
+
+      const row = db
+        .prepare(
+          "SELECT id, augmented_text, context_prefix FROM chunks WHERE capsule_id = ? AND id = ?",
+        )
+        .get(handles.capsuleId, handles.chunkId) as
+        | { readonly id: string; readonly augmented_text: string | null; readonly context_prefix: string | null }
+        | undefined;
+      expect(row?.id).toBe(handles.chunkId);
+      expect(row?.augmented_text).toBeNull();
+      expect(row?.context_prefix).toBeNull();
     } finally {
       db.close();
     }

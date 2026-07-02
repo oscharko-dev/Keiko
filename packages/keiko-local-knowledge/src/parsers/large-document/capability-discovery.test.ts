@@ -32,7 +32,7 @@ describe("probeOcrCapability", () => {
     expect(await probeOcrCapability(adapter, 1_000)).toBe("available");
   });
 
-  it("reports available when the engine rejects the empty probe input", async () => {
+  it("reports available when the engine rejects the invalid probe input", async () => {
     const adapter = ocrReturning({ ok: false, reason: "unsupported-input" });
     expect(await probeOcrCapability(adapter, 1_000)).toBe("available");
   });
@@ -40,6 +40,11 @@ describe("probeOcrCapability", () => {
   it("reports degraded on an engine timeout result", async () => {
     const adapter = ocrReturning({ ok: false, reason: "timeout" });
     expect(await probeOcrCapability(adapter, 1_000)).toBe("degraded");
+  });
+
+  it("reports failing when a configured engine returns engine-error", async () => {
+    const adapter = ocrReturning({ ok: false, reason: "engine-error" });
+    expect(await probeOcrCapability(adapter, 1_000)).toBe("failing");
   });
 
   it("reports failing when the adapter throws", async () => {

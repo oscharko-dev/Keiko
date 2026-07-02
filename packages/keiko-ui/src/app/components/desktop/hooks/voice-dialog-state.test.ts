@@ -76,12 +76,18 @@ describe("deriveVoiceDialogState — precedence", () => {
     ).toBe("interrupted");
   });
 
-  it("reads a speaking turn as 'speaking' when unmuted and 'muted' when muted (rung 4)", () => {
+  it("surfaces a connected muted microphone before steady floor states (rung 4)", () => {
     expect(
       deriveVoiceDialogState({ realtimePhase: "connected", turnState: "speaking", muted: false }),
     ).toBe("speaking");
     expect(
       deriveVoiceDialogState({ realtimePhase: "connected", turnState: "speaking", muted: true }),
+    ).toBe("muted");
+    expect(
+      deriveVoiceDialogState({ realtimePhase: "connected", turnState: "idle", muted: true }),
+    ).toBe("muted");
+    expect(
+      deriveVoiceDialogState({ realtimePhase: "connected", turnState: "listening", muted: true }),
     ).toBe("muted");
   });
 
@@ -100,11 +106,6 @@ describe("deriveVoiceDialogState — precedence", () => {
         "idle",
       );
     }
-    // A standing mute outside an active speaking turn is NOT surfaced as 'muted' here; it reads 'idle'
-    // (the mute preference is shown by the mute button's aria-pressed, not by this label).
-    expect(
-      deriveVoiceDialogState({ realtimePhase: "connected", turnState: "idle", muted: true }),
-    ).toBe("idle");
     expect(deriveVoiceDialogState({ realtimePhase: "idle", turnState: "idle", muted: false })).toBe(
       "idle",
     );

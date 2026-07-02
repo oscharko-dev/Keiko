@@ -23,6 +23,8 @@ import {
   toScopeInput,
   type RetrievalScopeInput,
 } from "./scoped-vector-search.js";
+import type { VectorIndexAdapter } from "./vector-index.js";
+import { QWEN3_QUERY_INSTRUCTION_TASK } from "./embedding-query-shaping.js";
 import {
   deterministicVector,
   scriptedAdapter,
@@ -80,6 +82,60 @@ function setChunkVector(
       "UPDATE vectors SET embedding = :embedding WHERE capsule_id = :capsule_id AND chunk_id = :chunk_id",
     )
     .run({ embedding: blob, capsule_id: capsuleId, chunk_id: chunkId });
+}
+
+function setChunkVectorAt(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  chunkId: string,
+  blob: Uint8Array,
+  createdAt: number,
+): void {
+  store._internal.db
+    .prepare(
+      [
+        "UPDATE vectors",
+        "SET embedding = :embedding, created_at = :created_at",
+        "WHERE capsule_id = :capsule_id AND chunk_id = :chunk_id",
+      ].join(" "),
+    )
+    .run({ embedding: blob, created_at: createdAt, capsule_id: capsuleId, chunk_id: chunkId });
+}
+
+function duplicateFirstVectorRows(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  copies: number,
+  sourceId?: KnowledgeSourceId,
+): void {
+  const insert = store._internal.db.prepare(
+    [
+      "INSERT INTO vectors (",
+      "  id, capsule_id, source_id, document_id, chunk_id, embedding,",
+      "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
+      "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
+      "  embedding_dimensions_param, vector_dimensions, vector_metric, storage_reference, created_at",
+      ")",
+      "SELECT :id, capsule_id, source_id, document_id, chunk_id, embedding,",
+      "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
+      "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
+      "  embedding_dimensions_param, vector_dimensions, vector_metric, :storage_reference,",
+      "  created_at + :offset",
+      "FROM vectors",
+      "WHERE capsule_id = :capsule_id AND (:source_id IS NULL OR source_id = :source_id)",
+      "ORDER BY id ASC",
+      "LIMIT 1",
+    ].join(" "),
+  );
+  for (let i = 0; i < copies; i += 1) {
+    insert.run({
+      id: `vec:${String(capsuleId)}:duplicate:${String(i)}`,
+      capsule_id: String(capsuleId),
+      source_id: sourceId === undefined ? null : String(sourceId),
+      storage_reference: `duplicate-${String(i)}`,
+      offset: i + 1,
+    });
+  }
 }
 
 describe("searchVectorsForScope — empty capsule", () => {
@@ -218,6 +274,232 @@ describe("searchVectorsForScope — composed capsule set", () => {
   });
 });
 
+describe("searchVectorsForScope — decoded vector cache", () => {
+  it("invalidates cached decoded vectors when a reindex changes the vector stamp", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-cache",
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const firstChunk = seeded.chunkIds[0];
+    const secondChunk = seeded.chunkIds[1];
+    if (firstChunk === undefined || secondChunk === undefined) {
+      throw new Error("expected two seeded chunks");
+    }
+    const capsuleId = seeded.capsuleId;
+    setChunkVectorAt(store, capsuleId, String(firstChunk), vectorBlob(1, 0), 1_700_000_000_100);
+    setChunkVectorAt(store, capsuleId, String(secondChunk), vectorBlob(0, 1), 1_700_000_000_100);
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const beforeReindex = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [capsuleId] },
+      "cache probe",
+      { topK: 1 },
+    );
+    expect(String(beforeReindex.references[0]?.chunkId)).toBe(String(firstChunk));
+
+    setChunkVectorAt(store, capsuleId, String(firstChunk), vectorBlob(0, 1), 1_700_000_000_200);
+    setChunkVectorAt(store, capsuleId, String(secondChunk), vectorBlob(1, 0), 1_700_000_000_200);
+
+    const afterReindex = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [capsuleId] },
+      "cache probe",
+      { topK: 1 },
+    );
+    expect(String(afterReindex.references[0]?.chunkId)).toBe(String(secondChunk));
+  });
+});
+
+describe("searchVectorsForScope — vector index adapter", () => {
+  it("uses an available vector index adapter for dense candidates", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-indexed",
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const firstChunk = seeded.chunkIds[0];
+    const secondChunk = seeded.chunkIds[1];
+    if (firstChunk === undefined || secondChunk === undefined) {
+      throw new Error("expected two seeded chunks");
+    }
+    const calls: string[] = [];
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: (request) => {
+        calls.push(String(request.capsule.id));
+        return {
+          ok: true,
+          candidates: [
+            {
+              chunkId: String(secondChunk),
+              capsuleId: request.capsule.id,
+              sourceId: seeded.sourceId,
+              score: 0.99,
+            },
+          ],
+          sawDimensionCompatible: true,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "sqlite-vec",
+            status: "available",
+            indexName: "fake-test-index",
+            vectorCount: 1,
+          },
+        };
+      },
+    };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      "unmatched indexed query",
+      { topK: 1, vectorIndex: { adapter } },
+    );
+
+    expect(calls).toEqual(["cap-indexed"]);
+    expect(String(outcome.references[0]?.chunkId)).toBe(String(secondChunk));
+    expect(outcome.diagnostics.vectorIndex).toMatchObject({
+      provider: "sqlite-vec",
+      status: "available",
+      indexName: "fake-test-index",
+    });
+  });
+
+  it("falls back to brute-force scoring when the vector index is unavailable", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-index-fallback",
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const firstChunk = seeded.chunkIds[0];
+    const secondChunk = seeded.chunkIds[1];
+    if (firstChunk === undefined || secondChunk === undefined) {
+      throw new Error("expected two seeded chunks");
+    }
+    setChunkVector(store, seeded.capsuleId, String(firstChunk), vectorBlob(1, 0));
+    setChunkVector(store, seeded.capsuleId, String(secondChunk), vectorBlob(0, 1));
+    const embeddingAdapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: () => ({
+        ok: false,
+        candidates: [],
+        sawDimensionCompatible: false,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "fallback-unavailable",
+          reason: "sqlite-vec-runtime-not-configured",
+          indexName: "fake-test-index",
+        },
+      }),
+    };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      embeddingAdapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "fallback query",
+      { topK: 1, vectorIndex: { adapter } },
+    );
+
+    expect(String(outcome.references[0]?.chunkId)).toBe(String(firstChunk));
+    expect(outcome.diagnostics.vectorIndex).toMatchObject({
+      provider: "sqlite-vec",
+      status: "fallback-unavailable",
+      reason: "sqlite-vec-runtime-not-configured",
+    });
+  });
+
+  it("rejects indexed candidates outside the active capsule/source scope", async () => {
+    const { store } = getFixture();
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-index-scope",
+      sourceId: "src-index-a",
+      documentId: "doc-index-a",
+      contentHash: "a".repeat(64),
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-index-scope",
+      sourceId: "src-index-b",
+      documentId: "doc-index-b",
+      contentHash: "b".repeat(64),
+      text: "epsilon zeta eta theta",
+      unitId: "unit-cap-index-scope-b",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+      skipCapsule: true,
+    });
+    const allowedChunk = seededA.chunkIds[0];
+    const disallowedChunk = seededB.chunkIds[0];
+    if (allowedChunk === undefined || disallowedChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: (request) => ({
+        ok: true,
+        candidates: [
+          {
+            chunkId: String(disallowedChunk),
+            capsuleId: request.capsule.id,
+            sourceId: seededB.sourceId,
+            score: 1,
+          },
+          {
+            chunkId: String(allowedChunk),
+            capsuleId: request.capsule.id,
+            sourceId: seededA.sourceId,
+            score: 0.5,
+          },
+        ],
+        sawDimensionCompatible: true,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "available",
+          indexName: "fake-test-index",
+          vectorCount: 2,
+        },
+      }),
+    };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seededA.capsuleId], sourceFilter: [seededA.sourceId] },
+      "indexed scoped query",
+      { topK: 2, vectorIndex: { adapter } },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(String(outcome.references[0]?.chunkId)).toBe(String(allowedChunk));
+    expect(String(outcome.references[0]?.citation.sourceId)).toBe("src-index-a");
+  });
+});
+
 describe("searchVectorsForScope — topK clamping", () => {
   it("honours an explicit topK override and never exceeds it", async () => {
     const { store } = getFixture();
@@ -236,35 +518,44 @@ describe("searchVectorsForScope — topK clamping", () => {
 describe("searchVectorsForScope — minScore filtering", () => {
   it("excludes references with score below minScore", async () => {
     const { store } = getFixture();
-    await seedCapsuleWithVectors(store, { capsuleId: "cap-a" });
-    // Score everything against the existing vectors then pick a threshold above the
-    // smallest score so at least one row is dropped.
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      text: "alpha beta gamma delta epsilon zeta eta theta",
+    });
+    seeded.chunkIds.forEach((chunkId, index) => {
+      setChunkVector(store, seeded.capsuleId, String(chunkId), index === 0 ? vectorBlob(1, 0) : vectorBlob(0, 1));
+    });
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
     const unfiltered = await searchVectorsForScope(
       store,
-      scriptedAdapter(),
+      adapter,
       { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
-      "query",
+      "unmatched-query",
       { topK: 50 },
     );
     expect(unfiltered.references.length).toBeGreaterThan(1);
-    const last = unfiltered.references[unfiltered.references.length - 1];
-    const first = unfiltered.references[0];
-    if (last === undefined || first === undefined) throw new Error("unreachable");
-    const threshold = (last.score + first.score) / 2;
     const filtered = await searchVectorsForScope(
       store,
-      scriptedAdapter(),
+      adapter,
       { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
-      "query",
-      { topK: 50, minScore: threshold },
+      "unmatched-query",
+      { topK: 50, minScore: 0.9 },
     );
-    expect(filtered.references.length).toBeLessThan(unfiltered.references.length);
-    for (const ref of filtered.references) {
-      expect(ref.score).toBeGreaterThanOrEqual(threshold);
-    }
+    expect(filtered.diagnostics.denseCandidateCount).toBeLessThan(
+      unfiltered.diagnostics.denseCandidateCount,
+    );
+    expect(filtered.references).toHaveLength(1);
   });
 
-  it("suppresses lexical-only matches under a minScore floor and reports below-min-score (GRD-002/024)", async () => {
+  it("applies minScore only to dense candidates and still allows lexical BM25 matches", async () => {
     const { store } = getFixture();
     const dims = DEFAULT_EMBEDDING.vectorDimensions;
     const blob = (a: number, b: number): Uint8Array => {
@@ -278,12 +569,6 @@ describe("searchVectorsForScope — minScore filtering", () => {
       text: "treasury ".repeat(40),
       chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
-    // Lexical recall material: the document text contains the query token.
-    store._internal.db
-      .prepare(
-        "INSERT OR REPLACE INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
-      )
-      .run({ c: "cap-a", d: String(seeded.documentId), t: "treasury treasury treasury treasury" });
     // Make every chunk vector ORTHOGONAL to the query vector (cosine ~ 0).
     for (const ch of seeded.chunkIds) {
       store._internal.db
@@ -298,16 +583,15 @@ describe("searchVectorsForScope — minScore filtering", () => {
     });
     const scope = { capsuleIds: ["cap-a" as KnowledgeCapsuleId] };
 
-    // With a high dense floor, the lexical-only (orthogonal-vector) chunk must NOT surface.
     const floored = await searchVectorsForScope(store, adapter, scope, "treasury", {
       topK: 50,
       minScore: 0.95,
     });
-    expect(floored.references).toHaveLength(0);
-    expect(floored.noEvidenceReason).toBe("below-min-score");
+    expect(floored.references).toHaveLength(1);
+    expect(floored.diagnostics.denseCandidateCount).toBe(0);
+    expect(floored.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+    expect(floored.diagnostics.mode).toBe("lexical-only");
 
-    // Control: without the floor, hybrid lexical recall DOES surface it (so the suppression
-    // above is the floor's doing, not a missing fixture).
     const unfloored = await searchVectorsForScope(store, adapter, scope, "treasury", { topK: 50 });
     expect(unfloored.references.length).toBeGreaterThan(0);
   });
@@ -342,6 +626,164 @@ describe("searchVectorsForScope — embedding dim mismatch", () => {
   });
 });
 
+describe("searchVectorsForScope — hardened embedding identity", () => {
+  it("returns incompatible-embedding-identity on embedding-space fingerprint drift even when lexical matches exist", async () => {
+    const { store } = getFixture();
+    const identity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      normalization: "l2",
+      instructionVersion: "keiko-embedding-input-v1",
+      embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-fingerprint",
+      identity,
+      text: "treasury controls treasury controls treasury controls",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const adapter = scriptedAdapter({
+      identity,
+      responder: (req): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: deterministicVector(req.input, identity.vectorDimensions),
+          modelId: identity.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-fingerprint" as KnowledgeCapsuleId] },
+      "treasury controls",
+      { topK: 10 },
+    );
+
+    expect(outcome.references).toHaveLength(0);
+    expect(outcome.noEvidenceReason).toBe("incompatible-embedding-identity");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+  });
+});
+
+describe("searchVectorsForScope — selective query transformation", () => {
+  it("uses optional broad-query variants and keeps exact queries single-pass", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-transform",
+      text: "SOC2 access reviews quarterly control owner approval evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const rewrites: string[] = [];
+    const queryTransformer = {
+      rewrite: ({ query }: { readonly query: string }): Promise<readonly string[]> => {
+        rewrites.push(query);
+        return Promise.resolve(["quarterly access review", "SOC2 control owner"]);
+      },
+    };
+
+    await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-transform" as KnowledgeCapsuleId] },
+      "compare and summarize the quarterly access review controls for policy owners across teams",
+      { topK: 5, queryTransformer },
+    );
+    expect(rewrites).toHaveLength(1);
+    expect(new Set(inputs).size).toBeGreaterThan(1);
+
+    inputs.length = 0;
+    rewrites.length = 0;
+    await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-transform" as KnowledgeCapsuleId] },
+      "SOC2-AC-3",
+      { topK: 5, queryTransformer },
+    );
+    expect(rewrites).toHaveLength(0);
+    expect(new Set(inputs).size).toBe(1);
+  });
+});
+
+describe("searchVectorsForScope — query shaping", () => {
+  it("sends the official Qwen3 query instruction prefix to the embedding adapter", async () => {
+    const { store } = getFixture();
+    const identity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "Qwen3-Embedding-8B",
+    };
+    await seedCapsuleWithVectors(store, { capsuleId: "cap-qwen", identity });
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      identity,
+      responder: (req): OpenAIEmbeddingOutcome => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, identity.vectorDimensions),
+            modelId: identity.modelId,
+          },
+        };
+      },
+    });
+
+    await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-qwen" as KnowledgeCapsuleId] },
+      "Which policy mentions SOC2?",
+      { topK: 1 },
+    );
+
+    expect(inputs[0]).toBe(
+      `Instruct: ${QWEN3_QUERY_INSTRUCTION_TASK}\nQuery:Which policy mentions SOC2?`,
+    );
+  });
+
+  it("leaves non-Qwen3 query text unchanged", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, { capsuleId: "cap-openai" });
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: ["cap-openai" as KnowledgeCapsuleId] },
+      "Which policy mentions SOC2?",
+      { topK: 1 },
+    );
+
+    expect(inputs[0]).toBe("Which policy mentions SOC2?");
+  });
+});
+
 describe("searchVectorsForScope — citation fields", () => {
   it("populates pageNumber + characterStart + characterEnd on every reference (page unit)", async () => {
     const { store } = getFixture();
@@ -371,8 +813,7 @@ describe("searchVectorsForScope — citation fields", () => {
           "SELECT character_start, character_end FROM chunks WHERE capsule_id = :c AND id = :id",
         )
         .get({ c: String(seeded.capsuleId), id: String(ref.citation.chunkId) }) as
-        | { readonly character_start: number; readonly character_end: number }
-        | undefined;
+        { readonly character_start: number; readonly character_end: number } | undefined;
       expect(chunkRow).toBeDefined();
       expect(ref.citation.pageNumber).toBe(42);
       expect(ref.citation.pageLabel).toBe("xlii");
@@ -459,6 +900,72 @@ describe("searchVectorsForScope — citation fields", () => {
     }
   });
 
+  it("attaches the first overlapping page hop for section chunks that cross pages", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-a",
+      unit: {
+        kind: "section",
+        sectionPath: ["Boundary"],
+        characterStart: 80,
+        characterEnd: 130,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "x ".repeat(120),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const insertPage = store._internal.db.prepare(
+      "INSERT INTO pages (capsule_id, document_id, page_number, page_label, character_start, character_end, bbox_x, bbox_y, bbox_w, bbox_h) VALUES (:c, :d, :n, :l, :s, :e, NULL, NULL, NULL, NULL)",
+    );
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 1, l: "1", s: 0, e: 100 });
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 2, l: "2", s: 101, e: 200 });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "query",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.references[0]?.citation.pageNumber).toBe(1);
+    expect(outcome.references[0]?.citation.pageLabel).toBe("1");
+  });
+
+  it("does not let empty placeholder pages claim a following text span", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      documentId: "doc-a",
+      unit: {
+        kind: "section",
+        sectionPath: ["Body"],
+        characterStart: 0,
+        characterEnd: 50,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "x ".repeat(60),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const insertPage = store._internal.db.prepare(
+      "INSERT INTO pages (capsule_id, document_id, page_number, page_label, character_start, character_end, bbox_x, bbox_y, bbox_w, bbox_h) VALUES (:c, :d, :n, :l, :s, :e, NULL, NULL, NULL, NULL)",
+    );
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 1, l: "blank", s: 0, e: 0 });
+    insertPage.run({ c: seeded.capsuleId, d: seeded.documentId, n: 2, l: "2", s: 0, e: 100 });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: ["cap-a" as KnowledgeCapsuleId] },
+      "query",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.references[0]?.citation.pageNumber).toBe(2);
+    expect(outcome.references[0]?.citation.pageLabel).toBe("2");
+  });
+
   it("preserves jsonPointer for json-path citations", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {
@@ -521,7 +1028,7 @@ describe("searchVectorsForScope — citation fields", () => {
     }
   });
 
-  it("applies a lexical metadata bonus from section titles and document names", async () => {
+  it("uses FTS BM25 chunk text when the query matches the indexed chunk", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {
       capsuleId: "cap-a",
@@ -534,7 +1041,8 @@ describe("searchVectorsForScope — citation fields", () => {
         characterStart: 0,
         characterEnd: 120,
       } satisfies ParsedUnitWithoutDocId,
-      text: "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+      text: "controls handbook alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
     await seedCapsuleWithVectors(store, {
       capsuleId: "cap-b",
@@ -561,9 +1069,10 @@ describe("searchVectorsForScope — citation fields", () => {
     );
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("controls-handbook.docx");
     expect(outcome.references[0]?.citation.sectionPath).toEqual(["Policy", "Controls"]);
+    expect(outcome.diagnostics.mode).toBe("hybrid");
   });
 
-  it("lets lexical metadata promote an oversampled candidate outside the raw vector topK", async () => {
+  it("lets BM25 promote an oversampled candidate outside the raw vector topK", async () => {
     const { store } = getFixture();
     const fast = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-vector",
@@ -590,7 +1099,7 @@ describe("searchVectorsForScope — citation fields", () => {
         characterStart: 0,
         characterEnd: 120,
       } satisfies ParsedUnitWithoutDocId,
-      text: "controls ".repeat(32),
+      text: "controls handbook ".repeat(16),
       chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
     setCapsuleVector(store, fast.capsuleId, vectorBlob(1, 0));
@@ -615,7 +1124,8 @@ describe("searchVectorsForScope — citation fields", () => {
 
     expect(outcome.references).toHaveLength(1);
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("controls-handbook.docx");
-    expect(outcome.references[0]?.score).toBeGreaterThan(1);
+    expect(outcome.references[0]?.score).toBeLessThan(1);
+    expect(outcome.diagnostics.mode).toBe("hybrid");
   });
 
   it("uses chunk text to promote exact domain terms beyond pure vector order", async () => {
@@ -655,7 +1165,7 @@ describe("searchVectorsForScope — citation fields", () => {
     });
     store._internal.db
       .prepare(
-        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+        "INSERT OR REPLACE INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
       )
       .run({
         c: String(vectorOnly.capsuleId),
@@ -664,7 +1174,7 @@ describe("searchVectorsForScope — citation fields", () => {
       });
     store._internal.db
       .prepare(
-        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+        "INSERT OR REPLACE INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
       )
       .run({ c: String(exact.capsuleId), d: String(exact.documentId), t: exactText });
     setCapsuleVector(store, vectorOnly.capsuleId, vectorBlob(1, 0));
@@ -689,10 +1199,106 @@ describe("searchVectorsForScope — citation fields", () => {
 
     expect(outcome.references).toHaveLength(1);
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("nvidia-notes.docx");
-    expect(outcome.references[0]?.score).toBeGreaterThan(1);
+    expect(outcome.references[0]?.score).toBeLessThan(1);
+    expect(outcome.diagnostics.mode).toBe("hybrid");
   });
 
-  it("uses leading document context to recover exact identifiers split before a chunk", async () => {
+  it("preserves German umlauts in the FTS lexical leg instead of folding to ASCII", async () => {
+    const { store } = getFixture();
+    const ascii = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-ascii",
+      sourceId: "src-ascii",
+      documentId: "doc-ascii",
+      safeDisplayName: "ascii-transfer.md",
+      text: "Uberweisung Zahlungsziel im Exportprozess",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const umlaut = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-umlaut",
+      sourceId: "src-umlaut",
+      documentId: "doc-umlaut",
+      safeDisplayName: "umlaut-transfer.md",
+      text: "Überweisung Zahlungsziel im Exportprozess",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    setCapsuleVector(store, ascii.capsuleId, vectorBlob(1, 0));
+    setCapsuleVector(store, umlaut.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const exactUmlaut = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [ascii.capsuleId, umlaut.capsuleId] },
+      "Überweisung Zahlungsziel",
+      { topK: 1 },
+    );
+    expect(exactUmlaut.references[0]?.citation.safeDisplayName).toBe("umlaut-transfer.md");
+
+    const asciiQuery = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [ascii.capsuleId, umlaut.capsuleId] },
+      "Uberweisung Zahlungsziel",
+      { topK: 1 },
+    );
+    expect(asciiQuery.references[0]?.citation.safeDisplayName).toBe("ascii-transfer.md");
+  });
+
+  it("adds light German stem variants for BM25 without folding umlauts", async () => {
+    const { store } = getFixture();
+    const general = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-general-de",
+      sourceId: "src-general-de",
+      documentId: "doc-general-de",
+      safeDisplayName: "allgemein.md",
+      text: "Allgemeine Prozessbeschreibung fuer Buchhaltung und Einkauf.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const inflected = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-inflected-de",
+      sourceId: "src-inflected-de",
+      documentId: "doc-inflected-de",
+      safeDisplayName: "richtlinien.md",
+      text: "Richtlinien fuer Zahlungen und Freigaben im Monatsabschluss.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    setCapsuleVector(store, general.capsuleId, vectorBlob(1, 0));
+    setCapsuleVector(
+      store,
+      inflected.capsuleId,
+      vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)),
+    );
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [general.capsuleId, inflected.capsuleId] },
+      "Richtlinie Zahlung",
+      { topK: 1 },
+    );
+
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("richtlinien.md");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+  });
+
+  it("uses chunk-indexed exact identifiers to recover code-like terms", async () => {
     const { store } = getFixture();
     const genericText = "General integration overview for connector deployments.".repeat(4);
     const contextualText =
@@ -714,26 +1320,12 @@ describe("searchVectorsForScope — citation fields", () => {
       unit: {
         kind: "section",
         sectionPath: ["Implementation"],
-        characterStart: 66,
+        characterStart: 0,
         characterEnd: contextualText.length,
       } satisfies ParsedUnitWithoutDocId,
       text: contextualText,
       chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
-    store._internal.db
-      .prepare(
-        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
-      )
-      .run({ c: String(generic.capsuleId), d: String(generic.documentId), t: genericText });
-    store._internal.db
-      .prepare(
-        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
-      )
-      .run({
-        c: String(contextual.capsuleId),
-        d: String(contextual.documentId),
-        t: contextualText,
-      });
     setCapsuleVector(store, generic.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, contextual.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
@@ -756,6 +1348,7 @@ describe("searchVectorsForScope — citation fields", () => {
 
     expect(outcome.references).toHaveLength(1);
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("release-notes.txt");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
 
   it("recalls exact text matches outside the raw vector oversampling window", async () => {
@@ -793,11 +1386,6 @@ describe("searchVectorsForScope — citation fields", () => {
       contentHash: "f".repeat(64),
       chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
-    store._internal.db
-      .prepare(
-        "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
-      )
-      .run({ c: String(capsuleId), d: String(exact.documentId), t: exactText });
     for (const chunkId of distractorChunks) {
       setChunkVector(store, capsuleId, chunkId, vectorBlob(1, 0));
     }
@@ -824,6 +1412,7 @@ describe("searchVectorsForScope — citation fields", () => {
 
     expect(outcome.references).toHaveLength(1);
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("treasury-recovery.txt");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
 
   it("diversifies broad query results across documents when scores are otherwise close", async () => {
@@ -877,14 +1466,195 @@ describe("searchVectorsForScope — citation fields", () => {
       { topK: 2 },
     );
 
-    expect(outcome.references.map((ref) => String(ref.citation.documentId))).toEqual([
-      "doc-a",
-      "doc-b",
-    ]);
+    expect(outcome.references).toHaveLength(2);
+    expect(new Set(outcome.references.map((ref) => String(ref.citation.documentId)))).toEqual(
+      new Set(["doc-a", "doc-b"]),
+    );
   });
 });
 
 describe("searchVectorsForScope — embeddingDegraded", () => {
+  it("reranks lexical candidates when an exact vector scan is oversized", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-large-lexical",
+      text: "treasury evidence controls",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    duplicateFirstVectorRows(store, seeded.capsuleId, 1);
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "treasury evidence",
+      { topK: 5, maxExactVectorScanRows: 1 },
+    );
+
+    expect(embeddingCalls).toBe(1);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+    expect(outcome.diagnostics.mode).toBe("hybrid");
+    expect(outcome.diagnostics.denseIndex).toBe("guided");
+    expect(outcome.diagnostics.denseCandidateCount).toBeGreaterThan(0);
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+  });
+
+  it("uses ANN when an oversized dense scan has no lexical fallback", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-large-no-lexical",
+      text: "legacy treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    duplicateFirstVectorRows(store, seeded.capsuleId, 1);
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id = :c")
+      .run({ c: String(seeded.capsuleId) });
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "treasury evidence",
+      { topK: 5, maxExactVectorScanRows: 1 },
+    );
+
+    expect(embeddingCalls).toBe(1);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+    expect(outcome.diagnostics.mode).toBe("dense-only");
+    expect(outcome.diagnostics.denseIndex).toBe("ann");
+    expect(outcome.diagnostics.denseCandidateCount).toBeGreaterThan(0);
+    expect(outcome.diagnostics.lexicalIndex).toBe("missing");
+  });
+
+  it("applies the exact-scan cap to the filtered source scope instead of the whole capsule", async () => {
+    const { store } = getFixture();
+    const scoped = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-source-filter-cap",
+      sourceId: "src-small",
+      documentId: "doc-small",
+      contentHash: "1".repeat(64),
+      text: "small source treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const large = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-source-filter-cap",
+      sourceId: "src-large",
+      documentId: "doc-large",
+      contentHash: "2".repeat(64),
+      text: "large source unrelated evidence",
+      unitId: "unit-source-filter-large",
+      skipCapsule: true,
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    duplicateFirstVectorRows(store, large.capsuleId, 2, large.sourceId);
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [scoped.capsuleId], sourceFilter: [scoped.sourceId] },
+      "small source treasury evidence",
+      { topK: 5, maxExactVectorScanRows: 1 },
+    );
+
+    expect(embeddingCalls).toBe(1);
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.diagnostics.denseIndex).toBe("available");
+    expect(new Set(outcome.references.map((ref) => String(ref.citation.sourceId)))).toEqual(
+      new Set(["src-small"]),
+    );
+  });
+
+  it("reports dense-only when an existing capsule has vectors but no FTS rows", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-legacy",
+      text: "legacy capsule alpha beta gamma",
+    });
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id = :c")
+      .run({ c: String(seeded.capsuleId) });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      "alpha beta",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(outcome.diagnostics.mode).toBe("dense-only");
+    expect(outcome.diagnostics.lexicalIndex).toBe("missing");
+  });
+
+  it("falls back to lexical-degraded retrieval when query embedding fails", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-lexical-degraded",
+      text: "lexical degraded treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const failingAdapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({ ok: false, kind: "transport" }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      failingAdapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "treasury evidence",
+      { topK: 5 },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.diagnostics.mode).toBe("lexical-degraded");
+    expect(outcome.diagnostics.denseCandidateCount).toBe(0);
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+  });
+
   it("sets embeddingDegraded=true when one capsule's embedding fails but another capsule's vectors keep result non-empty", async () => {
     // Two capsules share the same identity. Capsule A: embedding returns wrong dim →
     // embeddingFailed=true for that identity, but the dim-check path means anyDimensionCompatible

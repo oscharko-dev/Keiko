@@ -9,10 +9,7 @@
 import type { QualityIntelligenceRunId, QualityIntelligenceSourceEnvelopeId } from "./ids.js";
 
 export type QualityIntelligenceHandoffPromptedAction =
-  | "design-tests"
-  | "validate-tests"
-  | "review-coverage"
-  | "request-export";
+  "design-tests" | "validate-tests" | "review-coverage" | "request-export";
 
 export const QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS: readonly QualityIntelligenceHandoffPromptedAction[] =
   ["design-tests", "validate-tests", "review-coverage", "request-export"] as const;

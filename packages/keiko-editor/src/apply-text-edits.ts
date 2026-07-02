@@ -150,7 +150,7 @@ function appendWithinByteLimit(
   }
 
   let end = 0;
-  for (let index = 0; index < text.length; ) {
+  for (let index = 0; index < text.length;) {
     const codePoint = text.codePointAt(index) ?? 0;
     const codeUnits = codePoint > 0xffff ? 2 : 1;
     const nextBytes = utf8ByteLength(codePoint);

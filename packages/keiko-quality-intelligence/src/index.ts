@@ -9,7 +9,7 @@ export { compareStaleness } from "./domain/staleness.js";
 export type { StalenessReason, StalenessResult } from "./domain/staleness.js";
 
 export { deriveIntent } from "./domain/intentDerivation.js";
-export type { IntentSummary } from "./domain/intentDerivation.js";
+export type { DeriveIntentOptions, IntentSummary } from "./domain/intentDerivation.js";
 
 export {
   designTestCaseCandidates,
@@ -36,6 +36,12 @@ export {
   REQUIREMENT_EXCERPT_MAX_CHARS,
 } from "./domain/requirementExcerpt.js";
 
+export { analyzeRequirementQuality } from "./domain/requirementQuality.js";
+export type {
+  AnalyzeRequirementQualityInput,
+  RequirementQualityAtomInput,
+} from "./domain/requirementQuality.js";
+
 export {
   computeCandidateEquivalenceSignature,
   deduplicateCandidates,
@@ -53,10 +59,13 @@ export type { PolicyProfile } from "./domain/policyProfile.js";
 
 export {
   canonicaliseFragmentList,
+  containsNormalisedKeyword,
   isKnownPriority,
   isMeaningfulText,
   isUnsafeFormatCodePoint,
   normaliseCandidateText,
+  normaliseGermanComparisonText,
+  normaliseGermanKeywordText,
   normaliseText,
   stripUnsafeFormatChars,
 } from "./domain/assertions.js";

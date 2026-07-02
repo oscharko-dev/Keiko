@@ -23,7 +23,8 @@ import type {
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
-import type { ChunkingOptions } from "../chunking/index.js";
+import type { ChunkingOptions, LocalKnowledgeTokenizer } from "../chunking/index.js";
+import type { ContextualRetrievalOptions } from "./contextual-retrieval.js";
 import type { DiscoveryOptions } from "../discovery/index.js";
 import { KnowledgeStoreError } from "../errors.js";
 import type { ParserRegistry, ProgressiveExtractor } from "../parsers/index.js";
@@ -47,6 +48,7 @@ export type IndexingErrorCode =
   | "EMBEDDING_ADAPTER_FAILED"
   | "DISCOVERY_FAILED"
   | "CHUNKING_FAILED"
+  | "CONTEXTUAL_RETRIEVAL_FAILED"
   | "CANCELLED"
   | "CAPSULE_NOT_FOUND"
   | "INVALID_OPTIONS"
@@ -90,6 +92,7 @@ export interface IndexingOptions {
   readonly concurrency?: number;
   // Pass-through to the chunking layer's pure options (token estimator, min/max/overlap).
   readonly chunkingOptions?: ChunkingOptions;
+  readonly contextualRetrieval?: ContextualRetrievalOptions;
   // Pass-through to the discovery layer's walker options (maxDepth, maxFiles).
   readonly discoveryOptions?: DiscoveryOptions;
   // Clock injection — defaults to the store's internal clock.
@@ -255,6 +258,7 @@ export interface EmbedBatchOptions {
   readonly signal?: AbortSignal;
   readonly now: () => number;
   readonly idSource: () => string;
+  readonly tokenizer?: LocalKnowledgeTokenizer;
   // Optional; defaults to 2 retries with a 200 ms exponential backoff.
   readonly retry?: EmbedRetryOptions;
 }

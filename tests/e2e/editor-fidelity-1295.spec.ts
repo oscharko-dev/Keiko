@@ -691,10 +691,7 @@ function assertCopyButtonRestingStyles(
   styles: CopyButtonRestingStyles,
   viewportCase: EditorResizeViewportCase,
 ): void {
-  expect(
-    styles.opacity,
-    `Copy button should stay discoverable in ${viewportCase.name}`,
-  ).toBe("1");
+  expect(styles.opacity, `Copy button should stay discoverable in ${viewportCase.name}`).toBe("1");
   expect(styles.borderStyle).not.toBe("none");
   expect(styles.borderRadius).not.toBe("0px");
   expect(styles.backgroundColor).toBe("rgba(0, 0, 0, 0)");
@@ -794,7 +791,12 @@ async function revealNeedleWithFind(
 ): Promise<void> {
   await editorWindow.locator(".monaco-editor").first().click();
   await page.keyboard.press("Control+F");
-  if (!(await page.locator(".find-widget").isVisible({ timeout: 1_000 }).catch(() => false))) {
+  if (
+    !(await page
+      .locator(".find-widget")
+      .isVisible({ timeout: 1_000 })
+      .catch(() => false))
+  ) {
     await page.keyboard.press("Meta+F");
   }
   await page.keyboard.insertText(needle);

@@ -237,7 +237,9 @@ describe("handleGatewaySetup", () => {
     const voiceProvider = config?.providers.find((provider) => provider.modelId === "keiko-stt");
     expect(voiceProvider?.apiKey).toBe("voice-secret-token");
     expect(voiceProvider?.apiKeyHeaderName).toBe("api-key");
-    const voiceCapability = config?.capabilities?.find((capability) => capability.id === "keiko-stt");
+    const voiceCapability = config?.capabilities?.find(
+      (capability) => capability.id === "keiko-stt",
+    );
     expect(voiceCapability).toMatchObject({
       kind: "voice",
       supportsSpeechInput: true,
@@ -936,7 +938,7 @@ describe("handleGatewaySetup", () => {
       id: "Mistral-Large-3",
       kind: "chat",
       toolCalling: false,
-      structuredOutput: true,
+      structuredOutput: false,
       streaming: true,
     });
     deps.store.close();
@@ -1203,6 +1205,76 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).toContain("must use https");
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     expect(deps.gatewayConfig?.present()).toBe(false);
+    deps.store.close();
+  });
+
+  it("rejects link-local metadata gateway URLs before discovery or storage", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-metadata-url-");
+    const evidenceDir = await tempDir("keiko-gw-ev-metadata-url-");
+    let discoveryCalls = 0;
+    let testerCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => {
+        discoveryCalls += 1;
+        return Promise.resolve(["example-chat-model"]);
+      },
+      gatewaySetupTester: (_config, modelIds) => {
+        testerCalls += 1;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://169.254.169.254/v1",
+        apiKey: "example-secret-token",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("link-local metadata");
+    expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
+    expect(discoveryCalls).toBe(0);
+    expect(testerCalls).toBe(0);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    deps.store.close();
+  });
+
+  it("allows link-local gateway URLs only with the explicit metadata override", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-metadata-override-");
+    const evidenceDir = await tempDir("keiko-gw-ev-metadata-override-");
+    let discoveryCalls = 0;
+    let testerCalls = 0;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...VAULT_ENV, KEIKO_ALLOW_LINK_LOCAL_GATEWAY: "1" },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => {
+        discoveryCalls += 1;
+        return Promise.resolve(["example-chat-model"]);
+      },
+      gatewaySetupTester: (_config, modelIds) => {
+        testerCalls += 1;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://169.254.169.254/v1",
+        apiKey: "example-secret-token",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(discoveryCalls).toBe(1);
+    expect(testerCalls).toBe(1);
+    expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe(
+      "https://169.254.169.254/v1",
+    );
     deps.store.close();
   });
 

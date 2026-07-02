@@ -1,53 +1,174 @@
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext, WindowType } from "../windows/WindowsRegistry";
-import { ChatWindow } from "../ChatWindow";
-import { ChatSessionProvider } from "../context/ChatSessionContext";
-import { useChatSession } from "../hooks/useChatSession";
-import { ProjectPanel } from "./panels/ProjectPanel";
-import { ChatHistoryPanel } from "./panels/ChatHistoryPanel";
-import { SearchPanel } from "./panels/SearchPanel";
-import { PromptEnhancerPanel } from "./panels/PromptEnhancerPanel";
-import { PluginsPanel } from "./panels/PluginsPanel";
-import { AutomationsPanel } from "./panels/AutomationsPanel";
-import { MobilePanel } from "./panels/MobilePanel";
-import { InspectorPanel } from "./panels/InspectorPanel";
-import { NotificationsPanel } from "./panels/NotificationsPanel";
-import { ResourcesPanel } from "./panels/ResourcesPanel";
-import { TimelinePanel } from "./panels/TimelinePanel";
-import { FilesWidget } from "./cards/FilesWidget";
-import { EditorWidget } from "./cards/EditorWidget";
-import { BrowserWidget } from "./cards/BrowserWidget";
-import { TerminalWidget } from "./cards/TerminalWidget";
-import { CommandsWidget } from "./cards/CommandsWidget";
-import { RuntimeHubWidget } from "./cards/RuntimeHubWidget";
-import { GitClientWindow } from "./cards/git-client/GitClientWindow";
-import { GovernedPullRequestCard } from "./cards/GovernedPullRequestCard";
-import { GovernedMergeCard } from "./cards/GovernedMergeCard";
-import { ContainerStatusWidget } from "./cards/ContainerStatusWidget";
-import { ReviewWidget } from "./cards/ReviewWidget";
-import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
-import { IntegrationsWidget } from "./cards/IntegrationsWidget";
-import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
-import { SettingsPanel } from "./panels/SettingsPanel";
-import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
-import { PdfCitationPreviewWindow } from "./cards/PdfCitationPreviewWindow";
-import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
-import { FigmaJsonSourceWindow } from "./figma/FigmaJsonSourceWindow";
-import { FigmaImageSourceWindow } from "./figma/FigmaImageSourceWindow";
+import { useChatSessionContext } from "../context/ChatSessionContext";
 import { requestGatewaySetup } from "./shared/gatewaySetupBus";
-import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
-import { QiRunCard } from "./quality-intelligence/QiRunCard";
-import { RelationshipsView } from "../../../relationships/RelationshipsView";
-import { MemoriaVivaWindow } from "../../../memoriaviva/components/MemoriaVivaWindow";
-import { ConnectorGraph } from "../../../local-knowledge/connector-graph";
 import {
   buildConnectedRunSources,
   connectedRunSourcesCfgFromInlineSources,
   connectedRunSourcesCfgFromSources,
   connectedRunSourcesFromWindowCfg,
 } from "./quality-intelligence/connectedSources";
+import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import type { ChatMessage } from "@/lib/types";
+
+const windowChunkFallback = (): ReactNode => <div className="lk-loading">Loading...</div>;
+const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
+const ProjectPanel = dynamic(
+  () => import("./panels/ProjectPanel").then((mod) => mod.ProjectPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const ChatHistoryPanel = dynamic(
+  () => import("./panels/ChatHistoryPanel").then((mod) => mod.ChatHistoryPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const SearchPanel = dynamic(() => import("./panels/SearchPanel").then((mod) => mod.SearchPanel), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
+const PromptEnhancerPanel = dynamic(
+  () => import("./panels/PromptEnhancerPanel").then((mod) => mod.PromptEnhancerPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const PluginsPanel = dynamic(
+  () => import("./panels/PluginsPanel").then((mod) => mod.PluginsPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const AutomationsPanel = dynamic(
+  () => import("./panels/AutomationsPanel").then((mod) => mod.AutomationsPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const MobilePanel = dynamic(() => import("./panels/MobilePanel").then((mod) => mod.MobilePanel), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
+const InspectorPanel = dynamic(
+  () => import("./panels/InspectorPanel").then((mod) => mod.InspectorPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const NotificationsPanel = dynamic(
+  () => import("./panels/NotificationsPanel").then((mod) => mod.NotificationsPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const ResourcesPanel = dynamic(
+  () => import("./panels/ResourcesPanel").then((mod) => mod.ResourcesPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const TimelinePanel = dynamic(
+  () => import("./panels/TimelinePanel").then((mod) => mod.TimelinePanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const KeikoTwinPanel = dynamic(
+  () => import("./panels/KeikoTwinPanel").then((mod) => mod.KeikoTwinPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const SettingsPanel = dynamic(
+  () => import("./panels/SettingsPanel").then((mod) => mod.SettingsPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const UpdateWindow = dynamic(
+  () => import("../update/UpdateWindow").then((mod) => mod.UpdateWindow),
+  { ssr: false, loading: windowChunkFallback },
+);
+const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
+const EditorWidget = dynamic(() => import("./cards/EditorWidget").then((mod) => mod.EditorWidget), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
+const BrowserWidget = dynamic(
+  () => import("./cards/BrowserWidget").then((mod) => mod.BrowserWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const TerminalWidget = dynamic(
+  () => import("./cards/TerminalWidget").then((mod) => mod.TerminalWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const CommandsWidget = dynamic(
+  () => import("./cards/CommandsWidget").then((mod) => mod.CommandsWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const RuntimeHubWidget = dynamic(
+  () => import("./cards/RuntimeHubWidget").then((mod) => mod.RuntimeHubWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const GitClientWindow = dynamic(
+  () => import("./cards/git-client/GitClientWindow").then((mod) => mod.GitClientWindow),
+  { ssr: false, loading: windowChunkFallback },
+);
+const GovernedPullRequestCard = dynamic(
+  () => import("./cards/GovernedPullRequestCard").then((mod) => mod.GovernedPullRequestCard),
+  { ssr: false, loading: windowChunkFallback },
+);
+const GovernedMergeCard = dynamic(
+  () => import("./cards/GovernedMergeCard").then((mod) => mod.GovernedMergeCard),
+  { ssr: false, loading: windowChunkFallback },
+);
+const ContainerStatusWidget = dynamic(
+  () => import("./cards/ContainerStatusWidget").then((mod) => mod.ContainerStatusWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const ReviewWidget = dynamic(() => import("./cards/ReviewWidget").then((mod) => mod.ReviewWidget), {
+  ssr: false,
+  loading: windowChunkFallback,
+});
+const AgentRunWidget = dynamic(
+  () => import("./cards/AgentRunWidget").then((mod) => mod.AgentRunWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const IntegrationsWidget = dynamic(
+  () => import("./cards/IntegrationsWidget").then((mod) => mod.IntegrationsWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const ConnectorPickerWidget = dynamic(
+  () => import("./cards/ConnectorPickerWidget").then((mod) => mod.ConnectorPickerWidget),
+  { ssr: false, loading: windowChunkFallback },
+);
+const PdfCitationPreviewWindow = dynamic(
+  () => import("./cards/PdfCitationPreviewWindow").then((mod) => mod.PdfCitationPreviewWindow),
+  { ssr: false, loading: windowChunkFallback },
+);
+const FigmaSnapshotWindow = dynamic(
+  () => import("./figma/FigmaSnapshotWindow").then((mod) => mod.FigmaSnapshotWindow),
+  { ssr: false, loading: windowChunkFallback },
+);
+const FigmaJsonSourceWindow = dynamic(
+  () => import("./figma/FigmaJsonSourceWindow").then((mod) => mod.FigmaJsonSourceWindow),
+  { ssr: false, loading: windowChunkFallback },
+);
+const FigmaImageSourceWindow = dynamic(
+  () => import("./figma/FigmaImageSourceWindow").then((mod) => mod.FigmaImageSourceWindow),
+  { ssr: false, loading: windowChunkFallback },
+);
+const QiHubPanel = dynamic(
+  () => import("./quality-intelligence/QiHubPanel").then((mod) => mod.QiHubPanel),
+  { ssr: false, loading: windowChunkFallback },
+);
+const QiRunCard = dynamic(
+  () => import("./quality-intelligence/QiRunCard").then((mod) => mod.QiRunCard),
+  { ssr: false, loading: windowChunkFallback },
+);
+const RelationshipsView = dynamic(
+  () => import("../../../relationships/RelationshipsView").then((mod) => mod.RelationshipsView),
+  { ssr: false, loading: windowChunkFallback },
+);
+const MemoriaVivaWindow = dynamic(
+  () =>
+    import("../../../memoriaviva/components/MemoriaVivaWindow").then(
+      (mod) => mod.MemoriaVivaWindow,
+    ),
+  { ssr: false, loading: windowChunkFallback },
+);
+const ConnectorGraph = dynamic(
+  () => import("../../../local-knowledge/connector-graph").then((mod) => mod.ConnectorGraph),
+  { ssr: false, loading: windowChunkFallback },
+);
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -150,7 +271,7 @@ function ChatWindowSessionHost({
   readonly cfg: Record<string, unknown>;
   readonly ctx: WindowRenderContext;
 }): ReactNode {
-  const session = useChatSession({ autoCreate: false });
+  const session = useChatSessionContext();
   const creatingRef = useRef(false);
   const chatId = str(cfg, "chatId");
   const title = str(cfg, "title");
@@ -204,36 +325,32 @@ function ChatWindowSessionHost({
     [activeProject?.path, ctx],
   );
 
-  return (
-    <ChatSessionProvider value={session}>
-      {targetMissing ? (
-        <div className="lk-empty">
-          <p className="lk-empty-title">Chat not found</p>
-          <p className="lk-empty-body">This conversation was deleted or is no longer available.</p>
-        </div>
-      ) : waitingForTarget ? (
-        <div className="lk-loading">Opening chat...</div>
-      ) : (
-        <ChatWindow
-          windowId={ctx.windowId}
-          mini={ctx.mini === true}
-          minimalChat={ctx.minimalChat === true}
-          compact={ctx.compact === true}
-          controlsNarrow={ctx.controlsNarrow === true}
-          barCompact={ctx.barCompact === true}
-          workflowCompact={ctx.workflowCompact === true}
-          linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
-          linkedRoots={ctx.linkedRoots}
-          openEditorFile={ctx.openEditorFile}
-          previewWindows={{
-            add: ctx.openWindow,
-            focus: ctx.focusWindow,
-            update: ctx.updateWindow,
-          }}
-          onOpenRunResult={openRunResult}
-        />
-      )}
-    </ChatSessionProvider>
+  return targetMissing ? (
+    <div className="lk-empty">
+      <p className="lk-empty-title">Chat not found</p>
+      <p className="lk-empty-body">This conversation was deleted or is no longer available.</p>
+    </div>
+  ) : waitingForTarget ? (
+    <div className="lk-loading">Opening chat...</div>
+  ) : (
+    <ChatWindow
+      windowId={ctx.windowId}
+      mini={ctx.mini === true}
+      minimalChat={ctx.minimalChat === true}
+      compact={ctx.compact === true}
+      controlsNarrow={ctx.controlsNarrow === true}
+      barCompact={ctx.barCompact === true}
+      workflowCompact={ctx.workflowCompact === true}
+      linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
+      linkedRoots={ctx.linkedRoots}
+      openEditorFile={ctx.openEditorFile}
+      previewWindows={{
+        add: ctx.openWindow,
+        focus: ctx.focusWindow,
+        update: ctx.updateWindow,
+      }}
+      onOpenRunResult={openRunResult}
+    />
   );
 }
 
@@ -262,7 +379,10 @@ registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
-registerWindowRender("settings", () => <SettingsPanel />);
+registerWindowRender("settings", (_cfg, ctx) => (
+  <SettingsPanel openUpdatesWindow={() => ctx.openWindow("updates", { entrypoint: "settings" })} />
+));
+registerWindowRender("updates", () => <UpdateWindow />);
 registerWindowRender("localKnowledge", () => <ConnectorGraph showBackToWorkspace={false} />);
 registerWindowRender("pdfCitationPreview", (cfg, ctx) => (
   <PdfCitationPreviewWindow

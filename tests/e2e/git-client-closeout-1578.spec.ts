@@ -122,7 +122,11 @@ function buildLocalBareFixture(): GitFixture {
 }
 
 function json(route: Route, body: unknown): Promise<void> {
-  return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  return route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
 }
 
 function parsePost(route: Route): unknown {
@@ -594,7 +598,11 @@ async function verifyAddRepositoryDialog(page: Page, gitWindow: Locator): Promis
   await addDialog.getByRole("button", { name: "Close" }).click();
 }
 
-async function verifyChangesAndCommit(page: Page, gitWindow: Locator, ledger: RouteLedger): Promise<void> {
+async function verifyChangesAndCommit(
+  page: Page,
+  gitWindow: Locator,
+  ledger: RouteLedger,
+): Promise<void> {
   const changedFiles = gitWindow.locator('nav[aria-label="Changed files"]');
   await expect(changedFiles).toBeVisible();
   await changedFiles.locator('input[aria-label="Stage src/app.ts"]').click();
@@ -659,7 +667,9 @@ async function verifyPrAndMerge(
   const prPanel = page.getByRole("region", { name: "Pull Request", exact: true });
   await expect(prPanel.getByLabel("Repository (owner/repo)")).toHaveValue("oscharko-dev/Keiko");
   await prPanel.getByRole("button", { name: "Preview" }).click();
-  await expect.poll(() => ledger.prPreviews.length, { message: "PR preview route called" }).toBeGreaterThan(0);
+  await expect
+    .poll(() => ledger.prPreviews.length, { message: "PR preview route called" })
+    .toBeGreaterThan(0);
   await expect(prPanel.locator('[data-field="policy"]')).toContainText("policy-pack-blocked");
   await page.getByRole("button", { name: "Back to diff" }).click();
 
@@ -667,7 +677,9 @@ async function verifyPrAndMerge(
   const mergePanel = page.getByRole("region", { name: "Merge", exact: true });
   await mergePanel.getByLabel("Pull Request number").fill("1578");
   await mergePanel.getByRole("button", { name: "Preview" }).click();
-  await expect.poll(() => ledger.mergePreviews.length, { message: "merge preview route called" }).toBeGreaterThan(0);
+  await expect
+    .poll(() => ledger.mergePreviews.length, { message: "merge preview route called" })
+    .toBeGreaterThan(0);
   await expect(mergePanel.getByText("required-checks-pending")).toBeVisible();
   await assertNoPrivateEvidence(page, fixture);
 }
@@ -683,7 +695,10 @@ async function captureCloseoutEvidence(
   await page.setViewportSize({ width: 900, height: 760 });
   await expect(gitWindow).toBeVisible();
   await assertNoPrivateEvidence(page, fixture);
-  await page.screenshot({ path: artifactPath("git-client-closeout-constrained.png"), fullPage: true });
+  await page.screenshot({
+    path: artifactPath("git-client-closeout-constrained.png"),
+    fullPage: true,
+  });
 
   writeManifest(ledger);
   const manifestText = readFileSync(artifactPath("manifest.json"), "utf8");

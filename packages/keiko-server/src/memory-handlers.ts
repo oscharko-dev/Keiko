@@ -61,14 +61,20 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { ApiError, RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import { auditRunIdFor, recordMemoryAudit } from "./memory-audit-handler.js";
+import {
+  assertMemoryAuditWritable,
+  auditRunIdFor,
+  recordMemoryAudit,
+} from "./memory-audit-handler.js";
+import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_MEMORY_BODY_BYTES = 64_000;
-const DEFAULT_REVIEWER_ID = "memoriaviva-ui" as MemoryReviewerId;
+const DEFAULT_REVIEWER_ID = "local-operator" as MemoryReviewerId;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_LIST_LIMIT = 50;
+const MAX_LIST_QUERY_CHARS = 200;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
@@ -237,6 +243,7 @@ interface ListAcrossScopesOptions {
   readonly types?: readonly MemoryType[];
   readonly statuses?: readonly MemoryStatus[];
   readonly sensitivities?: readonly MemorySensitivity[];
+  readonly query?: string;
 }
 
 function sortMemories(records: readonly MemoryRecord[]): readonly MemoryRecord[] {
@@ -247,11 +254,40 @@ function sortMemories(records: readonly MemoryRecord[]): readonly MemoryRecord[]
   });
 }
 
+function normalizeListQuery(raw: string | null): string | undefined {
+  if (raw === null) return undefined;
+  const trimmed = raw.trim().slice(0, MAX_LIST_QUERY_CHARS);
+  return trimmed.length === 0 ? undefined : trimmed.toLocaleLowerCase("und");
+}
+
+function memoryMatchesQuery(record: MemoryRecord, query: string | undefined): boolean {
+  if (query === undefined) return true;
+  const haystack = [
+    record.body,
+    ...record.tags,
+    record.type,
+    record.status,
+    record.scope.kind,
+    record.provenance.sensitivity,
+  ]
+    .join("\n")
+    .toLocaleLowerCase("und");
+  return haystack.includes(query);
+}
+
 function listMemoriesAcrossScopes(
   vault: MemoryVaultStore,
   options: ListAcrossScopesOptions,
 ): readonly MemoryRecord[] {
-  const records = vault.listMemories({
+  const scopes = vault
+    .listMemoryScopes()
+    .filter(
+      (scope) =>
+        options.scopeKinds === undefined ||
+        options.scopeKinds.length === 0 ||
+        options.scopeKinds.includes(scope.kind),
+    );
+  const records = vault.listMemoriesAcrossScopes(scopes, {
     ...(options.types !== undefined && options.types.length > 0 ? { type: options.types } : {}),
     ...(options.statuses !== undefined && options.statuses.length > 0
       ? { status: options.statuses }
@@ -260,17 +296,13 @@ function listMemoriesAcrossScopes(
   });
   const filtered = records.filter((record) => {
     if (
-      options.scopeKinds !== undefined &&
-      options.scopeKinds.length > 0 &&
-      !options.scopeKinds.includes(record.scope.kind)
-    ) {
-      return false;
-    }
-    if (
       options.sensitivities !== undefined &&
       options.sensitivities.length > 0 &&
       !options.sensitivities.includes(record.provenance.sensitivity)
     ) {
+      return false;
+    }
+    if (!memoryMatchesQuery(record, options.query)) {
       return false;
     }
     return true;
@@ -309,6 +341,7 @@ interface ListParams {
   readonly types: string[];
   readonly statuses: string[];
   readonly sensitivities: string[];
+  readonly query?: string;
   readonly limit: number;
   readonly offset: number;
 }
@@ -318,6 +351,7 @@ function parseListParams(ctx: RouteContext): ListParams | RouteResult {
   const types = splitComma(ctx.url.searchParams.get("type"));
   const statuses = splitComma(ctx.url.searchParams.get("status"));
   const sensitivities = splitComma(ctx.url.searchParams.get("sensitivity"));
+  const query = normalizeListQuery(ctx.url.searchParams.get("q"));
 
   if (scopeKinds.length > 0 && !isScopeKindArray(scopeKinds)) {
     return {
@@ -355,6 +389,7 @@ function parseListParams(ctx: RouteContext): ListParams | RouteResult {
     types,
     statuses,
     sensitivities,
+    ...(query !== undefined ? { query } : {}),
     limit: parseIntQuery(ctx.url.searchParams.get("limit"), DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT),
     offset: parseIntQuery(ctx.url.searchParams.get("offset"), 0, Number.MAX_SAFE_INTEGER),
   };
@@ -367,7 +402,7 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
   const params = parseListParams(ctx);
   if (isRouteResult(params)) return params;
 
-  const { scopeKinds, types, statuses, sensitivities, limit, offset } = params;
+  const { scopeKinds, types, statuses, sensitivities, query, limit, offset } = params;
 
   try {
     const filtered = listMemoriesAcrossScopes(vault, {
@@ -377,6 +412,7 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
       ...(sensitivities.length > 0
         ? { sensitivities: sensitivities as readonly MemorySensitivity[] }
         : {}),
+      ...(query !== undefined ? { query } : {}),
     });
     const page = filtered.slice(offset, offset + limit);
 
@@ -494,6 +530,37 @@ function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string
   return patch;
 }
 
+function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
+  const { id } = ctx.params;
+  if (id === undefined || id.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+  }
+  return id as MemoryId;
+}
+
+async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+  return parseEditInput(body);
+}
+
+async function applyMemoryEdit(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  id: MemoryId,
+  input: EditInput,
+): Promise<RouteResult> {
+  const existing = vault.getMemory(id);
+  if (existing === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
+  }
+  const updated = vault.updateMemory(id, buildEditPatch(input, existing), Date.now());
+  if (typeof input.newBody === "string" && input.newBody.trim().length > 0) {
+    await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, updated.id, updated.body);
+  }
+  return { status: 200, body: { memory: redactMemory(deps, updated) } };
+}
+
 export async function handleEditMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -501,24 +568,13 @@ export async function handleEditMemory(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const body = await readJsonBody(ctx.req);
-  if (isRouteResult(body)) return body;
-
-  const input = parseEditInput(body);
+  const id = memoryIdFromParams(ctx);
+  if (isRouteResult(id)) return id;
+  const input = await readEditRouteInput(ctx);
   if (isRouteResult(input)) return input;
 
   try {
-    const existing = vault.getMemory(id as MemoryId);
-    if (existing === undefined) {
-      return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
-    }
-    const updated = vault.updateMemory(id as MemoryId, buildEditPatch(input, existing), Date.now());
-    return { status: 200, body: { memory: redactMemory(deps, updated) } };
+    return await applyMemoryEdit(deps, vault, id, input);
   } catch (err) {
     if (err instanceof MemoryStorageError) {
       return {
@@ -546,7 +602,10 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildPinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
+    void buildPinOperation(record, {
+      reviewerId: reviewerIdForMemoryMutation(deps),
+      nowMs: Date.now(),
+    });
     const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -579,7 +638,10 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    void buildUnpinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
+    void buildUnpinOperation(record, {
+      reviewerId: reviewerIdForMemoryMutation(deps),
+      nowMs: Date.now(),
+    });
     const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -622,7 +684,7 @@ export async function handleArchiveMemory(
     }
     void buildArchiveOperation(
       record,
-      { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() },
+      { reviewerId: reviewerIdForMemoryMutation(deps), nowMs: Date.now() },
       reason,
     );
     const updated = vault.updateMemory(id as MemoryId, { status: "archived" }, Date.now());
@@ -778,6 +840,44 @@ function parseForgetSelectionInput(
   return { ...destructive, selector };
 }
 
+function reviewerIdForMemoryMutation(deps: UiHandlerDeps): MemoryReviewerId {
+  return deps.memoryAuthorization?.reviewerId ?? DEFAULT_REVIEWER_ID;
+}
+
+function authorizedMemoryScopes(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+): readonly MemoryScope[] {
+  return deps.memoryAuthorization?.authorizedScopes() ?? vault.listMemoryScopes();
+}
+
+function selectorScope(selector: ForgetSelector): MemoryScope | undefined {
+  switch (selector.kind) {
+    case "by-id":
+      return undefined;
+    case "by-scope":
+    case "by-type":
+    case "by-source-conversation":
+    case "by-time-window":
+      return selector.scope;
+  }
+}
+
+function scopeAuthorized(scope: MemoryScope, authorizedScopes: readonly MemoryScope[]): boolean {
+  const key = scopeKey(scope);
+  return authorizedScopes.some((authorized) => scopeKey(authorized) === key);
+}
+
+function forbiddenMemoryScopeResult(): RouteResult {
+  return {
+    status: 403,
+    body: errorBody(
+      "MEMORY_SCOPE_FORBIDDEN",
+      "The requested memory scope is not authorized for this caller.",
+    ),
+  };
+}
+
 function listForgetCandidates(
   vault: MemoryVaultStore,
   selector: ForgetSelector,
@@ -793,13 +893,22 @@ function listForgetCandidates(
 }
 
 function executeForgetSelection(
+  deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: string,
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
   const nowMs = Date.now();
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  const requestedScope = selectorScope(selector);
+  if (requestedScope !== undefined && !scopeAuthorized(requestedScope, authorizedScopes)) {
+    return forbiddenMemoryScopeResult();
+  }
   const records = listForgetCandidates(vault, selector);
   if (isRouteResult(records)) return records;
+  if (records.some((record) => !scopeAuthorized(record.scope, authorizedScopes))) {
+    return forbiddenMemoryScopeResult();
+  }
   const candidates = selectMemoriesForForget(records, selector, { nowMs });
   if (candidates.length === 0) {
     return {
@@ -809,7 +918,7 @@ function executeForgetSelection(
   }
   const operations = buildForgetOperations(
     candidates,
-    { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+    { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
     { reason, writeTombstone: true },
   );
   vault.deleteMemories(
@@ -849,6 +958,21 @@ function memoryMutationErrorBody(err: unknown, fallbackMessage: string): RouteRe
   throw err;
 }
 
+function preflightPrivacyCriticalAudit(deps: UiHandlerDeps): RouteResult | undefined {
+  try {
+    assertMemoryAuditWritable(deps.evidenceStore, Date.now());
+    return undefined;
+  } catch {
+    return {
+      status: 500,
+      body: errorBody(
+        "MEMORY_AUDIT_UNAVAILABLE",
+        "Memory audit evidence is unavailable; destructive memory action was not applied.",
+      ),
+    };
+  }
+}
+
 export async function handleForgetMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -866,9 +990,12 @@ export async function handleForgetMemory(
 
   const input = parseDestructiveInput(body, "user-initiated forget from MemoriaViva");
   if (isRouteResult(input)) return input;
+  const auditReady = preflightPrivacyCriticalAudit(deps);
+  if (auditReady !== undefined) return auditReady;
 
   try {
     const result = executeForgetSelection(
+      deps,
       vault,
       { kind: "by-id", memoryId: id as MemoryId },
       input.reason,
@@ -892,9 +1019,11 @@ export async function handleForgetMemories(
 
   const input = parseForgetSelectionInput(body);
   if (isRouteResult(input)) return input;
+  const auditReady = preflightPrivacyCriticalAudit(deps);
+  if (auditReady !== undefined) return auditReady;
 
   try {
-    const result = executeForgetSelection(vault, input.selector, input.reason);
+    const result = executeForgetSelection(deps, vault, input.selector, input.reason);
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -922,9 +1051,12 @@ export async function handleDeleteMemory(
 
   const input = parseDestructiveInput(body, "user-initiated delete from MemoriaViva");
   if (isRouteResult(input)) return input;
+  const auditReady = preflightPrivacyCriticalAudit(deps);
+  if (auditReady !== undefined) return auditReady;
 
   try {
     const result = executeForgetSelection(
+      deps,
       vault,
       { kind: "by-id", memoryId: id as MemoryId },
       input.reason,
@@ -1128,7 +1260,7 @@ function executeConflictResolution(
   const resolution = buildConflictTransitions(
     memories,
     { winner: input.winner, losers: input.losers },
-    { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+    { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
   );
   persistConflictTransitions(vault, resolution, input.reason);
   const edgeIds = persistConflictSupersessions(
@@ -1310,7 +1442,7 @@ export async function handleCorrectMemory(
     const { proposal, supersession } = buildCorrection({
       olderMemory: existing,
       correctedBody: input.correctedBody,
-      context: { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+      context: { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
       newProposalId: randomUUID() as MemoryProposalId,
       newMemoryId: correctionId,
     });
@@ -1572,6 +1704,9 @@ export async function handleRejectMemoryProposal(
 export function createBffMemoryVault(
   redactString: (s: string) => string,
   onMemoryEvent?: (event: import("@oscharko-dev/keiko-memory-vault").MemoryEvent) => void,
+  onDeleteEventsBeforeCommit?: (
+    events: readonly import("@oscharko-dev/keiko-memory-vault").MemoryEvent[],
+  ) => void,
   env?: Readonly<Record<string, string | undefined>>,
 ): MemoryVaultStore {
   // Optional onMemoryEvent (#214) wires every successful vault mutation into the audit
@@ -1580,6 +1715,7 @@ export function createBffMemoryVault(
   return createMemoryVault({
     redactString,
     ...(onMemoryEvent === undefined ? {} : { onMemoryEvent }),
+    ...(onDeleteEventsBeforeCommit === undefined ? {} : { onDeleteEventsBeforeCommit }),
     ...(env === undefined ? {} : { env }),
   });
 }

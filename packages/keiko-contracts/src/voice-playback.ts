@@ -104,11 +104,7 @@ export const VOICE_PLAYBACK_SETTLED_PHASES: readonly VoicePlaybackPhase[] = [
 // transcript provider-error kinds so a server adapter maps `rate-limited` / `timeout` / `provider-error`
 // / `unavailable` onto these without a lossy round-trip.
 export type VoicePlaybackFailureKind =
-  | "rate-limited"
-  | "timeout"
-  | "provider-error"
-  | "unavailable"
-  | "internal";
+  "rate-limited" | "timeout" | "provider-error" | "unavailable" | "internal";
 
 export const VOICE_PLAYBACK_FAILURE_KINDS: readonly VoicePlaybackFailureKind[] = [
   "rate-limited",

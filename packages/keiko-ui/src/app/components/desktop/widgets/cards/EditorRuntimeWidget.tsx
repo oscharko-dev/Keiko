@@ -163,9 +163,12 @@ const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
 // Per-window session-cache cap (Issue 2.8). Open tabs + recently-visited files stay cached for instant
 // switching; the LRU evicts older clean/closed entries beyond this, never a saving/dirty/active one.
-const SESSION_CACHE_CAPACITY = 64;
-const COMPACT_TABS_ENTER_WIDTH_PX = 420;
-const COMPACT_TABS_EXIT_WIDTH_PX = 460;
+const SESSION_CACHE_CAPACITY = 16;
+const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
+const CONTENT_HASH_DEBOUNCE_MS = 150;
+const UTF8_ENCODER = new TextEncoder();
+const READABLE_TAB_TILE_WIDTH_PX = 112;
+const TAB_SUMMARY_TRIGGER_WIDTH_PX = 58;
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
 // GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
 // surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
@@ -187,6 +190,46 @@ const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   ],
 };
 
+function readableTabCapacity(tablistWidth: number, tabCount: number): number {
+  if (tablistWidth <= 0 || tabCount <= 2) return tabCount;
+  if (tablistWidth >= tabCount * READABLE_TAB_TILE_WIDTH_PX) return tabCount;
+  const widthForTabs = Math.max(
+    READABLE_TAB_TILE_WIDTH_PX,
+    tablistWidth - TAB_SUMMARY_TRIGGER_WIDTH_PX,
+  );
+  return Math.max(1, Math.min(tabCount - 1, Math.floor(widthForTabs / READABLE_TAB_TILE_WIDTH_PX)));
+}
+
+function visibleTabsForCapacity(
+  documentTabs: readonly string[],
+  startIndex: number,
+  capacity: number,
+): readonly string[] {
+  if (capacity >= documentTabs.length) return documentTabs;
+  const maxStart = Math.max(0, documentTabs.length - capacity);
+  const start = Math.min(Math.max(0, startIndex), maxStart);
+  return documentTabs.slice(start, start + capacity);
+}
+
+type EditorTabHandleProps = Pick<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "draggable" | "onClickCapture" | "onDragStart" | "onDragEnd" | "onKeyDown" | "onPointerDown"
+> & {
+  readonly "data-pane-id"?: string | undefined;
+  readonly "data-tab-file"?: string | undefined;
+  readonly "data-tab-draggable"?: "true" | "false" | undefined;
+  readonly "data-tab-held"?: "true" | "false" | undefined;
+};
+
+interface EditorTabHandleContext {
+  readonly onDragModeStart?: (() => void) | undefined;
+}
+
+interface EditorTabInsertTarget {
+  readonly file: string;
+  readonly edge: "before" | "after";
+}
+
 export interface EditorRuntimeWidgetProps {
   readonly windowId?: string | undefined;
   readonly paneId?: string | undefined;
@@ -206,17 +249,15 @@ export interface EditorRuntimeWidgetProps {
   readonly onDirtyChange?: ((file: string, dirty: boolean) => void) | undefined;
   readonly externalSaveRequest?: EditorExternalSaveRequest | undefined;
   readonly onExternalSaveComplete?:
-    | ((requestId: number, paneId: string, file: string, ok: boolean) => void)
-    | undefined;
+    ((requestId: number, paneId: string, file: string, ok: boolean) => void) | undefined;
+  readonly tabInsertTarget?: EditorTabInsertTarget | undefined;
   readonly renderTabHandle?:
     | ((
         file: string,
         active: boolean,
         dirty: boolean,
-      ) => Pick<
-        ButtonHTMLAttributes<HTMLButtonElement>,
-        "draggable" | "onDragStart" | "onDragEnd" | "onKeyDown"
-      >)
+        context?: EditorTabHandleContext,
+      ) => EditorTabHandleProps)
     | undefined;
   readonly toolbarExtras?: ReactNode | undefined;
   readonly linkedRoot?: string | null;
@@ -272,15 +313,15 @@ function documentSessionKey(root: string, file: string): string {
   return `${root}\u0000${file}`;
 }
 
-async function sha256Hex(text: string): Promise<string> {
+async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<string> {
   const cryptoLike = globalThis.crypto;
   if (cryptoLike?.subtle !== undefined) {
-    const digest = await cryptoLike.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    const digest = await cryptoLike.subtle.digest("SHA-256", bytes);
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
+  for (let index = 0; index < fallbackText.length; index += 1) {
+    hash ^= fallbackText.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
@@ -384,13 +425,6 @@ function providerOperationEnabled(
   );
 }
 
-function summarizePaths(paths: readonly string[]): string {
-  if (paths.length === 0) return "";
-  if (paths.length === 1) return paths[0] ?? "";
-  if (paths.length === 2) return `${paths[0] ?? ""}, ${paths[1] ?? ""}`;
-  return `${paths[0] ?? ""}, ${paths[1] ?? ""} +${String(paths.length - 2)} more`;
-}
-
 /**
  * Build a minimal, synthetic {@link PatchPreviewModel} for an agent applyPatch pending review
  * (Issue #1394, ADR-0058 D3). The model is not derived from a patch diff string; it is built
@@ -453,6 +487,7 @@ function EditorRuntimeWidget({
   onDirtyChange,
   externalSaveRequest,
   onExternalSaveComplete,
+  tabInsertTarget,
   renderTabHandle,
   toolbarExtras,
   linkedRoot,
@@ -479,7 +514,7 @@ function EditorRuntimeWidget({
     }
     return deduped;
   }, [file, openFiles]);
-  const [tablistCompact, setTablistCompact] = useState(false);
+  const [tablistWidth, setTablistWidth] = useState(0);
 
   useLayoutEffect(() => {
     const el = tablistRef.current;
@@ -489,12 +524,7 @@ function EditorRuntimeWidget({
       frame = null;
       const width = Math.round(el.getBoundingClientRect().width);
       if (width <= 0) return;
-      setTablistCompact((current) => {
-        const next = current
-          ? width < COMPACT_TABS_EXIT_WIDTH_PX
-          : width < COMPACT_TABS_ENTER_WIDTH_PX;
-        return current === next ? current : next;
-      });
+      setTablistWidth((current) => (current === width ? current : width));
     };
     const scheduleUpdate = (): void => {
       if (frame !== null) return;
@@ -517,14 +547,47 @@ function EditorRuntimeWidget({
       ro?.disconnect();
     };
   }, [documentTabs.length]);
-  const compactTabs =
-    tablistCompact && file !== undefined && file.length > 0 && documentTabs.length > 2;
-  const summaryTabs = compactTabs ? documentTabs.filter((path) => path !== file) : [];
-  const visibleTabs = compactTabs ? documentTabs.filter((path) => path === file) : documentTabs;
-  const summaryTip = summarizePaths(summaryTabs);
+  const visibleTabCapacity = readableTabCapacity(tablistWidth, documentTabs.length);
+  const [visibleTabStart, setVisibleTabStart] = useState(0);
+  useLayoutEffect(() => {
+    setVisibleTabStart((current) => {
+      if (visibleTabCapacity >= documentTabs.length) return 0;
+      const maxStart = Math.max(0, documentTabs.length - visibleTabCapacity);
+      const clampedStart = Math.min(Math.max(0, current), maxStart);
+      const activeIndex = file === undefined || file.length === 0 ? -1 : documentTabs.indexOf(file);
+      if (activeIndex < 0) return clampedStart;
+      if (activeIndex >= clampedStart && activeIndex < clampedStart + visibleTabCapacity) {
+        return clampedStart;
+      }
+      if (activeIndex < clampedStart) return activeIndex;
+      return Math.min(activeIndex - visibleTabCapacity + 1, maxStart);
+    });
+  }, [documentTabs, file, visibleTabCapacity]);
+  const visibleTabs = useMemo(
+    () => visibleTabsForCapacity(documentTabs, visibleTabStart, visibleTabCapacity),
+    [documentTabs, visibleTabCapacity, visibleTabStart],
+  );
+  const visibleTabSet = useMemo(() => new Set(visibleTabs), [visibleTabs]);
+  const summaryTabs = documentTabs.filter((path) => !visibleTabSet.has(path));
+  const compactTabs = summaryTabs.length > 0;
   const summaryMenuId = `${editorDomIdPrefix}-summary-menu`;
   const summaryMenuRef = useRef<HTMLDetailsElement>(null);
   const [summaryMenuOpen, setSummaryMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!summaryMenuOpen) return;
+    const closeSummaryMenuOnOutsidePointer = (event: globalThis.PointerEvent): void => {
+      const menu = summaryMenuRef.current;
+      const target = event.target;
+      if (menu === null || !(target instanceof Node) || menu.contains(target)) return;
+      setSummaryMenuOpen(false);
+      menu.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", closeSummaryMenuOnOutsidePointer, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeSummaryMenuOnOutsidePointer, true);
+    };
+  }, [summaryMenuOpen]);
 
   const [content, setContent] = useState("");
   const [fileModel, setFileModel] = useState<EditorFileModel | null>(null);
@@ -558,7 +621,10 @@ function EditorRuntimeWidget({
   const [recoveryDiskBaseline, setRecoveryDiskBaseline] = useState<string | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [recoveryCompare, setRecoveryCompare] = useState(false);
-  const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
+  const [activeContentDigest, setActiveContentDigest] = useState<{
+    readonly content: string;
+    readonly hash: string;
+  } | null>(null);
   // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
   const [agentConflict, setAgentConflict] = useState<{
     readonly code: AgentConflictCode;
@@ -604,6 +670,11 @@ function EditorRuntimeWidget({
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+  const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
+  const contentSizeBytes = contentBytes.length;
+  const activeContentHash =
+    activeContentDigest?.content === content ? activeContentDigest.hash : null;
+  const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setCurrentSelection(null);
@@ -618,13 +689,16 @@ function EditorRuntimeWidget({
 
   useEffect(() => {
     let cancelled = false;
-    void sha256Hex(content).then((hash) => {
-      if (!cancelled) setActiveContentHash(hash);
-    });
+    const timer = window.setTimeout(() => {
+      void sha256HexBytes(contentBytes, content).then((hash) => {
+        if (!cancelled) setActiveContentDigest({ content, hash });
+      });
+    }, CONTENT_HASH_DEBOUNCE_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [content]);
+  }, [content, contentBytes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -671,34 +745,39 @@ function EditorRuntimeWidget({
   }, [dirty, file, onDirtyChange]);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
+    const snapshotKey = documentSessionKey(root, file);
     if (!dirty) {
-      void deleteEditorHotExitSnapshot(root, file);
+      if (lastHotExitSnapshotKeyRef.current === snapshotKey) {
+        lastHotExitSnapshotKeyRef.current = null;
+        void deleteEditorHotExitSnapshot(root, file);
+      }
       return;
     }
-    const sizeBytes = new TextEncoder().encode(content).length;
-    if (maxBytes !== null && sizeBytes > maxBytes) return;
-    let cancelled = false;
-    void sha256Hex(content).then((contentHash) => {
-      if (cancelled) return;
+    if (maxBytes !== null && contentSizeBytes > maxBytes) return;
+    if (activeContentHash === null) return;
+    const timer = window.setTimeout(() => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
         workspaceRoot: root,
         relativePath: file,
         content,
         baseVersion: version,
-        contentHash,
+        contentHash: activeContentHash,
         savedContentHash: version?.contentHash ?? null,
         updatedAt: Date.now(),
         paneId: paneId ?? "pane-1",
         windowId: windowId ?? "editor",
       };
+      lastHotExitSnapshotKeyRef.current = snapshotKey;
       void writeEditorHotExitSnapshot(snapshot);
-    });
+    }, HOT_EXIT_WRITE_DEBOUNCE_MS);
     return () => {
-      cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [
+    activeContentHash,
     content,
+    contentSizeBytes,
     dirty,
     file,
     fileModelMatchesTarget,
@@ -788,7 +867,8 @@ function EditorRuntimeWidget({
       setLoadState({ status: "loading" });
       setSaveStatus("idle");
       setSaveError(undefined);
-      void fetchFilesContent(root, file)
+      void Promise.resolve()
+        .then(() => fetchFilesContent(root, file))
         .then(async (response) => {
           if (signal.cancelled) return;
           const identity: EditorDocumentIdentity = {
@@ -1362,7 +1442,6 @@ function EditorRuntimeWidget({
     [file, hasTarget, root],
   );
 
-  const contentSizeBytes = useMemo(() => new TextEncoder().encode(content).length, [content]);
   const largeFileMode = useMemo(
     () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
     [content, contentSizeBytes],
@@ -1499,10 +1578,12 @@ function EditorRuntimeWidget({
   }, [dirty, dirtyFiles, file]);
   const handleSelectTab = useCallback(
     (path: string): void => {
-      if (path === file || saveStatus === "saving") return;
+      const paneAlreadyActive =
+        paneId === undefined || activePaneId === undefined || paneId === activePaneId;
+      if ((path === file && paneAlreadyActive) || saveStatus === "saving") return;
       onSelectOpenFile?.(path);
     },
-    [file, onSelectOpenFile, saveStatus],
+    [activePaneId, file, onSelectOpenFile, paneId, saveStatus],
   );
   const handleCloseTab = useCallback(
     async (path: string): Promise<void> => {
@@ -1531,6 +1612,8 @@ function EditorRuntimeWidget({
     () => `${safeDomIdSegment(windowId ?? generatedId)}:${rootHash(root ?? "")}`,
     [generatedId, root, windowId],
   );
+  const shouldSubscribeToAgentActions =
+    paneId === undefined || activePaneId === undefined || paneId === activePaneId;
   const agentDocumentVersion = useMemo(
     () =>
       version === null
@@ -1738,6 +1821,7 @@ function EditorRuntimeWidget({
   const { agentSelectionRequest, consumeSelectionRequest } = useEditorAgentBridge({
     agentSessionId,
     controllers: agentControllers,
+    enabled: shouldSubscribeToAgentActions,
     registerSnapshot: registerAgentSnapshot,
     onConflict: setAgentConflict,
     onAgentActivity: () => setAuditRefreshNonce((nonce) => nonce + 1),
@@ -1987,10 +2071,17 @@ function EditorRuntimeWidget({
                 : `${editorDomIdPrefix}-tab-${safeDomIdSegment(path)}`;
               const tabDirty = effectiveDirtyFiles.has(path);
               const tabHandle = renderTabHandle?.(path, active, tabDirty);
+              const insertEdge = tabInsertTarget?.file === path ? tabInsertTarget.edge : null;
               return (
                 <span
                   className={`ed-tab${active ? " active" : ""}`}
                   data-dirty={tabDirty ? "true" : "false"}
+                  data-pane-id={paneId}
+                  data-tab-file={path}
+                  data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                  data-tab-held={tabHandle?.["data-tab-held"]}
+                  data-tab-insert-before={insertEdge === "before" ? "true" : "false"}
+                  data-tab-insert-after={insertEdge === "after" ? "true" : "false"}
                   key={path}
                 >
                   <button
@@ -2003,8 +2094,14 @@ function EditorRuntimeWidget({
                     aria-controls={tabpanelId}
                     tabIndex={active ? 0 : -1}
                     data-tip={path}
+                    data-pane-id={paneId}
+                    data-tab-file={path}
+                    data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                    data-tab-held={tabHandle?.["data-tab-held"]}
+                    onClickCapture={tabHandle?.onClickCapture}
                     onDragStart={tabHandle?.onDragStart}
                     onDragEnd={tabHandle?.onDragEnd}
+                    onPointerDown={tabHandle?.onPointerDown}
                     onKeyDown={tabHandle?.onKeyDown}
                     onClick={() => handleSelectTab(path)}
                     onAuxClick={(event) => {
@@ -2062,12 +2159,11 @@ function EditorRuntimeWidget({
               onToggle={(event) => setSummaryMenuOpen(event.currentTarget.open)}
             >
               <summary
-                className="ed-tab-summary ui-tip"
+                className="ed-tab-summary"
                 aria-label={`${String(summaryTabs.length)} more open documents`}
                 aria-haspopup="menu"
                 aria-expanded={summaryMenuOpen ? "true" : "false"}
                 aria-controls={summaryMenuId}
-                data-tip={summaryTip}
               >
                 +{summaryTabs.length}
               </summary>
@@ -2078,15 +2174,25 @@ function EditorRuntimeWidget({
               >
                 {summaryTabs.map((path) => {
                   const tabDirty = effectiveDirtyFiles.has(path);
+                  const tabHandle = renderTabHandle?.(path, false, tabDirty, {
+                    onDragModeStart: () => setSummaryMenuOpen(false),
+                  });
                   return (
                     <button
                       type="button"
                       key={path}
-                      className="ed-tab-summary-item ui-tip"
-                      data-tip={path}
+                      className="ed-tab-summary-item"
+                      draggable={tabHandle?.draggable}
+                      data-tab-draggable={tabHandle?.["data-tab-draggable"]}
+                      data-tab-held={tabHandle?.["data-tab-held"]}
+                      onClickCapture={tabHandle?.onClickCapture}
+                      onDragStart={tabHandle?.onDragStart}
+                      onDragEnd={tabHandle?.onDragEnd}
+                      onPointerDown={tabHandle?.onPointerDown}
+                      onKeyDown={tabHandle?.onKeyDown}
                       onClick={() => handleChooseSummaryTab(path)}
                     >
-                      <Icons.editor size={12} />
+                      <FileIcon name={path} />
                       <span className="ed-tab-summary-label">{path}</span>
                       {tabDirty ? (
                         <span className="ed-dirty" aria-hidden="true">
@@ -2102,66 +2208,48 @@ function EditorRuntimeWidget({
         </div>
         <div className="ed-toolbar-actions">
           {toolbarExtras}
-          {hasTarget && completionEnabled ? (
+          {hasTarget ? (
             <button
               type="button"
-              className="ed-save ui-tip"
+              className="ed-save ed-generate-tests"
               onClick={() => {
                 if (canGenerateTests) runTestGeneration();
               }}
-              aria-disabled={!canGenerateTests}
-              data-tip="Generate unit tests for this file"
+              aria-disabled={canGenerateTests ? "false" : "true"}
             >
-              {testGenBusy ? "Generating…" : "Generate Tests"}
+              Tests
             </button>
           ) : null}
           {testGenBusy ? (
-            <button
-              type="button"
-              className="ed-reload ui-tip"
-              onClick={cancelTestGeneration}
-              data-tip="Cancel test generation"
-            >
+            <button type="button" className="ed-reload" onClick={cancelTestGeneration}>
               Cancel
             </button>
           ) : null}
           {hasTarget ? (
             <button
               type="button"
-              className="ed-save ui-tip"
+              className="ed-save"
               onClick={() => {
                 if (canFormat) setFormatRequestNonce((value) => value + 1);
               }}
               aria-disabled={canFormat ? "false" : "true"}
-              aria-label={
-                canFormat
-                  ? "Format document"
-                  : `Formatting unavailable for ${formattingLanguageLabel}`
-              }
-              data-tip="Format document"
             >
               Format
             </button>
           ) : null}
           {hasTarget && saveStatus === "conflict" ? (
-            <button
-              type="button"
-              className="ed-reload ui-tip"
-              onClick={requestReload}
-              data-tip="Reload from disk"
-            >
+            <button type="button" className="ed-reload" onClick={requestReload}>
               Reload
             </button>
           ) : null}
           {hasTarget ? (
             <button
               type="button"
-              className="ed-save ui-tip"
+              className="ed-save"
               onClick={() => {
                 if (canSave) void persist(content);
               }}
               aria-disabled={saveUnavailable}
-              data-tip={saveStatus === "saving" ? "Saving changes" : "Save changes"}
             >
               {saveStatus === "saving" ? "Saving…" : "Save"}
             </button>

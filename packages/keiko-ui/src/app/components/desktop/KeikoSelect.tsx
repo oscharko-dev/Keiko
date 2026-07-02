@@ -118,10 +118,7 @@ function OverflowOptionButton({
   readonly active: boolean;
   readonly index: number;
   readonly onCommit: (option: FlatOption) => void;
-  readonly onOptionKeyDown: (
-    event: ReactKeyboardEvent<HTMLButtonElement>,
-    index: number,
-  ) => void;
+  readonly onOptionKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
   readonly option: FlatOption;
   readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
 }): ReactNode {

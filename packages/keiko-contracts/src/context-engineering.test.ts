@@ -11,8 +11,10 @@ import {
   DEFAULT_CONTEXT_PROFILE,
   DEFAULT_TOKEN_ESTIMATOR_ID,
   deriveContextProfile,
+  deriveContextProfileFromCapability,
   estimateTokens,
   estimateTokensForSegments,
+  maxUtf8BytesForTokenBudget,
 } from "./context-engineering.js";
 import type {
   ContextAssemblyDiagnostics,
@@ -21,6 +23,7 @@ import type {
   ContextLaneDiagnostics,
   ContextProfile,
 } from "./context-engineering.js";
+import type { ModelCapability } from "./gateway.js";
 import {
   isContextLaneId,
   validateContextAssemblyDiagnostics,
@@ -92,6 +95,38 @@ function happyAssembly(): ContextAssemblyDiagnostics {
   };
 }
 
+function chatCapability(
+  id: string,
+  contextWindow: number,
+  maxOutputTokens: number,
+): ModelCapability {
+  return {
+    id,
+    kind: "chat",
+    contextWindow,
+    maxOutputTokens,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "fixture",
+    preferredUseCases: ["Chat"],
+    knownLimitations: [],
+  };
+}
+
+function baselineTokenBudgetForBytes(bytes: number): number {
+  return 2 + Math.ceil(bytes / 3.5);
+}
+
+function denseTokenBudgetForBytes(bytes: number): number {
+  return 2 + Math.ceil(bytes / 3);
+}
+
 function expectInvalidWithReason(result: ContextValidationResult, fragment: string): void {
   expect(result.ok).toBe(false);
   if (result.ok) {
@@ -140,7 +175,7 @@ describe("DEFAULT_CONTEXT_PROFILE", () => {
   });
 
   it("carries the default estimator provenance id", () => {
-    expect(DEFAULT_CONTEXT_PROFILE.tokenEstimatorId).toBe("keiko-conservative-utf8-v1");
+    expect(DEFAULT_CONTEXT_PROFILE.tokenEstimatorId).toBe("keiko-conservative-content-v2");
   });
 
   it("omits the optional model metadata", () => {
@@ -176,6 +211,7 @@ describe("estimateTokens", () => {
     "",
     "hello world",
     "für eine Straße",
+    "变量未定义，请检查配置",
     "emoji 😀👨‍👩‍👧‍👦 and surrogate 😀",
     "x".repeat(1_048_576),
   ];
@@ -206,18 +242,41 @@ describe("estimateTokens", () => {
     }
   });
 
-  it("is conservative: estimate >= ceil(byteLength / 4) for non-empty inputs", () => {
+  it("never drops below the baseline UTF-8 byte floor for non-empty inputs", () => {
     for (const input of cases) {
       if (input.length === 0) continue;
       const bytes = new TextEncoder().encode(input).length;
-      expect(estimateTokens(input)).toBeGreaterThanOrEqual(Math.ceil(bytes / 4));
+      expect(estimateTokens(input)).toBeGreaterThanOrEqual(baselineTokenBudgetForBytes(bytes));
     }
   });
 
-  it("has a sane upper bound: estimate <= byteLength + overhead", () => {
+  it("uses the dense floor for CJK-heavy text", () => {
+    const input = "变量未定义请检查配置".repeat(20);
+    const bytes = new TextEncoder().encode(input).length;
+    expect(estimateTokens(input)).toBe(denseTokenBudgetForBytes(bytes));
+    expect(estimateTokens(input)).toBeGreaterThan(baselineTokenBudgetForBytes(bytes));
+  });
+
+  it("charges dense structural text more than same-byte plain ASCII", () => {
+    const bytes = 120;
+    const plain = "x".repeat(bytes);
+    const structural = "{".repeat(bytes);
+    expect(new TextEncoder().encode(plain)).toHaveLength(bytes);
+    expect(new TextEncoder().encode(structural)).toHaveLength(bytes);
+    expect(estimateTokens(structural)).toBe(denseTokenBudgetForBytes(bytes));
+    expect(estimateTokens(structural)).toBeGreaterThan(estimateTokens(plain));
+  });
+
+  it("uses the dense floor for short-line output", () => {
+    const input = ["a", "b", "c", "d", "e"].join("\n");
+    const bytes = new TextEncoder().encode(input).length;
+    expect(estimateTokens(input)).toBe(denseTokenBudgetForBytes(bytes));
+  });
+
+  it("has a sane upper bound: estimate <= dense byte floor", () => {
     for (const input of cases) {
       const bytes = new TextEncoder().encode(input).length;
-      expect(estimateTokens(input)).toBeLessThanOrEqual(bytes + 2);
+      expect(estimateTokens(input)).toBeLessThanOrEqual(denseTokenBudgetForBytes(bytes));
     }
   });
 });
@@ -242,6 +301,23 @@ describe("estimateTokensForSegments", () => {
     const base = estimateTokensForSegments(["one", "two"]);
     const grown = estimateTokensForSegments(["one", "two", "three"]);
     expect(grown).toBeGreaterThanOrEqual(base);
+  });
+});
+
+// ─── maxUtf8BytesForTokenBudget ────────────────────────────────────────────────
+describe("maxUtf8BytesForTokenBudget", () => {
+  it("returns 0 for empty or overhead-only budgets", () => {
+    expect(maxUtf8BytesForTokenBudget(0)).toBe(0);
+    expect(maxUtf8BytesForTokenBudget(1)).toBe(0);
+    expect(maxUtf8BytesForTokenBudget(2)).toBe(0);
+  });
+
+  it("stays aligned with estimateTokens for dense structural fixtures", () => {
+    for (const tokenBudget of [3, 8, 32, 512]) {
+      const maxBytes = maxUtf8BytesForTokenBudget(tokenBudget);
+      expect(estimateTokens("{".repeat(maxBytes))).toBeLessThanOrEqual(tokenBudget);
+      expect(estimateTokens("{".repeat(maxBytes + 1))).toBeGreaterThan(tokenBudget);
+    }
   });
 });
 
@@ -291,6 +367,40 @@ describe("deriveContextProfile", () => {
       safetyMarginTokens: 5,
     };
     expect(deriveContextProfile(input)).toEqual(deriveContextProfile(input));
+  });
+});
+
+describe("deriveContextProfileFromCapability", () => {
+  it("derives distinct effective budgets for 32k, 128k, and 200k chat capabilities", () => {
+    const profile32 = deriveContextProfileFromCapability(chatCapability("ctx-32k", 32_000, 2_048));
+    const profile128 = deriveContextProfileFromCapability(
+      chatCapability("ctx-128k", 128_000, 8_000),
+    );
+    const profile200 = deriveContextProfileFromCapability(
+      chatCapability("ctx-200k", 200_000, 12_000),
+    );
+    expect(profile32.effectiveInputBudget).toBe(28_952);
+    expect(profile128.effectiveInputBudget).toBe(DEFAULT_CONTEXT_PROFILE.effectiveInputBudget);
+    expect(profile200.effectiveInputBudget).toBe(181_750);
+  });
+
+  it("records the model id in the optional metadata", () => {
+    expect(deriveContextProfileFromCapability(chatCapability("gpt-bank", 128_000, 8_000))).toMatchObject(
+      {
+        model: { id: "gpt-bank" },
+      },
+    );
+  });
+
+  it("falls back to the default profile geometry for placeholder runtime capabilities", () => {
+    const profile = deriveContextProfileFromCapability(chatCapability("runtime-chat", 0, 0));
+    expect(profile).toMatchObject({
+      maxInputTokens: DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+      reservedOutputTokens: DEFAULT_CONTEXT_PROFILE.reservedOutputTokens,
+      safetyMarginTokens: DEFAULT_CONTEXT_PROFILE.safetyMarginTokens,
+      effectiveInputBudget: DEFAULT_CONTEXT_PROFILE.effectiveInputBudget,
+      model: { id: "runtime-chat" },
+    });
   });
 });
 

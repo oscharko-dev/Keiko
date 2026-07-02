@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -10,10 +10,12 @@ import type {
   MemoryReviewerId,
   ProjectId,
   UserId,
+  WorkflowDefinitionId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import {
   createMemoryVault,
+  memoryBodySuppressionHash,
   MemoryStorageError,
   MemoryStorageValidationError,
   type MemoryEvent,
@@ -55,6 +57,13 @@ function openVault(
     },
     onMemoryEvent: (e) => events.push(e),
   });
+}
+
+function listAllMemories(
+  vault: MemoryVaultStore,
+  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
 }
 
 function makeMemory(overrides: Partial<MemoryRecord> & Pick<MemoryRecord, "id">): MemoryRecord {
@@ -143,6 +152,23 @@ describe("corrupt-DB quarantine rotates sidecars", () => {
     expect(entries.some((e) => e.startsWith("keiko-memory.db.corrupt."))).toBe(true);
     expect(entries.some((e) => e.startsWith("keiko-memory.db-wal.corrupt."))).toBe(true);
     expect(entries.some((e) => e.startsWith("keiko-memory.db-shm.corrupt."))).toBe(true);
+  });
+});
+
+describe("sidecar permissions", () => {
+  it("hardens WAL sidecars created by later writes on POSIX", () => {
+    if (process.platform === "win32") return;
+    const dir = freshDir();
+    const vault = openVault(dir);
+    const dbPath = join(dir, "keiko-memory.db");
+
+    vault.insertMemory(makeMemory({ id: "mem-sidecar-mode" as MemoryId }));
+
+    expect(existsSync(`${dbPath}-wal`)).toBe(true);
+    expect(existsSync(`${dbPath}-shm`)).toBe(true);
+    expect(statSync(`${dbPath}-wal`).mode & 0o777).toBe(0o600);
+    expect(statSync(`${dbPath}-shm`).mode & 0o777).toBe(0o600);
+    vault.close();
   });
 });
 
@@ -255,6 +281,36 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
       "memory:deleted",
       "memory:tombstoned",
     ]);
+    v.close();
+  });
+
+  it("rolls back a soft delete when the pre-commit delete hook rejects the audit", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      onMemoryEvent: (e) => events.push(e),
+      onDeleteEventsBeforeCommit: () => {
+        throw new Error("audit unavailable");
+      },
+    });
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    events.length = 0;
+
+    expect(() => {
+      v.deleteMemory("m1" as MemoryId, {
+        tombstone: true,
+        forgetterSurface: "test",
+        reason: "test",
+        nowMs: 1_700_000_001_000,
+      });
+    }).toThrow("audit unavailable");
+
+    expect(v.getMemory("m1" as MemoryId)).toBeDefined();
+    expect(v.listTombstonesByScope({ kind: "user", userId: "u-1" as UserId })).toEqual([]);
+    expect(events).toEqual([]);
     v.close();
   });
 });
@@ -386,6 +442,7 @@ describe("deterministic now/newTombstoneId", () => {
         type: "preference",
         forgottenAt: 1_700_000_001_000,
         forgetterSurface: "test",
+        bodyHash: memoryBodySuppressionHash("prefers dark mode"),
         reviewerId: "reviewer-1",
         originalStatus: "accepted",
       },
@@ -444,6 +501,117 @@ describe("list filters", () => {
         .map((m) => m.id)
         .sort(),
     ).toEqual(["m2", "m3"]);
+    v.close();
+  });
+
+  it("lists scope metadata with the same filters without returning memory content", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(
+      makeMemory({
+        id: "m1" as MemoryId,
+        type: "semantic-fact",
+        body: "sensitive remembered body",
+        tags: ["private-tag"],
+        pinned: true,
+      }),
+    );
+    v.insertMemory(
+      makeMemory({
+        id: "m2" as MemoryId,
+        type: "semantic-fact",
+        status: "archived",
+        body: "archived body",
+      }),
+    );
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    const metadata = v.listMemoryMetadataByScope(userScope, {
+      type: ["semantic-fact"],
+      status: ["accepted"],
+    });
+    expect(metadata).toEqual([
+      {
+        id: "m1",
+        schemaVersion: "1",
+        scope: userScope,
+        type: "semantic-fact",
+        status: "accepted",
+        sensitivity: "confidential",
+        pinned: true,
+        confidence: 0.9,
+        validity: { validFrom: 1_700_000_000_000 },
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      },
+    ]);
+    expect(JSON.stringify(metadata)).not.toContain("sensitive remembered body");
+    expect(JSON.stringify(metadata)).not.toContain("private-tag");
+    v.close();
+  });
+
+  it("lists metadata for every supported scope kind", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    const workspaceScope = {
+      kind: "workspace" as const,
+      workspaceId: "w-1" as WorkspaceId,
+    };
+    const projectScope = { kind: "project" as const, projectId: "p-1" as ProjectId };
+    const workflowScope = {
+      kind: "workflow" as const,
+      workflowDefinitionId: "wf-1" as WorkflowDefinitionId,
+    };
+    const globalScope = { kind: "global" as const };
+    v.insertMemory(makeMemory({ id: "m-user" as MemoryId, scope: userScope }));
+    v.insertMemory(makeMemory({ id: "m-workspace" as MemoryId, scope: workspaceScope }));
+    v.insertMemory(makeMemory({ id: "m-project" as MemoryId, scope: projectScope }));
+    v.insertMemory(makeMemory({ id: "m-workflow" as MemoryId, scope: workflowScope }));
+    v.insertMemory(makeMemory({ id: "m-global" as MemoryId, scope: globalScope }));
+
+    expect(v.listMemoryMetadataByScope(userScope)[0]?.scope).toEqual(userScope);
+    expect(v.listMemoryMetadataByScope(workspaceScope)[0]?.scope).toEqual(workspaceScope);
+    expect(v.listMemoryMetadataByScope(projectScope)[0]?.scope).toEqual(projectScope);
+    expect(v.listMemoryMetadataByScope(workflowScope)[0]?.scope).toEqual(workflowScope);
+    expect(v.listMemoryMetadataByScope(globalScope)[0]?.scope).toEqual(globalScope);
+    v.close();
+  });
+
+  it("lists records only from explicitly supplied scopes", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    const workspaceScope = {
+      kind: "workspace" as const,
+      workspaceId: "w-1" as WorkspaceId,
+    };
+    v.insertMemory(makeMemory({ id: "m-user" as MemoryId, scope: userScope }));
+    v.insertMemory(makeMemory({ id: "m-workspace" as MemoryId, scope: workspaceScope }));
+
+    expect(v.listMemoryScopes()).toEqual([userScope, workspaceScope]);
+    expect(
+      v.listMemoriesAcrossScopes([userScope], { includeExpired: true }).map((memory) => memory.id),
+    ).toEqual(["m-user"]);
+    expect(v.listMemoriesAcrossScopes([], { includeExpired: true })).toEqual([]);
+    v.close();
+  });
+
+  it("supports root listing order, limit, and offset options", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, createdAt: 100, updatedAt: 100 }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId, createdAt: 200, updatedAt: 200 }));
+    v.insertMemory(makeMemory({ id: "m3" as MemoryId, createdAt: 300, updatedAt: 300 }));
+
+    expect(
+      listAllMemories(v, {
+        includeExpired: true,
+        limit: 1,
+        offset: 1,
+        orderBy: "updatedAt",
+        orderDir: "asc",
+      }).map((memory) => memory.id),
+    ).toEqual(["m2"]);
     v.close();
   });
 });

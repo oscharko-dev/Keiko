@@ -121,9 +121,9 @@ describe("MemoryActions", () => {
 
     await user.click(screen.getByRole("button", { name: /delete this memory record/i }));
     expect(deleteImpl).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading", { name: /delete this memory/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /delete this memory record/i })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /delete permanently/i }));
+    await user.click(screen.getByRole("button", { name: /delete record/i }));
     await waitFor(() => {
       expect(deleteImpl).toHaveBeenCalledWith(
         "mem-actions-1",

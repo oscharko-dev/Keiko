@@ -93,7 +93,7 @@ describe("Header split action wording (F039 C401)", () => {
     expect(btn.getAttribute("data-tip")).toBe("Split front windows");
   });
 
-  it("localizes header window-control labels when German is selected", () => {
+  it("localizes header window-control labels when German is selected", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     render(
       <I18nProvider>
@@ -107,7 +107,7 @@ describe("Header split action wording (F039 C401)", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Vordere Fenster teilen" })).toHaveAttribute(
+    expect(await screen.findByRole("button", { name: "Vordere Fenster teilen" })).toHaveAttribute(
       "data-tip",
       "Vordere Fenster teilen",
     );

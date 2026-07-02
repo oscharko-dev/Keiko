@@ -567,7 +567,12 @@ describe("provider pluggability (AC7)", () => {
   function stubProvider(): LanguageProvider {
     const range = { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } };
     return {
-      descriptor: { id: "stub", languages: ["fictional"], operations: ["diagnostics"], availability: "available" },
+      descriptor: {
+        id: "stub",
+        languages: ["fictional"],
+        operations: ["diagnostics"],
+        availability: "available",
+      },
       supports: (languageId: string): boolean => languageId === "fictional",
       getDiagnostics: () => ({
         diagnostics: [{ range, severity: "warning", message: "stub diagnostic", source: "stub" }],

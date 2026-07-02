@@ -39,6 +39,10 @@ export interface MemoryQueryPort {
   listOutgoingEdges?(memoryId: MemoryId): readonly MemoryEdge[];
   /** Fetch incoming edges. */
   listIncomingEdges?(memoryId: MemoryId): readonly MemoryEdge[];
+  /** Fetch all incident edges for the candidate set in one bounded pass. */
+  listEdgesForMemories?(
+    memoryIds: readonly MemoryId[],
+  ): ReadonlyMap<MemoryId, readonly MemoryEdge[]>;
 }
 
 export interface ListByScopeOptions {
@@ -83,24 +87,25 @@ export interface RankingWeights {
 // downstream consumer cannot mutate the global default.
 export const DEFAULT_RANKING_WEIGHTS: RankingWeights = Object.freeze({
   relevance: 0.2,
-  recency: 0.2,
-  confidence: 0.2,
+  recency: 0.12,
+  confidence: 0.12,
   pinned: 0.3,
   correction: 0.1,
   graph: 0.15,
-  semantic: 0.25,
+  semantic: 0.4,
   // Reinforcement weight (#204). Sits between recency and semantic: reuse is a strong signal but must
   // not override an explicit pin or a fresh correction. Only participates when the caller supplies
   // per-memory strength scores; otherwise the ranker forces it to 0 (byte-identical legacy behaviour).
   strength: 0.2,
-  // Source-authority importance weight (#204, O-F5). Default 0 (opt-in): always computed but inert
-  // until an operator sets a non-zero weight, so legacy ranking is byte-identical.
-  importance: 0,
+  // Source-authority importance weight (#204, O-F5): explicit user instructions and accepted
+  // corrections should not tie passive inferred memories at equal relevance.
+  importance: 0.1,
 });
 
 export const DEFAULT_BUDGET_TOKENS = 1500;
 export const DEFAULT_MAX_INCLUDED = 12;
 export const DEFAULT_STALE_CONFIDENCE_THRESHOLD = 0.3;
+export const DEFAULT_SEMANTIC_MIN_SCORE = 0.3;
 export const DEFAULT_LIST_BY_SCOPE_MAX_RESULTS = 500;
 
 // Signal-fusion strategy (#204, O-F2). "weighted-sum" (default) blends normalized subscores by
@@ -124,6 +129,10 @@ export interface MemoryRetrievalRequest {
   readonly graphProximityBoost?: number;
   readonly relevanceWeight?: number;
   readonly semanticWeight?: number;
+  // Semantic scores below this floor are treated as absent before ranking and relevance-threshold
+  // filtering. Prevents tiny positive cosine values from filling the prompt when lexical/graph
+  // signals are zero.
+  readonly semanticMinScore?: number;
   readonly staleConfidenceThreshold?: number;
   /** Audit/debug opt-in. Active context retrieval suppresses superseded memories by default. */
   readonly includeSuperseded?: boolean;
@@ -138,8 +147,8 @@ export interface MemoryRetrievalRequest {
   // ranker zeroes the strength weight so output is byte-identical to the pre-strength behaviour.
   readonly strengthById?: ReadonlyMap<MemoryId, number>;
   readonly strengthWeight?: number;
-  // Source-authority importance weight (#204, O-F5). Defaults to 0 (the signal is computed from
-  // provenance but inert) so legacy ranking is unchanged unless the caller opts in.
+  // Source-authority importance weight (#204, O-F5). Defaults to a small positive authority signal
+  // so explicit user instructions win equal-score ties against passive inferred memories.
   readonly importanceWeight?: number;
   // Per-memory embedding vectors for MMR diversity re-ordering at selection time (#204, O-F3). When
   // absent, selection stays the pure greedy-by-rank behaviour (byte-identical). mmrLambda balances
@@ -197,11 +206,7 @@ export interface IncludedMemory {
 }
 
 export type OmittedReason =
-  | "suppressed-by-status"
-  | "below-threshold"
-  | "budget-exceeded"
-  | "out-of-scope"
-  | "type-filtered";
+  "suppressed-by-status" | "below-threshold" | "budget-exceeded" | "out-of-scope" | "type-filtered";
 
 export interface OmittedMemory {
   readonly memoryId: MemoryId;

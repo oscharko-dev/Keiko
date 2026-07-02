@@ -67,11 +67,15 @@ function buildSessionCreatePayload(
   };
 }
 
-function buildSdpOfferPayload(sessionId: string, sdp: string): Record<string, unknown> {
+function buildSdpOfferPayload(
+  sessionId: string,
+  seq: number,
+  sdp: string,
+): Record<string, unknown> {
   return {
     protocolVersion: VOICE_PROTOCOL_VERSION,
     sessionId,
-    seq: 1,
+    seq,
     direction: "client-to-host",
     kind: "signal.sdp.offer",
     sdp,
@@ -87,12 +91,15 @@ export function createBrowserVoiceControlClient(
 ): VoiceControlClient {
   const factory = socketFactory ?? ((url: string) => new WebSocket(url));
   let ws: WebSocket | undefined;
+  const sessionId = crypto.randomUUID();
+  const idempotencyKey = crypto.randomUUID();
+  let nextOfferSeq = 1;
 
   return {
     negotiate(offerSdp: string): Promise<string> {
       return new Promise<string>((resolve, reject) => {
-        const sessionId = crypto.randomUUID();
-        const idempotencyKey = crypto.randomUUID();
+        const offerSeq = nextOfferSeq;
+        nextOfferSeq += 1;
 
         try {
           ws = factory(buildWsUrl());
@@ -169,7 +176,9 @@ export function createBrowserVoiceControlClient(
         ws.addEventListener("open", () => {
           opened = true;
           ws?.send(
-            JSON.stringify(buildSessionCreatePayload(sessionId, idempotencyKey, persona, chatContext)),
+            JSON.stringify(
+              buildSessionCreatePayload(sessionId, idempotencyKey, persona, chatContext),
+            ),
           );
         });
 
@@ -204,7 +213,7 @@ export function createBrowserVoiceControlClient(
           if (msg.kind === "session.created") {
             sessionCreated = true;
             // Send the SDP offer once the session is established.
-            ws?.send(JSON.stringify(buildSdpOfferPayload(sessionId, offerSdp)));
+            ws?.send(JSON.stringify(buildSdpOfferPayload(sessionId, offerSeq, offerSdp)));
             return;
           }
 

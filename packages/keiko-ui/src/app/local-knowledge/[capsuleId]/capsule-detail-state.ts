@@ -14,6 +14,7 @@ export interface CapsuleDetailState {
   readonly loadStatus: DetailLoadStatus;
   readonly loadError: string | null;
   readonly reload: () => void;
+  readonly replaceData: (nextData: CapsuleDetail) => void;
 }
 
 export function useCapsuleDetail(
@@ -70,5 +71,11 @@ export function useCapsuleDetail(
     void load();
   }
 
-  return { data, loadStatus, loadError, reload };
+  function replaceData(nextData: CapsuleDetail): void {
+    setData(nextData);
+    setLoadError(null);
+    setLoadStatus("ready");
+  }
+
+  return { data, loadStatus, loadError, reload, replaceData };
 }

@@ -153,6 +153,26 @@ function revealCfg(
   };
 }
 
+function sameWorkspaceValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((value, index) => sameWorkspaceValue(value, right[index]));
+  }
+  if (left === null || right === null || typeof left !== "object" || typeof right !== "object") {
+    return false;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every((key) =>
+    sameWorkspaceValue(
+      (left as Readonly<Record<string, unknown>>)[key],
+      (right as Readonly<Record<string, unknown>>)[key],
+    ),
+  );
+}
+
 function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
   return (id, patch) =>
     setWins((ws) => {
@@ -161,7 +181,7 @@ function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
       const next = ws.map((w) => {
         if (w.id !== id) return w;
         for (const [key, value] of Object.entries(patch)) {
-          if (w[key as keyof AppWindow] !== value) {
+          if (!sameWorkspaceValue(w[key as keyof AppWindow], value)) {
             changed = true;
             return { ...w, ...patch };
           }
@@ -502,6 +522,14 @@ function stripPrev(w: AppWindow): Omit<AppWindow, "prev"> {
   return rest;
 }
 
+function hasPrev(w: AppWindow): boolean {
+  return "prev" in w;
+}
+
+function hasLayoutGeometry(w: AppWindow, next: Pick<AppWindow, "x" | "y" | "w" | "h">): boolean {
+  return w.x === next.x && w.y === next.y && w.w === next.w && w.h === next.h;
+}
+
 function makeTileAll({ setWins, worldVP }: LayoutArgs): WorkspaceApi["tileAll"] {
   return () =>
     setWins((ws) => {
@@ -514,19 +542,33 @@ function makeTileAll({ setWins, worldVP }: LayoutArgs): WorkspaceApi["tileAll"] 
       const g = 12;
       const cw = (vp.w - g * (cols + 1)) / cols;
       const ch = (vp.h - g * (rows + 1)) / rows;
-      return ws.map((w, i) => {
+      let changed = false;
+      const next = ws.map((w, i) => {
         const c = i % cols;
         const rr = Math.floor(i / cols);
-        return {
-          ...stripPrev(w),
-          max: false,
-          minimized: false,
+        const geometry = {
           x: vp.x + g + c * (cw + g),
           y: vp.y + g + rr * (ch + g),
           w: cw,
           h: ch,
         };
+        if (
+          w.max === false &&
+          w.minimized === false &&
+          !hasPrev(w) &&
+          hasLayoutGeometry(w, geometry)
+        ) {
+          return w;
+        }
+        changed = true;
+        return {
+          ...stripPrev(w),
+          max: false,
+          minimized: false,
+          ...geometry,
+        };
       });
+      return changed ? next : ws;
     });
 }
 
@@ -541,32 +583,59 @@ function makeSplitFront({ setWins, worldVP }: LayoutArgs): WorkspaceApi["splitFr
         .sort((a, b) => b.z - a.z)
         .slice(0, 2)
         .map((s) => s.id);
-      return ws.map((w) => {
+      if (ids.length < 2) return ws;
+      let changed = false;
+      const next = ws.map((w) => {
         const i = ids.indexOf(w.id);
         if (i === 0) {
-          return {
-            ...stripPrev(w),
-            max: false,
-            minimized: false,
+          const geometry = {
             x: vp.x,
             y: vp.y,
             w: vp.w / 2,
             h: vp.h,
           };
-        }
-        if (i === 1) {
+          if (
+            w.max === false &&
+            w.minimized === false &&
+            !hasPrev(w) &&
+            hasLayoutGeometry(w, geometry)
+          ) {
+            return w;
+          }
+          changed = true;
           return {
             ...stripPrev(w),
             max: false,
             minimized: false,
+            ...geometry,
+          };
+        }
+        if (i === 1) {
+          const geometry = {
             x: vp.x + vp.w / 2,
             y: vp.y,
             w: vp.w / 2,
             h: vp.h,
           };
+          if (
+            w.max === false &&
+            w.minimized === false &&
+            !hasPrev(w) &&
+            hasLayoutGeometry(w, geometry)
+          ) {
+            return w;
+          }
+          changed = true;
+          return {
+            ...stripPrev(w),
+            max: false,
+            minimized: false,
+            ...geometry,
+          };
         }
         return w;
       });
+      return changed ? next : ws;
     });
 }
 
@@ -652,8 +721,7 @@ interface ConnectArgs {
   readonly winsByIdRef?: MutableRefObject<ReadonlyMap<string, AppWindow>> | undefined;
   readonly connsByIdRef?: MutableRefObject<ReadonlyMap<string, Connection>> | undefined;
   readonly connsByEndpointRef?:
-    | MutableRefObject<ReadonlyMap<string, readonly Connection[]>>
-    | undefined;
+    MutableRefObject<ReadonlyMap<string, readonly Connection[]>> | undefined;
   readonly connectingRef: MutableRefObject<ConnectingState | null>;
   readonly connectCleanupRef: MutableRefObject<(() => void) | null>;
   readonly focus: WorkspaceApi["focus"];
@@ -665,8 +733,7 @@ interface ConnectArgs {
   // Release 0.2.0 — the bind callback returns whether the bind was ACCEPTED; `false` (e.g. the
   // per-chat source limit is reached) vetoes the edge so no dangling ungrounded edge is drawn.
   readonly onScopeBind?:
-    | ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>)
-    | undefined;
+    ((chatWindowId: string, scope: ChatConnectedScope) => boolean | Promise<boolean>) | undefined;
   readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
   // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
@@ -675,8 +742,7 @@ interface ConnectArgs {
     | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    | ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void)
-    | undefined;
+    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
@@ -855,14 +921,28 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const initial: ConnectingState = { from: fromId, x: toWX(e.clientX), y: toWY(e.clientY) };
     connectingRef.current = initial;
     setConnecting(initial);
-    const move = (ev: PointerEvent): void => {
+    let latestMove: PointerEvent | null = null;
+    let frame: number | null = null;
+    const flushMove = (): void => {
+      frame = null;
+      const ev = latestMove;
+      if (ev === null) return;
       const next: ConnectingState = { from: fromId, x: toWX(ev.clientX), y: toWY(ev.clientY) };
       connectingRef.current = next;
       setConnecting(next);
     };
+    const move = (ev: PointerEvent): void => {
+      latestMove = ev;
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(flushMove);
+    };
     window.addEventListener("pointermove", move);
     connectCleanupRef.current = (): void => {
       window.removeEventListener("pointermove", move);
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+        frame = null;
+      }
     };
   };
 

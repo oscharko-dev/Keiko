@@ -21,8 +21,7 @@ import type {
 
 // ─── Result envelope (house pattern) ───────────────────────────────────────────
 export type ContextValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 const BUDGET_PRESSURES: readonly ContextBudgetPressure[] = ["low", "moderate", "high", "exceeded"];
 

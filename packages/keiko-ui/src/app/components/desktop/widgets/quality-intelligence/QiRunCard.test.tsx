@@ -318,13 +318,13 @@ describe("QiRunCard", () => {
     expect(screen.queryByRole("heading", { name: "Login" })).not.toBeInTheDocument();
   });
 
-  it("blocks review and edit actions until a reviewer label is set", async () => {
+  it("blocks review and edit actions until an audit display label is set", async () => {
     const detail = makeDetail("qi-run-blocked", [makeCandidate("tc-1", "Login")]);
     render(<QiRunCard runId="qi-run-blocked" fetchDetailImpl={fetchOk(detail)} />);
 
     await screen.findByText("Login");
     // Governance-gated controls are aria-disabled (focusable + reason announced), not natively
-    // disabled. The reviewer-label input is flagged aria-invalid until a label is supplied.
+    // disabled. The display-label input is flagged aria-invalid until a label is supplied.
     expect(screen.getByRole("button", { name: /^edit$/i })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -333,18 +333,20 @@ describe("QiRunCard", () => {
       "aria-disabled",
       "true",
     );
-    expect(screen.getByLabelText(/reviewer label/i)).toHaveAttribute("aria-invalid", "true");
-    const reasonNotes = screen.getAllByText(/set a reviewer label to review or edit candidates/i);
+    expect(screen.getByLabelText(/audit display label/i)).toHaveAttribute("aria-invalid", "true");
+    const reasonNotes = screen.getAllByText(
+      /add a display label for audit notes; review identity is resolved by the server/i,
+    );
     expect(reasonNotes.length).toBeGreaterThanOrEqual(3);
     expect(reasonNotes.some((node) => node.classList.contains("qi-cand-action-note"))).toBe(true);
   });
 
-  it("clears aria-invalid on the reviewer-label input once a label is entered", async () => {
+  it("clears aria-invalid on the audit display-label input once a label is entered", async () => {
     const user = userEvent.setup();
     const detail = makeDetail("qi-run-aria", [makeCandidate("tc-1", "Login")]);
     render(<QiRunCard runId="qi-run-aria" fetchDetailImpl={fetchOk(detail)} />);
     await screen.findByText("Login");
-    const labelInput = screen.getByLabelText(/reviewer label/i);
+    const labelInput = screen.getByLabelText(/audit display label/i);
     expect(labelInput).toHaveAttribute("aria-invalid", "true");
     await user.type(labelInput, "Alice");
     expect(labelInput).toHaveAttribute("aria-invalid", "false");

@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { memo, useMemo, type ReactNode } from "react";
 
 type JsonTokenKind = "key" | "string" | "number" | "boolean" | "null" | "punctuation";
 
@@ -40,14 +40,14 @@ export function jsonTextByteLength(text: string): number {
   return text.length;
 }
 
-export function JsonSyntaxBlock({
+export const JsonSyntaxBlock = memo(function JsonSyntaxBlock({
   text,
   className,
 }: {
   readonly text: string;
   readonly className: string;
 }): ReactNode {
-  const tokens = tokenizeJson(text);
+  const tokens = useMemo(() => tokenizeJson(text), [text]);
   return (
     <pre className={className}>
       <code>
@@ -63,4 +63,4 @@ export function JsonSyntaxBlock({
       </code>
     </pre>
   );
-}
+});

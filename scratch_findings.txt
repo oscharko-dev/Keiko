@@ -1,0 +1,86 @@
+**INGEST-01 [High/output-quality] ADF-Parser ist toter Code** · `keiko-quality-intelligence/src/ingestion/adfParser.ts`; `keiko-server/.../runIngestion.ts:284-327` · effort: large
+**INGEST-03 [High/output-quality] Gherkin-ACs und Markdown-Entscheidungstabellen werden in Per-Zeilen-Atome zerschreddert** · `requirementsIngestion.ts:44-57` · effort: medium
+**INGEST-02 [Medium/security] _(partially-confirmed)_ Untrusted Requirement-Text erreicht das Modell — Markdown-Escape tot, Fence + Scanner aber aktiv** · `generationPort.ts:77-106`; `runIngestion.ts:289-326` · effort: medium
+**INGEST-04 [Medium/output-quality] Dokument-Ingestion strippt alle Markdown-Headings → Requirement-IDs/Titel verloren** · `runIngestion.ts:375-413` · effort: small
+**INGEST-05 [Medium/multilingual-de] `MIN_ATOM_CHARS=6` + Letter-only-Filter droppt terse deutsche IDs/Kurz-Statements** · `requirementsIngestion.ts:31,39-40,44-56` · effort: small
+**INGEST-06 [Medium/multilingual-de] Satz-Splitter feuert nur bei Single-Line und mishandhabt Abkürzungen** · `requirementsIngestion.ts:49-56` · effort: small
+**INGEST-08 [Medium/output-quality] Single-File-PDF/DOCX als UTF-8 dekodiert, kein echter Parser; Rejection heuristisch** · `runIngestion.ts:492-546` · effort: large
+**INGEST-09 [Medium/ux-honesty] Fairer Byte-Budget-Split trunkiert große Sources still ohne Notice** · `runIngestion.ts:79-82,631,686-706,1696-1705` · effort: medium
+**INGEST-07 [Low/determinism] `planSourceMix` dedupt auf kind+id, Reconciliation behandelt same-id/diff-kind als Konflikt** · `sourceMixPlanning.ts:59,82-88`; `sourceReconciliation.ts:61-64` · effort: small
+**INGEST-10 [Low/determinism] Kapsel-Corpus-Reihenfolge nicht-deterministisch über Re-Index, aber Envelope-Hash + Budget-Survival hängen davon ab** · `runIngestion.ts:686-706,765-774`; `capsuleAdapter.ts:82-85` · effort: small
+**INGEST-11 [Low/security] Forbidden-Secret-Scan eine Ebene tief, substring-only** · `connectorErrors.ts:43-52,67-74` · effort: small
+**INGEST-12 [Low/multilingual-de] `workspaceAdapter` cappt Label per JS-String-Länge statt UTF-8-Bytes** · `workspaceAdapter.ts:94-100` · effort: trivial
+**GEN-01 [High/output-quality] System-Prompt nennt keine ISTQB-Techniken; keine Kreuzfeld-/Berechnungs-Tiefen-Direktive** · `prompt.ts:26-71,158-172` · effort: medium
+**GEN-02 [High/security] Prompt-Injection-Scanner-Korpus englisch-only; deutsche Imperative ungeflaggt** · `promptInjectionScrub.ts:27-61` · effort: small
+**GEN-03 [High/model-agnosticism] Structured-Output nur bei Self-Report angefordert, Response nie schema-validiert** · `generationPort.ts:176,199-220,250-253` · effort: medium
+**GEN-04 [High/determinism] Candidate-ID-„Determinismus über Modelle/Seeds" ist falsch: ID hängt von Parse-Index/Output-Ordering ab** · `parseGeneratedCandidates.ts:267-275,337-346` · effort: medium
+**GEN-05 [Medium/governance] Positionaler Evidence-Fallback fabriziert Provenienz** · `parseGeneratedCandidates.ts:245-265` · effort: small
+**GEN-06 [Medium/multilingual-de] Atom-Splitting mis-splittet deutsche Abkürzungen und merged Aufzählungs-Subklauseln** · `requirementsIngestion.ts:44-57` · effort: medium
+**GEN-07 [Medium/ux-honesty] Default `maxAtoms` (200) und Candidate-Cap droppen den Tail still** · `requirementsIngestion.ts:30,69-96` · effort: small
+**GEN-08 [Medium/output-quality] `priority`/`riskClass` optional, Parser defaultet still und maskiert Modell-Urteil** · `parseGeneratedCandidates.ts:235-243,312-313` · effort: small
+**GEN-09 [Medium/output-quality] Evidence-Index-Validierung akzeptiert jeden In-Range-Integer ohne Per-Candidate-Guard** · `parseGeneratedCandidates.ts:248-265` · effort: small
+**GEN-10 [Low/model-agnosticism] Keine Temperatur-Pinnung in Generierung; nur Seed bedingt** · `generationPort.ts:199-220,256` · effort: trivial
+**GEN-11 [Low/output-quality] Anti-Shallow-Direktiven rein advisorisch; kein Post-Parse-Quality-Gate; englischer Platzhalter in deutschem Output** · `parseGeneratedCandidates.ts:277-317` · effort: small
+**GEN-12 [Low/security] Loose-JSON-Recovery scannt jeden Index, re-parst balancierte Slices — O(n²) auf großem/adversarialem Output** · `parseGeneratedCandidates.ts:146-180` · effort: small
+**MODEL-01 [Critical/determinism] Judge läuft auf Provider-Default-Temperatur; `temperatureHint` erreicht das Modell nie** · `keiko-contracts/src/gateway.ts:396-405`; `openai-adapter.ts:66-85,127-147`; `taskProfiles.ts:58`; `judgePort.ts:372-384` · effort: medium
+**MODEL-02 [High/determinism] Judge seeded nie, auch bei seed-fähigem Modell** · `judgePort.ts:336-389`; `generationPort.ts:176-177,199-220` · effort: medium
+**MODEL-03 [High/output-quality] Single-Model-Self-Judge ohne Bias-Guard** · `modelSelection.ts:141-150,199-207` · effort: medium
+**MODEL-04 [High/output-quality] Weak-Verdict rein advisorisch — schwache Kandidaten werden nie aus dem Deliverable gehalten** · `keiko-workflows/.../modelRoutedTestDesign.ts:689-727,856-871,970-994` · effort: medium
+**MODEL-05 [High/model-agnosticism] Optimistische Default-Capability behauptet `structuredOutput:true`, lässt `supportsResponseFormat` unset → unbekannte Modelle passieren das Gate, erhalten aber unenforced JSON** · `capabilities.ts:147-170`; `judgePort.ts:361,376-383`; `modelSelection.ts:246-252` · effort: small
+**MODEL-06 [Medium/model-agnosticism] Judge-`response_format`-Schema ohne `strict`/`name`/Per-Item-Enforcement** · `testQualityRubric.ts:16-36`; `openai-adapter.ts:137-140`; `judgePort.ts:312-323` · effort: small
+**MODEL-07 [Medium/production-readiness] _(partially-confirmed)_ Profile-Timeout/Retry/Budget-Hints (30s Judge, 45s Generate, retriesMax, cacheable) inert auf Live-Path** · `dispatcher.ts:121-146`; `judgePort.ts:385`; `generationPort.ts:250` · effort: medium
+**MODEL-08 [Medium/multilingual-de] Judge-Preflight englischer Mini-Prompt + anderes Schema als der echte Judge** · `modelPolicyRoutes.ts:244-282` (vgl. `judgePort.ts:124-149`) · effort: small
+**MODEL-10 [Medium/observability] Budget-/Judge-Error-Kandidaten zählen `weak=0` → `qualityScore` als Funktion von Latenz/Limits statt Testqualität** · `modelRoutedTestDesign.ts:689-727,774-789,806-854` · effort: small
+**MODEL-09 [Low/model-agnosticism] _(partially-confirmed)_ Runtime-Routing kann „passed"-Preflight fabrizieren, wenn ohne precomputed Routing aufgerufen** · `runExecution.ts:142-184`; `handoffRoutes.ts:316-319`; `runRoutes.ts:479-497` · effort: medium
+**MODEL-11 [Low/governance] PUT model-policy persistiert ohne Preflight-Re-Run** · `modelPolicyRoutes.ts:390-418`; `modelSelection.ts:246-252` · effort: small
+**MODEL-12 [Low — Stärke, kein Defekt] Gateway-only Judge mit Injection-Scrubbing, fail-soft Judge, ReDoS-freier Verdict-Extractor, content-hash Baseline-IDs** · `judgePort.ts:90-110,239-266,706-710`; `testDesignModel.ts:183-190`
+**QUALITY-01 [Critical/output-quality] Keinerlei 29148-Requirement-Defekt-Erkennung im QI-Domain** · `validation.ts:1-209` · effort: large
+**QUALITY-02 [Critical/output-quality] `intentDerivation` konsumiert nur das 256-Zeichen-`displayLabel`, nie den Body** · `intentDerivation.ts:114-152` · effort: medium
+**QUALITY-03 [High/multilingual-de] Requirement-Verb-Erkennung englisch-only; deutsche Modalverben (muss/soll/darf nicht) matchen nie** · `intentDerivation.ts:30-33` · effort: small
+**QUALITY-04 [High/multilingual-de] Trivial-Kontradiktions-Negation englisch-only; deutsche Negationen (nicht/kein/niemals) unsichtbar** · `validation.ts:28,144-180` · effort: small
+**QUALITY-05 [High/multilingual-de] ß/ss-Casing bricht Deduplikation und Kontradiktion (toLowerCase + NFKC unifizieren ß nicht)** · `deduplication.ts:33-34,63-76` · effort: small
+**QUALITY-06 [High/multilingual-de] Policy-Profile-Keyword-Lexika komplett englisch; deutsche Banking/Insurance-Begriffe triggern nie Priority/Risk** · `policyProfile.ts:54-119` · effort: medium
+**QUALITY-07 [Medium/output-quality] `buildCoverageMap`-Docstring behauptet Step-Mention-Coverage, die der Code nicht implementiert** · `coverageRelevance.ts:158-200` · effort: medium
+**QUALITY-08 [Medium/model-agnosticism] Coverage-Confidence hängt ganz an modell-gelieferter `derivedFromAtomIds`-Länge** · `coverageRelevance.ts:113-136,178-188` · effort: medium
+**QUALITY-09 [Medium/output-quality] Theme-Extraktion droppt Tokens <3 Zeichen + lowercased → deutsche/Domain-Tokens und IDs verloren** · `intentDerivation.ts:37-52` · effort: small
+**QUALITY-10 [Medium/governance] Leeres `derivedFromAtomIds` wird als „source-removed" statt als Invalid/Unknown-Provenance-Defekt gemeldet** · `staleness.ts:376-378,456-458` · effort: small
+**QUALITY-11 [Medium/output-quality] Validierung hat keine ISTQB-Technik-Coverage-Prüfung; Kandidaten passieren mit null Grenzwert/Äquivalenz/Entscheidungstabellen-Tiefe** · `validation.ts:88-209` · effort: large
+**QUALITY-12 [Low/security] Trivial-Kontradiktion ist O(expectedResults × preconditions) je Kandidat ohne Input-Bound** · `validation.ts:144-179,186-208` · effort: small
+**QUALITY-13 [Low/security] _(partially-confirmed)_ `requirementExcerpt`-Redaction-Order solide, aber `redact()`-Lexikon nicht für deutsche PII/Secrets verifiziert** · `requirementExcerpt.ts:37-42` · effort: small
+**QUALITY-14 [Low/determinism] `canonicaliseFragmentList` nutzt leichteres `normaliseText` (kein Bidi/Zero-Width-Strip) → inkonsistente Canonicalisation-Surface** · `assertions.ts:120-142` · effort: trivial
+**EXPORT-01 [High/multilingual-de] Lokale CSV-Exporte ohne UTF-8-BOM → deutsche Umlaute mojibachen in Excel** · `exportRoutes.ts:350-362` · effort: small
+**EXPORT-02 [High/multilingual-de] CSV-Adapter hartkodieren Komma-Delimiter; deutsches Excel parst jede Zeile als eine Spalte** · `spreadsheetSafeCsv.ts:112-118` · effort: small
+**EXPORT-03 [High/export-fidelity] Generische CSV/JSON-Exporte emittieren immer leere `CoverageMapRefs`/`FindingRefs` → Traceability-Links still verworfen** · `exportRoutes.ts:108-131` · effort: medium
+**EXPORT-04 [Medium/export-fidelity] _(partially-confirmed)_ Xray/ALM/Polarion droppen Felder des kanonischen Importer-Schemas (Priority/Status/Labels/tags/risk)** · `xray.ts:16-24` · effort: medium
+**EXPORT-05 [Medium/export-fidelity] Traceability-CSV packt zwei Header/Section-Blöcke in eine Datei → bricht Single-Table-Import** · `traceability.ts:115-144` · effort: small
+**EXPORT-07 [Medium/governance] JSON-Export-Integrity-Hash deckt nur Candidate-IDs, `redactionAttested` hartkodiert true — nicht content-gebunden** · `exportRoutes.ts:119-130` · effort: small
+**EXPORT-08 [Medium/governance] Export-Evidence-Rows kollidieren über Re-Exporte — ID nur aus runId|target, Write-Fehler still geschluckt** · `exportRoutes.ts:150-181` · effort: small
+**EXPORT-06 [Low/multilingual-de] Confidence mit Fixed-Point-Punkt; keine Dezimalkomma-Awareness für deutsches Locale** · `traceability.ts:63` · effort: trivial
+**EXPORT-09 [Low/security] Markdown-Link-Escape-Regex verfehlt Reference-Style-Links und Autolinks** · `markdown.ts:36-47` · effort: small
+**EXPORT-10 [Low/export-fidelity — Stärke] PDF-Export faltet Non-WinAnsi-Codepoints zu '?' — lossy vs CSV/JSON, sonst solides deterministisches Design** · `exportAssembly.ts:241-257` · effort: trivial
+**EXPORT-11 [Low/security — Stärke] Spreadsheet-Formel-Lead-Check prüft nur das erste Non-Whitespace-Zeichen, nicht list-joined Sub-Werte (für CSV korrekt)** · `spreadsheetSafeCsv.ts:79-94` · effort: trivial
+**EXPORT-12 [Low/ux-honesty] Traceability-Route downgraded unbekannte `format`-Werte still auf CSV mit 200 statt Fehler** · `traceabilityRoutes.ts:65-83` · effort: trivial
+**EXPORT-13 [Low/model-agnosticism — Stärke+Gap] Export-Artefakte und Evidence-Rows ohne Modell-Identity-Provenienz** · `serialize.ts:61-79` · effort: small
+**GOV-01 [Critical/governance] Vier-Augen-Governance ist toter Code; serverseitig nie erzwungen** · `reviewStore.ts:39-219` · effort: large
+**GOV-02 [Critical/governance] Reviewer-Identität ist unauthentifizierter Freitext; keine Akteur-Bindung** · `reviewRoutes.ts:70-84,141-150` · effort: medium
+**GOV-03 [Critical/governance] `regenerate-stale` verwirft alle Human-Review-Zustände und das Review-Audit-Log für erhaltene Kandidaten** · `reCheckRoutes.ts:1644-1677,1393-1435` · effort: medium
+**GOV-04 [High/governance] „Append-only"-Audit-Log ist voller File-Overwrite ohne Tamper-Evidence/monotone Sequenz** · `reviewStore.ts:209-218` · effort: medium
+**GOV-05 [High/governance] Concurrent Review-Decisions racen: Last-Writer-Wins droppt Audit-Entries (kein Locking)** · `reviewStore.ts:186-218,239-259` · effort: medium
+**GOV-06 [High/governance] Kandidaten in Terminal-States editierbar ohne Re-Validierung/Re-Judge** · `editRoutes.ts:276-332` · effort: small
+**GOV-07 [Medium/governance] Edit auditierbar aber nicht transaktional: Body und konsolidiertes Audit-Log können bei Partial-Failure divergieren** · `editRoutes.ts:309-327` · effort: medium
+**GOV-08 [Medium/governance] Startup-Retention-Purge droppt alle Deletion-Audit-Receipts (No-Op-Sink + geschluckte Fehler)** · `retentionEnforcement.ts:32-66` · effort: medium
+**GOV-09 [Medium/governance] `reopen` resurrected jeden Terminalzustand (rejected/withdrawn/approved→open) mit nur Freitext-Label** · `reviewStore.ts:116-137` · effort: small
+**GOV-10 [Medium/governance] Run-Level-Approve gatet nicht auf Kandidat-Zustände; Run kann „approved" sein während Kandidaten rejected/open sind** · `reviewStore.ts:186-216` · effort: small
+**GOV-11 [Low/governance] Keine `candidateId`-Existenzprüfung bei Candidate-Review-Decisions; Approvals für nicht-existente Kandidaten recordet** · `reviewStore.ts:190-208` · effort: small
+**GOV-12 [Low/multilingual-de] Coverage-Gap-Audit-Summaries hartkodiert Deutsch** · `reCheckRoutes.ts:416-419` · effort: small
+**SECWIRE-01 [High/multilingual-de] Prompt-Injection-Detektor-Korpus englisch-only; verfehlt deutsche Imperative** · `promptInjectionScrub.ts:27-61` · effort: small
+**SECWIRE-02 [High/security] Kein Concurrency-Cap auf QI-Run-Starts; unbegrenzte registry-getrackte modell-gestützte Runs** · `runRoutes.ts:479-523` · effort: medium
+**SECWIRE-03 [High/observability] Kein QI-Level-Request-Timeout auf `model.call`; hängendes Gateway lässt Run/Spinner unbegrenzt stecken** · `generationPort.ts:233-250` · effort: small
+**SECWIRE-04 [Medium/observability] QI-Run-SSE-Stream ohne Heartbeat; lange stille Stufen können idle-getötet werden und wirken eingefroren** · `runRoutes.ts:507-521` · effort: small
+**SECWIRE-05 [Medium/security] Hardening-Primitive `isSafeRelativePath` und `assertCandidateCount`/`MAX_CANDIDATES_PER_RUN` exportiert aber nie verdrahtet** · `oversizeGuards.ts:19-56` · effort: medium
+**SECWIRE-06 [Medium/governance] Reviewer-Label-Vier-Augen ist Freitext aus localStorage; self-asserted, ohne Integrität, spoofbar** · `QiRunCard.tsx:30-40` · effort: medium
+**SECWIRE-07 [Medium/multilingual-de] `reasonSummary`-Failure/Degraded-Mapping splice't rohen englischen Modell-Error-Substring in die deutsche UI-Message** · `RunLauncher.tsx:146-172` · effort: small
+**SECWIRE-08 [Medium/ux-honesty] Source-Size-Guard hard-rejectet den ganzen Run bei Oversize statt ihn zu bounden** · `runIngestion.ts:284-305` · effort: medium
+**SECWIRE-09 [Low/observability] `RunLauncher`-Cancel abortet nur den lokalen Fetch; der dedizierte `cancelQiRun`-Endpoint ist tot** · `RunLauncher.tsx:804-806` · effort: small
+**SECWIRE-10 [Low/security] Client-SSE-Buffer unbegrenzt; ein newline-freier Frame wächst den Buffer ohne Limit** · `quality-intelligence-api.ts:127-148` · effort: trivial
+**SECWIRE-11 [Low — Stärke] Strukturelle Prompt-Fence + Control/Bidi-Scrubbing, CSV-Formel-Injection-Mitigation, SSE-Redaction** · `generationPort.ts:53-106` u. a.

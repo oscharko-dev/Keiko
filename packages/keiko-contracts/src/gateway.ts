@@ -204,9 +204,7 @@ export type CompletionInteractionMode = "as-you-type" | "manual" | "deterministi
 //   - "over-cost-ceiling"         — an aligned FIM model exists but every candidate exceeds the
 //                                   caller's cost ceiling (#1206).
 export type CompletionDegradeReason =
-  | "no-infilling-model"
-  | "only-base-infilling-model"
-  | "over-cost-ceiling";
+  "no-infilling-model" | "only-base-infilling-model" | "over-cost-ceiling";
 
 export interface CompletionModelSelection {
   readonly mode: CompletionInteractionMode;
@@ -261,9 +259,7 @@ export type VoiceProfile = "none" | "speech-to-text" | "speech-output" | "full-r
 //   - "policy-disabled"      — voice is disabled by deployment policy (operator kill-switch).
 //   - "provider-unreachable" — voice providers are configured but currently unreachable.
 export type VoiceUnavailableReason =
-  | "no-voice-provider"
-  | "policy-disabled"
-  | "provider-unreachable";
+  "no-voice-provider" | "policy-disabled" | "provider-unreachable";
 
 // Transport posture for the resolved profile (ADR-0058 D3). The control/signaling plane
 // ("WebSocket is authoritative") is realized today on the loopback HTTP + SSE seam, so
@@ -395,7 +391,80 @@ export interface ToolDefinition {
 
 export type ResponseFormat =
   | { readonly type: "text" }
-  | { readonly type: "json_schema"; readonly schema: Record<string, unknown> };
+  | {
+      readonly type: "json_schema";
+      readonly schema: Record<string, unknown>;
+      readonly name?: string | undefined;
+      readonly strict?: boolean | undefined;
+    };
+
+export interface GatewaySamplingParameters {
+  readonly temperature?: unknown;
+  readonly topP?: unknown;
+}
+
+export type GatewaySamplingParameterName = "temperature" | "topP";
+
+export interface GatewaySamplingParameterIssue {
+  readonly parameter: GatewaySamplingParameterName;
+  readonly message: string;
+}
+
+export const GATEWAY_TEMPERATURE_RANGE = Object.freeze({ min: 0, max: 2 });
+export const GATEWAY_TOP_P_RANGE = Object.freeze({ min: 0, max: 1 });
+const GATEWAY_TEMPERATURE_RANGE_LABEL = `${String(GATEWAY_TEMPERATURE_RANGE.min)} and ${String(
+  GATEWAY_TEMPERATURE_RANGE.max,
+)}`;
+const GATEWAY_TOP_P_RANGE_LABEL = `${String(GATEWAY_TOP_P_RANGE.min)} and ${String(
+  GATEWAY_TOP_P_RANGE.max,
+)}`;
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function isValidGatewayTemperature(value: unknown): value is number {
+  return (
+    isFiniteNumber(value) &&
+    value >= GATEWAY_TEMPERATURE_RANGE.min &&
+    value <= GATEWAY_TEMPERATURE_RANGE.max
+  );
+}
+
+export function isValidGatewayTopP(value: unknown): value is number {
+  return (
+    isFiniteNumber(value) && value >= GATEWAY_TOP_P_RANGE.min && value <= GATEWAY_TOP_P_RANGE.max
+  );
+}
+
+export function validateGatewaySamplingParameters(
+  parameters: GatewaySamplingParameters,
+): readonly GatewaySamplingParameterIssue[] {
+  const issues: GatewaySamplingParameterIssue[] = [];
+  if (parameters.temperature !== undefined && !isValidGatewayTemperature(parameters.temperature)) {
+    issues.push({
+      parameter: "temperature",
+      message: `temperature must be a finite number between ${GATEWAY_TEMPERATURE_RANGE_LABEL}`,
+    });
+  }
+  if (parameters.topP !== undefined && !isValidGatewayTopP(parameters.topP)) {
+    issues.push({
+      parameter: "topP",
+      message: `topP must be a finite number between ${GATEWAY_TOP_P_RANGE_LABEL}`,
+    });
+  }
+  return Object.freeze(issues);
+}
+
+export function isValidGatewaySamplingParameters(parameters: GatewaySamplingParameters): boolean {
+  return validateGatewaySamplingParameters(parameters).length === 0;
+}
+
+export function assertValidGatewaySamplingParameters(parameters: GatewaySamplingParameters): void {
+  const issues = validateGatewaySamplingParameters(parameters);
+  if (issues.length === 0) return;
+  throw new RangeError(issues.map((issue) => issue.message).join("; "));
+}
 
 export interface GatewayRequest {
   readonly modelId: string;
@@ -404,6 +473,10 @@ export interface GatewayRequest {
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;
+  /** Optional provider-neutral temperature for sampling; valid range is 0..2. */
+  readonly temperature?: number | undefined;
+  /** Optional provider-neutral nucleus sampling value; serialized as `top_p` for OpenAI APIs. */
+  readonly topP?: number | undefined;
   /** Optional seed for deterministic sampling when the model supports it (Epic #761). */
   readonly seed?: number | undefined;
 }
@@ -429,12 +502,7 @@ export interface UsageMetadata {
 // ─── Normalised response ──────────────────────────────────────────────────────
 
 export type FinishReason =
-  | "stop"
-  | "tool_calls"
-  | "length"
-  | "content_filter"
-  | "error"
-  | "cancelled";
+  "stop" | "tool_calls" | "length" | "content_filter" | "error" | "cancelled";
 
 export interface NormalizedResponse {
   readonly modelId: string;
@@ -473,10 +541,7 @@ export type StreamEvent =
 // Pinned by keiko-model-gateway/src/capabilities.test.ts (re-exported there).
 
 export type ConversationIneligibilityReason =
-  | "embedding-only"
-  | "ocr-vision-only"
-  | "voice-only"
-  | "non-chat";
+  "embedding-only" | "ocr-vision-only" | "voice-only" | "non-chat";
 
 // Why: see header — only `kind === "chat"` is conversation-eligible by
 // construction. Pure, total, no side effects.

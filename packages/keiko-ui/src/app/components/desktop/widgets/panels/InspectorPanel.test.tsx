@@ -26,7 +26,6 @@ function makeWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">):
 
 function renderWithFocus(active: AppWindow | null): void {
   const value: WsContextValue = {
-    wins: active !== null ? [active] : [],
     active,
     winCount: active !== null ? 1 : 0,
   };

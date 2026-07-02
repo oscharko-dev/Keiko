@@ -7,12 +7,17 @@
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { ChatWindow } from "./ChatWindow";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChatWindow, clearKnowledgeCatalogCacheForTests } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 import { isConversationEligibleModel } from "@/lib/types";
+
+vi.mock("@/lib/local-knowledge-api", () => ({
+  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+}));
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -81,6 +86,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -89,6 +95,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -119,6 +126,10 @@ function renderWindow(session: ChatSessionApi): void {
     </ChatSessionProvider>,
   );
 }
+
+beforeEach(() => {
+  clearKnowledgeCatalogCacheForTests();
+});
 
 // ── AC #1 — voice button is absent everywhere ─────────────────────────────────
 

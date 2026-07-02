@@ -8,7 +8,7 @@
 // is scrubbed before it ever reaches the wire. Guardrail/validation/model errors are returned as a
 // JSON RouteResult BEFORE any SSE header so the client can fall back to the buffered route.
 
-import { SSE_HEADERS } from "./sse.js";
+import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
 import { writeOrDestroy } from "./sse-write.js";
 import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -20,16 +20,16 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildChatPatch,
-  buildGatewayMessages,
+  buildGatewayAssembly,
   buildMemoryResult,
   collectMemoryActions,
   createAssistantMessage,
   createUserMessage,
-  deriveCompactionOutcome,
   desktopChatErrorResult,
   emptyMemoryResult,
   prepareDesktopChatSend,
   recordChatCompaction,
+  recordConversationMemoryUse,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
 
@@ -96,6 +96,7 @@ async function persistStreamedTurn(
 ): Promise<Record<string, unknown>> {
   const redactedContent = deps.redactor(turn.response.content) as string;
   const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
+  recordConversationMemoryUse(deps, memory, redactedContent);
   const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
     deps,
     request,
@@ -163,11 +164,11 @@ async function streamAndPersist(
   const memory = await resolveMemory(deps, request, memoryContext);
   // ADR-0057 D3: pin the pre-user-message count BEFORE createUserMessage, mirroring the buffered
   // path's lifecycle moment so the compaction-evidence runId is identical across both paths.
-  const messageCountBeforeTurn = deps.store.listMessages(request.chatId).length;
+  const messageCountBeforeTurn = deps.store.countMessages(request.chatId);
   const startedAt = Date.now();
   const userMessage = createUserMessage(deps, request);
-  const outcome = deriveCompactionOutcome(deps, request);
-  const messages = buildGatewayMessages(deps, request, memory.context.text);
+  const assembly = buildGatewayAssembly(deps, request, memory, modelId);
+  const messages = assembly.messages;
   const stream = callStream({ modelId, messages }, controller.signal);
   const turn = await streamConversation(ctx, deps, stream, controller);
   if (turn === undefined || controller.signal.aborted) {
@@ -185,7 +186,7 @@ async function streamAndPersist(
     userMessage,
   );
   recordChatCompaction(deps, {
-    outcome,
+    compaction: assembly.compaction,
     request,
     modelId,
     messageCount: messageCountBeforeTurn,
@@ -210,6 +211,7 @@ export async function handleSendDesktopChatStream(
   const callStream = model.callStream.bind(model);
   const controller = abortOnDisconnect(ctx);
   ctx.res.writeHead(200, SSE_HEADERS);
+  const stopHeartbeat = startSseHeartbeat(ctx.res);
   try {
     await streamAndPersist(ctx, deps, prepared, callStream, controller);
   } catch (error) {
@@ -219,6 +221,7 @@ export async function handleSendDesktopChatStream(
       ctx.res.write(sseMessage("error", errorEvent(error, deps)));
     }
   } finally {
+    stopHeartbeat();
     ctx.res.end();
   }
   return STREAMING;

@@ -25,6 +25,9 @@ const NOW = 1_700_000_000_000;
 const SK_FAKE = ["sk", "-live-fakeCompactionSecret1234567890abcdef"].join("");
 const BEARER_FAKE = ["Bearer ", "fakeCompactionBearerToken1234567890abcdef"].join("");
 const ABS_PATH = "/Users/secretuser/Projects/Keiko/packages/keiko-evidence/src/secret.ts";
+const WIN_DRIVE_PATH = "C:\\Users\\secretuser\\Projects\\Keiko\\src\\secret.ts";
+const WIN_FORWARD_DRIVE_PATH = "D:/Users/secretuser/Projects/Keiko/src/secret.ts";
+const WIN_UNC_PATH = "\\\\server\\share\\secret\\file.ts";
 
 function profileWithModelId(): ContextAssemblyDiagnostics["profile"] {
   return {
@@ -110,7 +113,11 @@ function fullCompactionRecord(): ContextCompactionRecord {
     },
     sourceSpans: [
       fullRef,
-      { kind: "tool-result", stableId: `tool-${SK_FAKE}`, notPersistedReason: `dropped ${SK_FAKE}` },
+      {
+        kind: "tool-result",
+        stableId: `tool-${SK_FAKE}`,
+        notPersistedReason: `dropped ${SK_FAKE}`,
+      },
     ],
     preservedFacts: [
       {
@@ -248,7 +255,7 @@ describe("compaction evidence (ADR-0056 W2)", () => {
     );
     // The RETURNED manifest must be secret-clean too (Layer 1), not only the stored JSON (Layer 2).
     // The redactor strips known secret patterns + supplied additionalSecrets from every string
-    // surface; it does NOT strip arbitrary relative scopePaths (those are deny-checked by contract).
+    // surface; absolute paths are also path-redacted so caller-provided secret hints are not required.
     expect(JSON.stringify(result.manifest)).not.toContain(SK_FAKE);
     const json = store.get("compaction-run-1");
     expect(json).toBeDefined();
@@ -293,10 +300,56 @@ describe("compaction evidence (ADR-0056 W2)", () => {
       },
       { store, env: {} },
     );
+    const serialized = store.get("compaction-run-3") ?? "";
+    expect(serialized).not.toContain(ABS_PATH);
+    expect(serialized).not.toContain("/Users/secretuser");
+    expect(serialized).toContain("[REDACTED_PATH]");
     const manifest = requireManifest(loadEvidence(store, "compaction-run-3"));
+    expect(JSON.stringify(manifest)).not.toContain(ABS_PATH);
     expect(manifest.compaction?.[0]?.laneId).toBe("history-summary");
     expect(manifest.compaction?.[0]?.itemsBefore).toBe(20);
     expect(manifest.context).toBeUndefined();
+  });
+
+  it("redacts Windows absolute path forms without caller-provided secret hints", () => {
+    const store = createInMemoryEvidenceStore();
+    persistCompactionEvidence(
+      {
+        runId: "compaction-run-windows-paths",
+        modelId: "example-model",
+        records: [
+          {
+            ...compactionRecord(),
+            preservedFacts: [
+              { statement: `drive path ${WIN_DRIVE_PATH}` },
+              { statement: `forward drive path ${WIN_FORWARD_DRIVE_PATH}` },
+              { statement: `unc path ${WIN_UNC_PATH}` },
+            ],
+            sourceSpans: [
+              { kind: "repo-file", stableId: "drive", scopePath: WIN_DRIVE_PATH },
+              {
+                kind: "repo-file",
+                stableId: "forward-drive",
+                scopePath: WIN_FORWARD_DRIVE_PATH,
+              },
+              { kind: "repo-file", stableId: "unc", scopePath: WIN_UNC_PATH },
+            ],
+            filesInspected: [WIN_DRIVE_PATH, WIN_FORWARD_DRIVE_PATH, WIN_UNC_PATH],
+          },
+        ],
+        startedAt: NOW,
+        finishedAt: NOW + 5,
+      },
+      { store, env: {} },
+    );
+    const serialized = store.get("compaction-run-windows-paths") ?? "";
+    expect(serialized).not.toContain(WIN_DRIVE_PATH);
+    expect(serialized).not.toContain(WIN_FORWARD_DRIVE_PATH);
+    expect(serialized).not.toContain(WIN_UNC_PATH);
+    expect(serialized).not.toContain("C:\\Users\\secretuser");
+    expect(serialized).not.toContain("D:/Users/secretuser");
+    expect(serialized).not.toContain("\\\\server\\share");
+    expect(serialized).toContain("[REDACTED_PATH]");
   });
 
   it("redacts optional provenance and rehydration fields in serialized evidence", () => {

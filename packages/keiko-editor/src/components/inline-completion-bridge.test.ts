@@ -50,8 +50,11 @@ function fakeRegistrar(): MonacoInlineCompletionsRegistrar & {
   };
 }
 
-function fakeModel(value = "const a = 1;\n"): MonacoInlineCompletionModel {
-  return { getValue: () => value, uri: { toString: () => "inmemory://model/a.ts" } };
+function fakeModel(
+  value = "const a = 1;\n",
+  uri = "inmemory://model/a.ts",
+): MonacoInlineCompletionModel {
+  return { getValue: () => value, uri: { toString: () => uri } };
 }
 
 function fakeToken(): MonacoCancellationToken & {
@@ -73,6 +76,13 @@ function fakeToken(): MonacoCancellationToken & {
     },
     disposeListener,
   };
+}
+
+function requireCapturedRequest(value: EditorRequestIdentity | null): EditorRequestIdentity {
+  if (value === null) {
+    throw new Error("expected a captured request");
+  }
+  return value;
 }
 
 function position(lineNumber = 1, column = 5): MonacoPositionLike {
@@ -116,6 +126,7 @@ function providerDeps(
   let n = 0;
   return {
     resolve,
+    isCurrentDocument: () => true,
     languages: fakeRegistrar(),
     documentLanguage: "typescript",
     contextBudgetBytes: DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
@@ -196,6 +207,84 @@ describe("createKeikoInlineCompletionProvider", () => {
     expect(query?.request.contextBudgetBytes).toBe(DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES);
     // content-free: no buffer text on the request identity
     expect(JSON.stringify(query?.request)).not.toContain("const a");
+  });
+
+  it("returns undefined without resolving when the model is not this editor's document", async () => {
+    const resolve = vi.fn<EditorInlineCompletionResolver>();
+    const provider = createKeikoInlineCompletionProvider(
+      providerDeps(resolve, {
+        isCurrentDocument: (documentUri) => documentUri === "inmemory://model/a.ts",
+      }),
+    );
+
+    const result = await provider.provideInlineCompletions(
+      fakeModel("const b = 1;\n", "inmemory://model/b.ts"),
+      position(),
+      context(),
+      fakeToken(),
+    );
+
+    expect(result).toBeUndefined();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("does not abort an active owned request when Monaco invokes the provider for another model", async () => {
+    const first = deferred<EditorInlineCompletionResponse>();
+    const signals: AbortSignal[] = [];
+    const provider = createKeikoInlineCompletionProvider(
+      providerDeps(
+        (query, signal) => {
+          signals.push(signal);
+          return first.promise.then(() => response(query.request.request, []));
+        },
+        { isCurrentDocument: (documentUri) => documentUri === "inmemory://model/a.ts" },
+      ),
+    );
+
+    const firstCall = provider.provideInlineCompletions(
+      fakeModel("const a = 1;\n", "inmemory://model/a.ts"),
+      position(),
+      context(),
+      fakeToken(),
+    );
+    const backgroundResult = await provider.provideInlineCompletions(
+      fakeModel("const b = 1;\n", "inmemory://model/b.ts"),
+      position(),
+      context(),
+      fakeToken(),
+    );
+
+    expect(backgroundResult).toBeUndefined();
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+    first.resolve(response({ requestId: "ignored", streamId: "ignored", sequence: 0 }, []));
+    await firstCall;
+  });
+
+  it("drops ghost text when the editor switches documents before the response resolves", async () => {
+    let currentUri = "inmemory://model/a.ts";
+    const pending = deferred<EditorInlineCompletionResponse>();
+    let captured: EditorRequestIdentity | null = null;
+    const provider = createKeikoInlineCompletionProvider(
+      providerDeps(
+        (query) => {
+          captured = query.request.request;
+          return pending.promise;
+        },
+        { isCurrentDocument: (documentUri) => documentUri === currentUri },
+      ),
+    );
+
+    const call = provider.provideInlineCompletions(
+      fakeModel("const a = 1;\n", "inmemory://model/a.ts"),
+      position(),
+      context(),
+      fakeToken(),
+    );
+    currentUri = "inmemory://model/b.ts";
+    pending.resolve(response(requireCapturedRequest(captured), [inlineItem()]));
+
+    expect(await call).toBeUndefined();
   });
 
   it("records an 'offered' event only when items are produced", async () => {
@@ -388,6 +477,7 @@ describe("registerKeikoInlineCompletionProvider", () => {
     const disposer = registerKeikoInlineCompletionProvider({
       languages,
       resolve: () => Promise.reject(new Error("inline test")),
+      isCurrentDocument: () => true,
       documentLanguages: INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
       contextBudgetBytes: DEFAULT_INLINE_COMPLETION_CONTEXT_BUDGET_BYTES,
       streamId: "s",
@@ -418,6 +508,7 @@ describe("registerKeikoInlineCompletionProvider", () => {
         captured.push(query.request.request.streamId);
         return Promise.resolve(response(query.request.request, []));
       },
+      isCurrentDocument: () => true,
       documentLanguages: ["typescript", "javascript"],
       contextBudgetBytes: 8192,
       streamId: "base",

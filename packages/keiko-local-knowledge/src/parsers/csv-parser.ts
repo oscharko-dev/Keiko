@@ -22,7 +22,12 @@ import {
   shouldStop,
 } from "./_internal.js";
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
-import type { ParserAdapter, ParserOptions, ParserSelectionInput } from "./types.js";
+import type {
+  InternalParserResult,
+  ParserAdapter,
+  ParserOptions,
+  ParserSelectionInput,
+} from "./types.js";
 
 const PARSER_ID = "csv";
 const PARSER_VERSION = "1";
@@ -55,6 +60,12 @@ interface RowSpan {
   readonly end: number;
   readonly fieldCount: number;
   readonly done: boolean;
+}
+
+interface ParsedCsvRow {
+  readonly start: number;
+  readonly end: number;
+  readonly fields: readonly string[];
 }
 
 function readField(state: ParseState): { readonly endOfRow: boolean } {
@@ -162,8 +173,101 @@ function readRow(state: ParseState): RowSpan {
 interface RowEmission {
   readonly units: readonly ParsedUnit[];
   readonly diagnostics: readonly ParserDiagnostic[];
+  readonly normalizedText: string;
 }
 
+function parseRowValues(rowText: string, delimiter: string): readonly string[] {
+  const fields: string[] = [];
+  let cursor = 0;
+  let current = "";
+  let quoted = false;
+  while (cursor < rowText.length) {
+    const ch = rowText.charAt(cursor);
+    if (quoted) {
+      if (ch === '"') {
+        if (cursor + 1 < rowText.length && rowText.charAt(cursor + 1) === '"') {
+          current += '"';
+          cursor += 2;
+          continue;
+        }
+        quoted = false;
+        cursor += 1;
+        continue;
+      }
+      current += ch;
+      cursor += 1;
+      continue;
+    }
+    if (ch === '"' && current.length === 0) {
+      quoted = true;
+      cursor += 1;
+      continue;
+    }
+    if (ch === delimiter) {
+      fields.push(current.trim());
+      current = "";
+      cursor += 1;
+      continue;
+    }
+    current += ch;
+    cursor += 1;
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+function readParsedRows(text: string, delimiter: string): readonly ParsedCsvRow[] {
+  const state: ParseState = { text, delimiter: delimiter.charCodeAt(0), cursor: 0, rowStart: 0 };
+  const rows: ParsedCsvRow[] = [];
+  for (;;) {
+    const row = readRow(state);
+    if (row.done) break;
+    rows.push({
+      start: row.start,
+      end: row.end,
+      fields: parseRowValues(text.slice(row.start, row.end), delimiter),
+    });
+  }
+  return rows;
+}
+
+function normalizeHeaderLabel(value: string, index: number): string {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : `Column ${String(index + 1)}`;
+}
+
+function normalizeHeaders(fields: readonly string[], minColumns: number): readonly string[] {
+  const headers: string[] = [];
+  const seen = new Map<string, number>();
+  const columnCount = Math.max(fields.length, minColumns);
+  for (let i = 0; i < columnCount; i += 1) {
+    const base = normalizeHeaderLabel(fields[i] ?? "", i);
+    const seenCount = seen.get(base) ?? 0;
+    seen.set(base, seenCount + 1);
+    headers.push(seenCount === 0 ? base : `${base} ${String(seenCount + 1)}`);
+  }
+  return headers;
+}
+
+function hasPlausibleHeader(rows: readonly ParsedCsvRow[]): boolean {
+  if (rows.length < 2) return false;
+  const first = rows[0];
+  if (first === undefined) return false;
+  return first.fields.some((field) => /[A-Za-z_ÄÖÜäöüß]/u.test(field));
+}
+
+function projectRow(fields: readonly string[], headers: readonly string[]): string {
+  const pairs: string[] = [];
+  const columnCount = Math.max(fields.length, headers.length);
+  for (let i = 0; i < columnCount; i += 1) {
+    const header = headers[i] ?? `Column ${String(i + 1)}`;
+    const value = fields[i] ?? "";
+    pairs.push(`${header}=${value}`);
+  }
+  return `${pairs.join(" | ")}\n`;
+}
+
+// eslint-disable-next-line complexity
 function emitRows(
   text: string,
   delimiter: string,
@@ -171,31 +275,34 @@ function emitRows(
   options: ParserOptions,
 ): RowEmission {
   const tableName = input.extension.toLowerCase() === "tsv" ? "tsv" : "csv";
-  const state: ParseState = { text, delimiter: delimiter.charCodeAt(0), cursor: 0, rowStart: 0 };
   const startedAt = options.now();
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  // Read the header row first. If there are no further rows, emit the header itself as a
-  // single data row at index 0 so a one-line CSV remains observable.
-  const header = readRow(state);
-  if (header.done) return { units, diagnostics };
-  if (state.cursor >= text.length) {
-    units.push(csvUnit(input, tableName, 0, header.start, header.end));
-    return { units, diagnostics };
-  }
+  const parts: string[] = [];
+  let offset = 0;
+  const rows = readParsedRows(text, delimiter);
+  if (rows.length === 0) return { units, diagnostics, normalizedText: "" };
+  const headerIsSchema = hasPlausibleHeader(rows);
+  const dataRows = headerIsSchema ? rows.slice(1) : rows;
+  const maxColumns = rows.reduce((max, row) => Math.max(max, row.fields.length), 0);
+  const headers = headerIsSchema
+    ? normalizeHeaders(rows[0]?.fields ?? [], maxColumns)
+    : normalizeHeaders([], maxColumns);
   let rowIndex = 0;
-  while (state.cursor < text.length) {
+  for (const row of dataRows) {
     const limit = shouldStop(startedAt, options, units.length);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
       break;
     }
-    const row = readRow(state);
-    if (row.done) break;
-    units.push(csvUnit(input, tableName, rowIndex, row.start, row.end));
+    const rowText = projectRow(row.fields, headers);
+    const start = offset;
+    parts.push(rowText);
+    offset += rowText.length;
+    units.push(csvUnit(input, tableName, rowIndex, start, offset));
     rowIndex += 1;
   }
-  return { units, diagnostics };
+  return { units, diagnostics, normalizedText: parts.join("") };
 }
 
 function csvUnit(
@@ -237,12 +344,15 @@ export const csvParser: ParserAdapter = Object.freeze({
     }
     const decoded = decodeUtf8(input.bytes);
     const emission = emitRows(decoded.text, delimiter, input, options);
-    return emptyResult(
-      csvParser.capability,
-      input.documentId,
-      options,
-      emission.diagnostics,
-      emission.units,
-    );
+    return {
+      ...emptyResult(
+        csvParser.capability,
+        input.documentId,
+        options,
+        emission.diagnostics,
+        emission.units,
+      ),
+      normalizedText: emission.normalizedText,
+    } satisfies InternalParserResult;
   },
 });

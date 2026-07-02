@@ -4,8 +4,10 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
   ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   copyFilesEntry,
   createFilesEntry,
@@ -115,6 +117,16 @@ interface ContextMenuState {
   readonly entry: FilesTreeEntry | null;
 }
 
+interface TreeTooltipState {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+const TREE_TOOLTIP_DELAY_MS = 650;
+const TREE_TOOLTIP_MAX_WIDTH = 240;
+const DIRECTORY_RENDER_BATCH_SIZE = 200;
+
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
 function entryParent(path: string): string | null {
   const idx = path.lastIndexOf("/");
@@ -164,6 +176,13 @@ function cssEscape(value: string): string {
 // placeholder) align with sibling folders (audit C143/C216).
 function treeIndent(depth: number): number {
   return 8 + depth * 18;
+}
+
+function treeTooltipPosition(x: number, y: number): { x: number; y: number } {
+  return {
+    x: Math.max(12, Math.min(x + 12, window.innerWidth - TREE_TOOLTIP_MAX_WIDTH - 12)),
+    y: Math.max(12, Math.min(y + 18, window.innerHeight - 44)),
+  };
 }
 
 const TREE_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "ArrowRight", "ArrowLeft", "Home", "End"]);
@@ -278,7 +297,9 @@ export function FilesWidget({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
+  const [directoryRenderLimits, setDirectoryRenderLimits] = useState<Record<string, number>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
+  const [treeTooltip, setTreeTooltip] = useState<TreeTooltipState | null>(null);
   const activeFileChangeRef = useRef(onActiveFileChange);
   activeFileChangeRef.current = onActiveFileChange;
   // Focus restore (WCAG 2.4.3): closing the preview re-mounts the whole tree, which would drop
@@ -286,6 +307,8 @@ export function FilesWidget({
   // tree row once the tree is rendered again (fallback: the widget container).
   const filesRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusPathRef = useRef<string | null>(null);
+  const treeTooltipTimerRef = useRef<number | null>(null);
+  const treeTooltipPointerRef = useRef({ x: 0, y: 0 });
   // Shared ARIA description for unreadable symlink rows (audit C196): the rows stay focusable
   // via aria-disabled, and this single hidden span explains WHY they cannot be opened.
   const unreadableReasonId = useId();
@@ -310,6 +333,46 @@ export function FilesWidget({
   const onFilesMutatedRef = useRef(onFilesMutated);
   onFilesMutatedRef.current = onFilesMutated;
 
+  const clearTreeTooltipTimer = useCallback((): void => {
+    if (treeTooltipTimerRef.current === null) return;
+    window.clearTimeout(treeTooltipTimerRef.current);
+    treeTooltipTimerRef.current = null;
+  }, []);
+
+  const hideTreeTooltip = useCallback((): void => {
+    clearTreeTooltipTimer();
+    setTreeTooltip(null);
+  }, [clearTreeTooltipTimer]);
+
+  const scheduleTreeTooltip = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>, text: string): void => {
+      clearTreeTooltipTimer();
+      setTreeTooltip(null);
+      const name = event.currentTarget.querySelector<HTMLElement>(".tr-name");
+      if (name === null || name.scrollWidth <= name.clientWidth + 1) return;
+
+      treeTooltipPointerRef.current = { x: event.clientX, y: event.clientY };
+      treeTooltipTimerRef.current = window.setTimeout(() => {
+        treeTooltipTimerRef.current = null;
+        const position = treeTooltipPosition(
+          treeTooltipPointerRef.current.x,
+          treeTooltipPointerRef.current.y,
+        );
+        setTreeTooltip({ text, ...position });
+      }, TREE_TOOLTIP_DELAY_MS);
+    },
+    [clearTreeTooltipTimer],
+  );
+
+  const moveTreeTooltip = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    treeTooltipPointerRef.current = { x: event.clientX, y: event.clientY };
+    setTreeTooltip((current) => {
+      if (current === null) return current;
+      const position = treeTooltipPosition(event.clientX, event.clientY);
+      return { ...current, ...position };
+    });
+  }, []);
+
   useEffect(() => {
     if (selectedPath !== null || gitDiffState !== null) return;
     const path = restoreFocusPathRef.current;
@@ -320,6 +383,13 @@ export function FilesWidget({
     );
     (row ?? filesRef.current)?.focus({ preventScroll: true });
   }, [gitDiffState, selectedPath]);
+
+  useEffect(
+    () => () => {
+      clearTreeTooltipTimer();
+    },
+    [clearTreeTooltipTimer],
+  );
 
   useEffect(() => {
     if (configuredRoot !== null) return;
@@ -404,6 +474,7 @@ export function FilesWidget({
     setResolvedRoot(null);
     setExpanded(new Set([""]));
     setDirectories({});
+    setDirectoryRenderLimits({});
     void loadDirectory("");
   }, [apiRoot, loadDirectory]);
 
@@ -698,6 +769,14 @@ export function FilesWidget({
     void loadDirectory(path);
   };
 
+  const showMoreDirectoryEntries = (path: string, entriesCount: number): void => {
+    setDirectoryRenderLimits((current) => {
+      const currentLimit = current[path] ?? DIRECTORY_RENDER_BATCH_SIZE;
+      const nextLimit = Math.min(entriesCount, currentLimit + DIRECTORY_RENDER_BATCH_SIZE);
+      return nextLimit > currentLimit ? { ...current, [path]: nextLimit } : current;
+    });
+  };
+
   const openDiff = useCallback(
     (path: string): void => {
       const targetRoot = resolvedRoot ?? apiRoot;
@@ -777,6 +856,26 @@ export function FilesWidget({
     onOpenGitDelivery !== undefined &&
     gitStatusState.status?.available === true &&
     gitDeliveryRoot.length > 0;
+  const activeTreePath = selectedPath ?? activeFilePath ?? null;
+
+  const renderLimitForDirectory = (
+    path: string,
+    entries: readonly FilesTreeEntry[],
+  ): number => {
+    const configuredLimit = directoryRenderLimits[path] ?? DIRECTORY_RENDER_BATCH_SIZE;
+    const activeIndex =
+      activeTreePath === null
+        ? -1
+        : entries.findIndex((entry) => entry.path === activeTreePath);
+    const pendingIndex =
+      pendingEntry?.kind === "rename"
+        ? entries.findIndex((entry) => entry.path === pendingEntry.path)
+        : -1;
+    return Math.min(
+      entries.length,
+      Math.max(configuredLimit, activeIndex + 1, pendingIndex + 1),
+    );
+  };
 
   // One inline input reused for new file / new folder / rename, styled with the existing root-bar
   // input class so no globals.css change is needed (keeps the #1300 proof gate untouched).
@@ -839,6 +938,7 @@ export function FilesWidget({
     // neutral copy covers all server cases — outside root, deny-listed AND broken links
     // (audit C349). Clicks are guarded instead of blocked by the browser.
     const unreadableTitle = "This link can't be opened from this folder.";
+    const entryTip = entry.readable ? entry.path : unreadableTitle;
     if (entry.kind === "directory") {
       const state = directories[entry.path];
       return (
@@ -851,9 +951,6 @@ export function FilesWidget({
               disabled={!entry.readable}
               aria-label={`${open ? "Collapse" : "Expand"} folder: ${entry.name}`}
               onClick={() => toggleDirectory(entry)}
-              title={
-                entry.readable ? `${open ? "Collapse" : "Expand"} ${entry.path}` : unreadableTitle
-              }
             >
               <span className="tr-caret" data-open={open}>
                 <Icons.chevronR size={11} />
@@ -872,6 +969,10 @@ export function FilesWidget({
               aria-disabled={entry.readable ? undefined : true}
               aria-describedby={entry.readable ? undefined : unreadableReasonId}
               aria-expanded={open}
+              onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
+              onPointerMove={moveTreeTooltip}
+              onPointerLeave={hideTreeTooltip}
+              onBlur={hideTreeTooltip}
               onClick={() => enterDirectory(entry)}
               onContextMenu={(event) => openContextMenu(event, entry)}
               onDragStart={(event) => {
@@ -893,7 +994,6 @@ export function FilesWidget({
                 setDraggedPath(null);
                 if (source !== null) void moveEntry(source, entry.path);
               }}
-              title={entry.readable ? entry.path : unreadableTitle}
             >
               <span className="fi-fallback" style={{ color: "var(--accent)" }}>
                 <Icons.folder size={14} />
@@ -907,7 +1007,6 @@ export function FilesWidget({
       );
     }
 
-    const activePath = selectedPath ?? activeFilePath ?? null;
     const change = gitChangeByPath.get(entry.path);
     return (
       <div className="tr-row-wrap tr-file-wrap" key={entry.path}>
@@ -916,8 +1015,8 @@ export function FilesWidget({
           onContextMenu={(event) => openContextMenu(event, entry)}
           role="treeitem"
           aria-level={depth + 1}
-          aria-selected={activePath === entry.path}
-          data-active={activePath === entry.path}
+          aria-selected={activeTreePath === entry.path}
+          data-active={activeTreePath === entry.path}
           data-readable={entry.readable}
           data-path={entry.path}
           style={{ paddingLeft: pad }}
@@ -925,6 +1024,10 @@ export function FilesWidget({
           draggable={mutationsEnabled && entry.readable}
           aria-disabled={entry.readable ? undefined : true}
           aria-describedby={entry.readable ? undefined : unreadableReasonId}
+          onPointerEnter={(event) => scheduleTreeTooltip(event, entryTip)}
+          onPointerMove={moveTreeTooltip}
+          onPointerLeave={hideTreeTooltip}
+          onBlur={hideTreeTooltip}
           onDragStart={(event) => {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", entry.path);
@@ -942,7 +1045,6 @@ export function FilesWidget({
             setSelectedPath(entry.path);
             activeFileChangeRef.current?.(entry.path, fileRoot);
           }}
-          title={entry.readable ? entry.path : unreadableTitle}
         >
           {/* invisible caret placeholder keeps file rows aligned with sibling folders (C216) */}
           <span className="tr-caret tr-caret-ghost" aria-hidden="true">
@@ -961,7 +1063,6 @@ export function FilesWidget({
             className="tr-git-diff"
             type="button"
             onClick={() => openDiff(entry.path)}
-            title={`View Git diff for ${entry.path}`}
             aria-label={`View Git diff for ${entry.path}`}
           >
             <Icons.diff size={13} />
@@ -971,7 +1072,12 @@ export function FilesWidget({
     );
   };
 
-  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => (
+  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => {
+    const entries = state?.entries ?? [];
+    const visibleCount = renderLimitForDirectory(path, entries);
+    const hiddenCount = entries.length - visibleCount;
+    const visibleEntries = hiddenCount > 0 ? entries.slice(0, visibleCount) : entries;
+    return (
     // Nested levels are role="group" so the treeitem hierarchy is exposed (audit C143);
     // the root level sits directly under role="tree".
     <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
@@ -1023,7 +1129,17 @@ export function FilesWidget({
             pendingEntry.kind === "new-folder" ? "New folder name" : "New file name",
           )
         : null}
-      {state?.entries.map((entry) => renderEntry(entry, depth))}
+      {visibleEntries.map((entry) => renderEntry(entry, depth))}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="files-load-more"
+          style={{ marginLeft: treeIndent(depth) + 18 }}
+          onClick={() => showMoreDirectoryEntries(path, entries.length)}
+        >
+          Show {Math.min(DIRECTORY_RENDER_BATCH_SIZE, hiddenCount)} more entries
+        </button>
+      ) : null}
       {state !== undefined &&
       !state.loading &&
       state.error === null &&
@@ -1034,7 +1150,8 @@ export function FilesWidget({
         </div>
       ) : null}
     </div>
-  );
+    );
+  };
 
   if (gitDiffState !== null) {
     const diff = gitDiffState.response?.diff ?? "";
@@ -1344,7 +1461,7 @@ export function FilesWidget({
               Delete {confirmDelete.kind === "directory" ? "folder" : "file"}?
             </h2>
             <p>
-              “{confirmDelete.name}” will be permanently deleted
+              "{confirmDelete.name}" will be permanently deleted
               {confirmDelete.kind === "directory" ? ", including everything inside it" : ""}. This
               cannot be undone.
             </p>
@@ -1356,7 +1473,7 @@ export function FilesWidget({
                 onClick={() => void performDelete(confirmDelete)}
                 disabled={opBusy}
               >
-                {opBusy ? "Deleting…" : "Delete"}
+                {opBusy ? "Deleting..." : "Delete"}
               </button>
               <button
                 type="button"
@@ -1373,6 +1490,18 @@ export function FilesWidget({
           </div>
         </div>
       ) : null}
+      {treeTooltip !== null && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              className="files-tree-tooltip mono"
+              role="tooltip"
+              style={{ left: treeTooltip.x, top: treeTooltip.y }}
+            >
+              {treeTooltip.text}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

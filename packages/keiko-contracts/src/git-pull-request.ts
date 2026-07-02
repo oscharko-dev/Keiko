@@ -158,11 +158,7 @@ export interface GitPullRequestReadinessSummary {
 // ─── Draft-vs-ready recommendation ──────────────────────────────────────────────────────────────────
 
 export type GitPullRequestRecommendation =
-  | "create-as-draft"
-  | "create-as-ready"
-  | "update-to-ready"
-  | "keep-as-draft"
-  | "blocked";
+  "create-as-draft" | "create-as-ready" | "update-to-ready" | "keep-as-draft" | "blocked";
 
 export const GIT_PR_RECOMMENDATIONS: readonly GitPullRequestRecommendation[] = [
   "create-as-draft",

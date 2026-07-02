@@ -1,9 +1,5 @@
 export type EditorDirtyCloseReason =
-  | "tab-close"
-  | "pane-close"
-  | "root-change"
-  | "window-close"
-  | "reload-file";
+  "tab-close" | "pane-close" | "root-change" | "window-close" | "reload-file";
 
 export interface EditorDirtyCloseIntent {
   readonly paneId: string;

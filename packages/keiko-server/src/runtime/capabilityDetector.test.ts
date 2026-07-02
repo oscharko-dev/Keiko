@@ -302,4 +302,93 @@ describe("detectRuntimeCapabilities", () => {
       response.capabilities.some((capability) => capability.id === "runtime-detection:deadline"),
     ).toBe(true);
   });
+
+  it("classifies PATH probing edge cases without executing workspace binaries", async () => {
+    const bin = await makeTempDir("keiko-runtime-path-");
+    const cachedTool = await makeExecutable(bin, "cached-tool.CMD");
+    const deniedTool = join(bin, "denied-tool");
+    await writeFile(deniedTool, "#!/bin/sh\nexit 0\n", "utf8");
+    await chmod(deniedTool, 0o644);
+
+    const probe = new PathHostExecutableProbe({ PATH: bin }, "linux");
+    const cacheProbe = new PathHostExecutableProbe({ PATH: bin, PATHEXT: ".CMD" }, "win32");
+
+    expect(probe.probe("", undefined)).toEqual({
+      state: "policy-blocked",
+      unavailableReason: "policy-blocked",
+    });
+    expect(probe.probe("bad/name", undefined)).toEqual({
+      state: "policy-blocked",
+      unavailableReason: "policy-blocked",
+    });
+    expect(probe.probe("denied-tool", undefined)).toEqual({
+      state: "permission-denied",
+      unavailableReason: "executable-not-runnable",
+    });
+    expect(cacheProbe.probe("cached-tool", undefined)).toEqual({ state: "available" });
+
+    await chmod(cachedTool, 0o644);
+    expect(cacheProbe.probe("cached-tool", undefined)).toEqual({ state: "available" });
+  });
+
+  it("honors Windows executable extensions from PATHEXT", async () => {
+    const bin = await makeTempDir("keiko-runtime-win-path-");
+    await makeExecutable(bin, "win-tool.CMD");
+
+    const probe = new PathHostExecutableProbe({ PATH: bin, PATHEXT: ".EXE;.CMD" }, "win32");
+
+    expect(probe.probe("win-tool", undefined)).toEqual({ state: "available" });
+  });
+
+  it("reports missing package manifests and skips workspace discovery after the deadline", () => {
+    const missingPackageFs: WorkspaceFs = {
+      readFileUtf8: (): string => {
+        throw new Error("missing package.json");
+      },
+      stat: (): WorkspaceStat => ({
+        size: 0,
+        isFile: false,
+        isDirectory: false,
+        isSymbolicLink: false,
+      }),
+      readDir: (): readonly [] => [],
+      realPath: (absolutePath: string): string => absolutePath,
+      exists: (): boolean => false,
+    };
+
+    const missingManifest = detectRuntimeCapabilities({
+      workspace: BASE_WORKSPACE,
+      fs: missingPackageFs,
+      probe: new MappingProbe({}),
+      specs: [],
+      now: () => 50,
+      deadlineMs: 100,
+    });
+    expect(missingManifest.capabilities).toContainEqual(
+      expect.objectContaining({
+        id: "manifest:package-json",
+        state: "missing",
+        unavailableReason: "manifest-not-found",
+      }),
+    );
+
+    const noWorkspace = detectRuntimeCapabilities({
+      fs: missingPackageFs,
+      probe: new MappingProbe({}),
+      specs: [],
+      now: () => 60,
+      deadlineMs: 100,
+    });
+    expect(noWorkspace.capabilities).toEqual([]);
+
+    const expiredBeforeWorkspaceDiscovery = detectRuntimeCapabilities({
+      workspace: BASE_WORKSPACE,
+      fs: missingPackageFs,
+      probe: new MappingProbe({}),
+      specs: [],
+      now: () => 70,
+      deadlineMs: 0,
+    });
+    expect(expiredBeforeWorkspaceDiscovery.capabilities).toEqual([]);
+  });
 });

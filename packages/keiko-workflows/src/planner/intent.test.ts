@@ -25,6 +25,12 @@ describe("classifyRetrievalIntent", () => {
     );
   });
 
+  it("prioritizes diagnostic intent over metadata terms", () => {
+    expect(classifyRetrievalIntent("Why does the React build fail?").intent).toBe(
+      "diagnostic-search",
+    );
+  });
+
   it("keeps identifier questions targeted even when they mention the repository", () => {
     expect(classifyRetrievalIntent("How is ZodConfigSchema used in this repository?").intent).toBe(
       "targeted-code-search",

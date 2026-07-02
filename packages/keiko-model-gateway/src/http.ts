@@ -11,6 +11,8 @@ export type { OutboundHttpEgressConfig } from "./types.js";
 
 // Caps a single gateway response at 10 MB; real chat completions are far smaller.
 export const MAX_RESPONSE_BYTES = 10_000_000;
+const HTTPS_PROXY_TUNNEL_IDLE_TTL_MS = 30_000;
+const MAX_IDLE_HTTPS_PROXY_TUNNELS_PER_KEY = 2;
 
 export interface GatewayFetchOptions extends RequestInit {
   readonly fetchImpl?: typeof fetch | undefined;
@@ -121,6 +123,14 @@ function readCertificateFile(path: string): readonly string[] {
 // One-time set of paths we have already warned about so the warning fires once per path.
 const warnedCaBundlePaths = new Set<string>();
 
+interface IdleHttpsProxyTunnel {
+  readonly socket: tls.TLSSocket;
+  readonly timer: ReturnType<typeof setTimeout>;
+  readonly onIdleError: (error: Error) => void;
+}
+
+const idleHttpsProxyTunnels = new Map<string, IdleHttpsProxyTunnel[]>();
+
 function extraCaCertificates(caBundlePath?: string): readonly string[] {
   const paths = [process.env.NODE_EXTRA_CA_CERTS, caBundlePath].filter(
     (path): path is string => path !== undefined && path.trim().length > 0,
@@ -139,6 +149,7 @@ function extraCaCertificates(caBundlePath?: string): readonly string[] {
 }
 
 type CaCertificateSource = "default" | "system" | "bundled" | "extra";
+const trustedCaCertificateCache = new Map<string, readonly string[]>();
 
 function nodeCaCertificates(source: CaCertificateSource): readonly string[] {
   const getter = tls.getCACertificates;
@@ -153,7 +164,12 @@ function nodeCaCertificates(source: CaCertificateSource): readonly string[] {
 }
 
 export function gatewayTrustedCaCertificates(caBundlePath?: string): readonly string[] {
-  return Array.from(
+  const cacheKey = caBundlePath ?? "";
+  const cached = trustedCaCertificateCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const certificates = Array.from(
     new Set([
       ...nodeCaCertificates("default"),
       ...tls.rootCertificates,
@@ -162,20 +178,32 @@ export function gatewayTrustedCaCertificates(caBundlePath?: string): readonly st
       ...extraCaCertificates(caBundlePath),
     ]),
   );
+  trustedCaCertificateCache.set(cacheKey, certificates);
+  return certificates;
 }
 
 // Exposed for tests to reset the one-time warning set between runs.
 export function _resetWarnedCaBundlePaths(): void {
   warnedCaBundlePaths.clear();
+  trustedCaCertificateCache.clear();
+  for (const entries of idleHttpsProxyTunnels.values()) {
+    for (const entry of entries) {
+      clearTimeout(entry.timer);
+      entry.socket.off("error", entry.onIdleError);
+      entry.socket.destroy();
+    }
+  }
+  idleHttpsProxyTunnels.clear();
 }
 
 // Normalizes a request body for the Node-based egress fallbacks (proxy tunnels and the custom-CA
-// path). String and URLSearchParams bodies are serialized as before; a typed-array body
-// (`Uint8Array`/`Buffer`) is forwarded verbatim so a binary payload — e.g. the multipart
-// `audio/transcriptions` body of the voice STT seam (ADR-0058 D4) — survives a corporate proxy
-// without UTF-8 corruption. `ClientRequest.end()` accepts both string and `Uint8Array` chunks.
-// Other BodyInit shapes (Blob, FormData, streams) remain unsupported on the fallback paths.
-function bodyToWire(body: BodyInit | null | undefined): string | Uint8Array | undefined {
+// path). String and URLSearchParams bodies are serialized as before; typed arrays and Blob bodies are
+// forwarded as bytes so multipart `audio/transcriptions` payloads survive a corporate proxy without
+// UTF-8 corruption. `ClientRequest.end()` accepts both string and `Uint8Array` chunks. FormData and
+// streams remain unsupported on the fallback paths.
+async function bodyToWire(
+  body: BodyInit | null | undefined,
+): Promise<string | Uint8Array | undefined> {
   if (body === undefined || body === null) {
     return undefined;
   }
@@ -188,6 +216,9 @@ function bodyToWire(body: BodyInit | null | undefined): string | Uint8Array | un
   if (body instanceof Uint8Array) {
     return body;
   }
+  if (body instanceof Blob) {
+    return new Uint8Array(await body.arrayBuffer());
+  }
   throw new TypeError("gateway HTTP fallback supports string and byte request bodies only");
 }
 
@@ -199,9 +230,15 @@ export function streamingResponseFromNode(
   res: import("node:http").IncomingMessage,
   onCancel: () => void,
   maxBytes: number = MAX_RESPONSE_BYTES,
+  onDone?: (() => void)  ,
 ): Response {
   let total = 0;
   let done = false;
+  const finish = (): void => {
+    if (done) return;
+    done = true;
+    onDone?.();
+  };
   const body = new ReadableStream<Uint8Array>({
     start(controller): void {
       res.on("data", (chunk: Buffer) => {
@@ -217,13 +254,14 @@ export function streamingResponseFromNode(
       });
       res.on("end", () => {
         if (done) return;
-        done = true;
         controller.close();
+        finish();
       });
       res.on("error", (error) => {
         if (done) return;
         done = true;
         controller.error(error);
+        onCancel();
       });
     },
     cancel(): void {
@@ -252,13 +290,13 @@ function composeSignal(
   return timeoutSignal;
 }
 
-function fetchWithCaBundle(
+async function fetchWithCaBundle(
   url: string,
   init: RequestInit,
   egress?: OutboundHttpEgressConfig,
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToWire(init.body);
+  const body = await bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -587,6 +625,61 @@ async function createTlsTunnel(
   return startTargetTls(target, socket, ca, signal);
 }
 
+function httpsProxyTunnelKey(target: URL, proxy: URL, ca: readonly string[]): string {
+  const caKey = ca.map((cert) => `${String(cert.length)}:${cert.slice(0, 32)}`).join("|");
+  return `${proxy.protocol}//${proxy.host}|${target.protocol}//${target.host}|${caKey}`;
+}
+
+function usableIdleTunnel(socket: tls.TLSSocket): boolean {
+  return !socket.destroyed && socket.readable && socket.writable;
+}
+
+function takeIdleHttpsProxyTunnel(key: string): tls.TLSSocket | undefined {
+  const entries = idleHttpsProxyTunnels.get(key);
+  if (entries === undefined) return undefined;
+  while (entries.length > 0) {
+    const entry = entries.pop();
+    if (entry === undefined) break;
+    clearTimeout(entry.timer);
+    entry.socket.off("error", entry.onIdleError);
+    if (usableIdleTunnel(entry.socket)) {
+      entry.socket.setTimeout(0);
+      return entry.socket;
+    }
+    entry.socket.destroy();
+  }
+  if (entries.length === 0) idleHttpsProxyTunnels.delete(key);
+  return undefined;
+}
+
+function releaseIdleHttpsProxyTunnel(key: string, socket: tls.TLSSocket): void {
+  if (!usableIdleTunnel(socket)) {
+    socket.destroy();
+    return;
+  }
+  socket.setKeepAlive(true);
+  const onIdleError = (): void => {
+    socket.destroy();
+  };
+  socket.once("error", onIdleError);
+  const timer = setTimeout(() => {
+    socket.off("error", onIdleError);
+    socket.destroy();
+  }, HTTPS_PROXY_TUNNEL_IDLE_TTL_MS);
+  timer.unref();
+  const entries = idleHttpsProxyTunnels.get(key) ?? [];
+  entries.push({ socket, timer, onIdleError });
+  while (entries.length > MAX_IDLE_HTTPS_PROXY_TUNNELS_PER_KEY) {
+    const stale = entries.shift();
+    if (stale !== undefined) {
+      clearTimeout(stale.timer);
+      stale.socket.off("error", stale.onIdleError);
+      stale.socket.destroy();
+    }
+  }
+  idleHttpsProxyTunnels.set(key, entries);
+}
+
 function responseFromClientRequest(
   start: (resolve: (response: Response) => void, reject: (error: Error) => void) => void,
 ): Promise<Response> {
@@ -595,14 +688,14 @@ function responseFromClientRequest(
   });
 }
 
-function fetchHttpViaProxy(
+async function fetchHttpViaProxy(
   target: URL,
   init: RequestInit,
   proxy: URL,
   ca: readonly string[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToWire(init.body);
+  const body = await bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   if (hasForwardedCredentialHeader(headers)) {
     throw new OutboundHttpEgressError(
@@ -647,6 +740,7 @@ function fetchHttpViaProxy(
   });
 }
 
+// eslint-disable-next-line max-lines-per-function
 async function fetchHttpsViaProxy(
   target: URL,
   init: RequestInit,
@@ -654,17 +748,21 @@ async function fetchHttpsViaProxy(
   ca: readonly string[],
   maxResponseBytes?: number,
 ): Promise<Response> {
-  const body = bodyToWire(init.body);
+  const body = await bodyToWire(init.body);
   const headers = headersToRecord(init.headers);
   if (!Object.prototype.hasOwnProperty.call(headers, "connection")) {
-    headers.connection = "close";
+    headers.connection = "keep-alive";
   }
   // Ensure Host header omits :443 so it matches what undici sends directly and
   // satisfies SigV4 pre-signed S3 URLs behind a proxy.
   if (!Object.prototype.hasOwnProperty.call(headers, "host")) {
     headers.host = hostHeader(target);
   }
-  const socket = await createTlsTunnel(target, proxy, ca, init.signal ?? undefined);
+  const tunnelKey = httpsProxyTunnelKey(target, proxy, ca);
+  const socket =
+    takeIdleHttpsProxyTunnel(tunnelKey) ??
+    (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined));
+  socket.setKeepAlive(true);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return responseFromClientRequest((resolve, reject) => {
     const req = httpRequest(
@@ -678,18 +776,25 @@ async function fetchHttpsViaProxy(
         createConnection: () => socket,
       },
       (res) => {
+        const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
         resolve(
           streamingResponseFromNode(
             res,
             () => {
+              socket.destroy();
               req.destroy();
             },
             cap,
+            () => {
+              if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
+              else socket.destroy();
+            },
           ),
         );
       },
     );
     req.on("error", (error) => {
+      socket.destroy();
       reject(mapProxyError(error));
     });
     req.end(body);

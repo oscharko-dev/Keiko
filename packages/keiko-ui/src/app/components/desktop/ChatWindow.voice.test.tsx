@@ -147,6 +147,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -155,6 +156,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -594,6 +596,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
       vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
         return (
           args.groundingActive === true &&
+          args.groundingToolActive === false &&
           args.chatContext?.chatId === "chat-1" &&
           args.chatContext.grounding?.enabled === true &&
           args.chatContext.grounding.kind === "knowledge" &&
@@ -614,6 +617,18 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
       expect(screen.getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument(),
     );
     expect(screen.getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+    expect(
+      vi.mocked(useRealtimeVoice).mock.calls.some(([args]) => {
+        return (
+          args.groundingActive === true &&
+          args.groundingToolActive === true &&
+          args.chatContext?.chatId === "chat-1" &&
+          args.chatContext.grounding?.enabled === true &&
+          args.chatContext.grounding.kind === "knowledge" &&
+          args.chatContext.grounding.sourceCount === 1
+        );
+      }),
+    ).toBe(true);
   });
 
   it("does not mark the composer with a voice aura before dialogue mode is active", async () => {
@@ -632,7 +647,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(box.querySelector('[role="status"][aria-atomic="true"]')).toBeNull();
   });
 
-  it("entering dialogue mode reduces the composer to voice stop and microphone mute controls", async () => {
+  it("entering dialogue mode keeps context controls while hiding send-only actions", async () => {
     vi.mocked(api.fetchVoiceCapability).mockResolvedValue({ voice: FULL_REALTIME_WITH_PERSONAS });
     stubRealtimeBrowser(async () => ({}) as MediaStream);
     renderWindow(makeSession());
@@ -647,6 +662,8 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
     expect(box).toHaveClass("cmp-box-voice-dialog");
+    expect(within(box).getByRole("textbox", { name: "Chat message" })).toBeInTheDocument();
+    expect(within(box).getByRole("button", { name: "Attach file" })).toBeInTheDocument();
     expect(within(box).getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
     expect(
       within(box).getByRole("button", { name: "Mute voice dialogue microphone" }),
@@ -678,7 +695,7 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(screen.queryByRole("button", { name: "Stop voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
 
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
@@ -773,7 +790,7 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(screen.queryByRole("button", { name: "Stop voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
     expect(within(box).getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
@@ -888,7 +905,7 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
       "true",
     );
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Interrupt the assistant" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
     // The conversation is now shown and the composer stays in the clean voice-control layout.
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");

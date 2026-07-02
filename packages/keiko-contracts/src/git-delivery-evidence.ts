@@ -59,12 +59,7 @@ export const GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION = "1" as const;
 // further precise dispositions the #472 kernel distinguishes. Every attempt produces exactly one.
 
 export type GitDeliveryEvidenceOutcomeClass =
-  | "succeeded"
-  | "blocked"
-  | "rejected"
-  | "failed"
-  | "recovery-required"
-  | "approval-required";
+  "succeeded" | "blocked" | "rejected" | "failed" | "recovery-required" | "approval-required";
 
 export const GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES: readonly GitDeliveryEvidenceOutcomeClass[] = [
   "succeeded",
@@ -84,10 +79,7 @@ export const GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES: readonly GitDeliveryEvidence
 // This is DATA on the failure category / error code / block reason, never inferred from a message.
 
 export type GitDeliveryRecoveryDisposition =
-  | "retryable"
-  | "user-fixable"
-  | "policy-forbidden"
-  | "none";
+  "retryable" | "user-fixable" | "policy-forbidden" | "none";
 
 export const GIT_DELIVERY_RECOVERY_DISPOSITIONS: readonly GitDeliveryRecoveryDisposition[] = [
   "retryable",
@@ -103,12 +95,7 @@ export const GIT_DELIVERY_RECOVERY_DISPOSITIONS: readonly GitDeliveryRecoveryDis
 // halted without a string compare.
 
 export type GitDeliveryEvidenceLifecyclePhase =
-  | "resolve"
-  | "preflight"
-  | "preview"
-  | "policy"
-  | "execute"
-  | "result";
+  "resolve" | "preflight" | "preview" | "policy" | "execute" | "result";
 
 export const GIT_DELIVERY_EVIDENCE_LIFECYCLE_PHASES: readonly GitDeliveryEvidenceLifecyclePhase[] =
   ["resolve", "preflight", "preview", "policy", "execute", "result"] as const;

@@ -101,6 +101,13 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
+function listAllMemories(
+  vault: MemoryVaultStore,
+  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
+}
+
 function registerChat(
   deps: UiHandlerDeps,
   label = "memory-conversation",
@@ -439,6 +446,8 @@ describe("handleMemoryRetrieveContext", () => {
 
     expect(port.listOutgoingEdges?.(source.id)).toEqual([edge]);
     expect(port.listIncomingEdges?.(target.id)).toEqual([edge]);
+    expect(port.listEdgesForMemories?.([source.id, target.id]).get(source.id)).toEqual([edge]);
+    expect(port.listEdgesForMemories?.([source.id, target.id]).get(target.id)).toEqual([edge]);
   });
 
   it("rejects oversize bodies with 413", async () => {
@@ -616,7 +625,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     ).toEqual([]);
   });
 
-  it("blocks confidential candidates instead of durably persisting them before approval", async () => {
+  it("persists confidential candidates as masked reviewable proposals", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
     const chat = registerChat(deps, "capture-confidential");
@@ -628,10 +637,42 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(result.status).toBe(200);
-    expect(asJson(result).outcomes).toEqual([
-      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
-    ]);
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    const outcomes = asJson(result).outcomes as readonly {
+      kind: string;
+      requiresApproval?: boolean;
+      proposal?: { proposalId: string; body: string };
+    }[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]).toMatchObject({
+      kind: "candidate",
+      requiresApproval: true,
+      proposal: { body: "Sensitive memory pending review." },
+    });
+    const proposalId = outcomes[0]?.proposal?.proposalId;
+    expect(typeof proposalId).toBe("string");
+    if (proposalId !== undefined) {
+      const stored = vault.getMemory(proposalId as unknown as MemoryId);
+      expect(stored?.status).toBe("proposed");
+      expect(stored?.provenance.sensitivity).toBe("confidential");
+      expect(stored?.body).toBe("my private support email is developer@example.com");
+    }
+  });
+
+  it("still rejects credential-shaped candidates and persists nothing", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-credential");
+    const apiKey = ["sk-", "abcdefghijklmnopqrstuvwxyz12345"].join("");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: `remember that the temporary API key is ${apiKey}`,
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "credential-shape" }]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
   });
 
   it("uses deployment redaction literals as customer identifier rejection matchers", async () => {
@@ -650,7 +691,7 @@ describe("handleMemoryCaptureFromConversation", () => {
     );
     expect(result.status).toBe(200);
     expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
   });
 
   it("resolves an explicit forget intent against in-scope memories", async () => {
@@ -676,6 +717,68 @@ describe("handleMemoryCaptureFromConversation", () => {
     const first = outcomes[0];
     expect(first.kind).toBe("forget");
     expect(first.operation?.memoryId).toBe(existing.id);
+  });
+
+  it("suppresses recapturing a previously forgotten body in the same scope", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-forgotten-body");
+    const scope = projectScope(chat.projectPath);
+    const existing = insertAcceptedMemory(vault, {
+      body: "release hardening uses vitest",
+      scope,
+    });
+    vault.deleteMemory(existing.id, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "user-request",
+      nowMs: Date.now() + 1,
+    });
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that release hardening uses vitest",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([{ kind: "rejected", reason: "suppressed-by-forget" }]);
+    expect(vault.listMemoriesByScope(scope, { includeExpired: true })).toEqual([]);
+  });
+
+  it("allows a different body after a forget tombstone in the same scope", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-after-forget-different");
+    const scope = projectScope(chat.projectPath);
+    const existing = insertAcceptedMemory(vault, {
+      body: "release hardening uses vitest",
+      scope,
+    });
+    vault.deleteMemory(existing.id, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "user-request",
+      nowMs: Date.now() + 1,
+    });
+
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that release hardening uses tap",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(200);
+    const outcomes = asJson(result).outcomes as readonly {
+      kind: string;
+      proposal?: { proposalId: string };
+    }[];
+    expect(outcomes[0]?.kind).toBe("candidate");
+    expect(vault.listMemoriesByScope(scope, { includeExpired: true })).toHaveLength(1);
   });
 
   it("resolves an explicit update intent against in-scope memories", async () => {

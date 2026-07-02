@@ -1,5 +1,10 @@
 import type { DocumentStatus } from "./local-knowledge-records.js";
-import type { ChunkId, DocumentId, KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
+import type {
+  ChunkId,
+  DocumentId,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "./local-knowledge.js";
 
 export type PdfCitationPreviewAnchorQuality = "page-only" | "approximate" | "unavailable";
 
@@ -23,6 +28,10 @@ export type PdfCitationPreviewReasonCode =
   | "document-not-ready"
   | "document-content-mismatch"
   | "page-provenance-missing"
+  | "source-modified"
+  | "source-needs-rebind"
+  | "source-dehydrated"
+  | "source-unavailable"
   | "preview-source-missing"
   | "preview-source-unreadable"
   | "preview-source-oversized";
@@ -41,6 +50,10 @@ export const PDF_CITATION_PREVIEW_REASON_CODES = [
   "document-not-ready",
   "document-content-mismatch",
   "page-provenance-missing",
+  "source-modified",
+  "source-needs-rebind",
+  "source-dehydrated",
+  "source-unavailable",
   "preview-source-missing",
   "preview-source-unreadable",
   "preview-source-oversized",
@@ -55,10 +68,7 @@ export const PDF_CITATION_PREVIEW_FAILURE_STATES = [
 ] as const;
 
 export type PdfCitationPreviewStatusState =
-  | "not-applicable"
-  | "available"
-  | "recoverable"
-  | "blocked";
+  "not-applicable" | "available" | "recoverable" | "blocked";
 
 export const PDF_CITATION_PREVIEW_STATUS_STATES = [
   "not-applicable",
@@ -113,6 +123,20 @@ export type PdfCitationPreviewOrigin = "inline-marker" | "citation-chip";
 
 export const PDF_CITATION_PREVIEW_ORIGINS = ["inline-marker", "citation-chip"] as const;
 
+export function normalizePdfCitationPreviewMarkerIndex(
+  marker: string | number,
+): number | undefined {
+  if (typeof marker === "number") {
+    return Number.isInteger(marker) && marker > 0 ? marker : undefined;
+  }
+  const trimmed = marker.trim();
+  const match = /^(?:\[(\d+)\]|【(\d+)】|［(\d+)］|(\d+))$/u.exec(trimmed);
+  if (match === null) return undefined;
+  const digits = trimmed.replace(/^[\u005B【［]/u, "").replace(/[\u005D】］]$/u, "");
+  const parsed = Number.parseInt(digits, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 export interface PdfCitationPreviewSelection {
   readonly chatId: string;
   readonly assistantMessageId: string;
@@ -141,8 +165,7 @@ export interface PdfCitationPreviewRejected {
 }
 
 export type PdfCitationPreviewAuthorizationResponse =
-  | PdfCitationPreviewAuthorized
-  | PdfCitationPreviewRejected;
+  PdfCitationPreviewAuthorized | PdfCitationPreviewRejected;
 
 export interface PdfCitationPreviewCitationStatus {
   readonly stableId: string;
@@ -172,27 +195,34 @@ export interface PdfCitationPreviewOpenAuthorized {
 }
 
 export type PdfCitationPreviewOpenResponse =
-  | PdfCitationPreviewOpenAuthorized
-  | PdfCitationPreviewRejected;
+  PdfCitationPreviewOpenAuthorized | PdfCitationPreviewRejected;
+
+const RECOVERABLE_PDF_CITATION_PREVIEW_REASONS = new Set<PdfCitationPreviewReasonCode>([
+  "preview-metadata-missing",
+  "document-not-ready",
+  "document-content-mismatch",
+  "page-provenance-missing",
+  "source-modified",
+  "source-needs-rebind",
+  "source-dehydrated",
+  "source-unavailable",
+  "preview-source-missing",
+  "preview-source-unreadable",
+  "preview-source-oversized",
+]);
+
+const NOT_APPLICABLE_PDF_CITATION_PREVIEW_REASONS = new Set<PdfCitationPreviewReasonCode>([
+  "grounded-answer-missing",
+  "not-local-knowledge-citation",
+]);
 
 export function pdfCitationPreviewFailureState(
   reason: PdfCitationPreviewReasonCode,
 ): PdfCitationPreviewFailureState {
-  if (
-    reason === "preview-metadata-missing" ||
-    reason === "document-not-ready" ||
-    reason === "document-content-mismatch" ||
-    reason === "page-provenance-missing" ||
-    reason === "preview-source-missing" ||
-    reason === "preview-source-unreadable" ||
-    reason === "preview-source-oversized"
-  ) {
+  if (RECOVERABLE_PDF_CITATION_PREVIEW_REASONS.has(reason)) {
     return "recoverable";
   }
-  if (
-    reason === "grounded-answer-missing" ||
-    reason === "not-local-knowledge-citation"
-  ) {
+  if (NOT_APPLICABLE_PDF_CITATION_PREVIEW_REASONS.has(reason)) {
     return "not-applicable";
   }
   return "blocked";

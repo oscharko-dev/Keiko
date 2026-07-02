@@ -25,7 +25,7 @@
   function toRGBA(str) {
     ctx.clearRect(0, 0, 1, 1);
     ctx.fillStyle = "#000";
-    ctx.fillStyle = str;          // ignored if invalid → stays #000
+    ctx.fillStyle = str; // ignored if invalid → stays #000
     ctx.fillRect(0, 0, 1, 1);
     var d = ctx.getImageData(0, 0, 1, 1).data;
     return [d[0], d[1], d[2], d[3] / 255];
@@ -37,13 +37,21 @@
       Math.round(fg[0] * a + base[0] * (1 - a)),
       Math.round(fg[1] * a + base[1] * (1 - a)),
       Math.round(fg[2] * a + base[2] * (1 - a)),
-      1
+      1,
     ];
   }
-  function lin(c) { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
-  function lum(rgb) { return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]); }
+  function lin(c) {
+    c /= 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  }
+  function lum(rgb) {
+    return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+  }
   function ratio(fg, bg) {
-    var a = lum(fg), b = lum(bg), hi = Math.max(a, b), lo = Math.min(a, b);
+    var a = lum(fg),
+      b = lum(bg),
+      hi = Math.max(a, b),
+      lo = Math.min(a, b);
     return (hi + 0.05) / (lo + 0.05);
   }
 
@@ -65,10 +73,14 @@
     if (m === "darkHC" || m === "lightHC") root.setAttribute("data-hc", "more");
     else root.removeAttribute("data-hc");
   }
-  function snapshot() { return [root.getAttribute("data-theme"), root.getAttribute("data-hc")]; }
+  function snapshot() {
+    return [root.getAttribute("data-theme"), root.getAttribute("data-hc")];
+  }
   function restore(s) {
-    if (s[0] === null) root.removeAttribute("data-theme"); else root.setAttribute("data-theme", s[0]);
-    if (s[1] === null) root.removeAttribute("data-hc"); else root.setAttribute("data-hc", s[1]);
+    if (s[0] === null) root.removeAttribute("data-theme");
+    else root.setAttribute("data-theme", s[0]);
+    if (s[1] === null) root.removeAttribute("data-hc");
+    else root.setAttribute("data-hc", s[1]);
   }
 
   // Resolve a CSS colour expression to RGBA in whatever mode is currently set on root.
@@ -111,5 +123,11 @@
     return out;
   }
 
-  window.KeikoA11y = { toRGBA: toRGBA, ratio: ratio, resolve: resolve, measure: measure, MODES: MODES };
+  window.KeikoA11y = {
+    toRGBA: toRGBA,
+    ratio: ratio,
+    resolve: resolve,
+    measure: measure,
+    MODES: MODES,
+  };
 })();

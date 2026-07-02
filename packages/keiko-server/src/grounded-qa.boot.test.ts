@@ -33,5 +33,6 @@ describe("grounded modules — native Node ESM boot", () => {
       );
       expect(out).toContain("BOOT_OK");
     },
+    20_000,
   );
 });

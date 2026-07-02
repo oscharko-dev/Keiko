@@ -7,9 +7,13 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  EXCEL_CSV_SEPARATOR_HINT,
+  UTF8_BOM,
+  convertCsvDelimiter,
   encodeSpreadsheetSafeCell,
   encodeSpreadsheetSafeRow,
   startsWithFormulaLead,
+  toExcelFriendlyCsv,
 } from "../adapters/spreadsheetSafeCsv.js";
 
 // ---------------------------------------------------------------------------
@@ -197,5 +201,29 @@ describe("encodeSpreadsheetSafeRow", () => {
 
   it("produces a single-cell row with CRLF", () => {
     expect(encodeSpreadsheetSafeRow(["only"])).toBe("only\r\n");
+  });
+
+  it("can encode a row with semicolon delimiter and quotes semicolon-bearing values", () => {
+    expect(encodeSpreadsheetSafeRow(["a", "b;c"], ";")).toBe('a;"b;c"\r\n');
+  });
+});
+
+describe("Excel-friendly CSV download helpers", () => {
+  it("adds UTF-8 BOM and sep=; hint while preserving German umlauts", () => {
+    const body = encodeSpreadsheetSafeRow(["Titel", "Überweisung prüfen"]);
+    const excel = toExcelFriendlyCsv(body);
+    expect(excel.startsWith(`${UTF8_BOM}${EXCEL_CSV_SEPARATOR_HINT}`)).toBe(true);
+    expect(excel).toContain("Überweisung prüfen");
+    expect(excel).toContain("Titel;Überweisung prüfen\r\n");
+  });
+
+  it("converts separators without splitting quoted comma-bearing cells", () => {
+    const converted = convertCsvDelimiter(encodeSpreadsheetSafeRow(["a,b", "c"]), ";");
+    expect(converted).toBe('"a,b";c\r\n');
+  });
+
+  it("preserves formula-injection apostrophes after delimiter conversion", () => {
+    const converted = toExcelFriendlyCsv(encodeSpreadsheetSafeRow(["=SUM(A1)", "plain"]));
+    expect(converted).toContain("'=SUM(A1);plain\r\n");
   });
 });

@@ -5,7 +5,28 @@
 
 // ─── Detected workspace ─────────────────────────────────────────────────────────
 
-export type WorkspaceLanguage = "typescript" | "javascript";
+export type WorkspaceLanguage =
+  | "typescript"
+  | "javascript"
+  | "java"
+  | "kotlin"
+  | "scala"
+  | "groovy"
+  | "go"
+  | "rust"
+  | "python"
+  | "csharp"
+  | "fsharp"
+  | "vb"
+  | "cpp"
+  | "swift"
+  | "ruby"
+  | "php"
+  | "terraform"
+  | "sql"
+  | "protobuf"
+  | "openapi"
+  | "graphql";
 
 export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
 
@@ -34,8 +55,8 @@ export interface DiscoveryOptions {
 }
 
 export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
-  maxDepth: 12,
-  maxFiles: 5_000,
+  maxDepth: 40,
+  maxFiles: 50_000,
   applyGitignore: true,
 } as const;
 
@@ -43,6 +64,8 @@ export interface DiscoveryStats {
   readonly discovered: number;
   readonly denied: number;
   readonly ignored: number;
+  readonly depthPruned: number;
+  readonly maxFilesPruned: number;
 }
 
 // ─── File reads ─────────────────────────────────────────────────────────────────
@@ -66,21 +89,16 @@ export interface FileContent {
 // ─── Context pack ───────────────────────────────────────────────────────────────
 
 export type SelectionReason =
-  | "entrypoint"
-  | "manifest"
-  | "documentation"
-  | "config"
-  | "source"
-  | "test";
+  "entrypoint" | "manifest" | "documentation" | "config" | "source" | "test";
 
 // Priority order used to rank candidates: lower index wins. Ties break on lexical path.
 export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = [
   "entrypoint",
-  "manifest",
-  "documentation",
-  "config",
   "source",
   "test",
+  "manifest",
+  "config",
+  "documentation",
 ] as const;
 
 export interface ContextRequest {

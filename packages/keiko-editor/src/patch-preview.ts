@@ -143,11 +143,10 @@ function clampToLimit(
 
   let bytes = 0;
   let end = 0;
-  for (let index = 0; index < text.length; ) {
+  for (let index = 0; index < text.length;) {
     const codePoint = text.codePointAt(index) ?? 0;
     const codeUnits = codePoint > 0xffff ? 2 : 1;
-    const nextBytes =
-      codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    const nextBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
     if (bytes + nextBytes > maxBytes) {
       return { text: text.slice(0, end), truncated: true };
     }

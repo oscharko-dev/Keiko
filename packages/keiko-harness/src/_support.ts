@@ -145,6 +145,7 @@ export function buildContext(options: CtxOptions): { ctx: RunContext; sink: Memo
     counters: newCounters(),
     ...(options.shaperPort === undefined ? {} : { shaperPort: options.shaperPort }),
     shapedObservations: [],
+    compactedToolMessages: new Map(),
     messages: [...plan.messages],
     lastResponse: undefined,
     patchDiff: undefined,

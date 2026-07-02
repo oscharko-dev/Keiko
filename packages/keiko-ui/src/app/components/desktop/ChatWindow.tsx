@@ -46,6 +46,7 @@ import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import {
   supportsDictation,
   supportsSpeechOutput,
+  supportsRealtimeToolCalling,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
@@ -55,6 +56,7 @@ import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
 import { useRealtimeVoice } from "./hooks/useRealtimeVoice";
+import { VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import {
   usePdfCitationPreviewController,
   type PdfCitationPreviewWindowApi,
@@ -68,7 +70,7 @@ import {
 import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
   fetchCapsules,
@@ -113,6 +115,11 @@ const SEND_HINT_ID = "cmp-send-hint";
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
 
+const CHAT_TURN_WINDOW_THRESHOLD = 120;
+const CHAT_TURN_WINDOW_SIZE = 80;
+const CHAT_TURN_WINDOW_OVERSCAN = 8;
+const CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX = 132;
+
 function timeLabel(timestamp: number): string {
   const date = new Date(timestamp);
   const time = date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -126,9 +133,9 @@ function timeLabel(timestamp: number): string {
 // RunSummaryCards (the chat-side projection of the run). Other system messages keep
 // the historical "filtered out of the visible log" behaviour.
 function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
-  // Issue #152 — the streaming path inserts an empty assistant bubble before the first token
-  // arrives; while it is empty the pending turn is represented by the TypingBubble, so an empty
-  // assistant turn is hidden here to avoid a duplicate "Keiko" bubble during the contacting wait.
+  // Issue #152 — while the stream is empty, the pending turn is represented by
+  // TypingBubble; empty assistant turns are hidden to avoid a duplicate "Keiko"
+  // bubble during the contacting wait.
   // Persisted assistant turns are never empty; empty provider responses fail before persistence.
   return messages.filter(
     (m) =>
@@ -163,6 +170,47 @@ function conversationTurns(messages: readonly ChatMessage[]): readonly Conversat
   }
 
   return turns;
+}
+
+interface ConversationTurnWindow {
+  readonly turns: readonly ConversationTurn[];
+  readonly beforeCount: number;
+  readonly afterCount: number;
+}
+
+function turnContainsMessage(turn: ConversationTurn, messageId: string): boolean {
+  if (turn.user?.id === messageId) return true;
+  return turn.responses.some((response) => response.id === messageId);
+}
+
+function conversationTurnWindow(
+  turns: readonly ConversationTurn[],
+  focusedMessageId: string | null,
+): ConversationTurnWindow {
+  if (turns.length <= CHAT_TURN_WINDOW_THRESHOLD) {
+    return { turns, beforeCount: 0, afterCount: 0 };
+  }
+
+  let start = Math.max(0, turns.length - CHAT_TURN_WINDOW_SIZE);
+  if (focusedMessageId !== null) {
+    const focusedIndex = turns.findIndex((turn) => turnContainsMessage(turn, focusedMessageId));
+    if (
+      focusedIndex >= 0 &&
+      (focusedIndex < start || focusedIndex >= start + CHAT_TURN_WINDOW_SIZE)
+    ) {
+      start = Math.max(0, focusedIndex - CHAT_TURN_WINDOW_OVERSCAN);
+    }
+  }
+  const end = Math.min(turns.length, start + CHAT_TURN_WINDOW_SIZE);
+  return {
+    turns: turns.slice(start, end),
+    beforeCount: start,
+    afterCount: turns.length - end,
+  };
+}
+
+function conversationTurnSpacerStyle(hiddenTurns: number): CSSProperties {
+  return { blockSize: `${String(hiddenTurns * CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX)}px` };
 }
 
 // No fallback to a placeholder model id — when no eligible models are
@@ -251,7 +299,7 @@ function isCollapsibleAssistantAnswer(content: string): boolean {
 // responses. Mirrors SafeMarkdown's code-block CopyButton: clipboard guard for
 // non-secure contexts and announced status (WCAG 4.1.3).
 function MessageCopyButton({ content }: { readonly content: string }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [status, setStatus] = useState("");
 
@@ -295,9 +343,54 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   );
 }
 
+function MessageRegenerateButton({
+  messageId,
+  regenerating,
+  onRegenerate,
+  onCancel,
+}: {
+  readonly messageId: string;
+  readonly regenerating: boolean;
+  readonly onRegenerate: (assistantMessageId: string) => Promise<void>;
+  readonly onCancel: () => void;
+}): ReactNode {
+  const [status, setStatus] = useState("");
+  const handleClick = useCallback(() => {
+    if (regenerating) {
+      onCancel();
+      setStatus("Regeneration cancelled");
+      return;
+    }
+    setStatus("Regenerating response");
+    void onRegenerate(messageId);
+  }, [messageId, onCancel, onRegenerate, regenerating]);
+  return (
+    <>
+      <div className="ai-controls" data-live={regenerating ? "true" : "false"}>
+        <button
+          type="button"
+          className="ai-stop"
+          aria-label={regenerating ? "Cancel regeneration" : "Regenerate response"}
+          aria-busy={regenerating ? "true" : undefined}
+          onClick={handleClick}
+        >
+          {regenerating ? "Cancel" : "Regenerate"}
+        </button>
+      </div>
+      <span role="status" className="sr-only">
+        {status}
+      </span>
+    </>
+  );
+}
+
 function ChatBubbleImpl({
   message,
   onOpenRunResult,
+  onRegenerate,
+  onCancelRegenerate,
+  showRegenerate = false,
+  regenerating = false,
   repositoryRoots,
   openRepositoryReference,
   previewWindows,
@@ -307,6 +400,10 @@ function ChatBubbleImpl({
 }: {
   readonly message: ChatMessage;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly onRegenerate?: ((assistantMessageId: string) => Promise<void>) | undefined;
+  readonly onCancelRegenerate?: (() => void) | undefined;
+  readonly showRegenerate?: boolean;
+  readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
@@ -316,7 +413,7 @@ function ChatBubbleImpl({
   readonly streaming?: boolean;
   readonly layout?: "stack" | "turn";
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { activeChat } = useChatSessionContext();
   const contentId = useId();
   const bubbleRef = useRef<HTMLElement | null>(null);
@@ -329,7 +426,8 @@ function ChatBubbleImpl({
     windowId,
     windows: previewWindows,
   });
-  const canCollapse = !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
+  const canCollapse =
+    !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(message.content);
 
   useEffect(() => {
     const assistantMessageId = message.groundedAnswer?.assistantMessageId ?? message.id;
@@ -347,7 +445,13 @@ function ChatBubbleImpl({
       chatWindowId: windowId,
       element: bubbleRef.current,
     });
-  }, [activeChat?.id, message.groundedAnswer?.assistantMessageId, message.id, message.role, windowId]);
+  }, [
+    activeChat?.id,
+    message.groundedAnswer?.assistantMessageId,
+    message.id,
+    message.role,
+    windowId,
+  ]);
 
   // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
   // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
@@ -372,11 +476,14 @@ function ChatBubbleImpl({
           data-collapsed={!isUser && collapsed ? "true" : "false"}
           data-collapsible={canCollapse ? "true" : "false"}
         >
-          {isUser ? (
+          {isUser || streaming ? (
             message.content
           ) : (
             // AC #1 / #2: assistant responses render as safe markdown.
             // User messages remain plain text — no markdown interpretation.
+            // The live streaming assistant turn also stays plain text until the
+            // canonical message arrives, avoiding full Markdown parse/highlight
+            // work on every token while retaining React's escaping guarantees.
             // SM-1: wrapped in a per-message boundary so a parser/render defect
             // degrades this one bubble to plain text instead of crashing the view.
             <SafeMarkdownBoundary
@@ -399,6 +506,14 @@ function ChatBubbleImpl({
           </div>
           {isUser ? null : (
             <div className="chat-msg-actions">
+              {showRegenerate && onRegenerate !== undefined && onCancelRegenerate !== undefined ? (
+                <MessageRegenerateButton
+                  messageId={message.id}
+                  regenerating={regenerating}
+                  onRegenerate={onRegenerate}
+                  onCancel={onCancelRegenerate}
+                />
+              ) : null}
               <MessageCopyButton content={message.content} />
               {canCollapse ? (
                 <button
@@ -442,7 +557,7 @@ function ChatBubbleImpl({
 const ChatBubble = memo(ChatBubbleImpl);
 
 function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div
       className="chat-msg-brand"
@@ -456,7 +571,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
 }
 
 function TypingBubble(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <article className="chat-msg" data-role="assistant">
       <div className="chat-msg-bubble">
@@ -476,6 +591,7 @@ function TypingBubble(): ReactNode {
 
 interface ConversationThreadProps {
   readonly messages: readonly ChatMessage[];
+  readonly streamingAssistantMessage?: ChatMessage | undefined;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
@@ -483,13 +599,19 @@ interface ConversationThreadProps {
   readonly windowId?: string | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
+  readonly regeneratingMessageId: string | undefined;
   readonly activeChat: Chat | undefined;
   readonly onCancelGrounded: () => void;
+  readonly onRegenerate: (assistantMessageId: string) => Promise<void>;
+  readonly onCancelRegenerate: () => void;
+  readonly showRegenerateControls: boolean;
   readonly registerQuestionAnchor?: (messageId: string, node: HTMLDivElement | null) => void;
+  readonly focusedMessageId: string | null;
 }
 
 function ConversationThreadImpl({
   messages,
+  streamingAssistantMessage,
   onOpenRunResult,
   repositoryRoots,
   openRepositoryReference,
@@ -497,16 +619,50 @@ function ConversationThreadImpl({
   windowId,
   sending,
   sendStatus,
+  regeneratingMessageId,
   activeChat,
   onCancelGrounded,
+  onRegenerate,
+  onCancelRegenerate,
+  showRegenerateControls,
   registerQuestionAnchor,
+  focusedMessageId,
 }: ConversationThreadProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const turns = useMemo(() => conversationTurns(messages), [messages]);
+  const turnWindow = useMemo(
+    () => conversationTurnWindow(turns, focusedMessageId),
+    [focusedMessageId, turns],
+  );
+  const liveAssistant =
+    streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0
+      ? streamingAssistantMessage
+      : undefined;
+  const lastTurnId = turns[turns.length - 1]?.id;
+  const latestAssistantId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role === "assistant") return message.id;
+    }
+    return undefined;
+  }, [messages]);
   return (
-    <div className="chatw-thread">
-      {turns.map((turn) => {
+    <div
+      className="chatw-thread"
+      data-windowed={turnWindow.beforeCount > 0 || turnWindow.afterCount > 0 ? "true" : "false"}
+    >
+      {turnWindow.beforeCount > 0 ? (
+        <div
+          className="chat-turn-spacer"
+          aria-hidden="true"
+          data-position="before"
+          data-hidden-turns={turnWindow.beforeCount}
+          style={conversationTurnSpacerStyle(turnWindow.beforeCount)}
+        />
+      ) : null}
+      {turnWindow.turns.map((turn) => {
         const userMessage = turn.user;
+        const isLastTurn = turn.id === lastTurnId;
         return (
           <div className="chat-turn" key={turn.id}>
             <div
@@ -541,18 +697,62 @@ function ConversationThreadImpl({
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
+                  onRegenerate={onRegenerate}
+                  onCancelRegenerate={onCancelRegenerate}
+                  showRegenerate={showRegenerateControls && latestAssistantId === response.id}
+                  regenerating={regeneratingMessageId === response.id}
                   streaming={
+                    liveAssistant === undefined &&
                     sendStatus === "streaming" &&
                     response.role === "assistant" &&
-                    turn === turns[turns.length - 1] &&
+                    isLastTurn &&
                     index === turn.responses.length - 1
                   }
                 />
               ))}
+              {liveAssistant !== undefined && isLastTurn ? (
+                <ChatBubble
+                  key={liveAssistant.id}
+                  message={liveAssistant}
+                  onOpenRunResult={onOpenRunResult}
+                  repositoryRoots={repositoryRoots}
+                  openRepositoryReference={openRepositoryReference}
+                  previewWindows={previewWindows}
+                  windowId={windowId}
+                  layout="turn"
+                  streaming={sendStatus === "streaming"}
+                />
+              ) : null}
             </div>
           </div>
         );
       })}
+      {turnWindow.afterCount > 0 ? (
+        <div
+          className="chat-turn-spacer"
+          aria-hidden="true"
+          data-position="after"
+          data-hidden-turns={turnWindow.afterCount}
+          style={conversationTurnSpacerStyle(turnWindow.afterCount)}
+        />
+      ) : null}
+      {liveAssistant !== undefined && turns.length === 0 ? (
+        <div className="chat-turn" key={liveAssistant.id}>
+          <div className="chat-turn-cell chat-turn-prompt" />
+          <div className="chat-turn-cell chat-turn-answer">
+            <ChatBubble
+              message={liveAssistant}
+              onOpenRunResult={onOpenRunResult}
+              repositoryRoots={repositoryRoots}
+              openRepositoryReference={openRepositoryReference}
+              previewWindows={previewWindows}
+              windowId={windowId}
+              layout="turn"
+              streaming={sendStatus === "streaming"}
+            />
+          </div>
+        </div>
+      ) : null}
       {sending && sendStatus !== "streaming" ? (
         <div className="chat-turn chat-turn-pending">
           <div className="chat-turn-cell chat-turn-prompt" />
@@ -597,7 +797,7 @@ function ConversationQuestionMap({
   readonly items: readonly ConversationQuestionMapItem[];
   readonly onJump: (messageId: string) => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
   const setWaveFromPointer = useCallback((clientY: number): void => {
     const buttons = Array.from(buttonRefs.current.values());
@@ -1306,13 +1506,25 @@ interface ComposerBarProps {
 }
 
 interface VoiceDialogComposerControlsProps {
+  readonly session: ChatSessionApi;
+  readonly selectedModelCapability: ModelCapability | undefined;
+  readonly onAttachFiles: (files: readonly File[]) => void;
   readonly voiceMuted: boolean;
   readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
+  readonly canInterrupt?: boolean | undefined;
+  readonly onInterrupt?: (() => void) | undefined;
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
   readonly compact?: boolean | undefined;
+}
+
+interface ComposerContextControlsProps {
+  readonly session: ChatSessionApi;
+  readonly selectedModelCapability: ModelCapability | undefined;
+  readonly onAttachFiles: (files: readonly File[]) => void;
+  readonly controlsNarrow?: boolean | undefined;
 }
 
 interface VoiceDialogMicMuteButtonProps {
@@ -1353,10 +1565,86 @@ function VoiceDialogMicMuteButton({
   );
 }
 
+function ComposerContextControls({
+  session,
+  selectedModelCapability,
+  onAttachFiles,
+  controlsNarrow = false,
+}: ComposerContextControlsProps): ReactNode {
+  const t = useTranslate();
+  const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
+  const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
+  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
+  const compactModelTip = loading
+    ? t("chat.model.loading")
+    : noEligibleModels
+      ? t("chat.model.noEligible")
+      : t("chat.model.change");
+
+  return (
+    <div className="cmp-bar-model">
+      <AttachButton
+        model={selectedModelCapability}
+        onFiles={onAttachFiles}
+        anyModelSupportsAttachments={models.some(
+          (m) => m.supportsImageInput || m.supportsDocumentInput,
+        )}
+      />
+      <div
+        className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
+        data-tip={controlsNarrow ? compactModelTip : undefined}
+      >
+        <KeikoSelect
+          triggerClassName="cmp-model-select"
+          value={selectValue}
+          ariaLabel={t("chat.model.menuTitle")}
+          ariaDescribedBy={selectDescribedBy}
+          disabled={loading}
+          placeholder={
+            loading
+              ? t("chat.model.loading")
+              : noEligibleModels
+                ? t("chat.model.noEligible")
+                : t("chat.model.menuTitle")
+          }
+          leadingVisual={
+            <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
+          }
+          menuTitle={t("chat.model.menuTitle")}
+          menuClassName="cmp-model-menu"
+          menuMinWidth={controlsNarrow ? 118 : 280}
+          mono
+          sections={[
+            {
+              options: loading
+                ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
+                : noEligibleModels
+                  ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
+                  : modelList(models).map((model) => ({
+                      value: model.id,
+                      label: model.id,
+                    })),
+            },
+          ]}
+          onValueChange={(next) => {
+            if (noEligibleModels || loading) return;
+            setSelectedModel(next);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function VoiceDialogComposerControls({
+  session,
+  selectedModelCapability,
+  onAttachFiles,
   voiceMuted,
   onToggleVoiceMute,
   playbackButtonRef,
+  canInterrupt = false,
+  onInterrupt,
   voiceDialogActive,
   onToggleVoiceDialog,
   voiceDialogButtonRef,
@@ -1364,6 +1652,12 @@ function VoiceDialogComposerControls({
 }: VoiceDialogComposerControlsProps): ReactNode {
   return (
     <div className="cmp-bar cmp-bar-voice-dialog">
+      <ComposerContextControls
+        session={session}
+        selectedModelCapability={selectedModelCapability}
+        onAttachFiles={onAttachFiles}
+        controlsNarrow={compact}
+      />
       <div className="cmp-bar-main cmp-bar-main-voice-dialog">
         <VoiceDialogModeSwitch
           active={voiceDialogActive}
@@ -1377,6 +1671,18 @@ function VoiceDialogComposerControls({
           buttonRef={playbackButtonRef}
           compact={compact}
         />
+        {onInterrupt !== undefined ? (
+          <button
+            type="button"
+            className={`cmp-voice-btn${compact ? " cmp-mode-compact" : ""}`}
+            aria-label="Interrupt the assistant"
+            data-tip="Interrupt the assistant"
+            disabled={!canInterrupt}
+            onClick={onInterrupt}
+          >
+            Interrupt
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -1401,17 +1707,8 @@ function ComposerBar({
   onToggleVoiceDialog,
   voiceDialogButtonRef,
 }: ComposerBarProps): ReactNode {
-  const { t } = useI18n();
-  const {
-    models,
-    selectedModel,
-    setSelectedModel,
-    draft,
-    noEligibleModels,
-    loading,
-    sending,
-    cancelSend,
-  } = session;
+  const t = useTranslate();
+  const { draft, noEligibleModels, loading, sending, cancelSend } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
@@ -1423,7 +1720,6 @@ function ComposerBar({
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
   //                  LOADING_STATUS_ID while bootstrapping,
   //                  else SEND_HINT_ID when only the draft is empty
-  const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const sendDescribedBy = noEligibleModels
     ? NO_MODEL_ALERT_ID
     : loading
@@ -1432,70 +1728,17 @@ function ComposerBar({
         ? SEND_HINT_ID
         : undefined;
 
-  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
-  const compactModelTip = loading
-    ? t("chat.model.loading")
-    : noEligibleModels
-      ? t("chat.model.noEligible")
-      : t("chat.model.change");
-
   return (
     <div className={`cmp-bar${barCompact ? " cmp-bar-compact" : ""}`}>
-      <div className="cmp-bar-model">
-        {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
-            uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
-            sr-only hint does not suggest a model switch that cannot succeed. */}
-        <AttachButton
-          model={selectedModelCapability}
-          onFiles={onAttachFiles}
-          anyModelSupportsAttachments={models.some(
-            (m) => m.supportsImageInput || m.supportsDocumentInput,
-          )}
-        />
-        {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
-        <div
-          className={`cmp-model mono ui-tip${controlsNarrow ? " cmp-model-compact" : " cmp-pill-standard"}`}
-          data-tip={controlsNarrow ? compactModelTip : undefined}
-        >
-          <KeikoSelect
-            triggerClassName="cmp-model-select"
-            value={selectValue}
-            ariaLabel={t("chat.model.menuTitle")}
-            ariaDescribedBy={selectDescribedBy}
-            disabled={loading}
-            placeholder={
-              loading
-                ? t("chat.model.loading")
-                : noEligibleModels
-                  ? t("chat.model.noEligible")
-                  : t("chat.model.menuTitle")
-            }
-            leadingVisual={
-              <Icons.cube size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
-            }
-            menuTitle={t("chat.model.menuTitle")}
-            menuClassName="cmp-model-menu"
-            menuMinWidth={controlsNarrow ? 118 : 280}
-            mono
-            sections={[
-              {
-                options: loading
-                  ? [{ value: "", label: t("chat.model.loading"), disabled: true }]
-                  : noEligibleModels
-                    ? [{ value: "", label: t("chat.model.noEligible"), disabled: true }]
-                    : modelList(models).map((model) => ({
-                        value: model.id,
-                        label: model.id,
-                      })),
-              },
-            ]}
-            onValueChange={(next) => {
-              if (noEligibleModels || loading) return;
-              setSelectedModel(next);
-            }}
-          />
-        </div>
-      </div>
+      {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button.
+          uiux-fix F040 C207 — tell the button whether ANY configured model can attach, so its
+          sr-only hint does not suggest a model switch that cannot succeed. */}
+      <ComposerContextControls
+        session={session}
+        selectedModelCapability={selectedModelCapability}
+        onAttachFiles={onAttachFiles}
+        controlsNarrow={controlsNarrow}
+      />
       <div className="cmp-bar-main">
         {/* Issue #495 — capability-gated dictation. Rendered only when the deployment advertises
             speech-to-text and the browser can capture audio; a no-voice deployment shows no mic at
@@ -1583,7 +1826,7 @@ function ComposerBar({
 // CSS class (var(--fg) text) for WCAG AA contrast compliance.
 // Stable id enables aria-describedby wiring from disabled controls (AC #2).
 function NoModelAlert(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div id={NO_MODEL_ALERT_ID} role="alert" className="gw-error cmp-no-model">
       {t("chat.noModelAlert")}
@@ -1595,7 +1838,7 @@ function NoModelAlert(): ReactNode {
 // screen-reader users hear the state without interruption. No fake progress
 // percentage — engineering note forbids it.
 function LoadingStatus(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div id={LOADING_STATUS_ID} role="status" className="cmp-loading-status">
       <span className="cmp-loading-dot" aria-hidden="true" />
@@ -1632,7 +1875,7 @@ export function sendStatusLabel(status: SendStatus): string {
 // without interruption. Hidden when there is nothing to say (idle/completed/
 // failed — the error string carries its own role="alert").
 function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const label =
     status === "queued"
       ? t("chat.send.statusQueued")
@@ -1680,7 +1923,7 @@ function ComposerCore({
   controlsNarrow = false,
   barCompact = false,
 }: ComposerCoreProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const {
     draft,
     loading,
@@ -1778,6 +2021,9 @@ function ComposerCore({
     messageId: undefined,
   });
   const voiceGrounding = voiceSessionGroundingContext(activeChat);
+  const voiceGroundingActive = voiceGrounding?.enabled === true;
+  const voiceGroundingToolAvailable =
+    voiceGroundingActive && supportsRealtimeToolCalling(voiceCapability);
   const realtimeVoice = useRealtimeVoice({
     persona: voiceDialog.persona,
     chatContext:
@@ -1791,12 +2037,11 @@ function ComposerCore({
             },
             ...(voiceGrounding === undefined ? {} : { grounding: voiceGrounding }),
           },
-    groundingActive: voiceGrounding?.enabled === true,
+    groundingActive: voiceGroundingActive,
+    groundingToolActive: voiceGroundingToolAvailable,
+    memoryContextText: session.latestMemory?.context.text,
     onGroundedToolCall: session.runRealtimeGroundedTool,
-    onUserTranscriptCommitted: (text) =>
-      session.appendVoiceTurn?.([{ role: "user", content: text }]),
-    onAssistantTranscriptCommitted: (text) =>
-      session.appendVoiceTurn?.([{ role: "assistant", content: text }]),
+    onVoiceTurnCommitted: (messages) => session.appendVoiceTurn?.(messages),
   });
   const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
   const voiceDialogState = deriveVoiceDialogState({
@@ -2079,9 +2324,7 @@ function ComposerCore({
         className={`cmp-input-stack${voiceDialog.active ? " cmp-input-stack-voice-dialog" : ""}`}
       >
         {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-        {voiceDialog.active ? null : (
-          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-        )}
+        <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
         <textarea
           className="cmp-input"
           ref={taRef}
@@ -2097,7 +2340,7 @@ function ComposerCore({
           // pre-typed during streaming. Re-submit stays blocked by the isInFlight
           // guard in useChatSession, and the primary button is "Cancel" meanwhile.
         />
-        {!voiceDialog.active && repositoryPickerOpen ? (
+        {repositoryPickerOpen ? (
           <div className="repo-focus repo-focus-inline">
             <span className="sr-only" role="status" aria-live="polite">
               {repositoryPickError ?? repositorySearch.error ?? repositorySearch.message}
@@ -2120,20 +2363,14 @@ function ComposerCore({
             />
           </div>
         ) : null}
-        {voiceDialog.active ? null : (
-          <RepositoryReferenceStrip
-            references={repositoryReferences}
-            onRemove={removeRepositoryReference}
-          />
-        )}
+        <RepositoryReferenceStrip
+          references={repositoryReferences}
+          onRemove={removeRepositoryReference}
+        />
         {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-        {voiceDialog.active ? null : (
-          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-        )}
+        <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
         {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-        {voiceDialog.active ? null : (
-          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-        )}
+        <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
         {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
             adjacent to the textarea so SR users hear the state without losing
             composer focus. Hidden when there is nothing to announce. */}
@@ -2150,6 +2387,17 @@ function ComposerCore({
           <VoiceDictationPreviewFromController
             controller={dictation}
             onAfterDiscard={() => micButtonRef.current?.focus()}
+          />
+        ) : null}
+        {voiceDialog.active ? (
+          <VoiceRealtimeStatusFromController
+            controller={realtimeVoice}
+            memoryContextText={session.latestMemory?.context.text}
+            memoryContextCount={session.latestMemory?.context.memories.length}
+            memoryActions={session.latestMemory?.actions}
+            onAcceptMemoryCandidate={session.acceptMemoryCandidate}
+            onRejectMemoryCandidate={session.rejectMemoryCandidate}
+            onAfterDismiss={voiceDialog.leave}
           />
         ) : null}
       </div>
@@ -2185,9 +2433,14 @@ function ComposerCore({
         ) : null}
         {voiceDialog.active ? (
           <VoiceDialogComposerControls
+            session={session}
+            selectedModelCapability={selectedModelCapability}
+            onAttachFiles={handleFiles}
             voiceMuted={voiceMuted}
             onToggleVoiceMute={toggleVoiceMute}
             playbackButtonRef={playbackButtonRef}
+            canInterrupt={realtimeVoice.canInterrupt}
+            onInterrupt={realtimeVoice.interrupt}
             voiceDialogActive={voiceDialog.active}
             onToggleVoiceDialog={toggleVoiceDialog}
             voiceDialogButtonRef={voiceDialogButtonRef}
@@ -2221,9 +2474,14 @@ function ComposerCore({
             inert
           >
             <VoiceDialogComposerControls
+              session={session}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
               voiceMuted={realtimeVoice.muted}
               onToggleVoiceMute={toggleVoiceMute}
               playbackButtonRef={motionPlaybackButtonRef}
+              canInterrupt={realtimeVoice.canInterrupt}
+              onInterrupt={realtimeVoice.interrupt}
               voiceDialogActive={true}
               onToggleVoiceDialog={toggleVoiceDialog}
               voiceDialogButtonRef={motionVoiceDialogButtonRef}
@@ -2244,7 +2502,7 @@ interface EmptyComposerStateProps {
 }
 
 function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (minimal) {
     return (
       <div
@@ -2266,7 +2524,7 @@ function EmptyComposerState({ minimal = false }: EmptyComposerStateProps): React
 // Rendered when no chat has been selected yet (activeChat is undefined).
 // Instructs the user to pick or start a chat from the project sidebar.
 function NoChatState(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div className="chatw-empty-no-chat">
       <div className="chatw-empty-no-chat-icon" aria-hidden="true">
@@ -2369,7 +2627,7 @@ function voiceSessionGroundingContext(
   return { enabled: true, sourceCount, kind };
 }
 
-function formatScopeUpdateError(error: unknown, t: ReturnType<typeof useI18n>["t"]): string {
+function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
   return formatUserError(error, t("chat.error.scopeUpdate"));
 }
@@ -2382,7 +2640,7 @@ interface ScopeOption {
 function capsuleOptions(
   chat: Chat,
   capsules: readonly CapsuleListEntry[],
-  t: ReturnType<typeof useI18n>["t"],
+  t: I18nTranslate,
 ): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
@@ -2412,7 +2670,7 @@ function capsuleOptions(
 function capsuleSetOptions(
   chat: Chat,
   capsuleSets: readonly CapsuleSetListEntry[],
-  t: ReturnType<typeof useI18n>["t"],
+  t: I18nTranslate,
 ): readonly ScopeOption[] {
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
@@ -2445,44 +2703,94 @@ interface KnowledgeCatalog {
   readonly loadError: string | null;
 }
 
+interface KnowledgeCatalogSnapshot {
+  readonly capsules: readonly CapsuleListEntry[];
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly loadError: unknown | null;
+}
+
+const EMPTY_KNOWLEDGE_CATALOG: KnowledgeCatalogSnapshot = {
+  capsules: [],
+  capsuleSets: [],
+  loadError: null,
+};
+const KNOWLEDGE_CATALOG_TTL_MS = 30_000;
+const KNOWLEDGE_CATALOG_ERROR_TTL_MS = 5_000;
+let knowledgeCatalogCache:
+  | {
+      readonly expiresAt: number;
+      readonly snapshot: KnowledgeCatalogSnapshot;
+    }
+  | undefined;
+let knowledgeCatalogPending: Promise<KnowledgeCatalogSnapshot> | undefined;
+
+function cachedKnowledgeCatalogSnapshot(now: number): KnowledgeCatalogSnapshot | undefined {
+  if (knowledgeCatalogCache === undefined || knowledgeCatalogCache.expiresAt <= now) {
+    return undefined;
+  }
+  return knowledgeCatalogCache.snapshot;
+}
+
+async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+  const now = Date.now();
+  const cached = cachedKnowledgeCatalogSnapshot(now);
+  if (cached !== undefined) return cached;
+  if (knowledgeCatalogPending !== undefined) return knowledgeCatalogPending;
+
+  knowledgeCatalogPending = Promise.allSettled([fetchCapsules(), fetchCapsuleSets()])
+    .then(([capsuleResult, capsuleSetResult]) => {
+      if (capsuleResult.status !== "fulfilled") {
+        return {
+          ...EMPTY_KNOWLEDGE_CATALOG,
+          loadError: capsuleResult.reason,
+        };
+      }
+      const snapshot: KnowledgeCatalogSnapshot = {
+        capsules: capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
+        capsuleSets:
+          capsuleSetResult.status === "fulfilled" ? capsuleSetResult.value.capsuleSets : [],
+        loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
+      };
+      return snapshot;
+    })
+    .then((snapshot) => {
+      const ttl =
+        snapshot.loadError === null ? KNOWLEDGE_CATALOG_TTL_MS : KNOWLEDGE_CATALOG_ERROR_TTL_MS;
+      knowledgeCatalogCache = { expiresAt: Date.now() + ttl, snapshot };
+      return snapshot;
+    })
+    .finally(() => {
+      knowledgeCatalogPending = undefined;
+    });
+  return knowledgeCatalogPending;
+}
+
+export function clearKnowledgeCatalogCacheForTests(): void {
+  knowledgeCatalogCache = undefined;
+  knowledgeCatalogPending = undefined;
+}
+
 function useKnowledgeCatalog(): KnowledgeCatalog {
-  const { t } = useI18n();
-  const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
-  const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const t = useTranslate();
+  const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
+    cachedKnowledgeCatalogSnapshot(Date.now()) ?? EMPTY_KNOWLEDGE_CATALOG,
+  );
 
   useEffect(() => {
     let cancelled = false;
-    async function load(): Promise<void> {
-      try {
-        const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
-          fetchCapsules(),
-          fetchCapsuleSets(),
-        ]);
-        if (capsuleResult.status !== "fulfilled") {
-          throw capsuleResult.reason;
-        }
-        if (cancelled) return;
-        setCapsules(
-          capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
-        );
-        if (capsuleSetResult.status === "fulfilled") {
-          setCapsuleSets(capsuleSetResult.value.capsuleSets);
-        } else {
-          setCapsuleSets([]);
-          setLoadError(formatScopeUpdateError(capsuleSetResult.reason, t));
-        }
-      } catch (caught) {
-        if (!cancelled) setLoadError(formatScopeUpdateError(caught, t));
-      }
-    }
-    void load();
+    void loadKnowledgeCatalogSnapshot().then((next) => {
+      if (!cancelled) setSnapshot(next);
+    });
     return () => {
       cancelled = true;
     };
-  }, [t]);
+  }, []);
 
-  return { capsules, capsuleSets, loadError };
+  return {
+    capsules: snapshot.capsules,
+    capsuleSets: snapshot.capsuleSets,
+    loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
+  };
 }
 
 function LocalKnowledgeScopeControl({
@@ -2496,7 +2804,7 @@ function LocalKnowledgeScopeControl({
   readonly catalog: KnowledgeCatalog;
   readonly connected: boolean;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { capsules, capsuleSets, loadError } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2714,10 +3022,11 @@ function MemoryActionCard({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly onActionSettled: (message: string) => void;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirmForget, setConfirmForget] = useState(false);
+  const [forgetConfirmText, setForgetConfirmText] = useState("");
   const runAction = useCallback(
     (actionCallback: () => Promise<void>, successMessage: string, errorMessage: string): void => {
       if (busy) return;
@@ -2803,21 +3112,41 @@ function MemoryActionCard({
   }
   if (action.kind === "forget") {
     const executeForget = (): void => {
+      if (action.requiresConfirmation && forgetConfirmText !== "FORGET") return;
       runAction(
-        () => forgetMemoryAction(action.memoryId).then(() => setConfirmForget(false)),
+        () =>
+          forgetMemoryAction(action.memoryId).then(() => {
+            setConfirmForget(false);
+            setForgetConfirmText("");
+          }),
         t("chat.memory.forgetCompleted"),
         t("chat.memory.forgetError"),
       );
     };
     return (
-      <article className="chat-memory-action">
-        <div className="chat-memory-action-head">
+      <article className={`chat-memory-action${confirmForget ? " ai-danger" : ""}`}>
+        <div className={`chat-memory-action-head${confirmForget ? " ai-danger-h" : ""}`}>
+          {confirmForget ? (
+            <span className="ic" aria-hidden="true">
+              !
+            </span>
+          ) : null}
           <strong>{t("chat.memory.forgetDetected")}</strong>
           <span>
             {action.requiresConfirmation ? t("chat.memory.confirmationRequired") : action.memoryId}
           </span>
         </div>
         <p>{t("chat.memory.forgetMatched", { id: action.memoryId })}</p>
+        {confirmForget ? (
+          <label className="chat-memory-confirm">
+            <span>{`Type FORGET to remove ${action.memoryId}.`}</span>
+            <input
+              value={forgetConfirmText}
+              onChange={(event) => setForgetConfirmText(event.currentTarget.value)}
+              autoComplete="off"
+            />
+          </label>
+        ) : null}
         <div className="chat-memory-action-buttons">
           {!action.requiresConfirmation ? (
             <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
@@ -2832,13 +3161,19 @@ function MemoryActionCard({
                 if (busy) return;
                 setError(undefined);
                 setConfirmForget(true);
+                setForgetConfirmText("");
               }}
             >
               {t("chat.memory.reviewForget")}
             </button>
           ) : (
             <>
-              <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
+              <button
+                type="button"
+                aria-disabled={busy || forgetConfirmText !== "FORGET"}
+                aria-busy={busy}
+                onClick={executeForget}
+              >
                 {t("chat.memory.forgetPermanently")}
               </button>
               <button
@@ -2849,6 +3184,7 @@ function MemoryActionCard({
                   if (busy) return;
                   setError(undefined);
                   setConfirmForget(false);
+                  setForgetConfirmText("");
                 }}
               >
                 {t("common.cancel")}
@@ -2907,7 +3243,7 @@ interface MemoryDisclosureState {
 function useMemoryDisclosureState(
   latestMemory: ConversationMemoryResultWire | undefined,
 ): MemoryDisclosureState {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [open, setOpen] = useState(false);
   const [actionStatus, setActionStatus] = useState("");
   const generatedId = useId();
@@ -2980,7 +3316,7 @@ function MemoryPanel({
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   readonly disclosure: MemoryDisclosureState;
 }): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   if (!disclosure.open) return null;
 
   return (
@@ -3071,17 +3407,21 @@ export function ChatWindow({
   previewWindows,
   onOpenRunResult,
 }: ChatWindowProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const session = useChatSessionContext();
   const {
     messages,
+    streamingAssistantMessage,
     draft,
     loading,
     sending,
     sendStatus,
+    regeneratingMessageId,
     error,
     noEligibleModels,
     sendMessage,
+    regenerateMessage,
+    cancelSend,
     cancelGrounded,
     activeProject,
     activeChat,
@@ -3094,7 +3434,9 @@ export function ChatWindow({
   } = session;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
-  const visible = visibleOnly(messages);
+  const visible = useMemo(() => visibleOnly(messages), [messages]);
+  const hasLiveStreamingAssistant =
+    streamingAssistantMessage !== undefined && streamingAssistantMessage.content.length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const repositoryRoots = useMemo(() => {
     return repositoryReferenceRoots(
@@ -3113,7 +3455,11 @@ export function ChatWindow({
   // history. Starting an own send (sending false→true) always jumps down.
   const stickRef = useRef(true);
   const prevSendingRef = useRef(false);
-  const lastVisible = visible.length > 0 ? visible[visible.length - 1] : undefined;
+  const lastVisible = hasLiveStreamingAssistant
+    ? streamingAssistantMessage
+    : visible.length > 0
+      ? visible[visible.length - 1]
+      : undefined;
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
   const effectiveMinimal = minimalChat;
   const effectiveCompact = compact || mini;
@@ -3121,6 +3467,8 @@ export function ChatWindow({
   const effectiveBarCompact = barCompact || effectiveMinimal;
   const memoryDisclosure = useMemoryDisclosureState(latestMemory);
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
+  const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
+  const pendingQuestionScrollRef = useRef<string | null>(null);
   const questionMapItems = useMemo<readonly ConversationQuestionMapItem[]>(() => {
     return visible
       .filter((message) => message.role === "user")
@@ -3143,16 +3491,42 @@ export function ChatWindow({
     [],
   );
   const scrollToQuestion = useCallback((messageId: string): void => {
+    setFocusedQuestionId(messageId);
     const node = questionAnchorsRef.current.get(messageId);
-    if (node === undefined) return;
+    if (node === undefined) {
+      pendingQuestionScrollRef.current = messageId;
+      return;
+    }
     stickRef.current = false;
     node.scrollIntoView({ block: "start", behavior: "smooth" });
   }, []);
   useEffect(() => {
+    const pending = pendingQuestionScrollRef.current;
+    if (pending === null) return;
+    const node = questionAnchorsRef.current.get(pending);
+    if (node === undefined) return;
+    pendingQuestionScrollRef.current = null;
+    stickRef.current = false;
+    node.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focusedQuestionId, visible.length]);
+  useEffect(() => {
+    if (!sending) return;
+    pendingQuestionScrollRef.current = null;
+    setFocusedQuestionId(null);
+  }, [sending]);
+  useEffect(() => {
+    pendingQuestionScrollRef.current = null;
+    setFocusedQuestionId(null);
+  }, [activeChat?.id]);
+  useEffect(() => {
     if (sending && !prevSendingRef.current) stickRef.current = true;
     prevSendingRef.current = sending;
-    const el = scrollRef.current;
-    if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+    if (!stickRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [visible.length, sending, lastContent]);
 
   return (
@@ -3200,10 +3574,15 @@ export function ChatWindow({
         tabIndex={0}
         onScroll={(event) => {
           const el = event.currentTarget;
-          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+          const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+          stickRef.current = nearBottom;
+          if (nearBottom && focusedQuestionId !== null) {
+            pendingQuestionScrollRef.current = null;
+            setFocusedQuestionId(null);
+          }
         }}
       >
-        {visible.length === 0 ? (
+        {visible.length === 0 && !hasLiveStreamingAssistant ? (
           activeChat !== undefined ? (
             <EmptyComposerState minimal={effectiveMinimal} />
           ) : (
@@ -3217,6 +3596,7 @@ export function ChatWindow({
             <div className="chatw-log">
               <ConversationThread
                 messages={visible}
+                streamingAssistantMessage={streamingAssistantMessage}
                 onOpenRunResult={onOpenRunResult}
                 repositoryRoots={repositoryRoots}
                 openRepositoryReference={openRepositoryReference}
@@ -3224,9 +3604,14 @@ export function ChatWindow({
                 windowId={windowId}
                 sending={sending}
                 sendStatus={sendStatus}
+                regeneratingMessageId={regeneratingMessageId}
                 activeChat={activeChat}
                 onCancelGrounded={cancelGrounded}
+                onRegenerate={regenerateMessage}
+                onCancelRegenerate={cancelSend}
+                showRegenerateControls={!effectiveMinimal}
                 registerQuestionAnchor={registerQuestionAnchor}
+                focusedMessageId={focusedQuestionId}
               />
               <GroundedAnswerPanel chat={activeChat} busy={sending} />
               {/* Issue #148 — disclose which attached documents contributed extracted context. */}

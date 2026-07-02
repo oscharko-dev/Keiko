@@ -88,6 +88,41 @@ describe("chunkDocument", () => {
     ).toBe(1);
   });
 
+  it("keeps chunk ids stable when parsed unit row ids change", () => {
+    const text = "Stable citation target.";
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-old",
+      pageUnit(0, text.length, fixture.seeded.documentId),
+    );
+    const first = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+    expect(first.chunkIds).toHaveLength(1);
+
+    fixture.store._internal.db
+      .prepare("DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d")
+      .run({ c: fixture.seeded.capsuleId, d: fixture.seeded.documentId });
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-new",
+      pageUnit(0, text.length, fixture.seeded.documentId),
+    );
+    const second = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+
+    expect(second.chunkIds).toEqual(first.chunkIds);
+  });
+
   it("splits a large parsed unit into multiple chunks with monotonic orderIndex", () => {
     const text = "a".repeat(8_000);
     seedParsedUnit(
@@ -263,12 +298,14 @@ describe("chunkDocument", () => {
   });
 
   it("with force=true deletes prior chunks before re-chunking", () => {
-    const text = "Hello world.";
+    const firstText = "Hello world.";
+    const secondText = " Goodbye.";
+    const text = `${firstText}${secondText}`;
     seedParsedUnit(
       fixture.store,
       fixture.seeded.capsuleId,
       "u-1",
-      pageUnit(0, text.length, fixture.seeded.documentId),
+      pageUnit(0, firstText.length, fixture.seeded.documentId),
     );
     chunkDocument(fixture.store, {
       capsuleId: fixture.seeded.capsuleId,
@@ -283,7 +320,7 @@ describe("chunkDocument", () => {
       fixture.store,
       fixture.seeded.capsuleId,
       "u-2",
-      pageUnit(0, text.length, fixture.seeded.documentId),
+      pageUnit(firstText.length, text.length, fixture.seeded.documentId),
     );
 
     const second = chunkDocument(fixture.store, {
@@ -349,8 +386,9 @@ describe("chunkDocument", () => {
       .get({ c: fixture.seeded.capsuleId, d: fixture.seeded.documentId }) as {
       readonly chunking_strategy_version: string | null;
     };
-    expect(row.chunking_strategy_version).toContain("issue-195-v2");
-    expect(row.chunking_strategy_version).toContain("max=400");
+    expect(row.chunking_strategy_version).toContain("boundary-v3");
+    expect(row.chunking_strategy_version).toContain("max=512");
+    expect(row.chunking_strategy_version).toContain("overlap=50");
   });
 
   it("re-chunks when effective chunking options change", () => {

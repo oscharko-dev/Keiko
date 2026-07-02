@@ -346,10 +346,11 @@ describe("WindowFrame content zoom controls", () => {
     expect(contentZoom).not.toBeNull();
     expect(body).not.toBeNull();
     expect(windowSection).toHaveStyle({
-      left: "40px",
-      top: "40px",
+      left: "0px",
+      top: "0px",
       width: "700px",
       height: "420px",
+      transform: "translate3d(40px, 40px, 0)",
     });
     expect(windowSection?.style.zoom).toBe("");
     expect(contentZoom).toHaveStyle({

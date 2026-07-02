@@ -80,13 +80,14 @@ const SELECT_PARSED_UNIT_SQL = [
 const SELECT_DOCUMENT_SQL =
   "SELECT source_id, safe_display_name FROM documents WHERE capsule_id = :c AND id = :id";
 
-// Page-hop query: find a page row that contains the parsed_unit's character span.
+// Page-hop query: find the first non-empty page row that overlaps the parsed_unit's character span.
 // Used to attach a page number to non-page units (e.g. sections / html-blocks inside a
-// paged document). Limit 1 — citations point at the first containing page.
+// paged document). Limit 1 — citations point at the first overlapping page.
 const SELECT_PAGE_FOR_RANGE_SQL = [
   "SELECT page_number, page_label FROM pages",
   "WHERE capsule_id = :c AND document_id = :d",
-  "  AND character_start <= :s AND character_end >= :e",
+  "  AND character_end > character_start",
+  "  AND character_start <= :e AND character_end >= :s",
   "ORDER BY page_number ASC LIMIT 1",
 ].join(" ");
 

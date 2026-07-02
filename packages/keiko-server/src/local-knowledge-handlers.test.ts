@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +12,9 @@ import {
   listCapsules,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
+  updateCapsuleDetails,
   upsertExtractionCheckpoint,
+  type OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
@@ -23,6 +25,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
+  GatewayRequest,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -39,6 +42,7 @@ import {
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleReindexLocalKnowledgeCapsule,
+  handleRebindLocalKnowledgeCapsuleSource,
   handleStartLocalKnowledgeCapsuleIndexing,
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
@@ -126,6 +130,29 @@ function embeddingCapability(modelId: string): NonNullable<GatewayConfig["capabi
   };
 }
 
+function gatewayConfigWithChatModels(chatModelIds: readonly string[]): GatewayConfig {
+  const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+  if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+  return {
+    providers: [
+      embeddingProvider,
+      ...chatModelIds.map((modelId) => ({
+        modelId,
+        baseUrl: "https://gateway.example.test/v1",
+        apiKey: "redacted",
+        timeoutMs: 30_000,
+        maxRetries: 1,
+        retryBaseDelayMs: 100,
+      })),
+    ],
+    capabilities: [
+      embeddingCapability("text-embedding-3-small"),
+      ...chatModelIds.map((modelId) => chatCapability(modelId)),
+    ],
+    circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+  };
+}
+
 function depsFor(tmp: string, override?: string | GatewayConfig): UiHandlerDeps {
   const config =
     typeof override === "string" || override === undefined
@@ -197,6 +224,34 @@ function seedStore(tmp: string): {
     storageReference: "capsules/cap-1",
   });
   return { store, capId, dbPath };
+}
+
+function seedIndexedChunk(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capId: KnowledgeCapsuleId,
+  rootPath: string,
+): void {
+  addSourceToCapsule(store, capId, {
+    id: "src-context" as KnowledgeSourceId,
+    displayName: "Context Source",
+    tags: [],
+    scope: { kind: "folder", rootPath, recursive: true },
+  });
+  store._internal.db
+    .prepare(
+      "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-context', :c, 'src-context', 'context.txt', 12, 'text/plain', 'ctx-hash', 'text', '1', 10, 'extracted', 'context.txt')",
+    )
+    .run({ c: capId });
+  store._internal.db
+    .prepare(
+      "INSERT INTO parsed_units (id, capsule_id, document_id, kind, character_start, character_end) VALUES ('unit-context', :c, 'doc-context', 'text', 0, 12)",
+    )
+    .run({ c: capId });
+  store._internal.db
+    .prepare(
+      "INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash, chunking_strategy_version, character_start, character_end, contextual_retrieval_key, context_status) VALUES ('chunk-context', :c, 'src-context', 'doc-context', 'unit-context', 0, 3, 'safe-hash', 'chunk-v1', 0, 12, 'indexed-text=contextual-v1|prompt=old|model=old|chunk=safe-hash', 'generated')",
+    )
+    .run({ c: capId });
 }
 
 const tempDirs: string[] = [];
@@ -439,6 +494,162 @@ describe("local-knowledge handlers", () => {
     expect(membershipKinds.map((row) => row.change_kind)).toEqual(["add-source"]);
   });
 
+  it("rebinds a source root without changing the source id and marks the capsule stale", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const oldRoot = join(tmp, "old-manuals");
+    const newRoot = join(tmp, "new-manuals");
+    mkdirSync(oldRoot, { recursive: true });
+    mkdirSync(newRoot, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-rebind" as KnowledgeSourceId,
+      displayName: "Manuals",
+      tags: [],
+      scope: { kind: "folder", rootPath: oldRoot, recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: newRoot }),
+        params: { capsuleId: "cap-1", sourceId: "src-rebind" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body).toMatchObject({
+      capsule: { lifecycleState: "stale" },
+      sources: [
+        {
+          sourceId: "src-rebind",
+          scope: { kind: "folder", rootPath: realpathSync(newRoot), recursive: true },
+        },
+      ],
+    });
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const auditRows = verify._internal.db
+      .prepare(
+        "SELECT kind, source_id, details_json FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly kind: string;
+      readonly source_id: string | null;
+      readonly details_json: string | null;
+    }[];
+    verify.close();
+    expect(auditRows).toEqual([
+      {
+        kind: "source-rebound",
+        source_id: "src-rebind",
+        details_json: JSON.stringify({
+          previousScopeKind: "folder",
+          currentScopeKind: "folder",
+        }),
+      },
+    ]);
+  });
+
+  it("rejects rebind when another source already uses the target root and scope", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const rootA = join(tmp, "manuals-a");
+    const rootB = join(tmp, "manuals-b");
+    mkdirSync(rootA, { recursive: true });
+    mkdirSync(rootB, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-a" as KnowledgeSourceId,
+      displayName: "A",
+      tags: [],
+      scope: { kind: "folder", rootPath: rootA, recursive: true },
+    });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-b" as KnowledgeSourceId,
+      displayName: "B",
+      tags: [],
+      scope: { kind: "folder", rootPath: realpathSync(rootB), recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: rootB }),
+        params: { capsuleId: "cap-1", sourceId: "src-a" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("already uses");
+  });
+
+  it("refuses to rebind a source root into a denied location", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const safeRoot = join(tmp, "manuals");
+    const deniedRoot = join(tmp, ".ssh");
+    mkdirSync(safeRoot, { recursive: true });
+    mkdirSync(deniedRoot, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-safe" as KnowledgeSourceId,
+      displayName: "Manuals",
+      tags: [],
+      scope: { kind: "folder", rootPath: safeRoot, recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: deniedRoot }),
+        params: { capsuleId: "cap-1", sourceId: "src-safe" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("denied");
+  });
+
+  it("rejects source rebind while indexing is already running", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const seeded = seedStore(tmp);
+    const oldRoot = join(tmp, "manuals");
+    const newRoot = join(tmp, "manuals-new");
+    mkdirSync(oldRoot, { recursive: true });
+    mkdirSync(newRoot, { recursive: true });
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      id: "src-running" as KnowledgeSourceId,
+      displayName: "Manuals",
+      tags: [],
+      scope: { kind: "folder", rootPath: oldRoot, recursive: true },
+    });
+    seeded.store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-rebind-running', :c, '[\"src-running\"]', 12, NULL, 'running', 1, 0, 0, 0, NULL, NULL, NULL, 0)",
+      )
+      .run({ c: seeded.capId });
+    localKnowledgeIndexingRegistry.start("cap-1");
+    localKnowledgeIndexingRegistry.attachJobId("cap-1", "job-rebind-running");
+    seeded.store.close();
+
+    const result = await handleRebindLocalKnowledgeCapsuleSource(
+      {
+        ...baseCtx(tmp, "PATCH", { rootPath: newRoot }),
+        params: { capsuleId: "cap-1", sourceId: "src-running" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(409);
+    expect(JSON.stringify(result.body)).toContain("already running");
+  });
+
   it("refuses a source path in a denied location (deny list)", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -645,6 +856,103 @@ describe("local-knowledge handlers", () => {
     expect(result.status).toBe(400);
   });
 
+  it("updates contextual retrieval settings via PATCH and reports re-index-required health", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    seedIndexedChunk(store, capId, docsRoot);
+    store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", {
+          contextualRetrieval: {
+            enabled: true,
+            modelId: "context-chat",
+            strict: false,
+            maxContextChars: 320,
+            documentContextMaxChars: 8000,
+          },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp, gatewayConfigWithChatModels(["context-chat"])),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body).toMatchObject({
+      capsule: {
+        lifecycleState: "stale",
+        contextualRetrieval: {
+          enabled: true,
+          modelId: "context-chat",
+          strict: false,
+          maxContextChars: 320,
+          documentContextMaxChars: 8000,
+        },
+      },
+    });
+    const body = result.body as { readonly health: CapsuleHealth };
+    expect(body.health.staleReasons).toContain(
+      "Contextual retrieval settings changed. Run full rebuild / rechunk to rebuild retrieval text.",
+    );
+    expect(body.health.contextualRetrieval).toMatchObject({
+      enabled: true,
+      source: "capsule",
+      status: "rebuild-required",
+      rebuildRequired: true,
+      staleChunkCount: 1,
+      modelId: "context-chat",
+    });
+  });
+
+  it("does not mark legacy raw chunks stale when no contextual retrieval policy is active", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    seedIndexedChunk(store, capId, docsRoot);
+    store._internal.db
+      .prepare(
+        "UPDATE chunks SET contextual_retrieval_key = NULL, context_status = NULL WHERE capsule_id = :c",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const body = result.body as { readonly health: CapsuleHealth };
+    expect(body.health.staleReasons).not.toContain(
+      "Contextual retrieval settings changed. Run full rebuild / rechunk to rebuild retrieval text.",
+    );
+  });
+
+  it("rejects invalid contextual retrieval PATCH payloads", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", {
+          contextualRetrieval: { enabled: true, modelId: "bad\u0001model" },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("contextualRetrieval.modelId");
+  });
+
   it("returns 404 when PATCHing a missing capsule", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -848,8 +1156,8 @@ describe("local-knowledge handlers", () => {
       deps,
     );
 
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
 
     const inspect = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
@@ -872,6 +1180,376 @@ describe("local-knowledge handlers", () => {
       "indexing-job-completed",
       "indexing-job-started",
     ]);
+  });
+
+  it("maps full-reembed and full-rebuild modes to a force reindex even when files are unchanged", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Policy alpha beta gamma delta epsilon.\n".repeat(20),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const deps = depsFor(tmp);
+    const first = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    const second = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "full-reembed" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    const third = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "full-rebuild" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    expect(third.status, JSON.stringify(third.body)).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const jobs = inspect._internal.db
+      .prepare(
+        "SELECT status, processed_documents FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at ASC, id ASC",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly {
+      readonly status: string;
+      readonly processed_documents: number;
+    }[];
+    inspect.close();
+
+    expect(jobs).toHaveLength(3);
+    expect(jobs[1]).toMatchObject({ status: "succeeded", processed_documents: 1 });
+    expect(jobs[2]).toMatchObject({ status: "succeeded", processed_documents: 1 });
+  });
+
+  it("rebinds capsule embedding identity before full-reembed when the configured model changed", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Policy alpha beta gamma delta epsilon.\n".repeat(20),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "full-reembed" }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp, "text-embedding-3-large"),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const capsule = getCapsule(inspect, capId);
+    inspect.close();
+
+    expect(capsule?.embeddingModelIdentity.modelId).toBe("text-embedding-3-large");
+    expect(capsule?.embeddingModelIdentity.vectorDimensions).toBe(3072);
+    expect(capsule?.embeddingModelIdentity.embeddingSpaceFingerprint).toMatch(
+      /^keiko-embedding-space-fingerprint-v1:[a-f0-9]{24}$/u,
+    );
+  });
+
+  it("wires opt-in contextual retrieval through the normal indexing handler", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Release TS-999 changes retry handling and billing rollout.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const embeddingInputs: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    const embeddingProvider = gatewayConfig("text-embedding-3-small").providers[0];
+    if (embeddingProvider === undefined) throw new Error("missing embedding provider");
+    const base = depsFor(tmp, {
+      providers: [
+        embeddingProvider,
+        {
+          modelId: "context-chat",
+          baseUrl: "https://gateway.example.test/v1",
+          apiKey: "redacted",
+          timeoutMs: 30_000,
+          maxRetries: 1,
+          retryBaseDelayMs: 100,
+        },
+      ],
+      capabilities: [embeddingCapability("text-embedding-3-small"), chatCapability("context-chat")],
+      circuitBreaker: gatewayConfig("text-embedding-3-small").circuitBreaker,
+    });
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: {
+        KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true",
+        KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MODEL_ID: "context-chat",
+      },
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: TS-999 retry handling and billing rollout.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          embeddingInputs.push(request.input);
+          return Promise.resolve({
+            ok: true,
+            value: {
+              vector: Float32Array.from(
+                { length: embeddingDimensionsForTestModel(request.modelId) },
+                (_, index) => index / 1000,
+              ),
+              modelId: request.modelId,
+            },
+          });
+        },
+      ),
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls).not.toHaveLength(0);
+    expect(contextCalls[0]?.modelId).toBe("context-chat");
+    expect(contextCalls[0]?.messages[1]?.content).toContain("<document>");
+    expect(
+      embeddingInputs.some((input) =>
+        input.startsWith("Context: TS-999 retry handling and billing rollout."),
+      ),
+    ).toBe(true);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const row = inspect._internal.db
+      .prepare(
+        "SELECT context_status FROM chunks WHERE capsule_id = :c ORDER BY order_index ASC LIMIT 1",
+      )
+      .get({ c: capId }) as { readonly context_status: string | null } | undefined;
+    inspect.close();
+
+    expect(row?.context_status).toBe("generated");
+  });
+
+  it("uses per-capsule contextual retrieval settings and model id without the env flag", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Capsule-level context model selection for TS-999.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    updateCapsuleDetails(store, capId, {
+      contextualRetrieval: { enabled: true, modelId: "capsule-chat", maxContextChars: 320 },
+    });
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const embeddingInputs: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    const base = depsFor(tmp, gatewayConfigWithChatModels(["env-chat", "capsule-chat"]));
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: {},
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: capsule selected TS-999 context.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          embeddingInputs.push(request.input);
+          return Promise.resolve({
+            ok: true,
+            value: {
+              vector: Float32Array.from(
+                { length: embeddingDimensionsForTestModel(request.modelId) },
+                (_, index) => index / 1000,
+              ),
+              modelId: request.modelId,
+            },
+          });
+        },
+      ),
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls.length).toBeGreaterThan(0);
+    expect(contextCalls[0]?.modelId).toBe("capsule-chat");
+    expect(
+      embeddingInputs.some((input) => input.startsWith("Context: capsule selected TS-999")),
+    ).toBe(true);
+  });
+
+  it("lets an explicit disabled capsule setting override an enabled env default", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Disabled contextual retrieval should embed raw chunks.\n".repeat(24),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    updateCapsuleDetails(store, capId, { contextualRetrieval: { enabled: false } });
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const embeddingInputs: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    const base = depsFor(tmp, gatewayConfigWithChatModels(["context-chat"]));
+    const deps: UiHandlerDeps = {
+      ...base,
+      env: {
+        KEIKO_LOCAL_KNOWLEDGE_CONTEXTUAL_RETRIEVAL: "true",
+        KEIKO_LOCAL_KNOWLEDGE_CONTEXT_MODEL_ID: "context-chat",
+      },
+      localKnowledgeContextualRetrievalChatGateway: {
+        chat: (request) => {
+          contextCalls.push(request);
+          return Promise.resolve({
+            modelId: request.modelId,
+            content: "Context: env default should not be used.",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "ctx-1",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          });
+        },
+      },
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          embeddingInputs.push(request.input);
+          return Promise.resolve({
+            ok: true,
+            value: {
+              vector: Float32Array.from(
+                { length: embeddingDimensionsForTestModel(request.modelId) },
+                (_, index) => index / 1000,
+              ),
+              modelId: request.modelId,
+            },
+          });
+        },
+      ),
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(contextCalls).toHaveLength(0);
+    expect(embeddingInputs.some((input) => input.startsWith("Context:"))).toBe(false);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const row = inspect._internal.db
+      .prepare(
+        "SELECT context_status FROM chunks WHERE capsule_id = :c ORDER BY order_index ASC LIMIT 1",
+      )
+      .get({ c: capId }) as { readonly context_status: string | null } | undefined;
+    inspect.close();
+
+    expect(row?.context_status).toBe("disabled");
   });
 
   it("starts capsule indexing from the graph surface", async () => {
@@ -1074,6 +1752,97 @@ describe("local-knowledge handlers", () => {
         },
       ],
     });
+  });
+
+  it("indexes configured OCR text from image files through extraction, chunking, and embeddings", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "scan.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]));
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-ocr" as never,
+      displayName: "Scans",
+      tags: [],
+      scope: {
+        kind: "files",
+        rootPath: docsRoot,
+        files: ["scan.png"],
+      },
+    });
+    store.close();
+
+    const ocrPage = vi.fn<OcrAdapter["ocrPage"]>((input) =>
+      Promise.resolve(
+        input.bytes.byteLength === 0
+          ? { ok: false, reason: "unsupported-input" }
+          : { ok: true, text: "Scanned invoice total 42", confidence: 0.91 },
+      ),
+    );
+    const base = depsFor(tmp);
+    const embeddingRequest = base.localKnowledgeEmbeddingRequest;
+    if (embeddingRequest === undefined) throw new Error("missing embedding request");
+    const embeddingInputs: string[] = [];
+    const deps: UiHandlerDeps = {
+      ...base,
+      localKnowledgeOcrAdapter: { kind: "ocr", ocrPage },
+      localKnowledgeEmbeddingRequest: vi.fn((request: OpenAIEmbeddingRequest) => {
+        embeddingInputs.push(request.input);
+        return embeddingRequest(request);
+      }),
+    };
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(embeddingInputs.some((input) => input.includes("Scanned invoice total 42"))).toBe(true);
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const doc = verify._internal.db
+      .prepare("SELECT id, status, parser_id FROM documents WHERE capsule_id = :c")
+      .get({ c: capId }) as { readonly id: string; readonly status: string; readonly parser_id: string };
+    const text = verify._internal.db
+      .prepare("SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d")
+      .get({ c: capId, d: doc.id }) as { readonly normalized_text: string };
+    verify.close();
+
+    expect(doc).toMatchObject({ status: "extracted", parser_id: "ocr-pipeline" });
+    expect(text.normalized_text).toBe("Scanned invoice total 42");
+
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    const body = detail.body as { readonly largeDocumentHealth: CapsuleLargeDocumentHealth };
+    expect(body.largeDocumentHealth.capabilities.ocr).toBe("available");
+  });
+
+  it("surfaces configured OCR engine failures in capsule large-document health", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeOcrAdapter: {
+        kind: "ocr",
+        ocrPage: () => Promise.resolve({ ok: false, reason: "engine-error" }),
+      },
+    };
+
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    const body = detail.body as { readonly largeDocumentHealth: CapsuleLargeDocumentHealth };
+    expect(body.largeDocumentHealth.capabilities.ocr).toBe("failing");
   });
 
   it("limits repair-failed reindex jobs to sources with failed documents", async () => {
@@ -1374,11 +2143,48 @@ describe("local-knowledge handlers", () => {
     const body = result.body as {
       readonly health: {
         readonly vectorCompatible: boolean;
+        readonly embeddingCompatibility?: CapsuleHealth["embeddingCompatibility"];
         readonly staleReasons: readonly string[];
       };
     };
     expect(body.health.vectorCompatible).toBe(false);
+    expect(body.health.embeddingCompatibility).toMatchObject({
+      status: "incompatible",
+      reason: "pinned-model-not-configured",
+      pinnedModelId: "text-embedding-3-small",
+      currentModelId: "text-embedding-3-large",
+    });
     expect(body.health.staleReasons.some((reason) => /embedding model/i.test(reason))).toBe(true);
+  });
+
+  it("reports vectorCompatible=false when gateway config is missing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      { ...depsFor(tmp), config: undefined, configPresent: false },
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      readonly health: {
+        readonly vectorCompatible: boolean;
+        readonly embeddingCompatibility?: CapsuleHealth["embeddingCompatibility"];
+        readonly staleReasons: readonly string[];
+      };
+    };
+    expect(body.health.vectorCompatible).toBe(false);
+    expect(body.health.embeddingCompatibility).toMatchObject({
+      status: "unknown",
+      reason: "gateway-config-missing",
+      pinnedModelId: "text-embedding-3-small",
+    });
+    expect(body.health.staleReasons.some((reason) => /gateway configuration/i.test(reason))).toBe(
+      true,
+    );
   });
 
   it("reports vectorCompatible=false when the configured model is present but explicitly chat-only", async () => {
@@ -1399,13 +2205,19 @@ describe("local-knowledge handlers", () => {
     const body = result.body as {
       readonly health: {
         readonly vectorCompatible: boolean;
+        readonly embeddingCompatibility?: CapsuleHealth["embeddingCompatibility"];
         readonly staleReasons: readonly string[];
       };
     };
     expect(body.health.vectorCompatible).toBe(false);
-    expect(body.health.staleReasons.some((reason) => /cannot serve embeddings/i.test(reason))).toBe(
-      true,
-    );
+    expect(body.health.embeddingCompatibility).toMatchObject({
+      status: "incompatible",
+      reason: "configured-model-not-embedding",
+      pinnedModelId: "text-embedding-3-small",
+    });
+    expect(
+      body.health.staleReasons.some((reason) => /not available as an embedding model/i.test(reason)),
+    ).toBe(true);
   });
 
   it("rejects a reindex request with a non-boolean force field (#189 O2)", async () => {
@@ -1531,6 +2343,42 @@ describe("local-knowledge handlers", () => {
         };
       };
       expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(768);
+    });
+
+    it("passes shared gateway egress to embedding probes when the provider has no override", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+      const egress = { httpsProxy: "http://proxy.example:8080", noProxy: ["localhost"] };
+      const config: GatewayConfig = { ...gatewayConfig("text-embedding-3-small"), egress };
+      const seen: OpenAIEmbeddingRequest[] = [];
+      const deps: UiHandlerDeps = {
+        ...depsFor(tmp, config),
+        localKnowledgeEmbeddingRequest: vi.fn(
+          (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+            seen.push(request);
+            return Promise.resolve({
+              ok: true as const,
+              value: {
+                vector: Float32Array.from(
+                  { length: embeddingDimensionsForTestModel(request.modelId) },
+                  (_, index) => index / 1000,
+                ),
+                modelId: request.modelId,
+              },
+            });
+          },
+        ),
+      };
+
+      const result = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Egress Bound" }),
+        deps,
+      );
+
+      expect(result.status, JSON.stringify(result.body)).toBe(201);
+      expect(seen.length).toBeGreaterThan(0);
+      expect(seen.every((request) => request.egress === egress)).toBe(true);
+      deps.store.close();
     });
 
     it("marks new capsules incompatible when the configured embedding gateway changes", async () => {
@@ -1701,7 +2549,13 @@ describe("local-knowledge handlers", () => {
     );
 
     expect(result.status).toBe(201);
-    expect(seenModelIds).toEqual([unhealthyModelId, healthyModelId]);
+    expect(seenModelIds[0]).toBe(unhealthyModelId);
+    expect(seenModelIds.slice(1)).toEqual([
+      healthyModelId,
+      healthyModelId,
+      healthyModelId,
+      healthyModelId,
+    ]);
     const body = result.body as {
       readonly capsule: {
         readonly embeddingModelIdentity: {
@@ -1921,6 +2775,7 @@ describe("local-knowledge large-document health (Issue #1286)", () => {
     const body = result.body as Record<string, unknown>;
     const largeDoc = body.largeDocumentHealth as CapsuleLargeDocumentHealth;
     expect(largeDoc.resourcePolicy.largeFileThresholdBytes).toBeGreaterThan(0);
+    expect(largeDoc.capabilities.ocr).toBe("unavailable");
     expect(largeDoc.progress).toHaveLength(1);
     expect(largeDoc.progress[0]?.phase).toBe("embedding");
     expect(largeDoc.progress[0]?.resumable).toBe(true);

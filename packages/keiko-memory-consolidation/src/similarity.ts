@@ -72,3 +72,21 @@ export function jaccardSimilarityPrepared(a: PreparedBody, b: PreparedBody): num
 export function jaccardSimilarity(a: string, b: string): number {
   return jaccardSimilarityPrepared(prepareBody(a), prepareBody(b));
 }
+
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number | null {
+  if (a.length === 0 || a.length !== b.length) return null;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const av = a[i];
+    const bv = b[i];
+    if (typeof av !== "number" || typeof bv !== "number") return null;
+    if (!Number.isFinite(av) || !Number.isFinite(bv)) return null;
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+  if (normA === 0 || normB === 0) return null;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}

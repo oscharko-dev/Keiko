@@ -87,9 +87,26 @@ const COLUMNS =
   "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
-const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
+const SQL_LIST_LIMITED = `
+SELECT ${COLUMNS}
+FROM (
+  SELECT rowid AS __rowid, ${COLUMNS}
+  FROM chat_messages
+  WHERE chat_id = ?
+  ORDER BY timestamp DESC, rowid DESC
+  LIMIT ?
+)
+ORDER BY timestamp ASC, __rowid ASC`;
+const SQL_LIST_PREFIX_LIMITED = `${SQL_LIST} LIMIT ?`;
+const SQL_COUNT = "SELECT COUNT(*) AS count FROM chat_messages WHERE chat_id = ?";
 const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 1`;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
+const SQL_REPLACE_ASSISTANT_CONTENT = `
+  UPDATE chat_messages
+  SET content = ?, timestamp = ?
+  WHERE id = ? AND role = 'assistant'
+  RETURNING ${COLUMNS}
+`;
 const SQL_INSERT = `
 INSERT INTO chat_messages
   (id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type, grounded_answer_json, grounded_preview_citations_json)
@@ -193,6 +210,24 @@ export function listMessagesLimited(
   return (db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map(
     rowToMessage,
   );
+}
+
+export function listMessagesPrefixLimited(
+  db: DatabaseSync,
+  chatId: string,
+  limit: number,
+): readonly ChatMessage[] {
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw invalidRequest("limit must be a positive integer.");
+  }
+  return (db.prepare(SQL_LIST_PREFIX_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map(
+    rowToMessage,
+  );
+}
+
+export function countMessages(db: DatabaseSync, chatId: string): number {
+  const row = db.prepare(SQL_COUNT).get(chatId) as { count?: unknown } | undefined;
+  return typeof row?.count === "number" ? row.count : 0;
 }
 
 export function findMessageById(db: DatabaseSync, id: string): ChatMessage | undefined {
@@ -301,6 +336,20 @@ export function updateMessage(
     RETURNING ${COLUMNS}
   `;
   const row = db.prepare(sql).get(...args, id) as unknown as MessageRow | undefined;
+  if (row === undefined) throw notFound("Message");
+  return rowToMessage(row);
+}
+
+export function replaceAssistantMessageContent(
+  db: DatabaseSync,
+  id: string,
+  content: string,
+  timestamp: number,
+): ChatMessage {
+  if (content.length === 0) throw invalidRequest("Content is required.");
+  const row = db.prepare(SQL_REPLACE_ASSISTANT_CONTENT).get(content, timestamp, id) as unknown as
+    | MessageRow
+    | undefined;
   if (row === undefined) throw notFound("Message");
   return rowToMessage(row);
 }

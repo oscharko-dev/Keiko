@@ -12,13 +12,22 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import type { Redactor, UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createInMemoryUiStore, createRunRegistry, STREAMING } from "../../index.js";
 import type { RouteContext, RouteResult } from "../../routes.js";
-import { doneFrameForSummary, handleStartQiRun, toStreamEvent } from "../runRoutes.js";
+import {
+  MAX_ACTIVE_QI_RUNS_ENV,
+  doneFrameForSummary,
+  handleCancelQiRun,
+  handleStartQiRun,
+  resolveMaxActiveQiRuns,
+  startQiRunSseHeartbeat,
+  toStreamEvent,
+} from "../runRoutes.js";
+import { qiRunRegistry } from "../runRegistry.js";
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -88,6 +97,11 @@ function asResult(outcome: RouteResult | typeof STREAMING): RouteResult {
   return outcome;
 }
 
+afterEach(() => {
+  qiRunRegistry.reset();
+  vi.useRealTimers();
+});
+
 describe("handleStartQiRun — single-file absolute-path validation", () => {
   const tmpDirs: string[] = [];
 
@@ -120,6 +134,29 @@ describe("handleStartQiRun — single-file absolute-path validation", () => {
     expect(res.chunks).toHaveLength(0);
   });
 
+  it("returns 400 QI_BAD_SOURCE before streaming for unsafe relative traversal paths", async () => {
+    const res = new MockResponse();
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [{ kind: "workspace", label: "Traversal", path: "../secrets" }],
+          }),
+          res,
+        ),
+        deps(),
+      ),
+    );
+
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string; message: string } }).error).toMatchObject({
+      code: "QI_BAD_SOURCE",
+    });
+    expect((result.body as { error: { message: string } }).error.message).toMatch(/unsafe/i);
+    expect(res.statusCode).toBeUndefined();
+    expect(res.chunks).toHaveLength(0);
+  });
+
   it("keeps an absolute file source on the SSE path", async () => {
     const dir = mkdtempSync(join(tmpdir(), "qi-start-route-"));
     tmpDirs.push(dir);
@@ -142,6 +179,72 @@ describe("handleStartQiRun — single-file absolute-path validation", () => {
     expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
     expect(res.ended).toBe(true);
     expect(res.chunks.join("")).toContain('"type":"error"');
+  });
+});
+
+describe("handleStartQiRun — runtime concurrency and SSE observability", () => {
+  it("parses the configured active-run cap defensively", () => {
+    expect(resolveMaxActiveQiRuns({ [MAX_ACTIVE_QI_RUNS_ENV]: "1" })).toBe(1);
+    expect(resolveMaxActiveQiRuns({ [MAX_ACTIVE_QI_RUNS_ENV]: "999" })).toBe(64);
+    expect(resolveMaxActiveQiRuns({ [MAX_ACTIVE_QI_RUNS_ENV]: "1abc" })).toBe(2);
+    expect(resolveMaxActiveQiRuns({ [MAX_ACTIVE_QI_RUNS_ENV]: "0" })).toBe(2);
+  });
+
+  it("returns 429 before streaming when the active-run cap is reached", async () => {
+    qiRunRegistry.register("qi-run-existing", "2026-01-01T00:00:00.000Z", {
+      maxActiveRuns: 1,
+    });
+    const res = new MockResponse();
+    const cappedDeps = { ...deps(), env: { [MAX_ACTIVE_QI_RUNS_ENV]: "1" } };
+
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+          }),
+          res,
+        ),
+        cappedDeps,
+      ),
+    );
+
+    expect(result.status).toBe(429);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_TOO_MANY_RUNS");
+    expect(qiRunRegistry.activeCount()).toBe(1);
+    expect(res.statusCode).toBeUndefined();
+    expect(res.chunks).toHaveLength(0);
+  });
+
+  it("writes bounded SSE heartbeat comments and stops them after cleanup", () => {
+    vi.useFakeTimers();
+    const res = new MockResponse();
+    const controller = new AbortController();
+
+    const stop = startQiRunSseHeartbeat(res as unknown as ServerResponse, controller, 10);
+    vi.advanceTimersByTime(10);
+    expect(res.chunks).toEqual([": ping\n\n"]);
+
+    stop();
+    vi.advanceTimersByTime(10);
+    expect(res.chunks).toEqual([": ping\n\n"]);
+  });
+});
+
+describe("handleCancelQiRun", () => {
+  it("aborts an active run and remains idempotent for a repeated cancel", () => {
+    const controller = qiRunRegistry.register("qi-run-cancel", "2026-01-01T00:00:00.000Z");
+    const baseCtx = ctx(makeReq({}), new MockResponse());
+    const cancelCtx = { ...baseCtx, params: { id: "qi-run-cancel" } };
+
+    const first = handleCancelQiRun(cancelCtx, deps());
+    expect(first.status).toBe(200);
+    expect(first.body).toMatchObject({ cancelled: true, runId: "qi-run-cancel" });
+    expect(controller.signal.aborted).toBe(true);
+
+    const second = handleCancelQiRun(cancelCtx, deps());
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ cancelled: false, runId: "qi-run-cancel" });
   });
 });
 
@@ -842,6 +945,29 @@ describe("handleStartQiRun — SSE accepted frame wire shape (Issue #730)", () =
     expect(entry).toBeDefined();
     // Exact key-set: {code, kind, label} — message must NOT appear on the wire.
     expect(Object.keys(entry ?? {}).sort()).toEqual(["code", "kind", "label"]);
+  });
+
+  it("accepted frame carries sourceSummaries when a source is atom-capped", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-route-summary-"));
+    tmpDirs.push(dir);
+    const res = new MockResponse();
+    const text = Array.from(
+      { length: 130 },
+      (_, i) => `The system shall satisfy capped requirement ${String(i)} for the audit trail.`,
+    ).join("\n");
+
+    const outcome = await handleStartQiRun(
+      ctx(makeReq({ sources: [{ kind: "requirements", label: "Large", text }] }), res),
+      depsWithEvidenceDir(dir),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    const frames = parseSseFrames(res.chunks);
+    const accepted = frames.find((f) => f.type === "accepted");
+    const summaries = accepted?.sourceSummaries as readonly Record<string, unknown>[] | undefined;
+    expect(summaries).toHaveLength(1);
+    expect(summaries?.[0]?.droppedAtomCount).toBeGreaterThan(0);
+    expect(summaries?.[0]?.notices).toContain("source-truncated-to-fair-atom-budget");
   });
 });
 

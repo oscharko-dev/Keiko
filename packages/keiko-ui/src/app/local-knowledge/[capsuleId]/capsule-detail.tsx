@@ -5,10 +5,11 @@
 // Parser diagnostics NEVER render raw extracted text — only severity/code/message/page_number.
 // State is split into capsule-detail-state.ts to keep each file under 400 LOC.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type {
   CapsuleLargeDocumentHealth,
+  CapsuleHealth,
   CoverageQuality,
   ExtractionPhase,
   KnowledgeCapsuleId,
@@ -17,6 +18,7 @@ import type {
   IndexingJobRecord,
   ParserDiagnosticSeverity,
   IndexingJobStatus,
+  CapsuleContextualRetrievalSettings,
 } from "@oscharko-dev/keiko-contracts";
 import { isTerminalExtractionPhase } from "@oscharko-dev/keiko-contracts";
 import type {
@@ -24,12 +26,16 @@ import type {
   CapsuleActionResponse,
   SourceIndexStats,
 } from "@/lib/local-knowledge-api";
-import { resumeCapsuleLargeDocuments } from "@/lib/local-knowledge-api";
+import {
+  resumeCapsuleLargeDocuments,
+  updateCapsuleContextualRetrieval,
+} from "@/lib/local-knowledge-api";
 import Link from "next/link";
 import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
 import { CapsuleRename } from "./capsule-rename";
+import { SourceRebindControl } from "./source-rebind-control";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -93,6 +99,46 @@ function indexedDocuments(data: CapsuleDetailData): number {
 
 function progressStyle(value: number): { readonly width: string } {
   return { width: formatPercent(value) };
+}
+
+type EmbeddingCompatibility = NonNullable<CapsuleHealth["embeddingCompatibility"]>;
+type ContextualRetrievalHealth = NonNullable<CapsuleHealth["contextualRetrieval"]>;
+
+function formatEmbeddingIdentity(identity: CapsuleHealth["embeddingIdentity"]): string {
+  return `${identity.provider} / ${identity.modelId} (${identity.vectorDimensions.toString()}d, ${identity.vectorMetric})`;
+}
+
+function compatibilityStatus(data: CapsuleDetailData): EmbeddingCompatibility["status"] {
+  return data.health.embeddingCompatibility?.status ?? (data.health.vectorCompatible ? "compatible" : "incompatible");
+}
+
+function compatibilityTone(status: EmbeddingCompatibility["status"]): "ok" | "warn" | "danger" {
+  if (status === "compatible") return "ok";
+  if (status === "unknown") return "warn";
+  return "danger";
+}
+
+function compatibilityLabel(status: EmbeddingCompatibility["status"]): string {
+  if (status === "compatible") return "Compatible";
+  if (status === "unknown") return "Unknown";
+  return "Incompatible";
+}
+
+function contextualTone(
+  status: ContextualRetrievalHealth["status"] | undefined,
+): "neutral" | "ok" | "warn" | "danger" {
+  if (status === "ready") return "ok";
+  if (status === "unavailable") return "danger";
+  if (status === "rebuild-required" || status === "degraded") return "warn";
+  return "neutral";
+}
+
+function contextualStatusLabel(status: ContextualRetrievalHealth["status"] | undefined): string {
+  if (status === "ready") return "Ready";
+  if (status === "rebuild-required") return "Rebuild required";
+  if (status === "degraded") return "Degraded";
+  if (status === "unavailable") return "Unavailable";
+  return "Disabled";
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +330,53 @@ function IndexingStatusSection({ data }: { data: CapsuleDetailData }): ReactNode
 }
 
 // ---------------------------------------------------------------------------
+// EmbeddingCompatibilitySection
+// ---------------------------------------------------------------------------
+
+function EmbeddingCompatibilitySection({ data }: { data: CapsuleDetailData }): ReactNode {
+  const compatibility = data.health.embeddingCompatibility;
+  const status = compatibilityStatus(data);
+  const tone = compatibilityTone(status);
+  const pinnedModel =
+    compatibility === undefined
+      ? formatEmbeddingIdentity(data.health.embeddingIdentity)
+      : `${compatibility.pinnedModelId} (${compatibility.pinnedVectorDimensions.toString()}d, ${compatibility.pinnedVectorMetric})`;
+  const pinnedProvider =
+    compatibility?.pinnedProvider ?? data.health.embeddingIdentity.provider;
+  const currentModel = compatibility?.currentModelId ?? "Not configured";
+  const currentProvider = compatibility?.currentProvider ?? "No embedding provider";
+  const message =
+    compatibility?.message ??
+    (data.health.vectorCompatible
+      ? "The pinned embedding model is configured for embeddings."
+      : "Embedding compatibility could not be confirmed. Run full re-embed after fixing the Gateway configuration.");
+
+  return (
+    <section aria-labelledby="lkd-embedding-compat-heading" className="lkd-status-section">
+      <div className="lkd-section-title-row">
+        <SectionHeading>
+          <span id="lkd-embedding-compat-heading">Embedding compatibility</span>
+        </SectionHeading>
+        <span className="lkd-live-note">{compatibilityLabel(status)}</span>
+      </div>
+      <div className="lkd-metric-grid">
+        <MetricCard label="Pinned model" value={pinnedModel} meta={pinnedProvider} />
+        <MetricCard label="Current embedding model" value={currentModel} meta={currentProvider} />
+        <MetricCard
+          label="Compatibility"
+          value={compatibilityLabel(status)}
+          meta={compatibility?.reason ?? "legacy-health"}
+          tone={tone}
+        />
+      </div>
+      <p className="lkd-status-callout" data-tone={tone}>
+        {message}
+      </p>
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // OverviewSection
 // ---------------------------------------------------------------------------
 
@@ -299,6 +392,7 @@ function OverviewRow({ label, value }: { label: string; value: ReactNode }): Rea
 function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
   const { capsule, health } = data;
   const embId = capsule.embeddingModelIdentity;
+  const status = compatibilityStatus(data);
 
   return (
     <section aria-labelledby="lkd-overview-heading">
@@ -339,7 +433,7 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
         />
         <OverviewRow
           label="Embedding model"
-          value={`${embId.provider} / ${embId.modelId} (${embId.vectorDimensions.toString()}d, ${embId.vectorMetric})`}
+          value={formatEmbeddingIdentity(embId)}
         />
         <OverviewRow label="Storage size" value={formatBytes(health.storageSizeBytes)} />
         <OverviewRow label="Unsupported documents" value={health.unsupportedDocuments.toString()} />
@@ -348,7 +442,13 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
         ) : null}
         <OverviewRow
           label="Vector compatible"
-          value={health.vectorCompatible ? "Yes" : "No — re-index required"}
+          value={
+            status === "compatible"
+              ? "Compatible"
+              : status === "unknown"
+                ? "Unknown — check Gateway configuration"
+                : "Incompatible — full re-embed required"
+          }
         />
         {health.staleReasons.length > 0 ? (
           <OverviewRow
@@ -380,10 +480,230 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
+// ContextualRetrievalSection
+// ---------------------------------------------------------------------------
+
+interface ContextualRetrievalSectionProps {
+  readonly data: CapsuleDetailData;
+  readonly onSaved: (data: CapsuleDetailData) => void;
+  readonly updateImpl?: typeof updateCapsuleContextualRetrieval;
+}
+
+function positiveIntOrUndefined(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return undefined;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function settingInputValue(value: number | undefined): string {
+  return value === undefined ? "" : value.toString();
+}
+
+function ContextualRetrievalSection({
+  data,
+  onSaved,
+  updateImpl = updateCapsuleContextualRetrieval,
+}: ContextualRetrievalSectionProps): ReactNode {
+  const settings = data.capsule.contextualRetrieval;
+  const health = data.health.contextualRetrieval;
+  const [enabled, setEnabled] = useState(settings?.enabled ?? false);
+  const [modelId, setModelId] = useState(settings?.modelId ?? "");
+  const [strict, setStrict] = useState(settings?.strict ?? false);
+  const [maxContextChars, setMaxContextChars] = useState(
+    settingInputValue(settings?.maxContextChars),
+  );
+  const [documentContextMaxChars, setDocumentContextMaxChars] = useState(
+    settingInputValue(settings?.documentContextMaxChars),
+  );
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEnabled(settings?.enabled ?? false);
+    setModelId(settings?.modelId ?? "");
+    setStrict(settings?.strict ?? false);
+    setMaxContextChars(settingInputValue(settings?.maxContextChars));
+    setDocumentContextMaxChars(settingInputValue(settings?.documentContextMaxChars));
+  }, [settings]);
+
+  async function handleSave(): Promise<void> {
+    const parsedMaxContextChars = positiveIntOrUndefined(maxContextChars);
+    const parsedDocumentContextMaxChars = positiveIntOrUndefined(documentContextMaxChars);
+    const next: CapsuleContextualRetrievalSettings = {
+      enabled,
+      ...(modelId.trim().length > 0 ? { modelId: modelId.trim() } : {}),
+      strict,
+      ...(parsedMaxContextChars !== undefined ? { maxContextChars: parsedMaxContextChars } : {}),
+      ...(parsedDocumentContextMaxChars !== undefined
+        ? { documentContextMaxChars: parsedDocumentContextMaxChars }
+        : {}),
+    };
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const updated = await updateImpl(data.capsule.id, next);
+      onSaved(updated);
+      setMessage("Saved. Full rebuild / rechunk this capsule to apply retrieval text changes.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to save contextual retrieval.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section aria-labelledby="lkd-contextual-retrieval-heading" className="lkd-status-section">
+      <div className="lkd-section-title-row">
+        <SectionHeading>
+          <span id="lkd-contextual-retrieval-heading">Contextual retrieval</span>
+        </SectionHeading>
+        <span className="lkd-live-note">{contextualStatusLabel(health?.status)}</span>
+      </div>
+      <p className="lkd-status-callout" data-tone={contextualTone(health?.status)}>
+        Adds a context-generation chat call per chunk during indexing. Run Full rebuild / rechunk
+        after saving.
+      </p>
+      {health !== undefined ? (
+        <div className="lkd-metric-grid">
+          <MetricCard
+            label="Retrieval context"
+            value={contextualStatusLabel(health.status)}
+            meta={`settings: ${health.source}`}
+            tone={contextualTone(health.status)}
+          />
+          <MetricCard
+            label="Context model"
+            value={health.modelId ?? "Gateway default"}
+            meta={health.strict ? "strict" : "non-strict fallback"}
+          />
+          <MetricCard
+            label="Stale context chunks"
+            value={health.staleChunkCount.toString()}
+            meta={`${health.degradedChunkCount.toString()} degraded`}
+            tone={health.rebuildRequired ? "warn" : health.degradedChunkCount > 0 ? "warn" : "ok"}
+          />
+        </div>
+      ) : null}
+      {health?.message !== undefined ? (
+        <p
+          className="lkd-status-callout"
+          data-tone={contextualTone(health.status)}
+          role={health.rebuildRequired ? "status" : undefined}
+        >
+          {health.message}
+        </p>
+      ) : null}
+      <div className="lkd-connect-row">
+        <label className="dlg-label" htmlFor="lkd-context-enabled">
+          <input
+            id="lkd-context-enabled"
+            type="checkbox"
+            checked={enabled}
+            disabled={busy}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => setEnabled(event.target.checked)}
+          />{" "}
+          Generate retrieval context at index time
+        </label>
+      </div>
+      <div className="lkd-connect-row">
+        <label htmlFor="lkd-context-model" className="dlg-label">
+          Context model ID
+        </label>
+        <input
+          id="lkd-context-model"
+          type="text"
+          className="dlg-input lkd-connect-input"
+          value={modelId}
+          disabled={busy || !enabled}
+          placeholder="Use gateway default chat model"
+          onChange={(event: ChangeEvent<HTMLInputElement>) => setModelId(event.target.value)}
+        />
+      </div>
+      <div className="lkd-connect-row">
+        <label className="dlg-label" htmlFor="lkd-context-strict">
+          <input
+            id="lkd-context-strict"
+            type="checkbox"
+            checked={strict}
+            disabled={busy || !enabled}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => setStrict(event.target.checked)}
+          />{" "}
+          Fail indexing if context generation fails
+        </label>
+      </div>
+      <div className="lkd-connect-row">
+        <label htmlFor="lkd-context-max" className="dlg-label">
+          Generated context character limit
+        </label>
+        <input
+          id="lkd-context-max"
+          type="number"
+          min={1}
+          className="dlg-input lkd-connect-input"
+          value={maxContextChars}
+          disabled={busy || !enabled}
+          placeholder="480"
+          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+            setMaxContextChars(event.target.value)
+          }
+        />
+      </div>
+      <div className="lkd-connect-row">
+        <label htmlFor="lkd-document-context-max" className="dlg-label">
+          Document context character limit
+        </label>
+        <input
+          id="lkd-document-context-max"
+          type="number"
+          min={1}
+          className="dlg-input lkd-connect-input"
+          value={documentContextMaxChars}
+          disabled={busy || !enabled}
+          placeholder="12000"
+          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+            setDocumentContextMaxChars(event.target.value)
+          }
+        />
+      </div>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        disabled={busy}
+        aria-busy={busy}
+        onClick={() => void handleSave()}
+      >
+        {busy ? "Saving…" : "Save retrieval settings"}
+      </button>
+      {message !== null ? (
+        <p className="lkd-status-callout" data-tone="warn" role="status">
+          {message}
+        </p>
+      ) : null}
+      {error !== null ? (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          {error}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // SourcesSection
 // ---------------------------------------------------------------------------
 
-function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): ReactNode {
+function SourcesSection({
+  capsuleId,
+  sources,
+  onActionComplete,
+}: {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sources: readonly SourceIndexStats[];
+  readonly onActionComplete: () => void;
+}): ReactNode {
   if (sources.length === 0) {
     return (
       <section aria-labelledby="lkd-sources-heading">
@@ -415,7 +735,14 @@ function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): 
                     {location}
                   </div>
                 </div>
-                <span className="lkd-source-scope">{src.scope.kind}</span>
+                <div className="lkd-source-card-actions">
+                  <span className="lkd-source-scope">{src.scope.kind}</span>
+                  <SourceRebindControl
+                    capsuleId={capsuleId}
+                    source={src}
+                    onRebound={onActionComplete}
+                  />
+                </div>
               </div>
               <div className="lkd-source-coverage" role="img" aria-label="Source document coverage">
                 <span
@@ -819,6 +1146,7 @@ export interface CapsuleDetailProps {
   readonly fetchDetailImpl?: typeof import("@/lib/local-knowledge-api").fetchCapsuleDetail;
   // Injectable resume seam for the large-document Resume control (tests pass a mock).
   readonly resumeImpl?: typeof resumeCapsuleLargeDocuments;
+  readonly updateContextualRetrievalImpl?: typeof updateCapsuleContextualRetrieval;
 }
 
 export function CapsuleDetail({
@@ -826,13 +1154,17 @@ export function CapsuleDetail({
   onDeleted,
   fetchDetailImpl,
   resumeImpl,
+  updateContextualRetrievalImpl,
 }: CapsuleDetailProps = {}): ReactNode {
   const searchParams = useSearchParams();
   const router = useRouter();
   const capsuleId =
     providedCapsuleId ?? ((searchParams.get("capsuleId") ?? "") as KnowledgeCapsuleId);
 
-  const { data, loadStatus, loadError, reload } = useCapsuleDetail(capsuleId, fetchDetailImpl);
+  const { data, loadStatus, loadError, reload, replaceData } = useCapsuleDetail(
+    capsuleId,
+    fetchDetailImpl,
+  );
 
   function handleDeleted(response: CapsuleActionResponse): void {
     if (onDeleted !== undefined) {
@@ -914,11 +1246,21 @@ export function CapsuleDetail({
         capsuleDisplayName={data.capsule.displayName}
         sourceCount={data.sources.length}
         lifecycleState={data.capsule.lifecycleState}
+        vectorCompatible={data.health.vectorCompatible}
+        contextualRebuildRequired={data.health.contextualRetrieval?.rebuildRequired ?? false}
         onActionComplete={reload}
         onDeleted={handleDeleted}
       />
 
       <IndexingStatusSection data={data} />
+      <EmbeddingCompatibilitySection data={data} />
+      <ContextualRetrievalSection
+        data={data}
+        onSaved={replaceData}
+        {...(updateContextualRetrievalImpl !== undefined
+          ? { updateImpl: updateContextualRetrievalImpl }
+          : {})}
+      />
       {data.largeDocumentHealth !== undefined ? (
         <LargeDocumentSection
           capsuleId={capsuleId}
@@ -934,7 +1276,11 @@ export function CapsuleDetail({
       ) : null}
       <OverviewSection data={data} />
       <PrivacySection />
-      <SourcesSection sources={data.sources} />
+      <SourcesSection
+        capsuleId={capsuleId}
+        sources={data.sources}
+        onActionComplete={reload}
+      />
       <HealthDiagnosticsSection diagnostics={data.parserDiagnostics} />
       <IndexingJobsSection jobs={data.indexingJobs} />
     </div>

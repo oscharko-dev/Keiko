@@ -62,6 +62,19 @@ export interface QualityIntelligenceExportBundleEntry {
   readonly findingRefs: readonly QualityIntelligenceValidationFindingId[];
 }
 
+export interface QualityIntelligenceExportModelStageProvenance {
+  readonly modelId: string;
+  readonly provider: string;
+  readonly revision: string;
+}
+
+export interface QualityIntelligenceExportModelProvenance {
+  readonly generation: QualityIntelligenceExportModelStageProvenance;
+  readonly judge: QualityIntelligenceExportModelStageProvenance;
+  readonly seedUsed?: number | null;
+  readonly modelParameters?: Readonly<Record<string, unknown>>;
+}
+
 export interface QualityIntelligenceExportBundle {
   readonly id: QualityIntelligenceExportBundleId;
   readonly runId: QualityIntelligenceRunId;
@@ -72,6 +85,8 @@ export interface QualityIntelligenceExportBundle {
   readonly integrityHashSha256Hex: string;
   readonly redactionAttested: boolean;
   readonly contents: readonly QualityIntelligenceExportBundleEntry[];
+  readonly diagnostics?: readonly string[];
+  readonly modelProvenance?: QualityIntelligenceExportModelProvenance;
 }
 
 /**

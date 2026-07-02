@@ -155,7 +155,7 @@ export function buildProposedEvent(record: MemoryRecord, ctx: BuildContext): Mem
     eventId: ctx.newEventId(),
     occurredAt: ctx.occurredAt,
     initiatorSurface: VAULT_DERIVED_SURFACE,
-    summary: safeSummary(`memory ${record.id} proposed (type=${record.type})`, ctx.redactString),
+    summary: safeSummary(`memory proposed (type=${record.type})`, ctx.redactString),
     memoryId: record.id,
     scope: record.scope,
   };
@@ -179,7 +179,7 @@ export function buildInsertedEvent(
         "memory:accepted",
         record,
         safeSummary(
-          `memory ${record.id} inserted as accepted (type=${record.type})`,
+          `memory inserted as accepted (type=${record.type})`,
           ctx.redactString,
         ),
         ctx,
@@ -203,7 +203,7 @@ export function buildUpdatedEvent(
   ctx: BuildContext,
 ): MemoryAuditEvent {
   const cls = classifyUpdate(previousStatus, previousPinned, record);
-  const summary = safeSummary(`memory ${record.id} ${cls.label}`, ctx.redactString);
+  const summary = safeSummary(`memory ${cls.label}`, ctx.redactString);
   return buildSingleRecordEvent(cls.kind, record, summary, ctx);
 }
 
@@ -259,7 +259,7 @@ export function buildTombstonedEvent(
     occurredAt: ctx.occurredAt,
     initiatorSurface: VAULT_DERIVED_SURFACE,
     summary: safeSummary(
-      `memory ${tombstone.memoryId} forgotten (surface=${tombstone.forgetterSurface})`,
+      `memory forgotten (surface=${tombstone.forgetterSurface})`,
       ctx.redactString,
     ),
     memoryId: tombstone.memoryId,
@@ -279,7 +279,7 @@ export function buildDeletedEvent(
     eventId: ctx.newEventId(),
     occurredAt: ctx.occurredAt,
     initiatorSurface: VAULT_DERIVED_SURFACE,
-    summary: safeSummary(`memory ${memoryId} deleted without tombstone`, ctx.redactString),
+    summary: safeSummary("memory deleted without tombstone", ctx.redactString),
     memoryId,
     scope,
     tombstoned: false,

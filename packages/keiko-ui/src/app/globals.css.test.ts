@@ -21,6 +21,98 @@ import { describe, expect, it } from "vitest";
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
+const pdfViewerModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const pdfViewerComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx"),
+  "utf8",
+);
+const browserWidgetModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/BrowserWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const browserWidgetComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/BrowserWidget.tsx"),
+  "utf8",
+);
+const connectorPickerModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/ConnectorPickerWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const connectorPickerComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/ConnectorPickerWidget.tsx"),
+  "utf8",
+);
+const terminalWidgetModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/TerminalWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const terminalWidgetComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/TerminalWidget.tsx"),
+  "utf8",
+);
+const terminalStyleConsumerComponents = [
+  terminalWidgetComponent,
+  readFileSync(resolve(here, "components/desktop/widgets/cards/CommandsWidget.tsx"), "utf8"),
+  readFileSync(resolve(here, "components/desktop/widgets/cards/RuntimeHubWidget.tsx"), "utf8"),
+  readFileSync(resolve(here, "components/desktop/widgets/cards/ContainerStatusWidget.tsx"), "utf8"),
+];
+const integrationsWidgetModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const integrationsWidgetComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.tsx"),
+  "utf8",
+);
+const figmaImageSourceModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/figma/FigmaImageSourceWindow.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const figmaImageSourceComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/figma/FigmaImageSourceWindow.tsx"),
+  "utf8",
+);
+const timelinePanelModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/TimelinePanel.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const timelinePanelComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/TimelinePanel.tsx"),
+  "utf8",
+);
+const notificationsPanelModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/NotificationsPanel.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const notificationsPanelComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/NotificationsPanel.tsx"),
+  "utf8",
+);
+const mobilePanelModuleCss = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/MobilePanel.module.css"),
+  "utf8",
+).replace(/\r\n?/g, "\n");
+const mobilePanelComponent = readFileSync(
+  resolve(here, "components/desktop/widgets/panels/MobilePanel.tsx"),
+  "utf8",
+);
+const lazyWidgetCss = [
+  pdfViewerModuleCss,
+  browserWidgetModuleCss,
+  connectorPickerModuleCss,
+  terminalWidgetModuleCss,
+  integrationsWidgetModuleCss,
+  figmaImageSourceModuleCss,
+  timelinePanelModuleCss,
+  notificationsPanelModuleCss,
+  mobilePanelModuleCss,
+]
+  .map(unwrapCssModuleGlobals)
+  .join("\n");
+const auditedProductCss = `${css}\n${lazyWidgetCss}`;
 const evidenceHarness1297 = readFileSync(
   resolve(here, "../../../..", "docs/design-system/evidence/1297/equivalence-harness.mjs"),
   "utf8",
@@ -72,11 +164,120 @@ function indexOfNth(haystack: string, needle: string, n: number): number {
   return idx;
 }
 
-function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
-  const idx = opts.fromLast === true ? css.lastIndexOf(selector) : css.indexOf(selector);
-  expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
-  return css.slice(idx, css.indexOf("}", idx) + 1);
+function unwrapCssModuleGlobals(source: string): string {
+  return source
+    .replace(/:global\(([^()]+)\)/g, "$1")
+    .replace(/\.lazyWidgetScope\s*/g, "");
 }
+
+function expectLazyCssModuleImport(component: string, fileName: string): void {
+  expect(component).toContain(`import styles from "./${fileName}";`);
+  expect(component).toContain("styles.lazyWidgetScope");
+}
+
+function cssBlockFrom(
+  source: string,
+  selector: string,
+  opts: { readonly fromLast?: boolean } = {},
+): string {
+  const idx = opts.fromLast === true ? source.lastIndexOf(selector) : source.indexOf(selector);
+  expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
+  return source.slice(idx, source.indexOf("}", idx) + 1);
+}
+
+function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
+  return cssBlockFrom(css, selector, opts);
+}
+
+describe("BUNDLE-09 — lazy widget CSS split", () => {
+  it("keeps PDF viewer window styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".pdfv-shell");
+    expect(css).not.toContain(".pdfv-page-frame");
+    expect(pdfViewerModuleCss).toContain(":global(.pdfv-shell)");
+    expect(pdfViewerModuleCss).toContain(":global(.pdfv-page-frame)");
+    expectLazyCssModuleImport(pdfViewerComponent, "PdfCitationPreviewWindow.module.css");
+  });
+
+  it("keeps Browser widget styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".browser {");
+    expect(css).not.toContain(".bw-btn-danger");
+    expect(browserWidgetModuleCss).toContain(":global(.browser)");
+    expect(browserWidgetModuleCss).toContain(":global(.bw-btn-danger)");
+    expectLazyCssModuleImport(browserWidgetComponent, "BrowserWidget.module.css");
+  });
+
+  it("keeps Connector Picker styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".connector-picker {");
+    expect(css).not.toContain(".connector-picker-retry {");
+    expect(css).not.toContain(".connector-node {");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-picker)");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-picker-retry)");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-node)");
+    expectLazyCssModuleImport(connectorPickerComponent, "ConnectorPickerWidget.module.css");
+  });
+
+  it("keeps shared Terminal/runtime styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.terminal {");
+    expect(css).not.toContain("\n.tm-action {");
+    expect(css).not.toContain(".tm-action[aria-disabled");
+    expect(terminalWidgetModuleCss).toContain(":global(.terminal)");
+    expect(terminalWidgetModuleCss).toContain(":global(.tm-action)");
+    expect(terminalWidgetModuleCss).toContain(':global(.tm-action[aria-disabled="true"])');
+    for (const component of terminalStyleConsumerComponents) {
+      expectLazyCssModuleImport(component, "TerminalWidget.module.css");
+    }
+  });
+
+  it("keeps Integrations widget styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.integ {");
+    expect(css).not.toContain("\nul.integ {");
+    expect(css).not.toContain(".integ-status");
+    expect(integrationsWidgetModuleCss).toContain(":global(.integ)");
+    expect(integrationsWidgetModuleCss).toContain(":global(ul.integ)");
+    expect(integrationsWidgetModuleCss).toContain(":global(.integ-status)");
+    expectLazyCssModuleImport(integrationsWidgetComponent, "IntegrationsWidget.module.css");
+  });
+
+  it("keeps Figma image source styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain(".figma-image-window");
+    expect(css).not.toContain(".figma-image-preview");
+    expect(css).not.toContain(".figma-image-missing");
+    expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-window)");
+    expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-preview)");
+    expect(figmaImageSourceModuleCss).toContain(":global(.figma-image-missing)");
+    expectLazyCssModuleImport(figmaImageSourceComponent, "FigmaImageSourceWindow.module.css");
+  });
+
+  it("keeps Timeline panel styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.tl {");
+    expect(css).not.toContain("\n.tl-row {");
+    expect(css).not.toContain(".tl-empty");
+    expect(timelinePanelModuleCss).toContain(":global(.tl)");
+    expect(timelinePanelModuleCss).toContain(":global(.tl-row)");
+    expect(timelinePanelModuleCss).toContain(":global(.tl-empty)");
+    expectLazyCssModuleImport(timelinePanelComponent, "TimelinePanel.module.css");
+  });
+
+  it("keeps Notification panel row styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.nt-row {");
+    expect(css).not.toContain("\n.nt-text {");
+    expect(css).not.toContain("\n.nt-time {");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-row)");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-text)");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-time)");
+    expectLazyCssModuleImport(notificationsPanelComponent, "NotificationsPanel.module.css");
+  });
+
+  it("keeps Mobile panel styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.mob {");
+    expect(css).not.toContain("\n.mob-qr {");
+    expect(css).not.toContain("\n.mob-sub {");
+    expect(mobilePanelModuleCss).toContain(":global(.mob)");
+    expect(mobilePanelModuleCss).toContain(":global(.mob-qr)");
+    expect(mobilePanelModuleCss).toContain(":global(.mob-sub)");
+    expectLazyCssModuleImport(mobilePanelComponent, "MobilePanel.module.css");
+  });
+});
 
 describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
   it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
@@ -1084,7 +1285,8 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(memoryBlock).toContain("border-color: var(--line-soft) !important");
     expect(memoryBlock).toContain("box-shadow: none !important");
 
-    const templateBlock = cssBlock(
+    const templateBlock = cssBlockFrom(
+      auditedProductCss,
       ':root[data-input-modality="pointer"] .tm-field input:focus,\n:root[data-input-modality="pointer"] .tm-field select:focus',
     );
     expect(templateBlock).toContain("border-color: var(--line-strong) !important");
@@ -1092,7 +1294,7 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
   });
 
   it("renders connector create actions as buttons, not text links", () => {
-    const block = cssBlock(".connector-picker-create-link");
+    const block = cssBlockFrom(auditedProductCss, ".connector-picker-create-link");
     expect(block).toContain("height: 36px");
     expect(block).toContain("padding: 0 18px");
     expect(block).toContain("border-radius: 10px");
@@ -1145,7 +1347,6 @@ describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL
     ".arun-prog i",
     ".pal-card",
     ".mc-row",
-    ".connector-picker-retry",
     ".files-retry",
     ".scope-grounding-select",
   ];
@@ -1187,6 +1388,12 @@ describe("uiux-fix A11Y — reduced-motion transition gating (WCAG 2.3.3, MO-ALL
     expect(cssBlock(".cmp-box {")).not.toContain("transition");
     expect(cssBlock(".cmp-send {")).not.toContain("transition");
     expect(cssBlock(".pal-card {")).not.toContain("transition");
+  });
+
+  it("keeps Connector Picker retry motion gated in its lazy stylesheet", () => {
+    expect(connectorPickerModuleCss).toContain("@media (prefers-reduced-motion: no-preference)");
+    expect(connectorPickerModuleCss).toContain(":global(.connector-picker-retry) {");
+    expect(connectorPickerModuleCss).toContain("transition: border-color 0.15s ease");
   });
 });
 
@@ -1446,6 +1653,9 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
       "--ed-suggest-match:",
       "--ed-minimap-bg:",
       "--ed-minimap-slider:",
+      "--ed-scrollbar-track:",
+      "--ed-scrollbar-thumb:",
+      "--ed-scrollbar-thumb-hover:",
     ]) {
       expect(css).toContain(token);
     }
@@ -1464,6 +1674,105 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(css).toContain("--ed-diff-chg-line:");
     expect(css).toContain("--ed-diff-chg-text:");
     expect(css).toContain("--ed-diff-chg-gutter: var(--info)");
+  });
+
+  it("keeps editor scrollbars translucent and token-backed so overview diagnostics remain visible", () => {
+    expect(css).toContain("--ed-scrollbar-track: transparent");
+    expect(css).toContain(
+      "--ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 30%, transparent)",
+    );
+    expect(css).toContain(
+      "--ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 44%, transparent)",
+    );
+    expect(css).toContain(
+      "--ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-fg) 42%, transparent)",
+    );
+    expect(css).toContain(
+      "--ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 28%, transparent)",
+    );
+    expect(css).toContain(
+      "--ed-scrollbar-thumb: color-mix(in oklch, var(--ed-fg) 52%, transparent)",
+    );
+    expect(css).not.toContain("--ed-scrollbar-thumb-hover: color-mix(in oklch, var(--ed-focus)");
+
+    const codeBlock = cssBlock(".ed-code {");
+    expect(codeBlock).toContain(
+      "scrollbar-color: var(--ed-scrollbar-thumb) var(--ed-scrollbar-track)",
+    );
+    const monacoSliderBlock = cssBlock(".monaco-editor .scrollbar .slider {");
+    expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb) !important");
+    expect(monacoSliderBlock).toContain("border-radius: 999px !important");
+    expect(monacoSliderBlock).toContain(
+      "transition: background var(--motion-fast) var(--ease-out) !important",
+    );
+    expect(monacoSliderBlock).not.toContain("background-clip");
+    expect(monacoSliderBlock).not.toContain("border:");
+    const monacoHoverBlock = cssBlock(".monaco-editor .scrollbar .slider:hover,");
+    expect(monacoHoverBlock).toContain("background: var(--ed-scrollbar-thumb-hover) !important");
+    const monacoVerticalRailBlock = cssBlock(".ed-host .monaco-editor .scrollbar.vertical {");
+    expect(monacoVerticalRailBlock).toContain("background: var(--ed-bg)");
+    const monacoVerticalBlock = cssBlock(".monaco-editor .scrollbar.vertical .slider {");
+    expect(monacoVerticalBlock).toContain("min-width: 8px !important");
+    expect(monacoVerticalBlock).not.toContain("border-right-width");
+    expect(monacoVerticalBlock).not.toContain("border-left-width");
+    const monacoHorizontalBlock = cssBlock(".monaco-editor .scrollbar.horizontal .slider {");
+    expect(monacoHorizontalBlock).toContain("min-height: 8px !important");
+    expect(monacoHorizontalBlock).not.toContain("border-top-width");
+    expect(monacoHorizontalBlock).not.toContain("border-bottom-width");
+
+    const hostBlock = cssBlock(".ed-host {");
+    expect(hostBlock).toContain("overflow: hidden");
+    expect(hostBlock).toContain("isolation: isolate");
+
+    const statusBarBlock = cssBlock(".ed-statusbar {");
+    expect(statusBarBlock).toContain("position: relative");
+    expect(statusBarBlock).toContain("z-index: 1");
+    expect(statusBarBlock).toContain("flex: 0 0 auto");
+    expect(statusBarBlock).toContain("background: var(--ed-statusbar-bg)");
+    expect(statusBarBlock).toContain("box-shadow: 0 -1px 0 var(--line-soft)");
+    expect(statusBarBlock).toContain("overflow: hidden");
+
+    const markerBlock = cssBlock(".keiko-editor-diagnostic-marker {");
+    expect(markerBlock).toContain("cursor: pointer");
+    expect(markerBlock).toContain("border: 0");
+    expect(markerBlock).toContain("box-shadow: none");
+
+    const markerHoverBlock = cssBlock(".keiko-editor-diagnostic-marker:hover,");
+    expect(markerHoverBlock).toContain("filter: saturate(1.08) brightness(1.05)");
+    expect(markerHoverBlock).toContain("outline: 0");
+
+    const markerFocusBlock = cssBlock(".keiko-editor-diagnostic-marker:focus-visible {", {
+      fromLast: true,
+    });
+    expect(markerFocusBlock).toContain("var(--focus-ring)");
+
+    const diagnosticTooltipBlock = cssBlock(".keiko-editor-diagnostic-tooltip {");
+    expect(diagnosticTooltipBlock).toContain("top: 0");
+    expect(diagnosticTooltipBlock).toContain("right: calc(100% + 10px)");
+    expect(diagnosticTooltipBlock).toContain("z-index: calc(var(--z-tooltip) + 1)");
+    expect(diagnosticTooltipBlock).toContain("border: 1px solid var(--popover-border)");
+    expect(diagnosticTooltipBlock).toContain("border-radius: var(--radius-floating)");
+    expect(diagnosticTooltipBlock).toContain("background: var(--popover-surface)");
+    expect(diagnosticTooltipBlock).toContain("box-shadow: var(--popover-shadow)");
+    expect(diagnosticTooltipBlock).toContain("opacity: 0");
+    expect(diagnosticTooltipBlock).toContain("visibility: hidden");
+
+    const diagnosticTooltipOpenBlock = cssBlock(
+      ".keiko-editor-diagnostic-marker:hover .keiko-editor-diagnostic-tooltip,",
+    );
+    expect(diagnosticTooltipOpenBlock).toContain("opacity: 1");
+    expect(diagnosticTooltipOpenBlock).toContain("visibility: visible");
+
+    const diagnosticTooltipMessageBlock = cssBlock(".keiko-editor-diagnostic-tooltip-message {");
+    expect(diagnosticTooltipMessageBlock).toContain("font-weight: 400");
+
+    const diagnosticTooltipMetaBlock = cssBlock(".keiko-editor-diagnostic-tooltip-meta {", {
+      fromLast: true,
+    });
+    expect(diagnosticTooltipMetaBlock).toContain("margin-top: 4px");
+    expect(diagnosticTooltipMetaBlock).toContain("padding-top: 8px");
+    expect(diagnosticTooltipMetaBlock).toContain("border-top: 1px solid var(--popover-border)");
+    expect(diagnosticTooltipMetaBlock).toContain("font-weight: 400");
   });
 
   it("provides dark (default), light, and high-contrast editor surfaces from the token source", () => {
@@ -1509,7 +1818,11 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
 
 describe("Issue #1205 — editor tab truncation", () => {
   it("keeps the tab strip shrinkable inside compact editor cards", () => {
-    expect(cssBlock(".ed-tabs {")).toContain("min-width: 0");
+    const tabsBlock = cssBlock(".ed-tabs {");
+    expect(tabsBlock).toContain("min-width: 0");
+    expect(tabsBlock).toContain("background: var(--ed-tab-bg)");
+    expect(tabsBlock).toContain("border-bottom: 1px solid var(--border-default)");
+
     expect(cssBlock(".ed-tablist {")).toContain("min-width: min(160px, 100%)");
     expect(cssBlock(".ed-tablist {")).toContain("overflow: visible");
   });
@@ -1522,6 +1835,142 @@ describe("Issue #1205 — editor tab truncation", () => {
       expect(block).toContain("white-space: nowrap");
       expect(block).toContain("text-overflow: ellipsis");
     }
+    const tabBlock = cssBlock(".ed-tab {");
+    expect(tabBlock).toContain("position: relative");
+    expect(tabBlock).toContain("z-index: 1");
+    expect(tabBlock).toContain("--ed-tab-outline-mask: var(--ed-tab-bg)");
+    expect(tabBlock).toContain("border: 1px solid var(--border-default)");
+    expect(tabBlock).toContain("border-bottom-color: transparent");
+    expect(tabBlock).toContain("flex: 1 1 136px");
+    expect(tabBlock).toContain("box-shadow: 0 1px 0 var(--ed-tab-outline-mask)");
+
+    const tabHoverBlock = cssBlock(".ed-tab:hover:not(.active)");
+    expect(tabHoverBlock).toContain(
+      "--ed-tab-outline-mask: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
+    );
+
+    const activeTabBlock = cssBlock(".ed-tab.active {");
+    expect(activeTabBlock).toContain("--ed-tab-outline-mask: var(--surface-inset)");
+    expect(activeTabBlock).toContain("border-color: var(--border-default)");
+    expect(activeTabBlock).toContain("border-bottom-color: var(--surface-inset)");
+
+    const inactivePaneActiveTabBlock = cssBlock('.ed-pane[data-active="false"] .ed-tab.active');
+    expect(inactivePaneActiveTabBlock).toContain("--ed-tab-outline-mask: var(--ed-tab-bg)");
+    expect(inactivePaneActiveTabBlock).toContain("color: var(--text-secondary)");
+    expect(inactivePaneActiveTabBlock).toContain("border-color: var(--border-subtle)");
+    expect(inactivePaneActiveTabBlock).toContain("border-bottom-color: transparent");
+    expect(inactivePaneActiveTabBlock).toContain("background: transparent");
+  });
+
+  it("aligns editor toolbar actions with the tab rail instead of floating pills", () => {
+    const toolbarBlock = cssBlock(".ed-toolbar-actions {");
+    expect(toolbarBlock).toContain("align-items: flex-end");
+
+    const actionShapeBlock = cssBlock(".ed-toolbar-actions > :is(.ed-save, .ed-reload) {");
+    expect(actionShapeBlock).toContain("position: relative");
+    expect(actionShapeBlock).toContain("z-index: 1");
+    expect(actionShapeBlock).toContain("display: inline-flex");
+    expect(actionShapeBlock).toContain("align-items: center");
+    expect(actionShapeBlock).toContain("justify-content: center");
+    expect(actionShapeBlock).toContain("align-self: flex-end");
+    expect(actionShapeBlock).toContain("min-height: 29px");
+    expect(actionShapeBlock).toContain("--ed-action-outline-mask: var(--ed-tab-bg)");
+    expect(actionShapeBlock).toContain("margin-bottom: -1px");
+    expect(actionShapeBlock).toContain("border-color: var(--border-default)");
+    expect(actionShapeBlock).toContain("border-radius: 8px 8px 0 0");
+    expect(actionShapeBlock).toContain("border-bottom-color: transparent");
+    expect(actionShapeBlock).toContain("background: transparent");
+    expect(actionShapeBlock).toContain("color: var(--text-secondary)");
+    expect(actionShapeBlock).toContain("box-shadow: 0 1px 0 var(--ed-action-outline-mask)");
+
+    const paneActionsBlock = cssBlock(".ed-toolbar-actions > .ed-pane-actions {");
+    expect(paneActionsBlock).toContain("align-self: flex-end");
+    expect(paneActionsBlock).toContain("align-items: center");
+    expect(paneActionsBlock).not.toContain("margin-bottom: -1px");
+
+    expect(css).not.toContain(".ed-toolbar-actions > .ed-pane-actions .ed-icon-action {");
+    expect(css).not.toContain(".ed-toolbar-actions > .ed-pane-actions .ed-icon-action:hover");
+
+    const actionHoverBlock = cssBlock(
+      '.ed-toolbar-actions > :is(.ed-save, .ed-reload):hover:not([aria-disabled="true"])',
+    );
+    expect(actionHoverBlock).toContain(
+      "--ed-action-outline-mask: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
+    );
+    expect(actionHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
+    );
+    expect(actionHoverBlock).toContain("color: var(--text-primary)");
+
+    const pointerFocusMaskBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .ed-toolbar-actions > :is(.ed-save, .ed-reload):focus',
+    );
+    expect(pointerFocusMaskBlock).toContain(
+      "box-shadow: 0 1px 0 var(--ed-action-outline-mask) !important",
+    );
+
+    const disabledToolbarSaveBlock = cssBlock(
+      '.ed-toolbar-actions > .ed-save[aria-disabled="true"]',
+    );
+    expect(disabledToolbarSaveBlock).toContain("opacity: 1");
+    expect(disabledToolbarSaveBlock).toContain("color: var(--text-faint)");
+    expect(disabledToolbarSaveBlock).toContain("--ed-action-outline-mask: var(--ed-tab-bg)");
+
+    const toolbarReloadBlock = cssBlock(".ed-toolbar-actions > .ed-reload {");
+    expect(toolbarReloadBlock).toContain("margin-right: 0");
+  });
+
+  it("keeps the compact hidden-tab chooser on the shared menu visual contract", () => {
+    const summaryBlock = cssBlock(".ed-tab-summary {");
+    expect(summaryBlock).toContain("position: relative");
+    expect(summaryBlock).toContain("z-index: 1");
+    expect(summaryBlock).toContain("--ed-tab-outline-mask: var(--ed-tab-bg)");
+    expect(summaryBlock).toContain("border: 1px solid var(--border-default)");
+    expect(summaryBlock).toContain("border-bottom-color: transparent");
+    expect(summaryBlock).toContain("border-radius: 8px 8px 0 0");
+    expect(summaryBlock).toContain("background: transparent");
+    expect(summaryBlock).toContain("box-shadow: 0 1px 0 var(--ed-tab-outline-mask)");
+    expect(summaryBlock).not.toContain("background: var(--surface-inset)");
+
+    const summaryHoverBlock = cssBlock(".ed-tab-summary:hover");
+    expect(summaryHoverBlock).toContain(
+      "--ed-tab-outline-mask: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
+    );
+    expect(summaryHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--button-secondary-surface) 62%, transparent)",
+    );
+
+    const summaryOpenBlock = cssBlock(".ed-tab-summary-menu[open] > .ed-tab-summary");
+    expect(summaryOpenBlock).toContain("--ed-tab-outline-mask: var(--surface-inset)");
+    expect(summaryOpenBlock).toContain("border-color: var(--border-default)");
+    expect(summaryOpenBlock).toContain("border-bottom-color: var(--surface-inset)");
+    expect(summaryOpenBlock).toContain("background: var(--surface-inset)");
+
+    const panelBlock = cssBlock(".ed-tab-summary-panel {", { fromLast: true });
+    expect(panelBlock).toContain("border: 1px solid var(--popover-border)");
+    expect(panelBlock).toContain("border-radius: var(--radius-surface)");
+    expect(panelBlock).toContain("background: var(--popover-surface)");
+    expect(panelBlock).toContain("box-shadow: var(--popover-shadow)");
+
+    const itemBlock = cssBlock(".ed-tab-summary-item {");
+    expect(itemBlock).toContain("border: 1px solid transparent");
+    expect(itemBlock).toContain("border-radius: var(--radius-control)");
+    expect(itemBlock).toContain("color: var(--context-item-text)");
+
+    const itemHoverBlock = cssBlock(".ed-tab-summary-item:hover,");
+    expect(itemHoverBlock).toContain(
+      "border-color: color-mix(in oklch, var(--accent) 30%, var(--border-default))",
+    );
+    expect(itemHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--accent) 8%, transparent)",
+    );
+    expect(itemHoverBlock).toContain("color: var(--text-primary)");
+    expect(itemHoverBlock).toContain("outline: none");
+
+    const pointerFocusBlock = cssBlock(
+      ':root[data-input-modality="pointer"] .ed-tab-summary:focus',
+    );
+    expect(pointerFocusBlock).toContain("outline: 0");
   });
 
   it("lets the compact hidden-tab chooser escape clipped split panes while open", () => {
@@ -1535,9 +1984,252 @@ describe("Issue #1205 — editor tab truncation", () => {
     expect(stackingBlock).toContain("position: relative");
     expect(stackingBlock).toContain("z-index: var(--z-overlay)");
   });
+
+  it("uses the product drag affordance pattern for movable editor tabs", () => {
+    const draggableTabBlock = cssBlock('.ed-tab-hit[data-tab-draggable="true"],');
+    expect(draggableTabBlock).toContain("cursor: grab");
+
+    const tabHoverBlock = cssBlock('.ed-tab-hit[data-tab-draggable="true"]:hover');
+    expect(tabHoverBlock).toContain("background: transparent");
+    expect(tabHoverBlock).toContain("box-shadow: none");
+    expect(tabHoverBlock).not.toContain("var(--accent-line)");
+
+    const summaryHoverBlock = cssBlock('.ed-tab-summary-item[data-tab-draggable="true"]:hover');
+    expect(summaryHoverBlock).toContain(
+      "border-color: color-mix(in oklch, var(--accent) 30%, var(--border-default))",
+    );
+    expect(summaryHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--accent) 8%, transparent)",
+    );
+    expect(summaryHoverBlock).toContain("color: var(--text-primary)");
+    expect(summaryHoverBlock).toContain("box-shadow: none");
+
+    const heldTabBlock = cssBlock('.ed-tab[data-tab-held="true"]');
+    expect(heldTabBlock).toContain("--ed-tab-outline-mask: var(--surface-secondary)");
+    expect(heldTabBlock).toContain("background: var(--surface-secondary)");
+    expect(heldTabBlock).toContain("box-shadow:");
+    expect(heldTabBlock).toContain("0 1px 0 var(--ed-tab-outline-mask)");
+    expect(heldTabBlock).toContain("var(--card-shadow)");
+    expect(heldTabBlock).toContain("transform: translateY(1px)");
+    expect(heldTabBlock).not.toContain("var(--accent-line)");
+
+    const dragModeTransitionBlock = cssBlock(
+      '.editor-workspace[data-tab-dragging="true"] .ed-tab[data-tab-draggable="true"],',
+    );
+    expect(dragModeTransitionBlock).toContain(
+      '.editor-workspace[data-tab-dragging="true"] .ed-tab-hit[data-tab-draggable="true"]',
+    );
+    expect(dragModeTransitionBlock).toContain("transition: none");
+
+    expect(css).not.toContain('.ed-tab[data-tab-insert-before="true"]::before');
+    expect(css).not.toContain('.ed-tab[data-tab-insert-after="true"]::after');
+
+    const insertTabBlock = cssBlock('.ed-tab[data-tab-insert-before="true"],');
+    expect(insertTabBlock).toContain('.ed-tab:has(+ .ed-tab[data-tab-insert-before="true"])');
+    expect(insertTabBlock).toContain('.ed-tab[data-tab-insert-after="true"],');
+    expect(insertTabBlock).toContain('.ed-tab[data-tab-insert-after="true"] + .ed-tab');
+    expect(insertTabBlock).toContain(
+      "--ed-tab-outline-mask: color-mix(in oklch, var(--accent) 10%, var(--surface-inset))",
+    );
+    expect(insertTabBlock).toContain(
+      "--ed-tab-insert-outline: color-mix(in oklch, var(--accent) 62%, var(--border-default))",
+    );
+    expect(insertTabBlock).toContain(
+      "--ed-tab-insert-ring: color-mix(in oklch, var(--accent) 34%, var(--border-default))",
+    );
+    expect(insertTabBlock).toContain("border-top-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain("border-right-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain("border-bottom-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain("border-left-color: var(--ed-tab-insert-outline)");
+    expect(insertTabBlock).toContain(
+      "background: color-mix(in oklch, var(--accent) 9%, var(--surface-inset))",
+    );
+    expect(insertTabBlock).toContain("color: var(--text-primary)");
+    expect(insertTabBlock).toContain("0 1px 0 var(--ed-tab-outline-mask)");
+    expect(insertTabBlock).toContain("0 0 0 1px var(--ed-tab-insert-ring)");
+    expect(insertTabBlock).not.toContain("34%, transparent");
+
+    const heldTabHitBlock = cssBlock(
+      '.ed-tab[data-tab-held="true"] .ed-tab-hit[data-tab-draggable="true"]',
+    );
+    expect(heldTabHitBlock).toContain("cursor: grabbing");
+
+    const heldSummaryBlock = cssBlock('.ed-tab-summary-item[data-tab-held="true"] {');
+    expect(heldSummaryBlock).toContain("cursor: grabbing");
+    expect(heldSummaryBlock).toContain("background: var(--surface-secondary)");
+    expect(heldSummaryBlock).toContain("box-shadow: inset 0 0 0 1px var(--border-subtle)");
+    expect(heldSummaryBlock).toContain("transform: translateY(1px)");
+
+    const draggableRoleBlock = cssBlock('.ed-tab-hit[role="tab"][data-tab-draggable="true"]');
+    expect(draggableRoleBlock).toContain("cursor: grab");
+
+    const activeBlock = cssBlock('.ed-tab-hit[role="tab"][data-tab-draggable="true"]:active');
+    expect(activeBlock).toContain("cursor: grabbing");
+
+    const workspaceDragBlock = cssBlock('.editor-workspace[data-tab-dragging="true"],');
+    expect(workspaceDragBlock).toContain("cursor: grabbing !important");
+    const workspaceDragResizerBlock = cssBlock(
+      '.editor-workspace[data-tab-dragging="true"] .ed-sidebar-resizer,',
+    );
+    expect(workspaceDragResizerBlock).toContain("pointer-events: none");
+
+    const resizerLineBlock = cssBlock(".ed-sidebar-resizer::before,");
+    expect(resizerLineBlock).toContain(".ed-pane-resizer::before");
+    expect(resizerLineBlock).toContain('content: ""');
+    expect(resizerLineBlock).toContain("background: var(--border-subtle)");
+    expect(resizerLineBlock).toContain("opacity: 0");
+
+    const resizerButtonBlock = cssBlock(".ed-sidebar-resizer,");
+    expect(resizerButtonBlock).toContain("padding: 0");
+
+    const resizerHoverLineBlock = cssBlock(".ed-sidebar-resizer:hover::before,");
+    expect(resizerHoverLineBlock).toContain(".ed-pane-resizer:hover::before");
+    expect(resizerHoverLineBlock).toContain("background: var(--border-accent)");
+    expect(resizerHoverLineBlock).not.toContain("background: var(--accent)");
+    expect(resizerHoverLineBlock).toContain("opacity: 1");
+    expect(resizerHoverLineBlock).not.toContain("box-shadow:");
+
+    const paneBlock = cssBlock(".ed-pane {", { fromLast: true });
+    expect(paneBlock).toContain("border-radius: 0");
+    const singlePaneBlock = cssBlock(".ed-panes.single > .ed-pane:only-child");
+    expect(singlePaneBlock).toContain(
+      "border-radius: var(--radius-control) 0 0 var(--radius-control)",
+    );
+    const rowFirstPaneBlock = cssBlock(".ed-panes.row > .ed-pane:first-child");
+    expect(rowFirstPaneBlock).toContain("border-radius: var(--radius-control)");
+    const rowLastPaneBlock = cssBlock(".ed-panes.row > .ed-pane:last-child");
+    expect(rowLastPaneBlock).toContain(
+      "border-radius: var(--radius-control) 0 0 var(--radius-control)",
+    );
+    const columnFirstPaneBlock = cssBlock(".ed-panes.column > .ed-pane:first-child");
+    expect(columnFirstPaneBlock).toContain(
+      "border-radius: var(--radius-control) 0 0 var(--radius-control)",
+    );
+    const columnLastPaneBlock = cssBlock(".ed-panes.column > .ed-pane:last-child");
+    expect(columnLastPaneBlock).toContain(
+      "border-radius: var(--radius-control) 0 0 var(--radius-control)",
+    );
+    const paneEditorBlock = cssBlock(".ed-pane .editor {");
+    expect(paneEditorBlock).toContain("border-radius: inherit");
+    expect(paneEditorBlock).toContain("overflow: hidden");
+
+    const sidebarBlock = cssBlock(".ed-sidebar {");
+    expect(sidebarBlock).toContain(
+      "border-radius: 0 var(--radius-control) var(--radius-control) 0",
+    );
+    expect(sidebarBlock).toContain("overflow: hidden");
+
+    const sidebarResizerLineBlock = cssBlock(".ed-sidebar-resizer::before {");
+    expect(sidebarResizerLineBlock).toContain("width: 1px");
+    expect(sidebarResizerLineBlock).toContain("left: 50%");
+    expect(sidebarResizerLineBlock).toContain("top: 14px");
+    expect(sidebarResizerLineBlock).toContain("bottom: 14px");
+
+    const rowSplitResizerLineBlock = cssBlock(".ed-panes.row .ed-pane-resizer::before");
+    expect(rowSplitResizerLineBlock).toContain("width: 1px");
+    expect(rowSplitResizerLineBlock).toContain("left: 50%");
+    expect(rowSplitResizerLineBlock).toContain("top: 14px");
+    expect(rowSplitResizerLineBlock).toContain("bottom: 14px");
+
+    const columnSplitResizerLineBlock = cssBlock(".ed-panes.column .ed-pane-resizer::before");
+    expect(columnSplitResizerLineBlock).toContain("height: 1px");
+    expect(columnSplitResizerLineBlock).toContain("top: 50%");
+    expect(columnSplitResizerLineBlock).toContain("right: 14px");
+    expect(columnSplitResizerLineBlock).toContain("left: 14px");
+
+    expect(css).not.toContain(".ed-panes:has(> .ed-pane-resizer:hover) > :is(.ed-pane, .ed-panes)");
+    expect(css).not.toContain(
+      ".editor-workspace:has(> .ed-sidebar-resizer:hover) > :is(.ed-sidebar, .ed-main)",
+    );
+
+    const targetBlock = cssBlock('.ed-pane[data-tab-drop-target="true"]::after');
+    expect(targetBlock).toContain("border: 1px solid var(--accent-line)");
+    expect(targetBlock).toContain("background: color-mix(in oklch, var(--accent) 8%, transparent)");
+    expect(targetBlock).toContain("box-shadow:");
+    expect(targetBlock).toContain("var(--shadow-card)");
+
+    const ghostBlock = cssBlock(".ed-tab-drag-ghost {");
+    expect(ghostBlock).toContain("left: var(--ed-tab-drag-x, 0px)");
+    expect(ghostBlock).toContain("top: var(--ed-tab-drag-y, 0px)");
+    expect(ghostBlock).toContain(
+      "width: min(var(--ed-tab-drag-width, 240px), 320px, calc(100vw - 24px))",
+    );
+    expect(ghostBlock).toContain("border: 1px solid var(--border-subtle)");
+    expect(ghostBlock).toContain("border-bottom-color: transparent");
+    expect(ghostBlock).toContain("border-radius: 8px 8px 0 0");
+    expect(ghostBlock).toContain("background: var(--surface-inset)");
+    expect(ghostBlock).toContain("box-shadow: var(--popover-shadow)");
+    expect(ghostBlock).toContain("transform: translateY(-2px) scale(1)");
+    expect(ghostBlock).toContain("animation: none");
+
+    const ghostLabelBlock = cssBlock(".ed-tab-drag-ghost-label {");
+    expect(ghostLabelBlock).toContain("text-overflow: ellipsis");
+    expect(ghostLabelBlock).toContain("font-size: 11.5px");
+
+    const ghostCloseBlock = cssBlock(".ed-tab-drag-ghost-close {");
+    expect(ghostCloseBlock).toContain("width: 20px");
+    expect(ghostCloseBlock).toContain("color: var(--text-faint)");
+
+    const motionBlock = cssRule("@media (prefers-reduced-motion: no-preference) {", {
+      fromIndex: css.indexOf(".ed-tab-drag-ghost {"),
+    });
+    expect(motionBlock).toContain(".ed-tab-drag-ghost");
+    expect(motionBlock).toContain("animation: ed-tab-drag-lift 120ms ease-out both");
+  });
+
+  it("gives four-pane minimum editors enough horizontal room for visible panes", () => {
+    expect(cssBlock(".editor-workspace {")).toContain("container-type: inline-size");
+
+    const editorSectionStart = css.indexOf("/* ---------- WIDGET: EDITOR ---------- */");
+    expect(editorSectionStart).toBeGreaterThan(-1);
+    const denseSplitBlock = cssRuleFrom(css, "@container (max-width: 720px)", {
+      fromIndex: editorSectionStart,
+    });
+    expect(denseSplitBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-sidebar',
+    );
+    expect(denseSplitBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-sidebar-resizer',
+    );
+    expect(denseSplitBlock).toContain("display: none");
+    expect(denseSplitBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-main',
+    );
+    expect(denseSplitBlock).toContain("grid-column: 1 / -1");
+
+    const denseChromeBlock = cssRuleFrom(css, "@container (max-width: 820px)", {
+      fromIndex: editorSectionStart,
+    });
+    expect(denseChromeBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-tabs',
+    );
+    expect(denseChromeBlock).toContain("flex-wrap: nowrap");
+    expect(denseChromeBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-toolbar-actions',
+    );
+    expect(denseChromeBlock).toContain("padding: 4px 6px");
+    expect(denseChromeBlock).toContain(
+      '.editor-workspace[data-pane-count="4"]:not(.sidebar-collapsed) .ed-statusbar',
+    );
+    expect(denseChromeBlock).toContain("padding: 2px 6px");
+  });
 });
 
 describe("Issue #1424 — editor Monaco hover chrome", () => {
+  it("keeps Monaco diagnostic ruler marks inside the scrollbar-width rail", () => {
+    const verticalScrollbarBlock = cssBlock(".ed-host .monaco-editor .scrollbar.vertical {");
+    expect(verticalScrollbarBlock).toContain("background: var(--ed-bg)");
+
+    const verticalSliderBlock = cssBlock(".monaco-editor .scrollbar.vertical .slider {");
+    expect(verticalSliderBlock).toContain("min-width: 8px !important");
+
+    const overviewRulerBlock = cssBlock(
+      ".ed-host .monaco-editor canvas.decorationsOverviewRuler {",
+    );
+    expect(overviewRulerBlock).toContain("z-index: 12");
+    expect(overviewRulerBlock).toContain("pointer-events: none");
+  });
+
   it("skins diagnostic hovers with Keiko popover tokens inside an editor container query", () => {
     const hostBlock = cssBlock(".ed-host {");
     expect(hostBlock).toContain("container-type: inline-size");
@@ -1862,7 +2554,7 @@ describe("Issue #1292 — design-system token drift gate", () => {
   function declarationMap(source: string, selector: string): Record<string, string> {
     const rule = cssRuleFrom(source, selector).replace(/\/\*[\s\S]*?\*\//g, "");
     const entries: Array<[string, string]> = [];
-    for (const match of rule.matchAll(/^\s*(--[a-z0-9-]+|color-scheme)\s*:\s*([^;]+);/gm)) {
+    for (const match of rule.matchAll(/(--[a-z0-9-]+|color-scheme)\s*:\s*([^;]+);/g)) {
       const name = match[1];
       const value = match[2];
       if (name !== undefined && value !== undefined) entries.push([name, value.trim()]);
@@ -2113,7 +2805,7 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
 
   // AC: danger affordances consume --feedback-danger; never the bare primitive.
   it("routes danger affordances through --feedback-danger", () => {
-    const block = cssBlock("\n.bw-btn-danger {");
+    const block = cssBlockFrom(auditedProductCss, "\n.bw-btn-danger {");
     expect(block).toContain("var(--feedback-danger)");
     expect(block).not.toMatch(/var\(--danger\)/);
   });
@@ -2168,7 +2860,7 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
   });
 
   it("does not leave undefined --focus references in reusable-control focus states", () => {
-    expect(css).not.toContain("var(--focus)");
+    expect(auditedProductCss).not.toContain("var(--focus)");
 
     const jsonButtonFocus = cssBlock(".figma-view-json-btn:focus-visible,");
     expect(jsonButtonFocus).toContain("outline: var(--focus-width, 2px) solid var(--focus-ring)");
@@ -2360,7 +3052,7 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
     );
     // #1295-owned Light shadow/scrim rows + hand-built popover drop-shadows (new-no-token)
     const scrim = /(overlay|backdrop|scrim)/i;
-    const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const source = auditedProductCss.replace(/\/\*[\s\S]*?\*\//g, "");
     const ruleRe = /([^{}]+)\{([^{}]*)\}/g;
     let match: RegExpExecArray | null;
     let controlRulesChecked = 0;
@@ -2504,7 +3196,7 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
   });
 
   it("routes connector-graph nodes through the text token", () => {
-    const block = cssBlock("\n.connector-node {");
+    const block = cssBlockFrom(auditedProductCss, "\n.connector-node {");
     expect(block).toContain("color: var(--text-primary)");
     expect(block).not.toContain("var(--fg)");
   });
@@ -3380,27 +4072,29 @@ describe("Issue #1298 — input + navigation components (Design System 0.4.0)", 
   });
 
   it("pins the reference input demo name/role/value repairs", () => {
+    const compactInputsHtml = designSystemInputsHtml.replace(/\s+/g, " ");
     expect(designSystemInputsHtml).toContain('aria-labelledby="temperature-label"');
     expect(designSystemInputsHtml).toContain('aria-labelledby="max-tokens-label"');
     expect(designSystemInputsHtml).toContain('aria-labelledby="parallel-runs-label"');
     expect(designSystemInputsHtml).toContain('aria-labelledby="reviewers-label"');
     expect(designSystemInputsHtml).toContain('aria-label="Remove @maya"');
     expect(designSystemInputsHtml).toContain('"Remove " + v');
-    expect(designSystemInputsHtml).toContain(
+    expect(compactInputsHtml).toContain(
       'role="spinbutton" aria-label="Day" aria-valuemin="1" aria-valuemax="31" aria-valuenow="21"',
     );
-    expect(designSystemInputsHtml).toContain(
+    expect(compactInputsHtml).toContain(
       'role="spinbutton" aria-label="Month" aria-valuemin="1" aria-valuemax="12" aria-valuenow="6"',
     );
-    expect(designSystemInputsHtml).toContain(
+    expect(compactInputsHtml).toContain(
       'role="spinbutton" aria-label="Year" aria-valuemin="2026" aria-valuemax="2030" aria-valuenow="2026"',
     );
   });
 
   it("pins context-menu keyboard entry in the navigation reference demo", () => {
-    expect(designSystemNavHtml).toContain('role="menu" aria-label="Row actions"');
+    const compactNavHtml = designSystemNavHtml.replace(/\s+/g, " ");
+    expect(compactNavHtml).toContain('role="menu" aria-label="Row actions"');
     expect(designSystemNavHtml).toContain('aria-orientation="vertical"');
-    expect(designSystemNavHtml).toContain('role="menuitem" tabindex="0"');
+    expect(compactNavHtml).toContain('role="menuitem" tabindex="0"');
   });
 
   it("makes the #1298 evidence harness prove focus and responsive viewport coverage", () => {

@@ -673,11 +673,7 @@ export interface EditorContextEntry {
 }
 
 export type EditorContextOmissionReason =
-  | "unavailable"
-  | "not-ready"
-  | "denied"
-  | "too-expensive"
-  | "out-of-budget";
+  "unavailable" | "not-ready" | "denied" | "too-expensive" | "out-of-budget";
 
 export interface EditorContextOmission {
   readonly sourceKind: EditorContextSourceKind;

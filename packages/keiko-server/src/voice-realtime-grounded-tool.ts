@@ -27,7 +27,6 @@ import type { Chat, ChatMessage } from "./store/index.js";
 const MAX_BODY_BYTES = 128_000;
 const MAX_TEXT_CHARS = 16_000;
 const MAX_CALL_ID_CHARS = 200;
-const MAX_CACHE_ENTRIES = 128;
 const SAFE_CALL_ID = /^[\x21-\x7e]+$/;
 
 class BodyTooLargeError extends Error {
@@ -73,7 +72,6 @@ export interface RealtimeGroundedToolResponse {
   readonly memory?: ConversationMemoryResultWire | undefined;
 }
 
-const responseCache = new Map<string, RealtimeGroundedToolResponse>();
 const responseInFlight = new Map<string, Promise<RealtimeGroundedToolResponse | RouteResult>>();
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -109,7 +107,9 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
-async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
+async function readJsonObject(
+  req: IncomingMessage,
+): Promise<Record<string, unknown> | RouteResult> {
   let raw: string;
   try {
     raw = await readBody(req);
@@ -149,10 +149,16 @@ function readRequiredString(
   return value;
 }
 
-function readOptionalText(body: Record<string, unknown>, key: string): string | RouteResult | undefined {
+function readOptionalText(
+  body: Record<string, unknown>,
+  key: string,
+): string | RouteResult | undefined {
   if (body[key] === undefined) return undefined;
   if (typeof body[key] !== "string") {
-    return { status: 400, body: errorBody("BAD_REQUEST", `${key} must be a string when provided.`) };
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", `${key} must be a string when provided.`),
+    };
   }
   const value = body[key].trim();
   if (value.length === 0 || value.length > MAX_TEXT_CHARS) {
@@ -189,17 +195,17 @@ function normalizeText(text: string): string {
   return text.replace(/\s+/gu, " ").trim().toLowerCase();
 }
 
-function cacheKey(request: RealtimeGroundedToolRequest): string {
-  return `${request.chatId}:${request.callId}:${normalizeText(request.query)}`;
+function retrievalText(request: RealtimeGroundedToolRequest): string {
+  return stripUnsafeFormatChars(request.userTranscript ?? request.query).trim();
 }
 
-function rememberResponse(key: string, response: RealtimeGroundedToolResponse): void {
-  responseCache.set(key, response);
-  while (responseCache.size > MAX_CACHE_ENTRIES) {
-    const first = responseCache.keys().next().value;
-    if (first === undefined) return;
-    responseCache.delete(first);
-  }
+function inFlightKey(request: RealtimeGroundedToolRequest, projectPath: string): string {
+  return JSON.stringify([
+    projectPath,
+    request.chatId,
+    request.callId,
+    normalizeText(retrievalText(request)),
+  ]);
 }
 
 function realtimeGroundedVoiceAvailable(resolution: VoiceCapabilityResolution): boolean {
@@ -272,9 +278,7 @@ function summarizeKnowledgeCitation(
   };
 }
 
-function summarizeCitations(
-  answer: GroundedAnswer,
-): RealtimeGroundedToolOutput["citations"] {
+function summarizeCitations(answer: GroundedAnswer): RealtimeGroundedToolOutput["citations"] {
   if (answer.groundingKind === "local-knowledge") {
     return answer.citations.slice(0, 8).map(summarizeKnowledgeCitation);
   }
@@ -314,7 +318,10 @@ function isGroundedAnswer(value: unknown): value is GroundedAnswer {
   );
 }
 
-function messagesForAnswer(deps: UiHandlerDeps, answer: GroundedAnswer): readonly ChatMessage[] | RouteResult {
+function messagesForAnswer(
+  deps: UiHandlerDeps,
+  answer: GroundedAnswer,
+): readonly ChatMessage[] | RouteResult {
   const user = deps.store.findMessageById(answer.userMessageId);
   const assistant = deps.store.findMessageById(answer.assistantMessageId);
   if (user === undefined || assistant === undefined) {
@@ -346,6 +353,7 @@ async function buildMemory(
         content: message.content,
         timestamp: message.timestamp,
       })),
+      modelId: request.modelId,
       memory: request.memory,
     },
     chat,
@@ -359,7 +367,7 @@ async function buildRealtimeGroundedToolResponse(
   projectPath: string,
   chat: Chat,
 ): Promise<RealtimeGroundedToolResponse | RouteResult> {
-  const content = stripUnsafeFormatChars(request.userTranscript ?? request.query).trim();
+  const content = retrievalText(request);
   const grounded = await runGroundedAskInput(
     {
       chatId: request.chatId,
@@ -395,17 +403,13 @@ export async function handleRealtimeGroundedVoiceTool(
   if (isRouteResult(body)) return body;
   const request = parseRequest(body);
   if (isRouteResult(request)) return request;
-  const key = cacheKey(request);
-  const cached = responseCache.get(key);
-  if (cached !== undefined) {
-    return { status: 200, body: cached };
-  }
   const capability = validateVoiceToolCapability(deps);
   if (capability !== undefined) return capability;
   const projectPath = normalizeProjectPath(request.projectPath, deps);
   if (isRouteResult(projectPath)) return projectPath;
   const chat = findValidatedChat(deps, projectPath, request.chatId);
   if (isRouteResult(chat)) return chat;
+  const key = inFlightKey(request, projectPath);
   const inFlight = responseInFlight.get(key);
   if (inFlight !== undefined) {
     const result = await inFlight;
@@ -417,6 +421,5 @@ export async function handleRealtimeGroundedVoiceTool(
     responseInFlight.delete(key);
   });
   if (isRouteResult(response)) return response;
-  rememberResponse(key, response);
   return { status: 200, body: response };
 }

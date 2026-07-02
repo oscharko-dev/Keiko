@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 
 import type { DocumentId, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
-import { chunkParsedUnit } from "./chunker.js";
+import { chunkParsedUnit, chunkingStrategyKey } from "./chunker.js";
+import {
+  CONSERVATIVE_TOKENIZER_ID,
+  QWEN3_SENTENCEPIECE_TOKENIZER_ID,
+  type LocalKnowledgeTokenizer,
+} from "./types.js";
 
 const DOC_ID = "doc-1" as DocumentId;
 
@@ -30,6 +35,19 @@ function sha256Hex(text: string): string {
 }
 
 describe("chunkParsedUnit — pure", () => {
+  it("includes the active tokenizer identity in the strategy key", () => {
+    const qwenTokenizer: LocalKnowledgeTokenizer = {
+      identity: QWEN3_SENTENCEPIECE_TOKENIZER_ID,
+      kind: "tokenizer",
+      countTokens: (text) => text.length,
+    };
+
+    expect(chunkingStrategyKey(undefined)).toContain(`tokenizer=${CONSERVATIVE_TOKENIZER_ID}`);
+    expect(chunkingStrategyKey({ tokenizer: qwenTokenizer })).toContain(
+      `tokenizer=${QWEN3_SENTENCEPIECE_TOKENIZER_ID}`,
+    );
+  });
+
   it("emits exactly one chunk for a unit smaller than maxTokens", () => {
     const text = "Hello world.";
     const unit = pageUnit(0, text.length);
@@ -52,8 +70,7 @@ describe("chunkParsedUnit — pure", () => {
   });
 
   it("splits a unit larger than maxTokens with overlap", () => {
-    // maxTokens=10 → maxChars=40. overlapTokens=2 → overlapChars=8. stride=32.
-    const text = "a".repeat(120);
+    const text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu ".repeat(6);
     const unit = pageUnit(0, text.length);
     const chunks = chunkParsedUnit(unit, text, {
       maxTokens: 10,
@@ -61,14 +78,68 @@ describe("chunkParsedUnit — pure", () => {
       overlapTokens: 2,
     });
     expect(chunks.length).toBeGreaterThan(1);
-    // Each non-final chunk has length 40; positions advance by stride=32.
     expect(chunks[0]?.characterStart).toBe(0);
-    expect(chunks[0]?.characterEnd).toBe(40);
-    expect(chunks[1]?.characterStart).toBe(32);
-    expect(chunks[1]?.characterEnd).toBe(72);
-    // Final chunk ends exactly at the unit boundary, never beyond.
+    for (const chunk of chunks) {
+      expect(chunk.tokenCount).toBeLessThanOrEqual(10);
+      expect(text.slice(chunk.characterStart, chunk.characterEnd).length).toBeGreaterThan(0);
+    }
+    const second = chunks[1];
+    expect(second?.characterStart).toBeGreaterThan(0);
+    expect(second?.characterStart).toBeLessThan(chunks[0]?.characterEnd ?? 0);
     const last = chunks[chunks.length - 1];
-    expect(last?.characterEnd).toBe(120);
+    expect(last?.characterEnd).toBe(text.length);
+  });
+
+  it("prefers paragraph and sentence boundaries for English and German prose", () => {
+    const english =
+      "First paragraph explains the scope. It ends cleanly here.\n\n" +
+      "Second paragraph starts with a new topic. It also has a complete sentence.";
+    const englishChunks = chunkParsedUnit(pageUnit(0, english.length), english, {
+      maxTokens: 18,
+      minTokens: 0,
+      overlapTokens: 0,
+    });
+    expect(englishChunks.length).toBeGreaterThan(1);
+    expect(english.slice(englishChunks[0]?.characterStart, englishChunks[0]?.characterEnd)).toMatch(
+      /\n\s*\n\s*$/u,
+    );
+
+    const german =
+      "Die erste Passage beschreibt die Überweisung. Sie endet an einer Satzgrenze. " +
+      "Der nächste Abschnitt erklärt Zahlungsziele und Fristen.";
+    const germanChunks = chunkParsedUnit(pageUnit(0, german.length), german, {
+      maxTokens: 14,
+      minTokens: 0,
+      overlapTokens: 0,
+    });
+    expect(germanChunks.length).toBeGreaterThan(1);
+    expect(german.slice(germanChunks[0]?.characterStart, germanChunks[0]?.characterEnd)).toMatch(
+      /[.!?]\s*$/u,
+    );
+  });
+
+  it("does not begin or end chunks inside a word when whitespace boundaries are available", () => {
+    const text = "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima. ".repeat(
+      5,
+    );
+    const unit = pageUnit(0, text.length);
+    const chunks = chunkParsedUnit(unit, text, {
+      maxTokens: 9,
+      minTokens: 0,
+      overlapTokens: 1,
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      const beforeStart = text[chunk.characterStart - 1] ?? " ";
+      const atStart = text[chunk.characterStart] ?? " ";
+      const beforeEnd = text[chunk.characterEnd - 1] ?? " ";
+      const atEnd = text[chunk.characterEnd] ?? " ";
+      expect(/\w/u.test(beforeStart) && /\w/u.test(atStart)).toBe(false);
+      expect(/\w/u.test(beforeEnd) && /\w/u.test(atEnd)).toBe(false);
+      expect(text.slice(chunk.characterStart, chunk.characterEnd)).toBe(
+        text.substring(chunk.characterStart, chunk.characterEnd),
+      );
+    }
   });
 
   it("produces disjoint chunks when overlapTokens=0", () => {
@@ -91,6 +162,39 @@ describe("chunkParsedUnit — pure", () => {
     }
   });
 
+  it("chunks a long German Markdown document with headings, table text, and paragraphs on boundaries", () => {
+    const paragraph =
+      "Die Überweisung wird im Fachprozess geprüft. Zahlungsziele, Fristen und Statuswerte bleiben nachvollziehbar.";
+    const table =
+      "| Feld | Bedeutung |\n| --- | --- |\n| Zahlungsziel | Datum der Fälligkeit |\n| Status | Bearbeitungsstand |\n";
+    const text = Array.from({ length: 18 }, (_unused, i) =>
+      [`## Abschnitt ${String(i + 1)}`, paragraph, table, paragraph].join("\n\n"),
+    ).join("\n\n");
+    const chunks = chunkParsedUnit(pageUnit(0, text.length), text, {
+      maxTokens: 48,
+      minTokens: 0,
+      overlapTokens: 4,
+    });
+
+    expect(chunks.length).toBeGreaterThan(3);
+    expect(chunks[0]?.characterStart).toBe(0);
+    expect(chunks[chunks.length - 1]?.characterEnd).toBe(text.length);
+    expect(chunks.some((chunk) => text.slice(chunk.characterStart, chunk.characterEnd).includes("| Feld |"))).toBe(
+      true,
+    );
+    for (const chunk of chunks) {
+      const excerpt = text.slice(chunk.characterStart, chunk.characterEnd);
+      expect(excerpt).toBe(text.substring(chunk.characterStart, chunk.characterEnd));
+      expect(chunk.tokenCount).toBeLessThanOrEqual(48);
+      const beforeStart = text[chunk.characterStart - 1] ?? " ";
+      const atStart = text[chunk.characterStart] ?? " ";
+      const beforeEnd = text[chunk.characterEnd - 1] ?? " ";
+      const atEnd = text[chunk.characterEnd] ?? " ";
+      expect(/\p{L}/u.test(beforeStart) && /\p{L}/u.test(atStart)).toBe(false);
+      expect(/\p{L}/u.test(beforeEnd) && /\p{L}/u.test(atEnd)).toBe(false);
+    }
+  });
+
   it("bounds chunks by character count for hostile no-whitespace long input", () => {
     // 100 KB single line, no whitespace. The chunker MUST still emit bounded slices.
     const text = "z".repeat(100_000);
@@ -101,9 +205,8 @@ describe("chunkParsedUnit — pure", () => {
       overlapTokens: 0,
     });
     expect(chunks.length).toBeGreaterThan(1);
-    // No chunk exceeds the character budget (maxTokens=400 → 1600 chars).
     for (const chunk of chunks) {
-      expect(chunk.characterEnd - chunk.characterStart).toBeLessThanOrEqual(1600);
+      expect(chunk.tokenCount).toBeLessThanOrEqual(400);
     }
     // Coverage: chunks span [0, text.length].
     expect(chunks[0]?.characterStart).toBe(0);

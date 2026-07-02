@@ -22,8 +22,21 @@ describe("checkUiStaticJavaScriptCompatibility", () => {
     await writeFile(join(chunkDir, "chunk.js"), source, "utf8");
   }
 
+  async function writeWorker(source) {
+    root = await mkdtemp(join(tmpdir(), "keiko-ui-static-compat-"));
+    const workerDir = join(root, "_next", "static", "media");
+    await mkdir(workerDir, { recursive: true });
+    await writeFile(join(workerDir, "editor.worker.abc123.js"), source, "utf8");
+  }
+
   it("allows dynamic import used by PDF.js worker and fallback loading", async () => {
     await writeChunk("async function loadWorker(src) { return import(src); }\n");
+
+    await expect(checkUiStaticJavaScriptCompatibility(root)).resolves.toBeUndefined();
+  });
+
+  it("allows emitted module worker assets with top-level import/export", async () => {
+    await writeWorker("import { work } from './chunk.js';\nexport { work };\n");
 
     await expect(checkUiStaticJavaScriptCompatibility(root)).resolves.toBeUndefined();
   });

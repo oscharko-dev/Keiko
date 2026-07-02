@@ -27,11 +27,7 @@ export interface ValidateProjectPathOptions {
 }
 
 export type PathShape =
-  | "posix-absolute"
-  | "windows-drive"
-  | "windows-unc"
-  | "windows-device"
-  | "relative";
+  "posix-absolute" | "windows-drive" | "windows-unc" | "windows-device" | "relative";
 
 // Pure, host-independent classifier. Inspects only the input string so the same call returns the
 // same shape on Linux, macOS, and Windows hosts.

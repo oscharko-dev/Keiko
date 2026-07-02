@@ -21,6 +21,7 @@ import {
   rejectMemoryProposal,
   unpinMemory,
 } from "@/lib/memory-api";
+import { useTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
@@ -50,6 +51,7 @@ export function MemoryActions({
   deleteImpl = deleteMemory,
   correctImpl = correctMemory,
 }: MemoryActionsProps): ReactNode {
+  const t = useTranslate();
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -112,10 +114,13 @@ export function MemoryActions({
     });
   }, [archiveImpl, onRecordChange, record.id, run]);
 
-  const handleCorrectionSaved = useCallback((correction: MemoryRecord): void => {
-    setShowCorrect(false);
-    setNotice(`Correction submitted for review: ${correction.body}`);
-  }, []);
+  const handleCorrectionSaved = useCallback(
+    (correction: MemoryRecord): void => {
+      setShowCorrect(false);
+      setNotice(t("memoria.actions.correctionSubmitted", { body: correction.body }));
+    },
+    [t],
+  );
 
   const isProposed = record.status === "proposed";
   const canArchive =
@@ -126,7 +131,7 @@ export function MemoryActions({
   const isForgotten = record.status === "forgotten";
 
   return (
-    <div className="mc-actions" role="group" aria-label="Memory actions">
+    <div className="mc-actions" role="group" aria-label={t("memoria.actions")}>
       {isProposed ? (
         <>
           <button
@@ -135,9 +140,9 @@ export function MemoryActions({
             aria-disabled={busy !== null}
             aria-busy={busy === "accept"}
             onClick={handleAccept}
-            aria-label="Approve this memory proposal"
+            aria-label={t("memoria.actions.approveProposal")}
           >
-            {busy === "accept" ? "Approving…" : "Approve"}
+            {busy === "accept" ? t("memoria.approving") : t("memoria.approve")}
           </button>
           <button
             type="button"
@@ -145,9 +150,9 @@ export function MemoryActions({
             aria-disabled={busy !== null}
             aria-busy={busy === "reject"}
             onClick={handleReject}
-            aria-label="Reject this memory proposal"
+            aria-label={t("memoria.actions.rejectProposal")}
           >
-            {busy === "reject" ? "Rejecting…" : "Reject"}
+            {busy === "reject" ? t("memoria.rejecting") : t("memoria.reject")}
           </button>
         </>
       ) : null}
@@ -164,9 +169,9 @@ export function MemoryActions({
               setNotice(null);
               setShowEdit(true);
             }}
-            aria-label="Edit memory body, tags, or sensitivity"
+            aria-label={t("memoria.actions.editLabel")}
           >
-            Edit
+            {t("memoria.actions.edit")}
           </button>
           <button
             type="button"
@@ -178,9 +183,9 @@ export function MemoryActions({
               setNotice(null);
               setShowCorrect(true);
             }}
-            aria-label="Create a correction proposal for this memory"
+            aria-label={t("memoria.actions.correctLabel")}
           >
-            Correct
+            {t("memoria.actions.correct")}
           </button>
         </>
       ) : null}
@@ -193,9 +198,9 @@ export function MemoryActions({
             aria-disabled={busy !== null}
             aria-busy={busy === "unpin"}
             onClick={handleUnpin}
-            aria-label="Unpin this memory"
+            aria-label={t("memoria.actions.unpinLabel")}
           >
-            {busy === "unpin" ? "Unpinning…" : "Unpin"}
+            {busy === "unpin" ? t("memoria.actions.unpinning") : t("memoria.actions.unpin")}
           </button>
         ) : (
           <button
@@ -204,9 +209,9 @@ export function MemoryActions({
             aria-disabled={busy !== null}
             aria-busy={busy === "pin"}
             onClick={handlePin}
-            aria-label="Pin this memory for priority retrieval"
+            aria-label={t("memoria.actions.pinLabel")}
           >
-            {busy === "pin" ? "Pinning…" : "Pin"}
+            {busy === "pin" ? t("memoria.actions.pinning") : t("memoria.actions.pin")}
           </button>
         )
       ) : null}
@@ -218,9 +223,9 @@ export function MemoryActions({
           aria-disabled={busy !== null}
           aria-busy={busy === "archive"}
           onClick={handleArchive}
-          aria-label="Archive this memory"
+          aria-label={t("memoria.actions.archiveLabel")}
         >
-          {busy === "archive" ? "Archiving…" : "Archive"}
+          {busy === "archive" ? t("memoria.archiving") : t("memoria.actions.archive")}
         </button>
       ) : null}
 
@@ -235,9 +240,9 @@ export function MemoryActions({
             setNotice(null);
             setShowForget(true);
           }}
-          aria-label="Forget this memory permanently"
+          aria-label={t("memoria.forget.title")}
         >
-          Forget
+          {t("memoria.forgetMemory")}
         </button>
       ) : null}
 
@@ -251,9 +256,9 @@ export function MemoryActions({
           setNotice(null);
           setShowDelete(true);
         }}
-        aria-label="Delete this memory record"
+        aria-label={t("memoria.delete.title")}
       >
-        Delete
+        {t("memoria.deleteRecord")}
       </button>
 
       {error !== null ? (

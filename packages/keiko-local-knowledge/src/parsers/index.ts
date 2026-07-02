@@ -35,9 +35,9 @@ export { pdfParser } from "./pdf-parser.js";
 export { docxParser } from "./docx-parser.js";
 export { xlsxParser } from "./xlsx-parser.js";
 
-// Convenience: a registry pre-populated with every shipped adapter. Resolution order is
-// JSON → CSV/TSV → HTML → text. Text registers last because its `matches` predicate is
-// the most permissive (accepts any `text/*`); registering it first would shadow CSV and HTML.
+// Convenience: a registry pre-populated with every shipped adapter. OCR is opt-in because it
+// depends on a runtime engine; text registers last because its `matches` predicate is the most
+// permissive (accepts any `text/*`), so it must not shadow structured adapters.
 import { csvParser } from "./csv-parser.js";
 import { docxParser } from "./docx-parser.js";
 import { htmlParser } from "./html-parser.js";
@@ -47,8 +47,16 @@ import { createParserRegistry, registerParser } from "./registry.js";
 import { textParser } from "./text-parser.js";
 import type { ParserRegistry } from "./types.js";
 import { xlsxParser } from "./xlsx-parser.js";
+import { createOcrPipelineParser } from "./ocr/ocr-pipeline-parser.js";
+import type { OcrAdapter } from "./ocr/types.js";
 
-export function createDefaultParserRegistry(): ParserRegistry {
+export interface DefaultParserRegistryOptions {
+  readonly ocrAdapter?: OcrAdapter;
+}
+
+export function createDefaultParserRegistry(
+  options: DefaultParserRegistryOptions = {},
+): ParserRegistry {
   let registry = createParserRegistry();
   registry = registerParser(registry, jsonParser);
   registry = registerParser(registry, csvParser);
@@ -56,6 +64,9 @@ export function createDefaultParserRegistry(): ParserRegistry {
   registry = registerParser(registry, pdfParser);
   registry = registerParser(registry, docxParser);
   registry = registerParser(registry, xlsxParser);
+  if (options.ocrAdapter !== undefined) {
+    registry = registerParser(registry, createOcrPipelineParser(options.ocrAdapter));
+  }
   // Text parser is registered last among the real adapters because its `matches` predicate
   // is the most permissive (it accepts any `text/*` media type), so it must not shadow the
   // structured adapters.
@@ -67,9 +78,18 @@ export function createDefaultParserRegistry(): ParserRegistry {
 export {
   nullOcrAdapter,
   createOcrPipelineParser,
+  createOcrAdapterFromEnv,
+  createTesseractOcrAdapter,
+  resolveOcrRuntimeFromEnv,
   type OcrAdapter,
   type OcrPageResult,
   type OcrPipelineAdapter,
+  type OcrRuntimeEngine,
+  type OcrRuntimeResolution,
+  type TesseractCommandRequest,
+  type TesseractCommandResult,
+  type TesseractCommandRunner,
+  type TesseractOcrAdapterOptions,
 } from "./ocr/index.js";
 
 // Bounded large-document ingestion parser layer (Epic #1160, Issue #1286).

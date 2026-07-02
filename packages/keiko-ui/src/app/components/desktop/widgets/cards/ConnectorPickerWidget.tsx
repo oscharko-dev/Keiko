@@ -13,6 +13,7 @@
 // Color contrast follows the design system tokens (ink on surface — all ≥4.5:1).
 
 import { useEffect, useState, type ReactNode } from "react";
+import styles from "./ConnectorPickerWidget.module.css";
 import {
   fetchCapsules,
   fetchCapsuleSets,
@@ -192,9 +193,7 @@ function KnowledgeConnectorNode({
         <h2 className="connector-node-title" title={label}>
           {label}
         </h2>
-        <p className="connector-node-meta">
-          Local Knowledge capsule
-        </p>
+        <p className="connector-node-meta">Local Knowledge capsule</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
         Manage
@@ -306,7 +305,7 @@ export function ConnectorPickerWidget({
   }
 
   return (
-    <div className="connector-picker">
+    <div className={`connector-picker ${styles.lazyWidgetScope}`}>
       <SelectedBadge
         capsules={capsules}
         capsuleSets={capsuleSets}

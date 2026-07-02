@@ -26,7 +26,7 @@ import {
   chunkingStrategyKey,
   resolveChunkingOptions,
 } from "../chunking/chunker.js";
-import type { ChunkingOptions } from "../chunking/types.js";
+import type { ChunkingOptions, LocalKnowledgeTokenizer } from "../chunking/types.js";
 import { composeChunkId, rowToParsedUnit } from "../chunking/chunker-runner.js";
 import {
   deleteChunksForDocument,
@@ -37,6 +37,17 @@ import { readDocumentTextSpan } from "../discovery/persist.js";
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
+import {
+  contextualizeChunk,
+  contextualRetrievalStrategyKey,
+  type ContextualRetrievalOptions,
+} from "./contextual-retrieval.js";
+import {
+  persistChunkIndexedText,
+  readStoredAugmentedText,
+  type StoredChunkIndexedTextColumns,
+} from "./chunk-indexed-text-persist.js";
+import { upsertLexicalRows } from "./lexical-index-persist.js";
 import type { ChunkToEmbed, EmbedBatchResult } from "./types.js";
 
 export interface BoundedChunkParams {
@@ -125,7 +136,8 @@ function chunkOneUnit(
   const end = row.character_end ?? start;
   const unitText =
     readDocumentTextSpan(db, cipher, params.capsuleId, params.documentId, start, end) ?? "";
-  const rebased = rebaseUnit(rowToParsedUnit(row, params.documentId, cipher), unitText.length);
+  const unit = rowToParsedUnit(row, params.documentId, cipher);
+  const rebased = rebaseUnit(unit, unitText.length);
   const chunks = chunkParsedUnit(
     rebased,
     unitText,
@@ -133,8 +145,13 @@ function chunkOneUnit(
   );
   let next = orderIndex;
   for (const chunk of chunks) {
+    const documentChunk = {
+      ...chunk,
+      characterStart: start + chunk.characterStart,
+      characterEnd: start + chunk.characterEnd,
+    };
     insertChunkRow(db, {
-      id: composeChunkId(params.documentId, row.id, next),
+      id: composeChunkId(params.documentId, unit, documentChunk),
       capsuleId: params.capsuleId,
       sourceId: params.sourceId,
       documentId: params.documentId,
@@ -143,8 +160,8 @@ function chunkOneUnit(
       tokenCount: chunk.tokenCount,
       safeExcerptHash: chunk.safeExcerptHash,
       chunkingStrategyVersion: ctx.strategyKey,
-      characterStart: start + chunk.characterStart,
-      characterEnd: start + chunk.characterEnd,
+      characterStart: documentChunk.characterStart,
+      characterEnd: documentChunk.characterEnd,
     });
     next += 1;
   }
@@ -200,15 +217,21 @@ interface ChunkOffsetRow {
   readonly id: string;
   readonly source_id: string;
   readonly order_index: number;
+  readonly safe_excerpt_hash: string;
   readonly char_start: number | null;
   readonly char_end: number | null;
+  readonly contextual_retrieval_key: string | null;
+  readonly context_prefix: string | null;
+  readonly augmented_text: string | null;
+  readonly context_status: string | null;
 }
 
 // Selects the next batch of chunks that do NOT yet have a vector. The missing-vector gate is the
 // resume mechanism: it self-heals across an interrupted embed, an externally deleted vector, and an
 // incompatible-checkpoint restart (which deletes vectors first), without trusting a fragile cursor.
 const SELECT_BOUNDED_CHUNKS_SQL = [
-  "SELECT c.id, c.source_id, c.order_index,",
+  "SELECT c.id, c.source_id, c.order_index, c.safe_excerpt_hash,",
+  "  c.contextual_retrieval_key, c.context_prefix, c.augmented_text, c.context_status,",
   "  COALESCE(c.character_start, pu.character_start) AS char_start,",
   "  COALESCE(c.character_end, pu.character_end) AS char_end",
   "FROM chunks AS c",
@@ -239,8 +262,10 @@ export interface BoundedEmbedDeps {
   readonly concurrency: number;
   readonly now: () => number;
   readonly idSource: () => string;
+  readonly tokenizer?: LocalKnowledgeTokenizer;
   readonly signal?: AbortSignal;
   readonly policy?: LargeDocumentResourcePolicy;
+  readonly contextualRetrieval?: ContextualRetrievalOptions;
   // Called after each successfully embedded batch with the new embedded-chunk cursor and id, so the
   // caller can advance the durable checkpoint between model calls.
   readonly onBatch?: (cursor: number, lastChunkId: ChunkId) => void;
@@ -262,8 +287,36 @@ function nextBatch(db: DatabaseSync, deps: BoundedEmbedDeps): readonly ChunkOffs
   }) as unknown as readonly ChunkOffsetRow[];
 }
 
-function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): ChunkToEmbed {
-  const text =
+function storedColumns(row: ChunkOffsetRow): StoredChunkIndexedTextColumns {
+  return {
+    contextual_retrieval_key: row.contextual_retrieval_key,
+    context_prefix: row.context_prefix,
+    augmented_text: row.augmented_text,
+    context_status: row.context_status,
+  };
+}
+
+function expectedContextualKey(deps: BoundedEmbedDeps, row: ChunkOffsetRow): string {
+  return `${contextualRetrievalStrategyKey(deps.contextualRetrieval)}|chunk=${row.safe_excerpt_hash}`;
+}
+
+// eslint-disable-next-line max-lines-per-function
+async function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): Promise<ChunkToEmbed> {
+  const stored = readStoredAugmentedText(
+    deps.store._internal.contentCipher,
+    storedColumns(row),
+    expectedContextualKey(deps, row),
+  );
+  if (stored !== undefined) {
+    return {
+      id: row.id as ChunkId,
+      capsuleId: deps.capsuleId,
+      sourceId: row.source_id as KnowledgeSourceId,
+      documentId: deps.documentId,
+      text: stored,
+    };
+  }
+  const originalText =
     readDocumentTextSpan(
       deps.store._internal.db,
       deps.store._internal.contentCipher,
@@ -272,12 +325,32 @@ function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): ChunkToEmb
       row.char_start ?? 0,
       row.char_end ?? 0,
     ) ?? "";
+  const result = await contextualizeChunk(
+    {
+      documentId: deps.documentId,
+      chunkId: row.id as ChunkId,
+      originalText,
+      safeExcerptHash: row.safe_excerpt_hash,
+      documentText: originalText,
+      ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    },
+    deps.contextualRetrieval,
+  );
+  persistChunkIndexedText(deps.store._internal.db, deps.store._internal.contentCipher, {
+    capsuleId: deps.capsuleId,
+    chunkId: row.id as ChunkId,
+    contextualRetrievalKey: result.contextualRetrievalKey,
+    contextPrefix: result.contextPrefix,
+    augmentedText: result.augmentedText,
+    contextStatus: result.status,
+    updatedAt: deps.now(),
+  });
   return {
     id: row.id as ChunkId,
     capsuleId: deps.capsuleId,
     sourceId: row.source_id as KnowledgeSourceId,
     documentId: deps.documentId,
-    text,
+    text: result.augmentedText,
   };
 }
 
@@ -290,6 +363,7 @@ function embedOptions(deps: BoundedEmbedDeps): Parameters<typeof embedChunkBatch
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     now: deps.now,
     idSource: deps.idSource,
+    ...(deps.tokenizer !== undefined ? { tokenizer: deps.tokenizer } : {}),
   };
 }
 
@@ -308,7 +382,28 @@ async function embedOneBatch(
   rows: readonly ChunkOffsetRow[],
   acc: EmbedAccumulator,
 ): Promise<boolean> {
-  const batch = rows.map((row) => toChunkToEmbed(deps, row));
+  const batch: ChunkToEmbed[] = [];
+  try {
+    for (const row of rows) batch.push(await toChunkToEmbed(deps, row));
+  } catch {
+    acc.errors.push({
+      code: "CONTEXTUAL_RETRIEVAL_FAILED",
+      message: "contextual retrieval generation failed",
+    });
+    return false;
+  }
+  upsertLexicalRows(
+    db,
+    batch.map((chunk) => ({
+      capsuleId: chunk.capsuleId,
+      sourceId: chunk.sourceId,
+      documentId: chunk.documentId,
+      chunkId: chunk.id,
+      text: chunk.text,
+      exactText: chunk.text,
+      updatedAt: deps.now(),
+    })),
+  );
   const result: EmbedBatchResult = await embedChunkBatch(batch, embedOptions(deps));
   acc.vectorCount += result.vectors.length;
   acc.errors.push(...result.errors);

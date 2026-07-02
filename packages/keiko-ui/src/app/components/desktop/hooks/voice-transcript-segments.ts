@@ -57,13 +57,7 @@ export type { VoiceClock };
 // so deriving it from text would defeat the no-side-channel guarantee, exactly as the protocol's opaque
 // `sessionId` / `idempotencyKey` are content-free by contract (voice-protocol.ts).
 export type VoiceTranscriptInputKind =
-  | "partial"
-  | "stabilize"
-  | "commit"
-  | "correct"
-  | "discard"
-  | "redact"
-  | "providerError";
+  "partial" | "stabilize" | "commit" | "correct" | "discard" | "redact" | "providerError";
 
 export type VoiceTranscriptInput =
   | { readonly kind: "partial"; readonly id: string; readonly seq: number; readonly text: string }

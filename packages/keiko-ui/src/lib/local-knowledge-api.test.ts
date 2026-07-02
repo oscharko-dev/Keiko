@@ -10,10 +10,14 @@ import {
   fetchCapsuleDetail,
   fetchCapsules,
   fetchCapsuleSets,
+  rebuildCapsuleIndex,
+  rebindCapsuleSourceRoot,
+  reembedCapsuleForCurrentModel,
   refreshCapsuleChangedFiles,
   renameCapsule,
   repairCapsuleFailedFiles,
   startIndexing,
+  updateCapsuleContextualRetrieval,
 } from "./local-knowledge-api";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -50,14 +54,23 @@ describe("local knowledge BFF boundary helpers", () => {
       capsuleIds: ["cap 1", "cap 2"] as unknown as readonly KnowledgeCapsuleId[],
     });
     await renameCapsule(capsuleId, { displayName: "Renamed", description: "curated" });
+    await updateCapsuleContextualRetrieval(capsuleId, {
+      enabled: true,
+      modelId: "context-chat",
+      strict: true,
+      maxContextChars: 320,
+    });
     await startIndexing(capsuleId);
     await cancelIndexing(capsuleId);
     await connectCapsuleSource(capsuleId, scope, "Release files");
+    await rebindCapsuleSourceRoot(capsuleId, "source 1", "/new repo");
     await disconnectCapsule(capsuleId);
     await fetchCapsuleDetail(capsuleId);
     await deleteCapsule(capsuleId);
     await refreshCapsuleChangedFiles(capsuleId);
     await repairCapsuleFailedFiles(capsuleId);
+    await reembedCapsuleForCurrentModel(capsuleId);
+    await rebuildCapsuleIndex(capsuleId);
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules",
@@ -83,6 +96,20 @@ describe("local knowledge BFF boundary helpers", () => {
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          contextualRetrieval: {
+            enabled: true,
+            modelId: "context-chat",
+            strict: true,
+            maxContextChars: 320,
+          },
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules/cap%201/index",
       expect.objectContaining({ method: "POST", body: JSON.stringify({ confirm: true }) }),
     );
@@ -95,6 +122,13 @@ describe("local knowledge BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ scope, displayName: "Release files" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/sources/source%201/root",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ rootPath: "/new repo" }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
@@ -113,6 +147,20 @@ describe("local knowledge BFF boundary helpers", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ capsuleId: "cap 1", mode: "repair-failed" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/reindex",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ capsuleId: "cap 1", mode: "full-reembed", force: true }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201/reindex",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ capsuleId: "cap 1", mode: "full-rebuild", force: true }),
       }),
     );
   });

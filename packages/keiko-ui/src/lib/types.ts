@@ -1,10 +1,9 @@
 // Browser-safe contract seam for the UI (ADR-0019 rule 8). Every name in this file
 // is a pure re-export; zero type definitions live here. The wire entity shapes come from
 // @oscharko-dev/keiko-contracts/bff-wire; evidence and verification-summary shapes come from
-// their respective subpaths; everything else comes from the contracts root barrel. The SSE
-// stream aggregation (HarnessEvent/SseStatus/ALL_SSE_EVENT_TYPES/TERMINAL_EVENT_TYPES) is
-// UI-internal because no orchestration package knows about the union of all three sources, so
-// it lives in ./sse-types and is re-exported here for ergonomic `@/lib/types` consumers.
+// their respective subpaths; everything else comes from the contracts root barrel. The SSE stream
+// aggregation is UI-internal because no orchestration package knows about the union of all three
+// sources, so it lives in ./sse-types and is re-exported here for ergonomic `@/lib/types` consumers.
 
 // ─── Gateway + workflow descriptor canonical types (contracts root barrel) ─────────
 export type {
@@ -63,9 +62,54 @@ export type {
   VoiceUnavailableReason,
   VoiceTransportPosture,
   VoiceCapabilityResolution,
+  UpdatePreflightBlocker,
+  UpdatePreflightBlockerCode,
+  UpdatePreflightImpactEntry,
+  UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNotes,
+  UpdatePreflightRegistryStatus,
+  UpdatePreflightReleaseMetadataStatus,
+  UpdatePreflightReleaseSummary,
+  UpdatePreflightReport,
+  UpdatePreflightSeverity,
+  UpdatePreflightStatus,
+  UpdateCommandPreview,
+  UpdateInstallMode,
+  UpdateInstallModeStatus,
+  UpdateInstallPackageManager,
+  UpdateMutationPolicy,
+  UpdatePolicySource,
+  UpdateRestartVerificationRequest,
+  UpdateSession,
+  UpdateSessionFailureReason,
+  UpdateSessionLogPreview,
+  UpdateSessionPhase,
+  UpdateSessionStartRequest,
+  UpdateSessionStatus,
+  UpdateUnsupportedReason,
+  ReleaseImpactRemediation,
+  ReleaseImpactStateImpact,
+  UpdateReleaseImpactInput,
+  UpdateStateStore,
+  UpdateRemediationAction,
+  UpdateRemediationActionKind,
+  UpdateRemediationActionRequest,
+  UpdateRemediationActionStatus,
+  UpdateRemediationAffectedFeature,
+  UpdateRemediationDecision,
+  UpdateRemediationFeatureState,
+  UpdateRemediationOverallStatus,
+  UpdateRemediationScopeCounts,
+  UpdateRemediationStatusReport,
+  UpdateRemediationStatusRequest,
 } from "@oscharko-dev/keiko-contracts";
 
-export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
+export {
+  DEFAULT_GROUNDING_LIMITS,
+  UPDATE_PREFLIGHT_BLOCKER_CODES,
+  UPDATE_PREFLIGHT_SCHEMA_VERSION,
+  UPDATE_PREFLIGHT_SEVERITIES,
+} from "@oscharko-dev/keiko-contracts";
 
 // ─── Editor completion gateway wire shapes (Issue #1199, contracts root barrel) ─────
 export type {
@@ -179,6 +223,7 @@ export { isEditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 // aggregate carried on a grounded answer's pack summary) comes from the bff-wire subpath. All
 // three are structurally path-free (string literal unions, numbers, booleans) by construction.
 export type { ContextLaneId, ContextBudgetPressure } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
 
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019

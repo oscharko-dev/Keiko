@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import type { ToolCallResult } from "@oscharko-dev/keiko-harness";
-import { harnessToolShaper } from "./tool-shaper.js";
+import { createHarnessToolShaper, harnessToolShaper } from "./tool-shaper.js";
 
 const SANDBOX = {
   envAllowlist: ["PATH"],
@@ -79,6 +79,41 @@ describe("harnessToolShaper", () => {
     }
     expect(observation.omittedByteCount).toBe(2048);
     expect(validateContextToolObservation(observation)).toEqual({ ok: true });
+  });
+
+  it("persists truncated command artifacts through an injected writer", () => {
+    const artifacts = new Map<string, string>();
+    const shaper = createHarnessToolShaper({
+      artifactWriter: {
+        write: (artifactId, content): void => {
+          artifacts.set(artifactId, content);
+        },
+      },
+    });
+    const observation = shaper({
+      result: commandResult(
+        JSON.stringify({
+          exitCode: 1,
+          signal: null,
+          timedOut: false,
+          truncated: true,
+          stdout: "full stdout",
+          stderr: "full stderr",
+        }),
+        4096,
+      ),
+      toolName: "run_command",
+      toolCallId: "call-1",
+      arguments: {},
+    });
+
+    expect(observation?.kind).toBe("command");
+    if (observation?.kind !== "command") {
+      throw new Error("expected command observation");
+    }
+    expect(observation.rehydration?.artifactId).toMatch(/^[0-9a-f]{64}$/u);
+    expect(observation.rehydration?.notPersistedReason).toBeUndefined();
+    expect(artifacts.get(observation.rehydration?.artifactId ?? "")).toContain("full stdout");
   });
 
   it("returns undefined for a non-command tool", () => {

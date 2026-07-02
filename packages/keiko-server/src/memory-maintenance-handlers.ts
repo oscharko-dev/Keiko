@@ -3,7 +3,7 @@
 //
 // POST /api/memory/maintenance runs a bounded, synchronous pass:
 //   1. Load every memory (all scopes) + the access stats.
-//   2. Run consolidation on the accepted subset; persist auto-applicable relationship edges and
+//   2. Run consolidation on reviewable live records; persist auto-applicable relationship edges and
 //      return unresolved review items for MemoriaViva or CLI operators. Conflict and merge review
 //      items are NEVER auto-applied here.
 //   3. Compute the maintenance plan and apply it: promote (-> accepted), archive (-> archived),
@@ -31,7 +31,7 @@ import type {
   MemoryId,
   MemoryRecord,
 } from "@oscharko-dev/keiko-contracts";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -224,12 +224,18 @@ function applyForgets(
   for (const forget of forgets) {
     const record = byId.get(forget.id);
     if (record === undefined) continue;
-    vault.deleteMemory(forget.id, {
-      tombstone: true,
-      forgetterSurface: "memory-maintenance",
-      reason: forget.reason,
-      nowMs,
-    });
+    if (record.status === "accepted" || record.status === "archived") continue;
+    try {
+      vault.deleteMemory(forget.id, {
+        tombstone: true,
+        forgetterSurface: "memory-maintenance",
+        reason: forget.reason,
+        nowMs,
+      });
+    } catch (err) {
+      if (err instanceof MemoryStorageError && err.code === "not-found") continue;
+      throw err;
+    }
     counts.forgotten += 1;
     emitAudit(
       evidenceStore,
@@ -264,11 +270,10 @@ export function runMemoryMaintenance(
   // injected (the deterministic-verification invariant the rest of the stack honours).
   const nowMs = options?.nowMs ?? Date.now();
   const counts = emptyCounts();
-  // Phase 1 — promote strong `proposed` memories FIRST. Consolidation and conflict detection only
-  // inspect `accepted` records, so without this a vault full of freshly-captured `proposed`
-  // memories would need a SECOND maintenance run before any near-duplicate or polarity conflict is
-  // resolved. Promoting up front makes a single "Run maintenance" fully effective.
-  const beforePromote = vault.listMemories({ includeExpired: true });
+  const scopes = vault.listMemoryScopes();
+  // Phase 1 — promote strong `proposed` memories FIRST. This keeps high-confidence captures visible
+  // to consolidation in the same maintenance pass instead of waiting for a second run.
+  const beforePromote = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, { nowMs });
   applyPromotions(
@@ -279,15 +284,21 @@ export function runMemoryMaintenance(
     recordsById(beforePromote),
     counts,
   );
-  // Phase 2 — consolidate the now-accepted set: link safe near-duplicate metadata and surface
-  // conflicts / merges as explicit review items. Status mutations require a later governed review.
-  const accepted = vault
-    .listMemories({ includeExpired: true })
-    .filter((record) => record.status === "accepted");
-  runConsolidationPass(vault, nowMs, accepted, counts);
+  // Phase 2 — consolidate live reviewable records: link safe near-duplicate metadata and surface
+  // proposed/conflicted conflicts or merges as explicit review items. Status mutations require a
+  // later governed review.
+  const reviewable = vault
+    .listMemoriesAcrossScopes(scopes, { includeExpired: true })
+    .filter(
+      (record) =>
+        record.status === "accepted" ||
+        record.status === "proposed" ||
+        record.status === "conflicted",
+    );
+  runConsolidationPass(vault, nowMs, reviewable, counts);
   // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
   // strength model; confidence itself is never mutated (O-V2).
-  const all = vault.listMemories({ includeExpired: true });
+  const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs });
   applyFadeEffects(vault, evidenceStore, nowMs, plan, recordsById(all), counts);

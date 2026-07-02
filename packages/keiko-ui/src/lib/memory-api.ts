@@ -41,12 +41,7 @@ export interface MemoryActionResponse {
 }
 
 export type MemoryConsolidationJobState =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "canceled"
-  | "skipped";
+  "queued" | "running" | "completed" | "failed" | "canceled" | "skipped";
 
 export type MemoryConsolidationStaleReason = "expired" | "low-confidence" | "aged-out";
 
@@ -56,7 +51,10 @@ export interface MemoryConsolidationStaleFlag {
   readonly detectedAt: number;
 }
 
-export type MemoryConsolidationReviewReason = "multi-way-duplicate" | "potential-conflict";
+export type MemoryConsolidationReviewReason =
+  | "duplicate-review"
+  | "multi-way-duplicate"
+  | "potential-conflict";
 
 export type MemoryConsolidationProposedAction =
   | { readonly kind: "merge"; readonly winner: MemoryId; readonly losers: readonly MemoryId[] }
@@ -66,15 +64,24 @@ export interface MemoryConsolidationReviewItem {
   readonly id: string;
   readonly reason: MemoryConsolidationReviewReason;
   readonly relatedMemoryIds: readonly MemoryId[];
+  readonly sourceMemoryIds?: readonly MemoryId[];
   readonly proposedAction?: MemoryConsolidationProposedAction;
   readonly proposedEdges?: readonly MemoryEdge[];
   readonly detectedAt: number;
+}
+
+export interface MemoryConsolidationSummaryStatus {
+  readonly kind: "not-configured" | "configured";
+  readonly updatesProposed: number;
+  readonly skippedMergeClusters: number;
+  readonly fallbacksUsed: number;
 }
 
 export interface MemoryConsolidationResult {
   readonly state: "completed" | "canceled" | "skipped" | "failed";
   readonly edgesProposed: readonly MemoryEdge[];
   readonly updatesProposed: readonly MemoryUpdate[];
+  readonly summaryStatus: MemoryConsolidationSummaryStatus;
   readonly staleFlags: readonly MemoryConsolidationStaleFlag[];
   readonly reviewItems: readonly MemoryConsolidationReviewItem[];
   readonly clustersInspected: number;
@@ -140,6 +147,7 @@ export interface MemoryCorrectionResponse {
 }
 
 export interface MemoryListFilters {
+  readonly query?: string;
   readonly scope?: readonly MemoryScopeKind[];
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
@@ -241,6 +249,9 @@ export async function fetchMemories(
   fetchImpl = fetchJson<MemoryListResponse>,
 ): Promise<MemoryListResponse> {
   const params = new URLSearchParams();
+  if (filters.query !== undefined && filters.query.trim().length > 0) {
+    params.set("q", filters.query.trim());
+  }
   if (filters.scope !== undefined && filters.scope.length > 0) {
     params.set("scope", filters.scope.join(","));
   }

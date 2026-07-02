@@ -432,7 +432,7 @@ function renderScreenHtml(
   ];
   return [
     "<!doctype html>",
-    '<html>',
+    "<html>",
     `${indent(1)}<head>`,
     `${indent(2)}<meta charset="utf-8" />`,
     `${indent(2)}<title>${title}</title>`,
@@ -461,7 +461,7 @@ function renderIndexHtml(
   });
   return [
     "<!doctype html>",
-    '<html>',
+    "<html>",
     `${indent(1)}<head>`,
     `${indent(2)}<meta charset="utf-8" />`,
     `${indent(2)}<title>Screens</title>`,

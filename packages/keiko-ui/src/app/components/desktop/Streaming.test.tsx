@@ -57,6 +57,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -65,6 +66,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -87,8 +89,8 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
   };
 }
 
-function renderWindow(session: ChatSessionApi): void {
-  render(
+function renderWindow(session: ChatSessionApi): ReturnType<typeof render> {
+  return render(
     <ChatSessionProvider value={session}>
       <ChatWindow />
     </ChatSessionProvider>,
@@ -298,7 +300,8 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
-        messages: [userMessage("hi"), assistantMessage("a-stream", "The TCP/IP stack")],
+        messages: [userMessage("hi")],
+        streamingAssistantMessage: assistantMessage("a-stream", "The TCP/IP stack"),
         sendStatus: "streaming",
         sending: true,
       }),
@@ -315,7 +318,8 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
     renderWindow(
       makeSession({
         activeChat: makeChat(),
-        messages: [userMessage("hi"), assistantMessage("a-stream", "The TCP/IP stack")],
+        messages: [userMessage("hi")],
+        streamingAssistantMessage: assistantMessage("a-stream", "The TCP/IP stack"),
         sendStatus: "streaming",
         sending: true,
       }),
@@ -328,6 +332,35 @@ describe("ChatWindow streaming typing indicator (Issue #152)", () => {
     expect(
       lastAssistant[lastAssistant.length - 1]?.querySelector(".ai-stream-cursor"),
     ).not.toBeNull();
+  });
+
+  it("keeps the live streaming assistant turn as escaped plain text until settled", () => {
+    const liveView = renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi")],
+        streamingAssistantMessage: assistantMessage("a-stream", "**bold** `code`"),
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    const liveAssistant = document.querySelector('article[data-role="assistant"]');
+    expect(liveAssistant).toHaveTextContent("**bold** `code`");
+    expect(liveAssistant?.querySelector("strong")).toBeNull();
+    expect(liveAssistant?.querySelector("code")).toBeNull();
+    liveView.unmount();
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-done", "**bold** `code`")],
+        sendStatus: "idle",
+        sending: false,
+      }),
+    );
+    const settledAssistant = document.querySelector('article[data-role="assistant"]');
+    expect(settledAssistant?.querySelector("strong")).toHaveTextContent("bold");
+    expect(settledAssistant?.querySelector("code")).toHaveTextContent("code");
   });
 
   it("does not render the streaming caret on a settled (non-streaming) turn", () => {
@@ -1126,14 +1159,14 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
       expect(view.result.current.sendStatus).toBe("streaming");
     });
     const afterFirstToken = view.result.current.messages.find((m) => m.role === "assistant");
-    expect(afterFirstToken?.content).toBe("Hello ");
+    expect(afterFirstToken).toBeUndefined();
+    expect(view.result.current.streamingAssistantMessage?.content).toBe("Hello ");
 
     act(() => {
       capturedHandlers?.onToken("world");
     });
     await waitFor(() => {
-      const bubble = view.result.current.messages.find((m) => m.role === "assistant");
-      expect(bubble?.content).toBe("Hello world");
+      expect(view.result.current.streamingAssistantMessage?.content).toBe("Hello world");
     });
 
     // Fire done — canonical messages replace the temp rows.
@@ -1166,6 +1199,7 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     const canonical = view.result.current.messages.find((m) => m.id === "assistant-canonical");
     expect(canonical).toBeDefined();
     expect(canonical?.content).toBe("Hello world");
+    expect(view.result.current.streamingAssistantMessage).toBeUndefined();
     // No temp rows remain (id starts with "stream-").
     const tempRows = view.result.current.messages.filter((m) => m.id.startsWith("stream-"));
     expect(tempRows).toHaveLength(0);
@@ -1210,6 +1244,7 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     // AC#3: no partial assistant content.
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(0);
+    expect(view.result.current.streamingAssistantMessage).toBeUndefined();
     // The user's prompt stays visible.
     const users = view.result.current.messages.filter((m) => m.role === "user");
     expect(users.length).toBeGreaterThanOrEqual(1);

@@ -286,6 +286,63 @@ describe("gatewayFetch", () => {
     }
   });
 
+  it("reuses a keep-alive HTTPS CONNECT tunnel for sequential requests", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-connect-keepalive-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let proxyConnects = 0;
+    let originRequests = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+      originRequests += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "keep-alive" });
+      res.end(JSON.stringify({ path: req.url, count: originRequests }));
+    });
+    origin.on("connection", (s) => {
+      originSockets.add(s);
+      s.once("close", () => originSockets.delete(s));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (s) => {
+      proxySockets.add(s);
+      s.once("close", () => proxySockets.delete(s));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+      });
+      upstream.on("error", () => clientSocket.destroy());
+    });
+    const proxyPort = await listen(proxy);
+    const egress = { httpsProxy: `http://127.0.0.1:${String(proxyPort)}`, caBundlePath };
+    try {
+      const first = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/first`, {
+        egress,
+      });
+      expect(await first.json()).toEqual({ path: "/first", count: 1 });
+
+      const second = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/second`, {
+        egress,
+      });
+      expect(await second.json()).toEqual({ path: "/second", count: 2 });
+      expect(proxyConnects).toBe(1);
+    } finally {
+      _resetWarnedCaBundlePaths();
+      for (const s of proxySockets) s.destroy();
+      for (const s of originSockets) s.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks credential headers from crossing a plaintext HTTP proxy boundary", async () => {
     let proxyHits = 0;
     const proxy = createHttpServer((_req, res) => {

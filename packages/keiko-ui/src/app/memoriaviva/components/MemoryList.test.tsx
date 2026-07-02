@@ -81,6 +81,7 @@ function fetchWith(records: readonly MemoryRecord[]) {
 
 const emptyFetch = vi.fn().mockResolvedValue(makeListResponse([]));
 const emptyFilters: MemoryFilterState = {
+  query: "",
   scope: [],
   type: [],
   status: [],
@@ -140,6 +141,23 @@ describe("MemoryList — loading state", () => {
   });
 });
 
+describe("MemoryList — URL search", () => {
+  it("passes q from URL params into fetch filters", async () => {
+    const fetchImpl = fetchWith([]);
+    currentSearchParams = { get: (key: string) => (key === "q" ? "atlas" : null) };
+
+    render(<MemoryList fetchMemoriesImpl={fetchImpl} />);
+
+    await waitFor(() => {
+      expect(fetchImpl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          query: "atlas",
+        }),
+      );
+    });
+  });
+});
+
 describe("MemoryList — empty state", () => {
   it("shows empty state when no memories returned", async () => {
     render(<MemoryList fetchMemoriesImpl={emptyFetch} />);
@@ -177,7 +195,7 @@ describe("MemoryList — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Source explicit-user-instruction")).toBeInTheDocument();
       expect(screen.getByText("87% confidence")).toBeInTheDocument();
-      expect(screen.getByText("Sensitivity confidential")).toBeInTheDocument();
+      expect(screen.getByText("Sensitivity Confidential")).toBeInTheDocument();
     });
   });
 
@@ -266,9 +284,7 @@ describe("MemoryList — populated state", () => {
       />,
     );
 
-    await user.click(
-      await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }),
-    );
+    await user.click(await screen.findByRole("switch", { name: "Enable MemoriaViva policy" }));
 
     expect(onPolicyEnabledChange).toHaveBeenCalledWith(false);
   });

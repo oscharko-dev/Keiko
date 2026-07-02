@@ -1,7 +1,6 @@
-// #189 citation rescue: a connector answer that uses retrieved references but whose model did
-// NOT emit [n] markers (some models emit fullwidth 【n】 or no markers at all) is still grounded —
-// it must surface the references it was given, not be discarded as "no evidence". Proven live with
-// gpt-oss-120b (which emitted 【1】 not [1]); these unit tests pin the behaviour.
+// #189 citation attachment: a connector answer is cited only when the model emitted markers.
+// Missing markers are not treated as "no evidence", but the server must not claim that every
+// prompt reference was cited after the fact.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +30,7 @@ import {
   enforcedNoEvidenceReason,
   handleLocalKnowledgeGroundedAsk,
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
+  localKnowledgeNoEvidenceAnswer,
   renderCitationLabel,
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -99,23 +99,13 @@ describe("local-knowledge citation rescue (#189)", () => {
     ).toBeUndefined();
   });
 
-  it("rescues the references as citations when the model answered without [n] markers", () => {
+  it("does not attach citations when the model answered without [n] markers", () => {
     const citations = buildLocalKnowledgeCitations(
       result({ references: [ref(1), ref(2)], citations: [] }),
       undefined,
       () => "Alpha Capsule / Product Manual",
     );
-    expect(citations).toHaveLength(2);
-    expect(citations.map((c) => c.marker)).toEqual(["[1]", "[2]"]);
-    expect(citations[0]?.label).toBe("manual-1.md");
-    expect(citations[0]?.source).toBe("Alpha Capsule / Product Manual");
-    expect(citations[0]?.score).toBe(0.9);
-    expect(citations[0]?.lineage).toEqual({
-      capsuleId: "cap-1",
-      sourceId: "src-1",
-      documentId: "doc-1",
-      chunkId: "chunk-1",
-    });
+    expect(citations).toEqual([]);
   });
 
   it("honours the model's explicit [n] citations when it did mark them", () => {
@@ -148,7 +138,10 @@ describe("local-knowledge citation rescue (#189)", () => {
 
     expect(renderCitationLabel(reference.citation, redactor)).not.toContain(secret);
     const citations = buildLocalKnowledgeCitations(
-      result({ references: [reference], citations: [] }),
+      result({
+        references: [reference],
+        citations: [{ reference, marker: "[1]", index: 1, citation: reference.citation }],
+      }),
       undefined,
       () => `Alpha ${secret}`,
       redactor,
@@ -183,15 +176,44 @@ describe("local-knowledge citation rescue (#189)", () => {
     ).toBe("no-evidence");
   });
 
-  it("still recognizes the legacy English no-evidence sentence", () => {
+  it("still recognizes the legacy German no-evidence sentence", () => {
     expect(
       enforcedNoEvidenceReason(
         result({
-          answer: "No evidence found in the selected knowledge scope.",
+          answer: "Keine Evidenz im ausgewählten Wissensumfang gefunden.",
           references: [ref(1)],
         }),
       ),
     ).toBe("no-evidence");
+  });
+
+  it("recognizes a short English refusal pattern without exact string equality", () => {
+    expect(
+      enforcedNoEvidenceReason(
+        result({
+          answer: "Insufficient evidence in the selected sources.",
+          references: [ref(1)],
+        }),
+      ),
+    ).toBe("no-evidence");
+  });
+
+  it("phrases incompatible embedding identity as an actionable re-index state", () => {
+    expect(localKnowledgeNoEvidenceAnswer("incompatible-embedding-identity")).toContain(
+      "Re-index it for the current embedding model",
+    );
+  });
+
+  it("mirrors German questions for server-generated no-evidence states", () => {
+    expect(
+      localKnowledgeNoEvidenceAnswer(
+        "incompatible-embedding-identity",
+        "Warum findet der Connector keine Evidenz?",
+      ),
+    ).toContain("Dieser Connector wurde");
+    expect(localKnowledgeNoEvidenceAnswer(undefined, "Welche Belege gibt es?")).toContain(
+      "Keine Evidenz",
+    );
   });
 });
 
@@ -354,7 +376,7 @@ describe("redactText fallback — non-string redactor output strips unsafe chars
 });
 
 describe("local-knowledge preview metadata persistence", () => {
-  it("persists rescued preview citation metadata alongside the assistant message", async () => {
+  it("does not persist preview citation metadata when the assistant omitted markers", async () => {
     const embeddingModelId = "text-embedding-3-small";
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
@@ -474,15 +496,183 @@ describe("local-knowledge preview metadata persistence", () => {
     );
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
-    const answer = result.body as Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
-    expect(answer.citations.length).toBeGreaterThan(0);
-    expect(answer.citations[0]?.marker).toBe("[1]");
-    expect(rescueStore.findGroundedPreviewCitations(answer.assistantMessageId)).toMatchObject(
-      answer.citations.map((citation: (typeof answer.citations)[number]) => ({
-        marker: citation.marker,
-        lineage: { capsuleId: seeded.capsuleId },
-      })),
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.citations).toEqual([]);
+    expect(rescueStore.findGroundedPreviewCitations(answer.assistantMessageId)).toEqual([]);
+  });
+});
+
+describe("local-knowledge reranker diagnostics", () => {
+  it("surfaces applied reranker diagnostics on the single-connector grounded answer", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Reranker Diagnostics Capsule",
+      capsuleId: "cap-reranker-diagnostics",
+      sourceId: "src-reranker-diagnostics",
+      text: "alpha beta reranked citation evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "reranker-diagnostics-project");
+    const created = rescueStore.createChat(project.path, "Reranker diagnostics", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+
+    const fakeModel: ModelPort = {
+      call: () =>
+        Promise.resolve({
+          modelId: "chat-model",
+          content: "The alpha beta reranked citation is sufficient [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "reranker-diagnostics",
+            promptTokens: 5,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        }),
+    };
+
+    const adapter = scriptedAdapter();
+    let rerankCalls = 0;
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [
+          {
+            modelId: "chat-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+          {
+            modelId: embeddingModelId,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: "chat-model",
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+          {
+            id: embeddingModelId,
+            kind: "embedding",
+            contextWindow: 8_191,
+            maxOutputTokens: 0,
+            toolCalling: false,
+            structuredOutput: false,
+            streaming: false,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "low",
+            latencyClass: "fast",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://reranker.example/v1",
+          apiKey: "reranker-test-key",
+          timeoutMs: 30_000,
+        },
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+      rerankRequest: (request) => {
+        rerankCalls += 1;
+        expect(request.endpoint).toBe("https://reranker.example/v1");
+        expect(request.modelId).toBe("qwen3-reranker");
+        expect(request.topN).toBe(16);
+        expect(request.query).toBe("alpha beta");
+        expect(request.documents.length).toBeGreaterThan(0);
+        return Promise.resolve({
+          ok: true,
+          value: {
+            modelId: "qwen3-reranker",
+            results: [{ index: 0, relevanceScore: 0.91 }],
+          },
+        });
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
     );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(rerankCalls).toBe(1);
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "applied",
+      keptCount: 1,
+    });
+    expect(answer.contextPack.reranker?.candidateCount).toBeGreaterThan(0);
+    expect(answer.contextPack.reranker?.documentCount).toBe(
+      answer.contextPack.reranker?.candidateCount,
+    );
+    expect(answer.contextPack.referencesUsed).toBe(1);
+    const indexLifecycle = answer.contextPack.indexLifecycle;
+    expect(indexLifecycle).toMatchObject({
+      schemaVersion: "local-knowledge-index-lifecycle-v1",
+      stale: false,
+    });
+    expect(indexLifecycle?.capsules).toHaveLength(1);
+    expect(indexLifecycle?.capsules[0]?.capsuleId).toBe(seeded.capsuleId);
+    expect(typeof indexLifecycle?.capsules[0]?.updatedAt).toBe("number");
+    expect(answer.citations[0]?.score).toBe(0.91);
   });
 });
 

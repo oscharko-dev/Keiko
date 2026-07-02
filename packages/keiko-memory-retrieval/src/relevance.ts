@@ -10,18 +10,109 @@ import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 // digit, or underscore (in any script) becomes a separator. This is a fixed-length pattern
 // with no alternation or backreferences — not ReDoS-prone.
 const NON_WORD = /[^\p{L}\p{N}_]+/u;
+const COMBINING_MARKS = /\p{M}+/gu;
+
+const STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "for",
+  "from",
+  "i",
+  "is",
+  "it",
+  "my",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "what",
+  "which",
+  "with",
+  "am",
+  "an",
+  "auf",
+  "aus",
+  "bei",
+  "bin",
+  "das",
+  "dem",
+  "den",
+  "der",
+  "des",
+  "die",
+  "du",
+  "ein",
+  "eine",
+  "einem",
+  "einen",
+  "einer",
+  "er",
+  "es",
+  "fur",
+  "fuer",
+  "ich",
+  "im",
+  "in",
+  "ist",
+  "mit",
+  "oder",
+  "sind",
+  "und",
+  "vom",
+  "von",
+  "was",
+  "welche",
+  "welchem",
+  "welchen",
+  "welcher",
+  "welches",
+  "wie",
+  "wir",
+  "zu",
+  "zum",
+  "zur",
+]);
+
+function normalizeText(text: string): string {
+  return text
+    .normalize("NFKD")
+    .replace(COMBINING_MARKS, "")
+    .replace(/ß/gu, "ss")
+    .toLocaleLowerCase("und");
+}
+
+function stemGermanLikeToken(token: string): string {
+  if (token.length <= 5) return token;
+  const suffixes = ["ungen", "ern", "en", "er", "es", "s"];
+  for (const suffix of suffixes) {
+    if (suffix === "s" && token.endsWith("ss")) continue;
+    if (token.length - suffix.length >= 5 && token.endsWith(suffix)) {
+      return token.slice(0, -suffix.length);
+    }
+  }
+  return token;
+}
 
 export function tokenize(text: string): readonly string[] {
   if (text === "") return [];
-  const lowered = text.toLowerCase();
-  const split = lowered.split(NON_WORD);
+  const split = normalizeText(text).split(NON_WORD);
   const seen = new Set<string>();
   const out: string[] = [];
   for (const piece of split) {
     if (piece === "") continue;
-    if (seen.has(piece)) continue;
-    seen.add(piece);
-    out.push(piece);
+    if (STOPWORDS.has(piece)) continue;
+    const normalized = stemGermanLikeToken(piece);
+    if (normalized === "" || STOPWORDS.has(normalized)) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
   }
   return out;
 }

@@ -22,7 +22,13 @@ import type {
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
-import { rerankAndSelect, type RerankInput, type SelectedCandidate } from "./grounded-rerank.js";
+import {
+  applyModelRerankResults,
+  rerankAndSelect,
+  selectTopPromptCandidates,
+  type RerankInput,
+  type SelectedCandidate,
+} from "./grounded-rerank.js";
 
 import {
   CANDIDATE_OMISSION_REASONS,
@@ -39,6 +45,7 @@ import {
   type ChatLocalKnowledgeScope,
   type GroundedAnswerContextPackSummary,
   type GroundedEvidenceCitation,
+  type GroundedRerankerDiagnostics,
   type GroundedUncertainty,
   type HybridGroundedAnswer,
   type LocalKnowledgeEvidenceCitation,
@@ -66,7 +73,7 @@ import {
   type GroundedRetriever,
 } from "./grounded-qa-multi-source.js";
 import {
-  MAX_PROMPT_REFERENCES,
+  LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
   buildSelectedScopeSourceLookup,
   createEmbeddingAdapter,
   openStoreForDeps,
@@ -83,6 +90,8 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
+import { requestConfiguredRerank } from "./grounded-model-reranker.js";
+import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import {
   buildCitations,
   buildQuery,
@@ -137,6 +146,7 @@ export interface HybridGroundedAskCtx {
   readonly chat: Chat;
   readonly content: string;
   readonly modelId: string;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly signal: AbortSignal;
   readonly folderRetriever?: FolderRetriever;
@@ -232,12 +242,11 @@ function connectorRerankInputs(
   connectors: readonly RetrievedConnector[],
   store: KnowledgeStore,
   redactor: Redactor,
-  maxPromptReferences: number,
   maxExcerptChars: number,
 ): RerankInput<HybridPayload>[] {
   return connectors.flatMap((src) => {
     const lookup = buildSelectedScopeSourceLookup(store, src.selected);
-    return src.references.slice(0, maxPromptReferences).map((reference) => ({
+    return src.references.map((reference) => ({
       kind: "connector" as const,
       redactedText: redactString(
         redactor,
@@ -265,7 +274,6 @@ function buildUnifiedSelection(
       connectors,
       store,
       redactor,
-      limits.maxPromptReferences,
       limits.maxExcerptChars,
     ),
   ];
@@ -273,6 +281,60 @@ function buildUnifiedSelection(
     maxCandidates: limits.hybridMaxCandidates,
     maxExcerptBytes: limits.hybridMaxExcerptBytes,
   });
+}
+
+interface HybridRerankedSelection {
+  readonly selected: readonly SelectedCandidate<HybridPayload>[];
+  readonly diagnostics: GroundedRerankerDiagnostics;
+}
+
+function withKeptCount(
+  diagnostics: GroundedRerankerDiagnostics,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return { ...diagnostics, keptCount };
+}
+
+function invalidRerankMappingDiagnostics(
+  diagnostics: GroundedRerankerDiagnostics,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return {
+    ...diagnostics,
+    status: "invalid-response",
+    failureKind: "invalid-response",
+    keptCount,
+  };
+}
+
+async function rerankHybridSelection(
+  ctx: HybridGroundedAskCtx,
+  preliminary: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+): Promise<HybridRerankedSelection> {
+  const fallback = selectTopPromptCandidates(preliminary, limits.maxPromptReferences);
+  const attempt = await requestConfiguredRerank({
+    deps: ctx.deps,
+    query: ctx.content,
+    documents: preliminary.map((candidate) => candidate.redactedText),
+    topN: limits.maxPromptReferences,
+    signal: ctx.signal,
+  });
+  if (attempt.outcome === undefined) {
+    return { selected: fallback, diagnostics: withKeptCount(attempt.diagnostics, fallback.length) };
+  }
+  const reranked = applyModelRerankResults(
+    preliminary,
+    attempt.outcome.value.results,
+    limits.maxPromptReferences,
+  );
+  if (reranked === undefined) {
+    return {
+      selected: fallback,
+      diagnostics: invalidRerankMappingDiagnostics(attempt.diagnostics, fallback.length),
+    };
+  }
+  return { selected: reranked, diagnostics: withKeptCount(attempt.diagnostics, reranked.length) };
 }
 
 // ─── Folder retrieval (mirrors runMultiSourceAsk's loop) ──────────────────────
@@ -344,7 +406,7 @@ function resolveConnectorScopes(
 function connectorQuery(scope: ChatLocalKnowledgeScope, content: string): RetrievalQueryShape {
   return {
     text: content,
-    topK: MAX_PROMPT_REFERENCES,
+    topK: LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
     ...(scope.kind === "capsule" ? { capsuleId: scope.capsuleId } : {}),
     ...(scope.kind === "capsule-set" ? { capsuleSetId: scope.capsuleSetId } : {}),
   };
@@ -423,7 +485,7 @@ async function retrieveOneConnector(
 
 // ─── Merged prompt ────────────────────────────────────────────────────────────
 
-const HYBRID_NO_EVIDENCE_ANSWER = "Keine Evidenz in den ausgewählten verbundenen Quellen gefunden.";
+const HYBRID_NO_EVIDENCE_ANSWER = "No evidence found in the selected connected sources.";
 const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
@@ -637,18 +699,20 @@ function connectorSourceCount(connectors: readonly RetrievedConnector[]): number
 
 // One merged knowledge summary across every connector. Counts are aggregated so the wire shape
 // stays a single LocalKnowledgeGroundedAnswerContextSummary even when N connectors contributed.
-// referencesUsed = connector candidates in the SHARED selected set; referenceBudget = the shared
-// hybridMaxCandidates cap so the invariant referencesUsed <= referenceBudget always holds.
+// referencesUsed = connector candidates in the SHARED prompt-selected set; referenceBudget = the
+// shared prompt-reference cap so the invariant referencesUsed <= referenceBudget always holds.
 function knowledgeSummary(
   chat: Chat,
   connectors: readonly RetrievedConnector[],
   citationCount: number,
   referencesUsed: number,
   referenceBudget: number,
+  reranker: GroundedRerankerDiagnostics,
 ): LocalKnowledgeGroundedAnswerContextSummary {
   const capsuleCount = connectors.reduce((acc, src) => acc + src.selected.capsules.length, 0);
   const label = connectors.map((src) => src.label).join("+");
   const scopeKind = connectors.length === 1 ? connectors[0]?.selected.scopeKind : "capsule-set";
+  const capsules = connectors.flatMap((src) => src.selected.capsules);
   return {
     kind: "local-knowledge",
     scopeKind: scopeKind ?? "capsule-set",
@@ -659,6 +723,8 @@ function knowledgeSummary(
     citationCount,
     referenceBudget,
     referencesUsed,
+    reranker,
+    indexLifecycle: buildLocalKnowledgeIndexLifecycle(capsules),
   };
 }
 
@@ -712,7 +778,7 @@ function persistFolderEvidence(
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput(ctx.deps, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -865,6 +931,7 @@ function buildHybridContextPack(
   summary: GroundedAnswerContextPackSummary,
   assistant: GroundedAnswerResult,
   knowledgeCitationCount: number,
+  reranker: GroundedRerankerDiagnostics,
 ): HybridGroundedAnswer["contextPack"] {
   const selectedConnectorCount = selected.filter((s) => s.kind === "connector").length;
   return {
@@ -884,8 +951,10 @@ function buildHybridContextPack(
       sources.connectors,
       knowledgeCitationCount,
       selectedConnectorCount,
-      limits.hybridMaxCandidates,
+      limits.maxPromptReferences,
+      reranker,
     ),
+    reranker,
   };
 }
 
@@ -910,6 +979,7 @@ function assembleHybridAnswer(
   selected: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
   assistant: GroundedAnswerResult,
+  reranker: GroundedRerankerDiagnostics,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
@@ -921,7 +991,9 @@ function assembleHybridAnswer(
   );
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
-  const summary = folderSummary(sources.folders, redactor, ctx.deps);
+  const summary = folderSummary(sources.folders, redactor, {
+    contextProfile: ctx.contextProfile,
+  });
   return {
     groundingKind: "hybrid",
     ...ids,
@@ -946,6 +1018,7 @@ function assembleHybridAnswer(
       summary,
       assistant,
       knowledgeCitations.length,
+      reranker,
     ),
   };
 }
@@ -976,6 +1049,7 @@ function assembleHybridNoEvidenceRoute(
   meta: AnswerMeta,
   selected: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
+  reranker: GroundedRerankerDiagnostics,
 ): RouteResult {
   const content = redactString(ctx.deps.redactor, HYBRID_NO_EVIDENCE_ANSWER);
   const [userMessage, assistantMessage] = persistGroundedExchange(
@@ -998,6 +1072,7 @@ function assembleHybridNoEvidenceRoute(
     selected,
     limits,
     { content, usage: { promptTokens: 0, completionTokens: 0 } },
+    reranker,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
@@ -1040,20 +1115,16 @@ function combinedSourceCandidates(
   connectors: readonly ChatLocalKnowledgeScope[],
 ): readonly CapCandidate[] {
   return [
-    ...folders.map(
-      (scope, index): CapCandidate => ({
-        kind: "folder",
-        index,
-        connectedAtMs: scope.connectedAtMs,
-      }),
-    ),
-    ...connectors.map(
-      (scope, index): CapCandidate => ({
-        kind: "connector",
-        index,
-        connectedAtMs: scope.connectedAtMs,
-      }),
-    ),
+    ...folders.map((scope, index): CapCandidate => ({
+      kind: "folder",
+      index,
+      connectedAtMs: scope.connectedAtMs,
+    })),
+    ...connectors.map((scope, index): CapCandidate => ({
+      kind: "connector",
+      index,
+      connectedAtMs: scope.connectedAtMs,
+    })),
   ].sort((a, b) => {
     if (a.connectedAtMs !== b.connectedAtMs) return a.connectedAtMs - b.connectedAtMs;
     if (a.kind !== b.kind) return a.kind === "folder" ? -1 : 1;
@@ -1099,13 +1170,11 @@ function skippedFoldersForCaps(
             },
           ],
     ),
-    ...all.slice(limits.maxConnectedSources).map(
-      (cs, i): SkippedConnector => ({
-        label: sourceLabels([cs])[0] ?? `folder-${String(limits.maxConnectedSources + i)}`,
-        reason: "source-skipped",
-        message: "Exceeded maxConnectedSources limit.",
-      }),
-    ),
+    ...all.slice(limits.maxConnectedSources).map((cs, i): SkippedConnector => ({
+      label: sourceLabels([cs])[0] ?? `folder-${String(limits.maxConnectedSources + i)}`,
+      reason: "source-skipped",
+      message: "Exceeded maxConnectedSources limit.",
+    })),
   ];
 }
 
@@ -1127,13 +1196,11 @@ function skippedConnectorsForCaps(
             },
           ],
     ),
-    ...allConnectors.slice(limits.maxLocalKnowledgeSources).map(
-      (_cs, i): SkippedConnector => ({
-        label: `connector-${String(limits.maxLocalKnowledgeSources + i)}`,
-        reason: "source-skipped",
-        message: "Exceeded maxLocalKnowledgeSources limit.",
-      }),
-    ),
+    ...allConnectors.slice(limits.maxLocalKnowledgeSources).map((_cs, i): SkippedConnector => ({
+      label: `connector-${String(limits.maxLocalKnowledgeSources + i)}`,
+      reason: "source-skipped",
+      message: "Exceeded maxLocalKnowledgeSources limit.",
+    })),
   ];
 }
 
@@ -1178,12 +1245,15 @@ async function runHybridWithStore(
   const resolved = resolveConnectorScopes(capped.connectorScopes, store);
   if ("status" in resolved) return resolved;
   const query = buildQuery(ctx.content, () => Date.now());
-  const rawFolderResult = await retrieveFolderPacks(
-    ctx,
-    capped.folderScopes,
-    query,
-    ctx.folderRetriever ?? defaultRetriever(ctx.signal),
-  );
+  const [rawFolderResult, connectorResult] = await Promise.all([
+    retrieveFolderPacks(
+      ctx,
+      capped.folderScopes,
+      query,
+      ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps),
+    ),
+    retrieveConnectors(ctx, store, capped.connectorScopes, resolved),
+  ]);
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.
   const folderResult: FolderRetrieval = {
@@ -1194,7 +1264,6 @@ async function runHybridWithStore(
       ...rawFolderResult.skipped,
     ],
   };
-  const connectorResult = await retrieveConnectors(ctx, store, capped.connectorScopes, resolved);
   if ("status" in connectorResult) return connectorResult;
   const connectorResultWithOverCap: ConnectorRetrieval =
     capped.overCapConnectorSkipped.length > 0
@@ -1218,9 +1287,10 @@ async function answerAndAssemble(
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
   const { retrieved: folders } = meta.folderResult;
-  const selected = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
+  const preliminary = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
+  const { selected, diagnostics: reranker } = await rerankHybridSelection(ctx, preliminary, limits);
   if (selected.length === 0) {
-    return assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits);
+    return assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits, reranker);
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
@@ -1249,6 +1319,7 @@ async function answerAndAssemble(
     selected,
     limits,
     assistant,
+    reranker,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);

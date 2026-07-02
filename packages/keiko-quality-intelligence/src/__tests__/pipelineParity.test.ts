@@ -195,7 +195,7 @@ describe("pipelineParity — banking golden invariants", () => {
     // Stable tokens in the fixture labels — both banking-profile keywords.
     // Kills: mutant that strips theme extraction or riskKeyword matching.
     const result = runPipeline("bankingRequirement.synthetic.json", bankingDefault);
-    expect(result.themes).toContain("kyc");
+    expect(result.themes).toContain("KYC");
     expect(result.riskHints).toContain("aml");
     expect(result.riskHints).toContain("kyc");
   });

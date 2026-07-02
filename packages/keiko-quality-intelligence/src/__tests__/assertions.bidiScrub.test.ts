@@ -9,8 +9,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canonicaliseFragmentList,
+  containsNormalisedKeyword,
   isUnsafeFormatCodePoint,
   normaliseCandidateText,
+  normaliseGermanComparisonText,
+  normaliseGermanKeywordText,
   stripUnsafeFormatChars,
 } from "../domain/assertions.js";
 
@@ -202,5 +206,33 @@ describe("normaliseCandidateText", () => {
       cp(0x2066), // LRI
     ].join("hello");
     expect(hasNoUnsafeChar(normaliseCandidateText(dirty))).toBe(true);
+  });
+});
+
+describe("canonicaliseFragmentList", () => {
+  it("uses candidate-text normalisation so zero-width spoofed duplicates collapse", () => {
+    const zwsp = cp(0x200b);
+    expect(canonicaliseFragmentList([`log${zwsp}in`, "login"])).toEqual(["login"]);
+  });
+});
+
+describe("German comparison and keyword normalisation", () => {
+  it("folds Eszett and ss to the same comparison signature", () => {
+    expect(normaliseGermanComparisonText("Straße")).toBe("strasse");
+    expect(normaliseGermanComparisonText("Strasse")).toBe("strasse");
+  });
+
+  it("folds German umlauts for keyword matching without changing candidate text normalisation", () => {
+    expect(normaliseGermanKeywordText("Überweisung und Geldwäsche")).toBe(
+      "ueberweisung und geldwaesche",
+    );
+    expect(normaliseCandidateText("Überweisung und Geldwäsche")).toBe("Überweisung und Geldwäsche");
+  });
+
+  it("matches umlaut and ASCII keyword variants at token boundaries only", () => {
+    expect(containsNormalisedKeyword("Die Geldwäsche-Prüfung greift.", "geldwaesche")).toBe(true);
+    expect(containsNormalisedKeyword("Die Geldwaesche-Pruefung greift.", "geldwäsche")).toBe(true);
+    expect(containsNormalisedKeyword("Pinterest ist eine Bookmarking-App.", "pin")).toBe(false);
+    expect(containsNormalisedKeyword("Die PIN wird bestätigt.", "pin")).toBe(true);
   });
 });

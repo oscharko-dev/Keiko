@@ -140,32 +140,11 @@ function safeStatFile(
   fs: WorkspaceFs,
   absolutePath: string,
   realPath: string,
-  relativePath: string,
 ): WorkspaceStat | DiscoveryError | undefined {
-  try {
-    const requestedStats = fs.stat(absolutePath);
-    if (requestedStats.hardLinkCount !== undefined && requestedStats.hardLinkCount > 1) {
-      return {
-        code: "READ_FAILED",
-        message: "selected file is not eligible for extraction",
-        relativePath,
-      };
-    }
-  } catch {
-    // Some WorkspaceFs fakes only stat the canonical realPath shape (not the mixed-separator
-    // requested path). Fall through to stat the resolved path below.
-  }
   try {
     const realStats = fs.stat(realPath);
     if (!realStats.isFile) {
       return undefined;
-    }
-    if (realStats.hardLinkCount !== undefined && realStats.hardLinkCount > 1) {
-      return {
-        code: "READ_FAILED",
-        message: "selected file is not eligible for extraction",
-        relativePath,
-      };
     }
     return realStats;
   } catch {
@@ -255,7 +234,7 @@ function* yieldFileIfAllowed(
   if (!isGlobMatched(ctx.bounds, relativePath)) {
     return;
   }
-  const stat = safeStatFile(ctx.fs, absolutePath, real, relativePath);
+  const stat = safeStatFile(ctx.fs, absolutePath, real);
   if (stat === undefined) {
     return;
   }

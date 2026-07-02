@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import {
   assertCompatibleEmbeddingIdentity,
+  embeddingIdentityHardeningStatus,
   verifyEmbeddingCapability,
   type EmbeddingProbeOptions,
   type OpenAIEmbeddingAdapter,
@@ -271,6 +272,45 @@ describe("verifyEmbeddingCapability", () => {
     }
   });
 
+  it("pins normalization, instruction version, and a stable embedding-space fingerprint", async () => {
+    const seen: string[] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: PROVIDER_ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      request: (input) => {
+        seen.push(input.input);
+        const seed = input.input.includes("alpha")
+          ? 1
+          : input.input.includes("beta")
+            ? 2
+            : input.input.includes("gamma")
+              ? 3
+              : 4;
+        return Promise.resolve({
+          ok: true,
+          value: {
+            vector: new Float32Array([seed, seed + 1, seed + 2, seed + 3]),
+            modelId: PROBE.modelId,
+          },
+        });
+      },
+    };
+    const result = await verifyEmbeddingCapability(adapter, {
+      ...PROBE,
+      includeSpaceFingerprint: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identity.normalization).toBe("l2");
+      expect(result.identity.instructionVersion).toBe("keiko-embedding-input-v1");
+      expect(result.identity.embeddingSpaceFingerprint).toMatch(
+        /^keiko-embedding-space-fingerprint-v1:[a-f0-9]{24}$/u,
+      );
+      expect(embeddingIdentityHardeningStatus(result.identity)).toBe("hardened");
+    }
+    expect(seen).toHaveLength(4);
+  });
+
   it("ensures the probe input is never echoed into any failure safeMessage", async () => {
     const kinds = [
       "wrong-header",
@@ -406,6 +446,36 @@ describe("assertCompatibleEmbeddingIdentity", () => {
       expect(result.identity.modelRevision).toBe("rev-NEW");
     }
   });
+
+  it("treats embedding-space fingerprint drift as incompatible", () => {
+    const hardened: EmbeddingModelIdentity = {
+      ...STORED,
+      normalization: "l2",
+      instructionVersion: "keiko-embedding-input-v1",
+      embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    const result = assertCompatibleEmbeddingIdentity(hardened, {
+      ...hardened,
+      embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("incompatible-with-stored-identity");
+    }
+  });
+
+  it("warns for legacy-to-hardened comparison without claiming legacy is hardened", () => {
+    const result = assertCompatibleEmbeddingIdentity(STORED, {
+      ...STORED,
+      normalization: "l2",
+      instructionVersion: "keiko-embedding-input-v1",
+    });
+    expect(embeddingIdentityHardeningStatus(STORED)).toBe("legacy-unverified");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.warning?.code).toBe("embedding-space-unverified");
+    }
+  });
 });
 
 // Direct transport tests for the OpenAI embeddings adapter. Verifies header formatting
@@ -452,6 +522,51 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     });
     expect(outcome.ok).toBe(true);
     expect(capturedAuth).toBe(`Bearer ${apiKey}`);
+  });
+
+  it("pins float encoding and normalizes returned scalar vectors", async () => {
+    let sentBody: unknown = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(makeSuccessBody([3, 4]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect((sentBody as { encoding_format: unknown }).encoding_format).toBe("float");
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.vector[0]).toBeCloseTo(0.6);
+      expect(outcome.value.vector[1]).toBeCloseTo(0.8);
+    }
+  });
+
+  it("passes the optional dimensions parameter through on scalar requests", async () => {
+    let sentBody: unknown = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(makeSuccessBody([1, 0, 0]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      dimensions: 1024,
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    expect((sentBody as { dimensions: unknown }).dimensions).toBe(1024);
   });
 
   it("does NOT double-prefix when the apiKey already includes 'Bearer ' (Copilot)", async () => {
@@ -616,6 +731,7 @@ describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
       fetchImpl,
     });
     expect((sentBody as { input: unknown }).input).toEqual(["a", "b", "c"]);
+    expect((sentBody as { encoding_format: unknown }).encoding_format).toBe("float");
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
       expect(outcome.value.map((v) => Array.from(v.vector))).toEqual([
@@ -624,6 +740,27 @@ describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
         [0, 0, 1],
       ]);
     }
+  });
+
+  it("passes the optional dimensions parameter through on batch requests", async () => {
+    let sentBody: unknown = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      sentBody = JSON.parse(init.body as string);
+      return new Response(arrayBody([{ index: 0, embedding: [1, 0, 0] }]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const outcome = await requestOpenAIEmbeddingBatch({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "text-embedding-3-large",
+      inputs: ["a"],
+      dimensions: 1024,
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    expect((sentBody as { dimensions: unknown }).dimensions).toBe(1024);
   });
 
   it("re-aligns by declared `index` even when the provider returns items out of order", async () => {
@@ -647,7 +784,9 @@ describe("requestOpenAIEmbeddingBatch (array transport, #189 GRD-004)", () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) {
-      expect(outcome.value.map((v) => v.vector[0])).toEqual([1, 2, 3]);
+      expect(outcome.value[0]?.vector[0]).toBeCloseTo(1 / Math.sqrt(3));
+      expect(outcome.value[1]?.vector[0]).toBeCloseTo(2 / Math.sqrt(12));
+      expect(outcome.value[2]?.vector[0]).toBeCloseTo(3 / Math.sqrt(27));
     }
   });
 
@@ -764,19 +903,28 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
   it("resolves modelId per item, then top-level model, then the request modelId", async () => {
     // item-level model wins
     const a = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "req-model",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1], model: "item-model" }] })),
     });
     expect(a.ok && a.value[0]?.modelId).toBe("item-model");
     // top-level model when no item model
     const b = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "req-model",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => ok({ model: "top-model", data: [{ index: 0, embedding: [1] }] })),
     });
     expect(b.ok && b.value[0]?.modelId).toBe("top-model");
     // request modelId when neither present
     const c = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "req-model", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "req-model",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => ok({ data: [{ index: 0, embedding: [1] }] })),
     });
     expect(c.ok && c.value[0]?.modelId).toBe("req-model");
@@ -784,8 +932,13 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
 
   it("carries model_revision when the payload provides one", async () => {
     const out = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
-      fetchImpl: mockFetch(() => ok({ model_revision: "rev-9", data: [{ index: 0, embedding: [1] }] })),
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x"],
+      fetchImpl: mockFetch(() =>
+        ok({ model_revision: "rev-9", data: [{ index: 0, embedding: [1] }] }),
+      ),
     });
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.value[0]?.modelRevision).toBe("rev-9");
@@ -794,7 +947,10 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
   it("rejects a non-record data item, a missing index, and a non-array embedding", async () => {
     for (const data of [[42], [{ embedding: [1] }], [{ index: 0, embedding: "nope" }]]) {
       const out = await requestOpenAIEmbeddingBatch({
-        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+        endpoint: "https://e/v1",
+        apiKey: "k",
+        modelId: "m",
+        inputs: ["x"],
         fetchImpl: mockFetch(() => ok({ data })),
       });
       expect(out.ok).toBe(false);
@@ -805,8 +961,14 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
   it("rejects when the payload is not an object or has no data array", async () => {
     for (const body of ["[]", JSON.stringify({ data: "x" })]) {
       const out = await requestOpenAIEmbeddingBatch({
-        endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
-        fetchImpl: mockFetch(() => new Response(body, { status: 200, headers: { "content-type": "application/json" } })),
+        endpoint: "https://e/v1",
+        apiKey: "k",
+        modelId: "m",
+        inputs: ["x"],
+        fetchImpl: mockFetch(
+          () =>
+            new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
+        ),
       });
       expect(out.ok).toBe(false);
       if (!out.ok) expect(out.kind).toBe("invalid-response");
@@ -815,13 +977,21 @@ describe("requestOpenAIEmbeddingBatch — branch coverage (#189 GRD-004)", () =>
 
   it("maps a transport failure and a 500 status to error kinds", async () => {
     const thrown = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
-      fetchImpl: mockFetch(() => { throw new Error("socket hang up"); }),
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x"],
+      fetchImpl: mockFetch(() => {
+        throw new Error("socket hang up");
+      }),
     });
     expect(thrown.ok).toBe(false);
     if (!thrown.ok) expect(thrown.kind).toBe("transport");
     const server = await requestOpenAIEmbeddingBatch({
-      endpoint: "https://e/v1", apiKey: "k", modelId: "m", inputs: ["x"],
+      endpoint: "https://e/v1",
+      apiKey: "k",
+      modelId: "m",
+      inputs: ["x"],
       fetchImpl: mockFetch(() => new Response("", { status: 500 })),
     });
     expect(server.ok).toBe(false);

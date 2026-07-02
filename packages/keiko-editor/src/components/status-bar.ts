@@ -28,9 +28,23 @@ const LANGUAGE_LABELS: Readonly<Record<EditorLanguageId, string>> = {
   yaml: "YAML",
   python: "Python",
   java: "Java",
+  kotlin: "Kotlin",
+  scala: "Scala",
+  groovy: "Groovy",
   go: "Go",
   rust: "Rust",
+  csharp: "C#",
+  fsharp: "F#",
+  vb: "Visual Basic",
+  cpp: "C++",
+  swift: "Swift",
+  ruby: "Ruby",
+  php: "PHP",
+  terraform: "Terraform",
   sql: "SQL",
+  protobuf: "Protocol Buffers",
+  openapi: "OpenAPI",
+  graphql: "GraphQL",
   shell: "Shell",
   plaintext: "Plain Text",
 };
@@ -80,8 +94,7 @@ export interface EditorStatusBarInput {
    * never disagree. Omitted when the host does not wire formatting state.
    */
   readonly formatting?:
-    | { readonly available: boolean; readonly source: EditorBuiltinFormattingSource }
-    | undefined;
+    { readonly available: boolean; readonly source: EditorBuiltinFormattingSource } | undefined;
   readonly run?: EditorStatusRun | undefined;
   readonly readOnly?: boolean | undefined;
 }

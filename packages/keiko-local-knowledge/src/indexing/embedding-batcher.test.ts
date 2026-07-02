@@ -12,9 +12,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
-import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  OpenAIEmbeddingAdapter,
+  OpenAIEmbeddingBatchOutcome,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
+import type { LocalKnowledgeTokenizer } from "../chunking/index.js";
 import { embedChunkBatch } from "./embedding-batcher.js";
 import { countVectorsForCapsule, countVectorsForDocument } from "./vector-persist.js";
 import {
@@ -163,6 +167,40 @@ describe("embedChunkBatch — happy path", () => {
     expect(result.vectors).toEqual([]);
     expect(result.errors).toEqual([]);
     expect(countVectorsForCapsule(fixture.store._internal.db, fixture.seeded.capsuleId)).toBe(0);
+  });
+
+  it("sends raw document chunk text without a Qwen3 query instruction prefix", async () => {
+    const qwenIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      modelId: "Qwen3-Embedding-8B",
+    };
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, qwenIdentity.vectorDimensions),
+            modelId: qwenIdentity.modelId,
+          },
+        };
+      },
+    });
+    const first = fixture.chunks[0];
+    if (first === undefined) throw new Error("fixture produced no chunks");
+    const rawText = "Document chunk that must remain raw for indexing.";
+
+    await embedChunkBatch([{ ...first, text: rawText }], {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: qwenIdentity,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+    });
+
+    expect(inputs).toEqual([rawText]);
   });
 });
 
@@ -572,9 +610,13 @@ function batchAdapter(identity: EmbeddingModelIdentity = DEFAULT_EMBEDDING): {
   return { adapter, batchCallSizes, scalarCalls: () => scalarCalls };
 }
 
+function buildArrayBatchFixture(): Fixture {
+  return buildFixture("alpha beta gamma delta epsilon zeta eta theta ".repeat(80));
+}
+
 describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
   it("uses requestBatch (never the scalar request) and persists one vector per chunk", async () => {
-    const { store, cleanup, seeded, chunks } = buildFixture();
+    const { store, cleanup, seeded, chunks } = buildArrayBatchFixture();
     const { adapter, batchCallSizes, scalarCalls } = batchAdapter();
     const result = await embedChunkBatch(chunks, {
       adapter,
@@ -623,5 +665,313 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
     expect(batchCallSizes.reduce((a, b) => a + b, 0)).toBe(chunks.length);
     expect(result.vectors).toHaveLength(chunks.length);
     cleanup();
+  });
+
+  it("splits token-dense batches before the Qwen3 32K-class token budget is exceeded", async () => {
+    const { store, cleanup, seeded, chunks: seededChunks } = buildFixture("dense ".repeat(40_000));
+    const chunks: ChunkToEmbed[] = seededChunks.slice(0, 40).map((chunk, i) => ({
+      ...chunk,
+      text: `dense-${String(i)}-${"漢".repeat(1_000)}`,
+    }));
+    const { adapter, batchCallSizes } = batchAdapter();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(chunks.length);
+      expect(batchCallSizes.length).toBeGreaterThan(1);
+      expect(batchCallSizes.reduce((sum, n) => sum + n, 0)).toBe(chunks.length);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        chunks.length,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("uses the injected tokenizer for array-batch token budgeting", async () => {
+    const { store, cleanup, seeded, chunks: seededChunks } = buildFixture("alpha ".repeat(400));
+    const chunks: ChunkToEmbed[] = seededChunks.slice(0, 3).map((chunk, i) => ({
+      ...chunk,
+      text: `short-${String(i)}`,
+    }));
+    const tokenizer: LocalKnowledgeTokenizer = {
+      identity: "test-tokenizer-v1",
+      kind: "tokenizer",
+      countTokens: () => 16_000,
+    };
+    const { adapter, batchCallSizes } = batchAdapter();
+    try {
+      const result = await embedChunkBatch(chunks, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 4,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        tokenizer,
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(chunks.length);
+      expect(batchCallSizes.length).toBeGreaterThan(1);
+      expect(batchCallSizes.every((n) => n === 1)).toBe(true);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        chunks.length,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("passes optional batch transport fields and supports non-l2 persisted vectors", async () => {
+    const { store, cleanup, seeded, chunks } = buildFixture();
+    const controller = new AbortController();
+    const pinnedIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      dimensionsParam: DEFAULT_EMBEDDING.vectorDimensions,
+      normalization: "none",
+    };
+    const requests: Parameters<NonNullable<OpenAIEmbeddingAdapter["requestBatch"]>>[0][] = [];
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      apiKeyHeaderName: "X-Embedding-Key",
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          ok: true as const,
+          value: request.inputs.map((input) => ({
+            vector: deterministicVector(input, pinnedIdentity.vectorDimensions),
+            modelId: pinnedIdentity.modelId,
+          })),
+        });
+      },
+    };
+
+    try {
+      const selected = chunks.slice(0, 2);
+      const result = await embedChunkBatch(selected, {
+        adapter,
+        store,
+        pinnedIdentity,
+        concurrency: 2,
+        signal: controller.signal,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(selected.length);
+      expect(result.vectors[0]?.embeddingIdentity.normalization).toBe("none");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.apiKeyHeaderName).toBe("X-Embedding-Key");
+      expect(requests[0]?.dimensions).toBe(DEFAULT_EMBEDDING.vectorDimensions);
+      expect(requests[0]?.signal).toBe(controller.signal);
+      expect(
+        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+      ).toBe(selected.length);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("retries a transient array-batch failure and succeeds on the next attempt", async () => {
+    const { store, cleanup, chunks } = buildArrayBatchFixture();
+    let calls = 0;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request): Promise<OpenAIEmbeddingBatchOutcome> => {
+        calls += 1;
+        if (calls === 1) return Promise.resolve({ ok: false, kind: "timeout" });
+        return Promise.resolve({
+          ok: true,
+          value: request.inputs.map((input) => ({
+            vector: deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          })),
+        });
+      },
+    };
+
+    try {
+      const result = await embedChunkBatch(chunks.slice(0, 2), {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: { maxRetries: 2, baseDelayMs: 0, sleep: () => Promise.resolve() },
+      });
+
+      expect(calls).toBe(2);
+      expect(result.errors).toEqual([]);
+      expect(result.vectors).toHaveLength(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("maps permanent array-batch failures to per-chunk adapter errors without persistence", async () => {
+    const { store, cleanup, seeded, chunks } = buildArrayBatchFixture();
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: () => Promise.resolve({ ok: false, kind: "wrong-header" }),
+    };
+
+    try {
+      const selected = chunks.slice(0, 3);
+      const result = await embedChunkBatch(selected, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+
+      expect(result.vectors).toEqual([]);
+      expect(result.errors).toHaveLength(selected.length);
+      expect(result.errors.every((error) => error.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+      expect(
+        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+      ).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("surfaces invalid-response when an array-batch response omits one embedding", async () => {
+    const { store, cleanup, seeded, chunks } = buildArrayBatchFixture();
+    const selected = chunks.slice(0, 2);
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request) => Promise.resolve({
+        ok: true as const,
+        value: request.inputs.slice(0, 1).map((input) => ({
+          vector: deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        })),
+      }),
+    };
+
+    try {
+      const result = await embedChunkBatch(selected, {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+
+      expect(result.vectors).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.message).toContain("invalid-response");
+      expect(
+        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+      ).toBe(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("refuses to persist any vector when an array-batch item drifts from the pinned identity", async () => {
+    const { store, cleanup, seeded, chunks } = buildArrayBatchFixture();
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: (request) => Promise.resolve({
+        ok: true as const,
+        value: request.inputs.map((input, index) => ({
+          vector: deterministicVector(
+            input,
+            index === 0 ? 32 : DEFAULT_EMBEDDING.vectorDimensions,
+          ),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        })),
+      }),
+    };
+
+    try {
+      const result = await embedChunkBatch(chunks.slice(0, 3), {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+      });
+
+      expect(result.vectors).toEqual([]);
+      expect(result.errors.some((error) => error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY")).toBe(
+        true,
+      );
+      expect(
+        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+      ).toBe(0);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("stops retrying array batches when the signal aborts during backoff", async () => {
+    const { store, cleanup, seeded, chunks } = buildArrayBatchFixture();
+    const controller = new AbortController();
+    let calls = 0;
+    const adapter: OpenAIEmbeddingAdapter = {
+      endpoint: "https://example.test/v1",
+      apiKey: ["sk-", "test"].join(""),
+      request: () => Promise.resolve({ ok: false, kind: "transport" }),
+      requestBatch: () => {
+        calls += 1;
+        return Promise.resolve({ ok: false as const, kind: "rate-limited" as const });
+      },
+    };
+
+    try {
+      const result = await embedChunkBatch(chunks.slice(0, 1), {
+        adapter,
+        store,
+        pinnedIdentity: DEFAULT_EMBEDDING,
+        concurrency: 1,
+        signal: controller.signal,
+        now: fixedClock(),
+        idSource: fixedIds("vec"),
+        retry: {
+          maxRetries: 5,
+          baseDelayMs: 0,
+          sleep: () => {
+            controller.abort();
+            return Promise.reject(new DOMException("aborted", "AbortError"));
+          },
+        },
+      });
+
+      expect(calls).toBe(1);
+      expect(result.vectors).toEqual([]);
+      expect(result.errors.some((error) => error.code === "CANCELLED")).toBe(true);
+      expect(
+        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+      ).toBe(0);
+    } finally {
+      cleanup();
+    }
   });
 });

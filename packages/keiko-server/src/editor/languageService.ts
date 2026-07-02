@@ -45,7 +45,11 @@ import {
 // Providers are stateless and deterministic, so a single shared instance is safe. External LSP
 // descriptors are advertised as unavailable until a workspace-contained executable is configured.
 const defaultRegistry = createLanguageProviderRegistry(
-  [createTypescriptLanguageProvider(), createJsonLanguageProvider(), createBuiltinTextLanguageProvider()],
+  [
+    createTypescriptLanguageProvider(),
+    createJsonLanguageProvider(),
+    createBuiltinTextLanguageProvider(),
+  ],
   unavailableExternalLspDescriptors(),
 );
 
@@ -70,7 +74,9 @@ export function describeLanguageCapabilities(
   registry: LanguageProviderRegistry = defaultRegistry,
   descriptorOverrides: readonly LanguageProviderDescriptor[] = [],
 ): LanguageServiceCapabilities {
-  const overridesById = new Map(descriptorOverrides.map((descriptor) => [descriptor.id, descriptor]));
+  const overridesById = new Map(
+    descriptorOverrides.map((descriptor) => [descriptor.id, descriptor]),
+  );
   const descriptors = registry
     .describe()
     .map((descriptor) => overridesById.get(descriptor.id) ?? descriptor);

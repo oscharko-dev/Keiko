@@ -651,7 +651,10 @@ export async function handleGitDiff(
 
       const runs =
         scope === "all"
-          ? [await runDiff(repo, options, true, path), await runDiff(repo, options, false, path)]
+          ? await Promise.all([
+              runDiff(repo, options, true, path),
+              runDiff(repo, options, false, path),
+            ])
           : [await runDiff(repo, options, scope === "staged", path)];
       const failed = runs.find((result) => result.exitCode !== 0);
       if (failed !== undefined) {

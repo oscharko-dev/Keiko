@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_TURN_DETECTION,
   DEFAULT_REALTIME_VOICE,
   isRealtimeVoice,
   MAX_SDP_BYTES,
@@ -149,7 +151,7 @@ describe("requestRealtimeNegotiation", () => {
     expect(seen[1]?.apiKey).toBeUndefined();
   });
 
-  it("applies grounded session config (instructions, voice, transcription, server_vad) in the ephemeral body", async () => {
+  it("applies grounded session config (instructions, voice, transcription, explicit server_vad) in the ephemeral body", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -185,7 +187,7 @@ describe("requestRealtimeNegotiation", () => {
         instructions: "You are Keiko.",
         audio: {
           input: {
-            turn_detection: { type: "server_vad" },
+            turn_detection: DEFAULT_REALTIME_TURN_DETECTION,
             transcription: { model: "whisper-1" },
           },
           output: { voice: "shimmer" },
@@ -226,7 +228,7 @@ describe("requestRealtimeNegotiation", () => {
           },
         },
       ],
-      toolChoice: "auto",
+      toolChoice: { type: "function", function: { name: "search_keiko_grounding" } },
       fetchImpl,
     });
 
@@ -241,12 +243,12 @@ describe("requestRealtimeNegotiation", () => {
             description: "Search connected Keiko grounding sources.",
           },
         ],
-        tool_choice: "auto",
+        tool_choice: { type: "function", function: { name: "search_keiko_grounding" } },
       },
     });
   });
 
-  it("omits session config fields that are not supplied (provider-default session stays valid)", async () => {
+  it("uses fail-safe input transcription and explicit VAD when optional session fields are not supplied", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
       if (url.endsWith("/realtime/client_secrets")) {
@@ -277,8 +279,45 @@ describe("requestRealtimeNegotiation", () => {
     };
     expect(parsed.session.instructions).toBeUndefined();
     expect(parsed.session.audio.output).toBeUndefined();
-    expect(parsed.session.audio.input.transcription).toBeUndefined();
-    expect(parsed.session.audio.input.turn_detection).toEqual({ type: "server_vad" });
+    expect(parsed.session.audio.input.transcription).toEqual({
+      model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    });
+    expect(parsed.session.audio.input.turn_detection).toEqual(DEFAULT_REALTIME_TURN_DETECTION);
+  });
+
+  it("can disable automatic server-VAD responses while keeping transcription enabled", async () => {
+    let clientSecretBody = "{}";
+    const fetchImpl = mockFetch((url, init) => {
+      if (url.endsWith("/realtime/client_secrets")) {
+        clientSecretBody = bodyToText(init);
+        return new Response(JSON.stringify({ value: "tok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sdp(ANSWER_SDP);
+    });
+
+    await requestRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      realtimeAuthMode: "ephemeral-session",
+      modelId: "keiko-realtime",
+      offerSdp: OFFER_SDP,
+      disableAutomaticResponse: true,
+      fetchImpl,
+    });
+
+    const parsed = JSON.parse(clientSecretBody) as {
+      session: { audio: { input: Record<string, unknown> } };
+    };
+    expect(parsed.session.audio.input.transcription).toEqual({
+      model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    });
+    expect(parsed.session.audio.input.turn_detection).toEqual({
+      ...DEFAULT_REALTIME_TURN_DETECTION,
+      create_response: false,
+    });
   });
 
   describe("resolveRealtimeVoice (guard against TTS-only voice ids)", () => {

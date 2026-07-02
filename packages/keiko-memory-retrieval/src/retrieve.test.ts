@@ -125,6 +125,17 @@ describe("retrieveMemoryContext — input validation", () => {
     }
   });
 
+  it("throws RetrievalError('invalid-threshold') when semanticMinScore is out of range", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ semanticMinScore: 1.1 }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
   it("wraps port failures as RetrievalError('port-failure') with cause preserved", () => {
     const root = new Error("port boom");
     const port: MemoryQueryPort = {
@@ -485,6 +496,30 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
     });
   });
 
+  it("treats semantic scores below the configured floor as absent", () => {
+    const semanticOnly = buildRecord({
+      id: "semantic-low",
+      body: "stores invoices in a legacy archive",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const { port } = portReturning({ "user:u1": [semanticOnly] });
+    const result = retrieveMemoryContext(
+      baseRequest({
+        queryText: "completely unrelated query",
+        semanticById: new Map([[memoryId("semantic-low"), 0.2]]),
+        semanticMinScore: 0.3,
+        budgetTokens: 500,
+      }),
+      port,
+    );
+    expect(result.included).toEqual([]);
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("semantic-low"),
+      reason: "below-threshold",
+    });
+  });
+
   it("uses incoming graph edges when computing graph proximity", () => {
     const anchor = buildRecord({ id: "anchor", pinned: true, updatedAt: now });
     const linked = buildRecord({ id: "linked", updatedAt: now - 1 });
@@ -496,6 +531,38 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
 
     const result = retrieveMemoryContext(baseRequest({ budgetTokens: 500 }), port);
 
+    const linkedEntry = result.included.find((entry) => entry.memoryId === memoryId("linked"));
+    expect(linkedEntry?.subscores.graph).toBeGreaterThan(0);
+  });
+
+  it("prefers the batched edge port over per-memory edge calls", () => {
+    const anchor = buildRecord({ id: "anchor", pinned: true, updatedAt: now });
+    const linked = buildRecord({ id: "linked", updatedAt: now - 1 });
+    let batchCalls = 0;
+    let singleCalls = 0;
+    const port: MemoryQueryPort = {
+      listByScope: () => [anchor, linked],
+      listEdgesForMemories: (ids) => {
+        batchCalls += 1;
+        expect(ids).toEqual([memoryId("anchor"), memoryId("linked")]);
+        return new Map([
+          [memoryId("linked"), [buildEdge({ from: "anchor", to: "linked" })]],
+        ]);
+      },
+      listOutgoingEdges: () => {
+        singleCalls += 1;
+        return [];
+      },
+      listIncomingEdges: () => {
+        singleCalls += 1;
+        return [];
+      },
+    };
+
+    const result = retrieveMemoryContext(baseRequest({ budgetTokens: 500 }), port);
+
+    expect(batchCalls).toBe(1);
+    expect(singleCalls).toBe(0);
     const linkedEntry = result.included.find((entry) => entry.memoryId === memoryId("linked"));
     expect(linkedEntry?.subscores.graph).toBeGreaterThan(0);
   });

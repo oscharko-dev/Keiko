@@ -45,7 +45,9 @@ export function createLspTransport(
 
   const client = createLspJsonRpcClient({
     source: guardedSource,
-    sendFrame: (body) => { writeLspFrame(handle.stdin, body); },
+    sendFrame: (body) => {
+      writeLspFrame(handle.stdin, body);
+    },
     ...(deps.scheduler !== undefined ? { scheduler: deps.scheduler } : {}),
   });
 

@@ -4,7 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>States · Keiko Design System</title>
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
     <link rel="stylesheet" href="keiko-semantic-tokens.css" />
@@ -12,35 +21,160 @@
     <link rel="stylesheet" href="components.css" />
     <link rel="stylesheet" href="keiko-inputs.css" />
     <style>
-      .matrix { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-      .matrix th { text-align: center; font: 600 10px var(--font-mono); letter-spacing: 0.03em; text-transform: uppercase; color: var(--fg-faint); padding: 0 6px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-      .matrix th.cmp { text-align: left; }
-      .matrix td { padding: 11px 6px; border-bottom: 1px solid var(--line-soft); text-align: center; color: var(--fg-faint); }
-      .matrix td.cmp { text-align: left; color: var(--fg); font-weight: 600; white-space: nowrap; }
-      .matrix tr:last-child td { border-bottom: 0; }
-      .matrix .y { color: var(--accent-text); }
-      .matrix .y svg { width: 15px; height: 15px; }
-      .state-proof { display: grid; gap: 0; }
-      .family-proof { display: grid; grid-template-columns: minmax(130px, 180px) 1fr; gap: 16px; align-items: start; padding: 14px 0; border-bottom: 1px solid var(--line-soft); }
-      .family-proof:last-child { border-bottom: 0; }
-      .state-strip { display: flex; flex-wrap: wrap; gap: 9px; }
-      .state-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; }
-      .state-cell .sc-l { font: 600 10px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-faint); }
-      .state-proof-chip { min-height: 34px; display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--card); color: var(--fg); font: 600 12px var(--font-ui); white-space: nowrap; }
-      .state-proof-chip[data-state="h"] { background: var(--surface-secondary); color: var(--text-primary); }
-      .state-proof-chip[data-state="f"] { border-color: var(--accent-line); box-shadow: 0 0 0 2px var(--bg), 0 0 0 calc(var(--focus-w, 2px) + 2px) var(--accent-text); }
-      .state-proof-chip[data-state="a"] { transform: translateY(0.5px); filter: brightness(.92); }
-      .state-proof-chip[data-state="s"] { border-color: var(--accent-line); background: var(--accent-dim); color: var(--accent-text); }
-      .state-proof-chip[data-state="x"] { opacity: .58; cursor: not-allowed; }
-      .state-proof-chip[data-state="l"] { border-color: var(--line); background: linear-gradient(90deg, var(--skeleton-base), var(--skeleton-highlight), var(--skeleton-base)); color: var(--fg); }
-      .state-proof-chip[data-state="e"] { border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent); background: var(--feedback-danger-surface); color: var(--feedback-danger); }
-      .state-proof-chip[data-state="m"] { border-style: dashed; color: var(--fg-muted); }
-      .state-proof-chip[data-state="y"] { border-color: color-mix(in oklch, var(--feedback-info) 42%, transparent); background: var(--feedback-info-surface); color: var(--feedback-info); }
-      .state-proof-chip[data-state="c"] { border-color: color-mix(in oklch, var(--feedback-warning) 42%, transparent); background: var(--feedback-warning-surface); color: var(--feedback-warning); }
-      .state-proof-icon { width: 18px; height: 18px; flex: none; display: inline-grid; place-items: center; border: 1px solid currentColor; border-radius: 999px; font: 700 10px var(--font-mono); }
-      .state-proof-chip[data-state="l"] .state-proof-icon { border-style: dotted; }
+      .matrix {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12.5px;
+      }
+      .matrix th {
+        text-align: center;
+        font: 600 10px var(--font-mono);
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        padding: 0 6px 12px;
+        border-bottom: 1px solid var(--line);
+        white-space: nowrap;
+      }
+      .matrix th.cmp {
+        text-align: left;
+      }
+      .matrix td {
+        padding: 11px 6px;
+        border-bottom: 1px solid var(--line-soft);
+        text-align: center;
+        color: var(--fg-faint);
+      }
+      .matrix td.cmp {
+        text-align: left;
+        color: var(--fg);
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .matrix tr:last-child td {
+        border-bottom: 0;
+      }
+      .matrix .y {
+        color: var(--accent-text);
+      }
+      .matrix .y svg {
+        width: 15px;
+        height: 15px;
+      }
+      .state-proof {
+        display: grid;
+        gap: 0;
+      }
+      .family-proof {
+        display: grid;
+        grid-template-columns: minmax(130px, 180px) 1fr;
+        gap: 16px;
+        align-items: start;
+        padding: 14px 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .family-proof:last-child {
+        border-bottom: 0;
+      }
+      .state-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+      }
+      .state-cell {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 9px;
+      }
+      .state-cell .sc-l {
+        font: 600 10px var(--font-mono);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+      }
+      .state-proof-chip {
+        min-height: 34px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius-control);
+        background: var(--card);
+        color: var(--fg);
+        font: 600 12px var(--font-ui);
+        white-space: nowrap;
+      }
+      .state-proof-chip[data-state="h"] {
+        background: var(--surface-secondary);
+        color: var(--text-primary);
+      }
+      .state-proof-chip[data-state="f"] {
+        border-color: var(--accent-line);
+        box-shadow:
+          0 0 0 2px var(--bg),
+          0 0 0 calc(var(--focus-w, 2px) + 2px) var(--accent-text);
+      }
+      .state-proof-chip[data-state="a"] {
+        transform: translateY(0.5px);
+        filter: brightness(0.92);
+      }
+      .state-proof-chip[data-state="s"] {
+        border-color: var(--accent-line);
+        background: var(--accent-dim);
+        color: var(--accent-text);
+      }
+      .state-proof-chip[data-state="x"] {
+        opacity: 0.58;
+        cursor: not-allowed;
+      }
+      .state-proof-chip[data-state="l"] {
+        border-color: var(--line);
+        background: linear-gradient(
+          90deg,
+          var(--skeleton-base),
+          var(--skeleton-highlight),
+          var(--skeleton-base)
+        );
+        color: var(--fg);
+      }
+      .state-proof-chip[data-state="e"] {
+        border-color: color-mix(in oklch, var(--feedback-danger) 42%, transparent);
+        background: var(--feedback-danger-surface);
+        color: var(--feedback-danger);
+      }
+      .state-proof-chip[data-state="m"] {
+        border-style: dashed;
+        color: var(--fg-muted);
+      }
+      .state-proof-chip[data-state="y"] {
+        border-color: color-mix(in oklch, var(--feedback-info) 42%, transparent);
+        background: var(--feedback-info-surface);
+        color: var(--feedback-info);
+      }
+      .state-proof-chip[data-state="c"] {
+        border-color: color-mix(in oklch, var(--feedback-warning) 42%, transparent);
+        background: var(--feedback-warning-surface);
+        color: var(--feedback-warning);
+      }
+      .state-proof-icon {
+        width: 18px;
+        height: 18px;
+        flex: none;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid currentColor;
+        border-radius: 999px;
+        font: 700 10px var(--font-mono);
+      }
+      .state-proof-chip[data-state="l"] .state-proof-icon {
+        border-style: dotted;
+      }
       @media (max-width: 720px) {
-        .family-proof { grid-template-columns: 1fr; }
+        .family-proof {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
@@ -53,13 +187,25 @@
       <header class="phero">
         <div class="ey">Components · States</div>
         <h1>Every state, <span class="dim">named.</span></h1>
-        <p class="lead">A component isn't done until its states are. Keiko standardises eleven — from rest to conflict — defines which apply to what, and proves every applicable state across the seven canonical appearance modes. Toggle appearance &amp; contrast in the sidebar; this page is the proof.</p>
+        <p class="lead">
+          A component isn't done until its states are. Keiko standardises eleven — from rest to
+          conflict — defines which apply to what, and proves every applicable state across the seven
+          canonical appearance modes. Toggle appearance &amp; contrast in the sidebar; this page is
+          the proof.
+        </p>
       </header>
 
       <!-- VOCAB -->
       <section class="sec" id="vocab">
-        <div class="sec-head"><div class="num">01 — VOCABULARY</div><h2>The eleven states</h2><p>One name per state, used everywhere. The first six are interaction; the last five are data &amp; sync, which agentic surfaces lean on.</p></div>
-        <div class="demo-row" style="gap:9px">
+        <div class="sec-head">
+          <div class="num">01 — VOCABULARY</div>
+          <h2>The eleven states</h2>
+          <p>
+            One name per state, used everywhere. The first six are interaction; the last five are
+            data &amp; sync, which agentic surfaces lean on.
+          </p>
+        </div>
+        <div class="demo-row" style="gap: 9px">
           <span class="c-badge">Default</span>
           <span class="c-badge">Hover</span>
           <span class="c-badge">Focus</span>
@@ -76,30 +222,72 @@
 
       <!-- LIVE -->
       <section class="sec" id="live">
-        <div class="sec-head"><div class="num">02 — PROOF</div><h2>States, live</h2><p>Forced into each applicable state so they're all visible at once — and all driven by the same tokens, so they're correct in dark, light, high-contrast, forced-colors, and reduced-motion evidence.</p></div>
+        <div class="sec-head">
+          <div class="num">02 — PROOF</div>
+          <h2>States, live</h2>
+          <p>
+            Forced into each applicable state so they're all visible at once — and all driven by the
+            same tokens, so they're correct in dark, light, high-contrast, forced-colors, and
+            reduced-motion evidence.
+          </p>
+        </div>
 
         <div class="card demo-card stack">
-          <div class="state-proof" id="state-proof" aria-label="Rendered state proof for every applicable component state"></div>
+          <div
+            class="state-proof"
+            id="state-proof"
+            aria-label="Rendered state proof for every applicable component state"
+          ></div>
         </div>
       </section>
 
       <!-- MATRIX -->
       <section class="sec" id="matrix">
-        <div class="sec-head"><div class="num">03 — APPLICABILITY</div><h2>Which states apply</h2><p>Not every state fits every component. The matrix is the contract — a green check means the component must define and document that state.</p></div>
-        <div class="card" style="padding:14px 24px;overflow-x:auto">
+        <div class="sec-head">
+          <div class="num">03 — APPLICABILITY</div>
+          <h2>Which states apply</h2>
+          <p>
+            Not every state fits every component. The matrix is the contract — a green check means
+            the component must define and document that state.
+          </p>
+        </div>
+        <div class="card" style="padding: 14px 24px; overflow-x: auto">
           <table class="matrix" id="mx">
             <thead>
-              <tr><th class="cmp">Component</th><th>Default</th><th>Hover</th><th>Focus</th><th>Active</th><th>Selected</th><th>Disabled</th><th>Loading</th><th>Error</th><th>Empty</th><th>Syncing</th><th>Conflict</th></tr>
+              <tr>
+                <th class="cmp">Component</th>
+                <th>Default</th>
+                <th>Hover</th>
+                <th>Focus</th>
+                <th>Active</th>
+                <th>Selected</th>
+                <th>Disabled</th>
+                <th>Loading</th>
+                <th>Error</th>
+                <th>Empty</th>
+                <th>Syncing</th>
+                <th>Conflict</th>
+              </tr>
             </thead>
-            <tbody><!-- filled by JS --></tbody>
+            <tbody>
+              <!-- filled by JS -->
+            </tbody>
           </table>
         </div>
-        <div class="note" style="margin-top:18px"><span class="tag" style="color:var(--accent-text)">Rule</span><div>Ship a component only when every checked cell is implemented and screenshotted in the seven canonical modes. Loading uses the skeleton tokens; error uses <code>--feedback-danger</code>; syncing uses <code>--feedback-info</code>; conflict uses <code>--feedback-warning</code> — always paired with an icon and a word.</div></div>
+        <div class="note" style="margin-top: 18px">
+          <span class="tag" style="color: var(--accent-text)">Rule</span>
+          <div>
+            Ship a component only when every checked cell is implemented and screenshotted in the
+            seven canonical modes. Loading uses the skeleton tokens; error uses
+            <code>--feedback-danger</code>; syncing uses <code>--feedback-info</code>; conflict uses
+            <code>--feedback-warning</code> — always paired with an icon and a word.
+          </div>
+        </div>
       </section>
     </main>
 
     <script>
-      var STATES = ["d","h","f","a","s","x","l","e","m","y","c"];
+      var STATES = ["d", "h", "f", "a", "s", "x", "l", "e", "m", "y", "c"];
       var STATE_META = [
         { key: "d", label: "Default", group: "interaction", icon: "" },
         { key: "h", label: "Hover", group: "interaction", icon: "" },
@@ -111,20 +299,20 @@
         { key: "e", label: "Error", group: "data-sync", icon: "!" },
         { key: "m", label: "Empty", group: "data-sync", icon: "0" },
         { key: "y", label: "Syncing", group: "data-sync", icon: "~" },
-        { key: "c", label: "Conflict", group: "data-sync", icon: "!" }
+        { key: "c", label: "Conflict", group: "data-sync", icon: "!" },
       ];
       var ROWS = [
-        ["Button",       "11110100000"],
-        ["Input / field","11111110000"],
-        ["Checkbox / radio","11111100000"],
-        ["Select / combobox","11111111000"],
-        ["List / tree row","11101100000"],
-        ["Table",        "10001011110"],
-        ["Tab",          "11111100000"],
-        ["Toggle",       "11111100000"],
-        ["Card / window","10100010011"],
-        ["AI response",  "10000111011"],
-        ["File / sync item","10000110111"]
+        ["Button", "11110100000"],
+        ["Input / field", "11111110000"],
+        ["Checkbox / radio", "11111100000"],
+        ["Select / combobox", "11111111000"],
+        ["List / tree row", "11101100000"],
+        ["Table", "10001011110"],
+        ["Tab", "11111100000"],
+        ["Toggle", "11111100000"],
+        ["Card / window", "10100010011"],
+        ["AI response", "10000111011"],
+        ["File / sync item", "10000110111"],
       ];
       var metaByKey = STATE_META.reduce(function (acc, meta) {
         acc[meta.key] = meta;
@@ -134,30 +322,59 @@
         var meta = metaByKey[stateKey];
         var isDataSync = meta.group === "data-sync";
         var marker = isDataSync
-          ? '<span class="state-proof-icon" data-state-icon aria-hidden="true">' + meta.icon + '</span>'
+          ? '<span class="state-proof-icon" data-state-icon aria-hidden="true">' +
+            meta.icon +
+            "</span>"
           : "";
-        return '<span class="state-proof-chip" data-family="' + family + '" data-state="' + stateKey + '"' +
-          (isDataSync ? ' data-noncolor="true"' : "") + '>' +
+        return (
+          '<span class="state-proof-chip" data-family="' +
+          family +
+          '" data-state="' +
+          stateKey +
+          '"' +
+          (isDataSync ? ' data-noncolor="true"' : "") +
+          ">" +
           marker +
-          '<span data-state-label>' + meta.label + '</span>' +
-          '</span>';
+          "<span data-state-label>" +
+          meta.label +
+          "</span>" +
+          "</span>"
+        );
       }
       document.querySelector("#state-proof").innerHTML = ROWS.map(function (r) {
-        var chips = r[1].split("").map(function (on, index) {
-          return on === "1" ? stateChip(r[0], STATES[index]) : "";
-        }).join("");
-        return '<div class="family-proof" data-family-row="' + r[0] + '">' +
-          '<div class="state-cell"><div class="sc-l">' + r[0] + '</div></div>' +
-          '<div class="state-strip">' + chips + '</div>' +
-          '</div>';
+        var chips = r[1]
+          .split("")
+          .map(function (on, index) {
+            return on === "1" ? stateChip(r[0], STATES[index]) : "";
+          })
+          .join("");
+        return (
+          '<div class="family-proof" data-family-row="' +
+          r[0] +
+          '">' +
+          '<div class="state-cell"><div class="sc-l">' +
+          r[0] +
+          "</div></div>" +
+          '<div class="state-strip">' +
+          chips +
+          "</div>" +
+          "</div>"
+        );
       }).join("");
       document.querySelector("#mx tbody").innerHTML = ROWS.map(function (r) {
-        var cells = r[1].split("").map(function (on) {
-          return '<td>' + (on === "1"
-            ? '<span class="y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5"/></svg></span>'
-            : '<span style="opacity:.32">·</span>') + '</td>';
-        }).join("");
-        return '<tr><td class="cmp">' + r[0] + '</td>' + cells + '</tr>';
+        var cells = r[1]
+          .split("")
+          .map(function (on) {
+            return (
+              "<td>" +
+              (on === "1"
+                ? '<span class="y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 L10 17.5 L19 6.5"/></svg></span>'
+                : '<span style="opacity:.32">·</span>') +
+              "</td>"
+            );
+          })
+          .join("");
+        return '<tr><td class="cmp">' + r[0] + "</td>" + cells + "</tr>";
       }).join("");
     </script>
     <script src="theme-control.js"></script>

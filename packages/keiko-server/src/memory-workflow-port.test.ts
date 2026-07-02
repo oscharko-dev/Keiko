@@ -53,6 +53,13 @@ function createVault(): { dir: string; vault: MemoryVaultStore } {
   };
 }
 
+function listAllMemories(
+  vault: MemoryVaultStore,
+  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
+}
+
 function readAuditEvents(store: EvidenceStore, nowMs: number): readonly Record<string, unknown>[] {
   const raw = store.get(auditRunIdFor(nowMs));
   return raw === undefined ? [] : (JSON.parse(raw) as readonly Record<string, unknown>[]);
@@ -254,9 +261,9 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-success",
     });
 
-    const proposed = vault
-      .listMemories({ includeExpired: true })
-      .find((record) => record.status === "proposed");
+    const proposed = listAllMemories(vault, { includeExpired: true }).find(
+      (record) => record.status === "proposed",
+    );
     expect(proposed).toBeDefined();
     expect(proposed?.body).toBe("the test runner is vitest");
     expect(proposed?.scope).toEqual({ kind: "project", projectId: "/repo" });
@@ -273,7 +280,7 @@ describe("createWorkflowMemoryPort", () => {
     vault.close();
   });
 
-  it("does not persist confidential workflow candidates before explicit approval", () => {
+  it("persists confidential workflow candidates as proposed review records", () => {
     const { dir, vault } = createVault();
     cleanup.push(dir);
     const evidenceStore = createEvidenceStore();
@@ -294,12 +301,17 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-correction",
     });
 
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    const proposed = listAllMemories(vault, { includeExpired: true }).find(
+      (record) => record.status === "proposed",
+    );
+    expect(proposed).toBeDefined();
+    expect(proposed?.body).toBe("the private support email is developer@example.com");
+    expect(proposed?.provenance.sensitivity).toBe("confidential");
     const events = readAuditEvents(evidenceStore, 1_710_000_000_000);
     expect(events[0]).toMatchObject({
       kind: "memory:workflow-write-candidate",
       workflowRunId: "wr-4",
-      proposedMemoryIds: [],
+      proposedMemoryIds: [proposed?.id],
     });
     expect(JSON.stringify(events)).not.toContain("developer@example.com");
     vault.close();
@@ -327,7 +339,7 @@ describe("createWorkflowMemoryPort", () => {
       source: "workflow-success",
     });
 
-    expect(vault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(listAllMemories(vault, { includeExpired: true })).toEqual([]);
     vault.close();
   });
 });

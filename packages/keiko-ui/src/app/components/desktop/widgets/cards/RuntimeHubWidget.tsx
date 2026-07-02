@@ -6,6 +6,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { Icons } from "../../Icons";
+import styles from "./TerminalWidget.module.css";
 
 interface RuntimeHubWidgetProps {
   readonly projectPath?: string | undefined;
@@ -95,7 +96,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
   ];
 
   return (
-    <div className="terminal commands">
+    <div className={`terminal commands ${styles.lazyWidgetScope}`}>
       <form
         className="tm-form"
         onSubmit={(event) => {

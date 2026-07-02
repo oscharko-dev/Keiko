@@ -259,6 +259,9 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     kind: f.kind,
     severity: f.severity,
     summaryRedacted: f.summaryRedacted,
+    ...(f.evidenceAtomIds !== undefined ? { evidenceAtomIds: f.evidenceAtomIds } : {}),
+    ...(f.category !== undefined ? { category: f.category } : {}),
+    ...(f.confidence !== undefined ? { confidence: f.confidence } : {}),
   }));
   const weakTestFlags = buildWeakTestFlags(manifest);
   const candidates: QualityIntelligenceUiCandidate[] = candidateRows.map((row) =>
@@ -290,6 +293,9 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     coveragePercentage: computeCoveragePercentage(coverageByAtom),
     coverageByAtom,
     qualityScore: manifest.qualityScore ?? null,
+    ...(manifest.qualityDiagnostics !== undefined
+      ? { qualityDiagnostics: manifest.qualityDiagnostics }
+      : {}),
     drift: projectDriftMetadata(manifest, candidateRows),
   };
 }

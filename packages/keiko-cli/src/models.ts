@@ -4,11 +4,7 @@
 // existing `process.exit(runCli(...))` shim stays synchronous. No credential value
 // is ever written to stdout or stderr.
 
-import {
-  listCapabilities,
-  type EnvSource,
-  GatewayError,
-} from "@oscharko-dev/keiko-model-gateway";
+import { listCapabilities, type EnvSource, GatewayError } from "@oscharko-dev/keiko-model-gateway";
 import { loadGatewayConfigFromFile, resolveConfigPathFromArgs } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 

@@ -80,6 +80,9 @@ export interface QualityIntelligenceUiFindingSummary {
   readonly severity: QualityIntelligenceSeverity;
   /** Already redacted by the QI redaction pipeline before reaching the BFF. */
   readonly summaryRedacted: string;
+  readonly evidenceAtomIds?: readonly string[];
+  readonly category?: string;
+  readonly confidence?: number;
 }
 
 /** Evidence reference row — envelope id and atom id only, no content. */
@@ -169,8 +172,23 @@ export interface QualityIntelligenceUiRunDetail {
    * judge stage was skipped, unavailable, or there were no candidates to judge.
    */
   readonly qualityScore: number | null;
+  /** Count-only judge diagnostics; absent on legacy manifests and skipped judge stages. */
+  readonly qualityDiagnostics?: QualityIntelligenceQualityDiagnostics;
   /** Browser-safe Living Tests drift metadata; never contains raw source text, paths, or hashes. */
   readonly drift: QualityIntelligenceUiDriftMetadata;
+}
+
+export interface QualityIntelligenceQualityDiagnostics {
+  readonly judgedCandidates: number;
+  readonly strongCandidates: number;
+  readonly weakCandidates: number;
+  readonly needsReviewCandidates: number;
+  readonly unjudgedCandidates: number;
+  readonly budgetSkippedCandidates: number;
+  readonly judgeErrorCandidates: number;
+  readonly judgeParseFailedCandidates: number;
+  readonly judgePromptTooLargeCandidates: number;
+  readonly judgeIsSelfModel?: boolean;
 }
 
 /**
@@ -207,20 +225,16 @@ export interface QualityIntelligenceUiCandidate {
    * and export semantics remain full-fidelity.
    */
   readonly truncatedFields?: readonly (
-    | "title"
-    | "preconditions"
-    | "steps"
-    | "expectedResults"
-    | "tags"
+    "title" | "preconditions" | "steps" | "expectedResults" | "tags"
   )[];
 }
 
 // ─── Living Tests drift report (Epic #735, Issue #743/#744) ──────────────────────
 
-/** Why a single candidate is stale: its source changed, or its source is gone. */
+/** Why a single candidate is stale: source drift, source deletion, or missing provenance. */
 export interface QualityIntelligenceUiStalenessEntry {
   readonly candidateId: string;
-  readonly reason: "source-changed" | "source-removed";
+  readonly reason: "source-changed" | "source-removed" | "unknown-provenance" | "unknown-source";
   readonly envelopeId: string;
 }
 
@@ -252,18 +266,17 @@ export interface QualityIntelligenceUiRegenerateResult {
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────
 
 export type QualityIntelligenceInlineSourceKind =
-  | "requirements"
-  | "workspace"
-  | "file"
-  | "capsule"
-  | "capsule-set"
-  | "figma-snapshot"
-  | "image";
+  "requirements" | "workspace" | "file" | "capsule" | "capsule-set" | "figma-snapshot" | "image";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
   readonly kind: "requirements";
   readonly label: string;
+  /**
+   * Optional Atlassian Document Format tree from Jira/Confluence. When present the server normalises
+   * it into text before splitting; `text` remains for legacy/plain pasted requirements.
+   */
+  readonly adf?: unknown;
   readonly text: string;
 }
 
@@ -368,9 +381,7 @@ export interface QualityIntelligenceResolvedModelPolicy {
 }
 
 export type QualityIntelligenceModelPolicyValidationIssueCode =
-  | "model-not-configured"
-  | "model-not-chat"
-  | "model-not-structured";
+  "model-not-configured" | "model-not-chat" | "model-not-structured" | "model-not-response-format";
 
 export interface QualityIntelligenceModelPolicyValidationIssue {
   readonly field: "testDesignModelId" | "judgeModelId";
@@ -384,10 +395,7 @@ export interface QualityIntelligenceModelPolicyValidation {
 }
 
 export type QualityIntelligenceModelPreflightStatus =
-  | "not-run"
-  | "passed"
-  | "failed"
-  | "unavailable";
+  "not-run" | "passed" | "failed" | "unavailable";
 
 export type QualityIntelligenceModelPreflightErrorCategory =
   | "timeout"
@@ -396,6 +404,7 @@ export type QualityIntelligenceModelPreflightErrorCategory =
   | "context"
   | "transport"
   | "provider-http"
+  | "schema"
   | "unavailable";
 
 export interface QualityIntelligenceModelPreflightStageResult {
@@ -472,6 +481,23 @@ export interface QualityIntelligenceSkippedSource {
   readonly code: string;
 }
 
+export interface QualityIntelligenceSourceSummary {
+  readonly label: string;
+  readonly kind: string;
+  readonly atomCount: number;
+  readonly totalAtomCount?: number;
+  readonly droppedAtomCount?: number;
+  readonly maxAtomCount?: number;
+  readonly truncated?: boolean;
+  readonly originalBytes?: number;
+  readonly retainedBytes?: number;
+  readonly droppedBytes?: number;
+  readonly byteLimit?: number;
+  readonly truncatedDocumentCount?: number;
+  readonly droppedDocumentCount?: number;
+  readonly notices?: readonly string[];
+}
+
 export interface QualityIntelligenceRunStreamAccepted {
   readonly type: "accepted";
   readonly runId: string;
@@ -490,6 +516,11 @@ export interface QualityIntelligenceRunStreamAccepted {
    * skipped; the UI surfaces a per-source coverage notice. Additive on the wire.
    */
   readonly skippedSources?: readonly QualityIntelligenceSkippedSource[];
+  /**
+   * Safe per-source ingestion honesty summary. Present only when at least one source was truncated,
+   * capped, or otherwise degraded in a way the UI should surface; never carries source content.
+   */
+  readonly sourceSummaries?: readonly QualityIntelligenceSourceSummary[];
 }
 
 export interface QualityIntelligenceRunStreamEvent {

@@ -174,11 +174,11 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("m"))?.status).toBe("archived");
   });
 
-  it("forgets an expired memory and writes a tombstone", () => {
+  it("forgets an expired non-accepted, non-archived memory and writes a tombstone", () => {
     const vault = makeVault();
     insert(vault, {
       id: "m",
-      status: "accepted",
+      status: "proposed",
       confidence: 0.9,
       createdAt: Date.now() - DAY,
       validUntil: Date.now() - 1,
@@ -189,6 +189,23 @@ describe("handleRunMaintenance", () => {
     expect(
       vault.listTombstonesByScope({ kind: "user", userId: "u-1" as unknown as MemoryUserId }),
     ).toHaveLength(1);
+  });
+
+  it("does not hard-delete expired archived memories during retention", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "archived",
+      confidence: 0.1,
+      createdAt: Date.now() - 60 * DAY,
+      validUntil: Date.now() - 1,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).forgotten).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("archived");
+    expect(
+      vault.listTombstonesByScope({ kind: "user", userId: "u-1" as unknown as MemoryUserId }),
+    ).toHaveLength(0);
   });
 
   it("returns a review item instead of auto-superseding a pairwise correction conflict", () => {
@@ -220,10 +237,8 @@ describe("handleRunMaintenance", () => {
   });
 
   it("promotes proposed conflicts and surfaces review evidence in a single pass", () => {
-    // Regression guard for the promote-before-consolidate ordering. Consolidation only inspects
-    // `accepted` records, so freshly-captured `proposed` conflicts must be promoted FIRST within the
-    // same pass — otherwise a single "Run maintenance" promotes but detects nothing until a
-    // second run.
+    // Regression guard for the promote-before-consolidate ordering: strong public proposals become
+    // accepted and are reviewed for conflicts in the same maintenance pass.
     const vault = makeVault();
     const now = Date.now();
     insert(vault, {
@@ -256,6 +271,33 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("new"))?.status).toBe("accepted");
   });
 
+  it("surfaces review for non-promoted proposed and conflicted records", () => {
+    const vault = makeVault();
+    const now = Date.now();
+    insert(vault, {
+      id: "conflicted",
+      status: "conflicted",
+      body: "deployment window is friday morning",
+      createdAt: now - DAY,
+    });
+    insert(vault, {
+      id: "proposed",
+      status: "proposed",
+      sensitivity: "confidential",
+      body: "deployment window is friday morning",
+      createdAt: now,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    const body = result.body as {
+      reviewItems: readonly { reason: string }[];
+      reviewItemsCreated: number;
+      promoted: number;
+    };
+    expect(body.promoted).toBe(0);
+    expect(body.reviewItemsCreated).toBe(1);
+    expect(body.reviewItems[0]?.reason).toBe("duplicate-review");
+  });
+
   it("never touches a pinned memory", () => {
     const vault = makeVault();
     insert(vault, {
@@ -278,7 +320,7 @@ describe("handleRunMaintenance", () => {
     const vault = makeVault();
     const faulty: MemoryVaultStore = {
       ...vault,
-      listMemories: () => {
+      listMemoriesAcrossScopes: () => {
         throw new Error("disk gone");
       },
     };
@@ -323,14 +365,14 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
 
   it("runs once when due, advances the cursor, then rate-limits until the interval elapses", () => {
     const vault = makeVault();
-    // A validity-expired memory is forgotten by the pass.
+    // Accepted memories are never hard-deleted by autonomous maintenance.
     insert(vault, { id: "m", status: "accepted", validUntil: NOW - 1, createdAt: NOW - DAY });
     const state: AutoMaintenanceState = {};
 
     const first = maybeRunAutoMaintenance(vault, undefined, state, { nowMs: NOW, enabled: true });
-    expect(first?.forgotten).toBe(1);
+    expect(first?.forgotten).toBe(0);
     expect(state.lastRunAtMs).toBe(NOW);
-    expect(vault.getMemory(mid("m"))).toBeUndefined();
+    expect(vault.getMemory(mid("m"))).toBeDefined();
 
     // Second call within the interval is a no-op.
     expect(
@@ -349,7 +391,7 @@ describe("maybeRunAutoMaintenance (O-V4)", () => {
   it("never throws and still advances the cursor when the pass faults", () => {
     const faulty = {
       ...makeVault(),
-      listMemories: () => {
+      listMemoriesAcrossScopes: () => {
         throw new Error("disk gone");
       },
     } as MemoryVaultStore;
@@ -369,13 +411,13 @@ describe("runMemoryMaintenance — injected clock (O-V4 determinism)", () => {
     // Date.now() would forget it, while the injected clock must keep it.
     insert(vault, {
       id: "future",
-      status: "accepted",
+      status: "conflicted",
       validUntil: 1_700_000_000_000,
       createdAt: 1_500_000_000_000,
     });
     insert(vault, {
       id: "expired",
-      status: "accepted",
+      status: "conflicted",
       validUntil: 1_500_000_000_001,
       createdAt: 1_500_000_000_000,
     });

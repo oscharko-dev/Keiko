@@ -181,8 +181,8 @@ export function classifyRetrievalIntent(
   }
 
   return (
-    classifyByPatterns(trimmed, normalized, PROJECT_METADATA_PATTERNS, "project-metadata") ??
     classifyByPatterns(trimmed, normalized, DIAGNOSTIC_PATTERNS, "diagnostic-search") ??
+    classifyByPatterns(trimmed, normalized, PROJECT_METADATA_PATTERNS, "project-metadata") ??
     classifyByPatterns(trimmed, normalized, TARGETED_CODE_PATTERNS, "targeted-code-search") ??
     classifyByPatterns(
       trimmed,

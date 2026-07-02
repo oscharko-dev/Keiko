@@ -121,6 +121,24 @@ describe("GET /api/git/summary", () => {
     expect((result.body as { lastSync?: unknown }).lastSync).toBeDefined();
   });
 
+  it("deduplicates repeated summary reads for the same deps and root within the TTL", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(ok(porcelain(["# branch.head main", "# branch.ab +0 -0"])))
+      .mockResolvedValueOnce(ok(""))
+      .mockResolvedValueOnce(ok(""));
+    const sharedDeps = deps(runner, (value) => value);
+    const path = `/api/git/summary?root=${encodeURIComponent(root)}`;
+
+    const first = await handleGitSummary(ctx(path), sharedDeps);
+    const second = await handleGitSummary(ctx(path), sharedDeps);
+
+    expect(first.status).toBe(200);
+    expect(second.body).toEqual(first.body);
+    expect(runner).toHaveBeenCalledTimes(4);
+  });
+
   it("omits lastSync when the FETCH_HEAD path resolves outside the repository root", async () => {
     // A FETCH_HEAD path outside the repo (e.g. a manipulated rev-parse result) must be rejected by
     // the containment guard even though the file exists and is stat-able. The file lives in its own

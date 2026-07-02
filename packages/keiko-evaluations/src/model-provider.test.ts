@@ -75,10 +75,7 @@ describe("createEvaluationModelProvider", () => {
     });
 
     await expect(
-      port.call(
-        { modelId: "eval-model", messages: [], tools: [] },
-        new AbortController().signal,
-      ),
+      port.call({ modelId: "eval-model", messages: [], tools: [] }, new AbortController().signal),
     ).resolves.toMatchObject({ content: "offline response" });
     expect(configLoader).not.toHaveBeenCalled();
   });

@@ -7,12 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import {
-  spawn,
-  type ChildProcess,
-  type SpawnOptions,
-  type StdioOptions,
-} from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from "node:child_process";
 import { createServer as createNetServer } from "node:net";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";

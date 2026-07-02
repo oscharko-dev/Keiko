@@ -3,7 +3,18 @@
 // testable with an in-memory fake and all real IO is auditable in one place. Synchronous, to
 // mirror the existing `loadConfigFromFile`/`readFileSync` usage in the gateway.
 
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  closeSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { open } from "node:fs/promises";
 
 export interface WorkspaceStat {
@@ -13,6 +24,7 @@ export interface WorkspaceStat {
   readonly isSymbolicLink: boolean;
   readonly hardLinkCount?: number | undefined;
   readonly mtimeMs?: number | undefined;
+  readonly ctimeMs?: number | undefined;
 }
 
 export interface WorkspaceDirEntry {
@@ -22,16 +34,28 @@ export interface WorkspaceDirEntry {
   readonly isSymbolicLink: boolean;
 }
 
+export interface WorkspaceFileReader {
+  readonly close: () => Promise<void>;
+  readonly readRange: (startByte: number, length: number) => Promise<Uint8Array>;
+}
+
 export interface WorkspaceFs {
   readonly readFileUtf8: (absolutePath: string) => string;
   readonly stat: (absolutePath: string) => WorkspaceStat;
   readonly readDir: (absolutePath: string) => readonly WorkspaceDirEntry[];
   readonly realPath: (absolutePath: string) => string;
   readonly exists: (absolutePath: string) => boolean;
+  // Optional bounded write surface for Keiko-owned workspace state (for example `.keiko/*`
+  // caches). Callers must still run lexical + realpath containment before passing a path here.
+  readonly makeDir?: (absolutePath: string) => void;
+  readonly writeFileUtf8?: (absolutePath: string, content: string) => void;
   // Optional: raw-byte read capped at `maxBytes`. Added in issue #179 for the repo-search
   // facade's binary-detection probe. Optional so existing in-memory test fakes that only
   // implement the synchronous surface keep compiling; callers must handle `undefined`.
   readonly readFileBytes?: (absolutePath: string, maxBytes: number) => Promise<Uint8Array>;
+  // Optional synchronous bounded UTF-8 prefix read for synchronous indexers. This must never be used
+  // before the caller has applied the normal workspace containment and deny gates.
+  readonly readFileUtf8Prefix?: (absolutePath: string, maxBytes: number) => string;
   // Optional bounded range read over [startByte, startByte + length). Large-document parsers use
   // this instead of materializing the full raw file at the workspace boundary.
   readonly readFileRange?: (
@@ -39,6 +63,9 @@ export interface WorkspaceFs {
     startByte: number,
     length: number,
   ) => Promise<Uint8Array>;
+  // Optional reusable raw-byte reader. Streaming callers use this when a single response should
+  // hold one file descriptor instead of re-opening the file for every bounded range read.
+  readonly openFileReader?: (absolutePath: string) => Promise<WorkspaceFileReader>;
 }
 
 function isSymlink(absolutePath: string): boolean {
@@ -56,6 +83,7 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       isSymbolicLink: isSymlink(absolutePath),
       hardLinkCount: stats.nlink,
       mtimeMs: stats.mtimeMs,
+      ctimeMs: stats.ctimeMs,
     };
   },
   readDir: (absolutePath: string): readonly WorkspaceDirEntry[] =>
@@ -73,6 +101,12 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       return false;
     }
   },
+  makeDir: (absolutePath: string): void => {
+    mkdirSync(absolutePath, { recursive: true, mode: 0o700 });
+  },
+  writeFileUtf8: (absolutePath: string, content: string): void => {
+    writeFileSync(absolutePath, content, { encoding: "utf8", mode: 0o600 });
+  },
   readFileBytes: async (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
     const handle = await open(absolutePath, "r");
     try {
@@ -85,6 +119,20 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       return buffer.subarray(0, bytesRead);
     } finally {
       await handle.close();
+    }
+  },
+  readFileUtf8Prefix: (absolutePath: string, maxBytes: number): string => {
+    const fd = openSync(absolutePath, "r");
+    try {
+      const cap = Math.max(0, Math.floor(maxBytes));
+      const buffer = Buffer.allocUnsafe(cap);
+      if (cap === 0) {
+        return "";
+      }
+      const bytesRead = readSync(fd, buffer, 0, cap, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8").replace(/�+$/u, "");
+    } finally {
+      closeSync(fd);
     }
   },
   readFileRange: async (
@@ -105,5 +153,26 @@ export const nodeWorkspaceFs: WorkspaceFs = {
     } finally {
       await handle.close();
     }
+  },
+  openFileReader: async (absolutePath: string): Promise<WorkspaceFileReader> => {
+    const handle = await open(absolutePath, "r");
+    let closed = false;
+    return {
+      readRange: async (startByte: number, length: number): Promise<Uint8Array> => {
+        const offset = Math.max(0, Math.floor(startByte));
+        const cap = Math.max(0, Math.floor(length));
+        const buffer = new Uint8Array(cap);
+        if (cap === 0) {
+          return buffer;
+        }
+        const { bytesRead } = await handle.read(buffer, 0, cap, offset);
+        return buffer.subarray(0, bytesRead);
+      },
+      close: async (): Promise<void> => {
+        if (closed) return;
+        closed = true;
+        await handle.close();
+      },
+    };
   },
 };

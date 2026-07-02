@@ -6,6 +6,8 @@
 import { describe, it, expect } from "vitest";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   CAPSULE_LIFECYCLE_STATES,
   CAPSULE_OUTPUT_MODES,
   CAPSULE_RETRIEVAL_EFFORTS,
@@ -42,6 +44,7 @@ import type {
 import {
   isSafeDisplaySummary,
   validateCapsuleSet,
+  validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
   validateConnectorGraphState,
   validateEmbeddingModelIdentity,
@@ -194,7 +197,13 @@ describe("frozen-constant arrays", () => {
     expect(PARSED_UNIT_KINDS.length).toBeGreaterThan(0);
     expect(INDEXING_JOB_STATUSES.length).toBeGreaterThan(0);
     expect(PARSER_DIAGNOSTIC_SEVERITIES).toEqual(["info", "warning", "error"]);
-    expect(CAPSULE_REINDEX_MODES).toEqual(["changed-files", "repair-failed", "resume"]);
+    expect(CAPSULE_REINDEX_MODES).toEqual([
+      "changed-files",
+      "repair-failed",
+      "resume",
+      "full-reembed",
+      "full-rebuild",
+    ]);
   });
 });
 
@@ -545,6 +554,22 @@ describe("validateKnowledgeCapsule", () => {
     expect(validateKnowledgeCapsule(happyCapsule()).ok).toBe(true);
   });
 
+  it("accepts typed contextual retrieval settings", () => {
+    const capsule = {
+      ...happyCapsule(),
+      contextualRetrieval: {
+        enabled: true,
+        modelId: "context-chat",
+        promptVersion: "contextual-retrieval-v1",
+        strict: true,
+        maxContextChars: 480,
+        documentContextMaxChars: 12_000,
+      },
+    };
+    expect(validateKnowledgeCapsule(capsule).ok).toBe(true);
+    expect(validateCapsuleContextualRetrievalSettings(capsule.contextualRetrieval).ok).toBe(true);
+  });
+
   it("rejects empty displayName", () => {
     expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "   " }).ok).toBe(false);
   });
@@ -639,6 +664,32 @@ describe("validateKnowledgeCapsule", () => {
       }).ok,
     ).toBe(false);
   });
+
+  it("rejects invalid contextual retrieval settings", () => {
+    expect(validateCapsuleContextualRetrievalSettings({ enabled: "yes" }).ok).toBe(false);
+    expect(
+      validateKnowledgeCapsule({
+        ...happyCapsule(),
+        contextualRetrieval: {
+          enabled: true,
+          modelId: "unsafe\x00model",
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCapsuleContextualRetrievalSettings({
+        enabled: true,
+        maxContextChars: CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX + 1,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCapsuleContextualRetrievalSettings({
+        enabled: true,
+        documentContextMaxChars:
+          CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX + 1,
+      }).ok,
+    ).toBe(false);
+  });
 });
 
 // ─── validateCapsuleSet ───────────────────────────────────────────────────────
@@ -683,6 +734,16 @@ describe("validateCapsuleReindexRequest", () => {
       validateCapsuleReindexRequest({
         capsuleId: "cap-1",
         mode: "changed-files",
+        force: true,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts full-reembed with force=true", () => {
+    expect(
+      validateCapsuleReindexRequest({
+        capsuleId: "cap-1",
+        mode: "full-reembed",
         force: true,
       }).ok,
     ).toBe(true);
@@ -1035,10 +1096,10 @@ describe("CapsuleReindexRequest", () => {
   it("type-pins the shared reindex request shape", () => {
     const req: CapsuleReindexRequest = {
       capsuleId: cap("c-1"),
-      mode: "repair-failed",
-      force: false,
+      mode: "full-rebuild",
+      force: true,
     };
-    expect(req.mode).toBe("repair-failed");
+    expect(req.mode).toBe("full-rebuild");
   });
 });
 

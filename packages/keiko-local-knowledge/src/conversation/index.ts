@@ -21,4 +21,7 @@ export type {
   ConversationCitationReference,
   ConversationGroundedAnswer,
   ConversationGroundedQuery,
+  ReferenceReranker,
+  ReferenceRerankerInput,
+  ReferenceRerankerResult,
 } from "./types.js";

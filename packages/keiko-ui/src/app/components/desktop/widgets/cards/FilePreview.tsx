@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
@@ -265,12 +265,15 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
         : refreshStatus === "failed"
           ? "Refresh failed"
           : "";
-  const lines: readonly (readonly Token[])[] =
-    preview?.kind === "text"
-      ? shouldHighlight
-        ? highlightLines(preview.content, langOf(preview.name))
-        : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
-      : [];
+  const lines: readonly (readonly Token[])[] = useMemo(
+    () =>
+      preview?.kind === "text"
+        ? shouldHighlight
+          ? highlightLines(preview.content, langOf(preview.name))
+          : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
+        : [],
+    [preview, shouldHighlight],
+  );
 
   return (
     // The keydown listener is a keyboard shortcut for the Back/Close buttons inside this
@@ -432,8 +435,8 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
       {preview?.kind === "image" ? (
         <div className="fpv-image-pane">
           <div className="fpv-image-card">
-            {/* eslint-disable-next-line @next/next/no-img-element -- local BFF returns a size-capped data URL preview */}
-            <img className="fpv-image" src={preview.dataUrl} alt={preview.name} />
+            {/* eslint-disable-next-line @next/next/no-img-element -- local BFF streams a size-capped image preview */}
+            <img className="fpv-image" src={preview.url} alt={preview.name} />
           </div>
           <div className="fpv-meta">
             <MetadataRow label="Type" value={preview.mime} />

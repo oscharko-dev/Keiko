@@ -20,6 +20,15 @@ import {
 import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  createCapsule,
+  openKnowledgeStore,
+  resolveKnowledgeStorePath,
+  updateCapsuleState,
+  type CreateCapsuleInput,
+} from "@oscharko-dev/keiko-local-knowledge";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -83,6 +92,29 @@ function customModelConfig(modelId = "example-private-chat"): GatewayConfig {
         knownLimitations: [],
       },
     ],
+  };
+}
+
+function testCapsuleInput(
+  overrides: Partial<CreateCapsuleInput> = {},
+): CreateCapsuleInput {
+  const id = overrides.id ?? ("cap-stale-lifecycle" as KnowledgeCapsuleId);
+  return {
+    id,
+    displayName: "Lifecycle Test Capsule",
+    tags: [],
+    retrievalEffort: "default",
+    outputMode: "snippets",
+    answerGroundingPolicy: "require-citations",
+    embeddingModelIdentity: {
+      provider: "openai",
+      modelId: "text-embedding-3-small",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+    },
+    lifecycleState: "ready",
+    storageReference: `capsules/${String(id)}`,
+    ...overrides,
   };
 }
 
@@ -756,8 +788,7 @@ describe("PATCH /api/chats", () => {
     const body = (await res.json()) as {
       chat: {
         connectedScope:
-          | { kind: string; relativePaths: string[]; connectedAtMs: number }
-          | undefined;
+          { kind: string; relativePaths: string[]; connectedAtMs: number } | undefined;
       };
     };
     expect(body.chat.connectedScope).toEqual({
@@ -1430,6 +1461,95 @@ describe("GET /api/chats/messages", () => {
     const body = (await res.json()) as { messages: { content: string }[] };
     expect(body.messages).toHaveLength(1);
     expect(body.messages[0]?.content).toBe("hello");
+  });
+
+  it("marks persisted local-knowledge answers stale when their capsule changed", async () => {
+    const runtimeDir = join(tmp, "runtime");
+    mkdirSync(runtimeDir);
+    await restartWithDeps({ uiDbPath: join(runtimeDir, "keiko-ui.db") });
+
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: runtimeDir }),
+    });
+    const capsule = createCapsule(knowledgeStore, testCapsuleInput());
+    Object.defineProperty(knowledgeStore._internal, "now", {
+      value: (): number => capsule.updatedAt + 10,
+      configurable: true,
+    });
+    updateCapsuleState(knowledgeStore, capsule.id, "indexing");
+    knowledgeStore.close();
+
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const user = store.createMessage({
+      chatId: c.id,
+      role: "user",
+      content: "what changed?",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: c.id,
+      role: "assistant",
+      content: "Answer [1].",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const answer: GroundedAnswer = {
+      groundingKind: "local-knowledge",
+      userMessageId: user.id,
+      assistantMessageId: assistant.id,
+      content: "Answer [1].",
+      citations: [],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: String(capsule.id),
+        scopeLabel: capsule.displayName,
+        capsuleCount: 1,
+        sourceCount: 0,
+        citationCount: 0,
+        referenceBudget: 16,
+        referencesUsed: 0,
+        indexLifecycle: {
+          schemaVersion: "local-knowledge-index-lifecycle-v1",
+          capturedAt: capsule.updatedAt,
+          capsules: [{ capsuleId: capsule.id, updatedAt: capsule.updatedAt }],
+          stale: false,
+        },
+      },
+    };
+    store.attachGroundedAnswer(assistant.id, answer);
+
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messages: {
+        groundedAnswer?: Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
+      }[];
+    };
+
+    expect(body.messages[1]?.groundedAnswer?.contextPack.indexLifecycle).toMatchObject({
+      stale: true,
+      staleCapsuleIds: [capsule.id],
+    });
+    expect(answer.contextPack.indexLifecycle?.stale).toBe(false);
   });
 
   it("filters legacy empty-response placeholders from persisted chat history", async () => {

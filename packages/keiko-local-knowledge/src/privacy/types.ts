@@ -11,6 +11,7 @@
 // a missing field skips the corresponding DELETE entirely.
 
 import type {
+  DocumentId,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
@@ -41,6 +42,7 @@ export type CapsuleAuditEvent =
   | CapsuleDeletedEvent
   | CapsuleSourceAddedEvent
   | CapsuleSourceRemovedEvent
+  | CapsuleSourceReboundEvent
   | IndexingJobStartedEvent
   | IndexingJobCompletedEvent
   | IndexingJobFailedEvent
@@ -50,7 +52,8 @@ export type CapsuleAuditEvent =
   | ModelContextSentEvent
   | CitationPreviewAuthorizedEvent
   | CitationPreviewRecoverableEvent
-  | CitationPreviewBlockedEvent;
+  | CitationPreviewBlockedEvent
+  | CitationPreviewDocumentAccessedEvent;
 
 export interface CapsuleCreatedEvent {
   readonly kind: "capsule-created";
@@ -75,6 +78,15 @@ export interface CapsuleSourceRemovedEvent {
   readonly kind: "source-removed";
   readonly capsuleId: KnowledgeCapsuleId;
   readonly sourceId: KnowledgeSourceId;
+  readonly occurredAt: number;
+}
+
+export interface CapsuleSourceReboundEvent {
+  readonly kind: "source-rebound";
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
+  readonly previousScopeKind: string;
+  readonly currentScopeKind: string;
   readonly occurredAt: number;
 }
 
@@ -165,6 +177,20 @@ export interface CitationPreviewRecoverableEvent extends CitationPreviewEventBas
 export interface CitationPreviewBlockedEvent extends CitationPreviewEventBase {
   readonly kind: "citation-preview-blocked";
   readonly reasonCode: PdfCitationPreviewReasonCode;
+}
+
+export interface CitationPreviewDocumentAccessedEvent {
+  readonly kind: "citation-preview-document-accessed";
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId | string;
+  readonly documentId: DocumentId | string;
+  readonly byteStart?: number | undefined;
+  readonly byteEnd?: number | undefined;
+  readonly byteCount?: number | undefined;
+  readonly outcome: "failure" | "not-modified" | "success";
+  readonly sourceKind: "blob" | "filesystem" | "unknown";
+  readonly reasonCode?: PdfCitationPreviewReasonCode | undefined;
+  readonly occurredAt: number;
 }
 
 // AuditEventSink — injectable port. The default node-sqlite sink in `./audit-emitter.ts`

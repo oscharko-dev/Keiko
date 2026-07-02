@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import type { TwinMode } from "./hooks/useTwinMode";
 
 interface ModeSwitchProps {
@@ -10,7 +10,7 @@ interface ModeSwitchProps {
 }
 
 export function ModeSwitch({ mode, onChange }: ModeSwitchProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   return (
     <div className="modesw" data-mode={mode} role="group" aria-label={t("mode.group")}>
       <button

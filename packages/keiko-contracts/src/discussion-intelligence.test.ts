@@ -573,9 +573,9 @@ describe("directive ↔ facet coverage (AC3 regression guard)", () => {
     };
     // The mutated plan still mandates `evidence`, but no remaining directive covers it.
     expect(broken.mandatedFacets).toContain<DisagreementFacet>("evidence");
-    expect(broken.directives.every((d) => !DISCUSSION_DIRECTIVE_FACETS[d].includes("evidence"))).toBe(
-      true,
-    );
+    expect(
+      broken.directives.every((d) => !DISCUSSION_DIRECTIVE_FACETS[d].includes("evidence")),
+    ).toBe(true);
     expect(discussionDirectivesCoverFacets(broken)).toBe(false);
   });
 });

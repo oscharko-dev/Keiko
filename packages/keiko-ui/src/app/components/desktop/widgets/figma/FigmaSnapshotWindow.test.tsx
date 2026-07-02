@@ -59,6 +59,12 @@ interface TriggerMock extends TriggerFn {
   mock: { calls: unknown[][] };
 }
 
+function imageSourceTarget(element: HTMLElement): string {
+  const src = element.getAttribute("src") ?? "";
+  if (!src.startsWith("/_next/image?")) return src;
+  return new URL(src, "http://localhost").searchParams.get("url") ?? src;
+}
+
 function makeTrigger(impl: (boardLink: string) => Promise<FigmaSnapshotSummary>): TriggerMock {
   return impl as unknown as TriggerMock;
 }
@@ -492,14 +498,12 @@ describe("FigmaSnapshotWindow", () => {
           screen.getByRole("img", { name: /captured preview for screen 1/iu }),
         ).toBeInTheDocument(),
       );
-      expect(screen.getByRole("img", { name: /captured preview for screen 1/iu })).toHaveAttribute(
-        "src",
-        "/api/figma/snapshots/fs-test-run-id-1234/screens/0/image",
-      );
-      expect(screen.getByRole("img", { name: /captured preview for screen 2/iu })).toHaveAttribute(
-        "src",
-        "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
-      );
+      expect(
+        imageSourceTarget(screen.getByRole("img", { name: /captured preview for screen 1/iu })),
+      ).toBe("/api/figma/snapshots/fs-test-run-id-1234/screens/0/image");
+      expect(
+        imageSourceTarget(screen.getByRole("img", { name: /captured preview for screen 2/iu })),
+      ).toBe("/api/figma/snapshots/fs-test-run-id-1234/screens/1/image");
     });
 
     it("opens a workspace source for an individual rendered screen", async () => {
@@ -947,10 +951,9 @@ describe("FigmaSnapshotWindow", () => {
       expect(
         await screen.findByRole("article", { name: /figma view source: screen 2/iu }),
       ).toBeInTheDocument();
-      expect(screen.getByRole("img", { name: /captured preview for screen 2/iu })).toHaveAttribute(
-        "src",
-        "/api/figma/snapshots/fs-test-run-id-1234/screens/1/image",
-      );
+      expect(
+        imageSourceTarget(screen.getByRole("img", { name: /captured preview for screen 2/iu })),
+      ).toBe("/api/figma/snapshots/fs-test-run-id-1234/screens/1/image");
       expect(screen.queryByLabelText(/board link/iu)).not.toBeInTheDocument();
       expect(
         screen.queryByRole("img", { name: /captured preview for screen 1/iu }),
@@ -1340,12 +1343,10 @@ describe("FigmaSnapshotWindow", () => {
   describe("revoke token (#758, fix #3)", () => {
     async function getToRevoke(user: ReturnType<typeof userEvent.setup>) {
       const trigger = resolvingTrigger();
-      const revokeFn = vi.fn(
-        async (): Promise<FigmaRevokeTokenResult> => ({
-          code: "FIGMA_TOKEN_REVOKED_OK",
-          message: "The stored Figma PAT was removed.",
-        }),
-      );
+      const revokeFn = vi.fn(async (): Promise<FigmaRevokeTokenResult> => ({
+        code: "FIGMA_TOKEN_REVOKED_OK",
+        message: "The stored Figma PAT was removed.",
+      }));
       renderWindow({ triggerImpl: trigger, revokeImpl: revokeFn as unknown as RevokeFn });
       await typeAndSubmit(user);
       await waitForDone();

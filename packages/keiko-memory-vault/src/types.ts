@@ -10,8 +10,10 @@ import type {
   MemoryReviewerId,
   MemoryScope,
   MemoryScopeKind,
+  MemorySensitivity,
   MemoryStatus,
   MemoryType,
+  MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import type { MemoryAccessStat } from "./access.js";
@@ -47,9 +49,24 @@ export interface MemoryTombstone {
   readonly type: MemoryType;
   readonly forgottenAt: number;
   readonly forgetterSurface: string;
+  readonly bodyHash?: string;
   readonly reviewerId?: MemoryReviewerId;
   readonly originalStatus?: MemoryStatus;
   readonly reason?: string;
+}
+
+export interface MemoryMetadata {
+  readonly id: MemoryId;
+  readonly schemaVersion: "1";
+  readonly scope: MemoryScope;
+  readonly type: MemoryType;
+  readonly status: MemoryStatus;
+  readonly sensitivity: MemorySensitivity;
+  readonly pinned: boolean;
+  readonly confidence: number;
+  readonly validity: MemoryValidityInterval;
+  readonly createdAt: number;
+  readonly updatedAt: number;
 }
 
 // Mutating-call event union for the optional onMemoryEvent callback. #214 wires the audit ledger
@@ -71,7 +88,8 @@ export type MemoryEvent =
       readonly memoryId: MemoryId;
       readonly provider: string;
       readonly modelId: string;
-    };
+    }
+  | { readonly kind: "embedding:deleted"; readonly memoryId: MemoryId };
 
 export type MemoryUpdatePatch = Partial<
   Omit<MemoryRecord, "id" | "schemaVersion" | "scope" | "createdAt">
@@ -123,16 +141,28 @@ export interface MemoryVaultStore {
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
   readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];
-  readonly listMemories: (options?: ListMemoriesOptions) => readonly MemoryRecord[];
+  readonly listMemoryScopes: () => readonly MemoryScope[];
+  readonly listMemoriesAcrossScopes: (
+    scopes: readonly MemoryScope[],
+    options?: ListMemoriesOptions,
+  ) => readonly MemoryRecord[];
   readonly listMemoriesByScope: (
     scope: MemoryScope,
     options?: ListMemoriesOptions,
   ) => readonly MemoryRecord[];
+  readonly listMemoryMetadataByScope: (
+    scope: MemoryScope,
+    options?: ListMemoriesOptions,
+  ) => readonly MemoryMetadata[];
   readonly insertEdge: (edge: MemoryEdge) => MemoryEdge;
   readonly listOutgoingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
   readonly listIncomingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
+  readonly listEdgesForMemories: (
+    memoryIds: readonly MemoryId[],
+  ) => ReadonlyMap<MemoryId, readonly MemoryEdge[]>;
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
+  readonly deleteEmbedding: (memoryId: MemoryId) => void;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly getEmbeddings: (
     memoryIds: readonly MemoryId[],
@@ -160,6 +190,10 @@ export interface MemoryVaultFactoryOptions {
   readonly newTombstoneId?: () => string;
   readonly redactString?: (input: string) => string;
   readonly onMemoryEvent?: (event: MemoryEvent) => void;
+  // Called inside the delete transaction after all SQL changes have been applied and before
+  // COMMIT. This is intentionally delete-only: privacy-critical forget/delete audit can throw here
+  // to roll back the memory mutation, while the public onMemoryEvent contract remains post-commit.
+  readonly onDeleteEventsBeforeCommit?: (events: readonly MemoryEvent[]) => void;
   // Test-only injection seams for encryption-at-rest (ADR-0035). Production callers pass neither:
   // createMemoryVault resolves the key internally via resolveVaultKey. `cipher` overrides the whole
   // cipher; `vaultKey` supplies a deterministic 32-byte key without touching the keychain/keyfile.

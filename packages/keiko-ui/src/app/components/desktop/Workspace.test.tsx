@@ -84,8 +84,10 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
 }
 
 function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
+  const wins = partial.wins ?? [];
   return {
-    wins: [],
+    wins,
+    winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
     palOpen: false,
     setPalOpen: vi.fn(),
@@ -164,6 +166,22 @@ describe("Workspace card connections", () => {
       />,
     );
     expect(screen.getByRole("main", { name: "Workspace surface" })).toBeInTheDocument();
+  });
+
+  it("renders canvas overlay children inside the workspace surface", () => {
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      >
+        <div data-testid="canvas-overlay-slot">Canvas overlay</div>
+      </Workspace>,
+    );
+
+    expect(screen.getByTestId("canvas-overlay-slot").closest(".workspace")).toBe(
+      screen.getByRole("main", { name: "Workspace surface" }),
+    );
   });
 
   it("does not expose connection ports on the Local Knowledge management window", () => {

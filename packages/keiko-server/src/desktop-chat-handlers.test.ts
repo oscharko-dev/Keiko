@@ -25,9 +25,11 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
+const NON_PATTERN_SECRET = "customer-secret-ABC-1234567890";
 
 let server: Server;
 let port: number;
@@ -97,22 +99,25 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
       const content = system.includes("You extract durable memories from a chat turn")
         ? JSON.stringify([
             {
+              source: "user",
               body: "The user's name is Oliver.",
-              type: "semantic-fact",
+              type: "identity",
               confidence: 0.96,
               scope: "user",
               tags: ["identity", "name"],
             },
             {
+              source: "user",
               body: "The user is 35 years old.",
-              type: "semantic-fact",
+              type: "fact",
               confidence: 0.9,
               scope: "user",
               tags: ["identity", "age"],
             },
             {
+              source: "user",
               body: "The user is a software developer.",
-              type: "semantic-fact",
+              type: "fact",
               confidence: 0.9,
               scope: "user",
               tags: ["identity", "profession"],
@@ -146,6 +151,11 @@ function deps(
     configPresent: true,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
+    contextProfile: deriveContextProfile({
+      maxInputTokens: 1_000_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    }),
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => model,
@@ -158,13 +168,16 @@ function base(): string {
   return `http://${UI_HOST}:${String(port)}`;
 }
 
-function customModelConfig(modelId = "example-private-chat"): GatewayConfig {
+function customModelConfig(
+  modelId = "example-private-chat",
+  apiKey = "test-config-secret-value-1234567890",
+): GatewayConfig {
   return {
     providers: [
       {
         modelId,
         baseUrl: "https://provider.example/v1",
-        apiKey: "test-config-secret-value-1234567890",
+        apiKey,
         timeoutMs: 30_000,
         maxRetries: 0,
         retryBaseDelayMs: 500,
@@ -227,6 +240,13 @@ function insertAcceptedMemory(
     createdAt: now,
     updatedAt: now,
   });
+}
+
+function listAllMemories(
+  vault: MemoryVaultStore,
+  options?: Parameters<MemoryVaultStore["listMemoriesAcrossScopes"]>[1],
+): readonly MemoryRecord[] {
+  return vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), options);
 }
 
 async function restartWithDeps(handlerDeps: UiHandlerDeps): Promise<void> {
@@ -384,6 +404,87 @@ describe("desktop chat routes", () => {
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
   });
 
+  it("compacts long chat history from the active model profile resolver when the singleton profile is absent", async () => {
+    await restartWithDeps(
+      deps(fakeModel("compacted response"), {
+        config: customModelConfig(CHAT_MODEL, NON_PATTERN_SECRET),
+        contextProfile: undefined,
+        contextProfileForModel: () => DEFAULT_CONTEXT_PROFILE,
+      }),
+    );
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const now = Date.now();
+    const huge = "x".repeat(300_000);
+    const history = [
+      {
+        chatId: created.chat.id,
+        role: "user" as const,
+        content: `history turn 0 ${NON_PATTERN_SECRET} ${huge}`,
+        timestamp: now,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId: created.chat.id,
+        role: "assistant" as const,
+        content: `history turn 1 ${huge}`,
+        timestamp: now + 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId: created.chat.id,
+        role: "user" as const,
+        content: `history turn 2 ${huge}`,
+        timestamp: now + 2,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+    ];
+    store.createMessages(history);
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Summarize the latest state",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const chatRequest = seenRequests.find((request) =>
+      request.messages.at(-1)?.content.includes("Summarize the latest state"),
+    );
+    expect(chatRequest).toBeDefined();
+    expect(chatRequest?.messages[0]?.role).toBe("system");
+    expect(chatRequest?.messages[0]?.content).toContain("Automated structured summary");
+    expect(chatRequest?.messages[0]?.content).toContain("not user-authored");
+    expect(chatRequest?.messages[0]?.content).not.toContain(NON_PATTERN_SECRET);
+    expect(
+      chatRequest?.messages.some(
+        (message) =>
+          message.role === "user" && message.content.includes("Automated structured summary"),
+      ),
+    ).toBe(false);
+  });
+
   it("appends realtime voice turns without calling the chat model", async () => {
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
@@ -481,6 +582,386 @@ describe("desktop chat routes", () => {
       expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
     }
     memoryVault.close();
+  });
+
+  it("does not capture assistant-only realtime voice turns as user memories", async () => {
+    const memoryDir = join(tmp, "voice-turn-assistant-only-memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(
+      deps(fakeModel("unused"), {
+        memoryVault,
+        modelPortFactory: () => undefined,
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [{ role: "assistant", content: "remember that my preferred shell is fish" }],
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    expect(body.memory?.actions).toEqual([]);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
+    expect(seenRequests).toHaveLength(0);
+    memoryVault.close();
+  });
+
+  it("does not wait for model-assisted salience capture before returning a realtime voice turn", async () => {
+    const memoryDir = join(tmp, "voice-turn-async-salience-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const neverResolvingSalienceModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return new Promise<NormalizedResponse>((resolve) => {
+          void resolve;
+        });
+      },
+    };
+    await restartWithDeps(deps(neverResolvingSalienceModel, { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const appendRes = await Promise.race([
+      fetch(`${base()}/api/desktop/chat/voice-turn`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: created.chat.id,
+          projectPath: projectDir,
+          messages: [
+            { role: "user", content: "remember that my voice IDE is Keiko" },
+            { role: "assistant", content: "I will remember that." },
+          ],
+          memory: {
+            enabled: true,
+            budgetTokens: 900,
+            context: {},
+          },
+        }),
+      }),
+      new Promise<Response>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("voice-turn response waited for salience capture"));
+        }, 250);
+      }),
+    ]);
+    if (timeout !== undefined) clearTimeout(timeout);
+
+    expect(appendRes.status).toBe(200);
+    const body = (await appendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    expect(body.memory?.actions[0]?.kind).toBe("candidate");
+    await vi.waitFor(() => {
+      expect(seenRequests).toHaveLength(1);
+    });
+    memoryVault.close();
+  });
+
+  it("captures model-assisted voice salience per committed user and assistant round", async () => {
+    const memoryDir = join(tmp, "voice-turn-paired-salience-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(fakeModel("[]"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const appendRes = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        messages: [
+          { role: "user", content: "My keyboard layout is Colemak." },
+          { role: "assistant", content: "Got it." },
+          { role: "user", content: "My editor theme is Solarized." },
+          { role: "assistant", content: "Noted." },
+        ],
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    });
+
+    expect(appendRes.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(seenRequests).toHaveLength(2);
+    });
+    const saliencePrompts = seenRequests.map((request) =>
+      request.messages.map((message) => message.content).join("\n"),
+    );
+    expect(saliencePrompts[0]).toContain("Colemak");
+    expect(saliencePrompts[0]).not.toContain("Solarized");
+    expect(saliencePrompts[1]).toContain("Solarized");
+    expect(saliencePrompts[1]).not.toContain("Colemak");
+    memoryVault.close();
+  });
+
+  it("does not wait for model-assisted salience capture before returning a desktop chat turn", async () => {
+    const memoryDir = join(tmp, "desktop-chat-async-salience-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const chatThenHangingSalienceModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        const system = request.messages[0]?.content ?? "";
+        if (system.includes("You extract durable memories from a chat turn")) {
+          return new Promise<NormalizedResponse>((resolve) => {
+            void resolve;
+          });
+        }
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "Noted.",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "desktop-chat-test",
+            promptTokens: 7,
+            completionTokens: 3,
+            latencyMs: 11,
+            costClass: "high",
+          },
+        });
+      },
+    };
+    await restartWithDeps(deps(chatThenHangingSalienceModel, { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const sendRes = await Promise.race([
+      fetch(`${base()}/api/desktop/chat`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({
+          chatId: created.chat.id,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "My build machine uses fish shell.",
+          memory: {
+            enabled: true,
+            budgetTokens: 900,
+            context: {},
+          },
+        }),
+      }),
+      new Promise<Response>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("desktop chat response waited for salience capture"));
+        }, 250);
+      }),
+    ]);
+    if (timeout !== undefined) clearTimeout(timeout);
+
+    expect(sendRes.status).toBe(200);
+    await vi.waitFor(() => {
+      expect(seenRequests).toHaveLength(2);
+    });
+    expect(seenRequests[0]?.messages[0]?.content).not.toContain(
+      "You extract durable memories from a chat turn",
+    );
+    expect(seenRequests[1]?.messages[0]?.content).toContain(
+      "You extract durable memories from a chat turn",
+    );
+    memoryVault.close();
+  });
+
+  it("regenerates the latest assistant turn through the gateway and preserves its message id", async () => {
+    await restartWithDeps(deps(fakeModel("replacement answer")));
+    const chat = store.createChat(projectDir, "t", CHAT_MODEL);
+    store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "original question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: chat.id,
+      role: "assistant",
+      content: "stale answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const res = await fetch(`${base()}/api/desktop/chat/regenerate`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        assistantMessageId: assistant.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      messages: { id: string; role: string; content: string }[];
+    };
+    expect(body.messages).toHaveLength(1);
+    expect(body.messages[0]).toMatchObject({
+      id: assistant.id,
+      role: "assistant",
+      content: "replacement answer",
+    });
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "original question",
+    });
+    expect(JSON.stringify(seenRequests[0]?.messages)).not.toContain("stale answer");
+    expect(store.findMessageById(assistant.id)?.content).toBe("replacement answer");
+    expect(store.listMessages(chat.id).map((message) => message.id)).toContain(assistant.id);
+  });
+
+  it("rejects regeneration when the assistant turn is not the latest conversational message", async () => {
+    const chat = store.createChat(projectDir, "t", CHAT_MODEL);
+    store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "first question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: chat.id,
+      role: "assistant",
+      content: "first answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "newer question",
+      timestamp: 3,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const res = await fetch(`${base()}/api/desktop/chat/regenerate`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        assistantMessageId: assistant.id,
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    expect(seenRequests).toHaveLength(0);
+    expect(store.findMessageById(assistant.id)?.content).toBe("first answer");
+  });
+
+  it("rejects grounded chat regeneration instead of dropping grounding evidence", async () => {
+    const chat = store.createChat(projectDir, "grounded", CHAT_MODEL);
+    const grounded = store.updateChat(chat.id, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
+    });
+    store.createMessage({
+      chatId: grounded.id,
+      role: "user",
+      content: "grounded question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: grounded.id,
+      role: "assistant",
+      content: "grounded answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const res = await fetch(`${base()}/api/desktop/chat/regenerate`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: grounded.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        assistantMessageId: assistant.id,
+      }),
+    });
+
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { error?: { code?: string; message?: string } };
+    expect(body.error?.code).toBe("NOT_APPLIABLE");
+    expect(body.error?.message).toContain("Grounded answers");
+    expect(seenRequests).toHaveLength(0);
   });
 
   it("rejects an empty model response without persisting a fake assistant message", async () => {
@@ -607,7 +1088,45 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("blocks confidential chat-intent candidates before durable persistence", async () => {
+  it("reinforces recalled chat memory only after the assistant uses it", async () => {
+    const memoryDir = join(tmp, "memory-vault-used-reinforcement");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const recalled = insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    await restartWithDeps(
+      deps(fakeModel("Use pnpm instead of npm for installs."), { memoryVault }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "What should I use for installs?",
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const access = memoryVault.getAccessStats([recalled.id]).get(recalled.id);
+    expect(access?.accessCount).toBe(1);
+    memoryVault.close();
+  });
+
+  it("persists confidential chat-intent candidates as masked review proposals", async () => {
     const memoryDir = join(tmp, "memory-vault-confidential");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -634,12 +1153,27 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(200);
     const body = (await sendRes.json()) as {
-      memory?: { actions: { kind: string; reason?: string }[] };
+      memory?: {
+        actions: {
+          kind: string;
+          body?: string;
+          proposalId?: string;
+          requiresApproval?: boolean;
+        }[];
+      };
     };
-    expect(body.memory?.actions).toEqual([
-      { kind: "rejected", reason: "sensitive-memory-requires-approval" },
-    ]);
-    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(body.memory?.actions[0]).toMatchObject({
+      kind: "candidate",
+      body: "Sensitive memory pending review.",
+      requiresApproval: true,
+    });
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    expect(proposalId).toBeDefined();
+    if (proposalId !== undefined) {
+      const record = memoryVault.getMemory(proposalId as MemoryId);
+      expect(record?.status).toBe("proposed");
+      expect(record?.provenance.sensitivity).toBe("confidential");
+    }
     memoryVault.close();
   });
 
@@ -678,7 +1212,7 @@ describe("desktop chat routes", () => {
       memory?: { actions: { kind: string; reason?: string }[] };
     };
     expect(body.memory?.actions).toEqual([{ kind: "rejected", reason: "customer-identifier" }]);
-    expect(memoryVault.listMemories({ includeExpired: true })).toEqual([]);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
     memoryVault.close();
   });
 
@@ -818,26 +1352,30 @@ describe("desktop chat routes", () => {
         actions: { kind: string; proposalId?: string; body?: string }[];
       };
     };
-    const candidates = body.memory?.actions.filter((action) => action.kind === "candidate") ?? [];
-    const candidateBodies = candidates.map((action) => action.body);
     expect(body.memory?.context.enabled).toBe(true);
     expect(body.memory?.context.memories).toHaveLength(0);
-    expect(candidateBodies).toEqual(
-      expect.arrayContaining([
-        "The user's name is Oliver.",
-        "The user is 35 years old.",
-        "The user is a software developer.",
-      ]),
-    );
-    for (const action of candidates) {
-      expect(typeof action.proposalId).toBe("string");
-      if (action.proposalId !== undefined) {
-        expect(memoryVault.getMemory(action.proposalId as MemoryId)?.status).toBe("proposed");
-      }
-    }
-    expect(seenRequests.some((request) => request.messages.at(-1)?.content.includes("Oliver"))).toBe(
-      true,
-    );
+    expect(body.memory?.actions).toEqual([]);
+    await vi.waitFor(() => {
+      const records = listAllMemories(memoryVault, { includeExpired: true });
+      expect(records.map((record) => record.body)).toEqual(
+        expect.arrayContaining([
+          "The user's name is Oliver.",
+          "The user is 35 years old.",
+          "The user is a software developer.",
+        ]),
+      );
+      expect(records.every((record) => record.status === "proposed")).toBe(true);
+    });
+    await vi.waitFor(() => {
+      expect(
+        seenRequests.some(
+          (request) =>
+            request.messages[0]?.content.includes(
+              "You extract durable memories from a chat turn",
+            ) && request.messages.at(-1)?.content.includes("Oliver"),
+        ),
+      ).toBe(true);
+    });
     memoryVault.close();
   });
 
@@ -855,7 +1393,7 @@ describe("desktop chat routes", () => {
     });
     const created = (await createRes.json()) as { chat: { id: string } };
 
-    const beforeCount = memoryVault.listMemories({ includeExpired: true }).length;
+    const beforeCount = listAllMemories(memoryVault, { includeExpired: true }).length;
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -883,7 +1421,7 @@ describe("desktop chat routes", () => {
     expect(body.memory?.context.enabled).toBe(false);
     expect(body.memory?.context.memories).toHaveLength(0);
     expect(body.memory?.actions).toHaveLength(0);
-    expect(memoryVault.listMemories({ includeExpired: true })).toHaveLength(beforeCount);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toHaveLength(beforeCount);
     memoryVault.close();
   });
 

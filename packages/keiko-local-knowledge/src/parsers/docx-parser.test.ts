@@ -60,6 +60,63 @@ function zipDocumentXml(xml: string): Uint8Array {
   );
 }
 
+function zipDocxEntries(entries: readonly { readonly name: string; readonly content: string }[]): Uint8Array {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+  for (const entry of entries) {
+    const filename = Buffer.from(entry.name, "utf8");
+    const raw = Buffer.from(entry.content, "utf8");
+    const compressed = deflateRawSync(raw);
+    const checksum = crc32(raw);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(0, 10);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(compressed.byteLength, 18);
+    localHeader.writeUInt32LE(raw.byteLength, 22);
+    localHeader.writeUInt16LE(filename.byteLength, 26);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(0, 12);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(compressed.byteLength, 20);
+    centralHeader.writeUInt32LE(raw.byteLength, 24);
+    centralHeader.writeUInt16LE(filename.byteLength, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+
+    localParts.push(localHeader, filename, compressed);
+    centralParts.push(centralHeader, filename);
+    localOffset += localHeader.byteLength + filename.byteLength + compressed.byteLength;
+  }
+
+  const centralOffset = localOffset;
+  const centralSize = centralParts.reduce((sum, part) => sum + part.byteLength, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(centralOffset, 16);
+  return Uint8Array.from(Buffer.concat([...localParts, ...centralParts, end]));
+}
+
+function zipDocxParts(documentXml: string, footnotesXml?: string): Uint8Array {
+  return zipDocxEntries([
+    { name: "word/document.xml", content: documentXml },
+    ...(footnotesXml === undefined ? [] : [{ name: "word/footnotes.xml", content: footnotesXml }]),
+  ]);
+}
+
 function headingParagraphXml(text: string, level = 1): string {
   return `<w:p><w:pPr><w:pStyle w:val="Heading${String(level)}"/></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
 }
@@ -119,6 +176,40 @@ describe("docxParser", () => {
       buildParserOptions(),
     );
     expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+  });
+
+  it("projects DOCX table rows with header/cell semantics and marks list items", async () => {
+    const xml = [
+      "<w:document><w:body>",
+      headingParagraphXml("Policy"),
+      '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Review backups</w:t></w:r></w:p>',
+      "<w:tbl>",
+      '<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>',
+      '<w:tr><w:tc><w:p><w:r><w:t>Firewall</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Enabled</w:t></w:r></w:p></w:tc></w:tr>',
+      "</w:tbl>",
+      "</w:body></w:document>",
+    ].join("");
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(xml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const normalizedText = "normalizedText" in result ? result.normalizedText : "";
+    expect(normalizedText).toContain("- Review backups");
+    expect(normalizedText).toContain("Table row 1: Name=Firewall | Status=Enabled");
+  });
+
+  it("extracts DOCX footnotes into the normalized text", async () => {
+    const documentXml =
+      "<w:document><w:body><w:p><w:r><w:t>Body text</w:t></w:r></w:p></w:body></w:document>";
+    const footnotesXml =
+      '<w:footnotes><w:footnote w:id="2"><w:p><w:r><w:t>Footnote body</w:t></w:r></w:p></w:footnote></w:footnotes>';
+    const result = await docxParser.parseAsync(
+      selectionFromBytes(zipDocxParts(documentXml, footnotesXml), { extension: "docx" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect("normalizedText" in result ? result.normalizedText : "").toContain(
+      "Footnote 2: Footnote body",
+    );
   });
 
   it("rejects inflated document.xml entries that exceed parser limits", async () => {

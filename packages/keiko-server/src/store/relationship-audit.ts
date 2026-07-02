@@ -35,11 +35,7 @@ export type RelationshipAuditKind =
   | "relationship.health-finding";
 
 export type RelationshipAuditActorSurface =
-  | "chat"
-  | "inspector"
-  | "workflow"
-  | "health-check"
-  | "system";
+  "chat" | "inspector" | "workflow" | "health-check" | "system";
 
 export type RelationshipAuditPlacement = "sibling-table" | "evidence-manifest";
 

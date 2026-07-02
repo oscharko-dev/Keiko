@@ -65,8 +65,10 @@ function appWindow(patch: Partial<AppWindow> & Pick<AppWindow, "id" | "type">): 
 }
 
 function workspace(api: WorkspaceApi, partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
+  const wins = partial.wins ?? [];
   return {
-    wins: [],
+    wins,
+    winsById: new Map(wins.map((win) => [win.id, win])),
     snapPrev: null,
     palOpen: false,
     setPalOpen: vi.fn(),

@@ -134,6 +134,7 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
     deleteCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     refreshCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     repairCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
+    reembedCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     startIndexingImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     fetchCapsuleDetailImpl: vi.fn().mockResolvedValue(progressDetail()),
     ...overrides,
@@ -513,6 +514,17 @@ describe("CapsuleActions — modal open and close", () => {
     expect(within(dialog).getByText(/repair failed files/i)).toBeInTheDocument();
   });
 
+  it("opens the full rebuild modal when Full rebuild / rechunk is clicked", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleActions {...defaultProps()} />);
+
+    await user.click(screen.getByRole("button", { name: /full rebuild capsule/i }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText(/full rebuild \/ rechunk/i)).toBeInTheDocument();
+  });
+
   it("closes the modal when Cancel is clicked", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
@@ -765,6 +777,70 @@ describe("CapsuleActions — repair action", () => {
 
     await waitFor(() => {
       expect(repairCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
+    });
+    expect(onActionComplete).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full re-embed action
+// ---------------------------------------------------------------------------
+
+describe("CapsuleActions — full re-embed action", () => {
+  it("keeps the full re-embed button visible and marks it recommended when vectors are incompatible", () => {
+    const { rerender } = render(<CapsuleActions {...defaultProps()} />);
+    expect(screen.getByRole("button", { name: /current embedding model/i })).toHaveAttribute(
+      "data-recommended",
+      "false",
+    );
+
+    rerender(<CapsuleActions {...defaultProps({ vectorCompatible: false })} />);
+    expect(screen.getByRole("button", { name: /current embedding model/i })).toHaveAttribute(
+      "data-recommended",
+      "true",
+    );
+  });
+
+  it("calls reembedCapsuleImpl when confirmed", async () => {
+    const user = userEvent.setup();
+    const reembedCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
+    const onActionComplete = vi.fn();
+    render(
+      <CapsuleActions
+        {...defaultProps({ reembedCapsuleImpl, onActionComplete, vectorCompatible: false })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /current embedding model/i }));
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /re-embed/i }));
+
+    await waitFor(() => {
+      expect(reembedCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
+    });
+    expect(onActionComplete).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Full rebuild action
+// ---------------------------------------------------------------------------
+
+describe("CapsuleActions — full rebuild action", () => {
+  it("calls rebuildCapsuleImpl when confirmed", async () => {
+    const user = userEvent.setup();
+    const rebuildCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
+    const onActionComplete = vi.fn();
+    render(<CapsuleActions {...defaultProps({ rebuildCapsuleImpl, onActionComplete })} />);
+
+    await user.click(screen.getByRole("button", { name: /full rebuild capsule/i }));
+
+    const dialog = screen.getByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: /rebuild/i }));
+
+    await waitFor(() => {
+      expect(rebuildCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
     expect(onActionComplete).toHaveBeenCalledOnce();
   });

@@ -49,6 +49,7 @@ import type { Project, UiStore } from "../store/index.js";
 // Tight cap — a container run is a high-trust surface, so a small number of concurrent runs.
 const MAX_CONCURRENT_CONTAINER_RUNS = 2;
 const MIN_TIMEOUT_MS = 1_000;
+const CAPABILITY_CACHE_TTL_MS = 30_000;
 
 // ─── Defaults (conservative; justified inline) ─────────────────────────────────────
 
@@ -309,6 +310,11 @@ interface InFlightRun {
   cancelledByUser: boolean;
 }
 
+interface CapabilityCacheEntry {
+  readonly expiresAt: number;
+  readonly promise: Promise<ContainerCapabilityResponse>;
+}
+
 class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   private readonly store: UiStore;
   private readonly evidenceStore: EvidenceStore | undefined;
@@ -319,11 +325,11 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   private readonly redactor: (input: string) => string;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly detect:
-    | ((projectId: string) => Promise<ContainerCapabilityResponse>)
-    | undefined;
+    ((projectId: string) => Promise<ContainerCapabilityResponse>) | undefined;
   private readonly now: () => number;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<ContainerRunnerEventEmitter>();
+  private readonly capabilityCache = new Map<string, CapabilityCacheEntry>();
 
   public constructor(opts: ContainerRunnerManagerOptions) {
     this.store = opts.store;
@@ -395,8 +401,20 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
   };
 
   private resolveCapability(projectId: string): Promise<ContainerCapabilityResponse> {
+    const now = this.now();
+    const cached = this.capabilityCache.get(projectId);
+    if (cached !== undefined && cached.expiresAt > now) {
+      return cached.promise;
+    }
     if (this.detect !== undefined) {
-      return this.detect(projectId);
+      const promise = this.detect(projectId);
+      this.capabilityCache.set(projectId, { expiresAt: now + CAPABILITY_CACHE_TTL_MS, promise });
+      promise.catch(() => {
+        if (this.capabilityCache.get(projectId)?.promise === promise) {
+          this.capabilityCache.delete(projectId);
+        }
+      });
+      return promise;
     }
     const probeDeps: ContainerProbeDeps = {
       runCommand,
@@ -405,7 +423,14 @@ class ContainerRunnerManagerImpl implements ContainerRunnerManager {
       processEnv: this.processEnv,
       now: this.now,
     };
-    return detectContainerEngines(probeDeps);
+    const promise = detectContainerEngines(probeDeps);
+    this.capabilityCache.set(projectId, { expiresAt: now + CAPABILITY_CACHE_TTL_MS, promise });
+    promise.catch(() => {
+      if (this.capabilityCache.get(projectId)?.promise === promise) {
+        this.capabilityCache.delete(projectId);
+      }
+    });
+    return promise;
   }
 
   private tryWorkspace(projectId: string): WorkspaceInfo | undefined {

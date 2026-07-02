@@ -60,6 +60,8 @@ export interface UiStore {
   readonly deleteChat: (id: string) => void;
 
   readonly listMessages: (chatId: string, limit?: number) => readonly ChatMessage[];
+  readonly listMessagesPrefix: (chatId: string, limit: number) => readonly ChatMessage[];
+  readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
@@ -72,6 +74,11 @@ export interface UiStore {
   readonly findGroundedPreviewCitations: (
     id: string,
   ) => readonly StoredPdfCitationPreviewCitation[] | undefined;
+  readonly replaceAssistantMessageContent: (
+    id: string,
+    content: string,
+    timestamp: number,
+  ) => ChatMessage;
 
   readonly close: () => void;
 }

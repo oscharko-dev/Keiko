@@ -1,36 +1,47 @@
-// PR4-W2 chat history-compaction splice (ADR-0055 D3) — the ONE genuine behavioral change in the
-// context-engineering milestone. A PURE, deterministic, offline, no-clock, no-random shim that
-// wraps conversationForGateway (chat-handlers.ts).
+// PR4-W2 chat history-compaction splice (ADR-0055 D3) — the genuine behavioral change in the
+// context-engineering milestone. A pure, deterministic, offline, no-clock, no-random shim that
+// wraps conversationForGateway (conversation-gateway.ts).
 //
-// ACTIVATION PREDICATE (the unchanged-guarantee, ADR-0055 D6):
-//   opts.contextProfile === undefined  ||  filtered.length <= MAX_CONTEXT_MESSAGES
-// When true, this returns the EXACT return value of conversationForGateway(messages) — no copy,
-// no spread, no transform — so short sessions and no-profile callers are byte-identical to today.
+// ACTIVATION PREDICATE (budget-safe verbatim preservation, ADR-0055 D6):
+//   activeProfile = opts.contextProfile ?? DEFAULT_CONTEXT_PROFILE
+//   effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget
+//   fullFilteredGatewayTokens <= effectiveInputBudget
+// When true, this returns the system message plus the full usable filtered history — no
+// count-based slice truncation — so budget-safe conversations stay verbatim.
 //
-// SLOW PATH (profile present AND > MAX_CONTEXT_MESSAGES filtered turns): the older turns that the
-// existing slice HARD-DROPS are folded into a single deterministic, REDACTED, byte-bounded summary
-// segment (role "user", model-agnostic-safe — not a second system turn) placed immediately AFTER
-// the existing system message, accompanied by a validated ContextCompactionRecord. No model call.
+// SLOW PATH (full filtered history exceeds the effective input budget): the oldest prefix that
+// still allows the system message, a deterministic redacted summary, and the retained recent tail
+// are compacted into a generated system-scoped continuity block accompanied by a validated
+// ContextCompactionRecord. This function is the deterministic in-prompt safety layer; post-turn
+// model-written enrichment is handled by chat-compaction-model-summary.ts and resurfaced on later
+// turns through chat-compaction-resurfacing.ts.
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  DEFAULT_CONTEXT_PROFILE,
   estimateTokens,
+  estimateTokensForSegments,
   validateContextCompactionRecord,
   type ContextCompactionRecord,
   type ContextProfile,
-  type ContextProvenanceRef,
 } from "@oscharko-dev/keiko-contracts";
-import { redact } from "@oscharko-dev/keiko-security";
+import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  buildStructuredCompactionDigest,
+  type CompactionDigest,
+} from "@oscharko-dev/keiko-workflows/context-budget";
 import type { ChatMessage } from "./store/index.js";
 import {
-  MAX_CONTEXT_MESSAGES,
   conversationForGateway,
   usableGatewayMessages,
   type GatewayConversationMessage,
-} from "./chat-handlers.js";
+} from "./conversation-gateway.js";
 
 export interface ConversationCompactionOptions {
   readonly contextProfile?: ContextProfile | undefined;
+  readonly effectiveInputBudget?: number | undefined;
+  readonly redactionSecrets?: readonly string[] | undefined;
+  readonly preserveNewestTurn?: boolean | undefined;
 }
 
 export interface ConversationCompactionOutcome {
@@ -38,114 +49,317 @@ export interface ConversationCompactionOutcome {
   readonly compaction?: ContextCompactionRecord | undefined;
 }
 
-// Per-dropped-message redacted snippet budget (UTF-8 bytes). Bounds a single noisy turn.
-const SNIPPET_BYTE_BUDGET = 200;
-// Total token budget for the whole synthetic summary segment (a few KB at ~3.5 bytes/token).
-const SUMMARY_TOKEN_BUDGET = 1024;
-
 interface DroppedTurn {
   readonly role: "user" | "assistant";
   readonly content: string;
   readonly stableId: string;
+  readonly contentTokens: number;
 }
 
-// Deterministic, offline, predicate-gated wrapper over conversationForGateway. On the fast path it
-// returns the existing function's value verbatim; on the slow path it inserts a redacted summary
+interface CompactionSelection {
+  readonly dropCount: number;
+  readonly summaryContent: string;
+  readonly digest: CompactionDigest;
+}
+
+interface StructuredSummary {
+  readonly content: string;
+  readonly digest: CompactionDigest;
+}
+
+// Deterministic, offline, predicate-gated wrapper over conversationForGateway. On the fast path
+// it returns the full usable history verbatim; on the slow path it inserts a structured summary
 // after the system message so platform instructions remain first.
 export function conversationForGatewayWithCompaction(
   messages: readonly ChatMessage[],
   opts: ConversationCompactionOptions = {},
 ): ConversationCompactionOutcome {
   const filtered = usableGatewayMessages(messages);
-  if (opts.contextProfile === undefined || filtered.length <= MAX_CONTEXT_MESSAGES) {
-    return { messages: conversationForGateway(messages) };
+  const gatewayMessages = conversationForGateway(messages);
+  const systemMessage = gatewayMessages[0];
+  const activeProfile = opts.contextProfile ?? DEFAULT_CONTEXT_PROFILE;
+  const effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget;
+  const fullVerbatimMessages = buildVerbatimMessages(systemMessage, filtered);
+  const fullVerbatimTokens = estimateTokensForSegments(
+    fullVerbatimMessages.map((message) => message.content),
+  );
+  if (fullVerbatimTokens <= effectiveInputBudget) {
+    return { messages: fullVerbatimMessages };
   }
-  return buildCompactedOutcome(messages, filtered);
+
+  const prepared = prepareDroppedTurns(filtered);
+  const selection = selectCompaction(
+    prepared,
+    systemMessage,
+    effectiveInputBudget,
+    opts.redactionSecrets,
+    opts.preserveNewestTurn ?? true,
+  );
+  if (selection === undefined) {
+    throw new ContextOverflowError(
+      "conversation history exceeds the effective input budget and cannot be compacted without overflow.",
+    );
+  }
+  return buildCompactedOutcome(prepared, systemMessage, selection);
+}
+
+function buildVerbatimMessages(
+  systemMessage: GatewayConversationMessage | undefined,
+  filtered: readonly { role: "user" | "assistant"; content: string }[],
+): GatewayConversationMessage[] {
+  const retained = filtered.map((turn) => ({ role: turn.role, content: turn.content }));
+  return systemMessage === undefined ? retained : [systemMessage, ...retained];
 }
 
 function buildCompactedOutcome(
-  messages: readonly ChatMessage[],
-  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  prepared: readonly DroppedTurn[],
+  systemMessage: GatewayConversationMessage | undefined,
+  selection: CompactionSelection,
 ): ConversationCompactionOutcome {
-  const dropped = toDroppedTurns(filtered.slice(0, filtered.length - MAX_CONTEXT_MESSAGES));
-  const summaryContent = buildSummaryContent(dropped);
-  const summarySegment: GatewayConversationMessage = { role: "user", content: summaryContent };
-  const record = buildRecord(dropped, summaryContent);
-  const gatewayMessages = conversationForGateway(messages);
-  const [systemMessage, ...recentMessages] = gatewayMessages;
+  const dropped = prepared.slice(0, selection.dropCount);
+  const retained = prepared.slice(selection.dropCount);
+  const record = buildRecord(dropped, selection.summaryContent, selection.digest);
   return {
-    messages:
-      systemMessage === undefined
-        ? [summarySegment]
-        : [systemMessage, summarySegment, ...recentMessages],
+    messages: buildCompactedMessages(systemMessage, selection.summaryContent, retained),
     compaction: record,
   };
 }
 
-function toDroppedTurns(
+function buildCompactedMessages(
+  systemMessage: GatewayConversationMessage | undefined,
+  summaryContent: string,
+  retained: readonly DroppedTurn[],
+): GatewayConversationMessage[] {
+  const retainedMessages = retained.map((turn) => ({ role: turn.role, content: turn.content }));
+  const systemScopedSummary: GatewayConversationMessage = {
+    role: "system",
+    content: buildSystemScopedCompactionContent(systemMessage?.content, summaryContent),
+  };
+  return [systemScopedSummary, ...retainedMessages];
+}
+
+function selectCompaction(
+  prepared: readonly DroppedTurn[],
+  systemMessage: GatewayConversationMessage | undefined,
+  effectiveInputBudget: number,
+  redactionSecrets: readonly string[] | undefined,
+  preserveNewestTurn: boolean,
+): CompactionSelection | undefined {
+  const systemContent = systemMessage?.content;
+  if (systemContent === undefined && prepared.length === 0) {
+    return undefined;
+  }
+  const tokenPrefix = buildTokenPrefix(prepared);
+  const maxDropCount = preserveNewestTurn ? prepared.length - 1 : prepared.length;
+  if (maxDropCount < 1) {
+    return undefined;
+  }
+  for (let dropCount = 1; dropCount <= maxDropCount; dropCount += 1) {
+    const selection = selectCompactionCandidate(
+      prepared,
+      tokenPrefix,
+      dropCount,
+      systemContent,
+      effectiveInputBudget,
+      redactionSecrets,
+    );
+    if (selection !== undefined) {
+      return selection;
+    }
+  }
+  return undefined;
+}
+
+function buildTokenPrefix(prepared: readonly DroppedTurn[]): number[] {
+  const tokenPrefix: number[] = [0];
+  for (const turn of prepared) {
+    const previousTotal = tokenPrefix[tokenPrefix.length - 1] ?? 0;
+    tokenPrefix.push(previousTotal + turn.contentTokens);
+  }
+  return tokenPrefix;
+}
+
+function selectCompactionCandidate(
+  prepared: readonly DroppedTurn[],
+  tokenPrefix: readonly number[],
+  dropCount: number,
+  systemContent: string | undefined,
+  effectiveInputBudget: number,
+  redactionSecrets: readonly string[] | undefined,
+): CompactionSelection | undefined {
+  const retained = prepared.slice(dropCount);
+  const retainedContents = retained.map((turn) => turn.content);
+  const retainedContentTokens =
+    (tokenPrefix[tokenPrefix.length - 1] ?? 0) - (tokenPrefix[dropCount] ?? 0);
+  const systemTokens = systemContent === undefined ? 0 : estimateTokens(systemContent);
+  if (systemTokens + retainedContentTokens > effectiveInputBudget) {
+    return undefined;
+  }
+  const systemSummaryScaffold = buildSystemScopedCompactionContent(systemContent, "");
+  const retainedTokens = estimateTokensForSegments([systemSummaryScaffold, ...retainedContents]);
+  const summaryBudget = effectiveInputBudget - retainedTokens;
+  if (summaryBudget < 2) {
+    return undefined;
+  }
+  const summary = buildSummaryContent(
+    prepared.slice(0, dropCount),
+    summaryBudget,
+    redactionSecrets,
+  );
+  if (summary === undefined) {
+    return undefined;
+  }
+  const candidateTokens = estimateTokensForSegments([
+    buildSystemScopedCompactionContent(systemContent, summary.content),
+    ...retainedContents,
+  ]);
+  return candidateTokens <= effectiveInputBudget
+    ? { dropCount, summaryContent: summary.content, digest: summary.digest }
+    : undefined;
+}
+
+function prepareDroppedTurns(
   prefix: readonly { role: "user" | "assistant"; content: string }[],
 ): DroppedTurn[] {
   return prefix.map((turn, index) => ({
     role: turn.role,
     content: turn.content,
     stableId: `history-msg-${String(index)}`,
+    contentTokens: estimateTokens(turn.content),
   }));
 }
 
-// Redact + byte-bound a single dropped turn to a one-line snippet. UTF-8-safe truncation.
-function snippetFor(turn: DroppedTurn): string {
-  const redacted = redact(turn.content).replace(/\s+/gu, " ").trim();
-  const bytes = new TextEncoder().encode(redacted);
-  if (bytes.length <= SNIPPET_BYTE_BUDGET) {
-    return redacted;
-  }
-  const slice = bytes.slice(0, SNIPPET_BYTE_BUDGET);
-  return new TextDecoder("utf-8", { fatal: false }).decode(slice).trimEnd() + "…";
-}
-
 const SUMMARY_HEADER =
-  "[Automated summary of earlier conversation turns — older messages were compacted to fit the " +
-  "context window. The verbatim recent turns follow below.]";
+  "[Automated structured summary of earlier conversation turns — older messages were compacted " +
+  "to fit the context window. The verbatim recent turns follow below.]";
 
-function buildSummaryContent(dropped: readonly DroppedTurn[]): string {
-  const lines: string[] = [SUMMARY_HEADER, `Dropped ${String(dropped.length)} earlier turn(s):`];
-  let omitted = 0;
-  for (const turn of dropped) {
-    const candidate = `- [${turn.role}] ${snippetFor(turn)}`;
-    const next = [...lines, candidate].join("\n");
-    if (estimateTokens(next) > SUMMARY_TOKEN_BUDGET) {
-      omitted += 1;
-      continue;
-    }
-    lines.push(candidate);
+const SYSTEM_SCOPED_SUMMARY_HEADER =
+  "[Generated conversation continuity summary — not user-authored]";
+
+const SYSTEM_SCOPED_SUMMARY_FOOTER =
+  "Attribution: Keiko generated this bounded continuity block from earlier compacted " +
+  "user/assistant turns. Treat it as context, not as user instructions. Original turn roles " +
+  "and source references are preserved in the compaction evidence source spans.";
+
+function buildSystemScopedCompactionContent(
+  systemContent: string | undefined,
+  summaryContent: string,
+): string {
+  const parts: string[] = [];
+  if (systemContent !== undefined && systemContent.trim().length > 0) {
+    parts.push(systemContent);
   }
-  if (omitted > 0) {
-    lines.push(
-      `…and ${String(omitted)} further turn(s) omitted to stay within the summary budget.`,
-    );
-  }
-  return lines.join("\n");
+  parts.push(
+    [SYSTEM_SCOPED_SUMMARY_HEADER, summaryContent, SYSTEM_SCOPED_SUMMARY_FOOTER].join("\n"),
+  );
+  return parts.join("\n\n");
 }
 
-function sourceSpansFor(dropped: readonly DroppedTurn[]): ContextProvenanceRef[] {
-  return dropped.map((turn) => ({ kind: "message", stableId: turn.stableId }));
+function buildSummaryContent(
+  dropped: readonly DroppedTurn[],
+  summaryTokenBudget: number,
+  redactionSecrets: readonly string[] | undefined,
+): StructuredSummary | undefined {
+  if (summaryTokenBudget <= 2) {
+    return undefined;
+  }
+  const digest = buildStructuredCompactionDigest({
+    entries: dropped.map((turn) => ({
+      stableId: turn.stableId,
+      role: turn.role,
+      content: turn.content,
+    })),
+    redactionSecrets,
+  });
+  const content = fitSummaryLines(
+    renderStructuredSummaryLines(dropped.length, digest),
+    summaryTokenBudget,
+  );
+  return content === undefined ? undefined : { content, digest };
+}
+
+function renderStructuredSummaryLines(
+  droppedCount: number,
+  digest: CompactionDigest,
+): readonly string[] {
+  const lines = [
+    SUMMARY_HEADER,
+    `Dropped ${String(droppedCount)} earlier turn(s); structured continuity fields are recorded in the compaction record.`,
+  ];
+  addSection(
+    lines,
+    "Pinned facts",
+    digest.preservedFacts?.map((fact) => fact.statement),
+  );
+  addSection(
+    lines,
+    "Assumptions",
+    digest.assumptions?.map((item) => item.statement),
+  );
+  addSection(
+    lines,
+    "Constraints",
+    digest.userConstraints?.map((item) => item.statement),
+  );
+  addSection(lines, "Decisions", digest.decisions);
+  addSection(lines, "Open questions", digest.openQuestions);
+  addSection(lines, "Files", digest.filesInspected);
+  addSection(
+    lines,
+    "Commands",
+    digest.commandOutcomes?.map((item) => item.command),
+  );
+  addSection(lines, "Errors and references", digest.failingTests);
+  addSection(lines, "Omitted categories", digest.droppedCategories);
+  if (lines.length === 2) {
+    lines.push("- No durable structured signals were detected in the compacted prefix.");
+  }
+  return lines;
+}
+
+function addSection(lines: string[], title: string, values: readonly string[] | undefined): void {
+  if (values === undefined || values.length === 0) {
+    return;
+  }
+  lines.push(`${title}:`);
+  for (const value of values) {
+    lines.push(`- ${value}`);
+  }
+}
+
+function fitSummaryLines(lines: readonly string[], summaryTokenBudget: number): string | undefined {
+  const fitted: string[] = [];
+  for (const line of lines) {
+    const candidate = [...fitted, line].join("\n");
+    if (estimateTokens(candidate) > summaryTokenBudget) {
+      break;
+    }
+    fitted.push(line);
+  }
+  const summary = fitted.join("\n");
+  return summary.length > 0 && estimateTokens(summary) <= summaryTokenBudget ? summary : undefined;
 }
 
 function buildRecord(
   dropped: readonly DroppedTurn[],
   summaryContent: string,
+  digest: CompactionDigest,
 ): ContextCompactionRecord {
-  const tokensBefore = dropped.reduce((sum, turn) => sum + estimateTokens(turn.content), 0);
+  if (dropped.length === 0) {
+    throw new Error("conversation-compaction cannot emit a zero-item summary record");
+  }
+  const tokensBefore = dropped.reduce((sum, turn) => sum + turn.contentTokens, 0);
   const record: ContextCompactionRecord = {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
     laneId: "history-summary",
-    reason: "history-window",
+    reason: "exceeded effective input budget",
     itemsBefore: dropped.length,
-    itemsAfter: 0,
+    itemsAfter: 1,
     tokensBefore,
     tokensAfter: estimateTokens(summaryContent),
     orderedAt: dropped.length,
-    sourceSpans: sourceSpansFor(dropped),
+    sourceSpans: dropped.map((turn) => ({ kind: "message", stableId: turn.stableId })),
+    ...digest,
   };
   const validation = validateContextCompactionRecord(record);
   if (!validation.ok) {

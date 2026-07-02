@@ -8,7 +8,11 @@
 // hash, validated as a string when present. Assumptions (rationale + confidence) and facts
 // (statement + sourceRef/inferred) are validated as structurally distinct shapes.
 
-import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "./context-engineering.js";
+import {
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+} from "./context-engineering.js";
 import type { ContextProvenanceRefKind } from "./context-engineering.js";
 import { isContextLaneId } from "./context-engineering-validation.js";
 import type { ContextValidationResult } from "./context-engineering-validation.js";
@@ -95,6 +99,7 @@ function collectProvenanceRef(value: unknown, prefix: string): string[] {
     !isOptionalNonEmptyString(value.evidenceAtomId),
     `${prefix}.evidenceAtomId invalid`,
   );
+  pushIf(reasons, !isOptionalNonEmptyString(value.artifactId), `${prefix}.artifactId invalid`);
   pushIf(
     reasons,
     !isOptionalNonEmptyString(value.notPersistedReason),
@@ -250,6 +255,7 @@ function collectHandleOptionals(value: Record<string, unknown>, prefix: string):
     !isOptionalNonEmptyString(value.evidenceAtomId),
     `${prefix}.evidenceAtomId invalid`,
   );
+  pushIf(reasons, !isOptionalNonEmptyString(value.artifactId), `${prefix}.artifactId invalid`);
   pushIf(
     reasons,
     !isOptionalNonEmptyString(value.notPersistedReason),
@@ -293,6 +299,29 @@ function collectRecordRequired(value: Record<string, unknown>, prefix: string): 
   if (value.rehydration !== undefined) {
     reasons.push(...collectRehydrationHandle(value.rehydration, `${prefix}.rehydration`));
   }
+  return reasons;
+}
+
+function collectModelSummary(value: unknown, prefix: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!isRecord(value)) {
+    return [`${prefix}.modelSummary invalid`];
+  }
+  const reasons: string[] = [];
+  pushIf(
+    reasons,
+    value.promptVersion !== CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+    `${prefix}.modelSummary.promptVersion invalid`,
+  );
+  pushIf(reasons, !isNonEmptyTrimmed(value.modelId), `${prefix}.modelSummary.modelId invalid`);
+  pushIf(
+    reasons,
+    !isNonEmptyTrimmed(value.content) ||
+      value.content.length > CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+    `${prefix}.modelSummary.content invalid`,
+  );
   return reasons;
 }
 
@@ -353,6 +382,7 @@ function collectRecordOptionals(value: Record<string, unknown>, prefix: string):
       collectInvalidationKey,
     ),
   );
+  reasons.push(...collectModelSummary(value.modelSummary, prefix));
   for (const key of [
     "decisions",
     "openQuestions",

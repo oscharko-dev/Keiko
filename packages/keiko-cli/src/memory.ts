@@ -62,8 +62,7 @@ const DEFAULT_REEMBED_LIMIT = 200;
 export interface MemoryCliDeps {
   readonly vault?: MemoryVaultStore | undefined;
   readonly openVault?:
-    | ((memoryDir: string | undefined, env: EnvSource) => MemoryVaultStore)
-    | undefined;
+    ((memoryDir: string | undefined, env: EnvSource) => MemoryVaultStore) | undefined;
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactString?: ((input: string) => string) | undefined;
   readonly embedText?: MemoryEmbedder | null | undefined;
@@ -167,7 +166,9 @@ function renderMaintenanceReport(counts: ReturnType<typeof runMemoryMaintenance>
 function runStats(args: readonly string[], io: CliIo, env: EnvSource, deps: MemoryCliDeps): number {
   const vault = resolveVault(args, env, deps);
   try {
-    const records = vault.listMemories({ includeExpired: true });
+    const records = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+      includeExpired: true,
+    });
     io.out(renderStats(records));
     return 0;
   } finally {
@@ -193,7 +194,9 @@ function runDiagnostics(
   const evidenceStore = deps.evidenceStore ?? createNodeEvidenceStore(evidenceDir);
   const redactString = deps.redactString ?? createAuditRedactor({}, env);
   try {
-    const records = vault.listMemories({ includeExpired: true });
+    const records = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+      includeExpired: true,
+    });
     const lastNAuditEvents = parseLastAuditEvents(args);
     const diagnostics = exportMemoryDiagnostics({
       vault,
@@ -266,7 +269,11 @@ async function backfillEmbeddings(
   embed: MemoryEmbedder,
   limit: number,
 ): Promise<ReembedCounts> {
-  const accepted = vault.listMemories({ status: ["accepted"], includeExpired: true, limit });
+  const accepted = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
+    status: ["accepted"],
+    includeExpired: true,
+    limit,
+  });
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   for (const record of accepted) {
     if (vault.getEmbedding(record.id) !== undefined) {

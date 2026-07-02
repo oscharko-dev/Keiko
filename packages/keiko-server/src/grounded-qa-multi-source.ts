@@ -53,6 +53,7 @@ import {
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
@@ -92,23 +93,168 @@ export function buildConnectedScopes(chat: Chat): readonly ChatConnectedScope[] 
   return chat.connectedScopes ?? (chat.connectedScope ? [chat.connectedScope] : []);
 }
 
-// Splits a base budget across n sources so total fan-out work stays bounded regardless of N.
-// Per-source dimensions floor-divide with a Math.max(1, …) floor so a source is never starved to
-// zero. `rerankCallsMax` is left UNCHANGED (it is 0 by default and is a per-source cap, not a
-// shared pool). n=1 returns the base unchanged so the single path is unaffected if it ever routes
-// through here.
-export function splitExplorationBudget(base: ExplorationBudget, n: number): ExplorationBudget {
-  if (n <= 1) return base;
-  const split = (value: number): number => Math.max(1, Math.floor(value / n));
+const BUDGET_KEYS = [
+  "searchCallsMax",
+  "filesReadMax",
+  "excerptBytesMax",
+  "modelInputTokensMax",
+  "modelOutputTokensMax",
+  "elapsedMsMax",
+  "rerankCallsMax",
+] as const satisfies readonly (keyof ExplorationBudget)[];
+
+function sourceQueryTerms(text: string): readonly string[] {
+  return [...new Set(text.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/gu) ?? [])].filter(
+    (term) => term.length >= 2,
+  );
+}
+
+function sourceSearchText(scope: ChatConnectedScope): string {
+  return [scope.root, rawSourceLabel(scope), scope.kind, ...scope.relativePaths]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(" ")
+    .toLowerCase();
+}
+
+function sourceRelevanceWeight(scope: ChatConnectedScope, query: RetrievalQuery): number {
+  const text = sourceSearchText(scope);
+  let weight = 1;
+  for (const term of sourceQueryTerms(query.text)) {
+    if (text.includes(term)) {
+      weight += text.split(/[^\w-]+/u).includes(term) ? 3 : 1;
+    }
+  }
+  return weight;
+}
+
+function normalizedWeights(weights: readonly number[]): readonly number[] {
+  return weights.map((weight) => (Number.isFinite(weight) && weight > 0 ? weight : 1));
+}
+
+function zeroAllocation(count: number): readonly number[] {
+  return Array.from({ length: count }, () => 0);
+}
+
+function seededAllocation(
+  count: number,
+  totalUnits: number,
+): { readonly allocation: number[]; readonly remaining: number } {
+  const floor: number = totalUnits >= count ? 1 : 0;
   return {
-    searchCallsMax: split(base.searchCallsMax),
-    filesReadMax: split(base.filesReadMax),
-    excerptBytesMax: split(base.excerptBytesMax),
-    modelInputTokensMax: split(base.modelInputTokensMax),
-    modelOutputTokensMax: split(base.modelOutputTokensMax),
-    elapsedMsMax: split(base.elapsedMsMax),
-    rerankCallsMax: base.rerankCallsMax,
+    allocation: Array.from({ length: count }, () => floor),
+    remaining: totalUnits - floor * count,
   };
+}
+
+function addWholeShares(allocation: number[], wholeShares: readonly number[]): void {
+  for (let index = 0; index < allocation.length; index += 1) {
+    allocation[index] = (allocation[index] ?? 0) + (wholeShares[index] ?? 0);
+  }
+}
+
+function remainderOrder(
+  weights: readonly number[],
+  rawShares: readonly number[],
+  wholeShares: readonly number[],
+): readonly { readonly index: number; readonly weight: number; readonly fraction: number }[] {
+  return weights
+    .map((weight, index) => ({
+      index,
+      weight,
+      fraction: (rawShares[index] ?? 0) - (wholeShares[index] ?? 0),
+    }))
+    .sort((a, b) => b.fraction - a.fraction || b.weight - a.weight || a.index - b.index);
+}
+
+function addRemainderUnits(
+  allocation: number[],
+  order: readonly { readonly index: number }[],
+  remaining: number,
+): void {
+  for (let i = 0; i < remaining; i += 1) {
+    const entry = order[i % order.length];
+    if (entry !== undefined) {
+      allocation[entry.index] = (allocation[entry.index] ?? 0) + 1;
+    }
+  }
+}
+
+function allocateDimension(total: number, rawWeights: readonly number[]): readonly number[] {
+  const count = rawWeights.length;
+  if (count === 0) return [];
+  const totalUnits = Math.max(0, Math.floor(total));
+  if (totalUnits === 0) return zeroAllocation(count);
+  const seeded = seededAllocation(count, totalUnits);
+  if (seeded.remaining <= 0) return seeded.allocation;
+  const weights = normalizedWeights(rawWeights);
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  const rawShares = weights.map((weight) => (seeded.remaining * weight) / weightSum);
+  const wholeShares = rawShares.map((share) => Math.floor(share));
+  addWholeShares(seeded.allocation, wholeShares);
+  addRemainderUnits(
+    seeded.allocation,
+    remainderOrder(weights, rawShares, wholeShares),
+    seeded.remaining - wholeShares.reduce((sum, share) => sum + share, 0),
+  );
+  return seeded.allocation;
+}
+
+function allocationAt(
+  allocations: ReadonlyMap<keyof ExplorationBudget, readonly number[]>,
+  key: keyof ExplorationBudget,
+  index: number,
+): number {
+  return allocations.get(key)?.[index] ?? 0;
+}
+
+function budgetAt(
+  allocations: ReadonlyMap<keyof ExplorationBudget, readonly number[]>,
+  index: number,
+): ExplorationBudget {
+  return {
+    searchCallsMax: allocationAt(allocations, "searchCallsMax", index),
+    filesReadMax: allocationAt(allocations, "filesReadMax", index),
+    excerptBytesMax: allocationAt(allocations, "excerptBytesMax", index),
+    modelInputTokensMax: allocationAt(allocations, "modelInputTokensMax", index),
+    modelOutputTokensMax: allocationAt(allocations, "modelOutputTokensMax", index),
+    elapsedMsMax: allocationAt(allocations, "elapsedMsMax", index),
+    rerankCallsMax: allocationAt(allocations, "rerankCallsMax", index),
+  };
+}
+
+function budgetsFromWeights(
+  base: ExplorationBudget,
+  weights: readonly number[],
+): readonly ExplorationBudget[] {
+  if (weights.length <= 1) return [base];
+  const allocations = new Map<keyof ExplorationBudget, readonly number[]>();
+  for (const key of BUDGET_KEYS) {
+    allocations.set(key, allocateDimension(base[key], weights));
+  }
+  return weights.map((_, index) => budgetAt(allocations, index));
+}
+
+// Relevance-weighted fan-out allocation. The sum of every budget dimension equals the base cap, so
+// connecting N sources cannot multiply work; query-matching roots/relative paths receive the
+// largest shares. If a dimension has fewer units than sources, the highest-scored sources receive
+// the units and lower-scored sources get a truthful zero cap for that dimension.
+export function splitExplorationBudgets(
+  base: ExplorationBudget,
+  scopes: readonly ChatConnectedScope[],
+  query: RetrievalQuery,
+): readonly ExplorationBudget[] {
+  if (scopes.length <= 1) return [base];
+  return budgetsFromWeights(
+    base,
+    scopes.map((scope) => sourceRelevanceWeight(scope, query)),
+  );
+}
+
+export function splitExplorationBudget(base: ExplorationBudget, n: number): ExplorationBudget {
+  return budgetsFromWeights(
+    base,
+    Array.from({ length: Math.max(1, n) }, () => 1),
+  )[0] ?? base;
 }
 
 function rawSourceLabel(cs: ChatConnectedScope): string {
@@ -369,6 +515,54 @@ function withMultiSourcePromptExcerptByteLimit(
   }));
 }
 
+function bestPackScore(pack: ConnectedContextPack): number {
+  let best = 0.01;
+  for (const file of pack.files) {
+    for (const excerpt of file.excerpts) {
+      best = Math.max(best, excerpt.atom.score);
+    }
+  }
+  return best;
+}
+
+function packExcerptCount(pack: ConnectedContextPack): number {
+  return pack.files.reduce((count, file) => count + file.excerpts.length, 0);
+}
+
+function sourceBudgetBytes(
+  totalBytes: number,
+  index: number,
+  weights: readonly number[],
+): number {
+  const equalPool = totalBytes * 0.35;
+  const weightedPool = totalBytes - equalPool;
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0);
+  const equal = equalPool / weights.length;
+  const weighted = weightSum <= 0 ? 0 : (weightedPool * (weights[index] ?? 0)) / weightSum;
+  return Math.floor(equal + weighted);
+}
+
+function withMultiSourcePromptExcerptTotalBudget(
+  labeledPacks: readonly LabeledPack[],
+  totalExcerptBytes: number,
+): readonly LabeledPack[] {
+  if (totalExcerptBytes <= 0 || labeledPacks.length === 0) {
+    return withMultiSourcePromptExcerptByteLimit(labeledPacks, 0);
+  }
+  const weights = labeledPacks.map((entry) => bestPackScore(entry.pack));
+  return labeledPacks.map((entry, index) => {
+    const excerptCount = packExcerptCount(entry.pack);
+    const perExcerpt =
+      excerptCount === 0
+        ? 0
+        : Math.floor(sourceBudgetBytes(totalExcerptBytes, index, weights) / excerptCount);
+    return {
+      ...entry,
+      pack: withPromptExcerptByteLimit(entry.pack, perExcerpt),
+    };
+  });
+}
+
 function budgetedMultiSourceGatewayMessages(
   question: string,
   labeledPacks: readonly LabeledPack[],
@@ -378,7 +572,7 @@ function budgetedMultiSourceGatewayMessages(
     labeledPacks.reduce((sum, entry) => sum + entry.pack.budget.modelInputTokensMax, 0),
   );
   let messages = buildRawMultiSourceGatewayMessages(question, labeledPacks, redactor);
-  if (limit === 0 || promptByteLength(messages) <= limit) return messages;
+  if (promptByteLength(messages) <= limit) return messages;
   const excerptCount = multiSourceExcerptCount(labeledPacks);
   if (excerptCount === 0) return messages;
 
@@ -394,17 +588,17 @@ function budgetedMultiSourceGatewayMessages(
       `Multi-source grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
-  while (maxExcerptBytes >= 0) {
+  let totalExcerptBytes = Math.max(0, limit - overheadBytes);
+  while (totalExcerptBytes >= 0) {
     messages = buildRawMultiSourceGatewayMessages(
       question,
-      withMultiSourcePromptExcerptByteLimit(labeledPacks, maxExcerptBytes),
+      withMultiSourcePromptExcerptTotalBudget(labeledPacks, totalExcerptBytes),
       redactor,
     );
-    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
+    if (promptByteLength(messages) <= limit || totalExcerptBytes === 0) {
       return messages;
     }
-    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
+    totalExcerptBytes = Math.max(0, Math.floor(totalExcerptBytes * 0.8));
   }
   return buildRawMultiSourceGatewayMessages(question, emptyPacks, redactor);
 }
@@ -415,14 +609,17 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
-export function defaultRetriever(signal: AbortSignal): GroundedRetriever {
+export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
+    const repoSemanticSearchProvider =
+      deps === undefined ? undefined : configuredRepoSemanticSearchProviderFor(deps, signal);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
     });
   };
 }
@@ -490,6 +687,7 @@ export interface MultiSourceAskInput {
   readonly scopes: readonly ChatConnectedScope[];
   readonly content: string;
   readonly modelId: string;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly retriever: GroundedRetriever;
   readonly answerer: MultiSourceAnswerer;
@@ -529,7 +727,7 @@ interface RetrieveAccumulator {
 async function retrieveOneSource(
   ctx: MultiSourceAskInput,
   query: RetrievalQuery,
-  perScopeBudget: ExplorationBudget,
+  perScopeBudgets: readonly ExplorationBudget[],
   labels: readonly string[],
   acc: RetrieveAccumulator,
   i: number,
@@ -538,6 +736,7 @@ async function retrieveOneSource(
   const cs = ctx.scopes[i];
   const label = labels[i];
   if (cs === undefined || label === undefined) return;
+  const budget = perScopeBudgets[i] ?? DEFAULT_EXPLORATION_BUDGET;
   const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
@@ -545,7 +744,7 @@ async function retrieveOneSource(
       scope,
       query,
       workspaceRoot: scope.workspaceRoot,
-      budget: perScopeBudget,
+      budget,
     });
   } catch (error) {
     const classified = classifyPerSourceRetrieveError(error, label);
@@ -565,7 +764,7 @@ async function retrieveOneSource(
 async function retrieveAllSources(
   ctx: MultiSourceAskInput,
   query: RetrievalQuery,
-  perScopeBudget: ExplorationBudget,
+  perScopeBudgets: readonly ExplorationBudget[],
   labels: readonly string[],
 ): Promise<RetrievalOutcome | RouteResult> {
   const acc: RetrieveAccumulator = {
@@ -580,7 +779,7 @@ async function retrieveAllSources(
       const i = nextIndex;
       nextIndex += 1;
       if (i >= ctx.scopes.length) return;
-      await retrieveOneSource(ctx, query, perScopeBudget, labels, acc, i);
+      await retrieveOneSource(ctx, query, perScopeBudgets, labels, acc, i);
     }
   }
 
@@ -593,13 +792,30 @@ async function retrieveAllSources(
   return { retrieved: sources, skipped, firstError };
 }
 
-function mergedCitations(
+interface SourceCitationBundle {
+  readonly source: RetrievedSource;
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly labeledCitations: readonly GroundedEvidenceCitation[];
+}
+
+function sourceCitationBundles(
   sources: readonly RetrievedSource[],
   redactor: Redactor,
+): readonly SourceCitationBundle[] {
+  return sources.map((source) => {
+    const citations = buildCitations(source.pack, redactor);
+    return {
+      source,
+      citations,
+      labeledCitations: citations.map((citation) => ({ ...citation, source: source.label })),
+    };
+  });
+}
+
+function mergedCitations(
+  bundles: readonly SourceCitationBundle[],
 ): readonly GroundedEvidenceCitation[] {
-  const citations = sources.flatMap((src) =>
-    buildCitations(src.pack, redactor).map((c) => ({ ...c, source: src.label })),
-  );
+  const citations = bundles.flatMap((bundle) => bundle.labeledCitations);
   return [...citations].sort((a, b) => b.score - a.score);
 }
 
@@ -628,14 +844,14 @@ function mergedUncertainty(
 // answer surfaces as its primary evidenceRunId, plus the full set for audit discovery.
 function persistPerSourceEvidence(
   ctx: MultiSourceAskInput,
-  sources: readonly RetrievedSource[],
+  bundles: readonly SourceCitationBundle[],
 ): {
   readonly firstRunId: string | undefined;
   readonly runIds: readonly string[];
 } {
   let firstRunId: string | undefined;
   const runIds: string[] = [];
-  for (const src of sources) {
+  for (const { source: src, citations } of bundles) {
     const finishedAt = Date.now();
     const startedAt = Math.max(0, finishedAt - src.elapsedMs);
     const runId = `grounded-${randomUUID()}`;
@@ -647,11 +863,11 @@ function persistPerSourceEvidence(
         chatId: ctx.chat.id,
         plan: src.plan,
         pack: src.pack,
-        citationCount: buildCitations(src.pack, ctx.deps.redactor).length,
+        citationCount: citations.length,
         elapsedMs: src.elapsedMs,
         startedAt,
         finishedAt,
-        ...groundedContextAssemblyInput(ctx.deps, src.pack),
+        ...groundedContextAssemblyInput({ contextProfile: ctx.contextProfile }, src.pack),
       },
       {
         store: ctx.deps.evidenceStore,
@@ -674,17 +890,18 @@ function assembleMultiSourceAnswer(
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
-  const citations = mergedCitations(sources, redactor);
-  const summaries = sources.map((src) =>
+  const citationBundles = sourceCitationBundles(sources, redactor);
+  const citations = mergedCitations(citationBundles);
+  const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
       src.pack,
-      buildCitations(src.pack, redactor).length,
+      sourceCitations.length,
       src.elapsedMs,
-      groundedContextSummaryInput(ctx.deps, src.pack),
+      groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
     ),
   );
   const mergedSummary = mergeContextPackSummaries(summaries);
-  const { firstRunId, runIds } = persistPerSourceEvidence(ctx, sources);
+  const { firstRunId, runIds } = persistPerSourceEvidence(ctx, citationBundles);
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,
@@ -710,10 +927,14 @@ function assembleMultiSourceAnswer(
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
   const query = buildQuery(ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
-  const perScopeBudget = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, ctx.scopes.length);
+  const perScopeBudgets = splitExplorationBudgets(
+    DEFAULT_EXPLORATION_BUDGET,
+    ctx.scopes,
+    query,
+  );
   let outcome: RetrievalOutcome | RouteResult;
   try {
-    outcome = await retrieveAllSources(ctx, query, perScopeBudget, labels);
+    outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps);
   }

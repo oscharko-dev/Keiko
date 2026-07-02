@@ -24,6 +24,19 @@ export {
   type OpenKnowledgeStoreOptions,
 } from "./store.js";
 export {
+  MAX_PDF_DOCUMENT_BLOB_BYTES,
+  PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+  persistPdfDocumentBlobInTransaction,
+  readPdfDocumentBlob,
+  readPdfDocumentBlobByContentHash,
+  writePdfDocumentBlob,
+  type PdfDocumentBlobInput,
+  type PdfDocumentBlobMetadata,
+  type PdfDocumentBlobReadResult,
+  type PdfDocumentBlobRecord,
+  type PdfDocumentBlobWriteResult,
+} from "./document-blob-store.js";
+export {
   createCapsule,
   deleteCapsule,
   getCapsule,
@@ -38,6 +51,7 @@ export {
   addSourceToCapsule,
   listCapsuleSources,
   removeSourceFromCapsule,
+  updateSourceScopeInCapsule,
   type AddCapsuleSourceInput,
 } from "./source-lifecycle.js";
 export {
@@ -78,13 +92,34 @@ export {
   type ParserSelectionInput,
 } from "./parsers/index.js";
 
+export {
+  createProgressivePdfExtractor,
+  discoverExtractionCapabilities,
+  probeMultimodalCapability,
+  probeOcrCapability,
+  type CapabilityProbeDeps,
+  type MultimodalAdapter,
+  type MultimodalResult,
+  type OcrPageFn,
+  type ProgressivePdfExtractorDeps,
+} from "./parsers/large-document/index.js";
+
 // OCR adapter seam (Issue #202).
 export {
   createOcrPipelineParser,
+  createOcrAdapterFromEnv,
+  createTesseractOcrAdapter,
   nullOcrAdapter,
+  resolveOcrRuntimeFromEnv,
   type OcrAdapter,
   type OcrPageResult,
   type OcrPipelineAdapter,
+  type OcrRuntimeEngine,
+  type OcrRuntimeResolution,
+  type TesseractCommandRequest,
+  type TesseractCommandResult,
+  type TesseractCommandRunner,
+  type TesseractOcrAdapterOptions,
 } from "./parsers/ocr/index.js";
 
 // Bounded request-local small-document text extraction for Repository Search (Issue #1285).
@@ -126,6 +161,7 @@ export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 export {
   lookupCitationPreviewSnapshot,
+  lookupCitationPreviewSnapshotForStoredCitation,
   type CitationPreviewSnapshotLookup,
 } from "./citation-preview-snapshot.js";
 export * from "./privacy/index.js";

@@ -4,6 +4,7 @@ import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from
 import {
   ApiError,
   askGrounded,
+  appendDesktopChatVoiceTurn,
   createDesktopChat,
   fetchChatMessages,
   fetchChats,
@@ -15,6 +16,7 @@ import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
   GROUNDED_ATTACHMENT_NOTICE,
   MAX_ATTACHMENT_BYTES,
+  clearChatSessionBootstrapCacheForTests,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
@@ -34,6 +36,7 @@ vi.mock("@/lib/api", () => ({
     }
   },
   askGrounded: vi.fn(),
+  appendDesktopChatVoiceTurn: vi.fn(),
   createDesktopChat: vi.fn(),
   createProject: vi.fn(),
   fetchChatMessages: vi.fn(),
@@ -42,6 +45,7 @@ vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
   sendDesktopChat: vi.fn(),
   sendDesktopChatStream: vi.fn(),
+  runRealtimeGroundedTool: vi.fn(),
   updateChat: vi.fn(),
 }));
 
@@ -53,6 +57,7 @@ vi.mock("@/lib/memory-api", () => ({
 
 afterEach(() => {
   vi.clearAllMocks();
+  clearChatSessionBootstrapCacheForTests();
 });
 
 function model(patch: Partial<ModelCapability> = {}): ModelCapability {
@@ -151,6 +156,56 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeChat?.id).toBe("chat-latest");
     expect(result.current.selectedModel).toBe("chat-live");
     expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("shares concurrent cold bootstrap requests across session instances", async () => {
+    const latest = chat({ id: "chat-latest", selectedModel: "chat-live", updatedAt: 20 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [latest] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [message({ id: "msg-latest", chatId: "chat-latest" })],
+    });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => {
+      expect(first.result.current.loading).toBe(false);
+      expect(second.result.current.loading).toBe(false);
+    });
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    expect(fetchProjects).toHaveBeenCalledTimes(1);
+    expect(fetchChats).toHaveBeenCalledTimes(1);
+    expect(fetchChatMessages).toHaveBeenCalledTimes(1);
+    expect(first.result.current.activeChat?.id).toBe("chat-latest");
+    expect(second.result.current.activeChat?.id).toBe("chat-latest");
+  });
+
+  it("uses one shared DOM listener pair for chat mutations across session instances", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ id: "chat-live-id" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [message()] });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => {
+      expect(first.result.current.loading).toBe(false);
+      expect(second.result.current.loading).toBe(false);
+    });
+    expect(addSpy.mock.calls.filter(([event]) => event === "keiko:chat-upsert")).toHaveLength(1);
+    expect(addSpy.mock.calls.filter(([event]) => event === "keiko:chat-delete")).toHaveLength(1);
+
+    first.unmount();
+    expect(removeSpy.mock.calls.filter(([event]) => event === "keiko:chat-upsert")).toHaveLength(0);
+
+    second.unmount();
+    expect(removeSpy.mock.calls.filter(([event]) => event === "keiko:chat-upsert")).toHaveLength(1);
+    expect(removeSpy.mock.calls.filter(([event]) => event === "keiko:chat-delete")).toHaveLength(1);
   });
 
   it("creates the first chat when auto-create is enabled and no chats exist", async () => {
@@ -386,6 +441,52 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
     // The optimistic user message must NOT have been appended.
     expect(result.current.messages).toHaveLength(0);
+  });
+});
+
+describe("useChatSession appendVoiceTurn", () => {
+  async function setupVoiceTurnSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-a" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ selectedModel: "chat-a" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("retries one transient voice-turn append failure before surfacing an error", async () => {
+    const updated = chat({ updatedAt: 20, title: "spoken turn" });
+    const user = message({ id: "voice-user", role: "user", content: "Remember the release gate." });
+    const assistant = message({
+      id: "voice-assistant",
+      role: "assistant",
+      content: "I will remember it.",
+    });
+    vi.mocked(appendDesktopChatVoiceTurn)
+      .mockRejectedValueOnce(new ApiError("INTERNAL", "temporary", 500))
+      .mockResolvedValueOnce({
+        chat: updated,
+        messages: [user, assistant],
+      });
+    const { result } = await setupVoiceTurnSession();
+
+    await act(async () => {
+      await result.current.appendVoiceTurn?.([
+        { role: "user", content: "Remember the release gate." },
+        { role: "assistant", content: "I will remember it." },
+      ]);
+    });
+
+    expect(appendDesktopChatVoiceTurn).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeUndefined();
+    expect(result.current.messages.map((entry) => [entry.role, entry.content])).toEqual([
+      ["user", "Remember the release gate."],
+      ["assistant", "I will remember it."],
+    ]);
   });
 });
 

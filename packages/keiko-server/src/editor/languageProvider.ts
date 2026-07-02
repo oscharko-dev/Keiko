@@ -79,7 +79,9 @@ export function createLanguageProviderRegistry(
   return {
     resolve: (languageId: string): LanguageProvider | undefined =>
       providers.find((provider) => provider.supports(languageId)),
-    describe: (): readonly LanguageProviderDescriptor[] =>
-      [...providers.map((provider) => provider.descriptor), ...unavailableProviders],
+    describe: (): readonly LanguageProviderDescriptor[] => [
+      ...providers.map((provider) => provider.descriptor),
+      ...unavailableProviders,
+    ],
   };
 }

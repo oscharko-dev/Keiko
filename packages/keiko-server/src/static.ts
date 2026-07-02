@@ -7,6 +7,7 @@ import { createReadStream } from "node:fs";
 import { lstat } from "node:fs/promises";
 import { join, normalize, resolve, sep, extname } from "node:path";
 import type { ServerResponse } from "node:http";
+import { createGzip } from "node:zlib";
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8",
@@ -32,6 +33,29 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
 
 export function contentTypeFor(filePath: string): string {
   return CONTENT_TYPES[extname(filePath).toLowerCase()] ?? "application/octet-stream";
+}
+
+function isImmutableAsset(filePath: string): boolean {
+  return filePath.includes(`${sep}_next${sep}static${sep}`);
+}
+
+function isCompressible(filePath: string): boolean {
+  return [".html", ".js", ".css", ".json", ".txt", ".svg", ".webmanifest"].includes(
+    extname(filePath).toLowerCase(),
+  );
+}
+
+function acceptsGzip(acceptEncoding: string | readonly string[] | undefined): boolean {
+  let value = "";
+  if (typeof acceptEncoding === "string") {
+    value = acceptEncoding;
+  } else if (acceptEncoding !== undefined) {
+    value = acceptEncoding.join(",");
+  }
+  return value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .some((item) => item === "gzip" || item.startsWith("gzip;"));
 }
 
 // Resolves a URL pathname to an absolute path strictly contained within `root`, or `undefined` when
@@ -62,7 +86,11 @@ export function resolveContainedPath(root: string, pathname: string): string | u
 // symlink planted in the static root is NOT followed: a regular file is served, a symlink is refused
 // even when it points back inside the root — matching the audit store's never-follow-a-symlink rule
 // (defense in depth; the export pipeline emits only regular files).
-export async function serveFile(res: ServerResponse, filePath: string): Promise<boolean> {
+export async function serveFile(
+  res: ServerResponse,
+  filePath: string,
+  acceptEncoding?: string | readonly string[]  ,
+): Promise<boolean> {
   let info;
   try {
     info = await lstat(filePath);
@@ -74,6 +102,16 @@ export async function serveFile(res: ServerResponse, filePath: string): Promise<
   }
   res.statusCode = 200;
   res.setHeader("Content-Type", contentTypeFor(filePath));
+  res.setHeader(
+    "Cache-Control",
+    isImmutableAsset(filePath) ? "public, max-age=31536000, immutable" : "no-cache",
+  );
+  if (acceptsGzip(acceptEncoding) && info.size >= 1024 && isCompressible(filePath)) {
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Vary", "Accept-Encoding");
+    createReadStream(filePath).pipe(createGzip()).pipe(res);
+    return true;
+  }
   res.setHeader("Content-Length", info.size);
   createReadStream(filePath).pipe(res);
   return true;

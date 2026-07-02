@@ -121,20 +121,21 @@ function deps(config: GatewayConfig = realtimeConfig()): UiHandlerDeps {
     redactor: (value) => value,
     registry: createRunRegistry(),
     modelPortFactory: () => ({
-      call: (request): Promise<NormalizedResponse> => Promise.resolve({
-        modelId: request.modelId,
-        content: "unused",
-        finishReason: "stop",
-        toolCalls: [],
-        structuredOutput: null,
-        usage: {
-          requestId: "voice-grounded-tool-test",
-          promptTokens: 1,
-          completionTokens: 1,
-          latencyMs: 1,
-          costClass: "medium",
-        },
-      }),
+      call: (request): Promise<NormalizedResponse> =>
+        Promise.resolve({
+          modelId: request.modelId,
+          content: "unused",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "voice-grounded-tool-test",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        }),
     }),
     store,
   };
@@ -160,16 +161,18 @@ function ctx(body: unknown): RouteContext {
   };
 }
 
+function flushReadableEvents(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
 function createChat(): Chat {
   store.createProject(projectPath, "Realtime voice tool");
   return store.createChat(projectPath, "Voice chat", CHAT_MODEL);
 }
 
-function createMessage(
-  chatId: string,
-  role: "user" | "assistant",
-  content: string,
-): ChatMessage {
+function createMessage(chatId: string, role: "user" | "assistant", content: string): ChatMessage {
   return store.createMessage({
     chatId,
     role,
@@ -183,10 +186,7 @@ function createMessage(
   });
 }
 
-function groundedAnswer(
-  chatId: string,
-  overrides: Partial<GroundedAnswer> = {},
-): GroundedAnswer {
+function groundedAnswer(chatId: string, overrides: Partial<GroundedAnswer> = {}): GroundedAnswer {
   const user = createMessage(chatId, "user", "Worum geht es im Fachkonzept?");
   const assistant = createMessage(
     chatId,
@@ -280,13 +280,38 @@ describe("handleRealtimeGroundedVoiceTool", () => {
 
   it("fails closed when the deployment is not full realtime voice capable", async () => {
     const chat = createChat();
-    const result = await handleRealtimeGroundedVoiceTool(ctx(requestFor(chat)), deps(chatOnlyConfig()));
+    const result = await handleRealtimeGroundedVoiceTool(
+      ctx(requestFor(chat)),
+      deps(chatOnlyConfig()),
+    );
 
     expect(result.status).toBe(403);
     expect(result.body).toMatchObject({
       error: { code: "VOICE_TOOL_UNAVAILABLE" },
     });
     expect(runGroundedAskInputMock).not.toHaveBeenCalled();
+  });
+
+  it("allows full realtime voice retrieval when the provider lacks tool calling", async () => {
+    const chat = createChat();
+    const answer = groundedAnswer(chat.id);
+    runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
+
+    const result = await handleRealtimeGroundedVoiceTool(
+      ctx(requestFor(chat)),
+      deps(realtimeConfig(false)),
+    );
+
+    expect(result.status).toBe(200);
+    expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    expect(result.body).toMatchObject({
+      groundedAnswer: { content: answer.content },
+      toolOutput: {
+        status: "ok",
+        answer: answer.content,
+        persisted: { userMessageId: answer.userMessageId, assistantMessageId: answer.assistantMessageId },
+      },
+    });
   });
 
   it("rejects missing or project-mismatched chats before running retrieval", async () => {
@@ -300,13 +325,18 @@ describe("handleRealtimeGroundedVoiceTool", () => {
     expect(runGroundedAskInputMock).not.toHaveBeenCalled();
   });
 
-  it("runs the shared grounded pipeline and returns a Realtime-safe tool output", async () => {
+  it("runs the shared grounded pipeline with the verbatim user transcript and returns a Realtime-safe tool output", async () => {
     const chat = createChat();
     const answer = groundedAnswer(chat.id);
     runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
 
     const result = await handleRealtimeGroundedVoiceTool(
-      ctx(requestFor(chat, { userTranscript: "Worum\u202e geht es im Fachkonzept?" })),
+      ctx(
+        requestFor(chat, {
+          query: "modell umgeschriebene retrieval query",
+          userTranscript: "Worum\u202e geht es im Fachkonzept?",
+        }),
+      ),
       deps(),
     );
 
@@ -337,17 +367,48 @@ describe("handleRealtimeGroundedVoiceTool", () => {
     ]);
   });
 
-  it("deduplicates duplicate provider function-call events by call id and normalized query", async () => {
+  it("falls back to the model query when no user transcript is available", async () => {
     const chat = createChat();
     const answer = groundedAnswer(chat.id);
     runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
+
+    const result = await handleRealtimeGroundedVoiceTool(
+      ctx(requestFor(chat, { query: "  Welche\u202e Quellen gelten?  " })),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    expect(runGroundedAskInputMock).toHaveBeenCalledWith(
+      { chatId: chat.id, content: "Welche Quellen gelten?", modelId: CHAT_MODEL },
+      expect.any(Object),
+    );
+  });
+
+  it("deduplicates concurrent duplicate provider function-call events after ownership validation", async () => {
+    const chat = createChat();
+    const answer = groundedAnswer(chat.id);
+    let resolveGrounded: (value: RouteResult) => void = () => undefined;
+    runGroundedAskInputMock.mockImplementation(
+      () =>
+        new Promise<RouteResult>((resolve) => {
+          resolveGrounded = resolve;
+        }),
+    );
     const request = requestFor(chat, { callId: "provider-call-1", query: " Worum   geht es? " });
 
-    const first = await handleRealtimeGroundedVoiceTool(ctx(request), deps());
-    const second = await handleRealtimeGroundedVoiceTool(
+    const firstPromise = handleRealtimeGroundedVoiceTool(ctx(request), deps());
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    });
+    const secondPromise = handleRealtimeGroundedVoiceTool(
       ctx({ ...request, query: "worum geht es?" }),
       deps(),
     );
+    await flushReadableEvents();
+    expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    resolveGrounded({ status: 200, body: answer } satisfies RouteResult);
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
@@ -355,14 +416,171 @@ describe("handleRealtimeGroundedVoiceTool", () => {
     expect(second.body).toEqual(first.body);
   });
 
+  it("checks realtime capability before returning any duplicate response", async () => {
+    const chat = createChat();
+    const answer = groundedAnswer(chat.id);
+    runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
+    const request = requestFor(chat, { callId: "provider-call-capability" });
+
+    const first = await handleRealtimeGroundedVoiceTool(ctx(request), deps());
+    const unavailable = await handleRealtimeGroundedVoiceTool(ctx(request), deps(chatOnlyConfig()));
+
+    expect(first.status).toBe(200);
+    expect(unavailable.status).toBe(403);
+    expect(unavailable.body).toMatchObject({
+      error: { code: "VOICE_TOOL_UNAVAILABLE" },
+    });
+    expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks chat ownership before joining an in-flight duplicate", async () => {
+    const chat = createChat();
+    const answer = groundedAnswer(chat.id);
+    let resolveGrounded: (value: RouteResult) => void = () => undefined;
+    runGroundedAskInputMock.mockImplementation(
+      () =>
+        new Promise<RouteResult>((resolve) => {
+          resolveGrounded = resolve;
+        }),
+    );
+    const request = requestFor(chat, {
+      callId: "provider-call-ownership",
+      query: "Welche Quelle?",
+      userTranscript: "Welche Quelle?",
+    });
+
+    const firstPromise = handleRealtimeGroundedVoiceTool(ctx(request), deps());
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    });
+    const mismatchedProject = await handleRealtimeGroundedVoiceTool(
+      ctx({ ...request, projectPath: join(tmp, "other-project") }),
+      deps(),
+    );
+    resolveGrounded({ status: 200, body: answer } satisfies RouteResult);
+    const first = await firstPromise;
+
+    expect(first.status).toBe(200);
+    expect(mismatchedProject.status).toBe(404);
+    expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps in-flight dedup scoped by normalized project path", async () => {
+    const chat = createChat();
+    const otherProjectPath = join(tmp, "other-project");
+    mkdirSync(otherProjectPath);
+    store.createProject(otherProjectPath, "Other realtime voice tool project");
+    let activeProjectPath = projectPath;
+    const scopedDeps: UiHandlerDeps = {
+      ...deps(),
+      store: {
+        ...store,
+        findChatById: (id) =>
+          id === chat.id ? { ...chat, projectPath: activeProjectPath } : store.findChatById(id),
+      },
+    };
+    const resolvers: ((value: RouteResult) => void)[] = [];
+    runGroundedAskInputMock.mockImplementation(
+      () =>
+        new Promise<RouteResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const request = requestFor(chat, {
+      callId: "provider-call-project-key",
+      query: "Welche Quelle?",
+      userTranscript: "Welche Quelle?",
+    });
+
+    activeProjectPath = projectPath;
+    const firstPromise = handleRealtimeGroundedVoiceTool(ctx(request), scopedDeps);
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(1);
+    });
+    activeProjectPath = otherProjectPath;
+    const secondPromise = handleRealtimeGroundedVoiceTool(
+      ctx({ ...request, projectPath: otherProjectPath }),
+      scopedDeps,
+    );
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(2);
+    });
+    const firstResolver = resolvers[0];
+    const secondResolver = resolvers[1];
+    if (firstResolver === undefined || secondResolver === undefined) {
+      throw new Error("expected both grounded tool calls to be pending");
+    }
+    firstResolver({ status: 200, body: groundedAnswer(chat.id) } satisfies RouteResult);
+    secondResolver({ status: 200, body: groundedAnswer(chat.id) } satisfies RouteResult);
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+  });
+
+  it("keeps in-flight dedup sensitive to the verbatim user transcript", async () => {
+    const chat = createChat();
+    const resolvers: ((value: RouteResult) => void)[] = [];
+    runGroundedAskInputMock.mockImplementation(
+      () =>
+        new Promise<RouteResult>((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+    const request = requestFor(chat, {
+      callId: "provider-call-transcript",
+      query: "modell query",
+    });
+
+    const firstPromise = handleRealtimeGroundedVoiceTool(
+      ctx({ ...request, userTranscript: "Welche Frist gilt?" }),
+      deps(),
+    );
+    const secondPromise = handleRealtimeGroundedVoiceTool(
+      ctx({ ...request, userTranscript: "Welche Gebühr gilt?" }),
+      deps(),
+    );
+    await vi.waitFor(() => {
+      expect(runGroundedAskInputMock).toHaveBeenCalledTimes(2);
+    });
+    expect(runGroundedAskInputMock).toHaveBeenNthCalledWith(
+      1,
+      { chatId: chat.id, content: "Welche Frist gilt?", modelId: CHAT_MODEL },
+      expect.any(Object),
+    );
+    expect(runGroundedAskInputMock).toHaveBeenNthCalledWith(
+      2,
+      { chatId: chat.id, content: "Welche Gebühr gilt?", modelId: CHAT_MODEL },
+      expect.any(Object),
+    );
+
+    const firstResolver = resolvers[0];
+    const secondResolver = resolvers[1];
+    if (firstResolver === undefined || secondResolver === undefined) {
+      throw new Error("expected both grounded tool calls to be pending");
+    }
+    firstResolver({ status: 200, body: groundedAnswer(chat.id) } satisfies RouteResult);
+    secondResolver({ status: 200, body: groundedAnswer(chat.id) } satisfies RouteResult);
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+  });
+
   it("maps non-grounded core responses and missing persisted messages to internal errors", async () => {
     const chat = createChat();
-    runGroundedAskInputMock.mockResolvedValueOnce({ status: 200, body: { ok: true } } satisfies RouteResult);
+    runGroundedAskInputMock.mockResolvedValueOnce({
+      status: 200,
+      body: { ok: true },
+    } satisfies RouteResult);
     const missingAnswer = groundedAnswer(chat.id, {
       userMessageId: "missing-user",
       assistantMessageId: "missing-assistant",
     });
-    runGroundedAskInputMock.mockResolvedValueOnce({ status: 200, body: missingAnswer } satisfies RouteResult);
+    runGroundedAskInputMock.mockResolvedValueOnce({
+      status: 200,
+      body: missingAnswer,
+    } satisfies RouteResult);
 
     const nonGrounded = await handleRealtimeGroundedVoiceTool(
       ctx(requestFor(chat, { callId: "non-grounded" })),

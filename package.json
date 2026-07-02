@@ -26,7 +26,8 @@
     "README.md",
     "LICENSE",
     "NOTICE",
-    "TRADEMARKS.md"
+    "TRADEMARKS.md",
+    "release-impact.catalog.json"
   ],
   "sideEffects": false,
   "scripts": {
@@ -65,6 +66,7 @@
     "test:e2e:git-publish-476": "playwright test --config tests/e2e/config/playwright.issue-476-git-publish.config.ts --project=chromium",
     "test:e2e:pr-command-center-477": "playwright test --config tests/e2e/config/playwright.issue-477-pr-command-center.config.ts --project=chromium",
     "test:e2e:merge-governance-478": "playwright test --config tests/e2e/config/playwright.issue-478-merge-governance.config.ts --project=chromium",
+    "test:e2e:update-ui-1696": "playwright test --config tests/e2e/config/playwright.issue-1696-update-ui.config.ts --project=chromium",
     "test:release:smoke": "npm run test:e2e:smoke",
     "release:plan": "node scripts/release-publish.mjs --plan-only",
     "release:publish": "node scripts/release-publish.mjs",
@@ -84,6 +86,8 @@
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
     "check:version-consistency": "node scripts/check-version-consistency.mjs",
+    "check:release-impact": "node scripts/check-release-impact.mjs",
+    "check:release-impact:publish": "node scripts/check-release-impact.mjs --publish",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
     "smoke:install:memory": "node scripts/installable-memory-smoke.mjs",
     "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
@@ -100,8 +104,8 @@
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages && node scripts/check-import-policy.mjs",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
-    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:qi-supply-chain",
-    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:qi-supply-chain",
+    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:release-impact && npm run check:qi-supply-chain",
+    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-native-optionals && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:publish-manifests && npm run check:release-impact:publish && npm run check:qi-supply-chain",
     "clean": "node scripts/clean.mjs",
     "test:mutation:security": "npx --yes @stryker-mutator/core@9 @stryker-mutator/vitest-runner@9 stryker run stryker.security.conf.json",
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
@@ -109,7 +113,7 @@
   },
   "overrides": {
     "undici": "7.28.0",
-    "postcss": "8.5.15",
+    "postcss": "8.5.16",
     "sharp": "npm:empty-npm-package@1.0.0",
     "@monaco-editor/loader": "1.7.0",
     "dompurify": "3.4.11"
@@ -118,7 +122,7 @@
     "@babel/preset-env": "^8.0.2",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.0",
-    "@types/node": "^25.9.1",
+    "@types/node": "^26.0.1",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "6.0.3",
     "@vitest/coverage-v8": "^4.1.7",

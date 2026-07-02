@@ -114,14 +114,14 @@ npm run dev:stop
 
 ### Repository map
 
-| Path | Purpose |
-| ---- | ------- |
-| `src/` | Root TypeScript entrypoints and shared runtime wiring. |
+| Path        | Purpose                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------ |
+| `src/`      | Root TypeScript entrypoints and shared runtime wiring.                                                 |
 | `packages/` | Workspace packages for the CLI, UI, contracts, workflows, security, memory, and supporting subsystems. |
-| `tests/` | Unit, integration, fixture, and Playwright end-to-end coverage. |
-| `docs/` | ADRs, operator runbooks, verification notes, and architecture documentation. |
-| `scripts/` | Build, validation, release, and repository maintenance scripts. |
-| `sandbox/` | Versioned install sandbox for packaged-application verification. |
+| `tests/`    | Unit, integration, fixture, and Playwright end-to-end coverage.                                        |
+| `docs/`     | ADRs, operator runbooks, verification notes, and architecture documentation.                           |
+| `scripts/`  | Build, validation, release, and repository maintenance scripts.                                        |
+| `sandbox/`  | Versioned install sandbox for packaged-application verification.                                       |
 
 ### How to orient in the codebase
 
@@ -143,7 +143,7 @@ npm run dev:start
 This checks whether dependencies are installed, runs the root build needed by the Node BFF, starts
 the UI through `next dev`, and exposes the app through one loopback URL. If the default port
 `1983` is already in use and no port was explicitly configured, the script chooses the next free
-loopback port.
+loopback port. The dev server binds the loopback interface and prints a `localhost` browser URL.
 
 Stop the development UI:
 
@@ -290,8 +290,32 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 | `keiko doctor`                | Diagnoses stale global-vs-local launch paths.                    |
 | `keiko repair`                | Runs an offline diagnostic-and-repair pass on the local install. |
 | `keiko uninstall`             | Removes Keiko's runtime artifacts so you can reinstall cleanly.  |
+| `keiko update status`         | Prints governed update status for support/headless workflows.    |
+| `keiko update check`          | Runs a fresh governed update availability check.                 |
+| `keiko update apply`          | Applies an update only when policy and install mode allow it.    |
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
+
+### Governed updates
+
+The in-app update window is the primary update path for ordinary users. The
+`keiko update` CLI is a secondary support surface for headless environments and
+support transcripts:
+
+```bash
+keiko update status  # cached/startup-style status: current version, target, policy, install mode
+keiko update check   # fresh registry/release-impact check
+keiko update apply   # package mutation only when policy and install-mode gates allow it
+```
+
+`keiko update apply` uses the same governed backend update authority as the UI.
+It refuses policy-disabled, unsupported, transient, linked, local-checkout, or
+ambiguous install modes and prints manual instructions instead of guessing a
+package-manager command. CLI output is support-oriented: it reports release
+availability, affected state stores, required remediation, policy state, and
+manual next steps, but does not print raw package-manager logs, private install
+paths, prompts, model output, customer content, or secret-bearing environment
+values.
 
 ### Repair and uninstall
 
@@ -427,10 +451,10 @@ Environment variables override file config. Each variable maps to the matching f
 | --------------------------------------------- | -------------------------- | ------- | ------------ |
 | `KEIKO_GROUNDING_MAX_CONNECTED_SOURCES`       | `maxConnectedSources`      | 16      | 64           |
 | `KEIKO_GROUNDING_MAX_LOCAL_KNOWLEDGE_SOURCES` | `maxLocalKnowledgeSources` | 16      | 64           |
-| `KEIKO_GROUNDING_MAX_PROMPT_REFERENCES`       | `maxPromptReferences`      | 8       | 64           |
+| `KEIKO_GROUNDING_MAX_PROMPT_REFERENCES`       | `maxPromptReferences`      | 16      | 64           |
 | `KEIKO_GROUNDING_MAX_EXCERPT_CHARS`           | `maxExcerptChars`          | 900     | 20 000       |
 | `KEIKO_GROUNDING_REFERENCE_BUDGET`            | `referenceBudget`          | 10      | 256          |
-| `KEIKO_GROUNDING_HYBRID_MAX_CANDIDATES`       | `hybridMaxCandidates`      | 24      | 256          |
+| `KEIKO_GROUNDING_HYBRID_MAX_CANDIDATES`       | `hybridMaxCandidates`      | 100     | 256          |
 | `KEIKO_GROUNDING_HYBRID_MAX_EXCERPT_BYTES`    | `hybridMaxExcerptBytes`    | 131 072 | 524 288      |
 
 `maxConnectedSources` bounds the number of folder/file scope entries per chat. `maxLocalKnowledgeSources` bounds the number of Knowledge Capsule or Capsule Set bindings per chat.
@@ -438,6 +462,54 @@ Environment variables override file config. Each variable maps to the matching f
 On top of the per-list bounds, a single combined cap of `max(maxConnectedSources, maxLocalKnowledgeSources)` — default 16 — applies across all connected source kinds together (folders, files, repositories, and knowledge connectors). This combined cap is enforced everywhere a source is connected: a Chat PATCH that would exceed it is rejected with HTTP 400, the workspace connect gesture shows a visible "source limit reached" notice instead of binding, and Quality Intelligence drops over-cap run sources with a coverage notice. Workspace connection edges are drawn only after the chat binding is accepted; unavailable sources or failed persistence show a concise connection notice and do not leave a dangling visual edge. Chats that already exceed the cap (rows written under a higher prior operator config) may keep or shrink their existing sources but cannot grow; at ask time only the first 16 sources per kind are explored and the rest surface as skipped-source notices.
 
 The effective limits at runtime are visible via `GET /api/config` as `effectiveGroundingLimits`.
+
+### Optional RAG reranker
+
+Local Knowledge and hybrid grounded answers can use an optional Cohere-compatible cross-encoder
+reranker after the broad retrieval/RRF candidate pass and before prompt assembly. The intended
+deployment is a self-hosted LiteLLM-compatible gateway exposing `/v1/rerank`, for example a
+Qwen3-reranker model served behind Infinity or vLLM and fronted by LiteLLM.
+
+Add a top-level `reranker` block to `keiko.config.json`:
+
+```json
+{
+  "providers": [{ "...": "..." }],
+  "reranker": {
+    "modelId": "qwen3-reranker",
+    "baseUrl": "https://litellm.internal.example/v1",
+    "apiKeySecretRef": "model-gateway:reranker",
+    "apiKeyHeaderName": "authorization",
+    "timeoutMs": 30000
+  }
+}
+```
+
+Keiko sends this request shape to `${baseUrl}/rerank`:
+
+```json
+{
+  "model": "qwen3-reranker",
+  "query": "user question",
+  "documents": ["retrieved excerpt", "retrieved excerpt"],
+  "top_n": 16
+}
+```
+
+Environment variables override the file block:
+
+| Variable                                | Purpose                                |
+| --------------------------------------- | -------------------------------------- |
+| `KEIKO_RERANKER_MODEL_ID`               | Reranker model/deployment id.          |
+| `KEIKO_RERANKER_BASE_URL`               | LiteLLM-compatible `/v1` base URL.     |
+| `KEIKO_RERANKER_API_KEY`                | Reranker gateway token.                |
+| `KEIKO_RERANKER_API_KEY_HEADER_NAME`    | Credential header name.                |
+| `KEIKO_RERANKER_TIMEOUT_MS`             | Per-rerank request timeout.            |
+
+When the block is missing, the request times out, the endpoint returns an unsupported response, or
+the model endpoint is unavailable, grounded answers fall back to the existing retrieval order and
+expose content-free diagnostics (`disabled`, `unavailable`, `invalid-response`, or `applied`).
+Queries, excerpts, endpoint URLs, provider payloads, and credentials are not returned in diagnostics.
 
 ### Figma snapshot connector
 
@@ -521,16 +593,16 @@ Read the full contracts and decisions:
 
 ## Troubleshooting
 
-| Symptom                | Check                                                                                                    |
-| ---------------------- | -------------------------------------------------------------------------------------------------------- |
-| UI does not open       | Run `npx keiko status`, then inspect `.keiko/ui.log`.                                                    |
-| Port is busy           | Start with `KEIKO_UI_PORT=1984 npm run keiko:start` or stop the process using the port.                  |
-| PowerShell blocks npm  | Run `npm.cmd run dev:start` when `npm.ps1` is blocked by the local execution policy.                     |
-| No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
-| Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
-| Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
+| Symptom                | Check                                                                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| UI does not open       | Run `npx keiko status`, then inspect `.keiko/ui.log`.                                                                                                  |
+| Port is busy           | Start with `KEIKO_UI_PORT=1984 npm run keiko:start` or stop the process using the port.                                                                |
+| PowerShell blocks npm  | Run `npm.cmd run dev:start` when `npm.ps1` is blocked by the local execution policy.                                                                   |
+| No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                                                                    |
+| Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.                                                    |
+| Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`.                                               |
 | Stale process state    | Run `npm run keiko:stop`, then `npx keiko repair` from a project where `@oscharko-dev/keiko` is installed to clear a stale pid and verify the install. |
-| Broken local install   | Run `npx keiko repair` for an offline diagnostic-and-repair pass, or `npx keiko uninstall` to reset.     |
+| Broken local install   | Run `npx keiko repair` for an offline diagnostic-and-repair pass, or `npx keiko uninstall` to reset.                                                   |
 
 For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
 

@@ -23,15 +23,15 @@
   /* ───────────────────────── SCALE · SPACING ─────────────────────────
      2-based rhythm. Mirrors Foundations → Spacing 1:1. Mode-independent. */
   --space-0: 0;
-  --space-1: 2px;   /* hairline insets */
-  --space-2: 4px;   /* icon-to-icon in a cluster */
-  --space-3: 6px;   /* chip / small-button padding */
-  --space-4: 8px;   /* default gap between related elements */
-  --space-5: 12px;  /* list-row padding, menu items */
-  --space-6: 14px;  /* card inner padding, composer */
-  --space-7: 18px;  /* gap between cards */
-  --space-8: 24px;  /* dot-grid pitch · block spacing */
-  --space-9: 32px;  /* sub-section separation */
+  --space-1: 2px; /* hairline insets */
+  --space-2: 4px; /* icon-to-icon in a cluster */
+  --space-3: 6px; /* chip / small-button padding */
+  --space-4: 8px; /* default gap between related elements */
+  --space-5: 12px; /* list-row padding, menu items */
+  --space-6: 14px; /* card inner padding, composer */
+  --space-7: 18px; /* gap between cards */
+  --space-8: 24px; /* dot-grid pitch · block spacing */
+  --space-9: 32px; /* sub-section separation */
   --space-10: 48px; /* section separation */
   --space-12: 64px;
   --space-16: 96px;
@@ -39,21 +39,21 @@
   /* ───────────────────────── SCALE · RADIUS (alias) ──────────────────
      Primitives own the values; these give a semantic name + the pill. */
   --radius-pill: 999px;
-  --radius-control: var(--radius-sm);  /* chips, inputs, buttons, menu items */
-  --radius-surface: var(--radius);     /* cards, windows, panels, popovers */
+  --radius-control: var(--radius-sm); /* chips, inputs, buttons, menu items */
+  --radius-surface: var(--radius); /* cards, windows, panels, popovers */
   --radius-floating: var(--radius-lg); /* composer, sheets */
 
   /* ───────────────────────── SCALE · TYPE WEIGHT ─────────────────────── */
   --weight-regular: 400;
   --weight-medium: 500;
   --weight-semibold: 600;
-  --weight-strong: 650;  /* the brand/title weight used in chrome */
+  --weight-strong: 650; /* the brand/title weight used in chrome */
 
   /* ───────────────────────── SCALE · LINE-HEIGHT ─────────────────────── */
-  --leading-tight: 1.1;   /* display / large headings */
-  --leading-snug: 1.3;    /* headings, labels */
-  --leading-normal: 1.5;  /* body, long-form */
-  --leading-relaxed: 1.65;/* code blocks */
+  --leading-tight: 1.1; /* display / large headings */
+  --leading-snug: 1.3; /* headings, labels */
+  --leading-normal: 1.5; /* body, long-form */
+  --leading-relaxed: 1.65; /* code blocks */
 
   /* ───────────────────────── SCALE · TYPE SIZE ───────────────────────
      Role-named ramp. 11px is the documented floor; nothing smaller ships. */
@@ -65,34 +65,34 @@
   --text-heading: 17px;
   --text-title: 22px;
   --text-title-lg: 28px;
-  --text-display-sm: 36px;  /* fills the gap between title-lg and display */
+  --text-display-sm: 36px; /* fills the gap between title-lg and display */
   --text-display: 50px;
 
   /* ───────────────────────── SCALE · OPACITY ─────────────────────────── */
-  --opacity-disabled: 0.42;  /* matches measured AA-safe dim floor */
+  --opacity-disabled: 0.42; /* matches measured AA-safe dim floor */
   --opacity-muted: 0.64;
   --opacity-hover-veil: 0.06;
-  --opacity-scrim: 0.55;     /* modal backdrop alpha */
+  --opacity-scrim: 0.55; /* modal backdrop alpha */
   --opacity-scrim-strong: 0.72;
 
   /* ───────────────────────── SCALE · BLUR ────────────────────────────── */
   --blur-sm: 4px;
-  --blur-md: 12px;   /* popover / sheet backdrop */
-  --blur-lg: 28px;   /* modal scrim glass */
+  --blur-md: 12px; /* popover / sheet backdrop */
+  --blur-lg: 28px; /* modal scrim glass */
 
   /* ───────────────────────── SCALE · MOTION ──────────────────────────
      Mirrors Motion → Durations. Reduced-motion is handled globally in
      keiko-tokens.css (@media prefers-reduced-motion). */
-  --dur-instant: 80ms;   /* press / colour shift */
-  --dur-fast: 120ms;     /* hover, small state */
-  --dur-base: 180ms;     /* entrances, lift */
-  --dur-slow: 260ms;     /* overlays, sheets */
-  --dur-flow: 1100ms;    /* the connection data-flow dash */
+  --dur-instant: 80ms; /* press / colour shift */
+  --dur-fast: 120ms; /* hover, small state */
+  --dur-base: 180ms; /* entrances, lift */
+  --dur-slow: 260ms; /* overlays, sheets */
+  --dur-flow: 1100ms; /* the connection data-flow dash */
 
-  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1);   /* default in/out */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);       /* entrances settle */
-  --ease-in: cubic-bezier(0.4, 0, 1, 1);           /* exits accelerate */
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);/* toggles, playful lift */
+  --ease-standard: cubic-bezier(0.2, 0, 0.2, 1); /* default in/out */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* entrances settle */
+  --ease-in: cubic-bezier(0.4, 0, 1, 1); /* exits accelerate */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* toggles, playful lift */
 
   /* ───────────────────────── SCALE · Z-INDEX ─────────────────────────
      Named layers, no magic numbers. */
@@ -103,7 +103,7 @@
   --z-nav: 50;
   --z-sticky: 80;
   --z-dropdown: 100;
-  --z-overlay: 200;     /* scrim + sheets/drawers */
+  --z-overlay: 200; /* scrim + sheets/drawers */
   --z-modal: 300;
   --z-popover: 400;
   --z-toast: 500;
@@ -148,15 +148,17 @@
   --surface-elevated: var(--card-2);
   --surface-inset: var(--inset);
   --surface-overlay: var(--surface);
-  --surface-accent-subtle: var(--accent-dim);  /* tinted accent fill — badges, selected rows, rail active */
-  --surface-accent-glow: var(--accent-glow);   /* focus ring fill, selection */
+  --surface-accent-subtle: var(
+    --accent-dim
+  ); /* tinted accent fill — badges, selected rows, rail active */
+  --surface-accent-glow: var(--accent-glow); /* focus ring fill, selection */
 
   /* text */
   --text-primary: var(--fg);
   --text-secondary: var(--fg-muted);
   --text-tertiary: var(--fg-dim);
   --text-faint: var(--fg-faint);
-  --text-disabled: var(--fg-faint);     /* pair with --opacity-disabled */
+  --text-disabled: var(--fg-faint); /* pair with --opacity-disabled */
   --text-inverse: var(--ink-inverse);
   --text-accent: var(--accent-text);
   --text-on-accent: var(--ink-inverse); /* text sitting on the green fill */

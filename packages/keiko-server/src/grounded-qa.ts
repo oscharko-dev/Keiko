@@ -32,9 +32,12 @@ import {
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
   type ConnectedContextPack,
+  type ContextExcerpt,
   type EvidenceAtom,
+  type ExplorationBudget,
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -45,12 +48,22 @@ import {
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  deriveContextProfileFromCapability,
+  maxUtf8BytesForTokenBudget,
+  type ContextProfile,
+} from "@oscharko-dev/keiko-contracts";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
+import {
+  currentContextProfileForModel,
+  currentGatewayConfig,
+  currentGroundingLimits,
+  currentRedactionSecrets,
+} from "./deps.js";
 import type { Chat, ChatConnectedScope, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -63,6 +76,8 @@ import {
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
+import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
+import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
 import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
@@ -431,14 +446,38 @@ export function promptSafeExcerptText(value: string): string {
   return value.split("```").join("` ` `");
 }
 
-const APPROX_BYTES_PER_TOKEN = 4;
-
 export function promptByteLength(messages: readonly GatewayChatMessage[]): number {
   return Buffer.byteLength(messages.map((message) => message.content).join("\n"), "utf8");
 }
 
 export function modelInputPromptByteLimit(modelInputTokensMax: number): number {
-  return Math.max(0, Math.floor(modelInputTokensMax) * APPROX_BYTES_PER_TOKEN);
+  return maxUtf8BytesForTokenBudget(modelInputTokensMax);
+}
+
+function contextProfileForGroundedModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ContextProfile | undefined {
+  const resolvedProfile = currentContextProfileForModel(deps, modelId);
+  if (resolvedProfile !== undefined) {
+    return resolvedProfile;
+  }
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) {
+    return undefined;
+  }
+  const capability = findConfiguredCapability(config, modelId);
+  return capability?.kind === "chat" ? deriveContextProfileFromCapability(capability) : undefined;
+}
+
+export function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
+  const profile = contextProfileForGroundedModel(deps, modelId);
+  if (profile === undefined) return DEFAULT_EXPLORATION_BUDGET;
+  return {
+    ...DEFAULT_EXPLORATION_BUDGET,
+    modelInputTokensMax: profile.effectiveInputBudget,
+    modelOutputTokensMax: profile.reservedOutputTokens,
+  };
 }
 
 function clampUtf8Bytes(value: string, maxBytes: number): string {
@@ -465,15 +504,76 @@ export function withPromptExcerptByteLimit(
   pack: ConnectedContextPack,
   maxExcerptBytes: number,
 ): ConnectedContextPack {
+  const excerptCount = packExcerptCount(pack);
+  return withPromptExcerptTotalByteBudget(pack, Math.max(0, maxExcerptBytes) * excerptCount);
+}
+
+interface RankedPromptExcerpt {
+  readonly fileIndex: number;
+  readonly excerptIndex: number;
+  readonly excerpt: ContextExcerpt;
+}
+
+function rankedPromptExcerpts(pack: ConnectedContextPack): readonly RankedPromptExcerpt[] {
+  const ranked: RankedPromptExcerpt[] = [];
+  for (let fileIndex = 0; fileIndex < pack.files.length; fileIndex += 1) {
+    const file = pack.files[fileIndex];
+    if (file === undefined) continue;
+    for (let excerptIndex = 0; excerptIndex < file.excerpts.length; excerptIndex += 1) {
+      const excerpt = file.excerpts[excerptIndex];
+      if (excerpt === undefined) continue;
+      ranked.push({ fileIndex, excerptIndex, excerpt });
+    }
+  }
+  ranked.sort(
+    (a, b) =>
+      b.excerpt.atom.score - a.excerpt.atom.score ||
+      a.fileIndex - b.fileIndex ||
+      a.excerptIndex - b.excerptIndex,
+  );
+  return ranked;
+}
+
+function excerptWithContent(excerpt: ContextExcerpt, content: string): ContextExcerpt {
+  return { ...excerpt, content, contentBytes: Buffer.byteLength(content, "utf8") };
+}
+
+function withPromptExcerptTotalByteBudget(
+  pack: ConnectedContextPack,
+  maxExcerptBytes: number,
+): ConnectedContextPack {
+  if (maxExcerptBytes <= 0) return { ...pack, files: [] };
+  const byFile = new Map<number, ContextExcerpt[]>();
+  let remaining = Math.floor(maxExcerptBytes);
+  for (const ranked of rankedPromptExcerpts(pack)) {
+    if (remaining <= 0) break;
+    const fullBytes = Buffer.byteLength(ranked.excerpt.content, "utf8");
+    if (fullBytes === 0) continue;
+    const content =
+      fullBytes <= remaining
+        ? ranked.excerpt.content
+        : clampUtf8Bytes(ranked.excerpt.content, remaining);
+    if (content.length === 0) break;
+    const bucket = byFile.get(ranked.fileIndex) ?? [];
+    bucket.push(excerptWithContent(ranked.excerpt, content));
+    byFile.set(ranked.fileIndex, bucket);
+    remaining -= Buffer.byteLength(content, "utf8");
+    if (fullBytes > Buffer.byteLength(content, "utf8")) break;
+  }
+  const files = [...byFile.entries()]
+    .sort((a, b) => {
+      const bestA = a[1][0]?.atom.score ?? 0;
+      const bestB = b[1][0]?.atom.score ?? 0;
+      return bestB - bestA || a[0] - b[0];
+    })
+    .map(([fileIndex, excerpts]) => {
+      const file = pack.files[fileIndex];
+      if (file === undefined) throw new ContextOverflowError("Prompt excerpt file missing.");
+      return { ...file, excerpts };
+    });
   return {
     ...pack,
-    files: pack.files.map((file) => ({
-      ...file,
-      excerpts: file.excerpts.map((excerpt) => ({
-        ...excerpt,
-        content: clampUtf8Bytes(excerpt.content, maxExcerptBytes),
-      })),
-    })),
+    files,
   };
 }
 
@@ -488,10 +588,8 @@ function promptBudgetedMessages(
   ) => readonly GatewayChatMessage[],
 ): readonly GatewayChatMessage[] {
   const limit = modelInputPromptByteLimit(pack.budget.modelInputTokensMax);
-  let messages = build(question, pack, redactor);
-  if (limit === 0 || promptByteLength(messages) <= limit) return messages;
-  const excerptCount = packExcerptCount(pack);
-  if (excerptCount === 0) return messages;
+  const messages = build(question, pack, redactor);
+  if (promptByteLength(messages) <= limit) return messages;
 
   const emptyPack = withPromptExcerptByteLimit(pack, 0);
   const emptyMessages = build(question, emptyPack, redactor);
@@ -504,15 +602,22 @@ function promptBudgetedMessages(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  let maxExcerptBytes = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
-  while (maxExcerptBytes >= 0) {
-    messages = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
-    if (promptByteLength(messages) <= limit || maxExcerptBytes === 0) {
-      return messages;
+  const excerptCount = packExcerptCount(pack);
+  if (excerptCount === 0) return messages;
+  let low = 0;
+  let high = Math.max(0, Math.floor((limit - overheadBytes) / excerptCount));
+  let best = emptyMessages;
+  while (low <= high) {
+    const maxExcerptBytes = Math.floor((low + high) / 2);
+    const candidate = build(question, withPromptExcerptByteLimit(pack, maxExcerptBytes), redactor);
+    if (promptByteLength(candidate) <= limit) {
+      best = candidate;
+      low = maxExcerptBytes + 1;
+    } else {
+      high = maxExcerptBytes - 1;
     }
-    maxExcerptBytes = Math.max(0, Math.floor(maxExcerptBytes * 0.8));
   }
-  return emptyMessages;
+  return best;
 }
 
 export function packBudgetSummary(pack: ConnectedContextPack): string {
@@ -672,6 +777,7 @@ function defaultRunner(
   deps: UiHandlerDeps,
   modelId: string,
   signal: AbortSignal,
+  contextProfile: UiHandlerDeps["contextProfile"],
 ): GroundedRunner | RouteResult {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
@@ -679,15 +785,27 @@ function defaultRunner(
   }
   return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
     const nowMs = Date.now;
-    return runGroundedExploration(input, {
+    const budgetedInput =
+      input.budget === undefined
+        ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
+        : input;
+    const contextPackReranker = configuredContextPackRerankerFor(
+      deps,
+      budgetedInput.query,
+      signal,
+    );
+    const repoSemanticSearchProvider = configuredRepoSemanticSearchProviderFor(deps, signal);
+    return runGroundedExploration(budgetedInput, {
       answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal),
       nowMs,
       signal,
-      microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
+      ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
+      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
-      ...(deps.contextProfile === undefined ? {} : { contextProfile: deps.contextProfile }),
+      ...(contextProfile === undefined ? {} : { contextProfile }),
     });
   };
 }
@@ -759,6 +877,7 @@ interface AskWorkerCtx {
   readonly scope: SelectedScope;
   readonly content: string;
   readonly modelId: string;
+  readonly contextProfile: UiHandlerDeps["contextProfile"];
   readonly deps: UiHandlerDeps;
   readonly runner: GroundedRunner;
   readonly signal: AbortSignal;
@@ -800,7 +919,7 @@ export function persistGroundedExchange(
 
 // ADR-0056 W3: regulated EvidenceManifest.contextAssembly? producer for the grounded persist
 // path. Returns the conditional-spread fragment for ConnectedContextEvidenceInput. The field is
-// emitted ONLY when a ContextProfile was threaded (deps.contextProfile) AND the observer ran on
+// emitted ONLY when a ContextProfile was threaded for the active model AND the observer ran on
 // this pack (pack.diagnostics?.contextBudget present — the same precondition the PR4 observer
 // records). When either is absent the fragment is empty, so the manifest is byte-identical to
 // today (exactOptionalPropertyTypes: omit, never set to undefined). Shared by all three grounded
@@ -856,7 +975,7 @@ function persistGroundedAuditEvidence(
       elapsedMs: output.elapsedMs,
       startedAt,
       finishedAt,
-      ...groundedContextAssemblyInput(workerCtx.deps, output.pack),
+      ...groundedContextAssemblyInput({ contextProfile: workerCtx.contextProfile }, output.pack),
     },
     {
       store: workerCtx.deps.evidenceStore,
@@ -895,7 +1014,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     output.pack,
     citations.length,
     output.elapsedMs,
-    groundedContextSummaryInput(deps, output.pack),
+    groundedContextSummaryInput({ contextProfile: workerCtx.contextProfile }, output.pack),
   );
   const answer: GroundedAnswer = {
     groundingKind: "connected-context",
@@ -988,18 +1107,27 @@ function resolveGroundedRunner(
   requestedModelId: string | undefined,
   signal: AbortSignal,
   runner: GroundedRunner | undefined,
-): { readonly modelId: string; readonly runner: GroundedRunner } | RouteResult {
+):
+  | {
+      readonly modelId: string;
+      readonly contextProfile: UiHandlerDeps["contextProfile"];
+      readonly runner: GroundedRunner;
+    }
+  | RouteResult {
   if (runner !== undefined) {
+    const modelId = requestedModelId ?? chat.selectedModel;
     return {
-      modelId: requestedModelId ?? chat.selectedModel,
+      modelId,
+      contextProfile: currentContextProfileForModel(deps, modelId),
       runner,
     };
   }
-  const modelId = resolveGroundedModelId(deps, chat, requestedModelId);
-  if (typeof modelId !== "string") return modelId;
-  const builtRunner = defaultRunner(deps, modelId, signal);
+  const resolvedModelId = resolveGroundedModelId(deps, chat, requestedModelId);
+  if (typeof resolvedModelId !== "string") return resolvedModelId;
+  const contextProfile = currentContextProfileForModel(deps, resolvedModelId);
+  const builtRunner = defaultRunner(deps, resolvedModelId, signal, contextProfile);
   if (typeof builtRunner !== "function") return builtRunner;
-  return { modelId, runner: builtRunner };
+  return { modelId: resolvedModelId, contextProfile, runner: builtRunner };
 }
 
 // ─── Multi-source seam (test injection) ───────────────────────────────────────
@@ -1023,7 +1151,7 @@ function resolveMultiSourceSeam(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   return {
-    retriever: defaultRetriever(signal),
+    retriever: defaultRetriever(signal, deps),
     answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal),
   };
 }
@@ -1051,6 +1179,7 @@ async function dispatchMultiSourceAsk(
     scopes,
     content: input.content,
     modelId,
+    contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     retriever: seam.retriever,
     answerer: seam.answerer,
@@ -1130,6 +1259,7 @@ async function dispatchFolderAsk(
     scope,
     content: input.content,
     modelId: resolved.modelId,
+    contextProfile: resolved.contextProfile,
     deps,
     runner: resolved.runner,
     signal,
@@ -1177,6 +1307,7 @@ async function dispatchHybridAsk(
     chat,
     content: input.content,
     modelId,
+    contextProfile: currentContextProfileForModel(deps, modelId),
     deps,
     signal,
     preSkippedFolders: skippedFolders.map((s) => ({

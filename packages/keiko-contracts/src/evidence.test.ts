@@ -5,7 +5,10 @@
 // validators. EVIDENCE_SCHEMA_VERSION stays "1" — additive optional fields are not a breaking change.
 
 import { describe, expect, it } from "vitest";
-import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "./context-engineering.js";
+import {
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  DEFAULT_TOKEN_ESTIMATOR_ID,
+} from "./context-engineering.js";
 import type {
   ContextAssemblyDiagnostics,
   ContextCompactionRecord,
@@ -23,7 +26,7 @@ function happyProfile(): ContextProfile {
     reservedOutputTokens: 8_000,
     safetyMarginTokens: 4_000,
     effectiveInputBudget: 116_000,
-    tokenEstimatorId: "keiko-conservative-utf8-v1",
+    tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
   };
 }
 

@@ -19,6 +19,10 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import {
+  buildConversationRetrievalSignals,
+  semanticRetrievalGateForText,
+} from "./memory-retrieval-signals.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   GatewayConfig,
@@ -37,11 +41,14 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
 const EMBEDDING_MODEL = "text-embedding-3-large";
 const DIMENSIONS = 8;
+const EXTERNAL_EMBEDDING_BASE_URL = "https://provider.example/v1";
+const IN_TENANT_EMBEDDING_BASE_URL = "http://127.0.0.1:11434/v1";
 
 let server: Server;
 let port: number;
@@ -107,11 +114,14 @@ function countingEmbeddingAdapter(
   };
 }
 
-function embeddingConfig(includeEmbeddingModel: boolean): GatewayConfig {
+function embeddingConfig(
+  includeEmbeddingModel: boolean,
+  embeddingBaseUrl = EXTERNAL_EMBEDDING_BASE_URL,
+): GatewayConfig {
   const providers = [
     {
       modelId: CHAT_MODEL,
-      baseUrl: "https://provider.example/v1",
+      baseUrl: EXTERNAL_EMBEDDING_BASE_URL,
       apiKey: "test-config-secret-value-1234567890",
       timeoutMs: 30_000,
       maxRetries: 0,
@@ -121,7 +131,7 @@ function embeddingConfig(includeEmbeddingModel: boolean): GatewayConfig {
       ? [
           {
             modelId: EMBEDDING_MODEL,
-            baseUrl: "https://provider.example/v1",
+            baseUrl: embeddingBaseUrl,
             apiKey: "test-config-secret-value-1234567890",
             timeoutMs: 30_000,
             maxRetries: 0,
@@ -136,9 +146,13 @@ function embeddingConfig(includeEmbeddingModel: boolean): GatewayConfig {
   };
 }
 
-function deps(overrides: Partial<UiHandlerDeps>, includeEmbeddingModel: boolean): UiHandlerDeps {
+function deps(
+  overrides: Partial<UiHandlerDeps>,
+  includeEmbeddingModel: boolean,
+  embeddingBaseUrl = EXTERNAL_EMBEDDING_BASE_URL,
+): UiHandlerDeps {
   return {
-    config: embeddingConfig(includeEmbeddingModel),
+    config: embeddingConfig(includeEmbeddingModel, embeddingBaseUrl),
     configPresent: true,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
@@ -185,9 +199,30 @@ function insertAccepted(vault: MemoryVaultStore, id: string, body: string): Memo
   return vault.insertMemory(record);
 }
 
-function storeEmbedding(vault: MemoryVaultStore, id: string, text: string): void {
+function storeEmbedding(
+  vault: MemoryVaultStore,
+  id: string,
+  text: string,
+  embeddingBaseUrl = EXTERNAL_EMBEDDING_BASE_URL,
+): void {
+  const provider = embeddingConfig(true, embeddingBaseUrl).providers.find(
+    (configured) => configured.modelId === EMBEDDING_MODEL,
+  );
+  if (provider === undefined) {
+    throw new Error("test embedding provider missing");
+  }
   const input: MemoryEmbeddingInput = {
-    provider: "openai",
+    provider: memoryEmbeddingProviderIdentity(provider),
+    modelId: EMBEDDING_MODEL,
+    metric: "cosine",
+    vector: vectorFor(text),
+  };
+  vault.upsertEmbedding(id as MemoryId, input);
+}
+
+function storeIncompatibleEmbedding(vault: MemoryVaultStore, id: string, text: string): void {
+  const input: MemoryEmbeddingInput = {
+    provider: "legacy-openai",
     modelId: EMBEDDING_MODEL,
     metric: "cosine",
     vector: vectorFor(text),
@@ -285,6 +320,22 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
+  it("does not surface a semantic-only memory when its stored embedding identity is incompatible", async () => {
+    const memoryDir = join(tmp, "vault-incompatible-semantic");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
+    storeIncompatibleEmbedding(vault, "mem-product", "The user is building a product named Keiko");
+    await restart(deps({ memoryVault: vault }, true));
+
+    const chatId = await createChat();
+    const result = await sendChat(chatId, "Wie heißt mein Produkt");
+
+    const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
+    expect(ids).not.toContain("mem-product");
+    vault.close();
+  });
+
   it("ranks purely lexically when no embedding model is configured (graceful degradation)", async () => {
     const memoryDir = join(tmp, "vault-no-model");
     mkdirSync(memoryDir);
@@ -307,13 +358,21 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
-  it("still records an access for surfaced memories (reinforcement reflex intact)", async () => {
+  it("records access only after the assistant uses a surfaced memory", async () => {
     const memoryDir = join(tmp, "vault-access");
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
     insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
     storeEmbedding(vault, "mem-product", "The user is building a product named Keiko");
-    await restart(deps({ memoryVault: vault }, true));
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          modelPortFactory: () => fakeModel("The product is named Keiko."),
+        },
+        true,
+      ),
+    );
 
     const chatId = await createChat();
     await sendChat(chatId, "Wie heißt mein Produkt");
@@ -347,6 +406,86 @@ describe("semantic memory retrieval (#204)", () => {
     const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
     expect(ids).toContain("mem-lex");
     expect(embeddingCalls).toEqual([]);
+    vault.close();
+  });
+
+  it("builds semantic candidates from vault metadata instead of full decrypted records", async () => {
+    const memoryDir = join(tmp, "vault-metadata-candidates");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
+    storeEmbedding(vault, "mem-product", "The user is building a product named Keiko");
+    let metadataCalls = 0;
+    let fullRecordCalls = 0;
+    const spiedVault: MemoryVaultStore = {
+      ...vault,
+      listMemoryMetadataByScope: (...args) => {
+        metadataCalls += 1;
+        return vault.listMemoryMetadataByScope(...args);
+      },
+      listMemoriesByScope: (...args) => {
+        fullRecordCalls += 1;
+        return vault.listMemoriesByScope(...args);
+      },
+    };
+    const d = deps(
+      {
+        memoryVault: spiedVault,
+        env: {
+          KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+            [EMBEDDING_MODEL]: { mmrLambda: 0.61 },
+          }),
+        },
+      },
+      true,
+    );
+    const query = "Wie heißt mein Produkt";
+    const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
+    const gate = semanticRetrievalGateForText(d, query, {});
+
+    const signals = await buildConversationRetrievalSignals(
+      d,
+      spiedVault,
+      query,
+      [scope],
+      Date.now(),
+      gate,
+    );
+
+    expect(signals.semanticById?.get("mem-product" as MemoryId)).toBe(1);
+    expect(signals.mmrLambda).toBe(0.61);
+    expect(metadataCalls).toBe(1);
+    expect(fullRecordCalls).toBe(0);
+    vault.close();
+  });
+
+  it("bounds the embedding sweep after metadata prefiltering", async () => {
+    const memoryDir = join(tmp, "vault-prefilter-candidates");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    for (let i = 0; i < 170; i += 1) {
+      insertAccepted(
+        vault,
+        `mem-prefilter-${String(i).padStart(3, "0")}`,
+        `Candidate ${String(i)}`,
+      );
+    }
+    let requestedIds: readonly MemoryId[] = [];
+    const spiedVault: MemoryVaultStore = {
+      ...vault,
+      getEmbeddings: (ids) => {
+        requestedIds = ids;
+        return vault.getEmbeddings(ids);
+      },
+    };
+    const d = deps({ memoryVault: spiedVault }, true);
+    const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
+    const query = "Which candidate matters?";
+    const gate = semanticRetrievalGateForText(d, query, {});
+
+    await buildConversationRetrievalSignals(d, spiedVault, query, [scope], Date.now(), gate);
+
+    expect(requestedIds).toHaveLength(160);
     vault.close();
   });
 
@@ -402,6 +541,108 @@ describe("semantic memory retrieval (#204)", () => {
     expect(ids).toContain("mem-package-manager");
     expect(embeddingCalls).toEqual([]);
     vault.close();
+  });
+
+  it("allows sensitive query embedding when the embedding provider is in-tenant", async () => {
+    const memoryDir = join(tmp, "vault-in-tenant-sensitive-query");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+    insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
+    storeEmbedding(
+      vault,
+      "mem-product",
+      "The user is building a product named Keiko",
+      IN_TENANT_EMBEDDING_BASE_URL,
+    );
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+        IN_TENANT_EMBEDDING_BASE_URL,
+      ),
+    );
+
+    const chatId = await createChat();
+    const query = "My private support email is dev@example.com; Wie heißt mein Produkt?";
+    const result = await sendChat(chatId, query);
+
+    const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
+    expect(ids[0]).toBe("mem-product");
+    expect(embeddingCalls).toEqual([query]);
+    vault.close();
+  });
+
+  it("allows restricted-default semantic retrieval only for in-tenant embedding providers", async () => {
+    const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
+    const query = "restricted policy query";
+
+    const inTenantDir = join(tmp, "vault-restricted-in-tenant");
+    mkdirSync(inTenantDir);
+    const inTenantVault = createMemoryVault({ memoryDir: inTenantDir, redactString: (v) => v });
+    insertAccepted(inTenantVault, "mem-in-tenant", "The user is building a product named Keiko");
+    storeEmbedding(
+      inTenantVault,
+      "mem-in-tenant",
+      "The user is building a product named Keiko",
+      IN_TENANT_EMBEDDING_BASE_URL,
+    );
+    const inTenantCalls: string[] = [];
+    const inTenantDeps = deps(
+      {
+        memoryVault: inTenantVault,
+        localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(inTenantCalls),
+      },
+      true,
+      IN_TENANT_EMBEDDING_BASE_URL,
+    );
+    const allowedGate = semanticRetrievalGateForText(inTenantDeps, query, {
+      defaultSensitivity: "restricted",
+    });
+    expect(allowedGate).toEqual({ allowed: true, reason: "allowed" });
+    const allowedSignals = await buildConversationRetrievalSignals(
+      inTenantDeps,
+      inTenantVault,
+      query,
+      [scope],
+      Date.now(),
+      allowedGate,
+    );
+    expect(allowedSignals.semanticById?.get("mem-in-tenant" as MemoryId)).toBe(1);
+    expect(inTenantCalls).toEqual([query]);
+    inTenantVault.close();
+
+    const externalDir = join(tmp, "vault-restricted-external");
+    mkdirSync(externalDir);
+    const externalVault = createMemoryVault({ memoryDir: externalDir, redactString: (v) => v });
+    insertAccepted(externalVault, "mem-external", "The user is building a product named Keiko");
+    storeEmbedding(externalVault, "mem-external", "The user is building a product named Keiko");
+    const externalCalls: string[] = [];
+    const externalDeps = deps(
+      {
+        memoryVault: externalVault,
+        localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(externalCalls),
+      },
+      true,
+    );
+    const blockedGate = semanticRetrievalGateForText(externalDeps, query, {
+      defaultSensitivity: "restricted",
+    });
+    expect(blockedGate).toEqual({ allowed: false, reason: "blocked-by-policy" });
+    const blockedSignals = await buildConversationRetrievalSignals(
+      externalDeps,
+      externalVault,
+      query,
+      [scope],
+      Date.now(),
+      blockedGate,
+    );
+    expect(blockedSignals.semanticById).toBeUndefined();
+    expect(externalCalls).toEqual([]);
+    externalVault.close();
   });
 
   it("does not embed the query when scoped vaults are empty", async () => {

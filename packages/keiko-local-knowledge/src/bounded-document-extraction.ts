@@ -186,10 +186,18 @@ function classifyParsedOutcome(
   if (hasDiagnostic(result, "PARSER_TIMEOUT") || hasDiagnostic(result, "PARSER_CANCELLED")) {
     return "timed-out";
   }
+  if (hasDiagnostic(result, "ENCRYPTED_PDF")) {
+    return "encrypted";
+  }
   if (hasDiagnostic(result, "MALFORMED_INPUT")) {
     return "malformed";
   }
-  if (hasNoTextLayerUnit(result)) {
+  if (
+    hasNoTextLayerUnit(result) ||
+    (result.parser.parserId === "pdf" &&
+      result.pages.length > 0 &&
+      (result.normalizedText === undefined || result.normalizedText.length === 0))
+  ) {
     return "no-text-layer";
   }
   // An empty-but-valid container (e.g. a workbook with no rows) produces no normalized text; it is
@@ -299,7 +307,10 @@ async function runParser(
     now: options.now,
   });
   try {
-    return await Promise.race([binding.parser.parseAsync(selection, parserOptions), timeout.expired]);
+    return await Promise.race([
+      binding.parser.parseAsync(selection, parserOptions),
+      timeout.expired,
+    ]);
   } catch {
     if (timeout.signal.aborted) {
       return "timed-out";

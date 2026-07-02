@@ -8,6 +8,7 @@
 // one per failed invariant, to keep diagnostics deterministic for evaluation harnesses.
 
 import type {
+  CapsuleContextualRetrievalSettings,
   CapsuleSet,
   ConnectorGraphState,
   ConnectorNode,
@@ -18,6 +19,8 @@ import type {
 import type { CapsuleReindexRequest } from "./local-knowledge-records.js";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+  CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
   CAPSULE_LIFECYCLE_STATES,
   CAPSULE_METADATA_KEY_MAX_CHARS,
   CAPSULE_METADATA_MAX_KEYS,
@@ -25,6 +28,7 @@ import {
   CAPSULE_OUTPUT_MODES,
   CAPSULE_RETRIEVAL_EFFORTS,
   CONNECTOR_NODE_KINDS,
+  EMBEDDING_VECTOR_NORMALIZATIONS,
   EMBEDDING_VECTOR_METRICS,
   KNOWLEDGE_SOURCE_SCOPE_KINDS,
 } from "./local-knowledge.js";
@@ -145,6 +149,17 @@ function validateSafeMetadataMap(errors: string[], field: string, value: unknown
   }
 }
 
+function validatePositiveIntegerMax(
+  errors: string[],
+  field: string,
+  value: unknown,
+  max: number,
+): void {
+  if (!isFinitePositiveInteger(value) || value > max) {
+    errors.push(`${field} must be a positive integer no greater than ${String(max)}`);
+  }
+}
+
 function validateOnlyKeys(
   record: Record<string, unknown>,
   allowedKeys: readonly string[],
@@ -172,6 +187,7 @@ function pushBadEnum(
   }
 }
 
+// eslint-disable-next-line max-lines-per-function, complexity
 export function validateEmbeddingModelIdentity(
   input: unknown,
 ): LocalKnowledgeValidation<EmbeddingModelIdentity> {
@@ -196,6 +212,31 @@ export function validateEmbeddingModelIdentity(
   );
   if (input.modelRevision !== undefined && !isNonEmptyTrimmedString(input.modelRevision)) {
     errors.push("embeddingModelIdentity.modelRevision must be a non-empty string when set");
+  }
+  if (input.normalization !== undefined) {
+    pushBadEnum(
+      errors,
+      "embeddingModelIdentity.normalization",
+      input.normalization,
+      EMBEDDING_VECTOR_NORMALIZATIONS,
+    );
+  }
+  if (
+    input.instructionVersion !== undefined &&
+    !isNonEmptyTrimmedString(input.instructionVersion)
+  ) {
+    errors.push("embeddingModelIdentity.instructionVersion must be a non-empty string when set");
+  }
+  if (
+    input.embeddingSpaceFingerprint !== undefined &&
+    !isNonEmptyTrimmedString(input.embeddingSpaceFingerprint)
+  ) {
+    errors.push(
+      "embeddingModelIdentity.embeddingSpaceFingerprint must be a non-empty string when set",
+    );
+  }
+  if (input.dimensionsParam !== undefined && !isFinitePositiveInteger(input.dimensionsParam)) {
+    errors.push("embeddingModelIdentity.dimensionsParam must be a positive integer when set");
   }
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -308,6 +349,71 @@ export function validateKnowledgeSourceScope(
 }
 
 // ─── KnowledgeCapsule ─────────────────────────────────────────────────────────
+const CONTEXTUAL_RETRIEVAL_KEYS = [
+  "enabled",
+  "modelId",
+  "promptVersion",
+  "strict",
+  "maxContextChars",
+  "documentContextMaxChars",
+] as const;
+
+function validateContextualRetrievalStrings(
+  input: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (input.modelId !== undefined && !isSafeDisplayString(input.modelId)) {
+    errors.push("contextualRetrieval.modelId must be a browser-safe non-empty string when set");
+  }
+  if (input.promptVersion !== undefined && !isSafeDisplayString(input.promptVersion)) {
+    errors.push(
+      "contextualRetrieval.promptVersion must be a browser-safe non-empty string when set",
+    );
+  }
+}
+
+function validateContextualRetrievalLimits(
+  input: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (input.maxContextChars !== undefined) {
+    validatePositiveIntegerMax(
+      errors,
+      "contextualRetrieval.maxContextChars",
+      input.maxContextChars,
+      CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX,
+    );
+  }
+  if (input.documentContextMaxChars !== undefined) {
+    validatePositiveIntegerMax(
+      errors,
+      "contextualRetrieval.documentContextMaxChars",
+      input.documentContextMaxChars,
+      CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
+    );
+  }
+}
+
+export function validateCapsuleContextualRetrievalSettings(
+  input: unknown,
+): LocalKnowledgeValidation<CapsuleContextualRetrievalSettings> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["contextualRetrieval must be an object"] };
+  }
+  const errors: string[] = [];
+  validateOnlyKeys(input, CONTEXTUAL_RETRIEVAL_KEYS, "contextualRetrieval", errors);
+  if (typeof input.enabled !== "boolean") {
+    errors.push("contextualRetrieval.enabled must be a boolean");
+  }
+  validateContextualRetrievalStrings(input, errors);
+  if (input.strict !== undefined && typeof input.strict !== "boolean") {
+    errors.push("contextualRetrieval.strict must be a boolean when set");
+  }
+  validateContextualRetrievalLimits(input, errors);
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: input as unknown as CapsuleContextualRetrievalSettings };
+}
+
 function validateCapsuleEnums(input: Record<string, unknown>, errors: string[]): void {
   pushBadEnum(errors, "capsule.retrievalEffort", input.retrievalEffort, CAPSULE_RETRIEVAL_EFFORTS);
   pushBadEnum(errors, "capsule.outputMode", input.outputMode, CAPSULE_OUTPUT_MODES);
@@ -372,6 +478,12 @@ export function validateKnowledgeCapsule(
     errors.push("capsule.id must be a non-empty string");
   }
   validateKnowledgeCapsuleDisplayMetadata(input, errors);
+  if (input.contextualRetrieval !== undefined) {
+    const contextualResult = validateCapsuleContextualRetrievalSettings(input.contextualRetrieval);
+    if (!contextualResult.ok) {
+      errors.push(...contextualResult.errors.map((error) => `capsule.${error}`));
+    }
+  }
   validateCapsuleSourceLineage(input, errors);
   validateCapsuleEnums(input, errors);
   const identityResult = validateEmbeddingModelIdentity(input.embeddingModelIdentity);

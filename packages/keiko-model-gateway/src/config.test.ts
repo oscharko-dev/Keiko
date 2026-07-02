@@ -61,6 +61,7 @@ describe("parseGatewayConfig", () => {
     expect(config.providers[0]?.modelId).toBe("example-chat-model");
     expect(config.providers[0]?.apiKeyHeaderName).toBe("authorization");
     expect(config.circuitBreaker.failureThreshold).toBe(5);
+    expect(config.reranker).toBeUndefined();
   });
 
   it("parses an explicit Azure OpenAI deployment endpoint style and API version", () => {
@@ -163,6 +164,82 @@ describe("parseGatewayConfig", () => {
       expect(error).toBeInstanceOf(ConfigInvalidError);
       expect((error as Error).message).toContain("figma.accessToken");
       expect((error as Error).message).not.toContain("figd_bad-token");
+    }
+  });
+
+  it("parses an optional self-hosted LiteLLM reranker block", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://litellm.local/v1",
+        apiKey: "rerank-secret",
+        apiKeyHeaderName: "x-litellm-key",
+        timeoutMs: 12_000,
+      },
+    });
+
+    expect(config.reranker).toEqual({
+      modelId: "qwen3-reranker",
+      baseUrl: "https://litellm.local/v1",
+      apiKey: "rerank-secret",
+      apiKeyHeaderName: "x-litellm-key",
+      timeoutMs: 12_000,
+    });
+  });
+
+  it("lets explicit reranker env vars override the config block", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        reranker: {
+          modelId: "config-reranker",
+          baseUrl: "https://config-reranker.local/v1",
+          apiKey: "config-secret",
+          timeoutMs: 12_000,
+        },
+      },
+      {
+        KEIKO_RERANKER_MODEL_ID: "env-reranker",
+        KEIKO_RERANKER_BASE_URL: "https://env-reranker.local/v1",
+        KEIKO_RERANKER_API_KEY: "env-secret",
+        KEIKO_RERANKER_API_KEY_HEADER_NAME: "x-api-key",
+        KEIKO_RERANKER_TIMEOUT_MS: "9000",
+      },
+    );
+
+    expect(config.reranker).toEqual({
+      modelId: "env-reranker",
+      baseUrl: "https://env-reranker.local/v1",
+      apiKey: "env-secret",
+      apiKeyHeaderName: "x-api-key",
+      timeoutMs: 9_000,
+    });
+  });
+
+  it("rejects malformed reranker config without leaking the token-like value", () => {
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        reranker: "sk-reranker-token",
+      }),
+    ).toThrow(/reranker must be an object/u);
+
+    try {
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://litellm.local/v1",
+          apiKey: "sk-reranker-token",
+          timeoutMs: 0,
+        },
+      });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("reranker.timeoutMs");
+      expect((error as Error).message).not.toContain("sk-reranker-token");
     }
   });
 
@@ -833,6 +910,30 @@ describe("toSafeObject", () => {
     expect(serialised).not.toContain("figd_config-token");
     expect(serialised).not.toContain("figma");
     expect(serialised).not.toContain("accessToken");
+  });
+
+  it("projects reranker readiness fields without endpoint or credentials", () => {
+    const config = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://litellm.internal/v1",
+        apiKey: "sk-reranker-token",
+        timeoutMs: 10_000,
+      },
+    });
+
+    const safe = toSafeObject(config);
+    expect(safe.reranker).toEqual({
+      modelId: "qwen3-reranker",
+      credentialHeaderName: "authorization",
+      timeoutMs: 10_000,
+    });
+    const serialised = JSON.stringify(safe);
+    expect(serialised).not.toContain("sk-reranker-token");
+    expect(serialised).not.toContain("litellm.internal");
+    expect(serialised).not.toContain("baseUrl");
+    expect(serialised).not.toContain("apiKey");
   });
 
   it("preserves non-secret fields", () => {

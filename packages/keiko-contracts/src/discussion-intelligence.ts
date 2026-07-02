@@ -511,8 +511,7 @@ export function summarizeDiscussionTurn(
 
 // ─── Validators (accumulating, never throw) ──────────────────────────────────────
 export type DiscussionValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 function buildDiscussionResult(reasons: readonly string[]): DiscussionValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };

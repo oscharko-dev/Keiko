@@ -28,6 +28,11 @@ import { stripUnsafeFormatChars } from "./assertions.js";
 export const REQUIREMENT_EXCERPT_MAX_CHARS = 96 as const;
 
 const ELLIPSIS = "…";
+const EMAIL_ADDRESS_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
+const REDACTED = "[REDACTED]";
+
+const redactExcerptText = (value: string): string =>
+  redact(value).replace(EMAIL_ADDRESS_PATTERN, REDACTED);
 
 /**
  * Build a short, redacted, single-line excerpt of an atom's canonical text. Returns `undefined`
@@ -35,7 +40,9 @@ const ELLIPSIS = "…";
  * same input always yields the same excerpt (no timestamps, no randomness).
  */
 export function buildRequirementExcerpt(canonicalText: string): string | undefined {
-  const collapsed = redact(stripUnsafeFormatChars(canonicalText)).replace(/\s+/gu, " ").trim();
+  const collapsed = redactExcerptText(stripUnsafeFormatChars(canonicalText))
+    .replace(/\s+/gu, " ")
+    .trim();
   if (collapsed.length === 0) return undefined;
   if (collapsed.length <= REQUIREMENT_EXCERPT_MAX_CHARS) return collapsed;
   return collapsed.slice(0, REQUIREMENT_EXCERPT_MAX_CHARS - ELLIPSIS.length).trimEnd() + ELLIPSIS;

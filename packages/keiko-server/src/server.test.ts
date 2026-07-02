@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import {
@@ -69,6 +70,29 @@ async function rawRequestWithHost(
   });
 }
 
+async function rawRequest(
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; headers: Record<string, string | string[]>; body: Buffer }> {
+  return new Promise((resolveResult, reject) => {
+    const req = request({ host: UI_HOST, port, path, method: "GET", headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+      });
+      res.on("end", () => {
+        resolveResult({
+          status: res.statusCode ?? 0,
+          headers: res.headers as Record<string, string | string[]>,
+          body: Buffer.concat(chunks),
+        });
+      });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 async function closeServer(): Promise<void> {
   await new Promise<void>((res) => {
     server.close(() => {
@@ -125,12 +149,20 @@ describe("GET/PUT /api/workspace/state", () => {
 
     const get = await fetchRaw("/api/workspace/state");
     expect(get.status).toBe(200);
+    const etag = get.headers.get("etag");
+    expect(etag).toBe('"workspace-state-1"');
     const body = JSON.parse(get.text) as {
       workspace: { revision: number; windows: unknown[]; connections: unknown[] };
     };
     expect(body.workspace.revision).toBe(1);
     expect(body.workspace.windows).toHaveLength(1);
     expect(body.workspace.connections).toEqual([{ id: "c-1", a: "files-1", b: "chat-1" }]);
+
+    const notModified = await fetchRawWithInit("/api/workspace/state", {
+      headers: { "If-None-Match": etag ?? "" },
+    });
+    expect(notModified.status).toBe(304);
+    expect(notModified.text).toBe("");
   });
 
   it("rejects malformed workspace state payloads", async () => {
@@ -141,6 +173,35 @@ describe("GET/PUT /api/workspace/state", () => {
     });
     expect(res.status).toBe(400);
     expect(JSON.parse(res.text)).toMatchObject({ error: { code: "invalid_request" } });
+  });
+
+  it("gzips large JSON API responses when requested", async () => {
+    const windows = Array.from({ length: 64 }, (_, index) => ({
+      id: `files-${String(index)}`,
+      type: "files",
+      x: index,
+      y: index,
+      w: 320,
+      h: 240,
+      z: index,
+      cfg: { label: "workspace-window".repeat(8) },
+      max: false,
+    }));
+    const put = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: JSON.stringify({ windows, connections: [] }),
+    });
+    expect(put.status).toBe(200);
+
+    const res = await rawRequest("/api/workspace/state", { "Accept-Encoding": "gzip" });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-encoding"]).toBe("gzip");
+    expect(res.headers.vary).toBe("Accept-Encoding");
+    const body = JSON.parse(gunzipSync(res.body).toString("utf8")) as {
+      workspace: { windows: unknown[] };
+    };
+    expect(body.workspace.windows).toHaveLength(64);
   });
 });
 
@@ -165,6 +226,7 @@ describe("security headers", () => {
       staticRoot,
       csp: buildCspHeader([]),
       cspProvider: () => csp,
+      cspCacheTtlMs: 0,
       port,
     });
     await new Promise<void>((res) => server.listen(port, UI_HOST, res));

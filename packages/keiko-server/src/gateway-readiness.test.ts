@@ -1,10 +1,8 @@
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import {
-  createDefaultChatCapability,
-  type GatewayConfig,
-} from "@oscharko-dev/keiko-model-gateway";
+import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { handleGatewayReadiness, runGatewayReadiness } from "./gateway-readiness.js";
@@ -21,8 +19,19 @@ function gatewayConfig(modelId = "test-chat-model"): GatewayConfig {
         maxRetries: 0,
         retryBaseDelayMs: 0,
       },
+      {
+        modelId: "text-embedding-3-small",
+        baseUrl: "https://llm-gateway.internal/v1",
+        apiKey: "secret-token",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 0,
+      },
     ],
-    capabilities: [createDefaultChatCapability(modelId)],
+    capabilities: [
+      createDefaultChatCapability(modelId),
+      embeddingCapability("text-embedding-3-small"),
+    ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
   };
 }
@@ -96,6 +105,10 @@ function chatPayload(content: string): unknown {
   return { choices: [{ message: { role: "assistant", content } }] };
 }
 
+function embeddingPayload(vector: readonly number[] = [3, 4]): unknown {
+  return { data: [{ embedding: vector }], model: "text-embedding-3-small" };
+}
+
 function requestBodyAt(fetchImpl: typeof fetch, index: number): Record<string, unknown> {
   const call = vi.mocked(fetchImpl).mock.calls[index];
   const init = call?.[1];
@@ -128,7 +141,8 @@ function fetchForDefaultSuccess(): typeof fetch {
         ],
       }),
     )
-    .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}'))) as typeof fetch;
+    .mockResolvedValueOnce(jsonResponse(chatPayload('{"status":"json-ok"}')))
+    .mockResolvedValueOnce(jsonResponse(embeddingPayload())) as typeof fetch;
 }
 
 afterEach(() => {
@@ -169,12 +183,17 @@ describe("gateway readiness route", () => {
 
     await expect(handleGatewayReadiness(rawCtx("{"), deps)).resolves.toEqual({
       status: 400,
-      body: { error: { code: "BAD_REQUEST", message: "The readiness request body must be valid JSON." } },
+      body: {
+        error: { code: "BAD_REQUEST", message: "The readiness request body must be valid JSON." },
+      },
     });
     await expect(handleGatewayReadiness(rawCtx("[]"), deps)).resolves.toEqual({
       status: 400,
       body: {
-        error: { code: "BAD_REQUEST", message: "The readiness request body must be a JSON object." },
+        error: {
+          code: "BAD_REQUEST",
+          message: "The readiness request body must be a JSON object.",
+        },
       },
     });
     expect(fetchImpl).not.toHaveBeenCalled();
@@ -188,7 +207,10 @@ describe("gateway readiness route", () => {
     await expect(runGatewayReadiness({ modelId: "missing-model" }, deps)).resolves.toEqual({
       status: 400,
       body: {
-        error: { code: "NO_MODEL", message: "Select a configured chat model before running readiness checks." },
+        error: {
+          code: "NO_MODEL",
+          message: "Select a configured chat model before running readiness checks.",
+        },
       },
     });
 
@@ -202,7 +224,10 @@ describe("gateway readiness route", () => {
     ).resolves.toEqual({
       status: 400,
       body: {
-        error: { code: "NO_MODEL", message: "Select a conversation-capable model before running readiness checks." },
+        error: {
+          code: "NO_MODEL",
+          message: "Select a conversation-capable model before running readiness checks.",
+        },
       },
     });
 
@@ -222,21 +247,57 @@ describe("gateway readiness route", () => {
       streaming: true,
       toolCalling: true,
       structuredOutput: true,
+      embedding: true,
+      embeddingDimensions: 2,
+      embeddingNorm: 1,
     });
     expect(report.probes.map((probe) => [probe.name, probe.status])).toEqual([
       ["chat", "passed"],
       ["streaming", "passed"],
       ["tool_calling", "passed"],
       ["json_schema", "passed"],
+      ["embedding", "passed"],
     ]);
     const serialized = JSON.stringify(report);
     expect(serialized).not.toContain("secret-token");
     expect(serialized).not.toContain("llm-gateway.internal");
-    for (let index = 0; index < 4; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       const body = requestBodyAt(fetchImpl, index);
       expect(body).not.toHaveProperty("temperature");
       expect(body).not.toHaveProperty("max_tokens");
     }
+    deps.store.close();
+  });
+
+  it("checks the optional reranker when requested", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] })) as
+      typeof fetch;
+    const config: GatewayConfig = {
+      ...gatewayConfig(),
+      reranker: {
+        modelId: "qwen3-reranker",
+        baseUrl: "https://reranker.internal/v1",
+        apiKey: "reranker-secret",
+        timeoutMs: 10_000,
+      },
+    };
+    const deps = depsWith(config, fetchImpl);
+    const report = await runGatewayReadiness({ options: { probes: ["reranker"] } }, deps);
+
+    expect("status" in report).toBe(false);
+    if ("status" in report) return;
+    expect(report.overallStatus).toBe("ready");
+    expect(report.verifiedCapabilities.reranker).toBe(true);
+    expect(report.probes).toEqual([
+      expect.objectContaining({ name: "chat", status: "passed" }),
+      expect.objectContaining({ name: "reranker", status: "passed" }),
+    ]);
+    const serialized = JSON.stringify(report);
+    expect(serialized).not.toContain("reranker-secret");
+    expect(serialized).not.toContain("reranker.internal");
     deps.store.close();
   });
 
@@ -268,7 +329,9 @@ describe("gateway readiness route", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse({ error: { message: "stream unsupported" } }, 501))
-      .mockResolvedValueOnce(jsonResponse({ error: { message: "schema failed" } }, 500)) as typeof fetch;
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: "schema failed" } }, 500),
+      ) as typeof fetch;
     const deps = depsWith(gatewayConfig(), fetchImpl);
     const report = await runGatewayReadiness(
       { options: { probes: ["streaming", "json_schema"] } },
@@ -382,7 +445,9 @@ describe("gateway readiness route", () => {
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("red")))
       .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO PDF READINESS PROBE")))
-      .mockResolvedValueOnce(jsonResponse(chatPayload("KEIKO_LONG_CONTEXT_SENTINEL"))) as typeof fetch;
+      .mockResolvedValueOnce(
+        jsonResponse(chatPayload("KEIKO_LONG_CONTEXT_SENTINEL")),
+      ) as typeof fetch;
     const config: GatewayConfig = {
       ...gatewayConfig(),
       capabilities: [
@@ -412,6 +477,16 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "document_input", status: "passed" }),
       expect.objectContaining({ name: "long_context", status: "passed" }),
     ]);
+    const longContextRequest = requestBodyAt(fetchImpl, 3);
+    const longContextMessages = longContextRequest.messages as
+      | readonly { readonly content?: unknown }[]
+      | undefined;
+    const longContextUserContent = longContextMessages?.[1]?.content;
+    expect(typeof longContextUserContent).toBe("string");
+    if (typeof longContextUserContent === "string") {
+      const [filler] = longContextUserContent.split("\nKEIKO_LONG_CONTEXT_SENTINEL");
+      expect(Buffer.byteLength(filler ?? "", "utf8")).toBe(maxUtf8BytesForTokenBudget(64_000));
+    }
     deps.store.close();
   });
 
@@ -424,7 +499,12 @@ describe("gateway readiness route", () => {
       .mockResolvedValueOnce(jsonResponse(chatPayload("missing sentinel"))) as typeof fetch;
     const deps = depsWith(gatewayConfig(), fetchImpl);
     const report = await runGatewayReadiness(
-      { options: { probes: ["image_input", "document_input", "long_context"], maxContextTokens: 128_000 } },
+      {
+        options: {
+          probes: ["image_input", "document_input", "long_context"],
+          maxContextTokens: 128_000,
+        },
+      },
       deps,
     );
 

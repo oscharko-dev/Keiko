@@ -33,17 +33,26 @@ interface RunStatement {
 
 type SourceOnlyAuditEvent = Extract<
   CapsuleAuditEvent,
-  { readonly kind: "indexing-job-started" | "indexing-job-completed" | "indexing-job-failed" | "retention-applied" }
+  {
+    readonly kind:
+      | "indexing-job-started"
+      | "indexing-job-completed"
+      | "indexing-job-failed"
+      | "retention-applied";
+  }
 >;
 
 type PreviewAuditEvent = Extract<
   CapsuleAuditEvent,
   {
     readonly kind:
-      | "citation-preview-authorized"
-      | "citation-preview-recoverable"
-      | "citation-preview-blocked";
+      "citation-preview-authorized" | "citation-preview-recoverable" | "citation-preview-blocked";
   }
+>;
+
+type PreviewDocumentAccessAuditEvent = Extract<
+  CapsuleAuditEvent,
+  { readonly kind: "citation-preview-document-accessed" }
 >;
 
 export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEventSink): void {
@@ -121,14 +130,36 @@ function referenceDetails(
   };
 }
 
-function previewDetails(
-  event: PreviewAuditEvent,
-): Record<string, unknown> {
+function previewDetails(event: PreviewAuditEvent): Record<string, unknown> {
   return {
     ...sourceOnlyDetails(event),
     chunkIds: redactChunkIds(event.chunkIds),
     targetQuality: event.targetQuality,
     ...("reasonCode" in event ? { reasonCode: event.reasonCode } : {}),
+  };
+}
+
+function previewDocumentAccessDetails(
+  event: PreviewDocumentAccessAuditEvent,
+): Record<string, unknown> {
+  return {
+    documentId: event.documentId,
+    sourceKind: event.sourceKind,
+    outcome: event.outcome,
+    ...("byteStart" in event && "byteEnd" in event
+      ? { byteRange: { start: event.byteStart, end: event.byteEnd } }
+      : {}),
+    ...("byteCount" in event ? { byteCount: event.byteCount } : {}),
+    ...("reasonCode" in event ? { reasonCode: event.reasonCode } : {}),
+  };
+}
+
+function sourceReboundDetails(
+  event: Extract<CapsuleAuditEvent, { readonly kind: "source-rebound" }>,
+): Record<string, unknown> {
+  return {
+    previousScopeKind: event.previousScopeKind,
+    currentScopeKind: event.currentScopeKind,
   };
 }
 
@@ -161,6 +192,12 @@ function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | 
   }
   if (isPreviewAuditEvent(event)) {
     return previewDetails(event);
+  }
+  if (event.kind === "citation-preview-document-accessed") {
+    return previewDocumentAccessDetails(event);
+  }
+  if (event.kind === "source-rebound") {
+    return sourceReboundDetails(event);
   }
   return null;
 }

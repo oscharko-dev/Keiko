@@ -1,8 +1,6 @@
-// UI-side SSE stream aggregation. The BFF emits events from three orchestration
-// layers (harness, unit-test workflow, bug-investigation workflow) plus a synthetic `ready`
-// sentinel. EventSource's `event:` framing requires per-name listeners, so the canonical
-// list of event names lives next to its sole consumer (useSSE.ts). No contracts package
-// owns the aggregation because none of the orchestration packages know about the others.
+// UI-side SSE stream aggregation. The BFF emits run events from three orchestration layers
+// (harness, unit-test workflow, bug-investigation workflow). Run SSE frames are unnamed and carry
+// the event type in JSON, so useSSE consumes them through one EventSource.onmessage handler.
 
 import type { HarnessEvent as ContractsHarnessEvent } from "@oscharko-dev/keiko-contracts";
 import type { WorkflowEvent } from "@oscharko-dev/keiko-contracts";
@@ -18,10 +16,7 @@ interface ReadySentinel {
 }
 
 export type HarnessEvent =
-  | ContractsHarnessEvent
-  | WorkflowEvent
-  | BugInvestigationEvent
-  | ReadySentinel;
+  ContractsHarnessEvent | WorkflowEvent | BugInvestigationEvent | ReadySentinel;
 
 export type HarnessEventType = HarnessEvent["type"];
 

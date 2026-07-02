@@ -121,8 +121,7 @@ describe("mapChunkToCitation", () => {
     const chunkRow = fixture.store._internal.db
       .prepare("SELECT character_start, character_end FROM chunks WHERE id = :id")
       .get({ id: String(chunkId) }) as
-      | { readonly character_start: number; readonly character_end: number }
-      | undefined;
+      { readonly character_start: number; readonly character_end: number } | undefined;
 
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
 
@@ -177,6 +176,82 @@ describe("mapChunkToCitation", () => {
     expect(citation?.characterStart).toBe(220);
     expect(citation?.characterEnd).toBe(280);
     // Page-hop: section sits inside page 2, so the mapper attaches pageNumber=2.
+    expect(citation?.pageNumber).toBe(2);
+    expect(citation?.pageLabel).toBe("2");
+  });
+
+  it("attaches the first overlapping page for section chunks that cross a page boundary", () => {
+    const text = "x".repeat(240);
+    seedPage(fixture.store, fixture.capsuleId, "doc-1" as never, {
+      pageNumber: 1,
+      pageLabel: "1",
+      characterStart: 0,
+      characterEnd: 100,
+    });
+    seedPage(fixture.store, fixture.capsuleId, "doc-1" as never, {
+      pageNumber: 2,
+      pageLabel: "2",
+      characterStart: 101,
+      characterEnd: 200,
+    });
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "section",
+      documentId: "doc-1" as never,
+      sectionPath: ["Boundary"],
+      characterStart: 80,
+      characterEnd: 130,
+    });
+
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: text,
+    });
+    const citation = mapChunkToCitation(
+      fixture.store,
+      fixture.capsuleId,
+      result.chunkIds[0] ?? ("" as never),
+    );
+
+    expect(citation?.pageNumber).toBe(1);
+    expect(citation?.pageLabel).toBe("1");
+  });
+
+  it("does not let empty placeholder pages claim a following text span", () => {
+    const text = "x".repeat(100);
+    seedPage(fixture.store, fixture.capsuleId, "doc-1" as never, {
+      pageNumber: 1,
+      pageLabel: "blank",
+      characterStart: 0,
+      characterEnd: 0,
+    });
+    seedPage(fixture.store, fixture.capsuleId, "doc-1" as never, {
+      pageNumber: 2,
+      pageLabel: "2",
+      characterStart: 0,
+      characterEnd: 100,
+    });
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "section",
+      documentId: "doc-1" as never,
+      sectionPath: ["Body"],
+      characterStart: 0,
+      characterEnd: 50,
+    });
+
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: text,
+    });
+    const citation = mapChunkToCitation(
+      fixture.store,
+      fixture.capsuleId,
+      result.chunkIds[0] ?? ("" as never),
+    );
+
     expect(citation?.pageNumber).toBe(2);
     expect(citation?.pageLabel).toBe("2");
   });

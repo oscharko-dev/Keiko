@@ -399,11 +399,7 @@ export interface RelationshipCardinalityCounts {
 // not call the resolver — the API layer (#539) passes the resolver's result here so the
 // pure validator can fold it into the resolution order without doing IO.
 export type RelationshipEndpointStatus =
-  | "live"
-  | "tombstoned"
-  | "retired"
-  | "unavailable"
-  | "missing";
+  "live" | "tombstoned" | "retired" | "unavailable" | "missing";
 
 export interface RelationshipEndpointResolverResult {
   readonly source: RelationshipEndpointStatus;

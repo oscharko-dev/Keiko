@@ -140,6 +140,99 @@ describe("splitRequirementsIntoAtoms — sentence-split fallback", () => {
     expect(atoms).toHaveLength(1);
     expect(atoms[0]?.canonicalText).toBe("The user must provide valid credentials to log in");
   });
+
+  it("does not split German abbreviations into fake atoms", () => {
+    const text =
+      "Der Zahlungsauftrag muss z. B. IBAN und BIC prüfen. Danach muss die TAN bestätigt werden.";
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(2);
+    expect(atoms[0]?.canonicalText).toContain("z. B. IBAN");
+    expect(atoms[1]?.canonicalText).toContain("TAN");
+  });
+
+  it("splits sentence boundaries inside regular lines of a multi-line blob", () => {
+    const text = [
+      "REQ-1: Der Zahlungsauftrag muss z. B. die IBAN prüfen. Danach muss die TAN bestätigt werden.",
+      "REQ-2: Die Freigabe muss protokolliert werden.",
+    ].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms.map((atom) => atom.canonicalText)).toEqual([
+      "REQ-1: Der Zahlungsauftrag muss z. B. die IBAN prüfen.",
+      "Danach muss die TAN bestätigt werden.",
+      "REQ-2: Die Freigabe muss protokolliert werden.",
+    ]);
+  });
+
+  it("splits inline alphabetic enumerations into separate requirement atoms", () => {
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+      "a) IBAN prüfen b) TAN bestätigen c) BIC speichern",
+      opts(),
+    );
+    expect(atoms.map((atom) => atom.canonicalText)).toEqual([
+      "IBAN prüfen",
+      "TAN bestätigen",
+      "BIC speichern",
+    ]);
+  });
+});
+
+describe("splitRequirementsIntoAtoms — structured requirement blocks", () => {
+  it("keeps a Gherkin scenario with its steps as one atom", () => {
+    const text = [
+      "Szenario: SEPA-Überweisung freigeben",
+      "Angenommen der Kunde hat ein gedecktes Konto",
+      "Wenn er die Überweisung per TAN bestätigt",
+      "Dann wird der Auftrag gebucht",
+    ].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.canonicalText).toContain("Szenario: SEPA-Überweisung freigeben");
+    expect(atoms[0]?.canonicalText).toContain("Dann wird der Auftrag gebucht");
+  });
+
+  it("keeps a markdown table as one atom instead of row atoms", () => {
+    const text = [
+      "| Feld | Regel |",
+      "| --- | --- |",
+      "| IBAN | Prüfziffer muss gültig sein |",
+      "| TAN | Muss einmalig sein |",
+    ].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.canonicalText).toContain("| IBAN | Prüfziffer");
+    expect(atoms[0]?.canonicalText).toContain("| TAN | Muss");
+  });
+
+  it("binds markdown headings to the following section", () => {
+    const text = [
+      "## KRED-001 Kreditlimit prüfen",
+      "Der Antrag darf das Kreditlimit nicht überschreiten.",
+      "## KRED-002 Auszahlung sperren",
+      "Die Auszahlung bleibt bis zur Vier-Augen-Freigabe gesperrt.",
+    ].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(2);
+    expect(atoms[0]?.canonicalText).toContain("## KRED-001 Kreditlimit prüfen");
+    expect(atoms[0]?.canonicalText).toContain("Kreditlimit nicht überschreiten");
+    expect(atoms[1]?.canonicalText).toContain("## KRED-002 Auszahlung sperren");
+  });
+
+  it("keeps separate requirement atoms inside one markdown heading while carrying the heading", () => {
+    const text = [
+      "# Fachkonzept",
+      "",
+      "Login must work reliably for every registered user.",
+      "Payments must support card capture for approved orders.",
+    ].join("\n");
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
+    expect(atoms).toHaveLength(2);
+    expect(atoms[0]?.canonicalText).toBe(
+      "# Fachkonzept\nLogin must work reliably for every registered user.",
+    );
+    expect(atoms[1]?.canonicalText).toBe(
+      "# Fachkonzept\nPayments must support card capture for approved orders.",
+    );
+  });
 });
 
 // ─── 3. Deduplication ────────────────────────────────────────────────────────
@@ -199,6 +292,20 @@ describe("splitRequirementsIntoAtoms — min-length and no-letter filter", () =>
     const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
     // 'abcdef' = 6 chars AND has letters → should be kept if it passes letter check
     expect(atoms.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("keeps short German banking domain tokens", () => {
+    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+      "IBAN\nBIC\nPIN\nTAN\nKRED-42",
+      opts(),
+    );
+    expect(atoms.map((atom) => atom.canonicalText)).toEqual([
+      "IBAN",
+      "BIC",
+      "PIN",
+      "TAN",
+      "KRED-42",
+    ]);
   });
 
   it("drops lines that contain no letters (pure digits/symbols)", () => {
@@ -270,6 +377,21 @@ describe("splitRequirementsIntoAtoms — maxAtoms cap", () => {
       opts({ maxAtoms: 50 }),
     );
     expect(atoms.length).toBeLessThanOrEqual(50);
+  });
+
+  it("reports unique atoms dropped by maxAtoms", () => {
+    const lines = Array.from(
+      { length: 5 },
+      (_, i) => `Unique requirement statement ${String(i + 1)} must pass validation`,
+    );
+    const result = QualityIntelligenceGeneration.splitRequirementsIntoAtomsWithStats(
+      lines.join("\n"),
+      opts({ maxAtoms: 2 }),
+    );
+    expect(result.atoms).toHaveLength(2);
+    expect(result.uniqueStatementCount).toBe(5);
+    expect(result.droppedAtomCount).toBe(3);
+    expect(result.truncated).toBe(true);
   });
 });
 

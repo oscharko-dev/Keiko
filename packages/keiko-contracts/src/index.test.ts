@@ -56,6 +56,10 @@ import {
   isAsYouTypeCompletionModel,
   validateCapsuleRowShape,
   redactPathInDiagnostic,
+  normalizePdfCitationPreviewMarkerIndex,
+  assertValidGatewaySamplingParameters,
+  isValidGatewaySamplingParameters,
+  validateGatewaySamplingParameters,
 } from "./index.js";
 import type {
   ConnectedContextPack,
@@ -124,6 +128,7 @@ import type {
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
+  GatewayRequest,
   GitDeliveryActionEnvelope,
   GitDeliveryResolvedInputs,
   GitDeliveryConstraint,
@@ -180,6 +185,36 @@ describe("keiko-contracts package surface", () => {
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
     expect(HARNESS_CODES.LIMIT_ITERATIONS).toBe("HARNESS_LIMIT_ITERATIONS");
+  });
+
+  it("accepts legacy gateway requests without sampling parameters", () => {
+    const request: GatewayRequest = {
+      modelId: "plain-chat",
+      messages: [{ role: "user", content: "hi" }],
+    };
+    expect(isValidGatewaySamplingParameters(request)).toBe(true);
+    expect(validateGatewaySamplingParameters(request)).toEqual([]);
+  });
+
+  it("accepts deterministic gateway sampling parameters", () => {
+    const request: GatewayRequest = {
+      modelId: "deterministic-chat",
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0,
+      topP: 1,
+    };
+    expect(isValidGatewaySamplingParameters(request)).toBe(true);
+    expect(() => {
+      assertValidGatewaySamplingParameters(request);
+    }).not.toThrow();
+  });
+
+  it("rejects invalid gateway sampling parameters", () => {
+    const issues = validateGatewaySamplingParameters({ temperature: -0.1, topP: 1.1 });
+    expect(issues.map((issue) => issue.parameter)).toEqual(["temperature", "topP"]);
+    expect(() => {
+      assertValidGatewaySamplingParameters({ temperature: Number.NaN });
+    }).toThrow(RangeError);
   });
 
   it("DEFAULT_LIMITS.maxIterations is 10", () => {
@@ -307,6 +342,7 @@ describe("keiko-contracts package surface", () => {
     expect(CAPSULE_ANSWER_GROUNDING_POLICIES).toContain("require-citations");
     expect(CONNECTOR_NODE_KINDS).toContain("local-knowledge");
     expect(DOCUMENT_STATUSES).toContain("extracted");
+    expect(DOCUMENT_STATUSES).toContain("extracted-image");
     expect(PARSED_UNIT_KINDS).toContain("page");
     expect(PARSER_DIAGNOSTIC_SEVERITIES).toContain("error");
     expect(INDEXING_JOB_STATUSES).toContain("succeeded");
@@ -320,6 +356,17 @@ describe("keiko-contracts package surface", () => {
     expect(typeof validateCapsuleSet).toBe("function");
     expect(typeof validateCapsuleReindexRequest).toBe("function");
     expect(typeof validateConnectorGraphState).toBe("function");
+    expect(typeof normalizePdfCitationPreviewMarkerIndex).toBe("function");
+  });
+
+  it("normalizes PDF citation preview marker indexes consistently", () => {
+    expect(normalizePdfCitationPreviewMarkerIndex("[1]")).toBe(1);
+    expect(normalizePdfCitationPreviewMarkerIndex("1")).toBe(1);
+    expect(normalizePdfCitationPreviewMarkerIndex("［1］")).toBe(1);
+    expect(normalizePdfCitationPreviewMarkerIndex("【1】")).toBe(1);
+    expect(normalizePdfCitationPreviewMarkerIndex("[1】")).toBeUndefined();
+    expect(normalizePdfCitationPreviewMarkerIndex("【1]")).toBeUndefined();
+    expect(normalizePdfCitationPreviewMarkerIndex(0)).toBeUndefined();
   });
 
   it("local-knowledge type re-exports are reachable through the barrel (#191)", () => {
@@ -366,17 +413,21 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(14);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(22);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     expect(KNOWLEDGE_CAPSULE_DDL[0]).toBe("PRAGMA foreign_keys = ON;");
     expect(KNOWLEDGE_CAPSULE_TABLES).toContain("capsules");
+    expect(KNOWLEDGE_CAPSULE_TABLES).toContain("document_blobs");
+    expect(KNOWLEDGE_CAPSULE_TABLES).toContain("chunk_lexical_index");
     expect(KNOWLEDGE_CAPSULE_TABLES).toContain("vectors");
     expect(KNOWLEDGE_CAPSULE_INDEXES.length).toBeGreaterThan(0);
     expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_vectors_capsule_identity");
     expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_sections_document_section_path_hash");
+    expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_document_blobs_created_document");
+    expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_chunk_lexical_capsule_document");
     expect(KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.version).toBe(1);
     expect(DELETE_CAPSULE_SQL).toContain("DELETE FROM capsules");
     expect(typeof validateCapsuleRowShape).toBe("function");

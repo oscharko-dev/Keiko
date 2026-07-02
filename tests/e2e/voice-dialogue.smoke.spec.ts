@@ -107,7 +107,13 @@ const REALTIME_BROWSER_FAKE_SCRIPT = `
     emit(obj) {
       for (const cb of this._l["message"] || []) cb({ data: JSON.stringify(obj) });
     }
-    send(data) { this.sent.push(data); }
+    send(data) {
+      this.sent.push(data);
+      let msg; try { msg = JSON.parse(data); } catch { return; }
+      if (msg.type === "session.update") {
+        this.emit({ type: "session.updated", session: msg.session || {} });
+      }
+    }
     close() {
       this.readyState = "closed";
       for (const cb of this._l["close"] || []) cb({});
@@ -303,7 +309,7 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 
@@ -408,6 +414,7 @@ async function activeComposerControlsFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
   await page.screenshot({

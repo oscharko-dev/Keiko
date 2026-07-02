@@ -30,6 +30,7 @@ import type {
   OutboundHttpEgressConfig,
   ProviderEndpointStyle,
   RealtimeAuthMode,
+  RerankerConfig,
   VoicePersona,
   VoicePersonaVoice,
   VoiceProviderLocality,
@@ -84,11 +85,18 @@ export interface SafeProviderConfig {
   readonly retryBaseDelayMs: number;
 }
 
+export interface SafeRerankerConfig {
+  readonly modelId: string;
+  readonly credentialHeaderName: string;
+  readonly timeoutMs: number;
+}
+
 export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
+  readonly reranker?: SafeRerankerConfig | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1149,6 +1157,86 @@ function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
   return resolveGroundingLimits(partial);
 }
 
+function rerankerSecret(
+  block: Record<string, unknown>,
+  env: EnvSource,
+  options: ParseGatewayConfigOptions,
+): string {
+  const envValue = env.KEIKO_RERANKER_API_KEY;
+  if (envValue !== undefined && envValue.length > 0) return envValue;
+  const fromVault = resolveSecretRef(block.apiKeySecretRef, options.secretResolver);
+  if (fromVault !== undefined) return fromVault;
+  if (typeof block.apiKey === "string" && block.apiKey.length > 0) return block.apiKey;
+  return env.KEIKO_DEFAULT_API_KEY ?? "";
+}
+
+function rerankerModelId(block: Record<string, unknown>, env: EnvSource): string {
+  const envValue = env.KEIKO_RERANKER_MODEL_ID;
+  if (envValue !== undefined && envValue.length > 0) return envValue;
+  return requireNonEmptyString(block.modelId, "reranker.modelId");
+}
+
+function rerankerBaseUrl(block: Record<string, unknown>, env: EnvSource): string {
+  const envValue = env.KEIKO_RERANKER_BASE_URL;
+  const baseUrl =
+    envValue !== undefined && envValue.length > 0
+      ? envValue
+      : typeof block.baseUrl === "string"
+        ? block.baseUrl
+        : "";
+  if (baseUrl.length === 0) {
+    throw new ConfigInvalidError("reranker.baseUrl must be set via config or environment");
+  }
+  validateBaseUrl(baseUrl, "reranker");
+  return baseUrl;
+}
+
+function rerankerTimeoutMs(block: Record<string, unknown>, env: EnvSource): number {
+  const envValue = env.KEIKO_RERANKER_TIMEOUT_MS;
+  if (envValue !== undefined && envValue.length > 0) {
+    return requirePositiveInt(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
+  }
+  return requirePositiveInt(block.timeoutMs ?? DEFAULT_TIMEOUT_MS, "reranker.timeoutMs");
+}
+
+function rerankerHeaderName(block: Record<string, unknown>, env: EnvSource): string {
+  const envValue = env.KEIKO_RERANKER_API_KEY_HEADER_NAME;
+  if (envValue !== undefined && envValue.length > 0) {
+    return normalizeApiKeyHeaderName(envValue, "KEIKO_RERANKER_API_KEY_HEADER_NAME");
+  }
+  return normalizeApiKeyHeaderName(block.apiKeyHeaderName, "reranker.apiKeyHeaderName");
+}
+
+function parseRerankerConfig(
+  raw: unknown,
+  env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
+  options: ParseGatewayConfigOptions,
+): RerankerConfig | undefined {
+  if (!isRecord(raw) || raw.reranker === undefined) {
+    return undefined;
+  }
+  const block = raw.reranker;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("reranker must be an object");
+  }
+  const apiKey = rerankerSecret(block, env, options);
+  if (apiKey.length === 0) {
+    throw new ConfigInvalidError(
+      "reranker.apiKey must be set via config, secret reference, or environment",
+    );
+  }
+  const config: RerankerConfig = {
+    modelId: rerankerModelId(block, env),
+    baseUrl: rerankerBaseUrl(block, env),
+    apiKey,
+    apiKeyHeaderName: rerankerHeaderName(block, env),
+    timeoutMs: rerankerTimeoutMs(block, env),
+    ...(egress !== undefined ? { egress } : {}),
+  };
+  return config;
+}
+
 function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefined {
   if (!isRecord(raw) || raw.figma === undefined) {
     return undefined;
@@ -1282,12 +1370,14 @@ function buildGatewayConfig(
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const capabilities = applyVoicePersonaDerivation(merged, providers);
   const grounding = parseGroundingLimits(raw);
+  const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
     ...(capabilities.length === 0 ? {} : { capabilities }),
     ...(grounding !== undefined ? { grounding } : {}),
+    ...(reranker !== undefined ? { reranker } : {}),
     ...(egress !== undefined ? { egress } : {}),
     ...(figma !== undefined ? { figma } : {}),
   };
@@ -1362,5 +1452,15 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
     // sensitive field must go on `ModelProviderConfig`, never here, or this projection must change.
     ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
     ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
+    ...(config.reranker === undefined
+      ? {}
+      : {
+          reranker: {
+            modelId: config.reranker.modelId,
+            credentialHeaderName:
+              config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+            timeoutMs: config.reranker.timeoutMs,
+          },
+        }),
   };
 }

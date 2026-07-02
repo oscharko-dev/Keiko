@@ -29,7 +29,7 @@ const ENCRYPTION_MARKER_KEY = "content_encryption";
 const ENCRYPTION_MARKER_VALUE = "aes-256-gcm/v1";
 const ENCRYPTION_PROBE_KEY = "content_encryption_probe";
 const ENCRYPTION_SCOPE_KEY = "content_encryption_scope";
-const ENCRYPTION_SCOPE_VALUE = "reconstructive-columns/v2";
+const ENCRYPTION_SCOPE_VALUE = "reconstructive-columns/v3";
 // Fixed, non-secret sentinel. Sealed at migration time and re-opened on every encrypted open to prove
 // the resolved key matches the one the store was sealed with. Never carries customer content.
 const ENCRYPTION_PROBE_PLAINTEXT = "keiko-local-knowledge-content-encryption-v1";
@@ -42,8 +42,7 @@ interface MetaRow {
 
 function readSchemaMeta(db: DatabaseSync, key: string): string | undefined {
   const row = db.prepare("SELECT value FROM schema_meta WHERE key = :k").get({ k: key }) as
-    | MetaRow
-    | undefined;
+    MetaRow | undefined;
   return row?.value;
 }
 
@@ -74,8 +73,13 @@ interface TextTarget {
 const LEGACY_TEXT_TARGETS: readonly TextTarget[] = [
   { table: "document_texts", column: "normalized_text" },
   { table: "document_text_windows", column: "normalized_text" },
+  { table: "chunks", column: "context_prefix" },
+  { table: "chunks", column: "augmented_text" },
 ];
 
+// Deliberately excludes chunk_lexical_index.text/exact_text. That table is the FTS5/BM25 search
+// projection; SQLite cannot MATCH sealed randomized envelopes, so the schema owns that narrow
+// plaintext retrieval-index exception while source-of-truth extracted text remains sealed here.
 const PATH_TEXT_TARGETS: readonly TextTarget[] = [
   { table: "sections", column: "section_path_json" },
   { table: "parsed_units", column: "section_path_json" },
@@ -205,6 +209,44 @@ interface VectorSweepRow {
   readonly vector_dimensions: number;
 }
 
+interface BlobSweepRow {
+  readonly blob_bytes: Uint8Array;
+  readonly byte_length: number;
+}
+
+function assertBlobOpens(row: BlobSweepRow, cipher: StoreContentCipher): void {
+  try {
+    const opened = cipher.openBlob(row.blob_bytes);
+    if (opened.byteLength !== row.byte_length) {
+      throw new KnowledgeStoreError(
+        "encrypted Local Knowledge blob content length does not match byte_length",
+      );
+    }
+  } catch (cause) {
+    if (cause instanceof KnowledgeStoreError) throw cause;
+    throw new KnowledgeStoreError(
+      "encrypted Local Knowledge blob row is neither plaintext nor a valid sealed envelope",
+      { cause },
+    );
+  }
+}
+
+function sealBlobColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
+  const select = db.prepare("SELECT blob_bytes, byte_length FROM document_blobs WHERE rowid = :id");
+  const update = db.prepare(
+    "UPDATE document_blobs SET blob_bytes = :b, storage_kind = 'sealed', seal_version = 'aes-256-gcm/v1' WHERE rowid = :id",
+  );
+  for (const id of collectRowIds(db, "document_blobs")) {
+    const row = select.get({ id }) as BlobSweepRow | undefined;
+    if (row === undefined) continue;
+    if (row.blob_bytes.byteLength === row.byte_length) {
+      update.run({ b: cipher.sealBlob(row.blob_bytes), id });
+      continue;
+    }
+    assertBlobOpens(row, cipher);
+  }
+}
+
 function assertVectorColumnSealed(db: DatabaseSync, cipher: StoreContentCipher): void {
   const select = db.prepare("SELECT embedding, vector_dimensions FROM vectors WHERE rowid = :id");
   for (const id of collectRowIds(db, "vectors")) {
@@ -213,10 +255,19 @@ function assertVectorColumnSealed(db: DatabaseSync, cipher: StoreContentCipher):
   }
 }
 
+function assertBlobColumnSealed(db: DatabaseSync, cipher: StoreContentCipher): void {
+  const select = db.prepare("SELECT blob_bytes, byte_length FROM document_blobs WHERE rowid = :id");
+  for (const id of collectRowIds(db, "document_blobs")) {
+    const row = select.get({ id }) as BlobSweepRow | undefined;
+    if (row !== undefined) assertBlobOpens(row, cipher);
+  }
+}
+
 function sealReconstructiveContent(db: DatabaseSync, cipher: StoreContentCipher): void {
   ensureSectionPathHashes(db, cipher);
   sealTextColumns(db, cipher);
   sealVectorColumn(db, cipher);
+  sealBlobColumn(db, cipher);
 }
 
 function flushPlaintextResidue(db: DatabaseSync): void {
@@ -259,6 +310,8 @@ function upgradeEncryptedScope(db: DatabaseSync, cipher: StoreContentCipher): vo
     assertLegacyTextColumnsSealed(db, cipher);
     assertVectorColumnSealed(db, cipher);
     sealPathTextColumns(db, cipher);
+    sealBlobColumn(db, cipher);
+    assertBlobColumnSealed(db, cipher);
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");

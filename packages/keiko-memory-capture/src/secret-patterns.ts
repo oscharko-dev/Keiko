@@ -67,6 +67,10 @@ const ISO_LOG_TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})
 const LOG_SEVERITY_RE = /\b(trace|debug|info|warn(?:ing)?|error|fatal)\b/i;
 const STACK_TRACE_MARKER_RE = /\b(stack trace|traceback|exception stack)\b/i;
 const STACK_FRAME_RE = /\bat\s+[A-Za-z_$][\w.$<>]*(?:\s+\[[^\]]+\])?\([^)\n]*\)/g;
+const GERMAN_IBAN_RE = /\bDE\d{2}(?:[ ]?\d{4}){4}[ ]?\d{2}\b/i;
+const GERMAN_TAX_ID_CANDIDATE_RE = /\b\d(?:[ -]?\d){10}\b/;
+const GERMAN_PHONE_RE =
+  /(?:\+49|0049)(?:[ -]?\d){7,13}\b|\b0\d{1,4}(?:[ -]?\d){5,12}\b/;
 
 function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
   for (const pattern of patterns) {
@@ -111,6 +115,28 @@ function looksLikeRawLog(value: string): boolean {
   const hasSeverityWithTimestamp = LOG_SEVERITY_RE.test(value) && ISO_LOG_TIMESTAMP_RE.test(value);
   const hasExplicitStackTrace = STACK_TRACE_MARKER_RE.test(value) && stackFrameCount >= 1;
   return hasSeverityWithTimestamp || hasExplicitStackTrace || stackFrameCount >= 2;
+}
+
+function hasAtLeastTwoDifferentDigits(value: string): boolean {
+  const digits = value.replace(/\D/gu, "");
+  return new Set(digits).size >= 2;
+}
+
+function looksLikeGermanTaxId(value: string): boolean {
+  const match = GERMAN_TAX_ID_CANDIDATE_RE.exec(value);
+  if (match === null) return false;
+  const digits = match[0].replace(/\D/gu, "");
+  if (digits.length !== 11 || !hasAtLeastTwoDifferentDigits(digits)) return false;
+  // Avoid treating prose years / ordered issue ranges as Steuer-ID. A real German Steuer-ID is
+  // usually surfaced with a nearby label in natural text; unlabeled 11-digit values are too broad.
+  const snippet = value.slice(Math.max(0, match.index - 32), match.index + match[0].length + 32);
+  return /\b(steuer(?:-|\s*)id|steueridentifikationsnummer|steuer\s*identifikationsnummer|tax\s*id)\b/iu.test(
+    snippet,
+  );
+}
+
+export function looksLikeEuDePii(value: string): boolean {
+  return GERMAN_IBAN_RE.test(value) || looksLikeGermanTaxId(value) || GERMAN_PHONE_RE.test(value);
 }
 
 // Returns the typed rejection class if `value` looks like a secret, credential-store path, or

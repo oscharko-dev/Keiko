@@ -40,6 +40,7 @@ import {
   type MonacoMarkerData,
   type MonacoMarkerEditorNamespace,
   type MonacoMarkerSeverities,
+  type RegisterKeikoDiagnosticsArgs,
 } from "./diagnostics-bridge.js";
 import {
   HOVER_ELIGIBLE_LANGUAGES,
@@ -88,6 +89,7 @@ export interface MountMonaco {
 /** Host-injected completion wiring (Issue #1199); absent when the host supplies no resolver. */
 export interface WireEditorCompletion {
   readonly resolve: EditorCompletionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly triggerCharacters: readonly string[];
   readonly contextBudgetBytes: number;
   readonly streamId: string;
@@ -99,6 +101,7 @@ export interface WireEditorCompletion {
 /** Host-injected inline-completion (ghost-text) wiring (Issue #1200); absent when unsupported. */
 export interface WireEditorInlineCompletion {
   readonly resolve: EditorInlineCompletionResolver;
+  readonly isCurrentDocument: (documentUri: string) => boolean;
   readonly contextBudgetBytes: number;
   readonly streamId: string;
   readonly newRequestId: () => string;
@@ -123,6 +126,7 @@ export interface WireEditorDiagnostics {
   readonly scheduler?: DiagnosticsScheduler | undefined;
   /** Content-free diagnostic-count observer for the status bar (Issue #1205). */
   readonly onSummary?: ((summary: EditorDiagnosticsSummary) => void) | undefined;
+  readonly onOverviewMarkers?: RegisterKeikoDiagnosticsArgs["onOverviewMarkers"] | undefined;
 }
 
 /**
@@ -302,6 +306,7 @@ function installCompletionProvider(args: WireEditorOnMountArgs): MonacoDisposabl
   return registerKeikoCompletionProvider({
     languages,
     resolve: completion.resolve,
+    isCurrentDocument: completion.isCurrentDocument,
     documentLanguages: completion.languages ?? COMPLETION_ELIGIBLE_LANGUAGES,
     triggerCharacters: completion.triggerCharacters,
     contextBudgetBytes: completion.contextBudgetBytes,
@@ -327,6 +332,7 @@ function installInlineCompletionProvider(args: WireEditorOnMountArgs): MonacoDis
   return registerKeikoInlineCompletionProvider({
     languages: registrar,
     resolve: inlineCompletion.resolve,
+    isCurrentDocument: inlineCompletion.isCurrentDocument,
     documentLanguages: inlineCompletion.languages ?? INLINE_COMPLETION_ELIGIBLE_LANGUAGES,
     contextBudgetBytes: inlineCompletion.contextBudgetBytes,
     streamId: inlineCompletion.streamId,
@@ -410,7 +416,15 @@ function installFormattingProvider(args: WireEditorOnMountArgs): MonacoDisposabl
 // `setModelMarkers` lives on `monaco.editor` while `MarkerSeverity` lives on the TOP-LEVEL `monaco`,
 // so this seam recombines them into the bridge's `MonacoMarkerEditorNamespace`. The runtime guards
 // degrade cleanly on a build lacking either part.
-function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | null {
+interface DiagnosticsInstallContext {
+  readonly diagnostics: WireEditorDiagnostics;
+  readonly diagnosticsEditor: MonacoDiagnosticsEditor;
+  readonly markers: MonacoMarkerEditorNamespace;
+}
+
+function resolveDiagnosticsInstallContext(
+  args: WireEditorOnMountArgs,
+): DiagnosticsInstallContext | null {
   const diagnostics = args.diagnostics;
   if (diagnostics === undefined) {
     return null;
@@ -435,6 +449,15 @@ function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | nul
       setModelMarkers(model, owner, markerData);
     },
   };
+  return { diagnostics, diagnosticsEditor, markers };
+}
+
+function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | null {
+  const context = resolveDiagnosticsInstallContext(args);
+  if (context === null) {
+    return null;
+  }
+  const { diagnostics, diagnosticsEditor, markers } = context;
   return registerKeikoDiagnostics({
     editor: diagnosticsEditor,
     markers,
@@ -446,6 +469,9 @@ function installDiagnostics(args: WireEditorOnMountArgs): MonacoDisposable | nul
     newRequestId: diagnostics.newRequestId,
     ...(diagnostics.scheduler === undefined ? {} : { scheduler: diagnostics.scheduler }),
     ...(diagnostics.onSummary === undefined ? {} : { onSummary: diagnostics.onSummary }),
+    ...(diagnostics.onOverviewMarkers === undefined
+      ? {}
+      : { onOverviewMarkers: diagnostics.onOverviewMarkers }),
   });
 }
 

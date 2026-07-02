@@ -7,7 +7,7 @@
 
 import { parse } from "acorn";
 import { readdir, readFile } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -29,7 +29,9 @@ const SYNTAX_VIOLATION_CHECKS = [
   },
   {
     matches: (node) =>
-      node.type === "MetaProperty" && node.meta?.name === "import" && node.property?.name === "meta",
+      node.type === "MetaProperty" &&
+      node.meta?.name === "import" &&
+      node.property?.name === "meta",
     message: "import.meta is not allowed",
   },
 ];
@@ -86,10 +88,20 @@ function collectSyntaxViolations(node, violations) {
   }
 }
 
-function parseJavaScript(source) {
+function normalizedPath(value) {
+  return value.split(sep).join("/");
+}
+
+function sourceTypeForStaticFile(file) {
+  return /\/_next\/static\/media\/[^/]+\.worker\.[^/]+\.js$/u.test(normalizedPath(file))
+    ? "module"
+    : "script";
+}
+
+function parseJavaScript(source, sourceType) {
   const ast = parse(source, {
     ecmaVersion: PARSE_ECMASCRIPT_VERSION,
-    sourceType: "script",
+    sourceType,
     allowHashBang: true,
     locations: true,
   });
@@ -106,7 +118,7 @@ export async function checkUiStaticJavaScriptCompatibility(staticRoot = DEFAULT_
   for (const file of files) {
     const source = await readFile(file, "utf8");
     try {
-      parseJavaScript(source);
+      parseJavaScript(source, sourceTypeForStaticFile(file));
     } catch (error) {
       const location =
         error && typeof error === "object" && "loc" in error && error.loc

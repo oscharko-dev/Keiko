@@ -42,6 +42,7 @@ export interface CapabilityProbeDeps {
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+const OCR_PROBE_BYTES = new Uint8Array([0]);
 
 async function withTimeout<T>(work: Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -64,7 +65,7 @@ export async function probeOcrCapability(
   if (adapter === undefined) return "unavailable";
   try {
     const result = await withTimeout(
-      adapter.ocrPage({ bytes: new Uint8Array(0), pageNumber: 1 }),
+      adapter.ocrPage({ bytes: OCR_PROBE_BYTES, pageNumber: 1 }),
       timeoutMs,
       () => ({ ok: false as const, reason: "timeout" as const }),
     );
@@ -75,8 +76,10 @@ export async function probeOcrCapability(
       case "timeout":
         return "degraded";
       case "unsupported-input":
-        // The engine is installed but rejected the empty probe input — still configured.
+        // The engine is installed but rejected the intentionally invalid probe input.
         return "available";
+      case "engine-error":
+        return "failing";
     }
   } catch {
     return "failing";

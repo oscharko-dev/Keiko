@@ -153,20 +153,22 @@ describe("memoryRecordToRow + rowToMemoryRecord", () => {
 });
 
 describe("rowToMemoryRecord — defensive parsing", () => {
-  it("returns an empty tags array when the JSON parses to something non-array", () => {
+  it("throws schema-mismatch when tags JSON parses to something non-array", () => {
     const row: MemoryRow = {
       ...memoryRecordToRow(baseRecord(), cipher),
       tags_json: JSON.stringify({ not: "an array" }),
     };
-    expect(rowToMemoryRecord(row, cipher).tags).toEqual([]);
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(MemoryStorageError);
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(/array of strings/i);
   });
 
-  it("drops non-string entries from a tags JSON array", () => {
+  it("throws schema-mismatch when tags JSON contains non-string entries", () => {
     const row: MemoryRow = {
       ...memoryRecordToRow(baseRecord(), cipher),
       tags_json: JSON.stringify(["ok", 123, null, "fine"]),
     };
-    expect(rowToMemoryRecord(row, cipher).tags).toEqual(["ok", "fine"]);
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(MemoryStorageError);
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(/array of strings/i);
   });
 
   it("throws schema-mismatch when tags_json is invalid JSON", () => {

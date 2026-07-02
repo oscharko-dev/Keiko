@@ -38,7 +38,11 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 // ones fade sooner. Counters only (no content) => the table stays CLEARTEXT. Additive: the columns
 // default 0, which yields a neutral factor of 1, so the strength model is byte-identical until a
 // real outcome lands.
-export const MEMORY_VAULT_SCHEMA_VERSION = 6;
+// v7 = forget suppression fingerprint. Adds body_hash to tombstones so the capture boundary can
+// suppress re-capture of the same canonical body without storing deleted body text.
+// v8 = embedding identity index. Adds an additive model/provider/revision/metric/dimension index so
+// re-embedding scans can detect compatible rows without touching sealed vector blobs.
+export const MEMORY_VAULT_SCHEMA_VERSION = 8;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -166,12 +170,26 @@ ALTER TABLE memory_access ADD COLUMN outcome_count INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE memory_access ADD COLUMN utility_sum REAL NOT NULL DEFAULT 0;
 `;
 
+const V7_SQL = `
+ALTER TABLE memory_tombstones ADD COLUMN body_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_tombstones_scope_body_hash
+  ON memory_tombstones(scope_kind, scope_coordinate, body_hash)
+  WHERE body_hash IS NOT NULL;
+`;
+
+const V8_SQL = `
+CREATE INDEX IF NOT EXISTS idx_embeddings_identity
+  ON memory_embeddings(provider, model_id, model_revision, vector_metric, vector_dimensions);
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
   { version: 4, sql: V4_SQL },
   { version: 5, sql: V5_SQL },
   { version: 6, sql: V6_SQL },
+  { version: 7, sql: V7_SQL },
+  { version: 8, sql: V8_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
@@ -187,6 +205,13 @@ function setUserVersion(db: DatabaseSync, v: number): void {
 
 export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): void {
   const start = currentUserVersion(db);
+  if (start > MEMORY_VAULT_SCHEMA_VERSION) {
+    throw new Error(
+      `Memory vault schema version ${String(start)} is newer than this binary supports (${String(
+        MEMORY_VAULT_SCHEMA_VERSION,
+      )}).`,
+    );
+  }
   const pendingDdl = MIGRATIONS.filter((m) => m.version > start);
   const needsEncryption = start < ENCRYPTION_VERSION;
   if (pendingDdl.length === 0 && !needsEncryption) return;

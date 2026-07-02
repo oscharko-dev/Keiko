@@ -30,7 +30,48 @@ export {
   type BuildHandlerDepsOptions,
   type Redactor,
   type ModelPortFactory,
+  type MemoryAuthorizationContext,
 } from "./deps.js";
+export {
+  createUpdateLocalStateManager,
+  type CreateUpdateSnapshotInput,
+  type UpdateLocalStateRepairResult,
+  type UpdateLocalStateManager,
+  type UpdateLocalStateManagerOptions,
+} from "./update-local-state.js";
+export {
+  createUpdatePreflightService,
+  runUpdatePreflight,
+  type UpdatePreflightService,
+} from "./update-preflight.js";
+export {
+  createFileUpdateSessionLock,
+  createStateDirUpdateSessionLock,
+  updateSessionLockPath,
+  type FileUpdateSessionLockOptions,
+  type UpdateSessionLock,
+  type UpdateSessionLockRecord,
+} from "./update-session-lock.js";
+export {
+  createUpdateSessionManager,
+  UpdateSessionError,
+  type UpdateSessionManager,
+  type UpdateSessionManagerOptions,
+  type UpdateSessionStartOutcome,
+} from "./update-session.js";
+export {
+  createUpdateRemediationManager,
+  UpdateRemediationError,
+  type UpdateRemediationManager,
+  type UpdateRemediationManagerOptions,
+} from "./update-remediation.js";
+export {
+  createLocalKnowledgeRemediationPort,
+  type CreateLocalKnowledgeRemediationPortOptions,
+  type LocalKnowledgeRemediationPort,
+  type LocalKnowledgeRemediationRunResult,
+  type LocalKnowledgeRemediationScope,
+} from "./local-knowledge-remediation.js";
 export {
   createRunRegistry,
   ActiveRunLimitError,
@@ -221,6 +262,7 @@ export {
 export {
   conversationForGateway,
   MAX_CONTEXT_MESSAGES,
+  usableGatewayMessages,
   type GatewayConversationMessage,
 } from "./chat-handlers.js";
 export {

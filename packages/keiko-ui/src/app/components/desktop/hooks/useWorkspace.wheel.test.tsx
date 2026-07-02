@@ -23,11 +23,7 @@ function appWindow(patch: Partial<AppWindow> = {}): AppWindow {
   };
 }
 
-function Harness({
-  cameraSmoothness = 0,
-}: {
-  readonly cameraSmoothness?: number;
-}): ReactElement {
+function Harness({ cameraSmoothness = 0 }: { readonly cameraSmoothness?: number }): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
   const ws = useWorkspace(wsRef, { cameraSmoothness });
   const files = ws.wins?.find((win) => win.id === "files-1");
@@ -173,7 +169,7 @@ describe("useWorkspace wheel zoom routing", () => {
     });
   });
 
-  it("eases free-workspace pan updates when smooth camera animation is selected", async () => {
+  it("keeps free-workspace pan direct even when smooth camera animation is selected", async () => {
     const callbacks: FrameRequestCallback[] = [];
     vi.spyOn(performance, "now").mockReturnValue(0);
     const requestAnimationFrameSpy = vi
@@ -206,26 +202,12 @@ describe("useWorkspace wheel zoom routing", () => {
 
     expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
     callbacks[0]?.(0);
-    expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("view-x")).toHaveTextContent("0");
-
-    callbacks[1]?.(140);
-
-    await waitFor(() => {
-      const x = Number(screen.getByTestId("view-x").textContent);
-      const y = Number(screen.getByTestId("view-y").textContent);
-      expect(x).toBeLessThan(0);
-      expect(x).toBeGreaterThan(-20);
-      expect(y).toBeLessThan(0);
-      expect(y).toBeGreaterThan(-40);
-    });
-
-    callbacks[2]?.(280);
 
     await waitFor(() => {
       expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
       expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
     });
+    expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
   });
 
   it("keeps low free-workspace pan smoothness close to immediate movement", async () => {
@@ -260,7 +242,6 @@ describe("useWorkspace wheel zoom routing", () => {
     });
 
     callbacks[0]?.(0);
-    callbacks[1]?.(16);
 
     await waitFor(() => {
       expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
@@ -268,7 +249,7 @@ describe("useWorkspace wheel zoom routing", () => {
     });
   });
 
-  it("settles workspace camera animation before routing Ctrl wheel inside a window", async () => {
+  it("routes Ctrl wheel inside a window after a direct workspace pan", async () => {
     const callbacks: FrameRequestCallback[] = [];
     vi.spyOn(performance, "now").mockReturnValue(0);
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(
@@ -302,6 +283,11 @@ describe("useWorkspace wheel zoom routing", () => {
     });
     callbacks[0]?.(0);
 
+    await waitFor(() => {
+      expect(screen.getByTestId("view-x")).toHaveTextContent("-20");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("-40");
+    });
+
     fireEvent.wheel(screen.getByTestId("window-target"), {
       bubbles: true,
       cancelable: true,
@@ -311,7 +297,7 @@ describe("useWorkspace wheel zoom routing", () => {
       deltaY: -100,
     });
 
-    expect(cancelAnimationFrameSpy).toHaveBeenCalledWith(2);
+    expect(cancelAnimationFrameSpy).not.toHaveBeenCalled();
     await waitFor(() => {
       expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.2");
       expect(screen.getByTestId("view-x")).toHaveTextContent("-20");

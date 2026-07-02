@@ -39,11 +39,18 @@ export type VectorId = string & { readonly [VectorIdBrand]: true };
 
 // ─── Embedding model + parser identity ────────────────────────────────────────
 export type EmbeddingVectorMetric = "cosine" | "euclidean" | "dot";
+export type EmbeddingVectorNormalization = "l2" | "none" | "unknown";
 
 export const EMBEDDING_VECTOR_METRICS: readonly EmbeddingVectorMetric[] = [
   "cosine",
   "euclidean",
   "dot",
+] as const;
+
+export const EMBEDDING_VECTOR_NORMALIZATIONS: readonly EmbeddingVectorNormalization[] = [
+  "l2",
+  "none",
+  "unknown",
 ] as const;
 
 export interface EmbeddingModelIdentity {
@@ -52,6 +59,10 @@ export interface EmbeddingModelIdentity {
   readonly vectorDimensions: number;
   readonly vectorMetric: EmbeddingVectorMetric;
   readonly modelRevision?: string;
+  readonly normalization?: EmbeddingVectorNormalization;
+  readonly instructionVersion?: string;
+  readonly embeddingSpaceFingerprint?: string;
+  readonly dimensionsParam?: number;
 }
 
 export interface ParserDependencyVersion {
@@ -133,15 +144,25 @@ export const CAPSULE_OUTPUT_MODES: readonly CapsuleOutputMode[] = [
 ] as const;
 
 export type CapsuleAnswerGroundingPolicy =
-  | "require-citations"
-  | "require-citations-or-state-no-evidence"
-  | "best-effort";
+  "require-citations" | "require-citations-or-state-no-evidence" | "best-effort";
 
 export const CAPSULE_ANSWER_GROUNDING_POLICIES: readonly CapsuleAnswerGroundingPolicy[] = [
   "require-citations",
   "require-citations-or-state-no-evidence",
   "best-effort",
 ] as const;
+
+export const CAPSULE_CONTEXTUAL_RETRIEVAL_MAX_CONTEXT_CHARS_MAX = 4_096 as const;
+export const CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX = 100_000 as const;
+
+export interface CapsuleContextualRetrievalSettings {
+  readonly enabled: boolean;
+  readonly modelId?: string;
+  readonly promptVersion?: string;
+  readonly strict?: boolean;
+  readonly maxContextChars?: number;
+  readonly documentContextMaxChars?: number;
+}
 
 // ─── Knowledge capsule + set ──────────────────────────────────────────────────
 export interface KnowledgeCapsule {
@@ -155,6 +176,7 @@ export interface KnowledgeCapsule {
   readonly retrievalEffort: CapsuleRetrievalEffort;
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   // Path relative to the runtime-state directory; never absolute and never containing `..`.
@@ -193,6 +215,7 @@ export const CAPSULE_SET_MAX_MEMBERS = 16 as const;
 export interface UpdateCapsulePatch {
   readonly displayName?: string;
   readonly description?: string;
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
   // Back-compat optional — absent means "no change". A metadata map replaces the full
   // metadata on the capsule. Bounded by CAPSULE_METADATA_MAX_KEYS.
   readonly metadata?: Readonly<Record<string, string>>;

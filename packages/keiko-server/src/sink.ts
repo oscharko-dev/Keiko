@@ -49,15 +49,19 @@ export class QueueEventSink {
     if (this.buffer.length > this.capacity) {
       this.buffer.shift();
     }
-    for (const writer of [...this.writers]) {
+    const failed: SseWriter[] = [];
+    for (const writer of this.writers) {
       try {
         const accepted = writer.write(event);
         if (accepted === false) {
-          this.writers.delete(writer);
-          writer.close();
+          failed.push(writer);
         }
       } catch {
-        this.writers.delete(writer);
+        failed.push(writer);
+      }
+    }
+    for (const writer of failed) {
+      if (this.writers.delete(writer)) {
         writer.close();
       }
     }

@@ -112,8 +112,7 @@ describe("assembleContextPack", () => {
       isAvailable: () => Promise.resolve({ available: true, modelLabel: "fake" }),
       rerank: (cs) => Promise.resolve([...cs].reverse()),
     };
-    // DEFAULT_EXPLORATION_BUDGET.rerankCallsMax = 0 (disabled). Allow exactly one rerank
-    // call so the seam fires.
+    // Allow exactly one rerank call so the seam fires.
     const input: AssembleInput = {
       ...baseInput(),
       budget: { ...DEFAULT_EXPLORATION_BUDGET, rerankCallsMax: 1 },
@@ -127,13 +126,17 @@ describe("assembleContextPack", () => {
     expect(result.pack.usage.rerankCalls).toBe(1);
   });
 
-  it("skips reranking when budget.rerankCallsMax is zero (default)", async () => {
+  it("skips reranking when budget.rerankCallsMax is zero", async () => {
     const reverse: RerankerSeam = {
       name: "reverse-fake",
       isAvailable: () => Promise.resolve({ available: true, modelLabel: "fake" }),
       rerank: (cs) => Promise.resolve([...cs].reverse()),
     };
-    const result = await assembleContextPack(baseInput(), {
+    const input: AssembleInput = {
+      ...baseInput(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, rerankCallsMax: 0 },
+    };
+    const result = await assembleContextPack(input, {
       nowMs: fixedNow,
       reranker: reverse,
     });

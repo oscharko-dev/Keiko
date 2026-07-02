@@ -28,6 +28,9 @@ export type WindowType =
   | "integ"
   | "keiko"
   | "settings"
+  // Issue #1696 — governed package-update window. Opened only from Settings/startup notification,
+  // not from the rail or command palette.
+  | "updates"
   | "project"
   | "search"
   | "plugins"
@@ -116,8 +119,7 @@ export interface WindowRenderContext {
   readonly linkedFigmaSnapshotRunIds: readonly string[];
   /** Figma Snapshot sources, optionally scoped to selected screen ids. */
   readonly linkedFigmaSnapshotSources?:
-    | readonly QualityIntelligenceFigmaSnapshotSource[]
-    | undefined;
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
   /**
@@ -394,6 +396,16 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 470,
     h: 560,
     tool: true,
+    singleton: true,
+  },
+  updates: {
+    title: "Updates",
+    icon: "activity",
+    desc: "Review available updates",
+    w: 620,
+    h: 640,
+    min: { w: 420, h: 430 },
+    tiny: { w: 320, h: 260 },
     singleton: true,
   },
   project: {

@@ -16,6 +16,7 @@
 // response (e.g. 100 nested blockquotes) cannot blow the call stack and crash the
 // whole chat view. 16 is well beyond any legible human-authored nesting.
 const MAX_MARKDOWN_DEPTH = 16;
+const MAX_ITALIC_LOOKAHEAD = 4096;
 
 export interface SafeMarkdownNode {
   readonly kind:
@@ -83,7 +84,9 @@ function containsEventHandler(lower: string): boolean {
     if (ON_ATTR_PREFIXES.includes(c as (typeof ON_ATTR_PREFIXES)[number])) {
       if (lower[i + 1] === "o" && lower[i + 2] === "n") {
         let j = i + 3;
-        while (j < lower.length && /[a-z]/.test(lower[j] ?? "")) {
+        while (j < lower.length) {
+          const code = lower.charCodeAt(j);
+          if (code < 97 || code > 122) break;
           j++;
         }
         if (j < lower.length && lower[j] === "=") return true;
@@ -188,12 +191,15 @@ function tryBold(
 }
 
 function isWordChar(value: string | undefined): boolean {
-  return value !== undefined && /[A-Za-z0-9]/.test(value);
+  if (value === undefined || value.length === 0) return false;
+  const code = value.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
 }
 
 /** Find the closing index of a single italic marker (ch). Returns -1 if not found. */
 function findItalicClose(raw: string, ch: string, from: number): number {
-  for (let k = from; k < raw.length; k++) {
+  const end = Math.min(raw.length, from + MAX_ITALIC_LOOKAHEAD);
+  for (let k = from; k < end; k++) {
     if (raw[k] === ch && raw[k - 1] !== ch && (k + 1 >= raw.length || raw[k + 1] !== ch)) {
       return k;
     }

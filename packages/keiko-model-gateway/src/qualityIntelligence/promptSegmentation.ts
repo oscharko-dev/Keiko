@@ -12,9 +12,7 @@ import type {
 } from "./taskProfiles.js";
 
 export type QualityIntelligenceUntrustedEvidenceKind =
-  | "envelope-ref"
-  | "atom-ref"
-  | "normalised-text";
+  "envelope-ref" | "atom-ref" | "normalised-text";
 
 export interface QualityIntelligenceUntrustedEvidenceInput {
   readonly kind: QualityIntelligenceUntrustedEvidenceKind;

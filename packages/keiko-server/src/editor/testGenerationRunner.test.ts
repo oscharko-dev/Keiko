@@ -112,7 +112,10 @@ describe("defaultTestGenerationRunner", () => {
   });
 
   it("forwards supported verification kinds without coercion", async () => {
-    mockGenerate.mockResolvedValue({ proposedDiff: CREATE_DIFF, verification: "playwright" } as never);
+    mockGenerate.mockResolvedValue({
+      proposedDiff: CREATE_DIFF,
+      verification: "playwright",
+    } as never);
     await expect(defaultTestGenerationRunner(args())).resolves.toMatchObject({
       verification: "playwright",
     });
@@ -127,7 +130,9 @@ describe("defaultTestGenerationRunner", () => {
     mockGenerate.mockResolvedValue({ proposedDiff: CREATE_DIFF, verification: "jest" } as never);
     const result = await defaultTestGenerationRunner(args());
     expect(result?.verification).toBeUndefined();
-    expect(result?.unsupportedVerificationReason).toContain("not supported by the assured pre-filter");
+    expect(result?.unsupportedVerificationReason).toContain(
+      "not supported by the assured pre-filter",
+    );
   });
 
   it("returns undefined when the workflow proposes no diff or an unparseable diff", async () => {

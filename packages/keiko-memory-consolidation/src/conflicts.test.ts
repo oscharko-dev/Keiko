@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { FIXED_NOW_MS, makeIdFactory, makeRecord, must } from "./_support.js";
-import { detectConflicts, type ConflictsOptions } from "./conflicts.js";
+import {
+  CONFLICT_OVERLAP_THRESHOLD,
+  detectConflicts,
+  findConflictPairs,
+  hasNegation,
+  type ConflictsOptions,
+} from "./conflicts.js";
 import type { DuplicateCluster } from "./dedupe.js";
 
 function options(): ConflictsOptions {
@@ -66,6 +72,21 @@ describe("detectConflicts - potential conflict (2-member negation pair)", () => 
     expect(items.map((i) => i.reason)).toContain("potential-conflict");
   });
 
+  it("detects German negation tokens", () => {
+    const older = makeRecord({ id: "m-old", body: "wir deployen am Freitag", createdAt: 100 });
+    const newer = makeRecord({
+      id: "m-new",
+      body: "wir deployen nicht am Freitag",
+      createdAt: 200,
+    });
+    const items = detectConflicts([cluster("m-old", [older, newer])], options());
+    expect(items.map((i) => i.reason)).toContain("potential-conflict");
+  });
+
+  it("does not treat words ending in nt as contractions", () => {
+    expect(hasNegation("we want tabs")).toBe(false);
+  });
+
   it("does NOT emit a conflict review item for a 2-member non-negating cluster", () => {
     const a = makeRecord({ id: "m-a", body: "user likes tabs", createdAt: 100 });
     const b = makeRecord({
@@ -98,6 +119,31 @@ describe("detectConflicts - potential conflict (2-member negation pair)", () => 
     });
     const items = detectConflicts([cluster("m-a", [a, b])], options());
     expect(items.filter((i) => i.reason === "potential-conflict")).toEqual([]);
+  });
+});
+
+describe("findConflictPairs - value replacement conflicts", () => {
+  it("detects same-key region changes even without a duplicate cluster", () => {
+    const older = makeRecord({
+      id: "m-old",
+      body: "Deployment region is eu-central-1",
+      createdAt: 100,
+    });
+    const newer = makeRecord({
+      id: "m-new",
+      body: "Deployment region is us-east-1",
+      createdAt: 200,
+    });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toHaveLength(1);
+    expect(must(items[0]).evidence?.map((item) => item.kind)).toContain("value-replacement");
+  });
+
+  it("does not flag normalised equivalent values as replacements", () => {
+    const older = makeRecord({ id: "m-old", body: "database is Postgres", createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: "database is PostgreSQL", createdAt: 200 });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toEqual([]);
   });
 });
 

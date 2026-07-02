@@ -21,7 +21,10 @@ function makeStorage(initial: Record<string, string> = {}): ScriptStorage {
   };
 }
 
-function runLocaleScript(storage: ScriptStorage): { readonly lang: string; readonly locale: string } {
+function runLocaleScript(storage: ScriptStorage): {
+  readonly lang: string;
+  readonly locale: string;
+} {
   const documentElement = {
     lang: "en",
     dataset: {} as Record<string, string>,

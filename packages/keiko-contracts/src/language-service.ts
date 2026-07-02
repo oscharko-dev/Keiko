@@ -29,11 +29,7 @@ export const LANGUAGE_SERVICE_SCHEMA_VERSION = "1" as const;
 // cancellable "format document" command applies; it is computed deterministically by the provider,
 // never by a model.
 export type LanguageServiceOperation =
-  | "diagnostics"
-  | "completion"
-  | "hover"
-  | "symbols"
-  | "formatting";
+  "diagnostics" | "completion" | "hover" | "symbols" | "formatting";
 
 export const LANGUAGE_SERVICE_OPERATIONS: readonly LanguageServiceOperation[] = [
   "diagnostics",

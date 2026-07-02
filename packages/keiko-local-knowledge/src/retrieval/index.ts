@@ -14,6 +14,16 @@ export {
 } from "./scoped-vector-search.js";
 
 export {
+  searchVectorIndex,
+  type VectorIndexAdapter,
+  type VectorIndexCandidate,
+  type VectorIndexMode,
+  type VectorIndexOptions,
+  type VectorIndexSearchRequest,
+  type VectorIndexSearchResult,
+} from "./vector-index.js";
+
+export {
   assembleGroundedContext,
   LOCAL_KNOWLEDGE_GROUNDED_CONTEXT_PACK_VERSION,
   type AssembleGroundedContextOptions,
@@ -34,6 +44,9 @@ export {
   RetrievalError,
   type RetrievalErrorCode,
   type RetrievalNoEvidenceReason,
+  type QueryTransformer,
+  type QueryTransformRequest,
   type RetrievalQuery,
   type RetrievalResult,
+  type RetrievalVectorIndexDiagnostics,
 } from "./types.js";

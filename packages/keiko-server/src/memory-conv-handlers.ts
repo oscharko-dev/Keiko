@@ -31,7 +31,6 @@ import {
 } from "@oscharko-dev/keiko-memory-retrieval";
 import {
   extractCandidatesFromUserText,
-  memoryTextEgressRejectionReason,
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
@@ -58,12 +57,16 @@ import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import {
   enforcePersistableMemoryOutcome,
+  FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   isPersistableMemoryCandidate,
   memoryCapturePolicyForDeps,
+  SENSITIVE_MEMORY_ACTION_BODY,
 } from "./memory-capture-policy.js";
+import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
 import {
   buildConversationRetrievalSignals,
   conversationFusionMode,
+  semanticRetrievalGateForText,
   type ConversationRetrievalSignals,
 } from "./memory-retrieval-signals.js";
 
@@ -174,6 +177,7 @@ export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
     },
     listOutgoingEdges: (memoryId) => vault.listOutgoingEdges(memoryId),
     listIncomingEdges: (memoryId) => vault.listIncomingEdges(memoryId),
+    listEdgesForMemories: (memoryIds) => vault.listEdgesForMemories(memoryIds),
   };
 }
 
@@ -265,6 +269,7 @@ function buildRetrievalRequest(
     semanticById?: ReadonlyMap<MemoryId, number>;
     strengthById?: ReadonlyMap<MemoryId, number>;
     embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
+    mmrLambda?: number;
     fusion?: ReturnType<typeof conversationFusionMode>;
   } = {
     scopes,
@@ -280,12 +285,13 @@ function buildRetrievalRequest(
   if (signals.semanticById !== undefined) req.semanticById = signals.semanticById;
   if (signals.strengthById.size > 0) req.strengthById = signals.strengthById;
   if (signals.embeddingById.size > 0) req.embeddingById = signals.embeddingById;
+  if (signals.mmrLambda !== undefined) req.mmrLambda = signals.mmrLambda;
   return req;
 }
 
-// Builds the embedding + reinforcement signals, runs scoped retrieval, and records the reinforcement
-// reflex — the same pipeline the chat path uses. Extracted so the route handler stays a thin
-// parse/dispatch/audit shell.
+// Builds the embedding + reinforcement signals and runs scoped retrieval — the same ranking pipeline
+// the chat path uses. This retrieval-only BFF route intentionally does not bump access counters
+// because it has no downstream assistant-use signal.
 async function retrieveConversationMemory(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -294,28 +300,23 @@ async function retrieveConversationMemory(
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
   const port = vaultAsQueryPort(vault);
   const nowMs = Date.now();
-  // Embedding egress gate (#204, O-F4): only send the query to the secondary embedding model when it
-  // is not secret-shaped — matching the chat path's safeForSecondaryModel guard.
-  const safeForSecondaryModel =
-    input.queryText === undefined ||
-    memoryTextEgressRejectionReason(input.queryText, memoryCapturePolicyForDeps(deps)) === null;
+  const semanticGate = semanticRetrievalGateForText(
+    deps,
+    input.queryText,
+    memoryCapturePolicyForDeps(deps),
+  );
   const signals = await buildConversationRetrievalSignals(
     deps,
     vault,
     input.queryText,
     scopes,
     nowMs,
-    safeForSecondaryModel,
+    semanticGate,
   );
   const result = retrieveMemoryContext(
     buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
     port,
   );
-  // Reinforcement reflex (#204, O-P1): every recall is an access, same as the chat path.
-  const accessedIds = result.included.map((item) => item.memoryId);
-  if (accessedIds.length > 0) {
-    vault.recordAccess(accessedIds, Date.now());
-  }
   return result;
 }
 
@@ -454,21 +455,47 @@ export async function handleMemoryCaptureFromConversation(
   // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
   // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
   const persistableOutcomes = outcomes.map(enforcePersistableMemoryOutcome);
-  persistCandidateOutcomes(vault, persistableOutcomes);
+  const persistedOutcomes = persistCandidateOutcomes(vault, persistableOutcomes);
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
-  return { status: 200, body: deps.redactor({ outcomes: persistableOutcomes }) };
+  return {
+    status: 200,
+    body: { outcomes: persistedOutcomes.map((outcome) => redactCaptureOutcome(deps, outcome)) },
+  };
 }
 
 function persistCandidateOutcomes(
   vault: MemoryVaultStore,
   outcomes: readonly CaptureOutcome[],
-): void {
+): readonly CaptureOutcome[] {
+  const persisted: CaptureOutcome[] = [];
   for (const outcome of outcomes) {
-    if (!isPersistableMemoryCandidate(outcome)) continue;
+    if (!isPersistableMemoryCandidate(outcome)) {
+      persisted.push(outcome);
+      continue;
+    }
     const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
     if (record !== null) {
+      if (isSuppressedByForgetTombstone(vault, record)) {
+        persisted.push({ kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON });
+        continue;
+      }
       vault.insertMemory(record);
     }
+    persisted.push(outcome);
   }
+  return persisted;
+}
+
+function redactCaptureOutcome(deps: UiHandlerDeps, outcome: CaptureOutcome): unknown {
+  if (
+    outcome.kind === "candidate" &&
+    (outcome.requiresApproval || outcome.proposal.provenance.sensitivity !== "public")
+  ) {
+    return deps.redactor({
+      ...outcome,
+      proposal: { ...outcome.proposal, body: SENSITIVE_MEMORY_ACTION_BODY },
+    });
+  }
+  return deps.redactor(outcome);
 }

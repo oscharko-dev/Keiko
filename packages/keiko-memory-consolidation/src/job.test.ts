@@ -9,6 +9,12 @@ function emptyCompletedResult(): ConsolidationResult {
     state: "completed",
     edgesProposed: [],
     updatesProposed: [],
+    summaryStatus: {
+      kind: "not-configured",
+      updatesProposed: 0,
+      skippedMergeClusters: 0,
+      fallbacksUsed: 0,
+    },
     staleFlags: [],
     reviewItems: [],
     clustersInspected: 0,

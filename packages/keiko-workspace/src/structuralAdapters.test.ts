@@ -47,12 +47,20 @@ function fakeAtom(scopePath: string, queryFingerprint: string): EvidenceAtom {
   };
 }
 
-function fakeAdapter(name: string, atoms: readonly EvidenceAtom[]): StructuralAdapter {
-  return {
+function fakeAdapter(
+  name: string,
+  atoms: readonly EvidenceAtom[],
+  coverage?: StructuralAdapter["coverage"],
+): StructuralAdapter {
+  const adapter: StructuralAdapter = {
     name,
     isAvailable: (): Promise<boolean> => Promise.resolve(true),
     lookup: (): Promise<readonly EvidenceAtom[]> => Promise.resolve(atoms),
   };
+  if (coverage !== undefined) {
+    return { ...adapter, coverage };
+  }
+  return adapter;
 }
 
 function unavailableAdapter(name: string): StructuralAdapter {
@@ -123,6 +131,40 @@ describe("runStructuralAdapters", () => {
     expect(result.atoms.map((a) => a.stableId)).toEqual([atom.stableId]);
     expect(result.errored).toEqual([{ name: "alpha", message: "boom" }]);
     expect(result.unavailable).toEqual([]);
+  });
+
+  it("collects optional adapter coverage diagnostics", async () => {
+    const { scope, fs } = makeScope();
+    const registry: StructuralAdapterRegistry = {
+      adapters: [
+        fakeAdapter("alpha", [], () =>
+          Promise.resolve({
+            name: "alpha",
+            filesIndexed: 2,
+            filesSkipped: 1,
+            parserCoverage: [{ parser: "polyglot-regex", filesIndexed: 2 }],
+          }),
+        ),
+      ],
+    };
+    const result = await runStructuralAdapters(
+      registry,
+      scope,
+      nlq("x"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      {
+        nowMs: FIXED_NOW,
+      },
+    );
+    expect(result.coverage).toEqual([
+      {
+        name: "alpha",
+        filesIndexed: 2,
+        filesSkipped: 1,
+        parserCoverage: [{ parser: "polyglot-regex", filesIndexed: 2 }],
+      },
+    ]);
   });
 
   it("propagates typed RepoSearchInvalidQueryError instead of swallowing it", async () => {

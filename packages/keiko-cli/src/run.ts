@@ -27,6 +27,7 @@ import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import { persistEvidence } from "@oscharko-dev/keiko-evidence";
 import { renderEvidenceReport } from "@oscharko-dev/keiko-evidence";
 import {
+  createNodeToolResultArtifactStore,
   createNodeEvidenceStore,
   resolveEvidenceDir,
   type EvidenceStore,
@@ -34,7 +35,7 @@ import {
 import { AuditError } from "@oscharko-dev/keiko-evidence";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
-import { harnessToolShaper } from "./tool-shaper.js";
+import { createHarnessToolShaper } from "./tool-shaper.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
   "generate-unit-tests",
@@ -245,6 +246,15 @@ function writeEvidence(
   }
 }
 
+function buildHarnessToolShaper(flags: EvidenceFlags, env: EnvSource): ReturnType<typeof createHarnessToolShaper> {
+  if (!flags.write) {
+    return createHarnessToolShaper();
+  }
+  return createHarnessToolShaper({
+    artifactWriter: createNodeToolResultArtifactStore(resolveEvidenceDir(flags.evidenceDirFlag, env)),
+  });
+}
+
 function configuredModelId(flags: EvidenceFlags, env: EnvSource): string | undefined {
   const path = flags.config ?? env.KEIKO_CONFIG_FILE;
   if (path === undefined) {
@@ -341,7 +351,7 @@ export async function runAgentCli(
     model: model.port,
     tools: new DryRunToolPort(),
     sink: teeSink([memory, new CliEventSink(io)]),
-    shaperPort: harnessToolShaper,
+    shaperPort: buildHarnessToolShaper(flags, env),
   });
   const result = await session.result;
   if (flags.write) {

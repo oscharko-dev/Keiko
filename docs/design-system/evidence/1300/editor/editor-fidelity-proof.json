@@ -2,20 +2,20 @@
   "issue": 1300,
   "epic": 1290,
   "surface": "editor",
-  "postCssSha256": "471fe78c2d81984b29f98fabf90a1cb844cf5270d4c54fa79334d907bef32156",
+  "postCssSha256": "230158f3305c6d53d1275b5cb8af45b676d6313c666cc1775074a7b0f98f3ce6",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
     "keiko-editor-tokens.css"
   ],
   "referenceFileSha256": {
-    "keiko-tokens.css": "6dc51e347aed8c924c1041af31ceb8be3370125c248d387bbbb075f936bc7583",
-    "keiko-semantic-tokens.css": "217e36e42423fb2645f611feb725944ec76b88dc067cb98023a7a3e166dcee2a",
-    "keiko-editor-tokens.css": "9d61f7df19dc02861354eb30206403942695608a8c9ee43cde0db13c0da81bac"
+    "keiko-tokens.css": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
+    "keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
+    "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-06-29T19:27:35.550Z",
-    "repoHeadSha": "f5e6776d87423b4bd2a3a05f5118e09877870796"
+    "generatedAt": "2026-07-02T04:35:26.246Z",
+    "repoHeadSha": "8373b4fed3b73e826acf47e1713f642f75501c3b"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {
@@ -537,7 +537,7 @@
       "mode": "dark",
       "title": "Editor Theme · Keiko Design System",
       "theme": "dark",
-      "textLen": 8594
+      "textLen": 9200
     },
     {
       "file": "ref-editor-theme-light.png",
@@ -545,7 +545,7 @@
       "mode": "light",
       "title": "Editor Theme · Keiko Design System",
       "theme": "light",
-      "textLen": 8594
+      "textLen": 9200
     },
     {
       "file": "ref-editor-chrome-dark.png",
@@ -553,7 +553,7 @@
       "mode": "dark",
       "title": "Editor · Chrome & Tabs · Keiko Design System",
       "theme": "dark",
-      "textLen": 5989
+      "textLen": 6698
     },
     {
       "file": "ref-editor-chrome-light.png",
@@ -561,7 +561,7 @@
       "mode": "light",
       "title": "Editor · Chrome & Tabs · Keiko Design System",
       "theme": "light",
-      "textLen": 5989
+      "textLen": 6698
     },
     {
       "file": "ref-editor-gutter-dark.png",
@@ -569,7 +569,7 @@
       "mode": "dark",
       "title": "Editor · Gutter · Keiko Design System",
       "theme": "dark",
-      "textLen": 6187
+      "textLen": 6777
     },
     {
       "file": "ref-editor-gutter-light.png",
@@ -577,7 +577,7 @@
       "mode": "light",
       "title": "Editor · Gutter · Keiko Design System",
       "theme": "light",
-      "textLen": 6187
+      "textLen": 6777
     },
     {
       "file": "ref-editor-navigation-dark.png",
@@ -585,7 +585,7 @@
       "mode": "dark",
       "title": "Editor · Navigation & Search · Keiko Design System",
       "theme": "dark",
-      "textLen": 5591
+      "textLen": 5713
     },
     {
       "file": "ref-editor-navigation-light.png",
@@ -593,7 +593,7 @@
       "mode": "light",
       "title": "Editor · Navigation & Search · Keiko Design System",
       "theme": "light",
-      "textLen": 5591
+      "textLen": 5713
     },
     {
       "file": "ref-editor-panels-dark.png",
@@ -601,7 +601,7 @@
       "mode": "dark",
       "title": "Editor · Tool Windows · Keiko Design System",
       "theme": "dark",
-      "textLen": 5095
+      "textLen": 5463
     },
     {
       "file": "ref-editor-panels-light.png",
@@ -609,7 +609,7 @@
       "mode": "light",
       "title": "Editor · Tool Windows · Keiko Design System",
       "theme": "light",
-      "textLen": 5095
+      "textLen": 5463
     },
     {
       "file": "ref-editor-markdown-dark.png",
@@ -617,7 +617,7 @@
       "mode": "dark",
       "title": "Editor · Markdown Views · Keiko Design System",
       "theme": "dark",
-      "textLen": 5938
+      "textLen": 6076
     },
     {
       "file": "ref-editor-markdown-light.png",
@@ -625,7 +625,7 @@
       "mode": "light",
       "title": "Editor · Markdown Views · Keiko Design System",
       "theme": "light",
-      "textLen": 5938
+      "textLen": 6076
     },
     {
       "file": "ref-editor-agent-dark.png",
@@ -633,7 +633,7 @@
       "mode": "dark",
       "title": "Editor · Agent in Editor · Keiko Design System",
       "theme": "dark",
-      "textLen": 6023
+      "textLen": 6487
     },
     {
       "file": "ref-editor-agent-light.png",
@@ -641,7 +641,7 @@
       "mode": "light",
       "title": "Editor · Agent in Editor · Keiko Design System",
       "theme": "light",
-      "textLen": 6023
+      "textLen": 6487
     }
   ],
   "runningEditorEvidence": {

@@ -23,6 +23,8 @@ import {
   createNoopMemoryAuditHandler,
   recordMemoryAudit,
   recordMemoryAudits,
+  createMemoryAuditDeleteCommitHandler,
+  verifyMemoryAuditHashChain,
 } from "./memory-audit-handler.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -122,6 +124,9 @@ describe("createMemoryAuditHandler", () => {
     expect(events[0]?.kind).toBe("memory:proposed");
     expect(events[0]?.eventId).toBe("evt-1");
     expect(events[0]?.occurredAt).toBe(FIXED_NOW);
+    expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
+      ok: true,
+    });
   });
 
   it("emits memory:accepted when a proposed record transitions to accepted", () => {
@@ -139,6 +144,28 @@ describe("createMemoryAuditHandler", () => {
     const events = readEvents(store, FIXED_NOW);
     expect(events).toHaveLength(2);
     expect(events[1]?.kind).toBe("memory:accepted");
+    expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
+      ok: true,
+    });
+  });
+
+  it("detects tampering in the persisted audit hash chain", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
+    const runId = auditRunIdFor(FIXED_NOW);
+    const persisted = JSON.parse(store.get(runId) ?? "[]") as Record<string, unknown>[];
+    persisted[0] = { ...persisted[0], summary: "tampered summary" };
+
+    expect(verifyMemoryAuditHashChain(JSON.stringify(persisted))).toEqual({
+      ok: false,
+      error: "audit hash chain eventHash mismatch",
+    });
   });
 
   it("emits memory:pinned and memory:unpinned on pin/unpin transitions", () => {
@@ -257,7 +284,7 @@ describe("createMemoryAuditHandler", () => {
       now: () => FIXED_NOW,
       newEventId: makeIdFactory(),
     });
-    // Tag the record id with the secret so it lands in the summary string.
+    // Tag the record id with the secret; summaries must not include raw ids.
     const id = brandedMemoryId(`mem-${secret}-tail`);
     const record = makeRecord({ id, status: "proposed" });
     handler({ kind: "memory:inserted", record });
@@ -278,8 +305,7 @@ describe("createMemoryAuditHandler", () => {
       now: () => FIXED_NOW,
       newEventId: makeIdFactory(),
     });
-    // Embed the Bearer token in the record id so `safeSummary` receives it in the
-    // summary string: "memory Bearer AAAA-BBBB-fake-token-1234567890 proposed (type=preference)".
+    // Embed the Bearer token in the record id; summaries must not include raw ids.
     const id = brandedMemoryId(bearerToken);
     const record = makeRecord({ id, status: "proposed" });
     handler({ kind: "memory:inserted", record });
@@ -300,7 +326,7 @@ describe("createMemoryAuditHandler", () => {
       now: () => FIXED_NOW,
       newEventId: makeIdFactory(),
     });
-    // Embed the api_key= assignment in the record id so it enters the summary string.
+    // Embed the api_key= assignment in the record id; summaries must not include raw ids.
     const id = brandedMemoryId(apiKeyId);
     const record = makeRecord({ id, status: "proposed" });
     handler({ kind: "memory:inserted", record });
@@ -480,6 +506,77 @@ describe("recordMemoryAudit", () => {
     const events = readEvents(store, beforeMidnight);
     expect(events).toHaveLength(1);
     expect(store.get(auditRunIdFor(afterMidnight))).toBeUndefined();
+  });
+
+  it("throws when a required direct audit append fails", () => {
+    const store: EvidenceStore = {
+      put: () => {
+        throw new Error("audit store unavailable");
+      },
+      get: () => undefined,
+      list: () => [],
+      delete: () => undefined,
+    };
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:retrieved",
+      eventId: "evt-required-1",
+      occurredAt: FIXED_NOW,
+      initiatorSurface: "workflow",
+      summary: "retrieval returned 1 record",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
+      matchedMemoryIds: [brandedMemoryId("mem-test-1")],
+    };
+
+    expect(() => {
+      recordMemoryAudit({ evidenceStore: store, required: true }, event);
+    }).toThrow("audit store unavailable");
+  });
+});
+
+describe("createMemoryAuditDeleteCommitHandler", () => {
+  it("emits one required forgotten audit event for a tombstoned delete batch", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditDeleteCommitHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const tombstone: MemoryTombstone = {
+      id: "t-1",
+      memoryId: brandedMemoryId("mem-test-1"),
+      scopeKind: "user",
+      scopeCoordinate: "u-1",
+      type: "preference",
+      forgottenAt: FIXED_NOW,
+      forgetterSurface: "memory-center",
+      originalStatus: "accepted",
+    };
+
+    handler([
+      {
+        kind: "memory:deleted",
+        memoryId: brandedMemoryId("mem-test-1"),
+        scope: { kind: "user", userId: brandedMemoryUserId("u-1") },
+        tombstoned: true,
+      },
+      { kind: "memory:tombstoned", tombstone },
+    ]);
+
+    const events = readEvents(store, FIXED_NOW);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        kind: "memory:forgotten",
+        eventId: "evt-1",
+        memoryId: brandedMemoryId("mem-test-1"),
+        tombstoned: true,
+      }),
+    );
+    expect(verifyMemoryAuditHashChain(store.get(auditRunIdFor(FIXED_NOW)) ?? "[]")).toEqual({
+      ok: true,
+    });
   });
 });
 

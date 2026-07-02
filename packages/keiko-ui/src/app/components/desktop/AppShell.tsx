@@ -39,7 +39,7 @@ import {
   totalSourceCap,
 } from "./hooks/workspaceActions";
 import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
-import { I18nProvider, useI18n } from "@/lib/i18n";
+import { I18nProvider, useTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
@@ -59,6 +59,7 @@ import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
 import { InstallBanner } from "./install/InstallBanner";
 import { registerSw } from "./install/registerSw";
+import { UpdateStartupNotice } from "./update/UpdateStartupNotice";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 
@@ -357,7 +358,7 @@ export function buildAppShellCommands(
 }
 
 function AppShellInner(): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
   const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
@@ -566,8 +567,8 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     if (ws.wins === null) return;
     for (const conn of ws.conns) {
-      const a = ws.wins.find((win) => win.id === conn.a);
-      const b = ws.wins.find((win) => win.id === conn.b);
+      const a = ws.winsById.get(conn.a);
+      const b = ws.winsById.get(conn.b);
       if (a === undefined || b === undefined) continue;
       const chatWindowId =
         conn.boundChatWindowId ?? (a.type === "chat" ? a.id : b.type === "chat" ? b.id : null);
@@ -580,7 +581,7 @@ function AppShellInner(): ReactNode {
         if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
       });
     }
-  }, [replaceFilesScope, ws.api, ws.conns, ws.wins]);
+  }, [replaceFilesScope, ws.api, ws.conns, ws.wins, ws.winsById]);
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
@@ -591,8 +592,8 @@ function AppShellInner(): ReactNode {
   const active = topWindow(ws.wins);
   const openTools = useMemo(() => deriveOpenTools(ws.wins), [ws.wins]);
   const wsContextValue: WsContextValue = useMemo(
-    () => ({ wins: ws.wins ?? [], active, winCount }),
-    [ws.wins, active, winCount],
+    () => ({ active, winCount }),
+    [active, winCount],
   );
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
@@ -759,6 +760,11 @@ function AppShellInner(): ReactNode {
   });
   const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
   const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
+  const updateStartupReady = ws.wins !== null && !session.loading && !needsGatewaySetup;
+  const openUpdatesFromStartup = useCallback((): void => {
+    const createdId = ws.api.add("updates", { entrypoint: "startup" });
+    if (createdId !== null) focusCreatedWindow(createdId);
+  }, [ws.api]);
 
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
@@ -795,7 +801,12 @@ function AppShellInner(): ReactNode {
                 />
               )}
               <div className="stage" id="main" tabIndex={-1}>
-                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
+                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode}>
+                  <UpdateStartupNotice
+                    ready={updateStartupReady}
+                    openUpdates={openUpdatesFromStartup}
+                  />
+                </Workspace>
                 {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
                   AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
                 {sourceConnectionNotice !== null && (

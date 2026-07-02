@@ -16,8 +16,11 @@
 // Custom stores without that optional method still work through get+put, but the built-in
 // Node and in-memory stores use the safer update path.
 //
-// Failure mode: persistence errors are caught and logged to console.error; the handler
-// never throws. An audit-persistence failure must NEVER break the user's memory mutation.
+// Failure mode: ordinary post-commit bridge errors are caught and logged to console.error so a
+// noncritical audit sink cannot break already-committed writes. Privacy-critical delete/forget uses
+// `createMemoryAuditDeleteCommitHandler` below: it writes inside the vault's pre-commit delete hook
+// and throws on persistence failure so the memory mutation rolls back instead of committing without
+// its audit evidence.
 // Corrupt audit manifests are never reset or overwritten; append attempts fail closed and
 // preserve the existing artifact for operator investigation.
 //
@@ -34,7 +37,7 @@
 // Retrieval/workflow-specific kinds are NOT vault-derived. The `recordMemoryAudit()`
 // helper exported below is the single emission point for those direct audit signals.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
@@ -65,6 +68,19 @@ export type MemoryAuditHandler = (event: MemoryEvent) => void;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const RUNID_PREFIX = "memory-audit-";
+const AUDIT_HASH_CHAIN_VERSION = "sha256-v1";
+const AUDIT_HASH_GENESIS = "0".repeat(64);
+
+interface MemoryAuditIntegrity {
+  readonly version: typeof AUDIT_HASH_CHAIN_VERSION;
+  readonly previousHash: string;
+  readonly eventHash: string;
+  readonly sequence: number;
+}
+
+type PersistedMemoryAuditEvent = MemoryAuditEvent & {
+  readonly integrity?: MemoryAuditIntegrity;
+};
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -91,7 +107,7 @@ function appendAuditEvents(
     return;
   }
   const append = (existingJson: string | undefined): string =>
-    JSON.stringify([...parseExistingEvents(existingJson), ...events]);
+    JSON.stringify(appendIntegrity(parseExistingEvents(existingJson), events));
 
   if (store.update !== undefined) {
     store.update(runId, append);
@@ -101,7 +117,7 @@ function appendAuditEvents(
   store.put(runId, append(store.get(runId)));
 }
 
-function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
+function parseExistingEvents(json: string | undefined): PersistedMemoryAuditEvent[] {
   if (json === undefined) {
     return [];
   }
@@ -110,7 +126,7 @@ function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
     if (!Array.isArray(parsed)) {
       throw new Error("memory audit manifest has unexpected shape");
     }
-    return parsed as MemoryAuditEvent[];
+    return parsed as PersistedMemoryAuditEvent[];
   } catch (error) {
     throw new Error(
       `memory audit manifest is corrupt; refusing to overwrite existing audit evidence: ${
@@ -119,6 +135,143 @@ function parseExistingEvents(json: string | undefined): MemoryAuditEvent[] {
       { cause: error },
     );
   }
+}
+
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+type ParsedAuditIntegrity = Omit<MemoryAuditIntegrity, "version"> & {
+  readonly version: string;
+};
+
+type ParsedPersistedMemoryAuditEvent = Omit<PersistedMemoryAuditEvent, "integrity"> & {
+  readonly integrity?: ParsedAuditIntegrity;
+};
+
+function withoutIntegrity(event: ParsedPersistedMemoryAuditEvent): MemoryAuditEvent {
+  const rest: Record<string, unknown> = { ...event };
+  delete rest.integrity;
+  return rest as unknown as MemoryAuditEvent;
+}
+
+function hashAuditEvent(event: MemoryAuditEvent, previousHash: string, sequence: number): string {
+  return createHash("sha256")
+    .update(stableStringify({ event, previousHash, sequence, version: AUDIT_HASH_CHAIN_VERSION }))
+    .digest("hex");
+}
+
+function lastIntegrity(
+  existing: readonly PersistedMemoryAuditEvent[],
+): MemoryAuditIntegrity | undefined {
+  for (let i = existing.length - 1; i >= 0; i -= 1) {
+    const integrity = existing[i]?.integrity;
+    if (integrity !== undefined) return integrity;
+  }
+  return undefined;
+}
+
+function appendIntegrity(
+  existing: readonly PersistedMemoryAuditEvent[],
+  events: readonly MemoryAuditEvent[],
+): readonly PersistedMemoryAuditEvent[] {
+  const out: PersistedMemoryAuditEvent[] = [...existing];
+  const last = lastIntegrity(existing);
+  let previousHash = last?.eventHash ?? AUDIT_HASH_GENESIS;
+  let sequence = last === undefined ? existing.length : last.sequence + 1;
+  for (const event of events) {
+    const eventHash = hashAuditEvent(event, previousHash, sequence);
+    out.push({
+      ...event,
+      integrity: {
+        version: AUDIT_HASH_CHAIN_VERSION,
+        previousHash,
+        eventHash,
+        sequence,
+      },
+    });
+    previousHash = eventHash;
+    sequence += 1;
+  }
+  return out;
+}
+
+function parseAuditEvents(json: string): readonly ParsedPersistedMemoryAuditEvent[] | string {
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!Array.isArray(parsed)) return "memory audit manifest is not an array";
+    return parsed as readonly ParsedPersistedMemoryAuditEvent[];
+  } catch (error) {
+    return error instanceof Error ? error.message : "memory audit manifest is invalid JSON";
+  }
+}
+
+function verifyEventIntegrity(
+  event: ParsedPersistedMemoryAuditEvent,
+  expectedPreviousHash: string,
+  expectedSequence: number,
+): string | null {
+  const integrity = event.integrity;
+  if (integrity === undefined) return "missing integrity metadata after hash chain started";
+  if (integrity.version !== AUDIT_HASH_CHAIN_VERSION) {
+    return "unsupported audit hash chain version";
+  }
+  if (integrity.previousHash !== expectedPreviousHash) {
+    return "audit hash chain previousHash mismatch";
+  }
+  if (integrity.sequence !== expectedSequence) {
+    return "audit hash chain sequence mismatch";
+  }
+  const actualHash = hashAuditEvent(withoutIntegrity(event), integrity.previousHash, integrity.sequence);
+  return integrity.eventHash === actualHash ? null : "audit hash chain eventHash mismatch";
+}
+
+export function verifyMemoryAuditHashChain(
+  json: string,
+): { ok: true } | { ok: false; error: string } {
+  const events = parseAuditEvents(json);
+  if (typeof events === "string") return { ok: false, error: events };
+  let expectedPreviousHash = AUDIT_HASH_GENESIS;
+  let expectedSequence = 0;
+  let sawIntegrity = false;
+  for (const event of events) {
+    if (event.integrity === undefined) {
+      if (!sawIntegrity) {
+        expectedSequence += 1;
+        continue;
+      }
+      return { ok: false, error: "missing integrity metadata after hash chain started" };
+    }
+    const error = verifyEventIntegrity(event, expectedPreviousHash, expectedSequence);
+    if (error !== null) return { ok: false, error };
+    sawIntegrity = true;
+    expectedPreviousHash = event.integrity.eventHash;
+    expectedSequence += 1;
+  }
+  return { ok: true };
+}
+
+export function assertMemoryAuditWritable(store: EvidenceStore, nowMs: number): void {
+  const runId = auditRunIdFor(nowMs);
+  const keepExisting = (existingJson: string | undefined): string => {
+    parseExistingEvents(existingJson);
+    return existingJson ?? "[]";
+  };
+  if (store.update !== undefined) {
+    store.update(runId, keepExisting);
+    return;
+  }
+  store.put(runId, keepExisting(store.get(runId)));
 }
 
 // ─── Public factory ───────────────────────────────────────────────────────────
@@ -223,6 +376,7 @@ export interface RecordMemoryAuditOptions {
   readonly now?: () => number;
   readonly redactString?: (input: string) => string;
   readonly onPersistError?: (error: unknown) => void;
+  readonly required?: boolean;
 }
 
 export function recordMemoryAudit(
@@ -260,9 +414,59 @@ export function recordMemoryAudits(
     try {
       appendAuditEvents(options.evidenceStore, runId, bucket);
     } catch (error) {
+      if (options.required === true) {
+        throw error;
+      }
       onPersistError(error);
     }
   }
+}
+
+export function createMemoryAuditDeleteCommitHandler(
+  options: MemoryAuditHandlerOptions,
+): (events: readonly MemoryEvent[]) => void {
+  const now = options.now ?? ((): number => Date.now());
+  const newEventId = options.newEventId ?? ((): string => randomUUID());
+  return (events: readonly MemoryEvent[]): void => {
+    const auditEvents: MemoryAuditEvent[] = [];
+    for (const event of events) {
+      switch (event.kind) {
+        case "memory:deleted":
+          if (!event.tombstoned) {
+            auditEvents.push(
+              buildDeletedEvent(event.memoryId, event.scope, {
+                occurredAt: now(),
+                newEventId,
+                redactString: options.redactString,
+              }),
+            );
+          }
+          break;
+        case "memory:tombstoned":
+          auditEvents.push(
+            buildTombstonedEvent(event.tombstone, {
+              occurredAt: now(),
+              newEventId,
+              redactString: options.redactString,
+            }),
+          );
+          break;
+        default:
+          break;
+      }
+    }
+    recordMemoryAudits(
+      {
+        evidenceStore: options.evidenceStore,
+        redactString: options.redactString,
+        required: true,
+        ...(options.onPersistError === undefined
+          ? {}
+          : { onPersistError: options.onPersistError }),
+      },
+      auditEvents,
+    );
+  };
 }
 
 // ─── No-op handler ────────────────────────────────────────────────────────────

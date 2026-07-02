@@ -58,6 +58,9 @@ export interface ParserSelectionInput {
   // Hint forwarded to a `text-like` parser so a `.py` file lands as `languageHint: "python"`.
   // Optional because callers may not classify; adapters set it when they themselves know.
   readonly languageHint?: string;
+  // Optional page context for callers that already split a document into per-page images before
+  // invoking a parser. OCR adapters use this to avoid collapsing every page to page 1.
+  readonly pageNumber?: number;
 }
 
 export interface ParserCapability {

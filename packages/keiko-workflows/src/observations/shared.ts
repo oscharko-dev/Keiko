@@ -74,6 +74,10 @@ export interface RehydrationHandleInput {
   readonly notPersistedReason?: string | undefined;
 }
 
+export interface ToolResultArtifactWriter {
+  readonly write: (artifactId: string, content: string) => void;
+}
+
 // Builds the content-free ContextToolRehydrationHandle. artifactId = hashExcerptContent(artifactSeed)
 // — deterministic and stable. notPersistedReason is included only when supplied (exactOptional:
 // conditional spread, never assigned undefined). approxTokens is passed through unchanged.

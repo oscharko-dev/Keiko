@@ -23,10 +23,7 @@ export interface DictationCapture {
 //   - "unsupported"       — the browser does not expose getUserMedia / MediaRecorder.
 //   - "capture-failed"    — capture started but could not be completed.
 export type DictationStartFailure =
-  | "permission-denied"
-  | "no-microphone"
-  | "unsupported"
-  | "capture-failed";
+  "permission-denied" | "no-microphone" | "unsupported" | "capture-failed";
 
 export class DictationRecorderError extends Error {
   constructor(

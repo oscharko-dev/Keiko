@@ -296,8 +296,7 @@ describe("compareStaleness — unknown atom", () => {
     const args: CompareStalenessArgs = {
       oldFingerprints: [fp("env-1", "aaa")],
       evidenceRefs: [ref("env-1", "atom-1")],
-      // tc-unknown derives from atom-999 which has no evidenceRef mapping →
-      // classifyCandidate: atomToEnvelope lacks "atom-999" → source-changed with UNKNOWN_ENVELOPE
+      // tc-unknown derives from atom-999 which has no evidenceRef mapping.
       candidates: [cand("tc-unknown", "atom-999")],
       currentFingerprints: [fp("env-1", "aaa")],
     };
@@ -307,7 +306,22 @@ describe("compareStaleness — unknown atom", () => {
     expect(result.changedStale).toHaveLength(1);
     expect(result.changedStale[0]?.candidateId).toBe("tc-unknown");
     expect(result.changedStale[0]?.envelopeId).toBe("unknown");
-    expect(result.changedStale[0]?.reason).toBe("source-changed");
+    expect(result.changedStale[0]?.reason).toBe("unknown-source");
+  });
+
+  it("marks a candidate with no provenance as stale without claiming a removed source", () => {
+    const args: CompareStalenessArgs = {
+      oldFingerprints: [fp("env-1", "aaa")],
+      evidenceRefs: [ref("env-1", "atom-1")],
+      candidates: [cand("tc-no-provenance")],
+      currentFingerprints: [fp("env-1", "aaa")],
+    };
+    const result = compareStaleness(args);
+    expect(result.fresh).toHaveLength(0);
+    expect(result.orphanedStale).toHaveLength(0);
+    expect(result.changedStale).toEqual([
+      { candidateId: "tc-no-provenance", reason: "unknown-provenance", envelopeId: "unknown" },
+    ]);
   });
 });
 

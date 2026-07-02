@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { EMPTY_FILTERS, MemoryFilters } from "./MemoryFilters";
 import type { MemoryFilterState } from "./MemoryFilters";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -44,6 +45,39 @@ describe("MemoryFilters — landmark groups", () => {
   it('sensitivity group has aria-label "Filter by Sensitivity"', () => {
     renderFilters();
     expect(screen.getByRole("group", { name: "Filter by Sensitivity" })).toBeInTheDocument();
+  });
+
+  it("renders filter labels in German when the locale is German", async () => {
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      render(
+        <I18nProvider>
+          <MemoryFilters filters={EMPTY_FILTERS} onChange={vi.fn()} />
+        </I18nProvider>,
+      );
+      expect(
+        await screen.findByRole("group", { name: "Nach Bereich filtern" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("searchbox", { name: "Suchen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Vorgeschlagen" })).toBeInTheDocument();
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+});
+
+describe("MemoryFilters — search", () => {
+  it("updates query text without changing chip axes", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    renderFilters({ ...EMPTY_FILTERS, scope: ["project"] }, onChange);
+
+    await user.type(screen.getByRole("searchbox", { name: "Search" }), "a");
+
+    expect(onChange).toHaveBeenCalled();
+    const [next] = onChange.mock.calls.at(-1) as [MemoryFilterState];
+    expect(next.query).toBe("a");
+    expect(next.scope).toEqual(["project"]);
   });
 });
 
@@ -169,6 +203,7 @@ describe("MemoryFilters — axis independence", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const initial: MemoryFilterState = {
+      query: "",
       scope: ["global"],
       type: ["preference"],
       status: [],
@@ -190,6 +225,7 @@ describe("MemoryFilters — axis independence", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const initial: MemoryFilterState = {
+      query: "",
       scope: [],
       type: ["episodic"],
       status: ["proposed"],
@@ -211,6 +247,7 @@ describe("MemoryFilters — axis independence", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const initial: MemoryFilterState = {
+      query: "",
       scope: ["user"],
       type: ["decision"],
       status: ["accepted"],
@@ -333,7 +370,13 @@ describe("MemoryFilters — no fire on render", () => {
   it("does not call onChange on initial render with pre-populated filters", () => {
     const onChange = vi.fn();
     renderFilters(
-      { scope: ["global"], type: ["preference"], status: ["accepted"], sensitivity: ["public"] },
+      {
+        query: "",
+        scope: ["global"],
+        type: ["preference"],
+        status: ["accepted"],
+        sensitivity: ["public"],
+      },
       onChange,
     );
     expect(onChange).not.toHaveBeenCalled();

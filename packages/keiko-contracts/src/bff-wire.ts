@@ -89,10 +89,10 @@ export interface GroundingLimits {
 export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
   maxConnectedSources: 16,
   maxLocalKnowledgeSources: 16,
-  maxPromptReferences: 8,
+  maxPromptReferences: 16,
   maxExcerptChars: 900,
   referenceBudget: 10,
-  hybridMaxCandidates: 24,
+  hybridMaxCandidates: 100,
   hybridMaxExcerptBytes: 131_072,
 } as const;
 
@@ -504,10 +504,7 @@ export interface WorkflowsResponse {
 // ─── Agent input shapes (BFF /api/agents/* POST bodies) ───────────────────────────
 
 export type AgentWorkflowId =
-  | "verify"
-  | "explain-plan"
-  | "unit-test-generation"
-  | "bug-investigation";
+  "verify" | "explain-plan" | "unit-test-generation" | "bug-investigation";
 
 export type UnitTestTargetKind = "file" | "module" | "changedFiles";
 
@@ -578,6 +575,22 @@ export interface GroundedUncertainty {
   readonly claim: string;
 }
 
+export type GroundedRerankerStatus =
+  | "disabled"
+  | "not-configured"
+  | "unavailable"
+  | "invalid-response"
+  | "applied";
+
+export interface GroundedRerankerDiagnostics {
+  readonly status: GroundedRerankerStatus;
+  readonly candidateCount: number;
+  readonly documentCount: number;
+  readonly keptCount: number;
+  readonly failureKind?: string | undefined;
+  readonly latencyMs?: number | undefined;
+}
+
 // Path-free aggregate of the candidate-ranking rationale (enterprise retrieval M2). Carries only
 // bucket counts + ecosystem counts — NO scope path, NO score, NO signal-per-file — so it preserves
 // the path-free privacy contract below. Full per-file rationale lives only in the regulated audit
@@ -634,6 +647,21 @@ export interface LocalKnowledgeGroundedAnswerContextSummary {
   readonly citationCount: number;
   readonly referenceBudget: number;
   readonly referencesUsed: number;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
+  readonly indexLifecycle?: LocalKnowledgeIndexLifecycleSummary | undefined;
+}
+
+export interface LocalKnowledgeCapsuleIndexLifecycleStamp {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly updatedAt: number;
+}
+
+export interface LocalKnowledgeIndexLifecycleSummary {
+  readonly schemaVersion: "local-knowledge-index-lifecycle-v1";
+  readonly capturedAt: number;
+  readonly capsules: readonly LocalKnowledgeCapsuleIndexLifecycleStamp[];
+  readonly stale: boolean;
+  readonly staleCapsuleIds?: readonly KnowledgeCapsuleId[] | undefined;
 }
 
 function buildOmittedCounts(
@@ -798,6 +826,7 @@ export interface HybridGroundedAnswerContextSummary {
   readonly connectorSourceCount: number;
   readonly folder: GroundedAnswerContextPackSummary;
   readonly knowledge: LocalKnowledgeGroundedAnswerContextSummary;
+  readonly reranker?: GroundedRerankerDiagnostics | undefined;
 }
 
 export interface HybridGroundedAnswer {
@@ -818,9 +847,7 @@ export interface HybridGroundedAnswer {
 }
 
 export type GroundedAnswer =
-  | ConnectedContextGroundedAnswer
-  | LocalKnowledgeGroundedAnswer
-  | HybridGroundedAnswer;
+  ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer | HybridGroundedAnswer;
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 
@@ -983,10 +1010,7 @@ export interface TerminalExecutionResult {
 }
 
 export type TerminalEventKind =
-  | "execution-started"
-  | "execution-completed"
-  | "execution-failed"
-  | "execution-cancelled";
+  "execution-started" | "execution-completed" | "execution-failed" | "execution-cancelled";
 
 export interface TerminalEventEnvelope {
   readonly kind: TerminalEventKind;
@@ -1058,13 +1082,7 @@ export interface FilesSearchResult {
 }
 
 export type FilesSearchFileRole =
-  | "source"
-  | "test"
-  | "config"
-  | "docs"
-  | "generated"
-  | "asset"
-  | "other";
+  "source" | "test" | "config" | "docs" | "generated" | "asset" | "other";
 
 export type FilesSearchMatchQuality = "exact" | "strong" | "path" | "weak";
 
@@ -1098,7 +1116,7 @@ export type FilesPreviewResponse =
     })
   | (FilesPreviewBase & {
       readonly kind: "image";
-      readonly dataUrl: string;
+      readonly url: string;
       readonly maxBytes: number;
     })
   | (FilesPreviewBase & {
@@ -1257,6 +1275,8 @@ export type GatewayReadinessProbeName =
   | "streaming"
   | "tool_calling"
   | "json_schema"
+  | "embedding"
+  | "reranker"
   | "reasoning"
   | "image_input"
   | "document_input"
@@ -1281,6 +1301,10 @@ export interface GatewayReadinessVerifiedCapabilities {
   readonly reasoningOutput?: boolean | undefined;
   readonly imageInput?: boolean | undefined;
   readonly documentInput?: boolean | undefined;
+  readonly embedding?: boolean | undefined;
+  readonly embeddingDimensions?: number | undefined;
+  readonly embeddingNorm?: number | undefined;
+  readonly reranker?: boolean | undefined;
   readonly testedContextTokens?: number | undefined;
 }
 

@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { memo } from "react";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "./Icons";
 
 export type HeaderStatusTone = "ok" | "warn" | "danger";
@@ -18,8 +18,13 @@ interface HeaderProps {
   readonly contextControl?: ReactNode;
 }
 
-function HeaderImpl({ onTileAll, onSplitFront, onCascade, contextControl }: HeaderProps): ReactNode {
-  const { t } = useI18n();
+function HeaderImpl({
+  onTileAll,
+  onSplitFront,
+  onCascade,
+  contextControl,
+}: HeaderProps): ReactNode {
+  const t = useTranslate();
 
   return (
     <header className="header">

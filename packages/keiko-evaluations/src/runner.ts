@@ -22,10 +22,7 @@ import { canonicalise, HARNESS_VERSION, type TaskType } from "@oscharko-dev/keik
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
-import {
-  createEvaluationModelProvider,
-  type EvaluationConfigLoader,
-} from "./model-provider.js";
+import { createEvaluationModelProvider, type EvaluationConfigLoader } from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
 import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
 import {
@@ -54,8 +51,7 @@ import {
 // writes without real config or disk. Defaults compose the real audit store + gateway provider.
 export interface EvalRunnerDeps {
   readonly modelProviderFactory?:
-    | ((fixture: EvaluationFixture, mode: EvaluationMode, modelId: string) => ModelPort)
-    | undefined;
+    ((fixture: EvaluationFixture, mode: EvaluationMode, modelId: string) => ModelPort) | undefined;
   readonly store?: EvidenceStore | undefined;
   readonly env?: EnvSource | undefined;
   // Fixed wall-clock used for evaluatedAt and as the workflow `now` source (deterministic durations).

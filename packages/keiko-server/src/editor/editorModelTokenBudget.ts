@@ -37,11 +37,7 @@ export interface EditorModelTokenBudget {
    * Attempts to reserve `tokens` before a provider call. Returns undefined when adding the
    * reservation would exceed the sliding-window ceiling.
    */
-  tryReserve(
-    root: string,
-    nowMs: number,
-    tokens: number,
-  ): EditorModelTokenReservation | undefined;
+  tryReserve(root: string, nowMs: number, tokens: number): EditorModelTokenReservation | undefined;
 }
 
 export interface EditorModelTokenReservation {
@@ -157,7 +153,11 @@ export function createEditorModelTokenBudget(
       recent.push({ ms: nowMs, tokens: normalized });
       byRoot.set(root, recent);
     },
-    tryReserve(root: string, nowMs: number, tokens: number): EditorModelTokenReservation | undefined {
+    tryReserve(
+      root: string,
+      nowMs: number,
+      tokens: number,
+    ): EditorModelTokenReservation | undefined {
       const normalized = normalizedTokenCount(tokens);
       if (normalized <= 0) {
         return undefined;
@@ -186,7 +186,9 @@ export function estimateEditorModelReservationTokens(
   prompt: PromptForEstimation,
   maxOutputTokens: number,
 ): number {
-  const promptTokens = Math.ceil((prompt.system.length + prompt.user.length) / APPROX_CHARS_PER_TOKEN);
+  const promptTokens = Math.ceil(
+    (prompt.system.length + prompt.user.length) / APPROX_CHARS_PER_TOKEN,
+  );
   return Math.max(1, promptTokens + normalizedTokenCount(maxOutputTokens));
 }
 

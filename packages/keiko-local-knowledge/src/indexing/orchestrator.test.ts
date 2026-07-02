@@ -9,10 +9,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type {
+  CitationReference,
   EmbeddingModelIdentity,
+  GatewayRequest,
   KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
+  NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -26,12 +29,14 @@ import {
   type ParserOptions,
   type ParserSelectionInput,
 } from "../parsers/index.js";
-import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
+import { PDF_NO_TEXT_LAYER, PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 import { readExistingDocumentRow } from "../discovery/persist.js";
+import { readCitationExcerpt } from "../conversation/citation-excerpts.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { folderScope, memoryFs } from "../discovery/test-support.js";
 import { documentIdFor } from "../discovery/types.js";
+import { LEXICAL_ANALYZER_KEY } from "../retrieval/lexical-normalization.js";
 
 import { runIndexingJob } from "./orchestrator.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
@@ -118,6 +123,36 @@ function buildOptions(fixture: Fixture, overrides: Partial<IndexingOptions> = {}
     store: fixture.store,
   };
   return { ...base, ...overrides };
+}
+
+function normalizedContextResponse(modelId: string, content: string): NormalizedResponse {
+  return {
+    modelId,
+    content,
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: null,
+    usage: {
+      requestId: "ctx-test",
+      promptTokens: 1,
+      completionTokens: 1,
+      latencyMs: 1,
+      costClass: "low",
+    },
+  };
+}
+
+function contextGateway(
+  responder: (request: GatewayRequest) => string | Promise<string>,
+  calls: GatewayRequest[] = [],
+): { readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>; readonly calls: GatewayRequest[] } {
+  return {
+    calls,
+    chat: async (request): Promise<NormalizedResponse> => {
+      calls.push(request);
+      return normalizedContextResponse(request.modelId, await responder(request));
+    },
+  };
 }
 
 function countVectorsForSource(fixture: Fixture, sourceId: KnowledgeSourceId): number {
@@ -228,6 +263,176 @@ describe("runIndexingJob — per-chunk embedding spans (Epic #189 audit)", () =>
   });
 });
 
+describe("runIndexingJob — contextual retrieval indexing", () => {
+  it("prepends generated context before document embedding and FTS indexing", async () => {
+    const sourceText =
+      "Release TS-999 changes the connector rollout. BillingService handles retries. ".repeat(24);
+    const fixture = buildFixture({ "context.txt": sourceText });
+    const inputs: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const gateway = contextGateway(() => "Context: TS-999 rollout and retry handling.", contextCalls);
+
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: adapter,
+            contextualRetrieval: {
+              enabled: true,
+              chatGateway: gateway,
+              modelId: "context-model",
+            },
+          }),
+        ),
+      );
+
+      expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+      expect(contextCalls.length).toBeGreaterThan(0);
+      expect(contextCalls[0]?.messages[1]?.content).toContain("<document>");
+      const chunkInputs = inputs.filter((input) => input !== "ping");
+      expect(chunkInputs.length).toBeGreaterThan(0);
+      expect(chunkInputs.every((input) => input.startsWith("Context: TS-999"))).toBe(true);
+      expect(inputs.some((input) => input.startsWith("Instruct:"))).toBe(false);
+
+      const lexical = fixture.store._internal.db
+        .prepare("SELECT text FROM chunk_lexical_index WHERE capsule_id = :c LIMIT 1")
+        .get({ c: fixture.capsuleId }) as { readonly text: string } | undefined;
+      expect(lexical?.text.startsWith("Context: TS-999")).toBe(true);
+
+      const chunkRow = fixture.store._internal.db
+        .prepare(
+          "SELECT id, source_id, document_id, character_start, character_end FROM chunks WHERE capsule_id = :c ORDER BY order_index ASC LIMIT 1",
+        )
+        .get({ c: fixture.capsuleId }) as
+        | {
+            readonly id: string;
+            readonly source_id: string;
+            readonly document_id: string;
+            readonly character_start: number;
+            readonly character_end: number;
+          }
+        | undefined;
+      if (chunkRow === undefined) throw new Error("missing chunk row");
+      const citation: CitationReference = {
+        capsuleId: fixture.capsuleId,
+        sourceId: chunkRow.source_id as KnowledgeSourceId,
+        documentId: chunkRow.document_id as CitationReference["documentId"],
+        chunkId: chunkRow.id as CitationReference["chunkId"],
+        characterStart: chunkRow.character_start,
+        characterEnd: chunkRow.character_end,
+        safeDisplayName: "context.txt",
+      };
+      expect(readCitationExcerpt(fixture.store, fixture.capsuleId, citation)).not.toContain(
+        "Context: TS-999",
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps document embeddings raw when contextual retrieval is disabled", async () => {
+    const sourceText = "Raw indexing sentence without generated context. ".repeat(16);
+    const fixture = buildFixture({ "raw.txt": sourceText });
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    try {
+      await drain(runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })));
+      expect(inputs.length).toBeGreaterThan(0);
+      expect(inputs.some((input) => input.startsWith("Context:"))).toBe(false);
+      expect(inputs.some((input) => input.startsWith("Instruct:"))).toBe(false);
+      const row = fixture.store._internal.db
+        .prepare(
+          "SELECT context_status, augmented_text FROM chunks WHERE capsule_id = :c ORDER BY order_index ASC LIMIT 1",
+        )
+        .get({ c: fixture.capsuleId }) as
+        | { readonly context_status: string | null; readonly augmented_text: string | null }
+        | undefined;
+      expect(row?.context_status).toBe("disabled");
+      expect(row?.augmented_text).toBeTypeOf("string");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("degrades to raw chunk text when the context model fails", async () => {
+    const sourceText = "Failure-tolerant contextual retrieval sentence. ".repeat(20);
+    const fixture = buildFixture({ "degraded.txt": sourceText });
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: adapter,
+            contextualRetrieval: {
+              enabled: true,
+              modelId: "context-model",
+              chatGateway: {
+                chat: () => Promise.reject(new Error("context unavailable")),
+              },
+            },
+          }),
+        ),
+      );
+      expect(events.some((event) => event.kind === "job-failed")).toBe(false);
+      expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+      expect(inputs.length).toBeGreaterThan(0);
+      expect(inputs.some((input) => input.startsWith("Context:"))).toBe(false);
+
+      const row = fixture.store._internal.db
+        .prepare(
+          "SELECT context_status FROM chunks WHERE capsule_id = :c ORDER BY order_index ASC LIMIT 1",
+        )
+        .get({ c: fixture.capsuleId }) as { readonly context_status: string | null } | undefined;
+      expect(row?.context_status).toBe("degraded");
+      const diag = fixture.store._internal.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM parser_diagnostics WHERE capsule_id = :c AND code = 'CONTEXTUAL_RETRIEVAL_DEGRADED'",
+        )
+        .get({ c: fixture.capsuleId }) as { readonly n: number };
+      expect(diag.n).toBeGreaterThan(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
 // ─── Test 1: full happy path ─────────────────────────────────────────────────
 describe("runIndexingJob — happy path", () => {
   let fixture: Fixture;
@@ -267,6 +472,18 @@ describe("runIndexingJob — happy path", () => {
       expect(completed.result.processedDocuments).toBe(3);
       expect(completed.result.vectorsPersisted).toBe(vectorCount);
     }
+  });
+
+  it("persists the lexical analyzer key in the chunking strategy key", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const row = fixture.store._internal.db
+      .prepare(
+        "SELECT chunking_strategy_version FROM chunks WHERE capsule_id = :capsule_id LIMIT 1",
+      )
+      .get({ capsule_id: String(fixture.capsuleId) }) as
+      | { readonly chunking_strategy_version: string | null }
+      | undefined;
+    expect(row?.chunking_strategy_version).toContain(`lexical-analyzer=${LEXICAL_ANALYZER_KEY}`);
   });
 
   it("persists an indexing_jobs row in `succeeded` state", async () => {
@@ -594,6 +811,44 @@ describe("runIndexingJob — incremental", () => {
     ).toBe(false);
   });
 
+  it("re-embeds unchanged files when the contextual retrieval model identity changes", async () => {
+    const single = buildFixture({
+      "contextual.txt": "Context model identity should affect the reindex key. ".repeat(20),
+    });
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(single, {
+            contextualRetrieval: {
+              enabled: true,
+              modelId: "context-model-a",
+              chatGateway: contextGateway(() => "Context A"),
+            },
+          }),
+        ),
+      );
+
+      const secondEvents = await drain(
+        runIndexingJob(
+          buildOptions(single, {
+            contextualRetrieval: {
+              enabled: true,
+              modelId: "context-model-b",
+              chatGateway: contextGateway(() => "Context B"),
+            },
+          }),
+        ),
+      );
+
+      expect(secondEvents.some((event) => event.kind === "document-embedded")).toBe(true);
+      expect(
+        secondEvents.some((event) => event.kind === "document-skipped" && event.reason === "already-embedded"),
+      ).toBe(false);
+    } finally {
+      single.cleanup();
+    }
+  });
+
   it("removes persisted rows for files deleted from the source on the next clean pass", async () => {
     await drain(runIndexingJob(buildOptions(fixture)));
     const deletedDocumentId = documentIdFor({
@@ -719,6 +974,35 @@ describe("runIndexingJob — force", () => {
     expect(secondVectorCount).toBe(firstVectorCount);
   });
 
+  it("invalidates ready vector-index state when force=true replaces vectors", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    fixture.store._internal.db
+      .prepare(
+        [
+          "INSERT INTO vector_index_state (",
+          "  capsule_id, provider, index_name, vector_dimensions, vector_metric,",
+          "  embedding_identity_key, vector_count, vector_max_created_at, status, updated_at",
+          ") VALUES (",
+          "  :capsule_id, 'sqlite-vec', 'keiko_lk_vec_1536_cosine', 1536, 'cosine',",
+          "  'openai|text-embedding-3-small|1536|cosine|legacy|legacy|unverified|', 1, 1000,",
+          "  'ready', 1000",
+          ")",
+        ].join(" "),
+      )
+      .run({ capsule_id: String(fixture.capsuleId) });
+    const before = fixture.store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM vector_index_state WHERE capsule_id = :capsule_id")
+      .get({ capsule_id: String(fixture.capsuleId) }) as { readonly n: number };
+    expect(before.n).toBe(1);
+
+    await drain(runIndexingJob(buildOptions(fixture, { force: true })));
+
+    const after = fixture.store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM vector_index_state WHERE capsule_id = :capsule_id")
+      .get({ capsule_id: String(fixture.capsuleId) }) as { readonly n: number };
+    expect(after.n).toBe(0);
+  });
+
   it("preserves other source vectors when force=true is scoped to one source", async () => {
     const multi = buildTwoSourceFixture();
 
@@ -827,6 +1111,36 @@ describe("runIndexingJob — unsupported documents", () => {
     const row = selectJobById(fixture.store._internal.db, started.jobId);
     expect(row?.processed_documents).toBe(0);
     expect(row?.skipped_documents).toBe(1);
+  });
+
+  it("marks scanned PDFs without OCR as unsupported and skips grounding work", async () => {
+    const imageFixture = buildFixture({ "scan.pdf": PDF_NO_TEXT_LAYER });
+    try {
+      const events = await drain(runIndexingJob(buildOptions(imageFixture)));
+      const documentId = documentIdFor({
+        capsuleId: imageFixture.capsuleId,
+        sourceId: imageFixture.sourceId,
+        relativePath: "scan.pdf",
+      });
+      const row = readExistingDocumentRow(
+        imageFixture.store._internal.db,
+        imageFixture.capsuleId,
+        documentId,
+      );
+      const pageCount = imageFixture.store._internal.db
+        .prepare("SELECT COUNT(*) AS n FROM pages WHERE capsule_id = :c AND document_id = :d")
+        .get({ c: imageFixture.capsuleId, d: String(documentId) }) as { readonly n: number };
+
+      expect(row?.status).toBe("unsupported");
+      expect(pageCount.n).toBe(1);
+      expect(
+        events.some((event) => event.kind === "document-skipped" && event.reason === "unsupported"),
+      ).toBe(true);
+      expect(events.some((event) => event.kind === "document-failed")).toBe(false);
+      expect(events.some((event) => event.kind === "document-embedded")).toBe(false);
+    } finally {
+      imageFixture.cleanup();
+    }
   });
 });
 
@@ -1021,6 +1335,55 @@ describe("runIndexingJob — embedding capability preflight", () => {
       expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
       expect(terminal.error.message).toBe(
         "embedding vector dimensions do not match the expected value",
+      );
+      expect(terminal.result.processedDocuments).toBe(0);
+      expect(terminal.result.vectorsPersisted).toBe(0);
+    }
+  });
+
+  it("fails before discovery when a hardened embedding-space fingerprint drifts", async () => {
+    fixture.cleanup();
+    const hardenedIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      normalization: "l2",
+      instructionVersion: "keiko-embedding-input-v1",
+      embeddingSpaceFingerprint:
+        "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+    };
+    fixture = buildFixture(
+      {
+        "alpha.txt": "Lorem ipsum dolor sit amet. ".repeat(8),
+      },
+      hardenedIdentity,
+    );
+
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        requestCount += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, hardenedIdentity.vectorDimensions),
+            modelId: hardenedIdentity.modelId,
+          },
+        };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter, force: true })),
+    );
+
+    expect(requestCount).toBe(4);
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+      expect(terminal.error.message).toBe(
+        "embedding model identity changed — existing capsules are no longer compatible",
       );
       expect(terminal.result.processedDocuments).toBe(0);
       expect(terminal.result.vectorsPersisted).toBe(0);

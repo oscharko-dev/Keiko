@@ -58,6 +58,9 @@ describe("containsForbiddenSecretShape", () => {
     "X-Api-Key: secret",
     "my apikey value",
     "the api_key here",
+    "AKIA1234567890ABCDEF",
+    "ghp_1234567890abcdefghijklmnop",
+    "sk-1234567890abcdefghijklmnop",
   ])("detects %s", (value) => {
     expect(containsForbiddenSecretShape(value)).toBe(true);
   });
@@ -110,7 +113,13 @@ describe("payloadContainsForbiddenSecretShape", () => {
 
   it("ignores non-string values", () => {
     expect(payloadContainsForbiddenSecretShape({ a: 1, b: true, c: null })).toBe(false);
-    expect(payloadContainsForbiddenSecretShape({ nested: { secret: "Bearer x" } })).toBe(false);
+  });
+
+  it("detects forbidden strings in nested objects and arrays", () => {
+    expect(payloadContainsForbiddenSecretShape({ nested: { secret: "Bearer x" } })).toBe(true);
+    expect(
+      payloadContainsForbiddenSecretShape({ nested: [{ token: "AKIA1234567890ABCDEF" }] }),
+    ).toBe(true);
   });
 
   it("returns false for empty payload", () => {

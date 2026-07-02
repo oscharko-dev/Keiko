@@ -7,10 +7,12 @@ import type {
   PdfCitationPreviewOrigin,
   PdfCitationPreviewStatusState,
 } from "@oscharko-dev/keiko-contracts";
+import { normalizePdfCitationPreviewMarkerIndex } from "@oscharko-dev/keiko-contracts";
 import { fetchPdfCitationPreviewStatus, openPdfCitationPreviewSession } from "@/lib/api";
 import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@/lib/types";
 import type { WorkspaceApi } from "./useWorkspace.types";
 import {
+  showPdfCitationPreviewFailure,
   showPdfCitationPreviewResult,
   type PdfCitationPreviewAnswerContext,
   type PdfCitationPreviewContextCitation,
@@ -46,18 +48,46 @@ export interface CitationPreviewController {
   ) => Promise<string | null>;
 }
 
-function normalizePreviewMarkerIndex(marker: string | number): number | undefined {
-  if (typeof marker === "number") {
-    return Number.isInteger(marker) && marker > 0 ? marker : undefined;
+const PDF_STATUS_CACHE_TTL_MS = 2000;
+type PdfStatusResponse = Awaited<ReturnType<typeof fetchPdfCitationPreviewStatus>>;
+const pdfStatusCache = new Map<
+  string,
+  { readonly expiresAt: number; readonly promise: Promise<PdfStatusResponse> }
+>();
+
+export function clearPdfCitationPreviewStatusCacheForTests(): void {
+  pdfStatusCache.clear();
+}
+
+function fetchCachedPdfCitationPreviewStatus(input: {
+  readonly chatId: string;
+  readonly assistantMessageId: string;
+}): Promise<PdfStatusResponse> {
+  const key = `${input.chatId}\u0000${input.assistantMessageId}`;
+  const now = Date.now();
+  const cached = pdfStatusCache.get(key);
+  if (cached !== undefined && cached.expiresAt > now) {
+    return cached.promise;
   }
-  const trimmed = marker.trim();
-  const match = /^(?:\[(\d+)\]|【(\d+)】|［(\d+)］|(\d+))$/u.exec(trimmed);
-  if (match === null) return undefined;
-  const parsed = Number.parseInt(
-    match[1] ?? match[2] ?? match[3] ?? match[4] ?? "",
-    10,
-  );
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  const promise = fetchPdfCitationPreviewStatus(input).catch((error: unknown) => {
+    pdfStatusCache.delete(key);
+    throw error;
+  });
+  pdfStatusCache.set(key, { promise, expiresAt: now + PDF_STATUS_CACHE_TTL_MS });
+  return promise;
+}
+
+interface CitationPreviewRenderSnapshot {
+  readonly affordances: Record<string, CitationPreviewAffordance>;
+  readonly answer: GroundedAnswer | undefined;
+  readonly chatId: string | undefined;
+  readonly citations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly windowId: string | undefined;
+  readonly windows: PdfCitationPreviewWindowApi | undefined;
+}
+
+function normalizePreviewMarkerIndex(marker: string | number): number | undefined {
+  return normalizePdfCitationPreviewMarkerIndex(marker);
 }
 
 export function knowledgeCitationsForAnswer(
@@ -182,21 +212,38 @@ export function usePdfCitationPreviewController({
   readonly windowId?: string | undefined;
   readonly windows: PdfCitationPreviewWindowApi | undefined;
 }): CitationPreviewController | undefined {
+  const assistantMessageId = answer?.assistantMessageId;
   const citations = useMemo(() => knowledgeCitationsForAnswer(answer), [answer]);
   const [affordances, setAffordances] = useState<Record<string, CitationPreviewAffordance>>({});
   const [openingKeys, setOpeningKeys] = useState<ReadonlySet<string>>(new Set());
   const pendingOpensRef = useRef(new Map<string, Promise<string | null>>());
+  const latestSnapshotRef = useRef<CitationPreviewRenderSnapshot>({
+    affordances,
+    answer,
+    chatId,
+    citations,
+    windowId,
+    windows,
+  });
+  latestSnapshotRef.current = {
+    affordances,
+    answer,
+    chatId,
+    citations,
+    windowId,
+    windows,
+  };
 
   useEffect(() => {
-    if (chatId === undefined || answer === undefined || citations.length === 0) {
+    if (chatId === undefined || assistantMessageId === undefined || citations.length === 0) {
       setAffordances({});
       return;
     }
 
     let cancelled = false;
-    void fetchPdfCitationPreviewStatus({
+    void fetchCachedPdfCitationPreviewStatus({
       chatId,
-      assistantMessageId: answer.assistantMessageId,
+      assistantMessageId,
     }).then(
       (response) => {
         if (cancelled) return;
@@ -211,7 +258,7 @@ export function usePdfCitationPreviewController({
     return () => {
       cancelled = true;
     };
-  }, [answer, chatId, citations]);
+  }, [assistantMessageId, chatId, citations]);
 
   const forCitation = useCallback(
     (citation: LocalKnowledgeEvidenceCitation): CitationPreviewAffordance | undefined =>
@@ -266,25 +313,48 @@ export function usePdfCitationPreviewController({
         origin,
       })
         .then((response) => {
-          const sameDocumentCitations = answerLocalPreviewContext(citation, citations, affordances);
+          const latest = latestSnapshotRef.current;
+          const latestAnswer = latest.answer;
+          if (
+            latest.chatId !== chatId ||
+            latestAnswer === undefined ||
+            latestAnswer.assistantMessageId !== answer.assistantMessageId ||
+            latest.windows === undefined
+          ) {
+            return null;
+          }
+          const latestCitation = latest.citations.find(
+            (candidate) => candidate.stableId === citation.stableId,
+          );
+          if (latestCitation === undefined) {
+            return null;
+          }
+          const sameDocumentCitations = answerLocalPreviewContext(
+            latestCitation,
+            latest.citations,
+            latest.affordances,
+          );
           const context: PdfCitationPreviewAnswerContext | undefined =
             sameDocumentCitations.length === 0
               ? undefined
               : {
-                  activeStableId: citation.stableId,
+                  activeStableId: latestCitation.stableId,
                   citations: sameDocumentCitations,
                   origin: {
-                    assistantMessageId: answer.assistantMessageId,
+                    assistantMessageId: latestAnswer.assistantMessageId,
                     chatId,
-                    ...(windowId === undefined ? {} : { chatWindowId: windowId }),
-                    marker: citation.marker,
+                    ...(latest.windowId === undefined ? {} : { chatWindowId: latest.windowId }),
+                    marker: latestCitation.marker,
                     representation: origin,
                   },
                 };
-          return showPdfCitationPreviewResult(windows, response, {
-            ...(context === undefined ? {} : { context }),
-            currentPage: response.display?.pageNumber,
-          });
+          if (response.outcome === "authorized") {
+            return showPdfCitationPreviewResult(latest.windows, response, {
+              ...(context === undefined ? {} : { context }),
+              currentPage: response.display.pageNumber,
+            });
+          }
+          return showPdfCitationPreviewFailure(latest.windows, response);
         })
         .finally(() => {
           pendingOpensRef.current.delete(key);
@@ -294,10 +364,15 @@ export function usePdfCitationPreviewController({
       pendingOpensRef.current.set(key, request);
       return request;
     },
-    [affordances, answer, chatId, citations, windowId, windows],
+    [answer, chatId, windows],
   );
 
-  if (chatId === undefined || answer === undefined || citations.length === 0 || windows === undefined) {
+  if (
+    chatId === undefined ||
+    answer === undefined ||
+    citations.length === 0 ||
+    windows === undefined
+  ) {
     return undefined;
   }
 

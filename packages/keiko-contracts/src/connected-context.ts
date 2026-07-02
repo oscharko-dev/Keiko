@@ -50,6 +50,7 @@ export interface EvidenceLedgerRef {
 // ─── Evidence atom ────────────────────────────────────────────────────────────
 export type EvidenceAtomProvenanceKind =
   | "lexical-search"
+  | "semantic-search"
   | "file-listing"
   | "excerpt-read"
   | "structural"
@@ -63,6 +64,7 @@ export type EvidenceAtomProvenanceKind =
 
 export const EVIDENCE_ATOM_PROVENANCE_KINDS: readonly EvidenceAtomProvenanceKind[] = [
   "lexical-search",
+  "semantic-search",
   "file-listing",
   "excerpt-read",
   "structural",
@@ -75,6 +77,43 @@ export interface EvidenceAtomProvenance {
   readonly kind: EvidenceAtomProvenanceKind;
   readonly tool: string;
   readonly queryFingerprint: string;
+}
+
+export type EvidenceEdgeKind =
+  | "import"
+  | "export"
+  | "call"
+  | "definition"
+  | "reference"
+  | "test-source"
+  | "api-contract"
+  | "dto-contract"
+  | "package-dependency";
+
+export const EVIDENCE_EDGE_KINDS: readonly EvidenceEdgeKind[] = [
+  "import",
+  "export",
+  "call",
+  "definition",
+  "reference",
+  "test-source",
+  "api-contract",
+  "dto-contract",
+  "package-dependency",
+] as const;
+
+export interface EvidenceEdgeEndpoint {
+  readonly scopePath: string;
+  readonly lineRange?: LineRange | undefined;
+  readonly symbol?: string | undefined;
+}
+
+export interface EvidenceEdge {
+  readonly kind: EvidenceEdgeKind;
+  readonly source: EvidenceEdgeEndpoint;
+  readonly target: EvidenceEdgeEndpoint;
+  readonly label?: string | undefined;
+  readonly confidence: "resolved" | "heuristic";
 }
 
 // `raw-internal` may never reach a browser or persisted artifact; downstream trust boundaries
@@ -100,9 +139,16 @@ export interface EvidenceAtom {
   readonly lineRange: LineRange | undefined;
   readonly score: number;
   readonly provenance: EvidenceAtomProvenance;
+  readonly edge?: EvidenceEdge | undefined;
+  readonly metrics?: EvidenceAtomMetrics | undefined;
   readonly redactionState: EvidenceAtomRedactionState;
   readonly emittedAtMs: number;
   readonly ledgerRef: EvidenceLedgerRef | undefined;
+}
+
+export interface EvidenceAtomMetrics {
+  readonly gitRecency?: number | undefined;
+  readonly gitChurn?: number | undefined;
 }
 
 // ─── Exploration budget + usage ───────────────────────────────────────────────
@@ -122,10 +168,10 @@ export const DEFAULT_EXPLORATION_BUDGET: ExplorationBudget = {
   searchCallsMax: 16,
   filesReadMax: 32,
   excerptBytesMax: 131_072,
-  modelInputTokensMax: 32_000,
+  modelInputTokensMax: 116_000,
   modelOutputTokensMax: 4_096,
   elapsedMsMax: 30_000,
-  rerankCallsMax: 0,
+  rerankCallsMax: 1,
 } as const;
 
 export interface ExplorationUsage {
@@ -303,9 +349,24 @@ export interface RankedCandidateExplanation {
 
 export interface ContextPackDiagnostics {
   readonly rankedCandidates: readonly RankedCandidateExplanation[];
+  readonly coverage?: ContextCoverageDiagnostics | undefined;
   // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
   // when present it is validated by validateContextBudget. Never affects the pack stableId.
   readonly contextBudget?: ContextBudget | undefined;
+}
+
+export interface ContextCoverageDiagnostics {
+  readonly filesDiscovered: number;
+  readonly filesAfterPolicy: number;
+  readonly filesScanned: number;
+  readonly oversizedFilesScanned?: number | undefined;
+  readonly lowValueRescueFilesDiscovered?: number | undefined;
+  readonly lowValueRescueFilesScanned?: number | undefined;
+  readonly truncated: boolean;
+  readonly ignoredByDiscovery: number;
+  readonly deniedByDiscovery: number;
+  readonly depthPrunedByDiscovery: number;
+  readonly maxFilesPrunedByDiscovery: number;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -343,6 +404,8 @@ export interface EvidenceAtomStableIdInput {
   readonly scopeId: string;
   readonly scopePath: string;
   readonly lineRange: LineRange | undefined;
+  readonly edge?: EvidenceEdge | undefined;
+  readonly evidenceFingerprint?: string | undefined;
   readonly provenanceKind: EvidenceAtomProvenanceKind;
   readonly provenanceTool: string;
   readonly queryFingerprint: string;
@@ -357,8 +420,7 @@ export interface ConnectedContextPackStableIdInput {
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 export type ValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reasons: readonly string[] };
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
 
 export interface IsValidScopePathOptions {
   // Only `true` is supported today; `false` returns `false` (defensive contract boundary).
@@ -466,17 +528,18 @@ function isValidWorkspaceRootPath(path: string): boolean {
   return !TRAVERSAL_SEGMENT_RE.test(path);
 }
 
-export function isValidLineRange(range: LineRange): boolean {
+export function isValidLineRange(range: unknown): boolean {
   if (!isRecord(range)) {
     return false;
   }
-  if (!Number.isInteger(range.startLine) || !Number.isInteger(range.endLine)) {
+  const { startLine, endLine } = range;
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine)) {
     return false;
   }
-  if (range.startLine < 1) {
+  if (typeof startLine !== "number" || typeof endLine !== "number" || startLine < 1) {
     return false;
   }
-  return range.endLine >= range.startLine;
+  return endLine >= startLine;
 }
 
 export function isWithinBudget(usage: ExplorationUsage, budget: ExplorationBudget): boolean {
@@ -645,8 +708,93 @@ function validateLedgerRef(ref: EvidenceLedgerRef, reasons: string[], prefix: st
   }
 }
 
+function validateEvidenceEdgeEndpoint(endpoint: unknown, reasons: string[], prefix: string): void {
+  if (!isRecord(endpoint)) {
+    reasons.push(`${prefix} invalid`);
+    return;
+  }
+  pushIf(
+    reasons,
+    !isValidScopePath(endpoint.scopePath, { mustBeRelative: true }),
+    `${prefix}.scopePath invalid`,
+  );
+  if (endpoint.lineRange !== undefined) {
+    pushIf(reasons, !isValidLineRange(endpoint.lineRange), `${prefix}.lineRange invalid`);
+  }
+  pushIf(
+    reasons,
+    endpoint.symbol !== undefined && !isNonEmptyTrimmed(endpoint.symbol),
+    `${prefix}.symbol empty`,
+  );
+}
+
+function validateEvidenceEdge(edge: unknown, reasons: string[]): void {
+  if (!isRecord(edge)) {
+    reasons.push("atom.edge invalid");
+    return;
+  }
+  pushIf(
+    reasons,
+    !EVIDENCE_EDGE_KINDS.includes(edge.kind as EvidenceEdgeKind),
+    "atom.edge.kind invalid",
+  );
+  pushIf(
+    reasons,
+    edge.confidence !== "resolved" && edge.confidence !== "heuristic",
+    "atom.edge.confidence invalid",
+  );
+  validateEvidenceEdgeEndpoint(edge.source, reasons, "atom.edge.source");
+  validateEvidenceEdgeEndpoint(edge.target, reasons, "atom.edge.target");
+  pushIf(
+    reasons,
+    edge.label !== undefined && !isNonEmptyTrimmed(edge.label),
+    "atom.edge.label empty",
+  );
+}
+
 function isScoreInUnitInterval(score: unknown): score is number {
   return typeof score === "number" && Number.isFinite(score) && score >= 0 && score <= 1;
+}
+
+function validateEvidenceProvenance(provenance: unknown, reasons: string[]): void {
+  if (!isRecord(provenance)) {
+    reasons.push("atom.provenance missing");
+    return;
+  }
+  pushIf(
+    reasons,
+    !EVIDENCE_ATOM_PROVENANCE_KINDS.includes(provenance.kind as EvidenceAtomProvenanceKind),
+    "atom.provenance.kind invalid",
+  );
+  pushIf(reasons, !isNonEmptyTrimmed(provenance.tool), "atom.provenance.tool empty");
+  pushIf(
+    reasons,
+    !isNonEmptyTrimmed(provenance.queryFingerprint),
+    "atom.provenance.queryFingerprint empty",
+  );
+}
+
+function validateEvidenceAtomMetrics(
+  metrics: EvidenceAtomMetrics | undefined,
+  reasons: string[],
+): void {
+  if (metrics === undefined) {
+    return;
+  }
+  if (!isRecord(metrics)) {
+    reasons.push("atom.metrics invalid");
+    return;
+  }
+  pushIf(
+    reasons,
+    metrics.gitRecency !== undefined && !isScoreInUnitInterval(metrics.gitRecency),
+    "atom.metrics.gitRecency out of range",
+  );
+  pushIf(
+    reasons,
+    metrics.gitChurn !== undefined && !isScoreInUnitInterval(metrics.gitChurn),
+    "atom.metrics.gitChurn out of range",
+  );
 }
 
 export function validateEvidenceAtom(atom: EvidenceAtom): ValidationResult {
@@ -669,22 +817,11 @@ export function validateEvidenceAtom(atom: EvidenceAtom): ValidationResult {
     pushIf(reasons, !isValidLineRange(atom.lineRange), "atom.lineRange invalid");
   }
   pushIf(reasons, !isScoreInUnitInterval(atom.score), "atom.score out of range");
-  const provenance = atom.provenance as unknown;
-  if (typeof provenance !== "object" || provenance === null) {
-    reasons.push("atom.provenance missing");
-  } else {
-    pushIf(
-      reasons,
-      !EVIDENCE_ATOM_PROVENANCE_KINDS.includes(atom.provenance.kind),
-      "atom.provenance.kind invalid",
-    );
-    pushIf(reasons, !isNonEmptyTrimmed(atom.provenance.tool), "atom.provenance.tool empty");
-    pushIf(
-      reasons,
-      !isNonEmptyTrimmed(atom.provenance.queryFingerprint),
-      "atom.provenance.queryFingerprint empty",
-    );
+  validateEvidenceProvenance(atom.provenance, reasons);
+  if (atom.edge !== undefined) {
+    validateEvidenceEdge(atom.edge, reasons);
   }
+  validateEvidenceAtomMetrics(atom.metrics, reasons);
   pushIf(
     reasons,
     !EVIDENCE_ATOM_REDACTION_STATES.includes(atom.redactionState),
@@ -1138,8 +1275,90 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
       "rankedCandidate.signals invalid",
     );
   }
+  validateDiagnosticsCoverage(diagnostics.coverage, reasons);
   // Additive, guarded: legacy diagnostics without contextBudget validate exactly as before.
   validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
+}
+
+function validateDiagnosticsCoverage(
+  coverage: ContextCoverageDiagnostics | undefined,
+  reasons: string[],
+): void {
+  if (coverage === undefined) {
+    return;
+  }
+  if (!isRecord(coverage)) {
+    reasons.push("pack.diagnostics.coverage invalid");
+    return;
+  }
+  validateCoverageRequiredCounts(coverage, reasons);
+  validateCoverageOptionalCounts(coverage, reasons);
+  pushIf(reasons, typeof coverage.truncated !== "boolean", "coverage.truncated invalid");
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.ignoredByDiscovery),
+    "coverage.ignoredByDiscovery invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.deniedByDiscovery),
+    "coverage.deniedByDiscovery invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.depthPrunedByDiscovery),
+    "coverage.depthPrunedByDiscovery invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.maxFilesPrunedByDiscovery),
+    "coverage.maxFilesPrunedByDiscovery invalid",
+  );
+}
+
+function validateCoverageOptionalCounts(
+  coverage: ContextCoverageDiagnostics,
+  reasons: string[],
+): void {
+  pushIf(
+    reasons,
+    coverage.oversizedFilesScanned !== undefined &&
+      !isFiniteNonNegativeInteger(coverage.oversizedFilesScanned),
+    "coverage.oversizedFilesScanned invalid",
+  );
+  pushIf(
+    reasons,
+    coverage.lowValueRescueFilesDiscovered !== undefined &&
+      !isFiniteNonNegativeInteger(coverage.lowValueRescueFilesDiscovered),
+    "coverage.lowValueRescueFilesDiscovered invalid",
+  );
+  pushIf(
+    reasons,
+    coverage.lowValueRescueFilesScanned !== undefined &&
+      !isFiniteNonNegativeInteger(coverage.lowValueRescueFilesScanned),
+    "coverage.lowValueRescueFilesScanned invalid",
+  );
+}
+
+function validateCoverageRequiredCounts(
+  coverage: ContextCoverageDiagnostics,
+  reasons: string[],
+): void {
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.filesDiscovered),
+    "coverage.filesDiscovered invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.filesAfterPolicy),
+    "coverage.filesAfterPolicy invalid",
+  );
+  pushIf(
+    reasons,
+    !isFiniteNonNegativeInteger(coverage.filesScanned),
+    "coverage.filesScanned invalid",
+  );
 }
 
 function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: string[]): void {

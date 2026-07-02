@@ -19,10 +19,11 @@ export type RejectionReason =
   // The restricted sensitivity class is rejected by default at this layer. A future per-policy
   // option could lift this; for #207 the contract is "restricted is unrepresentable from text".
   | "restricted-sensitivity"
-  // Server persistence cannot durably write non-public candidates until an explicit approval
-  // surface exists. The capture layer can still classify them; the BFF/storage boundary blocks
-  // the write with this typed reason.
+  // Legacy/server-side hard rejection reason for surfaces that cannot offer a review queue.
   | "sensitive-memory-requires-approval"
+  // The same canonical body was already forgotten in this scope. Suppress re-capture without
+  // echoing the body back to the caller.
+  | "suppressed-by-forget"
   // Inferred scope is null because the required coordinate is missing from the CaptureContext.
   // Returned in the rejection path rather than thrown so the caller can render a "please switch
   // to a project/workspace first" prompt.

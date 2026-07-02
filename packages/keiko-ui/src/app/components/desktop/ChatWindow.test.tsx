@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { ChatWindow, copyableMessageText } from "./ChatWindow";
+import { ChatWindow, clearKnowledgeCatalogCacheForTests, copyableMessageText } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ChatMessage, GroundedAnswer, ModelCapability } from "@/lib/types";
@@ -42,6 +42,22 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
   };
 }
 
+function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+  return {
+    id: "msg-1",
+    chatId: "chat-1",
+    role: "user",
+    content: "",
+    timestamp: 1,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
   return {
     projects: [],
@@ -56,6 +72,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     loading: false,
     sending: false,
     sendStatus: "idle",
+    regeneratingMessageId: undefined,
     error: undefined,
     setDraft: vi.fn(),
     setSelectedModel: vi.fn(),
@@ -64,6 +81,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     openChat: vi.fn(),
     addProject: vi.fn(),
     sendMessage: vi.fn(),
+    regenerateMessage: vi.fn(),
     cancelSend: vi.fn(),
     replaceChat: vi.fn(),
     latestGrounded: undefined,
@@ -140,6 +158,7 @@ const fetchFilesSearchMock = vi.mocked(fetchFilesSearch);
 const updateChatMock = vi.mocked(updateChat);
 
 beforeEach(() => {
+  clearKnowledgeCatalogCacheForTests();
   fetchCapsulesMock.mockReset();
   fetchCapsulesMock.mockResolvedValue({ capsules: [] });
   fetchCapsuleSetsMock.mockReset();
@@ -177,6 +196,89 @@ async function chooseComboboxOption(
 }
 
 describe("ChatWindow cancel button", () => {
+  it("renders regenerate on the latest ungrounded assistant response", async () => {
+    const regenerateMessage = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "u1",
+            chatId: "chat-1",
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "a1",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "answer",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+        regenerateMessage,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /regenerate response/i }));
+    expect(regenerateMessage).toHaveBeenCalledWith("a1");
+  });
+
+  it("keeps cancel reachable while regeneration is in flight", async () => {
+    const cancelSend = vi.fn();
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        sending: true,
+        sendStatus: "contacting",
+        regeneratingMessageId: "a1",
+        cancelSend,
+        messages: [
+          {
+            id: "u1",
+            chatId: "chat-1",
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "a1",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "answer",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /cancel regeneration/i }));
+    expect(cancelSend).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps connected resource details out of the chat header", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
@@ -906,6 +1008,37 @@ describe("ChatWindow repository file focus picker", () => {
 });
 
 describe("ChatWindow local knowledge scope disclosure", () => {
+  it("shares the capsule catalog request across mounted chat windows", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: makeCapsuleId("cap-shared"),
+          displayName: "Shared capsule",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    const session = makeSession({ activeChat: makeChat() });
+
+    render(
+      <>
+        <ChatSessionProvider value={session}>
+          <ChatWindow />
+        </ChatSessionProvider>
+        <ChatSessionProvider value={{ ...session, activeChat: makeChat({ id: "chat-2" }) }}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      </>,
+    );
+
+    await waitFor(() => expect(fetchCapsulesMock).toHaveBeenCalledTimes(1));
+    expect(fetchCapsuleSetsMock).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole("combobox", { name: "Grounding mode" })).toHaveLength(2);
+  });
+
   it("switches from Files grounding to a ready knowledge capsule and clears file scopes", async () => {
     const user = userEvent.setup();
     const replaceChat = vi.fn();
@@ -1647,6 +1780,7 @@ describe("ChatWindow memory controls", () => {
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
     await user.click(screen.getByRole("button", { name: /review forget/i }));
+    await user.type(screen.getByLabelText(/type forget/i), "FORGET");
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => expect(forgetMemoryAction).toHaveBeenCalledWith("mem-forget-1"));
   });
@@ -1678,6 +1812,7 @@ describe("ChatWindow memory controls", () => {
 
     await user.click(screen.getByRole("button", { name: /no memories included/i }));
     await user.click(screen.getByRole("button", { name: /review forget/i }));
+    await user.type(screen.getByLabelText(/type forget/i), "FORGET");
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
@@ -1890,6 +2025,61 @@ describe("ChatWindow message copy", () => {
 
     fireEvent.click(secondButton);
     expect(scrollSpy).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+    scrollSpy.mockRestore();
+  });
+
+  it("windows long transcripts and mounts an older question before jumping to it", async () => {
+    const scrollSpy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    const messages = Array.from({ length: 130 }, (_, index) => {
+      const turn = index + 1;
+      return [
+        makeMessage({
+          id: `u${String(turn)}`,
+          role: "user",
+          content: `Question ${String(turn)} body for a long transcript.`,
+          timestamp: turn * 2 - 1,
+        }),
+        makeMessage({
+          id: `a${String(turn)}`,
+          role: "assistant",
+          content: `Answer ${String(turn)} body.`,
+          timestamp: turn * 2,
+        }),
+      ];
+    }).flat();
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages,
+      }),
+    );
+
+    expect(document.querySelector(".chatw-thread")).toHaveAttribute("data-windowed", "true");
+    expect(document.querySelectorAll(".chat-turn")).toHaveLength(80);
+    expect(document.querySelector('[data-chat-question-id="u1"]')).toBeNull();
+    expect(document.querySelector('[data-chat-question-id="u130"]')).not.toBeNull();
+    expect(document.querySelector('[data-position="before"]')).toHaveAttribute(
+      "data-hidden-turns",
+      "50",
+    );
+
+    const buttons = screen.getAllByRole("button", { name: /Jump to question/u });
+    expect(buttons).toHaveLength(130);
+    const firstButton = buttons[0];
+    if (firstButton === undefined) throw new Error("first question map marker missing");
+    fireEvent.click(firstButton);
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-chat-question-id="u1"]')).not.toBeNull();
+    });
+    await waitFor(() => {
+      expect(scrollSpy).toHaveBeenCalledWith({ block: "start", behavior: "smooth" });
+    });
+    expect(document.querySelector('[data-position="after"]')).toHaveAttribute(
+      "data-hidden-turns",
+      "50",
+    );
     scrollSpy.mockRestore();
   });
 

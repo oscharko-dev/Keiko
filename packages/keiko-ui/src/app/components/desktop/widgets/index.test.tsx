@@ -45,10 +45,7 @@ vi.mock("../ChatWindow", () => ({
 
 vi.mock("../context/ChatSessionContext", () => ({
   ChatSessionProvider: ({ children }: { readonly children: ReactNode }) => <>{children}</>,
-}));
-
-vi.mock("../hooks/useChatSession", () => ({
-  useChatSession: () => ({
+  useChatSessionContext: () => ({
     activeChat: { id: "chat-1", title: "Chat 1", status: "open" },
     activeProject: { path: "/repo" },
     chats: [{ id: "chat-1", title: "Chat 1", status: "open" }],
@@ -98,7 +95,16 @@ vi.mock("./panels/NotificationsPanel", () => ({
 vi.mock("./panels/ResourcesPanel", () => ({ ResourcesPanel: () => <div>ResourcesPanel</div> }));
 vi.mock("./panels/TimelinePanel", () => ({ TimelinePanel: () => <div>TimelinePanel</div> }));
 vi.mock("./panels/KeikoTwinPanel", () => ({ KeikoTwinPanel: () => <div>KeikoTwinPanel</div> }));
-vi.mock("./panels/SettingsPanel", () => ({ SettingsPanel: () => <div>SettingsPanel</div> }));
+vi.mock("./panels/SettingsPanel", () => ({
+  SettingsPanel: ({ openUpdatesWindow }: { readonly openUpdatesWindow?: () => void }) => (
+    <button type="button" data-testid="settings-panel" onClick={openUpdatesWindow}>
+      SettingsPanel
+    </button>
+  ),
+}));
+vi.mock("../update/UpdateWindow", () => ({
+  UpdateWindow: () => <div data-testid="update-window">UpdateWindow</div>,
+}));
 
 vi.mock("./cards/FilesWidget", () => ({
   FilesWidget: ({
@@ -456,11 +462,11 @@ describe("workspace widget renderer registry", () => {
     expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo:/repo|/docs:false");
   });
 
-  it("maps window cfg into widget props and follow-up workspace actions", () => {
+  it("maps window cfg into widget props and follow-up workspace actions", async () => {
     const ctx = makeCtx();
     const view = render(<>{WIN_TYPES.files.render({ root: "/repo" }, ctx)}</>);
 
-    expect(screen.getByTestId("files-root")).toHaveTextContent("/repo");
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/repo");
     fireEvent.click(screen.getByRole("button", { name: "Active file" }));
     expect(ctx.updateCfg).toHaveBeenCalledWith({
       activeFilePath: "src/app.ts",
@@ -484,7 +490,7 @@ describe("workspace widget renderer registry", () => {
     expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", { projectPath: "/repo" });
 
     view.rerender(<>{WIN_TYPES.review.render({}, ctx)}</>);
-    fireEvent.click(screen.getByTestId("review-widget"));
+    fireEvent.click(await screen.findByTestId("review-widget"));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ runId: "run-entered" });
 
     view.rerender(
@@ -505,7 +511,7 @@ describe("workspace widget renderer registry", () => {
         {WIN_TYPES.agents.render({ workflow: "verify", access: "full", keikoMode: true }, ctx)}
       </>,
     );
-    expect(screen.getByTestId("editor-widget")).toHaveTextContent(
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent(
       "/repo:src/app.ts:src/app.ts|package.json::/repo:src/app.ts:cap-1:set-1:7:10:reveal-1",
     );
     fireEvent.click(screen.getByRole("button", { name: "Change editor workspace" }));
@@ -515,21 +521,28 @@ describe("workspace widget renderer registry", () => {
       openFiles: ["README.md"],
       layoutJson: '{"version":1}',
     });
-    expect(screen.getByTestId("browser-widget")).toHaveTextContent("https://example.test");
-    expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
-    expect(screen.getByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");
+    expect(await screen.findByTestId("browser-widget")).toHaveTextContent("https://example.test");
+    expect(await screen.findByTestId("terminal-widget")).toHaveTextContent("/repo:/repo");
+    expect(await screen.findByTestId("agent-widget")).toHaveTextContent("verify:/repo:src/app.ts");
 
     view.rerender(<>{WIN_TYPES.promptEnhancer.render({}, ctx)}</>);
-    expect(screen.getByTestId("prompt-enhancer-panel")).toHaveTextContent(
+    expect(await screen.findByTestId("prompt-enhancer-panel")).toHaveTextContent(
       "/repo:src/app.ts:/repo|/docs",
     );
+
+    view.rerender(<>{WIN_TYPES.settings.render({}, ctx)}</>);
+    fireEvent.click(await screen.findByTestId("settings-panel"));
+    expect(ctx.openWindow).toHaveBeenCalledWith("updates", { entrypoint: "settings" });
+
+    view.rerender(<>{WIN_TYPES.updates.render({}, ctx)}</>);
+    expect(await screen.findByTestId("update-window")).toHaveTextContent("UpdateWindow");
   });
 
-  it("maps the runtime hub into existing runtime and governed delivery windows", () => {
+  it("maps the runtime hub into existing runtime and governed delivery windows", async () => {
     const ctx = makeCtx();
     render(<>{WIN_TYPES.runtime.render({ projectPath: "/repo" }, ctx)}</>);
 
-    expect(screen.getByTestId("runtime-hub-widget")).toHaveTextContent("/repo");
+    expect(await screen.findByTestId("runtime-hub-widget")).toHaveTextContent("/repo");
     fireEvent.click(screen.getByRole("button", { name: "Change runtime project" }));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ projectPath: "/next-runtime" });
     fireEvent.click(screen.getByRole("button", { name: "Runtime files" }));
@@ -546,18 +559,18 @@ describe("workspace widget renderer registry", () => {
     expect(ctx.openWindow).toHaveBeenCalledWith("governedMerge", { projectPath: "/repo" });
   });
 
-  it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", () => {
+  it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", async () => {
     const ctx = makeCtx();
     const view = render(<>{WIN_TYPES.quality.render({}, ctx)}</>);
 
-    fireEvent.click(screen.getByTestId("qi-hub"));
+    fireEvent.click(await screen.findByTestId("qi-hub"));
     expect(ctx.openWindow).toHaveBeenCalledWith(
       "qiRun",
       expect.objectContaining({ runId: "qi-run-1" }),
     );
 
     view.rerender(<>{WIN_TYPES.qiRun.render({ runId: "qi-run-1" }, ctx)}</>);
-    fireEvent.click(screen.getByTestId("qi-run-card"));
+    fireEvent.click(await screen.findByTestId("qi-run-card"));
     expect(ctx.openWindow).toHaveBeenCalledWith(
       "qiRun",
       expect.objectContaining({ runId: "qi-run-2" }),
@@ -571,14 +584,14 @@ describe("workspace widget renderer registry", () => {
         )}
       </>,
     );
-    expect(screen.getByTestId("connector-widget")).toHaveTextContent("inline:cap-1");
+    expect(await screen.findByTestId("connector-widget")).toHaveTextContent("inline:cap-1");
     fireEvent.click(screen.getByRole("button", { name: "Select connector" }));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ selectedKind: "capsule", selectedId: "cap-1" });
     fireEvent.click(screen.getByRole("button", { name: "Manage connectors" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("localKnowledge");
 
     view.rerender(<>{WIN_TYPES.figma.render({ snapshotRunId: "fs-1" }, ctx)}</>);
-    fireEvent.click(screen.getByTestId("figma-window"));
+    fireEvent.click(await screen.findByTestId("figma-window"));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ snapshotRunId: "fs-2" });
     fireEvent.click(screen.getByRole("button", { name: "Add screen source" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("figmaView", {
@@ -599,7 +612,7 @@ describe("workspace widget renderer registry", () => {
         )}
       </>,
     );
-    expect(screen.getByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
+    expect(await screen.findByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
 
     view.rerender(
       <>
@@ -613,7 +626,7 @@ describe("workspace widget renderer registry", () => {
         )}
       </>,
     );
-    expect(screen.getByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
+    expect(await screen.findByTestId("figma-window")).toHaveTextContent("ctx-window:fs-1:screen-1");
 
     view.rerender(
       <>
@@ -623,7 +636,9 @@ describe("workspace widget renderer registry", () => {
         )}
       </>,
     );
-    expect(screen.getByTestId("figma-json-window")).toHaveTextContent("fs-1:screen-1:Screen 1");
+    expect(await screen.findByTestId("figma-json-window")).toHaveTextContent(
+      "fs-1:screen-1:Screen 1",
+    );
 
     view.rerender(
       <>
@@ -636,12 +651,12 @@ describe("workspace widget renderer registry", () => {
         )}
       </>,
     );
-    expect(screen.getByTestId("figma-image-window")).toHaveTextContent(
+    expect(await screen.findByTestId("figma-image-window")).toHaveTextContent(
       "/api/figma/snapshots/fs-1/screens/0/image:Screen 1",
     );
 
     view.rerender(<>{WIN_TYPES.chatHistory.render({}, ctx)}</>);
-    fireEvent.click(screen.getByRole("button", { name: "Open history chat" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open history chat" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("chat", { chatId: "chat-2", title: "Chat 2" });
 
     view.rerender(
@@ -651,15 +666,15 @@ describe("workspace widget renderer registry", () => {
         {WIN_TYPES.relationships.render({}, ctx)}
       </>,
     );
-    expect(screen.getByTestId("chat-window")).toHaveTextContent("true:/repo");
+    expect(await screen.findByTestId("chat-window")).toHaveTextContent("true:/repo");
     fireEvent.click(screen.getByRole("button", { name: "Open chat run" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("agents", {
       runId: "run-chat",
       workflow: "unit-test-generation",
       workspaceRoot: "/repo",
     });
-    expect(screen.getByTestId("connector-graph")).toHaveTextContent("false");
-    expect(screen.getByText("RelationshipsView")).toBeInTheDocument();
+    expect(await screen.findByTestId("connector-graph")).toHaveTextContent("false");
+    expect(await screen.findByText("RelationshipsView")).toBeInTheDocument();
   });
 });
 
@@ -671,17 +686,17 @@ describe("active workspace binding override (Issue #446)", () => {
     return { ...makeCtx(), activeRoot, linkedRoot: null };
   }
 
-  it("files renderer uses the active root, overriding the per-window cfg root", () => {
+  it("files renderer uses the active root, overriding the per-window cfg root", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
-    expect(screen.getByTestId("files-root")).toHaveTextContent("/wt/active");
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/wt/active");
   });
 
-  it("files renderer falls back to the cfg root in unbound mode", () => {
+  it("files renderer falls back to the cfg root in unbound mode", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx(null))}</>);
-    expect(screen.getByTestId("files-root")).toHaveTextContent("/cfg/old");
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/cfg/old");
   });
 
-  it("terminal renderer scopes projectPath + cwd to the active root", () => {
+  it("terminal renderer scopes projectPath + cwd to the active root", async () => {
     render(
       <>
         {WIN_TYPES.terminal.render(
@@ -690,12 +705,12 @@ describe("active workspace binding override (Issue #446)", () => {
         )}
       </>,
     );
-    expect(screen.getByTestId("terminal-widget")).toHaveTextContent("/wt/active:/wt/active");
+    expect(await screen.findByTestId("terminal-widget")).toHaveTextContent("/wt/active:/wt/active");
   });
 
-  it("editor renderer targets the active root and remounts (key changes) on a switch", () => {
+  it("editor renderer targets the active root and remounts (key changes) on a switch", async () => {
     render(<>{WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
-    expect(screen.getByTestId("editor-widget")).toHaveTextContent("/wt/active:");
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/active:");
     // The remount key is the activeRoot — a switch to a different workspace changes it (drops the
     // stale Monaco model), and unbound mode collapses to a stable "unbound" key.
     const a = WIN_TYPES.editor.render({ root: "/cfg/old" }, boundCtx("/wt/a")) as {

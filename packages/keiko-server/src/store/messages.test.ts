@@ -674,6 +674,69 @@ describe("updateMessage (issue #66)", () => {
   });
 });
 
+describe("replaceAssistantMessageContent (issue #1405)", () => {
+  it("updates only assistant content while preserving the message id", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "stale answer",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    const updated = store.replaceAssistantMessageContent(assistant.id, "replacement answer", 20);
+
+    expect(updated).toMatchObject({
+      id: assistant.id,
+      chatId,
+      role: "assistant",
+      content: "replacement answer",
+      timestamp: 20,
+    });
+    expect(store.findMessageById(assistant.id)?.content).toBe("replacement answer");
+  });
+
+  it("does not rewrite user turns through the regenerate update primitive", () => {
+    const user = store.createMessage({
+      chatId,
+      role: "user",
+      content: "original question",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.replaceAssistantMessageContent(user.id, "replacement", 20)).toThrow(
+      UiStoreError,
+    );
+    expect(store.findMessageById(user.id)?.content).toBe("original question");
+  });
+
+  it("rejects empty replacement content", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "answer",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() => store.replaceAssistantMessageContent(assistant.id, "", 20)).toThrow(UiStoreError);
+    expect(store.findMessageById(assistant.id)?.content).toBe("answer");
+  });
+});
+
 describe("findMessageById", () => {
   it("returns the row when id matches", () => {
     const created = store.createMessage({
@@ -802,7 +865,31 @@ describe("listMessages", () => {
     expect(store.listMessages(chatId).map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
+  it("returns the latest limited messages in chronological order", () => {
+    for (let i = 0; i < 5; i += 1) {
+      store.createMessage({
+        chatId,
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `message ${String(i)}`,
+        timestamp: i,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+
+    expect(store.listMessages(chatId, 3).map((m) => m.content)).toEqual([
+      "message 2",
+      "message 3",
+      "message 4",
+    ]);
+    expect(store.countMessages(chatId)).toBe(5);
+  });
+
   it("returns an empty array for an unknown chatId (no throw)", () => {
     expect(store.listMessages("nope")).toEqual([]);
+    expect(store.countMessages("nope")).toBe(0);
   });
 });

@@ -51,11 +51,9 @@ export const KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK: GitDeliveryRepoPolicyPack = {
 export interface GitDeliveryExecutionSeams {
   readonly adapterFactory?: ((workspace: WorkspaceInfo) => GitLocalMutationAdapter) | undefined;
   readonly snapshotReader?:
-    | ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>)
-    | undefined;
+    ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly stagedPathsReader?:
-    | ((workspace: WorkspaceInfo) => Promise<readonly string[]>)
-    | undefined;
+    ((workspace: WorkspaceInfo) => Promise<readonly string[]>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;

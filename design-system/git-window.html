@@ -3,7 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script>try { var t = localStorage.getItem("keiko-ds-theme"); document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark"; var c = localStorage.getItem("keiko-ds-contrast"); if (c === "more") document.documentElement.dataset.hc = "more"; } catch (e) { document.documentElement.dataset.theme = "dark"; }</script>
+    <script>
+      try {
+        var t = localStorage.getItem("keiko-ds-theme");
+        document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
+        var c = localStorage.getItem("keiko-ds-contrast");
+        if (c === "more") document.documentElement.dataset.hc = "more";
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
     <title>Git window · Keiko Design System</title>
     <link rel="stylesheet" href="keiko-fonts.css" />
     <link rel="stylesheet" href="keiko-tokens.css" />
@@ -12,166 +21,975 @@
     <link rel="stylesheet" href="ds.css" />
     <style>
       /* Git-window showcase — scoped to this page only; every value reads a design token. */
-      .gw-frame { width: 100%; max-width: 1180px; height: 660px; display: flex; flex-direction: column; }
-      .gw-win { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-      .gw-body { flex: 1; display: flex; min-height: 0; }
-      .gw-hide { display: none !important; }
+      .gw-frame {
+        width: 100%;
+        max-width: 1180px;
+        height: 660px;
+        display: flex;
+        flex-direction: column;
+      }
+      .gw-win {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .gw-body {
+        flex: 1;
+        display: flex;
+        min-height: 0;
+      }
+      .gw-hide {
+        display: none !important;
+      }
 
       /* Toolbar (connected) */
-      .gw-toolbar { height: 66px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
-      .gw-cell { display: flex; align-items: center; gap: 11px; padding: 0 18px; border: 0; background: transparent; cursor: pointer; text-align: left; border-right: 1px solid var(--line-soft); color: var(--fg); }
-      .gw-cell:hover { background: var(--card); }
-      .gw-cell.last { border-right: 0; }
-      .gw-cell .lead { color: var(--fg-dim); display: grid; place-items: center; }
-      .gw-cap { font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--fg-faint); font-family: var(--font-mono); }
-      .gw-val { font-size: 14px; font-weight: 600; color: var(--fg); line-height: 1.1; }
-      .gw-chev { color: var(--fg-faint); margin-left: 6px; display: grid; place-items: center; }
-      .gw-prbadge { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; color: var(--accent-on-tint); background: var(--accent-dim); padding: 1px 6px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--accent-line); }
-      .gw-count { display: inline-flex; align-items: center; gap: 2px; font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); background: var(--inset); padding: 2px 7px; border-radius: 7px; margin-left: 4px; }
-      .gw-actions { display: flex; align-items: center; gap: 6px; padding: 0 16px; border-left: 1px solid var(--line-soft); }
-      .gw-btn { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 13px; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: 500 12.5px var(--font-ui); cursor: pointer; }
-      .gw-btn:hover { background: var(--card-2); border-color: var(--line-strong); }
-      .gw-btn .lead { color: var(--fg-dim); display: grid; place-items: center; }
-      .gw-btn[disabled] { opacity: 0.6; cursor: not-allowed; }
+      .gw-toolbar {
+        height: 66px;
+        flex: none;
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid var(--line-soft);
+        background: var(--surface);
+      }
+      .gw-cell {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        padding: 0 18px;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        text-align: left;
+        border-right: 1px solid var(--line-soft);
+        color: var(--fg);
+      }
+      .gw-cell:hover {
+        background: var(--card);
+      }
+      .gw-cell.last {
+        border-right: 0;
+      }
+      .gw-cell .lead {
+        color: var(--fg-dim);
+        display: grid;
+        place-items: center;
+      }
+      .gw-cap {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.07em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        font-family: var(--font-mono);
+      }
+      .gw-val {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--fg);
+        line-height: 1.1;
+      }
+      .gw-chev {
+        color: var(--fg-faint);
+        margin-left: 6px;
+        display: grid;
+        place-items: center;
+      }
+      .gw-prbadge {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 600;
+        color: var(--accent-on-tint);
+        background: var(--accent-dim);
+        padding: 1px 6px;
+        border-radius: 999px;
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
+      .gw-count {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-muted);
+        background: var(--inset);
+        padding: 2px 7px;
+        border-radius: 7px;
+        margin-left: 4px;
+      }
+      .gw-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 16px;
+        border-left: 1px solid var(--line-soft);
+      }
+      .gw-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 34px;
+        padding: 0 13px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--fg);
+        font: 500 12.5px var(--font-ui);
+        cursor: pointer;
+      }
+      .gw-btn:hover {
+        background: var(--card-2);
+        border-color: var(--line-strong);
+      }
+      .gw-btn .lead {
+        color: var(--fg-dim);
+        display: grid;
+        place-items: center;
+      }
+      .gw-btn[disabled] {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
 
       /* Toolbar (muted / empty) */
-      .gw-toolbar-empty { height: 66px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
-      .gw-muted { display: flex; align-items: center; gap: 10px; color: var(--fg-faint); font-size: 14px; }
-      .gw-muted.dim { font-size: 13px; }
-      .gw-hair { width: 1px; height: 26px; background: var(--line-soft); }
+      .gw-toolbar-empty {
+        height: 66px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--line-soft);
+        background: var(--surface);
+      }
+      .gw-muted {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--fg-faint);
+        font-size: 14px;
+      }
+      .gw-muted.dim {
+        font-size: 13px;
+      }
+      .gw-hair {
+        width: 1px;
+        height: 26px;
+        background: var(--line-soft);
+      }
 
       /* Left column */
-      .gw-left { width: 384px; flex: none; display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line-soft); background: var(--card); }
-      .gw-tabs { height: 44px; flex: none; display: flex; align-items: stretch; padding: 0 8px; border-bottom: 1px solid var(--line-soft); }
-      .gw-tab { position: relative; display: inline-flex; align-items: center; gap: 7px; padding: 0 12px; border: 0; background: transparent; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--fg-muted); }
-      .gw-tab.on { color: var(--fg); }
-      .gw-tab .bdg { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 600; background: var(--inset); color: var(--fg-muted); }
-      .gw-tab.on .bdg { background: var(--accent-dim); color: var(--accent-on-tint); }
-      .gw-tab .ul { position: absolute; left: 8px; right: 8px; bottom: -1px; height: 2px; border-radius: 2px; background: transparent; }
-      .gw-tab.on .ul { background: var(--accent); }
+      .gw-left {
+        width: 384px;
+        flex: none;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+        border-right: 1px solid var(--line-soft);
+        background: var(--card);
+      }
+      .gw-tabs {
+        height: 44px;
+        flex: none;
+        display: flex;
+        align-items: stretch;
+        padding: 0 8px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .gw-tab {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 0 12px;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--fg-muted);
+      }
+      .gw-tab.on {
+        color: var(--fg);
+      }
+      .gw-tab .bdg {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 5px;
+        border-radius: 999px;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        font-weight: 600;
+        background: var(--inset);
+        color: var(--fg-muted);
+      }
+      .gw-tab.on .bdg {
+        background: var(--accent-dim);
+        color: var(--accent-on-tint);
+      }
+      .gw-tab .ul {
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px;
+        background: transparent;
+      }
+      .gw-tab.on .ul {
+        background: var(--accent);
+      }
 
-      .gw-summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px; color: var(--fg-faint); }
-      .gw-sumcheck { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border-radius: 4px; background: var(--accent-solid); color: var(--accent-solid-ink); }
-      .gw-sumtext { font-size: 12px; font-weight: 600; color: var(--fg-muted); }
-      .gw-stat-add { font-family: var(--font-mono); font-size: 11px; color: var(--ok); }
-      .gw-stat-del { font-family: var(--font-mono); font-size: 11px; color: var(--danger); }
+      .gw-summary {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px 6px;
+        color: var(--fg-faint);
+      }
+      .gw-sumcheck {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 15px;
+        height: 15px;
+        border-radius: 4px;
+        background: var(--accent-solid);
+        color: var(--accent-solid-ink);
+      }
+      .gw-sumtext {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--fg-muted);
+      }
+      .gw-stat-add {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--ok);
+      }
+      .gw-stat-del {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--danger);
+      }
 
-      .gw-files { flex: 1; overflow-y: auto; padding: 2px 8px 8px; }
-      .gw-file { display: flex; align-items: center; gap: 11px; width: 100%; padding: 9px 10px; border: 0; border-radius: 9px; cursor: pointer; text-align: left; background: transparent; color: var(--fg); }
-      .gw-file:hover { background: var(--card); }
-      .gw-file.sel { background: var(--accent-dim); box-shadow: inset 2px 0 0 var(--accent); }
-      .gw-stagebox { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; flex: none; border-radius: 5px; color: var(--accent-solid-ink); }
-      .gw-stagebox.on { background: var(--accent-solid); }
-      .gw-stagebox.off { box-shadow: inset 0 0 0 1.5px var(--line-strong); }
-      .gw-fname { font-size: 13px; font-weight: 500; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .gw-fdir { font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .gw-status { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: none; border-radius: 5px; font-family: var(--font-mono); font-size: 11px; font-weight: 700; }
-      .gw-status.M { color: var(--info); background: color-mix(in oklch, var(--info) 16%, transparent); }
-      .gw-status.A { color: var(--ok); background: color-mix(in oklch, var(--ok) 16%, transparent); }
-      .gw-status.D { color: var(--danger); background: color-mix(in oklch, var(--danger) 16%, transparent); }
-      .gw-status.R { color: var(--warn); background: color-mix(in oklch, var(--warn) 16%, transparent); }
+      .gw-files {
+        flex: 1;
+        overflow-y: auto;
+        padding: 2px 8px 8px;
+      }
+      .gw-file {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        width: 100%;
+        padding: 9px 10px;
+        border: 0;
+        border-radius: 9px;
+        cursor: pointer;
+        text-align: left;
+        background: transparent;
+        color: var(--fg);
+      }
+      .gw-file:hover {
+        background: var(--card);
+      }
+      .gw-file.sel {
+        background: var(--accent-dim);
+        box-shadow: inset 2px 0 0 var(--accent);
+      }
+      .gw-stagebox {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
+        flex: none;
+        border-radius: 5px;
+        color: var(--accent-solid-ink);
+      }
+      .gw-stagebox.on {
+        background: var(--accent-solid);
+      }
+      .gw-stagebox.off {
+        box-shadow: inset 0 0 0 1.5px var(--line-strong);
+      }
+      .gw-fname {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--fg);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .gw-fdir {
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        color: var(--fg-faint);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .gw-status {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        flex: none;
+        border-radius: 5px;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .gw-status.M {
+        color: var(--info);
+        background: color-mix(in oklch, var(--info) 16%, transparent);
+      }
+      .gw-status.A {
+        color: var(--ok);
+        background: color-mix(in oklch, var(--ok) 16%, transparent);
+      }
+      .gw-status.D {
+        color: var(--danger);
+        background: color-mix(in oklch, var(--danger) 16%, transparent);
+      }
+      .gw-status.R {
+        color: var(--warn);
+        background: color-mix(in oklch, var(--warn) 16%, transparent);
+      }
 
       /* Commit composer */
-      .gw-composer { flex: none; border-top: 1px solid var(--line-soft); background: var(--surface); padding: 13px 14px; display: flex; flex-direction: column; gap: 10px; }
-      .gw-aihdr { display: flex; align-items: center; gap: 7px; }
-      .gw-aihdr .spk { display: inline-flex; color: var(--accent-text); }
-      .gw-aihdr .lbl { font-size: 12px; font-weight: 600; color: var(--accent-text); }
-      .gw-regen { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--fg-faint); font: 500 11.5px var(--font-ui); cursor: pointer; padding: 2px 4px; border-radius: 6px; }
-      .gw-regen:hover { color: var(--fg); background: var(--inset); }
-      .gw-summary-field { display: flex; align-items: center; min-height: 38px; padding: 0 12px; border-radius: 9px; background: var(--inset); box-shadow: inset 0 0 0 1px var(--line), inset 2px 0 0 var(--accent); font-size: 13px; color: var(--fg); }
-      .gw-desc-field { min-height: 54px; padding: 9px 12px; border-radius: 9px; background: var(--inset); box-shadow: inset 0 0 0 1px var(--line); font-size: 13px; color: var(--fg-muted); line-height: 1.5; }
-      .gw-coauthors { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-      .gw-coauthors .clbl { font-size: 11px; color: var(--fg-faint); font-weight: 500; }
-      .gw-chip { display: inline-flex; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--accent-on-tint); background: var(--accent-dim); padding: 2px 8px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--accent-line); }
-      .gw-addco { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 0; background: var(--inset); color: var(--fg-muted); cursor: pointer; }
-      .gw-commit { display: flex; align-items: center; justify-content: center; gap: 8px; height: 40px; border-radius: 9px; border: 0; background: var(--accent); color: var(--ink-inverse); font: 650 13px var(--font-ui); cursor: pointer; }
-      .gw-commit:hover { background: var(--accent-bright); }
-      .gw-flow { display: flex; align-items: center; gap: 6px; }
-      .gw-flow .gw-btn { flex: 1; justify-content: center; }
+      .gw-composer {
+        flex: none;
+        border-top: 1px solid var(--line-soft);
+        background: var(--surface);
+        padding: 13px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .gw-aihdr {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .gw-aihdr .spk {
+        display: inline-flex;
+        color: var(--accent-text);
+      }
+      .gw-aihdr .lbl {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-text);
+      }
+      .gw-regen {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        border: 0;
+        background: transparent;
+        color: var(--fg-faint);
+        font: 500 11.5px var(--font-ui);
+        cursor: pointer;
+        padding: 2px 4px;
+        border-radius: 6px;
+      }
+      .gw-regen:hover {
+        color: var(--fg);
+        background: var(--inset);
+      }
+      .gw-summary-field {
+        display: flex;
+        align-items: center;
+        min-height: 38px;
+        padding: 0 12px;
+        border-radius: 9px;
+        background: var(--inset);
+        box-shadow:
+          inset 0 0 0 1px var(--line),
+          inset 2px 0 0 var(--accent);
+        font-size: 13px;
+        color: var(--fg);
+      }
+      .gw-desc-field {
+        min-height: 54px;
+        padding: 9px 12px;
+        border-radius: 9px;
+        background: var(--inset);
+        box-shadow: inset 0 0 0 1px var(--line);
+        font-size: 13px;
+        color: var(--fg-muted);
+        line-height: 1.5;
+      }
+      .gw-coauthors {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        flex-wrap: wrap;
+      }
+      .gw-coauthors .clbl {
+        font-size: 11px;
+        color: var(--fg-faint);
+        font-weight: 500;
+      }
+      .gw-chip {
+        display: inline-flex;
+        align-items: center;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--accent-on-tint);
+        background: var(--accent-dim);
+        padding: 2px 8px;
+        border-radius: 999px;
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
+      .gw-addco {
+        display: grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        border: 0;
+        background: var(--inset);
+        color: var(--fg-muted);
+        cursor: pointer;
+      }
+      .gw-commit {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        height: 40px;
+        border-radius: 9px;
+        border: 0;
+        background: var(--accent);
+        color: var(--ink-inverse);
+        font: 650 13px var(--font-ui);
+        cursor: pointer;
+      }
+      .gw-commit:hover {
+        background: var(--accent-bright);
+      }
+      .gw-flow {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .gw-flow .gw-btn {
+        flex: 1;
+        justify-content: center;
+      }
 
       /* History list */
-      .gw-history { flex: 1; overflow-y: auto; padding: 6px 8px; }
-      .gw-commitrow { display: flex; align-items: flex-start; gap: 11px; width: 100%; padding: 11px 10px; border: 0; border-radius: 9px; cursor: pointer; text-align: left; background: transparent; color: var(--fg); }
-      .gw-commitrow:hover { background: var(--card); }
-      .gw-commitrow.sel { background: var(--accent-dim); box-shadow: inset 2px 0 0 var(--accent); }
-      .gw-avatar { display: inline-flex; align-items: center; justify-content: center; flex: none; border-radius: 50%; background: var(--accent-dim); color: var(--accent-text); font-family: var(--font-mono); font-weight: 700; box-shadow: inset 0 0 0 1px var(--accent-line); }
-      .gw-cmsg { font-size: 13px; font-weight: 500; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.3; }
-      .gw-cmeta { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--fg-faint); }
-      .gw-cmeta .hash { font-family: var(--font-mono); color: var(--fg-muted); }
-      .gw-head-pill { font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; color: var(--accent-on-tint); background: var(--accent-dim); padding: 1px 6px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--accent-line); }
+      .gw-history {
+        flex: 1;
+        overflow-y: auto;
+        padding: 6px 8px;
+      }
+      .gw-commitrow {
+        display: flex;
+        align-items: flex-start;
+        gap: 11px;
+        width: 100%;
+        padding: 11px 10px;
+        border: 0;
+        border-radius: 9px;
+        cursor: pointer;
+        text-align: left;
+        background: transparent;
+        color: var(--fg);
+      }
+      .gw-commitrow:hover {
+        background: var(--card);
+      }
+      .gw-commitrow.sel {
+        background: var(--accent-dim);
+        box-shadow: inset 2px 0 0 var(--accent);
+      }
+      .gw-avatar {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: none;
+        border-radius: 50%;
+        background: var(--accent-dim);
+        color: var(--accent-text);
+        font-family: var(--font-mono);
+        font-weight: 700;
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
+      .gw-cmsg {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--fg);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.3;
+      }
+      .gw-cmeta {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 11px;
+        color: var(--fg-faint);
+      }
+      .gw-cmeta .hash {
+        font-family: var(--font-mono);
+        color: var(--fg-muted);
+      }
+      .gw-head-pill {
+        font-family: var(--font-mono);
+        font-size: 9.5px;
+        font-weight: 600;
+        color: var(--accent-on-tint);
+        background: var(--accent-dim);
+        padding: 1px 6px;
+        border-radius: 999px;
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
 
       /* Right pane / diff */
-      .gw-right { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--ed-bg); }
-      .gw-diffhdr { height: 44px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--line-soft); background: var(--surface); }
-      .gw-path { font-family: var(--font-mono); font-size: 12px; color: var(--fg-faint); }
-      .gw-path b { color: var(--fg); font-weight: 400; }
-      .gw-explain { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--accent-line); background: var(--accent-dim); color: var(--accent-text); font: 600 12px var(--font-ui); cursor: pointer; }
-      .gw-explain:hover { background: var(--accent-glow); }
-      .gw-iconbtn { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; border: 0; background: transparent; color: var(--fg-faint); cursor: pointer; }
-      .gw-iconbtn:hover { background: var(--inset); color: var(--fg); }
+      .gw-right {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--ed-bg);
+      }
+      .gw-diffhdr {
+        height: 44px;
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 0 14px;
+        border-bottom: 1px solid var(--line-soft);
+        background: var(--surface);
+      }
+      .gw-path {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--fg-faint);
+      }
+      .gw-path b {
+        color: var(--fg);
+        font-weight: 400;
+      }
+      .gw-explain {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 11px;
+        border-radius: 8px;
+        border: 1px solid var(--accent-line);
+        background: var(--accent-dim);
+        color: var(--accent-text);
+        font: 600 12px var(--font-ui);
+        cursor: pointer;
+      }
+      .gw-explain:hover {
+        background: var(--accent-glow);
+      }
+      .gw-iconbtn {
+        display: grid;
+        place-items: center;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        border: 0;
+        background: transparent;
+        color: var(--fg-faint);
+        cursor: pointer;
+      }
+      .gw-iconbtn:hover {
+        background: var(--inset);
+        color: var(--fg);
+      }
 
-      .gw-agent { margin: 12px 14px 4px; padding: 12px 13px; border-radius: 12px; background: var(--accent-dim); box-shadow: inset 0 0 0 1px var(--accent-line); display: flex; gap: 11px; position: relative; }
-      .gw-agent .av { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; flex: none; border-radius: 8px; background: var(--card); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-line); }
-      .gw-agent .nm { font-size: 12px; font-weight: 600; color: var(--accent-text); }
-      .gw-conf { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--fg-muted); }
-      .gw-conf .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
-      .gw-agent .bd { font-size: 12.5px; color: var(--fg); line-height: 1.55; }
-      .gw-agent code { font-family: var(--font-mono); color: var(--accent-text); }
-      .gw-cite { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10.5px; color: var(--accent-on-tint); background: var(--card); padding: 2px 8px; border-radius: 6px; box-shadow: inset 0 0 0 1px var(--accent-line); }
-      .gw-open { display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; color: var(--fg-muted); font: 500 11px var(--font-ui); cursor: pointer; }
-      .gw-close { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 22px; height: 22px; border: 0; background: transparent; color: var(--fg-faint); cursor: pointer; border-radius: 6px; }
-      .gw-close:hover { background: var(--card); color: var(--fg); }
+      .gw-agent {
+        margin: 12px 14px 4px;
+        padding: 12px 13px;
+        border-radius: 12px;
+        background: var(--accent-dim);
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+        display: flex;
+        gap: 11px;
+        position: relative;
+      }
+      .gw-agent .av {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        flex: none;
+        border-radius: 8px;
+        background: var(--card);
+        color: var(--accent-text);
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
+      .gw-agent .nm {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--accent-text);
+      }
+      .gw-conf {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 10px;
+        color: var(--fg-muted);
+      }
+      .gw-conf .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--ok);
+      }
+      .gw-agent .bd {
+        font-size: 12.5px;
+        color: var(--fg);
+        line-height: 1.55;
+      }
+      .gw-agent code {
+        font-family: var(--font-mono);
+        color: var(--accent-text);
+      }
+      .gw-cite {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        color: var(--accent-on-tint);
+        background: var(--card);
+        padding: 2px 8px;
+        border-radius: 6px;
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
+      .gw-open {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 0;
+        background: transparent;
+        color: var(--fg-muted);
+        font: 500 11px var(--font-ui);
+        cursor: pointer;
+      }
+      .gw-close {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        border: 0;
+        background: transparent;
+        color: var(--fg-faint);
+        cursor: pointer;
+        border-radius: 6px;
+      }
+      .gw-close:hover {
+        background: var(--card);
+        color: var(--fg);
+      }
 
-      .gw-diff { flex: 1; min-height: 0; overflow: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55; padding-bottom: 10px; }
-      .gw-drow { display: flex; align-items: stretch; min-height: 21px; }
-      .gw-drow.add { background: var(--ed-diff-ins-line); }
-      .gw-drow.del { background: var(--ed-diff-rem-line); }
-      .gw-hunk { display: block; width: 100%; padding: 5px 14px; font-size: 11.5px; color: var(--info); background: color-mix(in oklch, var(--info) 7%, transparent); border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
-      .gw-gut { width: 50px; flex: none; text-align: right; padding: 2px 10px 2px 0; color: var(--ed-gutter-fg); opacity: 0.8; user-select: none; }
-      .gw-gut.new { border-right: 1px solid var(--line-soft); }
-      .gw-drow.add .gw-gut, .gw-drow.add .gw-sign { color: var(--ed-diff-ins-gutter); }
-      .gw-drow.del .gw-gut, .gw-drow.del .gw-sign { color: var(--ed-diff-rem-gutter); }
-      .gw-sign { width: 18px; flex: none; text-align: center; padding: 2px 0; font-weight: 600; user-select: none; color: transparent; }
-      .gw-code { flex: 1; min-width: 0; padding: 2px 12px 2px 4px; white-space: pre; overflow: hidden; }
-      .t-kw { color: var(--ed-syn-keyword); }
-      .t-str { color: var(--ed-syn-string); }
-      .t-fn { color: var(--ed-syn-function); }
-      .t-ty { color: var(--ed-syn-type); }
-      .t-pr { color: var(--ed-syn-property); }
-      .t-op { color: var(--ed-syn-operator); }
-      .t-cm { color: var(--ed-syn-comment); }
+      .gw-diff {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+        line-height: 1.55;
+        padding-bottom: 10px;
+      }
+      .gw-drow {
+        display: flex;
+        align-items: stretch;
+        min-height: 21px;
+      }
+      .gw-drow.add {
+        background: var(--ed-diff-ins-line);
+      }
+      .gw-drow.del {
+        background: var(--ed-diff-rem-line);
+      }
+      .gw-hunk {
+        display: block;
+        width: 100%;
+        padding: 5px 14px;
+        font-size: 11.5px;
+        color: var(--info);
+        background: color-mix(in oklch, var(--info) 7%, transparent);
+        border-top: 1px solid var(--line-soft);
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .gw-gut {
+        width: 50px;
+        flex: none;
+        text-align: right;
+        padding: 2px 10px 2px 0;
+        color: var(--ed-gutter-fg);
+        opacity: 0.8;
+        user-select: none;
+      }
+      .gw-gut.new {
+        border-right: 1px solid var(--line-soft);
+      }
+      .gw-drow.add .gw-gut,
+      .gw-drow.add .gw-sign {
+        color: var(--ed-diff-ins-gutter);
+      }
+      .gw-drow.del .gw-gut,
+      .gw-drow.del .gw-sign {
+        color: var(--ed-diff-rem-gutter);
+      }
+      .gw-sign {
+        width: 18px;
+        flex: none;
+        text-align: center;
+        padding: 2px 0;
+        font-weight: 600;
+        user-select: none;
+        color: transparent;
+      }
+      .gw-code {
+        flex: 1;
+        min-width: 0;
+        padding: 2px 12px 2px 4px;
+        white-space: pre;
+        overflow: hidden;
+      }
+      .t-kw {
+        color: var(--ed-syn-keyword);
+      }
+      .t-str {
+        color: var(--ed-syn-string);
+      }
+      .t-fn {
+        color: var(--ed-syn-function);
+      }
+      .t-ty {
+        color: var(--ed-syn-type);
+      }
+      .t-pr {
+        color: var(--ed-syn-property);
+      }
+      .t-op {
+        color: var(--ed-syn-operator);
+      }
+      .t-cm {
+        color: var(--ed-syn-comment);
+      }
 
       /* Commit detail header (history right pane) */
-      .gw-cdetail { flex: none; padding: 13px 16px; border-bottom: 1px solid var(--line-soft); background: var(--surface); display: flex; flex-direction: column; gap: 8px; }
-      .gw-cdetail .ttl { font-size: 14px; font-weight: 600; color: var(--fg); }
-      .gw-cdetail .row { display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: var(--fg-muted); }
-      .gw-cdetail .row .nm { color: var(--fg); }
-      .gw-hashchip { font-family: var(--font-mono); color: var(--fg-muted); background: var(--inset); padding: 1px 7px; border-radius: 6px; }
+      .gw-cdetail {
+        flex: none;
+        padding: 13px 16px;
+        border-bottom: 1px solid var(--line-soft);
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .gw-cdetail .ttl {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .gw-cdetail .row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 11.5px;
+        color: var(--fg-muted);
+      }
+      .gw-cdetail .row .nm {
+        color: var(--fg);
+      }
+      .gw-hashchip {
+        font-family: var(--font-mono);
+        color: var(--fg-muted);
+        background: var(--inset);
+        padding: 1px 7px;
+        border-radius: 6px;
+      }
 
       /* Connect / empty state */
-      .gw-connect { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 40px; overflow-y: auto; }
-      .gw-connect-col { width: 100%; max-width: 520px; display: flex; flex-direction: column; align-items: center; text-align: center; }
-      .gw-medallion { display: grid; place-items: center; width: 72px; height: 72px; border-radius: 20px; background: var(--inset); color: var(--fg-dim); box-shadow: inset 0 0 0 1px var(--line-soft); }
-      .gw-ctitle { font-size: 19px; font-weight: 600; color: var(--fg); margin-top: 20px; letter-spacing: -0.01em; }
-      .gw-csub { font-size: 13.5px; color: var(--fg-muted); line-height: 1.6; margin-top: 8px; max-width: 400px; }
-      .gw-cactions { display: flex; align-items: center; gap: 10px; margin-top: 22px; }
-      .gw-primary { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 18px; border-radius: 9px; border: 0; background: var(--accent); color: var(--ink-inverse); font: 650 13px var(--font-ui); cursor: pointer; }
-      .gw-primary:hover { background: var(--accent-bright); }
-      .gw-recent { width: 100%; margin-top: 34px; text-align: left; }
-      .gw-recent-lbl { font-size: 10.5px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-faint); font-family: var(--font-mono); margin-bottom: 8px; }
-      .gw-recent-row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 13px; border-radius: 11px; border: 1px solid var(--line-soft); background: var(--card); cursor: pointer; text-align: left; }
-      .gw-recent-row:hover { background: var(--card-2); border-color: var(--line); }
-      .gw-recent-med { display: grid; place-items: center; width: 34px; height: 34px; flex: none; border-radius: 9px; background: var(--accent-dim); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-line); }
-      .gw-recent-name { font-size: 13.5px; font-weight: 600; color: var(--fg); }
-      .gw-recent-path { font-family: var(--font-mono); font-size: 11px; color: var(--fg-faint); }
-      .gw-hint { display: flex; align-items: flex-start; gap: 9px; margin-top: 22px; padding: 11px 13px; border-radius: 11px; background: var(--accent-dim); box-shadow: inset 0 0 0 1px var(--accent-line); text-align: left; }
-      .gw-hint .spk { display: inline-flex; color: var(--accent-text); margin-top: 1px; }
-      .gw-hint .tx { font-size: 12px; color: var(--fg-muted); line-height: 1.55; }
+      .gw-connect {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 40px;
+        overflow-y: auto;
+      }
+      .gw-connect-col {
+        width: 100%;
+        max-width: 520px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+      }
+      .gw-medallion {
+        display: grid;
+        place-items: center;
+        width: 72px;
+        height: 72px;
+        border-radius: 20px;
+        background: var(--inset);
+        color: var(--fg-dim);
+        box-shadow: inset 0 0 0 1px var(--line-soft);
+      }
+      .gw-ctitle {
+        font-size: 19px;
+        font-weight: 600;
+        color: var(--fg);
+        margin-top: 20px;
+        letter-spacing: -0.01em;
+      }
+      .gw-csub {
+        font-size: 13.5px;
+        color: var(--fg-muted);
+        line-height: 1.6;
+        margin-top: 8px;
+        max-width: 400px;
+      }
+      .gw-cactions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 22px;
+      }
+      .gw-primary {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 40px;
+        padding: 0 18px;
+        border-radius: 9px;
+        border: 0;
+        background: var(--accent);
+        color: var(--ink-inverse);
+        font: 650 13px var(--font-ui);
+        cursor: pointer;
+      }
+      .gw-primary:hover {
+        background: var(--accent-bright);
+      }
+      .gw-recent {
+        width: 100%;
+        margin-top: 34px;
+        text-align: left;
+      }
+      .gw-recent-lbl {
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--fg-faint);
+        font-family: var(--font-mono);
+        margin-bottom: 8px;
+      }
+      .gw-recent-row {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 13px;
+        border-radius: 11px;
+        border: 1px solid var(--line-soft);
+        background: var(--card);
+        cursor: pointer;
+        text-align: left;
+      }
+      .gw-recent-row:hover {
+        background: var(--card-2);
+        border-color: var(--line);
+      }
+      .gw-recent-med {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        flex: none;
+        border-radius: 9px;
+        background: var(--accent-dim);
+        color: var(--accent-text);
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
+      .gw-recent-name {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--fg);
+      }
+      .gw-recent-path {
+        font-family: var(--font-mono);
+        font-size: 11px;
+        color: var(--fg-faint);
+      }
+      .gw-hint {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        margin-top: 22px;
+        padding: 11px 13px;
+        border-radius: 11px;
+        background: var(--accent-dim);
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+        text-align: left;
+      }
+      .gw-hint .spk {
+        display: inline-flex;
+        color: var(--accent-text);
+        margin-top: 1px;
+      }
+      .gw-hint .tx {
+        font-size: 12px;
+        color: var(--fg-muted);
+        line-height: 1.55;
+      }
 
       /* State switcher (preview affordance only) */
-      .gw-states { display: inline-flex; align-items: center; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
-      .gw-states button { display: flex; align-items: center; height: 28px; padding: 0 12px; border-radius: 7px; border: 0; cursor: pointer; font: 600 12px var(--font-ui); background: transparent; color: var(--fg-muted); }
-      .gw-states button.on { background: var(--accent-dim); color: var(--accent-text); box-shadow: inset 0 0 0 1px var(--accent-line); }
+      .gw-states {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 4px;
+      }
+      .gw-states button {
+        display: flex;
+        align-items: center;
+        height: 28px;
+        padding: 0 12px;
+        border-radius: 7px;
+        border: 0;
+        cursor: pointer;
+        font: 600 12px var(--font-ui);
+        background: transparent;
+        color: var(--fg-muted);
+      }
+      .gw-states button.on {
+        background: var(--accent-dim);
+        color: var(--accent-text);
+        box-shadow: inset 0 0 0 1px var(--accent-line);
+      }
     </style>
   </head>
   <body class="ds">
@@ -183,12 +1001,40 @@
       <header class="phero">
         <div class="ey">Patterns · Git</div>
         <h1>Git window</h1>
-        <p class="lead">The surface where a developer reviews working changes, stages files, writes a commit, and opens pull requests — plus a commit <b style="color:var(--fg)">History</b> view and a <b style="color:var(--fg)">Connect repository</b> empty state. It keeps the information architecture of GitHub Desktop but renders entirely in the Keiko hand: monochrome warm-neutral surfaces, the orca-green accent reserved for selection and AI, the Lift icon set, and the editor diff palette. Ships in production as the <code style="font-family:var(--font-mono);color:var(--accent-text)">cards/git-client</code> window.</p>
+        <p class="lead">
+          The surface where a developer reviews working changes, stages files, writes a commit, and
+          opens pull requests — plus a commit <b style="color: var(--fg)">History</b> view and a
+          <b style="color: var(--fg)">Connect repository</b> empty state. It keeps the information
+          architecture of GitHub Desktop but renders entirely in the Keiko hand: monochrome
+          warm-neutral surfaces, the orca-green accent reserved for selection and AI, the Lift icon
+          set, and the editor diff palette. Ships in production as the
+          <code style="font-family: var(--font-mono); color: var(--accent-text)"
+            >cards/git-client</code
+          >
+          window.
+        </p>
       </header>
 
       <section class="sec" id="showcase">
-        <div class="sec-head" style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap">
-          <div><div class="num">01 — SHOWCASE</div><h2>The window, in three states</h2><p>Changes and History share the window head, toolbar and two-column shell; only the left column and the right-pane header swap. Empty replaces the body with one centred Connect panel and mutes the toolbar.</p></div>
+        <div
+          class="sec-head"
+          style="
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            gap: 20px;
+            flex-wrap: wrap;
+          "
+        >
+          <div>
+            <div class="num">01 — SHOWCASE</div>
+            <h2>The window, in three states</h2>
+            <p>
+              Changes and History share the window head, toolbar and two-column shell; only the left
+              column and the right-pane header swap. Empty replaces the body with one centred
+              Connect panel and mutes the toolbar.
+            </p>
+          </div>
           <div class="gw-states" role="group" aria-label="Preview state">
             <button type="button" data-go="changes" class="on" aria-pressed="true">Changes</button>
             <button type="button" data-go="history" aria-pressed="false">History</button>
@@ -200,62 +1046,148 @@
           <div class="kx-win gw-win" id="gwWin" data-state="changes">
             <!-- window head -->
             <div class="kx-winhead">
-              <span class="kx-ico" style="color:var(--accent-text)"><span class="ico" data-licon="branch" data-size="15"></span></span>
+              <span class="kx-ico" style="color: var(--accent-text)"
+                ><span class="ico" data-licon="branch" data-size="15"></span
+              ></span>
               <span class="kx-wintitle">Git</span>
               <span class="kx-winsub">Keiko</span>
               <span class="kx-grow"></span>
-              <div style="display:flex;align-items:center;gap:2px;margin-right:6px;color:var(--fg-faint)">
-                <button class="gw-iconbtn" aria-label="Zoom out"><span class="ico" data-licon="min" data-size="14"></span></button>
-                <span style="font-family:var(--font-mono);font-size:11px;color:var(--fg-muted);min-width:34px;text-align:center">100%</span>
-                <button class="gw-iconbtn" aria-label="Zoom in"><span class="ico" data-licon="plus" data-size="14"></span></button>
+              <div
+                style="
+                  display: flex;
+                  align-items: center;
+                  gap: 2px;
+                  margin-right: 6px;
+                  color: var(--fg-faint);
+                "
+              >
+                <button class="gw-iconbtn" aria-label="Zoom out">
+                  <span class="ico" data-licon="min" data-size="14"></span>
+                </button>
+                <span
+                  style="
+                    font-family: var(--font-mono);
+                    font-size: 11px;
+                    color: var(--fg-muted);
+                    min-width: 34px;
+                    text-align: center;
+                  "
+                  >100%</span
+                >
+                <button class="gw-iconbtn" aria-label="Zoom in">
+                  <span class="ico" data-licon="plus" data-size="14"></span>
+                </button>
               </div>
               <span class="kx-controls">
-                <button class="kx-ctl" data-dir="ductus" data-act="min" aria-label="Minimize" style="width:28px;height:28px;border-radius:8px"><span class="kx-chip"></span><span class="ico" data-licon="min" data-size="16"></span></button>
-                <button class="kx-ctl" data-dir="ductus" data-act="max" aria-label="Full screen" style="width:28px;height:28px;border-radius:8px"><span class="kx-chip"></span><span class="ico" data-licon="max" data-size="16"></span></button>
-                <button class="kx-ctl" data-dir="ductus" data-act="close" aria-label="Close" style="width:28px;height:28px;border-radius:8px"><span class="kx-chip"></span><span class="ico" data-licon="close" data-size="16"></span></button>
+                <button
+                  class="kx-ctl"
+                  data-dir="ductus"
+                  data-act="min"
+                  aria-label="Minimize"
+                  style="width: 28px; height: 28px; border-radius: 8px"
+                >
+                  <span class="kx-chip"></span
+                  ><span class="ico" data-licon="min" data-size="16"></span>
+                </button>
+                <button
+                  class="kx-ctl"
+                  data-dir="ductus"
+                  data-act="max"
+                  aria-label="Full screen"
+                  style="width: 28px; height: 28px; border-radius: 8px"
+                >
+                  <span class="kx-chip"></span
+                  ><span class="ico" data-licon="max" data-size="16"></span>
+                </button>
+                <button
+                  class="kx-ctl"
+                  data-dir="ductus"
+                  data-act="close"
+                  aria-label="Close"
+                  style="width: 28px; height: 28px; border-radius: 8px"
+                >
+                  <span class="kx-chip"></span
+                  ><span class="ico" data-licon="close" data-size="16"></span>
+                </button>
               </span>
             </div>
 
             <!-- toolbar: connected -->
             <div class="gw-toolbar" data-when="changes history">
-              <button class="gw-cell" style="min-width:188px">
-                <span class="lead"><span class="ico" data-licon="folder" data-size="16"></span></span>
-                <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
+              <button class="gw-cell" style="min-width: 188px">
+                <span class="lead"
+                  ><span class="ico" data-licon="folder" data-size="16"></span
+                ></span>
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
                   <span class="gw-cap">Repository</span>
                   <span class="gw-val">Keiko</span>
                 </span>
-                <span class="gw-chev"><span class="ico" data-licon="chevron" data-size="15"></span></span>
+                <span class="gw-chev"
+                  ><span class="ico" data-licon="chevron" data-size="15"></span
+                ></span>
               </button>
-              <button class="gw-cell" style="min-width:212px">
-                <span class="lead"><span class="ico" data-licon="branch" data-size="16"></span></span>
-                <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
+              <button class="gw-cell" style="min-width: 212px">
+                <span class="lead"
+                  ><span class="ico" data-licon="branch" data-size="16"></span
+                ></span>
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
                   <span class="gw-cap">Current branch</span>
-                  <span style="display:flex;align-items:center;gap:7px"><span class="gw-val">main</span><span class="gw-prbadge">#15640 <span style="display:inline-flex;color:var(--ok)"><span class="ico" data-licon="check" data-size="12"></span></span></span></span>
+                  <span style="display: flex; align-items: center; gap: 7px"
+                    ><span class="gw-val">main</span
+                    ><span class="gw-prbadge"
+                      >#15640
+                      <span style="display: inline-flex; color: var(--ok)"
+                        ><span class="ico" data-licon="check" data-size="12"></span></span></span
+                  ></span>
                 </span>
-                <span class="gw-chev"><span class="ico" data-licon="chevron" data-size="15"></span></span>
+                <span class="gw-chev"
+                  ><span class="ico" data-licon="chevron" data-size="15"></span
+                ></span>
               </button>
-              <button class="gw-cell last" style="min-width:196px">
-                <span class="lead"><span class="ico" data-licon="download" data-size="17"></span></span>
-                <span style="display:flex;flex-direction:column;gap:2px;min-width:0">
-                  <span class="gw-val" style="font-size:13px">Pull origin</span>
-                  <span style="font-size:11px;color:var(--fg-muted)">Last fetched 3 minutes ago</span>
+              <button class="gw-cell last" style="min-width: 196px">
+                <span class="lead"
+                  ><span class="ico" data-licon="download" data-size="17"></span
+                ></span>
+                <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+                  <span class="gw-val" style="font-size: 13px">Pull origin</span>
+                  <span style="font-size: 11px; color: var(--fg-muted)"
+                    >Last fetched 3 minutes ago</span
+                  >
                 </span>
-                <span class="gw-count">1 <span class="ico" data-licon="download" data-size="11"></span></span>
+                <span class="gw-count"
+                  >1 <span class="ico" data-licon="download" data-size="11"></span
+                ></span>
               </button>
-              <span style="flex:1"></span>
+              <span style="flex: 1"></span>
               <div class="gw-actions">
-                <button class="gw-btn"><span class="lead"><span class="ico" data-licon="code" data-size="15"></span></span>Open in Editor</button>
-                <button class="gw-btn"><span class="lead"><span class="ico" data-licon="files" data-size="15"></span></span>Open Files</button>
+                <button class="gw-btn">
+                  <span class="lead"
+                    ><span class="ico" data-licon="code" data-size="15"></span></span
+                  >Open in Editor
+                </button>
+                <button class="gw-btn">
+                  <span class="lead"
+                    ><span class="ico" data-licon="files" data-size="15"></span></span
+                  >Open Files
+                </button>
               </div>
             </div>
 
             <!-- toolbar: empty/muted -->
             <div class="gw-toolbar-empty" data-when="empty">
-              <span class="gw-muted"><span class="ico" data-licon="folder" data-size="16"></span><span style="color:var(--fg-muted)">Select a repository</span></span>
+              <span class="gw-muted"
+                ><span class="ico" data-licon="folder" data-size="16"></span
+                ><span style="color: var(--fg-muted)">Select a repository</span></span
+              >
               <span class="gw-hair"></span>
-              <span class="gw-muted dim"><span class="ico" data-licon="branch" data-size="16"></span>No branch</span>
-              <span style="flex:1"></span>
-              <button class="gw-btn" disabled><span class="lead"><span class="ico" data-licon="code" data-size="15"></span></span>Open in Editor</button>
+              <span class="gw-muted dim"
+                ><span class="ico" data-licon="branch" data-size="16"></span>No branch</span
+              >
+              <span style="flex: 1"></span>
+              <button class="gw-btn" disabled>
+                <span class="lead"><span class="ico" data-licon="code" data-size="15"></span></span
+                >Open in Editor
+              </button>
             </div>
 
             <!-- body: connected (changes + history) -->
@@ -263,55 +1195,199 @@
               <!-- left column -->
               <div class="gw-left">
                 <div class="gw-tabs">
-                  <button class="gw-tab" data-tab="changes"><span>Changes</span><span class="bdg">4</span><span class="ul"></span></button>
-                  <button class="gw-tab" data-tab="history"><span>History</span><span class="ul"></span></button>
+                  <button class="gw-tab" data-tab="changes">
+                    <span>Changes</span><span class="bdg">4</span><span class="ul"></span>
+                  </button>
+                  <button class="gw-tab" data-tab="history">
+                    <span>History</span><span class="ul"></span>
+                  </button>
                 </div>
 
                 <!-- changes -->
-                <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-when="changes">
+                <div
+                  style="flex: 1; min-height: 0; display: flex; flex-direction: column"
+                  data-when="changes"
+                >
                   <div class="gw-summary">
-                    <span class="gw-sumcheck"><span class="ico" data-licon="check" data-size="11"></span></span>
+                    <span class="gw-sumcheck"
+                      ><span class="ico" data-licon="check" data-size="11"></span
+                    ></span>
                     <span class="gw-sumtext">3 of 4 files staged</span>
-                    <span style="flex:1"></span>
+                    <span style="flex: 1"></span>
                     <span class="gw-stat-add">+67</span>
                     <span class="gw-stat-del">−69</span>
                   </div>
                   <div class="gw-files">
-                    <button class="gw-file sel"><span class="gw-stagebox on"><span class="ico" data-licon="check" data-size="11"></span></span><span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1"><span class="gw-fname">seamless-diff-switcher.tsx</span><span class="gw-fdir">app/src/ui/diff/</span></span><span class="gw-status M">M</span></button>
-                    <button class="gw-file"><span class="gw-stagebox on"><span class="ico" data-licon="check" data-size="11"></span></span><span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1"><span class="gw-fname">side-by-side-diff.tsx</span><span class="gw-fdir">app/src/ui/diff/</span></span><span class="gw-status M">M</span></button>
-                    <button class="gw-file"><span class="gw-stagebox on"><span class="ico" data-licon="check" data-size="11"></span></span><span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1"><span class="gw-fname">diff-helpers.ts</span><span class="gw-fdir">app/src/lib/diff/</span></span><span class="gw-status A">A</span></button>
-                    <button class="gw-file"><span class="gw-stagebox off"></span><span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1"><span class="gw-fname">globals.css</span><span class="gw-fdir">packages/keiko-ui/styles/</span></span><span class="gw-status M">M</span></button>
+                    <button class="gw-file sel">
+                      <span class="gw-stagebox on"
+                        ><span class="ico" data-licon="check" data-size="11"></span></span
+                      ><span
+                        style="
+                          display: flex;
+                          flex-direction: column;
+                          gap: 2px;
+                          min-width: 0;
+                          flex: 1;
+                        "
+                        ><span class="gw-fname">seamless-diff-switcher.tsx</span
+                        ><span class="gw-fdir">app/src/ui/diff/</span></span
+                      ><span class="gw-status M">M</span>
+                    </button>
+                    <button class="gw-file">
+                      <span class="gw-stagebox on"
+                        ><span class="ico" data-licon="check" data-size="11"></span></span
+                      ><span
+                        style="
+                          display: flex;
+                          flex-direction: column;
+                          gap: 2px;
+                          min-width: 0;
+                          flex: 1;
+                        "
+                        ><span class="gw-fname">side-by-side-diff.tsx</span
+                        ><span class="gw-fdir">app/src/ui/diff/</span></span
+                      ><span class="gw-status M">M</span>
+                    </button>
+                    <button class="gw-file">
+                      <span class="gw-stagebox on"
+                        ><span class="ico" data-licon="check" data-size="11"></span></span
+                      ><span
+                        style="
+                          display: flex;
+                          flex-direction: column;
+                          gap: 2px;
+                          min-width: 0;
+                          flex: 1;
+                        "
+                        ><span class="gw-fname">diff-helpers.ts</span
+                        ><span class="gw-fdir">app/src/lib/diff/</span></span
+                      ><span class="gw-status A">A</span>
+                    </button>
+                    <button class="gw-file">
+                      <span class="gw-stagebox off"></span
+                      ><span
+                        style="
+                          display: flex;
+                          flex-direction: column;
+                          gap: 2px;
+                          min-width: 0;
+                          flex: 1;
+                        "
+                        ><span class="gw-fname">globals.css</span
+                        ><span class="gw-fdir">packages/keiko-ui/styles/</span></span
+                      ><span class="gw-status M">M</span>
+                    </button>
                   </div>
                   <div class="gw-composer">
                     <div class="gw-aihdr">
-                      <span class="spk"><span class="ico" data-licon="spark" data-size="14"></span></span>
+                      <span class="spk"
+                        ><span class="ico" data-licon="spark" data-size="14"></span
+                      ></span>
                       <span class="lbl">Keiko suggested this summary</span>
-                      <span style="flex:1"></span>
-                      <button class="gw-regen"><span class="ico" data-licon="regenerate" data-size="14"></span>Regenerate</button>
+                      <span style="flex: 1"></span>
+                      <button class="gw-regen">
+                        <span class="ico" data-licon="regenerate" data-size="14"></span>Regenerate
+                      </button>
                     </div>
-                    <div class="gw-summary-field">Short-circuit identical text diffs with textDiffEquals</div>
-                    <div class="gw-desc-field">Adds a guard so identical text diffs skip re-comparison. Verified against the diff regression suite.</div>
+                    <div class="gw-summary-field">
+                      Short-circuit identical text diffs with textDiffEquals
+                    </div>
+                    <div class="gw-desc-field">
+                      Adds a guard so identical text diffs skip re-comparison. Verified against the
+                      diff regression suite.
+                    </div>
                     <div class="gw-coauthors">
                       <span class="clbl">Co-authors</span>
                       <span class="gw-chip">@tidy-dev</span>
                       <span class="gw-chip">@sergiou87</span>
-                      <button class="gw-addco"><span class="ico" data-licon="plus" data-size="13"></span></button>
+                      <button class="gw-addco">
+                        <span class="ico" data-licon="plus" data-size="13"></span>
+                      </button>
                     </div>
-                    <button class="gw-commit"><span class="ico" data-licon="commit" data-size="16"></span>Commit to main</button>
+                    <button class="gw-commit">
+                      <span class="ico" data-licon="commit" data-size="16"></span>Commit to main
+                    </button>
                     <div class="gw-flow">
-                      <button class="gw-btn"><span class="lead"><span class="ico" data-licon="pullRequest" data-size="16"></span></span>Create pull request</button>
-                      <button class="gw-btn"><span class="lead"><span class="ico" data-licon="merge" data-size="16"></span></span>Merge…</button>
+                      <button class="gw-btn">
+                        <span class="lead"
+                          ><span class="ico" data-licon="pullRequest" data-size="16"></span></span
+                        >Create pull request
+                      </button>
+                      <button class="gw-btn">
+                        <span class="lead"
+                          ><span class="ico" data-licon="merge" data-size="16"></span></span
+                        >Merge…
+                      </button>
                     </div>
                   </div>
                 </div>
 
                 <!-- history -->
                 <div class="gw-history" data-when="history">
-                  <button class="gw-commitrow sel"><span class="gw-avatar" style="width:28px;height:28px;font-size:10.5px">OS</span><span style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1"><span class="gw-cmsg">Rerender diff when newlines are added to end of file</span><span class="gw-cmeta"><span class="hash">a3f9c21</span><span>·</span><span>oscharko-dev</span><span>·</span><span>3 minutes ago</span><span class="gw-head-pill">HEAD</span></span></span></button>
-                  <button class="gw-commitrow"><span class="gw-avatar" style="width:28px;height:28px;font-size:10.5px">OS</span><span style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1"><span class="gw-cmsg">Add textDiffEquals helper to short-circuit identical diffs</span><span class="gw-cmeta"><span class="hash">7b1e004</span><span>·</span><span>oscharko-dev</span><span>·</span><span>2 hours ago</span></span></span></button>
-                  <button class="gw-commitrow"><span class="gw-avatar" style="width:28px;height:28px;font-size:10.5px">TI</span><span style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1"><span class="gw-cmsg">Extract seamless diff switcher into its own module</span><span class="gw-cmeta"><span class="hash">c52aa18</span><span>·</span><span>tidy-dev</span><span>·</span><span>Yesterday</span></span></span></button>
-                  <button class="gw-commitrow"><span class="gw-avatar" style="width:28px;height:28px;font-size:10.5px">SE</span><span style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1"><span class="gw-cmsg">Bump keiko-ui to 0.2.8</span><span class="gw-cmeta"><span class="hash">0049fd2</span><span>·</span><span>sergiou87</span><span>·</span><span>2 days ago</span></span></span></button>
-                  <button class="gw-commitrow"><span class="gw-avatar" style="width:28px;height:28px;font-size:10.5px">OS</span><span style="display:flex;flex-direction:column;gap:3px;min-width:0;flex:1"><span class="gw-cmsg">Redact secrets before memory capture</span><span class="gw-cmeta"><span class="hash">9d3b7a1</span><span>·</span><span>oscharko-dev</span><span>·</span><span>3 days ago</span></span></span></button>
+                  <button class="gw-commitrow sel">
+                    <span class="gw-avatar" style="width: 28px; height: 28px; font-size: 10.5px"
+                      >OS</span
+                    ><span
+                      style="display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1"
+                      ><span class="gw-cmsg"
+                        >Rerender diff when newlines are added to end of file</span
+                      ><span class="gw-cmeta"
+                        ><span class="hash">a3f9c21</span><span>·</span><span>oscharko-dev</span
+                        ><span>·</span><span>3 minutes ago</span
+                        ><span class="gw-head-pill">HEAD</span></span
+                      ></span
+                    >
+                  </button>
+                  <button class="gw-commitrow">
+                    <span class="gw-avatar" style="width: 28px; height: 28px; font-size: 10.5px"
+                      >OS</span
+                    ><span
+                      style="display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1"
+                      ><span class="gw-cmsg"
+                        >Add textDiffEquals helper to short-circuit identical diffs</span
+                      ><span class="gw-cmeta"
+                        ><span class="hash">7b1e004</span><span>·</span><span>oscharko-dev</span
+                        ><span>·</span><span>2 hours ago</span></span
+                      ></span
+                    >
+                  </button>
+                  <button class="gw-commitrow">
+                    <span class="gw-avatar" style="width: 28px; height: 28px; font-size: 10.5px"
+                      >TI</span
+                    ><span
+                      style="display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1"
+                      ><span class="gw-cmsg"
+                        >Extract seamless diff switcher into its own module</span
+                      ><span class="gw-cmeta"
+                        ><span class="hash">c52aa18</span><span>·</span><span>tidy-dev</span
+                        ><span>·</span><span>Yesterday</span></span
+                      ></span
+                    >
+                  </button>
+                  <button class="gw-commitrow">
+                    <span class="gw-avatar" style="width: 28px; height: 28px; font-size: 10.5px"
+                      >SE</span
+                    ><span
+                      style="display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1"
+                      ><span class="gw-cmsg">Bump keiko-ui to 0.2.8</span
+                      ><span class="gw-cmeta"
+                        ><span class="hash">0049fd2</span><span>·</span><span>sergiou87</span
+                        ><span>·</span><span>2 days ago</span></span
+                      ></span
+                    >
+                  </button>
+                  <button class="gw-commitrow">
+                    <span class="gw-avatar" style="width: 28px; height: 28px; font-size: 10.5px"
+                      >OS</span
+                    ><span
+                      style="display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1"
+                      ><span class="gw-cmsg">Redact secrets before memory capture</span
+                      ><span class="gw-cmeta"
+                        ><span class="hash">9d3b7a1</span><span>·</span><span>oscharko-dev</span
+                        ><span>·</span><span>3 days ago</span></span
+                      ></span
+                    >
+                  </button>
                 </div>
               </div>
 
@@ -320,59 +1396,174 @@
                 <!-- diff header (changes) -->
                 <div class="gw-diffhdr" data-when="changes">
                   <span class="gw-path">app/src/ui/diff/<b>seamless-diff-switcher.tsx</b></span>
-                  <span style="flex:1"></span>
-                  <button class="gw-explain"><span class="ico" data-licon="spark" data-size="15"></span>Explain diff</button>
-                  <button class="gw-iconbtn" aria-label="Unified / split"><span class="ico" data-licon="split" data-size="16"></span></button>
-                  <button class="gw-iconbtn" aria-label="Diff settings"><span class="ico" data-licon="settings" data-size="16"></span></button>
+                  <span style="flex: 1"></span>
+                  <button class="gw-explain">
+                    <span class="ico" data-licon="spark" data-size="15"></span>Explain diff
+                  </button>
+                  <button class="gw-iconbtn" aria-label="Unified / split">
+                    <span class="ico" data-licon="split" data-size="16"></span>
+                  </button>
+                  <button class="gw-iconbtn" aria-label="Diff settings">
+                    <span class="ico" data-licon="settings" data-size="16"></span>
+                  </button>
                 </div>
 
                 <!-- commit detail header (history) -->
                 <div class="gw-cdetail" data-when="history">
                   <div class="ttl">Rerender diff when newlines are added to end of file</div>
                   <div class="row">
-                    <span class="gw-avatar" style="width:22px;height:22px;font-size:9.5px">OS</span>
+                    <span class="gw-avatar" style="width: 22px; height: 22px; font-size: 9.5px"
+                      >OS</span
+                    >
                     <span class="nm">oscharko-dev</span><span>committed</span>
                     <span class="gw-hashchip">a3f9c21</span><span>·</span><span>3 minutes ago</span>
-                    <span style="flex:1"></span>
-                    <span style="color:var(--fg-faint)">3 files changed</span><span class="gw-stat-add">+67</span><span class="gw-stat-del">−69</span>
+                    <span style="flex: 1"></span>
+                    <span style="color: var(--fg-faint)">3 files changed</span
+                    ><span class="gw-stat-add">+67</span><span class="gw-stat-del">−69</span>
                   </div>
                 </div>
 
                 <!-- agent explain card (changes only) -->
                 <div class="gw-agent" data-when="changes">
-                  <span class="av"><span class="ico" data-licon="spark" data-size="16"></span></span>
-                  <div style="flex:1;min-width:0;padding-right:18px">
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+                  <span class="av"
+                    ><span class="ico" data-licon="spark" data-size="16"></span
+                  ></span>
+                  <div style="flex: 1; min-width: 0; padding-right: 18px">
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 3px">
                       <span class="nm">Keiko</span>
                       <span class="gw-conf"><span class="dot"></span>High confidence</span>
                     </div>
-                    <div class="bd">This change adds a <code>textDiffEquals()</code> guard so <code style="color:var(--fg-muted)">isSameDiff</code> stops comparing full diff text on every render. Behaviour is unchanged for non-text diffs.</div>
-                    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
-                      <span class="gw-cite"><span style="color:var(--fg-dim)"><span class="ico" data-licon="code" data-size="12"></span></span>seamless-diff-switcher.tsx · L130</span>
-                      <button class="gw-open">Open file <span class="ico" data-licon="external" data-size="12"></span></button>
+                    <div class="bd">
+                      This change adds a <code>textDiffEquals()</code> guard so
+                      <code style="color: var(--fg-muted)">isSameDiff</code> stops comparing full
+                      diff text on every render. Behaviour is unchanged for non-text diffs.
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px">
+                      <span class="gw-cite"
+                        ><span style="color: var(--fg-dim)"
+                          ><span class="ico" data-licon="code" data-size="12"></span></span
+                        >seamless-diff-switcher.tsx · L130</span
+                      >
+                      <button class="gw-open">
+                        Open file <span class="ico" data-licon="external" data-size="12"></span>
+                      </button>
                     </div>
                   </div>
-                  <button class="gw-close" aria-label="Dismiss"><span class="ico" data-licon="close" data-size="13"></span></button>
+                  <button class="gw-close" aria-label="Dismiss">
+                    <span class="ico" data-licon="close" data-size="13"></span>
+                  </button>
                 </div>
 
                 <!-- diff body -->
                 <div class="gw-diff">
                   <div class="gw-drow"><span class="gw-hunk">@@ -19,6 +19,7 @@ import {</span></div>
-                  <div class="gw-drow"><span class="gw-gut">19</span><span class="gw-gut new">19</span><span class="gw-sign"></span><span class="gw-code"><span class="t-kw">import</span> { Loading } <span class="t-kw">from</span> <span class="t-str">'../lib/loading'</span></span></div>
-                  <div class="gw-drow"><span class="gw-gut">20</span><span class="gw-gut new">20</span><span class="gw-sign"></span><span class="gw-code"><span class="t-kw">import</span> { getFileContents } <span class="t-kw">from</span> <span class="t-str">'./syntax-highlighting'</span></span></div>
-                  <div class="gw-drow"><span class="gw-gut">21</span><span class="gw-gut new">21</span><span class="gw-sign"></span><span class="gw-code"><span class="t-kw">import</span> { getTextDiffWithBottomDummyHunk } <span class="t-kw">from</span> <span class="t-str">'./text-diff-expansion'</span></span></div>
-                  <div class="gw-drow add"><span class="gw-gut"></span><span class="gw-gut new">22</span><span class="gw-sign">+</span><span class="gw-code"><span class="t-kw">import</span> { textDiffEquals } <span class="t-kw">from</span> <span class="t-str">'./diff-helpers'</span></span></div>
-                  <div class="gw-drow"><span class="gw-gut">22</span><span class="gw-gut new">23</span><span class="gw-sign"></span><span class="gw-code"> </span></div>
-                  <div class="gw-drow"><span class="gw-gut">23</span><span class="gw-gut new">24</span><span class="gw-sign"></span><span class="gw-code"><span class="t-cm">/**</span></span></div>
-                  <div class="gw-drow"><span class="gw-gut">24</span><span class="gw-gut new">25</span><span class="gw-sign"></span><span class="gw-code"><span class="t-cm"> * The time (in milliseconds) we allow when loading a diff</span></span></div>
-                  <div class="gw-drow"><span class="gw-hunk">@@ -127,7 +128,7 @@ function isSameDiff(prevDiff: IDiff, newDiff: IDiff) {</span></div>
-                  <div class="gw-drow"><span class="gw-gut">127</span><span class="gw-gut new">128</span><span class="gw-sign"></span><span class="gw-code">    prevDiff <span class="t-op">===</span> newDiff <span class="t-op">||</span></span></div>
-                  <div class="gw-drow"><span class="gw-gut">128</span><span class="gw-gut new">129</span><span class="gw-sign"></span><span class="gw-code">    (<span class="t-fn">isTextDiff</span>(prevDiff) <span class="t-op">&&</span></span></div>
-                  <div class="gw-drow"><span class="gw-gut">129</span><span class="gw-gut new">130</span><span class="gw-sign"></span><span class="gw-code">      <span class="t-fn">isTextDiff</span>(newDiff) <span class="t-op">&&</span></span></div>
-                  <div class="gw-drow del"><span class="gw-gut">130</span><span class="gw-gut new"></span><span class="gw-sign">−</span><span class="gw-code">      prevDiff<span class="t-op">.</span><span class="t-pr">text</span> <span class="t-op">===</span> newDiff<span class="t-op">.</span><span class="t-pr">text</span>)</span></div>
-                  <div class="gw-drow add"><span class="gw-gut"></span><span class="gw-gut new">131</span><span class="gw-sign">+</span><span class="gw-code">      <span class="t-fn">textDiffEquals</span>(prevDiff, newDiff))</span></div>
-                  <div class="gw-drow"><span class="gw-gut">131</span><span class="gw-gut new">132</span><span class="gw-sign"></span><span class="gw-code">    )</span></div>
-                  <div class="gw-drow"><span class="gw-gut">132</span><span class="gw-gut new">133</span><span class="gw-sign"></span><span class="gw-code">  }</span></div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">19</span><span class="gw-gut new">19</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code"
+                      ><span class="t-kw">import</span> { Loading } <span class="t-kw">from</span>
+                      <span class="t-str">'../lib/loading'</span></span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">20</span><span class="gw-gut new">20</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code"
+                      ><span class="t-kw">import</span> { getFileContents }
+                      <span class="t-kw">from</span>
+                      <span class="t-str">'./syntax-highlighting'</span></span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">21</span><span class="gw-gut new">21</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code"
+                      ><span class="t-kw">import</span> { getTextDiffWithBottomDummyHunk }
+                      <span class="t-kw">from</span>
+                      <span class="t-str">'./text-diff-expansion'</span></span
+                    >
+                  </div>
+                  <div class="gw-drow add">
+                    <span class="gw-gut"></span><span class="gw-gut new">22</span
+                    ><span class="gw-sign">+</span
+                    ><span class="gw-code"
+                      ><span class="t-kw">import</span> { textDiffEquals }
+                      <span class="t-kw">from</span>
+                      <span class="t-str">'./diff-helpers'</span></span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">22</span><span class="gw-gut new">23</span
+                    ><span class="gw-sign"></span><span class="gw-code"> </span>
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">23</span><span class="gw-gut new">24</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code"><span class="t-cm">/**</span></span>
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">24</span><span class="gw-gut new">25</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code"
+                      ><span class="t-cm">
+                        * The time (in milliseconds) we allow when loading a diff</span
+                      ></span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-hunk"
+                      >@@ -127,7 +128,7 @@ function isSameDiff(prevDiff: IDiff, newDiff: IDiff)
+                      {</span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">127</span><span class="gw-gut new">128</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code">
+                      prevDiff <span class="t-op">===</span> newDiff
+                      <span class="t-op">||</span></span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">128</span><span class="gw-gut new">129</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code">
+                      (<span class="t-fn">isTextDiff</span>(prevDiff)
+                      <span class="t-op">&&</span></span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">129</span><span class="gw-gut new">130</span
+                    ><span class="gw-sign"></span
+                    ><span class="gw-code">
+                      <span class="t-fn">isTextDiff</span>(newDiff)
+                      <span class="t-op">&&</span></span
+                    >
+                  </div>
+                  <div class="gw-drow del">
+                    <span class="gw-gut">130</span><span class="gw-gut new"></span
+                    ><span class="gw-sign">−</span
+                    ><span class="gw-code">
+                      prevDiff<span class="t-op">.</span><span class="t-pr">text</span>
+                      <span class="t-op">===</span> newDiff<span class="t-op">.</span
+                      ><span class="t-pr">text</span>)</span
+                    >
+                  </div>
+                  <div class="gw-drow add">
+                    <span class="gw-gut"></span><span class="gw-gut new">131</span
+                    ><span class="gw-sign">+</span
+                    ><span class="gw-code">
+                      <span class="t-fn">textDiffEquals</span>(prevDiff, newDiff))</span
+                    >
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">131</span><span class="gw-gut new">132</span
+                    ><span class="gw-sign"></span><span class="gw-code"> )</span>
+                  </div>
+                  <div class="gw-drow">
+                    <span class="gw-gut">132</span><span class="gw-gut new">133</span
+                    ><span class="gw-sign"></span><span class="gw-code"> }</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -380,27 +1571,49 @@
             <!-- body: empty / connect -->
             <div class="gw-connect" data-when="empty">
               <div class="gw-connect-col">
-                <div class="gw-medallion"><span class="ico" data-licon="branch" data-size="28"></span></div>
+                <div class="gw-medallion">
+                  <span class="ico" data-licon="branch" data-size="28"></span>
+                </div>
                 <div class="gw-ctitle">No repository connected</div>
-                <div class="gw-csub">Connect a folder or repository to review changes, stage commits, and open pull requests — all in one window.</div>
+                <div class="gw-csub">
+                  Connect a folder or repository to review changes, stage commits, and open pull
+                  requests — all in one window.
+                </div>
                 <div class="gw-cactions">
-                  <button class="gw-primary"><span class="ico" data-licon="folder" data-size="16"></span>Connect repository</button>
-                  <button class="gw-btn"><span class="lead"><span class="ico" data-licon="link" data-size="15"></span></span>Clone from URL</button>
+                  <button class="gw-primary">
+                    <span class="ico" data-licon="folder" data-size="16"></span>Connect repository
+                  </button>
+                  <button class="gw-btn">
+                    <span class="lead"
+                      ><span class="ico" data-licon="link" data-size="15"></span></span
+                    >Clone from URL
+                  </button>
                 </div>
                 <div class="gw-recent">
                   <div class="gw-recent-lbl">Recent</div>
                   <button class="gw-recent-row">
-                    <span class="gw-recent-med"><span class="ico" data-licon="folder" data-size="16"></span></span>
-                    <span style="display:flex;flex-direction:column;gap:2px;min-width:0;flex:1">
+                    <span class="gw-recent-med"
+                      ><span class="ico" data-licon="folder" data-size="16"></span
+                    ></span>
+                    <span
+                      style="display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1"
+                    >
                       <span class="gw-recent-name">Keiko</span>
                       <span class="gw-recent-path">/Users/oscharko-dev/Projects/Keiko</span>
                     </span>
-                    <span style="color:var(--fg-faint)"><span class="ico" data-licon="chevronR" data-size="15"></span></span>
+                    <span style="color: var(--fg-faint)"
+                      ><span class="ico" data-licon="chevronR" data-size="15"></span
+                    ></span>
                   </button>
                 </div>
                 <div class="gw-hint">
-                  <span class="spk"><span class="ico" data-licon="spark" data-size="14"></span></span>
-                  <span class="tx">Once a repository is connected, Keiko can summarize your working changes and draft commit messages for you.</span>
+                  <span class="spk"
+                    ><span class="ico" data-licon="spark" data-size="14"></span
+                  ></span>
+                  <span class="tx"
+                    >Once a repository is connected, Keiko can summarize your working changes and
+                    draft commit messages for you.</span
+                  >
                 </div>
               </div>
             </div>
@@ -411,23 +1624,118 @@
       <section class="sec" id="anatomy">
         <div class="num">02 — ANATOMY</div>
         <h2>Anatomy &amp; tokens</h2>
-        <p>Every value resolves from a design token — match by token name, never by re-typing a resolved colour.</p>
-        <div class="grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:16px">
-          <div class="card" style="padding:16px;border-radius:14px;background:var(--card);border:1px solid var(--line)">
+        <p>
+          Every value resolves from a design token — match by token name, never by re-typing a
+          resolved colour.
+        </p>
+        <div
+          class="grid"
+          style="
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+          "
+        >
+          <div
+            class="card"
+            style="
+              padding: 16px;
+              border-radius: 14px;
+              background: var(--card);
+              border: 1px solid var(--line);
+            "
+          >
             <div class="kx-tag">TOOLBAR</div>
-            <p style="margin:6px 0 0;font-size:13px;color:var(--fg-muted);line-height:1.6">Stacked cells — <code style="font-family:var(--font-mono);color:var(--accent-text)">Repository</code> · <code style="font-family:var(--font-mono);color:var(--accent-text)">Current branch</code> · <code style="font-family:var(--font-mono);color:var(--accent-text)">Pull origin</code> — split by <code style="font-family:var(--font-mono);color:var(--accent-text)">--line-soft</code> hairlines, on <code style="font-family:var(--font-mono);color:var(--accent-text)">--surface</code>. Right actions are bordered <code style="font-family:var(--font-mono);color:var(--accent-text)">--card</code> buttons.</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: var(--fg-muted); line-height: 1.6">
+              Stacked cells —
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >Repository</code
+              >
+              ·
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >Current branch</code
+              >
+              ·
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >Pull origin</code
+              >
+              — split by
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >--line-soft</code
+              >
+              hairlines, on
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--surface</code
+              >. Right actions are bordered
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--card</code>
+              buttons.
+            </p>
           </div>
-          <div class="card" style="padding:16px;border-radius:14px;background:var(--card);border:1px solid var(--line)">
+          <div
+            class="card"
+            style="
+              padding: 16px;
+              border-radius: 14px;
+              background: var(--card);
+              border: 1px solid var(--line);
+            "
+          >
             <div class="kx-tag">STATUS SQUARES</div>
-            <p style="margin:6px 0 0;font-size:13px;color:var(--fg-muted);line-height:1.6">Letter + tint, never colour alone: <b style="color:var(--info)">M</b> <code style="font-family:var(--font-mono);color:var(--accent-text)">--info</code>, <b style="color:var(--ok)">A</b> <code style="font-family:var(--font-mono);color:var(--accent-text)">--ok</code>, <b style="color:var(--danger)">D</b> <code style="font-family:var(--font-mono);color:var(--accent-text)">--danger</code>, <b style="color:var(--warn)">R</b> <code style="font-family:var(--font-mono);color:var(--accent-text)">--warn</code>.</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: var(--fg-muted); line-height: 1.6">
+              Letter + tint, never colour alone: <b style="color: var(--info)">M</b>
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--info</code>,
+              <b style="color: var(--ok)">A</b>
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--ok</code>,
+              <b style="color: var(--danger)">D</b>
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--danger</code
+              >, <b style="color: var(--warn)">R</b>
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--warn</code>.
+            </p>
           </div>
-          <div class="card" style="padding:16px;border-radius:14px;background:var(--card);border:1px solid var(--line)">
+          <div
+            class="card"
+            style="
+              padding: 16px;
+              border-radius: 14px;
+              background: var(--card);
+              border: 1px solid var(--line);
+            "
+          >
             <div class="kx-tag">AI &amp; SELECTION</div>
-            <p style="margin:6px 0 0;font-size:13px;color:var(--fg-muted);line-height:1.6">Orca-green is reserved for selection (the <code style="font-family:var(--font-mono);color:var(--accent-text)">--accent</code> bar + <code style="font-family:var(--font-mono);color:var(--accent-text)">--accent-dim</code> row) and for Keiko's voice — the suggested summary's accent edge and the Explain-diff card.</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: var(--fg-muted); line-height: 1.6">
+              Orca-green is reserved for selection (the
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--accent</code>
+              bar +
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >--accent-dim</code
+              >
+              row) and for Keiko's voice — the suggested summary's accent edge and the Explain-diff
+              card.
+            </p>
           </div>
-          <div class="card" style="padding:16px;border-radius:14px;background:var(--card);border:1px solid var(--line)">
+          <div
+            class="card"
+            style="
+              padding: 16px;
+              border-radius: 14px;
+              background: var(--card);
+              border: 1px solid var(--line);
+            "
+          >
             <div class="kx-tag">DIFF</div>
-            <p style="margin:6px 0 0;font-size:13px;color:var(--fg-muted);line-height:1.6">The right pane uses the editor background <code style="font-family:var(--font-mono);color:var(--accent-text)">--ed-bg</code> and the editor diff/syntax palette — <code style="font-family:var(--font-mono);color:var(--accent-text)">--ed-diff-*</code> rows and <code style="font-family:var(--font-mono);color:var(--accent-text)">--ed-syn-*</code> tokens.</p>
+            <p style="margin: 6px 0 0; font-size: 13px; color: var(--fg-muted); line-height: 1.6">
+              The right pane uses the editor background
+              <code style="font-family: var(--font-mono); color: var(--accent-text)">--ed-bg</code>
+              and the editor diff/syntax palette —
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >--ed-diff-*</code
+              >
+              rows and
+              <code style="font-family: var(--font-mono); color: var(--accent-text)"
+                >--ed-syn-*</code
+              >
+              tokens.
+            </p>
           </div>
         </div>
       </section>
@@ -483,7 +1791,11 @@
         });
         // dismiss the explain card (preview)
         var close = win.querySelector(".gw-close");
-        if (close) close.addEventListener("click", function () { var c = win.querySelector(".gw-agent"); if (c) c.style.display = "none"; });
+        if (close)
+          close.addEventListener("click", function () {
+            var c = win.querySelector(".gw-agent");
+            if (c) c.style.display = "none";
+          });
         setTab("changes");
       })();
     </script>

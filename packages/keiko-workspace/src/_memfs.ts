@@ -1,4 +1,4 @@
-import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import type { WorkspaceDirEntry, WorkspaceFileReader, WorkspaceFs, WorkspaceStat } from "./fs.js";
 
 // Minimal in-memory WorkspaceFs over a flat path->content map. Directories are implied by
 // path prefixes. Keys are relative POSIX paths under a single absolute root. No symlinks.
@@ -62,6 +62,22 @@ function memReadFileBytes(
   return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, cap)));
 }
 
+function memReadFileUtf8Prefix(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+  maxBytes: number,
+): string {
+  const cap = Math.max(0, Math.floor(maxBytes));
+  const encoded = encodedFile(files, key);
+  if (encoded === undefined) {
+    throw new Error(`ENOENT: ${absolutePath}`);
+  }
+  return new TextDecoder("utf-8", { fatal: false })
+    .decode(encoded.subarray(0, Math.min(encoded.length, cap)))
+    .replace(/�+$/u, "");
+}
+
 function memReadFileRange(
   files: Readonly<Record<string, string>>,
   key: string | undefined,
@@ -76,6 +92,29 @@ function memReadFileRange(
     return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
   }
   return Promise.resolve(encoded.subarray(start, Math.min(encoded.length, start + cap)));
+}
+
+function memOpenFileReader(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+): Promise<WorkspaceFileReader> {
+  if (key === undefined) {
+    return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
+  }
+  let closed = false;
+  return Promise.resolve({
+    readRange: (startByte: number, length: number): Promise<Uint8Array> => {
+      if (closed) {
+        return Promise.reject(new Error(`EBADF: ${absolutePath}`));
+      }
+      return memReadFileRange(files, key, absolutePath, startByte, length);
+    },
+    close: (): Promise<void> => {
+      closed = true;
+      return Promise.resolve();
+    },
+  });
 }
 
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
@@ -109,6 +148,8 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
     readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
       return memReadFileBytes(files, findKey(absolutePath), absolutePath, maxBytes);
     },
+    readFileUtf8Prefix: (absolutePath: string, maxBytes: number): string =>
+      memReadFileUtf8Prefix(files, findKey(absolutePath), absolutePath, maxBytes),
     readFileRange: (
       absolutePath: string,
       startByte: number,
@@ -116,5 +157,7 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
     ): Promise<Uint8Array> => {
       return memReadFileRange(files, findKey(absolutePath), absolutePath, startByte, length);
     },
+    openFileReader: (absolutePath: string): Promise<WorkspaceFileReader> =>
+      memOpenFileReader(files, findKey(absolutePath), absolutePath),
   };
 }

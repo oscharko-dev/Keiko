@@ -49,6 +49,26 @@ function getFixture(): Fixture {
   return fixture;
 }
 
+function vectorBlob(first: number, second: number): Uint8Array {
+  const vector = new Float32Array(DEFAULT_EMBEDDING.vectorDimensions);
+  vector[0] = first;
+  vector[1] = second;
+  return new Uint8Array(vector.buffer.slice(0));
+}
+
+function setChunkVector(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  chunkId: string,
+  blob: Uint8Array,
+): void {
+  store._internal.db
+    .prepare(
+      "UPDATE vectors SET embedding = :embedding WHERE capsule_id = :capsule_id AND chunk_id = :chunk_id",
+    )
+    .run({ embedding: blob, capsule_id: capsuleId, chunk_id: chunkId });
+}
+
 describe("runLocalKnowledgeRetrieval — input guards", () => {
   it("returns noEvidence 'no-scope' when neither capsuleId nor capsuleSetId is provided", async () => {
     const { store } = getFixture();
@@ -433,36 +453,42 @@ describe("runLocalKnowledgeRetrieval — topK and minScore pass-through", () => 
 
   it("forwards minScore so callers can raise the relevance bar", async () => {
     const { store } = getFixture();
-    await seedCapsuleWithVectors(store, { capsuleId: "cap-a" });
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-a" });
+    seeded.chunkIds.forEach((chunkId, index) => {
+      setChunkVector(
+        store,
+        seeded.capsuleId,
+        String(chunkId),
+        index === 0 ? vectorBlob(1, 0) : vectorBlob(0, 1),
+      );
+    });
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
     const unfiltered = await runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter: scriptedAdapter() },
-      { capsuleId: "cap-a" as KnowledgeCapsuleId, text: "query", topK: 50 },
+      { store, embeddingAdapter: adapter },
+      { capsuleId: "cap-a" as KnowledgeCapsuleId, text: "unmatched-query", topK: 50 },
     );
     expect(unfiltered.references.length).toBeGreaterThan(1);
-    // Compose a threshold somewhere between the lowest and highest score.
-    const last = unfiltered.references[unfiltered.references.length - 1];
-    const first = unfiltered.references[0];
-    if (last === undefined || first === undefined) throw new Error("unreachable");
-    const threshold = (last.score + first.score) / 2;
     const filtered = await runLocalKnowledgeRetrieval(
-      { store, embeddingAdapter: scriptedAdapter() },
+      { store, embeddingAdapter: adapter },
       {
         capsuleId: "cap-a" as KnowledgeCapsuleId,
-        text: "query",
+        text: "unmatched-query",
         topK: 50,
-        minScore: threshold,
+        minScore: 0.9,
       },
     );
-    // Either fewer refs than the unfiltered run, or — if the threshold cut everything —
-    // a grounding rejection (default policy is require-citations).
-    if (filtered.references.length > 0) {
-      expect(filtered.references.length).toBeLessThan(unfiltered.references.length);
-      for (const ref of filtered.references) {
-        expect(ref.score).toBeGreaterThanOrEqual(threshold);
-      }
-    } else {
-      expect(filtered.noEvidence).toBe(true);
-    }
+    expect(filtered.diagnostics?.denseCandidateCount).toBeLessThan(
+      unfiltered.diagnostics?.denseCandidateCount ?? 0,
+    );
+    expect(filtered.references).toHaveLength(1);
   });
 });
 
