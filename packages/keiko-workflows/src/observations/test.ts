@@ -28,7 +28,7 @@ export interface ShapeTestOptions {
   readonly observationId?: string | undefined;
 }
 
-const TRUNCATED_NOT_PERSISTED = "tool output not persisted in PR3 (artifact store wired in PR5)";
+const TRUNCATED_NOT_PERSISTED = "verification output not persisted: full output unavailable";
 
 // VerificationResult has no per-test breakdown; the only honest count is all-zero. A future producer
 // with structured test data populates this via a richer overload, not by inventing numbers here.

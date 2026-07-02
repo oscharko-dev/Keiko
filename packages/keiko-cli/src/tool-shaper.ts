@@ -3,16 +3,21 @@
 // to inject the shaper without adding a keiko-harness -> keiko-workflows package edge. The harness
 // stays decoupled: it calls the injected port and attaches whatever observation it returns.
 //
-// The port is pure and total — it never throws and performs no IO. It shapes only `run_command`
-// results (the only shapeable tool type the harness emits today); for every other tool it returns
-// undefined, leaving the ToolCallResult untouched. The CommandResult is reconstructed from the
-// summarizeCommand JSON that keiko-tools writes to ToolCallResult.output. The reconstruction is
-// read-only; the harness still prefers raw output and renders the shaped observation only when raw
-// output would exceed the live context budget.
+// The returned port is pure from the harness perspective and total — it never throws. When the
+// production caller supplies an artifactWriter, truncated command outputs are persisted by the
+// injected evidence-layer writer; without one the observation honestly carries notPersistedReason.
+// It shapes only `run_command` results (the only shapeable tool type the harness emits today); for
+// every other tool it returns undefined, leaving the ToolCallResult untouched. The CommandResult is
+// reconstructed from the summarizeCommand JSON that keiko-tools writes to ToolCallResult.output.
+// The harness still prefers raw output and renders the shaped observation only when raw output would
+// exceed the live context budget.
 
 import type { CommandResult } from "@oscharko-dev/keiko-contracts";
 import type { HarnessShaperInput, HarnessShaperPort } from "@oscharko-dev/keiko-harness";
-import { shapeCommandObservation } from "@oscharko-dev/keiko-workflows";
+import {
+  shapeCommandObservation,
+  type ToolResultArtifactWriter,
+} from "@oscharko-dev/keiko-workflows";
 
 const COMMAND_TOOL = "run_command";
 
@@ -71,19 +76,32 @@ function parseCommandResult(
   };
 }
 
-// The injected production shaper. Dispatches run_command results to the pure command shaper; every
-// other tool type yields undefined (no shape).
-export const harnessToolShaper: HarnessShaperPort = (input: HarnessShaperInput) => {
-  if (input.toolName !== COMMAND_TOOL || input.result.metadata?.kind !== "command") {
-    return undefined;
-  }
-  const command = parseCommandResult(
-    input.result.output,
-    input.result.durationMs,
-    asOptionalNonNegativeNumber(input.result.metadata.omittedByteCount),
-  );
-  if (command === undefined) {
-    return undefined;
-  }
-  return shapeCommandObservation(command, { observationId: input.toolCallId });
-};
+export interface HarnessToolShaperOptions {
+  readonly artifactWriter?: ToolResultArtifactWriter | undefined;
+}
+
+// The injected production shaper. Dispatches run_command results to the command shaper; every other
+// tool type yields undefined (no shape).
+export function createHarnessToolShaper(
+  options: HarnessToolShaperOptions = {},
+): HarnessShaperPort {
+  return (input: HarnessShaperInput) => {
+    if (input.toolName !== COMMAND_TOOL || input.result.metadata?.kind !== "command") {
+      return undefined;
+    }
+    const command = parseCommandResult(
+      input.result.output,
+      input.result.durationMs,
+      asOptionalNonNegativeNumber(input.result.metadata.omittedByteCount),
+    );
+    if (command === undefined) {
+      return undefined;
+    }
+    return shapeCommandObservation(command, {
+      observationId: input.toolCallId,
+      ...(options.artifactWriter === undefined ? {} : { artifactWriter: options.artifactWriter }),
+    });
+  };
+}
+
+export const harnessToolShaper: HarnessShaperPort = createHarnessToolShaper();

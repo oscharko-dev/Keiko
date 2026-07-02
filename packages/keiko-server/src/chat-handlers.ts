@@ -93,7 +93,11 @@ import {
 } from "./assistant-response.js";
 import { conversationForGatewayWithCompaction } from "./conversation-compaction.js";
 import type { ConversationCompactionOutcome } from "./conversation-compaction.js";
-import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import {
+  persistChatCompactionEvidence,
+  type ChatCompactionEvidenceInput,
+} from "./chat-compaction-evidence.js";
+import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
 import {
   buildChatCompactionContextText,
   selectGatewayPromptAssembly,
@@ -116,7 +120,9 @@ const DEFAULT_CHAT_TITLE = "New chat";
 const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
 const MAX_PENDING_SALIENCE_CAPTURES = 32;
+const MAX_PENDING_COMPACTION_SUMMARIES = 4;
 let pendingSalienceCaptures = 0;
+let pendingCompactionSummaries = 0;
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -1050,14 +1056,51 @@ export interface ChatCompactionTurn {
 // runId + timing are identical. Never throws into the send path (persistChatCompactionEvidence is
 // fully guarded and a no-op on the fast path).
 export function recordChatCompaction(deps: UiHandlerDeps, turn: ChatCompactionTurn): void {
-  persistChatCompactionEvidence(deps, {
+  const input = {
     compaction: turn.compaction,
     chatId: turn.request.chatId,
     modelId: turn.modelId,
     messageCount: turn.messageCount,
     startedAt: turn.startedAt,
     finishedAt: Date.now(),
+  } satisfies ChatCompactionEvidenceInput;
+  persistChatCompactionEvidence(deps, input);
+  scheduleCompactionModelSummary(deps, input);
+}
+
+function scheduleCompactionModelSummary(
+  deps: UiHandlerDeps,
+  input: ChatCompactionEvidenceInput,
+): void {
+  if (
+    input.compaction === undefined ||
+    pendingCompactionSummaries >= MAX_PENDING_COMPACTION_SUMMARIES
+  ) {
+    return;
+  }
+  let historyPrefix: readonly ChatMessage[];
+  try {
+    historyPrefix = deps.store.listMessages(input.chatId).slice(0, input.messageCount);
+  } catch (error) {
+    logCompactionSummaryFailure(error);
+    return;
+  }
+  pendingCompactionSummaries += 1;
+  const handle = setImmediate(() => {
+    void enrichChatCompactionWithModelSummary(deps, { ...input, historyPrefix })
+      .catch((error: unknown) => {
+        logCompactionSummaryFailure(error);
+      })
+      .finally(() => {
+        pendingCompactionSummaries -= 1;
+      });
   });
+  handle.unref();
+}
+
+function logCompactionSummaryFailure(error: unknown): void {
+  // eslint-disable-next-line no-console
+  console.warn("chat-compaction-model-summary: scheduled enrichment failed", error);
 }
 
 function buildRegenerateGatewayAssembly(

@@ -85,6 +85,22 @@ Touch packages/keiko-server/src/conversation-compaction.ts:42 and call buildSumm
     expect(digest.preservedFacts).toBeUndefined();
   });
 
+  it("removes open questions that are explicitly resolved later in the compacted thread", () => {
+    const digest = buildStructuredCompactionDigest({
+      entries: [
+        entry("Open question: should persisted records rehydrate in #1727?"),
+        entry(
+          "Resolved question: should persisted records rehydrate in #1727? Use the recorded rehydration handle.",
+        ),
+      ],
+    });
+
+    expect(digest.openQuestions).toBeUndefined();
+    expect(digest.decisions).toContain(
+      "Resolved question: should persisted records rehydrate in #1727? Use the recorded rehydration handle.",
+    );
+  });
+
   it("redacts secrets and records omitted unsafe categories", () => {
     const digest = buildStructuredCompactionDigest({
       entries: [

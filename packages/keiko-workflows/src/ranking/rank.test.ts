@@ -32,6 +32,15 @@ function atom(scopePath: string, score: number): EvidenceAtom {
   };
 }
 
+function gitAtom(scopePath: string, recency: number, churn: number): EvidenceAtom {
+  return {
+    ...atom(scopePath, Math.max(recency, churn)),
+    stableId: `git-${scopePath}-${recency.toString()}-${churn.toString()}`,
+    provenance: { kind: "git-history", tool: "git-file-history", queryFingerprint: "fp" },
+    metrics: { gitRecency: recency, gitChurn: churn },
+  };
+}
+
 function anchor(term: string, kind: SearchAnchor["kind"], weight = 0.7): SearchAnchor {
   return { term, kind, weight };
 }
@@ -70,6 +79,25 @@ describe("rankCandidates", () => {
       BASE_OPTIONS,
     );
     expect(clarification.kept).toEqual(neutral.kept);
+  });
+
+  it("boosts recent and high-churn git-history candidates for targeted code search", () => {
+    const result = rankCandidates(
+      {
+        atoms: [atom("src/a.ts", 0.5), atom("src/b.ts", 0.5), gitAtom("src/b.ts", 1, 0.8)],
+        anchors: [],
+        context: { retrievalIntent: "targeted-code-search" },
+      },
+      BASE_OPTIONS,
+    );
+    expect(result.kept[0]?.scopePath).toBe("src/b.ts");
+    const signals = result.kept[0]?.signals ?? [];
+    expect(signals.some((signal) => signal.name === "git-recency" && signal.value === 1)).toBe(
+      true,
+    );
+    expect(signals.some((signal) => signal.name === "git-churn" && signal.value === 0.8)).toBe(
+      true,
+    );
   });
 
   it("collapses multiple atoms for the same path into a single CandidateFile", () => {

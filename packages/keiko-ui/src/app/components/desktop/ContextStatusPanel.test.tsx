@@ -8,6 +8,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ContextStatusPanel } from "./ContextStatusPanel";
+import { DEFAULT_TOKEN_ESTIMATOR_ID } from "@/lib/types";
 import type { ContextLaneId, GroundedAnswerContextSummary } from "@/lib/types";
 
 const ALL_LANES: readonly ContextLaneId[] = [
@@ -81,7 +82,7 @@ describe("ContextStatusPanel", () => {
     expect(summaryEl).toHaveAttribute("aria-label", "Context assembly details");
     expect(summaryEl).toHaveAttribute(
       "title",
-      expect.stringContaining("keiko-conservative-utf8-v1"),
+      expect.stringContaining(DEFAULT_TOKEN_ESTIMATOR_ID),
     );
     expect(title).toHaveTextContent("Context");
     expect(meta).toHaveTextContent("34.0k est. assembled tokens");
@@ -98,7 +99,7 @@ describe("ContextStatusPanel", () => {
     );
     const text = container.textContent ?? "";
     expect(text).toContain("Estimator");
-    expect(text).toContain("keiko-conservative-utf8-v1");
+    expect(text).toContain(DEFAULT_TOKEN_ESTIMATOR_ID);
     expect(text).toContain("Assembled estimate");
     expect(text).toContain("34.0k tok");
     expect(text).toContain("Budget pressure");

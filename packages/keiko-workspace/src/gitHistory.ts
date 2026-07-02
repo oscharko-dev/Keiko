@@ -2,8 +2,9 @@
 // via the WorkspaceFs port — never spawns `git` and never imports `child_process`. The shared
 // always-on deny list refuses `.git`; this adapter is the SOLE legitimate consumer of those
 // paths and therefore goes through the lower-level `fs.readFileUtf8` after `assertContainedRealPath`,
-// applies an explicit stat-based size cap, and redacts the contents. v1 surfaces the presence
-// of a reflog as a single EvidenceAtom referencing `.git/HEAD`; per-file granularity deferred.
+// applies an explicit stat-based size cap, and redacts the contents. This workspace adapter stays
+// repo-level; grounded chat adds per-file recency/churn evidence in the server layer where spawning
+// bounded `git log` commands is already governed.
 // Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts, sibling workspace
 // modules, and Node stdlib (node:crypto). Limitation: unavailable when scope.relativePaths is
 // non-empty because git-history is a repo-level signal that cannot meaningfully scope to a

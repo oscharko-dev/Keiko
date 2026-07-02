@@ -88,6 +88,9 @@ export type {
   SearchResult,
   ReadExcerptRequest,
   ReadExcerptResult,
+  SemanticSearchHit,
+  SemanticSearchProvider,
+  SemanticSearchRequest,
 } from "./repoSearch.js";
 export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
 export type {
@@ -135,13 +138,32 @@ export type {
   AdapterError,
   RunAllResult,
   StructuralAdapter,
+  StructuralCoverageDiagnostics,
   StructuralAdapterDeps,
   StructuralAdapterRegistry,
+  StructuralParserCoverage,
 } from "./structuralAdapters.js";
 export { createDefaultStructuralRegistry, runStructuralAdapters } from "./structuralAdapters.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";
+export {
+  buildCodeIntelligenceIndex,
+  lookupCodeIntelligenceAtoms,
+  queryCodeIntelligenceIndex,
+  type ApiContractEdge,
+  type ApiEndpoint,
+  type CodeCallEdge,
+  type CodeImportEdge,
+  type CodeIntelligenceIndex,
+  type CodeLanguage,
+  type CodeParserCoverage,
+  type CodeParserKind,
+  type CodeReferenceEdge,
+  type CodeSymbol,
+  type CodeSymbolKind,
+  type DtoContractEdge,
+} from "./codeIntelligence.js";
 
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";
 

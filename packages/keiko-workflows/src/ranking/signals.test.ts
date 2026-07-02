@@ -197,6 +197,14 @@ function structuralAtom(scopePath: string, score: number, tool: string): Evidenc
   };
 }
 
+function gitAtom(scopePath: string, recency: number, churn: number): EvidenceAtom {
+  return {
+    ...atom(scopePath, Math.max(recency, churn)),
+    provenance: { kind: "git-history", tool: "git-file-history", queryFingerprint: "fp" },
+    metrics: { gitRecency: recency, gitChurn: churn },
+  };
+}
+
 describe("extractSignals — intent context (M4)", () => {
   it("appends nothing without a context (byte-identical signal vector)", () => {
     const result = extractSignals([atom("pom.xml", 0.5)], [], REQUIRED_HINTS);
@@ -239,5 +247,22 @@ describe("extractSignals — intent context (M4)", () => {
     expect(result.signals.find((s) => s.name === "structural-edge")?.value).toBe(1);
     expect(result.baseScore >= 0).toBe(true);
     expect(result.baseScore <= 1).toBe(true);
+  });
+
+  it("structural-edge recognizes code-intelligence and follow-up edge-target atoms", () => {
+    for (const tool of ["code-intelligence-index", "structural-edge-target"]) {
+      const result = extractSignals([structuralAtom("src/foo.ts", 0.7, tool)], [], REQUIRED_HINTS, {
+        retrievalIntent: "targeted-code-search",
+      });
+      expect(result.signals.find((s) => s.name === "structural-edge")?.value).toBe(1);
+    }
+  });
+
+  it("appends git-recency and git-churn when git-history metrics are present", () => {
+    const result = extractSignals([gitAtom("src/foo.ts", 0.8, 0.35)], [], REQUIRED_HINTS, {
+      retrievalIntent: "targeted-code-search",
+    });
+    expect(result.signals.find((s) => s.name === "git-recency")?.value).toBe(0.8);
+    expect(result.signals.find((s) => s.name === "git-churn")?.value).toBe(0.35);
   });
 });

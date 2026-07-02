@@ -6,7 +6,11 @@
 // PR1 minimal record/handle shapes through the expanded validators.
 
 import { describe, it, expect } from "vitest";
-import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "./context-engineering.js";
+import {
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+} from "./context-engineering.js";
 import type {
   ContextAssumption,
   ContextCommandOutcome,
@@ -102,6 +106,11 @@ function richRecord(): ContextCompactionRecord {
     failingTests: [],
     droppedCategories: ["verbose webpack output"],
     invalidationKeys: [happyInvalidationKey()],
+    modelSummary: {
+      promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+      modelId: "summary-model",
+      content: "Model-written continuity summary.",
+    },
     rehydration: { ...minimalHandle(), kind: "repo-file", scopePath: "src/index.ts" },
   };
 }
@@ -336,6 +345,7 @@ describe("validateContextRehydrationHandle", () => {
         lineRange: { startLine: 1, endLine: 3 },
         contentHash: "c".repeat(64),
         evidenceAtomId: "atom-1",
+        artifactId: "artifact-1",
         notPersistedReason: "too large",
         approvedSummary: "the gist",
       }).ok,
@@ -377,6 +387,13 @@ describe("validateContextRehydrationHandle", () => {
     expectInvalidWithReason(
       validateContextRehydrationHandle({ ...minimalHandle(), approvedSummary: 5 }),
       "approvedSummary",
+    );
+  });
+
+  it("rejects an empty artifactId", () => {
+    expectInvalidWithReason(
+      validateContextRehydrationHandle({ ...minimalHandle(), artifactId: "  " }),
+      "artifactId",
     );
   });
 });
@@ -480,6 +497,34 @@ describe("validateContextCompactionRecord", () => {
         rehydration: { ...minimalHandle(), kind: "bad" },
       }),
       "rehydration.kind",
+    );
+  });
+
+  it("rejects an invalid modelSummary prompt version", () => {
+    expectInvalidWithReason(
+      validateContextCompactionRecord({
+        ...minimalRecord(),
+        modelSummary: {
+          promptVersion: "old",
+          modelId: "summary-model",
+          content: "summary",
+        },
+      }),
+      "modelSummary.promptVersion",
+    );
+  });
+
+  it("rejects an oversized modelSummary content field", () => {
+    expectInvalidWithReason(
+      validateContextCompactionRecord({
+        ...minimalRecord(),
+        modelSummary: {
+          promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+          modelId: "summary-model",
+          content: "x".repeat(CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS + 1),
+        },
+      }),
+      "modelSummary.content",
     );
   });
 

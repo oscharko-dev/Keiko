@@ -38,11 +38,6 @@ describe("isDenied (always-on security)", () => {
     ".playwright-mcp/session.json",
     ".idea",
     ".idea/workspace.xml",
-    "dist",
-    "dist/index.js",
-    "build/output.js",
-    "out/main.js",
-    "coverage/lcov.info",
     ".cache/x",
     ".next/server",
     ".turbo/cache",
@@ -129,6 +124,12 @@ describe("isDenied (always-on security)", () => {
     "history.txt",
     ".keiko.example",
     "docs/keiko.md",
+    // Build/noise directories are search-policy suppressions, not hard security denies, so an
+    // explicitly selected generated source file can still be read.
+    "dist/index.js",
+    "build/generated/Client.java",
+    "out/main.js",
+    "coverage/lcov.info",
     // Epic #177 post-closure audit — new denies must NOT over-match legitimate adjacent files.
     "app.config.txt",
     "vars.tf",
@@ -149,7 +150,6 @@ describe("isDenied (always-on security)", () => {
     expect(isDenied(".ENV")).toBe(true);
     expect(isDenied("Node_Modules/pkg/index.js")).toBe(true);
     expect(isDenied("keys/server.PEM")).toBe(true);
-    expect(isDenied("DIST/out.js")).toBe(true);
     expect(isDenied(".ds_store")).toBe(true);
     expect(isDenied(".Keiko/evidence/qi/run.candidates.json")).toBe(true);
   });

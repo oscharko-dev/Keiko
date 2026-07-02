@@ -1,7 +1,7 @@
 // Tests for bounded, deny-checked rehydration (ADR-0053 D5). Builds an in-memory WorkspaceFs +
-// SearchScope over synthetic files, proves a repo-file ref resolves, a content mutation flips
-// invalidated, a denied path degrades to {resolved:false} without throwing, a deferred kind is
-// reported, and a notPersistedReason short-circuits without any read.
+// SearchScope over synthetic files, proves repo-file/message/evidence/tool refs resolve through
+// bounded readers, a content mutation flips invalidated, denied paths degrade without throwing, and
+// a notPersistedReason short-circuits without any read.
 
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +9,7 @@ import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   type ContextProvenanceRef,
   type ContextRehydrationHandle,
+  type ContextToolRehydrationHandle,
 } from "@oscharko-dev/keiko-contracts";
 import {
   hashExcerptContent,
@@ -18,7 +19,11 @@ import {
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 
-import { rehydrateHandle, rehydrateProvenanceRef } from "./rehydration.js";
+import {
+  rehydrateHandle,
+  rehydrateProvenanceRef,
+  rehydrateToolResultHandle,
+} from "./rehydration.js";
 
 const ROOT = "/ws";
 
@@ -162,13 +167,55 @@ describe("rehydrateProvenanceRef — repo-file", () => {
 });
 
 describe("rehydrateProvenanceRef — non-repo-file", () => {
-  it("returns a deferred result for a tool-result ref with no IO", async () => {
+  it("reports a missing artifact reader for a tool-result ref with no IO", async () => {
     const fs = memFs({});
     const ref: ContextProvenanceRef = { kind: "tool-result", stableId: "t-1" };
     const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs);
     expect(result.resolved).toBe(false);
-    expect(result.reason).toContain("tool-result");
-    expect(result.reason).toContain("deferred");
+    expect(result.reason).toContain("artifact reader unavailable");
+  });
+
+  it("resolves a tool-result ref through the injected artifact reader", async () => {
+    const fs = memFs({});
+    const ref: ContextProvenanceRef = { kind: "tool-result", stableId: "artifact-1" };
+    const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs, undefined, {
+      toolArtifacts: { read: (artifactId): string | undefined => `full output for ${artifactId}` },
+    });
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("full output for artifact-1");
+  });
+
+  it("resolves a message ref through the injected message reader and clamps content", async () => {
+    const fs = memFs({});
+    const ref: ContextProvenanceRef = { kind: "message", stableId: "history-msg-1" };
+    const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs, 7, {
+      messages: { read: (messageId): string | undefined => `message ${messageId}` },
+    });
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("message");
+    expect(result.reason).toContain("truncated");
+  });
+
+  it("reports a missing message reader without falling back to opaque deferred status", async () => {
+    const fs = memFs({});
+    const ref: ContextProvenanceRef = { kind: "message", stableId: "history-msg-2" };
+    const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs);
+    expect(result.resolved).toBe(false);
+    expect(result.reason).toContain("message reader unavailable");
+  });
+
+  it("resolves an evidence-atom ref through the injected evidence atom reader", async () => {
+    const fs = memFs({});
+    const ref: ContextProvenanceRef = {
+      kind: "evidence-atom",
+      stableId: "source-span-1",
+      evidenceAtomId: "atom-1",
+    };
+    const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs, undefined, {
+      evidenceAtoms: { read: (atomId): string | undefined => `atom payload ${atomId}` },
+    });
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("atom payload atom-1");
   });
 
   it("returns notPersistedReason without reading", async () => {
@@ -217,5 +264,103 @@ describe("rehydrateHandle", () => {
     const result = await rehydrateHandle(handle, scopeOver([]), fs);
     expect(result.resolved).toBe(false);
     expect(result.reason).toContain("lane-level");
+  });
+
+  it("resolves a tool-result handle through an injected artifact reader", async () => {
+    const fs = memFs({});
+    const handle: ContextRehydrationHandle = {
+      schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+      laneId: "tool-observations",
+      handleId: "h-tool",
+      itemCount: 1,
+      approxTokens: 10,
+      kind: "tool-result",
+      artifactId: "artifact-2",
+    };
+    const result = await rehydrateHandle(handle, scopeOver([]), fs, undefined, {
+      toolArtifacts: { read: (artifactId): string | undefined => `tool output ${artifactId}` },
+    });
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("tool output artifact-2");
+  });
+
+  it("resolves an evidence-atom handle through an injected evidence atom reader", async () => {
+    const fs = memFs({});
+    const handle: ContextRehydrationHandle = {
+      schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+      laneId: "verification-evidence",
+      handleId: "h-atom",
+      itemCount: 1,
+      approxTokens: 10,
+      kind: "evidence-atom",
+      evidenceAtomId: "atom-2",
+    };
+    const result = await rehydrateHandle(handle, scopeOver([]), fs, undefined, {
+      evidenceAtoms: { read: (atomId): string | undefined => `evidence atom ${atomId}` },
+    });
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("evidence atom atom-2");
+  });
+
+  it("reports a tool-result handle without artifactId as unresolved", async () => {
+    const fs = memFs({});
+    const handle: ContextRehydrationHandle = {
+      schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+      laneId: "tool-observations",
+      handleId: "h-tool",
+      itemCount: 1,
+      approxTokens: 10,
+      kind: "tool-result",
+    };
+    const result = await rehydrateHandle(handle, scopeOver([]), fs, undefined, {
+      toolArtifacts: { read: (): string => "unused" },
+    });
+    expect(result.resolved).toBe(false);
+    expect(result.reason).toContain("missing artifactId");
+  });
+});
+
+describe("rehydrateToolResultHandle", () => {
+  it("resolves a ContextToolRehydrationHandle and clamps to the rehydration budget", () => {
+    const handle: ContextToolRehydrationHandle = {
+      schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+      laneId: "tool-observations",
+      kind: "tool-result",
+      artifactId: "artifact-3",
+      itemCount: 1,
+      approxTokens: 10,
+    };
+    const result = rehydrateToolResultHandle(
+      handle,
+      { toolArtifacts: { read: (): string => "abcdef" } },
+      3,
+    );
+    expect(result.resolved).toBe(true);
+    expect(result.content).toBe("abc");
+    expect(result.reason).toContain("truncated");
+  });
+
+  it("honors notPersistedReason without reading", () => {
+    let reads = 0;
+    const handle: ContextToolRehydrationHandle = {
+      schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+      laneId: "tool-observations",
+      kind: "tool-result",
+      artifactId: "artifact-4",
+      itemCount: 1,
+      approxTokens: 10,
+      notPersistedReason: "writer unavailable",
+    };
+    const result = rehydrateToolResultHandle(handle, {
+      toolArtifacts: {
+        read: (): string => {
+          reads += 1;
+          return "should not read";
+        },
+      },
+    });
+    expect(result.resolved).toBe(false);
+    expect(result.reason).toBe("writer unavailable");
+    expect(reads).toBe(0);
   });
 });

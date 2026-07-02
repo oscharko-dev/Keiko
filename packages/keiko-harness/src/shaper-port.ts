@@ -8,9 +8,11 @@
 //
 // The port is content-agnostic: it receives the completed ToolCallResult plus the originating
 // call's name/id/arguments and returns a ContextToolObservation or undefined (no shape for this
-// tool type). It MUST be pure and total — it never throws and performs no IO. The shaped
-// observation is attached to the keiko-internal ToolCallResult / accumulator; the executor renders a
-// compact role:tool message from it only when raw output would exceed the live context budget.
+// tool type). It MUST be total and fail closed: production wiring may inject evidence-layer IO, but
+// failures must be represented on the observation (for example notPersistedReason), never thrown
+// through the harness. The shaped observation is attached to the keiko-internal ToolCallResult /
+// accumulator; the executor renders a compact role:tool message from it only when raw output would
+// exceed the live context budget.
 
 import type { ContextToolObservation, ToolCallResult } from "@oscharko-dev/keiko-contracts";
 

@@ -41,6 +41,7 @@ import {
   mergeContextPackSummaries,
   sourceLabels,
   splitExplorationBudget,
+  splitExplorationBudgets,
   type GroundedRetriever,
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
@@ -188,6 +189,31 @@ function scopePack(scopePath: string, score: number, stableId: string): Connecte
   };
 }
 
+function budgetSum(
+  budgets: readonly ConnectedContextPack["budget"][],
+): ConnectedContextPack["budget"] {
+  return budgets.reduce(
+    (acc, budget) => ({
+      searchCallsMax: acc.searchCallsMax + budget.searchCallsMax,
+      filesReadMax: acc.filesReadMax + budget.filesReadMax,
+      excerptBytesMax: acc.excerptBytesMax + budget.excerptBytesMax,
+      modelInputTokensMax: acc.modelInputTokensMax + budget.modelInputTokensMax,
+      modelOutputTokensMax: acc.modelOutputTokensMax + budget.modelOutputTokensMax,
+      elapsedMsMax: acc.elapsedMsMax + budget.elapsedMsMax,
+      rerankCallsMax: acc.rerankCallsMax + budget.rerankCallsMax,
+    }),
+    {
+      searchCallsMax: 0,
+      filesReadMax: 0,
+      excerptBytesMax: 0,
+      modelInputTokensMax: 0,
+      modelOutputTokensMax: 0,
+      elapsedMsMax: 0,
+      rerankCallsMax: 0,
+    },
+  );
+}
+
 // Retriever that returns a distinct pack per source, keyed by the source's first relativePath, so
 // the two merged packs carry distinct evidence/scores and we can assert the merge.
 function packPerScope(byPath: ReadonlyMap<string, ConnectedContextPack>): GroundedRetriever {
@@ -236,23 +262,66 @@ afterEach(() => {
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
 describe("splitExplorationBudget", () => {
-  it("returns the base unchanged for n=1", () => {
-    expect(splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, 1)).toStrictEqual(
-      DEFAULT_EXPLORATION_BUDGET,
+  const query = {
+    kind: "natural-language",
+    text: "debug payments refund api",
+    caseSensitive: false,
+    maxResults: 50,
+    emittedAtMs: NOW,
+  } as const;
+
+  const scopes: readonly ChatConnectedScope[] = [
+    {
+      kind: "directory",
+      relativePaths: ["services/payments-api"],
+      connectedAtMs: NOW,
+      root: "/repo/services/payments-api",
+    },
+    {
+      kind: "directory",
+      relativePaths: ["web"],
+      connectedAtMs: NOW,
+      root: "/repo/web",
+    },
+    {
+      kind: "directory",
+      relativePaths: ["docs"],
+      connectedAtMs: NOW,
+      root: "/repo/docs",
+    },
+  ];
+
+  it("returns the base unchanged for one scope", () => {
+    const firstScope = scopes[0];
+    if (firstScope === undefined) {
+      throw new Error("expected first scope fixture");
+    }
+    expect(splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, [firstScope], query)).toStrictEqual(
+      [DEFAULT_EXPLORATION_BUDGET],
     );
   });
 
-  it("floor-divides each bounded dimension for n=3 and leaves rerankCallsMax unchanged", () => {
-    const split = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, 3);
-    expect(split.searchCallsMax).toBe(Math.floor(DEFAULT_EXPLORATION_BUDGET.searchCallsMax / 3));
-    expect(split.filesReadMax).toBe(Math.floor(DEFAULT_EXPLORATION_BUDGET.filesReadMax / 3));
-    expect(split.excerptBytesMax).toBe(Math.floor(DEFAULT_EXPLORATION_BUDGET.excerptBytesMax / 3));
-    expect(split.rerankCallsMax).toBe(DEFAULT_EXPLORATION_BUDGET.rerankCallsMax);
+  it("weights fan-out budgets toward query-relevant sources while preserving total caps", () => {
+    const budgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, scopes, query);
+
+    expect(budgets).toHaveLength(3);
+    expect(budgetSum(budgets)).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
+    expect(budgets[0]?.filesReadMax).toBeGreaterThan(budgets[1]?.filesReadMax ?? 0);
+    expect(budgets[1]?.filesReadMax).toBeGreaterThanOrEqual(budgets[2]?.filesReadMax ?? 0);
+    expect(budgets.filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(1);
   });
 
-  it("floors a tiny dimension to 1 rather than 0", () => {
+  it("does not multiply tiny dimensions when there are more sources than units", () => {
     const base = { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 };
-    expect(splitExplorationBudget(base, 4).filesReadMax).toBe(1);
+    const budgets = splitExplorationBudgets(base, scopes, query);
+    expect(budgetSum(budgets).filesReadMax).toBe(1);
+    expect(budgets.filter((budget) => budget.filesReadMax > 0)).toHaveLength(1);
+  });
+
+  it("keeps the legacy equal split helper deterministic", () => {
+    const split = splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, 3);
+    expect(split.searchCallsMax).toBe(6);
+    expect(split.filesReadMax).toBe(11);
   });
 });
 
@@ -624,6 +693,77 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.contextPack.usage.searchCalls).toBe(baseSummary.usage.searchCalls * 2);
     expect(answer.contextPack.budget.filesReadMax).toBe(baseSummary.budget.filesReadMax * 2);
     expect(answer.uncertainty).toHaveLength(2);
+  });
+
+  it("passes relevance-weighted budgets to per-source retrievers", async () => {
+    const scopePayments: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["services/payments-api"],
+      connectedAtMs: NOW,
+      root: tempRoot("payments-api"),
+    };
+    const scopeWeb: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["apps/web"],
+      connectedAtMs: NOW,
+      root: tempRoot("web"),
+    };
+    const scopeDocs: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["docs"],
+      connectedAtMs: NOW,
+      root: tempRoot("docs"),
+    };
+    const chatId = makeChat([scopePayments, scopeWeb, scopeDocs]);
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["services/payments-api", scopePack("services/payments-api/src/controller.ts", 0.9, "pay")],
+      ["apps/web", scopePack("apps/web/src/client.ts", 0.5, "web")],
+      ["docs", scopePack("docs/payments.md", 0.2, "docs")],
+    ]);
+    const seenBudgets = new Map<string, ConnectedContextPack["budget"]>();
+    const retriever: GroundedRetriever = (input) => {
+      const key = input.scope.relativePaths[0] ?? "";
+      const pack = byPath.get(key);
+      if (pack === undefined) throw new Error(`no fixture pack for ${key}`);
+      const budget = input.budget ?? DEFAULT_EXPLORATION_BUDGET;
+      seenBudgets.set(key, budget);
+      const excerptBytes = pack.files.reduce(
+        (sum, file) =>
+          sum + file.excerpts.reduce((fileSum, excerpt) => fileSum + excerpt.contentBytes, 0),
+        0,
+      );
+      const candidatePack = {
+        ...pack,
+        scope: input.scope,
+        budget,
+        usage: { ...pack.usage, excerptBytes },
+        omitted: [],
+      };
+      return Promise.resolve({
+        pack: candidatePack,
+        elapsedMs: 11,
+        plan: { state: "ready" } as never,
+      });
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "debug payments api refund" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("weighted answer", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    expect(budgetSum([...seenBudgets.values()])).toStrictEqual(DEFAULT_EXPLORATION_BUDGET);
+    expect(seenBudgets.get("services/payments-api")?.filesReadMax).toBeGreaterThan(
+      seenBudgets.get("apps/web")?.filesReadMax ?? 0,
+    );
+    expect(seenBudgets.get("apps/web")?.filesReadMax).toBeGreaterThanOrEqual(
+      seenBudgets.get("docs")?.filesReadMax ?? 0,
+    );
+    expect([...seenBudgets.values()].filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(
+      1,
+    );
   });
 
   it("does not persist a merged answer when the client disconnects after answering", async () => {

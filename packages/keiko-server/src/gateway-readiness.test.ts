@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { handleGatewayReadiness, runGatewayReadiness } from "./gateway-readiness.js";
@@ -476,6 +477,16 @@ describe("gateway readiness route", () => {
       expect.objectContaining({ name: "document_input", status: "passed" }),
       expect.objectContaining({ name: "long_context", status: "passed" }),
     ]);
+    const longContextRequest = requestBodyAt(fetchImpl, 3);
+    const longContextMessages = longContextRequest.messages as
+      | readonly { readonly content?: unknown }[]
+      | undefined;
+    const longContextUserContent = longContextMessages?.[1]?.content;
+    expect(typeof longContextUserContent).toBe("string");
+    if (typeof longContextUserContent === "string") {
+      const [filler] = longContextUserContent.split("\nKEIKO_LONG_CONTEXT_SENTINEL");
+      expect(Buffer.byteLength(filler ?? "", "utf8")).toBe(maxUtf8BytesForTokenBudget(64_000));
+    }
     deps.store.close();
   });
 

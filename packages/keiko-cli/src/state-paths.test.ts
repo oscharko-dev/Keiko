@@ -140,9 +140,11 @@ function touch(path: string): void {
 // plus a customer file the manifest must not claim.
 function seedRuntimeState(root: string): string {
   const stateDir = join(root, ".keiko");
+  const toolArtifactId = "a".repeat(64);
   mkdirSync(join(stateDir, "credentials"), { recursive: true });
   mkdirSync(join(stateDir, "memory"), { recursive: true });
   mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
+  mkdirSync(join(stateDir, "evidence", "tool-results"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
   mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
@@ -165,6 +167,15 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "evidence", "run-1.json"));
   touch(join(stateDir, "evidence", "run-1.json.123e4567-e89b-12d3-a456-426614174000.tmp"));
   touch(join(stateDir, "evidence", "run-1.lock"));
+  touch(join(stateDir, "evidence", "tool-results", `${toolArtifactId}.tool-result.txt`));
+  touch(
+    join(
+      stateDir,
+      "evidence",
+      "tool-results",
+      `${toolArtifactId}.tool-result.txt.123e4567-e89b-12d3-a456-426614174000.tmp`,
+    ),
+  );
   touch(join(stateDir, "evidence", "figma", "figma-token.vault"));
   touch(join(stateDir, "evidence", "figma", "figma-vault.key"));
   touch(join(stateDir, "evidence", "qi", "run-1.qi.json"));
@@ -250,6 +261,17 @@ describe("scanRuntimeState — runtime-state manifest", () => {
       "evidence",
     );
     expect(categoryOf(scan, "evidence/run-1.lock")).toBe("evidence");
+    expect(categoryOf(scan, `evidence/tool-results/${"a".repeat(64)}.tool-result.txt`)).toBe(
+      "evidence",
+    );
+    expect(
+      categoryOf(
+        scan,
+        `evidence/tool-results/${"a".repeat(
+          64,
+        )}.tool-result.txt.123e4567-e89b-12d3-a456-426614174000.tmp`,
+      ),
+    ).toBe("evidence");
     expect(categoryOf(scan, "evidence/figma/figma-token.vault")).toBe("credential-vault");
     expect(categoryOf(scan, "evidence/figma/figma-vault.key")).toBe("credential-vault");
     expect(categoryOf(scan, "evidence/qi/run-1.qi.json")).toBe("quality-intelligence");

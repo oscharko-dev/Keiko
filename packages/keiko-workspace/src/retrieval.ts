@@ -1,9 +1,10 @@
-// Retrieval seam (ADR-0005 D5). `RetrievalStrategy` is the typed extension point a future
-// embedding ranker (e.g. `example-embedding-model`) plugs into. Wave-1 ships ONLY the seam and
-// a deterministic lexical default — no embeddings, no vector DB, no new dependency. The
-// default ranker is pure and clock/RNG-free so context packs are reproducible.
+// Retrieval seam (ADR-0005 D5). `RetrievalStrategy` is the typed extension point for alternate
+// repository rankers. The default remains deterministic and local-first: query-expanded lexical
+// scoring first, file-role priority as a tie-breaker, and no clock/RNG input so context packs are
+// reproducible.
 
 import { SELECTION_REASON_PRIORITY, type DiscoveredFile, type SelectionReason } from "./types.js";
+import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
 
 export interface RankedFile {
   readonly file: DiscoveredFile;
@@ -123,11 +124,42 @@ function priorityIndex(reason: SelectionReason): number {
   return SELECTION_REASON_PRIORITY.indexOf(reason);
 }
 
-// Deterministic lexical ranking: by selection-reason priority, then by path (ascending).
+function normalizedPath(path: string): string {
+  return path.split("\\").join("/").toLowerCase();
+}
+
+function queryScore(path: string, task: string | undefined): number {
+  if (task === undefined || task.trim().length === 0) {
+    return 0;
+  }
+  const terms = expandedQueryTerms(task, false);
+  const normalized = normalizedPath(path);
+  const name = normalized.slice(normalized.lastIndexOf("/") + 1);
+  let score = 0;
+  for (const term of terms) {
+    if (name === term || name.startsWith(`${term}.`)) {
+      score += 40;
+    } else if (normalized.includes(`/${term}/`) || normalized.endsWith(`/${term}`)) {
+      score += 25;
+    } else if (normalized.includes(term)) {
+      score += 10;
+    }
+  }
+  return score;
+}
+
+// Deterministic lexical ranking: task/path relevance first, then file-role tie-break, then path.
 export const lexicalRetrievalStrategy: RetrievalStrategy = {
-  rank: (files: readonly DiscoveredFile[]): readonly RankedFile[] => {
-    const ranked = files.map((file) => ({ file, selectionReason: classify(file.relativePath) }));
+  rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
+    const ranked = files.map((file) => ({
+      file,
+      selectionReason: classify(file.relativePath),
+      score: queryScore(file.relativePath, task),
+    }));
     return [...ranked].sort((a, b) => {
+      if (a.score !== b.score) {
+        return b.score - a.score;
+      }
       const byReason = priorityIndex(a.selectionReason) - priorityIndex(b.selectionReason);
       if (byReason !== 0) {
         return byReason;

@@ -1,8 +1,9 @@
 // PURE filtering. Two tiers (ADR-0005 D3):
 //   1. isDenied()  — ALWAYS-ON security deny list. Enforced before every read regardless
-//      of .gitignore. Secret/dep/build/cache/vcs/log/os files are never discovered or read.
+//      of .gitignore. Secret/dep/cache/vcs/log/os files are never discovered or read.
 //   2. compileIgnore()/isIgnored() — best-effort noise reduction over a DOCUMENTED, bounded
-//      .gitignore subset. Never relaxes the deny list.
+//      .gitignore subset. Never relaxes the deny list. Build/noise directories are handled by
+//      search policy so explicit selections can still read committed generated source.
 // Glob translation produces only linear regex pieces (`[^/]*`, `.*`) so there is no
 // catastrophic backtracking (no ReDoS).
 
@@ -92,11 +93,6 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   ".claude",
   ".playwright-mcp",
   ".idea",
-  // build
-  "dist",
-  "build",
-  "out",
-  "coverage",
   // caches
   ".cache",
   ".next",

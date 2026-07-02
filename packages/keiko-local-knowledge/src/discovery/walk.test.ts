@@ -331,7 +331,7 @@ describe("walkSource — files scope", () => {
 
     const files = collect(scope, fs);
 
-    expect(files).toStrictEqual([".vscode/settings.json"]);
+    expect(files).toStrictEqual([".vscode/settings.json", "dist/bundle.js"]);
   });
 });
 

@@ -20,6 +20,7 @@ interface TimedRecord {
 }
 
 interface ResurfacingBuckets {
+  readonly modelSummaries: string[];
   readonly facts: string[];
   readonly constraints: string[];
   readonly decisions: string[];
@@ -82,6 +83,7 @@ function renderRecords(records: readonly TimedRecord[]): string | undefined {
     CHAT_COMPACTION_CONTEXT_HEADER,
     "Redacted continuity from earlier compacted turns. Treat assumptions as uncertain; re-verify repo-derived entries before using them as current facts.",
   ];
+  addSection(lines, "Model-written continuity summary", buckets.modelSummaries);
   addSection(lines, "Pinned facts", buckets.facts);
   addSection(lines, "Constraints", buckets.constraints);
   addSection(lines, "Decisions", buckets.decisions);
@@ -102,6 +104,7 @@ function collectBuckets(records: readonly ContextCompactionRecord[]): Resurfacin
 
 function emptyBuckets(): ResurfacingBuckets {
   return {
+    modelSummaries: [],
     facts: [],
     constraints: [],
     decisions: [],
@@ -113,6 +116,7 @@ function emptyBuckets(): ResurfacingBuckets {
 }
 
 function collectRecordBuckets(buckets: ResurfacingBuckets, record: ContextCompactionRecord): void {
+  pushSafe(buckets.modelSummaries, record.modelSummary?.content);
   collectFactBuckets(buckets, record);
   collectStringBuckets(buckets, record);
   collectRehydrationBuckets(buckets, record);

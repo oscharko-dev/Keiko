@@ -112,6 +112,219 @@ describe("testSourcePairingAdapter", () => {
     expect(atoms.map((a) => a.scopePath)).toEqual(["tests/foo.test.tsx"]);
   });
 
+  it("pairs a source file to a test through a resolved import edge before naming fallbacks", async () => {
+    const { scope, fs } = makeScope({
+      "src/domain/cart.ts": "export function priceCart() { return 1; }",
+      "tests/cart-behaviour.spec.ts": "import { priceCart } from '../src/domain/cart';",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("src/domain/cart.ts"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual(["tests/cart-behaviour.spec.ts"]);
+    expect(atoms[0]?.edge).toMatchObject({
+      kind: "test-source",
+      source: { scopePath: "tests/cart-behaviour.spec.ts" },
+      target: { scopePath: "src/domain/cart.ts" },
+      confidence: "resolved",
+    });
+    expect(atoms[0]?.score).toBe(0.92);
+  });
+
+  it("emits every test that imports a source file through resolved import edges", async () => {
+    const { scope, fs } = makeScope({
+      "src/domain/cart.ts": "export function priceCart() { return 1; }",
+      "tests/cart-behaviour.spec.ts": "import { priceCart } from '../src/domain/cart';",
+      "tests/cart-regression.test.ts": "import { priceCart } from '../src/domain/cart';",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("src/domain/cart.ts"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((atom) => atom.scopePath).sort()).toEqual([
+      "tests/cart-behaviour.spec.ts",
+      "tests/cart-regression.test.ts",
+    ]);
+    expect(atoms.every((atom) => atom.edge?.confidence === "resolved")).toBe(true);
+  });
+
+  it("emits every source imported by a test through resolved import edges", async () => {
+    const { scope, fs } = makeScope({
+      "src/domain/cart.ts": "export function priceCart() { return 1; }",
+      "src/domain/tax.ts": "export function priceTax() { return 1; }",
+      "tests/cart-behaviour.spec.ts": [
+        "import { priceCart } from '../src/domain/cart';",
+        "import { priceTax } from '../src/domain/tax';",
+      ].join("\n"),
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("tests/cart-behaviour.spec.ts"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((atom) => atom.scopePath).sort()).toEqual([
+      "src/domain/cart.ts",
+      "src/domain/tax.ts",
+    ]);
+    expect(atoms.every((atom) => atom.edge?.confidence === "resolved")).toBe(true);
+  });
+
+  it("honors limits.maxMatchesReturned across multiple resolved graph pairs", async () => {
+    const { scope, fs } = makeScope({
+      "src/domain/cart.ts": "export function priceCart() { return 1; }",
+      "tests/cart-behaviour.spec.ts": "import { priceCart } from '../src/domain/cart';",
+      "tests/cart-regression.test.ts": "import { priceCart } from '../src/domain/cart';",
+    });
+    const cappedLimits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 1 };
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("src/domain/cart.ts"),
+      cappedLimits,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms).toHaveLength(1);
+    expect(atoms[0]?.edge?.confidence).toBe("resolved");
+  });
+
+  it("pairs by indexed TypeScript symbols instead of only filename stems", async () => {
+    const { scope, fs } = makeScope({
+      "src/domain/cart.ts": "export function priceCart() { return 1; }",
+      "tests/cart-behaviour.spec.ts": "import { priceCart } from '../src/domain/cart';",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      exq("priceCart"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((atom) => atom.scopePath)).toEqual(["tests/cart-behaviour.spec.ts"]);
+    expect(atoms[0]?.edge?.confidence).toBe("resolved");
+  });
+
+  it("pairs by indexed Python symbols instead of only module filenames", async () => {
+    const { scope, fs } = makeScope({
+      "src/orders/service.py": "def price_order(): return 1",
+      "tests/orders/test_service.py": "from src.orders.service import price_order",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      exq("price_order"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((atom) => atom.scopePath)).toEqual(["tests/orders/test_service.py"]);
+    expect(atoms[0]?.edge?.confidence).toBe("resolved");
+  });
+
+  it("pairs Java src/main and src/test files by JVM conventions", async () => {
+    const { scope, fs } = makeScope({
+      "backend/src/main/java/com/acme/orders/OrderService.java": "class OrderService {}",
+      "backend/src/test/java/com/acme/orders/OrderServiceTest.java": "class OrderServiceTest {}",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("backend/src/main/java/com/acme/orders/OrderService.java"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual([
+      "backend/src/test/java/com/acme/orders/OrderServiceTest.java",
+    ]);
+  });
+
+  it("pairs non-conventional JVM tests through resolved import edges", async () => {
+    const { scope, fs } = makeScope({
+      "backend/src/main/java/com/acme/orders/OrderService.java": [
+        "package com.acme.orders;",
+        "public class OrderService {}",
+      ].join("\n"),
+      "backend/src/test/java/com/acme/orders/CheckoutFlowIT.java": [
+        "package com.acme.orders;",
+        "import com.acme.orders.OrderService;",
+        "class CheckoutFlowIT { private final OrderService service = new OrderService(); }",
+      ].join("\n"),
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("backend/src/main/java/com/acme/orders/OrderService.java"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual([
+      "backend/src/test/java/com/acme/orders/CheckoutFlowIT.java",
+    ]);
+    expect(atoms[0]?.edge).toMatchObject({
+      kind: "test-source",
+      source: { scopePath: "backend/src/test/java/com/acme/orders/CheckoutFlowIT.java" },
+      target: { scopePath: "backend/src/main/java/com/acme/orders/OrderService.java" },
+      confidence: "resolved",
+    });
+  });
+
+  it("pairs Python modules with pytest naming conventions", async () => {
+    const { scope, fs } = makeScope({
+      "src/orders/service.py": "def price_order(): return 1",
+      "tests/orders/test_service.py": "from src.orders.service import price_order",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("src/orders/service.py"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual(["tests/orders/test_service.py"]);
+  });
+
+  it("pairs non-conventional pytest files through resolved import edges", async () => {
+    const { scope, fs } = makeScope({
+      "src/orders/service.py": "def price_order(): return 1",
+      "tests/orders/test_checkout_flow.py": "from src.orders.service import price_order",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("src/orders/service.py"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual(["tests/orders/test_checkout_flow.py"]);
+    expect(atoms[0]?.edge).toMatchObject({
+      kind: "test-source",
+      source: { scopePath: "tests/orders/test_checkout_flow.py" },
+      target: { scopePath: "src/orders/service.py" },
+      confidence: "resolved",
+    });
+  });
+
+  it("pairs Go source and _test files", async () => {
+    const { scope, fs } = makeScope({
+      "pkg/orders/service.go": "package orders\nfunc PriceOrder() int { return 1 }",
+      "pkg/orders/service_test.go": "package orders\nfunc TestPriceOrder(t *testing.T) {}",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("pkg/orders/service.go"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual(["pkg/orders/service_test.go"]);
+  });
+
   it("returns an empty array when no pair exists", async () => {
     const { scope, fs } = makeScope({
       "src/foo.ts": "only source",

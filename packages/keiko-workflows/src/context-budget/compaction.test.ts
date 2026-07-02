@@ -329,6 +329,18 @@ describe("compaction helper edge cases", () => {
     expect(handle.lineRange).toBeUndefined();
     expect(handle.contentHash).toBeUndefined();
   });
+
+  it("copies a single tool-result artifact id onto direct rehydration handles", () => {
+    const handle = buildRehydrationHandle({
+      laneId: "tool-observations",
+      excludedIds: ["tool"],
+      spans: [{ kind: "tool-result", stableId: "artifact-tool-1" }],
+      approxTokens: 12,
+    });
+    expect(handle.kind).toBe("tool-result");
+    expect(handle.artifactId).toBe("artifact-tool-1");
+    expect(handle.scopePath).toBeUndefined();
+  });
 });
 
 describe("buildCompactionRecords — digest-only fallback", () => {

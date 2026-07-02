@@ -64,8 +64,12 @@ export interface SearchDiagnostics {
   readonly intent: SearchIntent;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
+  readonly lowValueRescueFilesDiscovered?: number | undefined;
+  readonly lowValueRescueFilesScanned?: number | undefined;
   readonly ignoredByDiscovery: number;
   readonly deniedByDiscovery: number;
+  readonly depthPrunedByDiscovery: number;
+  readonly maxFilesPrunedByDiscovery: number;
   readonly candidateBuckets: Readonly<Record<CandidateBucket, number>>;
   // Top-ranked candidates with their ranking-signal breakdown, bounded for audit readability.
   readonly rankedCandidates: readonly RankedCandidateDiagnostic[];
@@ -110,9 +114,11 @@ const LOW_VALUE_SEGMENTS = new Set([
   ".parcel-cache",
   ".svelte-kit",
   ".vercel",
+  "build",
   "coverage",
   "dist",
   "generated",
+  "out",
   "storybook-static",
   "tmp",
 ]);
@@ -121,9 +127,11 @@ const LOW_VALUE_IGNORE_LINES: readonly string[] = Object.freeze([
   ".parcel-cache/",
   ".svelte-kit/",
   ".vercel/",
+  "build/",
   "coverage/",
   "dist/",
   "generated/",
+  "out/",
   "storybook-static/",
   "tmp/",
   "bun.lock",
@@ -233,6 +241,144 @@ function isConfigPath(scopePath: string): boolean {
 
 function normalizedQueryTerms(query: RetrievalQuery): readonly string[] {
   return expandedQueryTerms(query.text, false);
+}
+
+const CONTENT_SCORE_STOP_TERMS: ReadonlySet<string> = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "does",
+  "for",
+  "from",
+  "how",
+  "in",
+  "is",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "what",
+  "where",
+  "which",
+  "who",
+  "why",
+  "with",
+]);
+
+const SHORT_CODE_TERMS: ReadonlySet<string> = new Set([
+  "id",
+  "url",
+  "uri",
+  "api",
+  "jwt",
+  "sql",
+  "db",
+  "ui",
+  "io",
+]);
+
+function contentQueryTerms(query: RetrievalQuery): readonly string[] {
+  return normalizedQueryTerms(query).filter((term) => {
+    const lower = term.toLowerCase();
+    return (
+      !CONTENT_SCORE_STOP_TERMS.has(lower) &&
+      (term.length >= 3 || SHORT_CODE_TERMS.has(lower))
+    );
+  });
+}
+
+function contentTokenSet(text: string, caseSensitive: boolean): ReadonlySet<string> {
+  const tokens = new Set<string>();
+  for (const raw of text.matchAll(/[\p{L}\p{N}_$]+/gu)) {
+    const token = caseSensitive ? raw[0] : raw[0].toLowerCase();
+    tokens.add(token);
+    for (const part of raw[0].split(/(?<=[\p{Ll}\p{N}])(?=\p{Lu})/gu)) {
+      if (part.length > 0) {
+        tokens.add(caseSensitive ? part : part.toLowerCase());
+      }
+    }
+  }
+  return tokens;
+}
+
+interface ContentTermHits {
+  readonly exactHits: number;
+  readonly substringHits: number;
+}
+
+function exactSymbolContentBonus(query: RetrievalQuery, haystack: string): number {
+  if (query.kind !== "exact-symbol") {
+    return 0;
+  }
+  const needle = query.caseSensitive ? query.text : query.text.toLowerCase();
+  return haystack.includes(needle) ? 45 : 0;
+}
+
+function countContentTermHits(
+  terms: readonly string[],
+  haystack: string,
+  tokens: ReadonlySet<string>,
+  caseSensitive: boolean,
+): ContentTermHits {
+  let exactHits = 0;
+  let substringHits = 0;
+  for (const term of terms) {
+    const normalized = caseSensitive ? term : term.toLowerCase();
+    if (tokens.has(normalized)) {
+      exactHits += 1;
+    } else if (normalized.length >= 4 && haystack.includes(normalized)) {
+      substringHits += 1;
+    }
+  }
+  return { exactHits, substringHits };
+}
+
+function contentTermScore(
+  hits: ContentTermHits,
+  termCount: number,
+  exactSymbolBonus: number,
+  intent: SearchIntent,
+): number {
+  if (hits.exactHits === 0 && hits.substringHits === 0) {
+    return 0;
+  }
+  const coverage = (hits.exactHits + hits.substringHits * 0.5) / Math.max(termCount, 1);
+  const intentMultiplier =
+    intent === "targeted-code-search" || intent === "diagnostic-search" ? 1.15 : 1;
+  const rawScore =
+    hits.exactHits * 14 + hits.substringHits * 6 + coverage * 45 + exactSymbolBonus;
+  return Math.min(140, Math.round(rawScore * intentMultiplier));
+}
+
+export function scoreContentForSearch(
+  query: RetrievalQuery,
+  text: string,
+  policy: SearchPolicy,
+): number {
+  if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
+    return 0;
+  }
+  if (text.length === 0) {
+    return 0;
+  }
+  const terms = contentQueryTerms(query);
+  if (terms.length === 0) {
+    return 0;
+  }
+  const haystack = query.caseSensitive ? text : text.toLowerCase();
+  const tokens = contentTokenSet(text, query.caseSensitive);
+  return contentTermScore(
+    countContentTermHits(terms, haystack, tokens, query.caseSensitive),
+    terms.length,
+    exactSymbolContentBonus(query, haystack),
+    policy.intent,
+  );
 }
 
 function bucketByPath(scopePath: string): CandidateBucket {
@@ -396,35 +542,39 @@ function scoreCandidate(
   file: DiscoveredFile,
   terms: readonly string[],
   policy: SearchPolicy,
+  contentScores: ReadonlyMap<string, number> | undefined,
 ): ScoredCandidate {
   const path = file.relativePath;
   const bucket = bucketByPath(path);
   const bucketWeight = bucketScore(bucket, policy.intent);
   const termBonus = pathTermBonus(path, terms);
+  const contentScore = contentScores?.get(path) ?? 0;
   const depth = depthPenalty(path);
   const ecosystem = bucket === "canonical-metadata" ? canonicalMetadataEcosystem(path) : undefined;
   const signals: CandidateSignal[] = [
     { name: `bucket:${bucket}`, value: bucketWeight },
     { name: "path-term-bonus", value: termBonus },
+    { name: "content-term-score", value: contentScore },
     { name: "depth-penalty", value: -depth },
   ];
   if (ecosystem !== undefined) {
     signals.push({ name: `ecosystem:${ecosystem}`, value: 1 });
   }
-  return { file, bucket, score: bucketWeight + termBonus - depth, signals, ecosystem };
+  return { file, bucket, score: bucketWeight + termBonus + contentScore - depth, signals, ecosystem };
 }
 
 function rankCandidates(
   files: readonly DiscoveredFile[],
   query: RetrievalQuery,
   policy: SearchPolicy,
+  contentScores?: ReadonlyMap<string, number>,
 ): readonly ScoredCandidate[] {
   // Score each file ONCE (query tokenization + path bucketing are O(path) and were previously
   // recomputed twice per comparison — O(n log n) blocking work on the 2000-file candidate cap).
   // Tie-break on raw code-point order, not localeCompare, so evidence ordering is reproducible
   // across locales/ICU builds (regulated-delivery determinism).
   const terms = normalizedQueryTerms(query);
-  const scored = files.map((file) => scoreCandidate(file, terms, policy));
+  const scored = files.map((file) => scoreCandidate(file, terms, policy, contentScores));
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
     if (a.file.relativePath < b.file.relativePath) return -1;
@@ -471,6 +621,13 @@ export function legacyDiscoveryPolicy(hasExplicitRelativePaths: boolean): Search
   };
 }
 
+export function lowValueRescuePolicy(policy: SearchPolicy): SearchPolicy {
+  return {
+    ...policy,
+    omitLowValueWorkspaceFiles: false,
+  };
+}
+
 export function policyOmissionReason(
   scopePath: string,
   policy: SearchPolicy,
@@ -496,8 +653,11 @@ export function orderCandidatesForSearch(
   policy: SearchPolicy,
   ignoredByDiscovery: number,
   deniedByDiscovery: number,
+  depthPrunedByDiscovery = 0,
+  maxFilesPrunedByDiscovery = 0,
+  contentScores?: ReadonlyMap<string, number>,
 ): CandidateOrderingResult {
-  const ranked = rankCandidates(files, query, policy);
+  const ranked = rankCandidates(files, query, policy, contentScores);
   const rankedCandidates: readonly RankedCandidateDiagnostic[] = ranked
     .slice(0, MAX_RANKED_CANDIDATE_DIAGNOSTICS)
     .map((candidate) => ({
@@ -516,6 +676,8 @@ export function orderCandidatesForSearch(
       filesAfterPolicy: ranked.length,
       ignoredByDiscovery,
       deniedByDiscovery,
+      depthPrunedByDiscovery,
+      maxFilesPrunedByDiscovery,
       candidateBuckets: bucketCounts(ranked),
       rankedCandidates,
     },
@@ -534,6 +696,10 @@ export function shouldScoreContent(
     return true;
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
-  const terms = normalizedQueryTerms(query).filter((term) => term.length >= 4);
+  const terms = normalizedQueryTerms(query).filter(
+    (term) =>
+      term.length >= 4 ||
+      SHORT_CODE_TERMS.has(term.toLowerCase()),
+  );
   return terms.length === 0 || terms.some((term) => haystack.includes(term));
 }

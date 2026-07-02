@@ -267,6 +267,32 @@ function singleRepoFileFields(
   };
 }
 
+function singleToolResultFields(
+  spans: readonly ContextProvenanceRef[],
+): Partial<Pick<ContextRehydrationHandle, "kind" | "artifactId">> {
+  const toolResults = spans.filter((span) => span.kind === "tool-result");
+  const only = toolResults.length === 1 ? toolResults[0] : undefined;
+  if (only === undefined) {
+    return {};
+  }
+  return { kind: only.kind, artifactId: only.stableId };
+}
+
+function directRehydrationFields(
+  spans: readonly ContextProvenanceRef[],
+): Partial<
+  Pick<
+    ContextRehydrationHandle,
+    "kind" | "scopePath" | "lineRange" | "contentHash" | "artifactId"
+  >
+> {
+  const repoFile = singleRepoFileFields(spans);
+  if (repoFile.kind !== undefined) {
+    return repoFile;
+  }
+  return singleToolResultFields(spans);
+}
+
 export function buildRehydrationHandle(input: {
   readonly laneId: ContextLaneId;
   readonly excludedIds: readonly string[];
@@ -279,7 +305,7 @@ export function buildRehydrationHandle(input: {
     handleId: handleId(input.laneId, input.excludedIds),
     itemCount: input.excludedIds.length,
     approxTokens: input.approxTokens,
-    ...singleRepoFileFields(input.spans),
+    ...directRehydrationFields(input.spans),
   };
 }
 

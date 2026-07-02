@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   type ContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
@@ -48,6 +49,11 @@ function record(overrides: Partial<ContextCompactionRecord> = {}): ContextCompac
         confidence: "low",
       },
     ],
+    modelSummary: {
+      promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+      modelId: "summary-model",
+      content: "Continue with the governed evidence manifest plan.",
+    },
     rehydration: {
       schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
       laneId: "repo-evidence",
@@ -101,6 +107,7 @@ describe("buildChatCompactionResurfacingContext", () => {
     const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
 
     expect(context).toContain(CHAT_COMPACTION_CONTEXT_HEADER);
+    expect(context).toContain("Continue with the governed evidence manifest plan.");
     expect(context).toContain("structured summaries are persisted");
     expect(context).toContain("use governed evidence manifests");
     expect(context).toContain("do not store raw private logs");

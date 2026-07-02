@@ -10,7 +10,7 @@ import {
   type EcosystemVersionDeclarationPattern,
 } from "./ecosystems.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import { expandedQueryTermGroups, expandedQueryTerms } from "./repoSearchQueryTerms.js";
 import { regexSafetyIssue } from "./repoSearchRegexSafety.js";
 
 export interface LineMatcher {
@@ -247,18 +247,25 @@ function naturalLanguageNormalizedTokens(rawTokens: readonly string[]): readonly
   return rawTokens.map(normalizeNaturalLanguageToken).filter((t) => t.length > 0);
 }
 
-// Extract the content tokens a relevance score should be computed over. Falls back to the
-// normalized-but-unfiltered tokens when filtering removes everything (a degenerate single-char
-// or stop-word-only query), so the matcher never silently scores nothing.
-function naturalLanguageContentTokens(
-  rawTokens: readonly string[],
+function naturalLanguageContentGroups(
+  rawGroups: readonly (readonly string[])[],
   caseSensitive: boolean,
-): readonly string[] {
-  const normalized = naturalLanguageNormalizedTokens(rawTokens).map((t) =>
-    caseSensitive ? t : t.toLowerCase(),
-  );
-  const content = normalized.filter((t) => t.length >= 2 && !NL_STOP_WORDS.has(t.toLowerCase()));
-  return content.length > 0 ? content : normalized;
+): readonly (readonly string[])[] {
+  const contentGroups = rawGroups
+    .map((group) =>
+      naturalLanguageNormalizedTokens(group)
+        .map((t) => (caseSensitive ? t : t.toLowerCase()))
+        .filter((t) => t.length >= 2 && !NL_STOP_WORDS.has(t.toLowerCase())),
+    )
+    .filter((group) => group.length > 0);
+  if (contentGroups.length > 0) {
+    return contentGroups;
+  }
+  return rawGroups
+    .map((group) =>
+      naturalLanguageNormalizedTokens(group).map((t) => (caseSensitive ? t : t.toLowerCase())),
+    )
+    .filter((group) => group.length > 0);
 }
 
 function technicalPhraseTerms(queryText: string, caseSensitive: boolean): readonly string[] {
@@ -322,11 +329,19 @@ function lineLooksLikeSymbolDefinition(
 ): boolean {
   const escaped = escapeRegExp(symbolToken);
   const flags = caseSensitive ? "u" : "iu";
+  const modifiers =
+    "(?:(?:export|public|private|protected|internal|static|abstract|final|sealed|partial|data|open|override|virtual|readonly|async)\\s+)*";
   const patterns = [
-    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, flags),
-    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, flags),
-    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b${modifiers}function\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b${modifiers}(?:const|let|var)\\s+${escaped}\\b`, flags),
+    new RegExp(
+      `\\b${modifiers}(?:class|interface|type|enum|record|struct|trait|object)\\s+${escaped}\\b`,
+      flags,
+    ),
     new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, flags),
+    new RegExp(`\\b${modifiers}(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, flags),
+    new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, flags),
+    new RegExp(`\\b${modifiers}[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`, flags),
   ];
   return patterns.some((pattern) => pattern.test(line));
 }
@@ -421,22 +436,22 @@ function adjustedVersionDeclarationScore(
 }
 
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
-  const rawTokens = expandedQueryTerms(query.text, query.caseSensitive);
+  const rawGroups = expandedQueryTermGroups(query.text, query.caseSensitive);
   const intentTokens = expandedQueryTerms(query.text, true);
   const normalizedTokens = naturalLanguageNormalizedTokens(intentTokens);
-  // GRD-033: dedupe content tokens (as symbol/route/method tokens already are) so a repeated
-  // query word does not double-count in `hits/total`, which over-rewarded prose-heavy scopes.
-  const tokens = uniqueStrings([
-    ...naturalLanguageContentTokens(rawTokens, query.caseSensitive),
-    ...technicalPhraseTerms(query.text, query.caseSensitive),
-  ]);
+  // GRD-033: dedupe alternatives inside each original-token group so aliases/stems improve recall
+  // without making every alias an additional required term in `hits/total`.
+  const tokenGroups = [
+    ...naturalLanguageContentGroups(rawGroups, query.caseSensitive).map(uniqueStrings),
+    ...technicalPhraseTerms(query.text, query.caseSensitive).map((term) => [term] as const),
+  ];
   const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
   // The ecosystem declaration-line patterns whose routing pattern matched this query (e.g. for a
   // Java question: maven.compiler/java.version; for a Go question: go/toolchain directives).
   const versionDeclarationPatterns = ecosystemVersionDeclarationPatterns.filter((p) =>
     p.routePattern.test(query.text),
   );
-  const total = tokens.length;
+  const total = tokenGroups.length;
   return {
     match: (line: string): number => {
       if (total === 0) {
@@ -444,8 +459,8 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
       }
       const haystack = query.caseSensitive ? line : line.toLowerCase();
       let hits = 0;
-      for (const token of tokens) {
-        if (haystack.includes(token)) {
+      for (const group of tokenGroups) {
+        if (group.some((token) => haystack.includes(token))) {
           hits += 1;
         }
       }

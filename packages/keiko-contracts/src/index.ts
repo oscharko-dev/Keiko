@@ -1292,6 +1292,7 @@ export type {
   ContextLaneDiagnostics,
   ContextAssemblyDiagnostics,
   ContextCompactionRecord,
+  ContextCompactionModelSummary,
   ContextRehydrationHandle,
   ContextProvenanceRefKind,
   ContextProvenanceRef,
@@ -1303,6 +1304,8 @@ export type {
 } from "./context-engineering.js";
 export {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   DEFAULT_TOKEN_ESTIMATOR_ID,
   CONTEXT_LANE_IDS,
   CONTEXT_EVICTION_POLICIES,
