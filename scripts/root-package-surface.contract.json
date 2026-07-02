@@ -559,6 +559,8 @@
     "StructuralAdapter",
     "StructuralAdapterDeps",
     "StructuralAdapterRegistry",
+    "StructuralCoverageDiagnostics",
+    "StructuralParserCoverage",
     "SurfaceParityResult",
     "TERMINAL_STATES",
     "TaskInput",
