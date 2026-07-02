@@ -283,43 +283,42 @@ export async function runUpdateRemediationAction(
 // Route 2 — config
 // ---------------------------------------------------------------------------
 
-export async function fetchConfig(): Promise<{
-  config: SafeGatewayConfig | null;
-  configPresent: boolean;
-  effectiveGroundingLimits: GroundingLimits;
-}> {
+interface FetchConfigResponse {
+  readonly config: SafeGatewayConfig | null;
+  readonly configPresent: boolean;
+  readonly effectiveGroundingLimits: GroundingLimits;
+}
+
+let configRequest: Promise<FetchConfigResponse> | undefined;
+
+export function clearConfigCacheForTests(): void {
+  configRequest = undefined;
+}
+
+export async function fetchConfig(): Promise<FetchConfigResponse> {
   configRequest ??= fetchJson<{
     config: SafeGatewayConfig | null;
     configPresent: boolean;
     effectiveGroundingLimits?: GroundingLimits;
-  }>("/api/config").catch((error: unknown) => {
-    configRequest = undefined;
-    throw error;
-  });
-  const raw = await configRequest;
-  return {
-    config: raw.config,
-    configPresent: raw.configPresent,
-    effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
-  };
+  }>("/api/config")
+    .then((raw) => ({
+      config: raw.config,
+      configPresent: raw.configPresent,
+      effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
+    }))
+    .finally(() => {
+      configRequest = undefined;
+    });
+  return configRequest;
 }
+
+export type { FetchConfigResponse };
 
 // ---------------------------------------------------------------------------
 // Route 3 — models
 // ---------------------------------------------------------------------------
 
-let configRequest:
-  | Promise<{
-      config: SafeGatewayConfig | null;
-      configPresent: boolean;
-      effectiveGroundingLimits?: GroundingLimits;
-    }>
-  | undefined;
 let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
-
-export function clearConfigCacheForTests(): void {
-  configRequest = undefined;
-}
 
 export function clearModelCacheForTests(): void {
   modelsRequest = undefined;

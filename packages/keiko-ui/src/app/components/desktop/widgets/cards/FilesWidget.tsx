@@ -21,6 +21,7 @@ import {
 import type {
   FilesMutationResponse,
   FilesTreeEntry,
+  FilesTreeResponse,
   GitChangedFile,
   GitRepositoryDiffResponse,
   GitRepositoryStatusResponse,
@@ -251,6 +252,30 @@ function gitChangeLabel(change: GitChangedFile): string {
   return change.worktreeStatus;
 }
 
+const filesTreeRequests = new Map<string, Promise<FilesTreeResponse>>();
+const gitStatusRequests = new Map<string, Promise<GitRepositoryStatusResponse>>();
+
+function readSharedFilesTree(root: string, path: string): Promise<FilesTreeResponse> {
+  const key = `${root}\u0000${path}`;
+  const existing = filesTreeRequests.get(key);
+  if (existing !== undefined) return existing;
+  const request = fetchFilesTree(root, path).finally(() => {
+    filesTreeRequests.delete(key);
+  });
+  filesTreeRequests.set(key, request);
+  return request;
+}
+
+function readSharedGitStatus(root: string): Promise<GitRepositoryStatusResponse> {
+  const existing = gitStatusRequests.get(root);
+  if (existing !== undefined) return existing;
+  const request = fetchGitStatus(root).finally(() => {
+    gitStatusRequests.delete(root);
+  });
+  gitStatusRequests.set(root, request);
+  return request;
+}
+
 export function FilesWidget({
   root,
   activeFilePath,
@@ -292,6 +317,7 @@ export function FilesWidget({
     status: null,
     error: null,
   });
+  const gitStatusRootRef = useRef<string | null>(null);
   const [gitDiffState, setGitDiffState] = useState<GitDiffState | null>(null);
   // File-operation state (new file/folder, rename, delete). `pendingEntry` drives the single inline
   // input reused for all three create/rename flows; `menu` is the right-click context menu; `confirm`
@@ -408,7 +434,7 @@ export function FilesWidget({
         },
       }));
       try {
-        const response = await fetchFilesTree(apiRoot, path);
+        const response = await readSharedFilesTree(apiRoot, path);
         if (path === "") {
           setResolvedRoot(response.root);
           activeFileChangeRef.current?.(null, response.root, null);
@@ -455,12 +481,15 @@ export function FilesWidget({
   useEffect(() => {
     const targetRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
     if (targetRoot === null) {
+      gitStatusRootRef.current = null;
       setGitStatusState({ loading: false, status: null, error: null });
       return;
     }
+    if (gitStatusRootRef.current === targetRoot) return;
+    gitStatusRootRef.current = targetRoot;
     let cancelled = false;
     setGitStatusState((current) => ({ ...current, loading: true, error: null }));
-    void fetchGitStatus(targetRoot)
+    void readSharedGitStatus(targetRoot)
       .then((status) => {
         if (!cancelled) setGitStatusState({ loading: false, status, error: null });
       })

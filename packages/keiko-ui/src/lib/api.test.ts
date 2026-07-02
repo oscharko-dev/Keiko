@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askGrounded,
   cloneRepository,
+  clearConfigCacheForTests,
   clearModelCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
@@ -20,6 +21,7 @@ import {
   fetchGitRemotes,
   fetchGitSummary,
   fetchGitStatus,
+  fetchConfig,
   fetchModels,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
@@ -1023,6 +1025,54 @@ describe("fetchModels", () => {
       },
     );
     await expect(fetchModels()).resolves.toEqual({ models: [] });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("fetchConfig", () => {
+  afterEach(() => {
+    clearConfigCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses the in-flight config request across simultaneous callers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        config: null,
+        configPresent: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await Promise.all([fetchConfig(), fetchConfig(), fetchConfig()]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/config",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("clears the config request cache after a failed request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(jsonResponse({ config: null, configPresent: false }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchConfig().then(
+      () => {
+        throw new Error("Expected fetchConfig to reject.");
+      },
+      (error: unknown) => {
+        expect(error).toBeInstanceOf(TypeError);
+        expect((error as Error).message).toBe("offline");
+      },
+    );
+    await expect(fetchConfig()).resolves.toMatchObject({ configPresent: false });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
