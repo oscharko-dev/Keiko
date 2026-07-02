@@ -96,7 +96,7 @@ describe("lexical index persistence", () => {
       2,
     );
     expect(countLexicalRowsForCapsule(store._internal.db, seeded.capsuleId)).toBe(2);
-    expect(exactTextFor(String(chunkA))).toBe(`Raw text ${String(chunkA)}`);
+    expect(exactTextFor(String(chunkA))).toBe(`Raw text ${String(chunkA)}\n${String(chunkA)}`);
     expect(exactTextFor(String(chunkB))).toBe("Exact B");
 
     upsertLexicalRows(store._internal.db, [

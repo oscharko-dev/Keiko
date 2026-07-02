@@ -137,6 +137,7 @@ import { createLocalKnowledgeKeyProvider } from "./localKnowledgeKeyProvider.js"
 import type {
   ContextualRetrievalChatGateway,
   KnowledgeStoreKeyProvider,
+  OcrAdapter,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { migrateLocalConfigCredentials } from "./credentialPersistence.js";
 import {
@@ -309,7 +310,11 @@ export interface UiHandlerDeps {
   // Production builds this over the configured Gateway; tests inject a deterministic chat gateway
   // so the normal indexing route can prove contextual text reaches embedding/FTS without network IO.
   readonly localKnowledgeContextualRetrievalChatGateway?:
-    ContextualRetrievalChatGateway | undefined;
+    | ContextualRetrievalChatGateway
+    | undefined;
+  // Optional production OCR seam for Local Knowledge extraction. Production resolves from env when
+  // absent; tests inject a deterministic adapter without requiring Tesseract or a local OCR service.
+  readonly localKnowledgeOcrAdapter?: OcrAdapter | undefined;
   // Work Package 2 — optional LiteLLM/Cohere-compatible reranker seam. Production leaves this
   // undefined and uses requestLiteLLMRerank with config.reranker; tests inject deterministic
   // structural outcomes without touching global fetch.

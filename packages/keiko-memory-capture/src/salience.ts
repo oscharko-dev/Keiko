@@ -25,6 +25,7 @@ import type {
   MemoryScopeKindHint,
   SalienceDeps,
   SalienceInput,
+  SalienceModelMessage,
 } from "./types.js";
 import type { MemoryType } from "@oscharko-dev/keiko-contracts/memory";
 
@@ -83,12 +84,35 @@ EXCLUDE: questions; one-off ephemeral task requests; anything the ASSISTANT said
 
 If there is nothing durable to capture, return [].`;
 
-function buildUserPrompt(userText: string, assistantText: string | undefined): string {
-  const assistantBlock =
-    assistantText !== undefined && assistantText.trim().length > 0
-      ? `\n\nAssistant said (CONTEXT ONLY — never a source of user facts):\n${assistantText}`
-      : "";
-  return `User said:\n${userText}${assistantBlock}`;
+function buildLegacyUserPrompt(messages: readonly SalienceModelMessage[]): string {
+  return messages
+    .filter((message) => message.role !== "system")
+    .map((message) => message.content)
+    .join("\n\n");
+}
+
+export function buildSalienceMessages(
+  userText: string,
+  assistantText: string | undefined,
+): readonly SalienceModelMessage[] {
+  const messages: SalienceModelMessage[] = [{ role: "system", content: SALIENCE_SYSTEM_PROMPT }];
+  const trimmedAssistantText = assistantText?.trim();
+  if (trimmedAssistantText !== undefined && trimmedAssistantText.length > 0) {
+    messages.push({
+      role: "assistant",
+      content: `Assistant said (CONTEXT ONLY — never a source of user facts):\n${trimmedAssistantText}`,
+    });
+  }
+  messages.push({ role: "user", content: `User said:\n${userText}` });
+  return messages;
+}
+
+async function callSalienceModel(input: SalienceInput, deps: SalienceDeps): Promise<string> {
+  const messages = buildSalienceMessages(input.userText, input.assistantText);
+  if (deps.callModelMessages !== undefined) {
+    return deps.callModelMessages(messages);
+  }
+  return deps.callModel(SALIENCE_SYSTEM_PROMPT, buildLegacyUserPrompt(messages));
 }
 
 // ─── Defensive JSON parsing (never throws) ───────────────────────────────────
@@ -414,10 +438,7 @@ export async function extractSalientMemories(
   if (input.userText.trim().length === 0) {
     return [];
   }
-  const raw = await deps.callModel(
-    SALIENCE_SYSTEM_PROMPT,
-    buildUserPrompt(input.userText, input.assistantText),
-  );
+  const raw = await callSalienceModel(input, deps);
   const items = parseSalienceItems(raw);
   const context = effectiveContext(input, deps);
   const policy = input.policy ?? {};

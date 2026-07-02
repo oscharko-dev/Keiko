@@ -26,11 +26,13 @@ import { charsForTokenBudget } from "./token-estimator.js";
 import type {
   ChunkingOptions,
   ChunkingResult,
+  LocalKnowledgeTokenizer,
   ResolvedChunkingOptions,
   TokenEstimator,
 } from "./types.js";
 import {
   ChunkingError,
+  CUSTOM_TOKEN_ESTIMATOR_ID,
   DEFAULT_CHUNKING_STRATEGY_KEY,
   DEFAULT_INDEXING_TEXT_STRATEGY_KEY,
   DEFAULT_MAX_CHUNKS,
@@ -41,7 +43,7 @@ import {
   MAX_OVERLAP_TOKENS,
   CHUNKING_STRATEGY_VERSION,
 } from "./types.js";
-import { defaultTokenEstimator } from "./token-estimator.js";
+import { conservativeTokenEstimatorTokenizer } from "./token-estimator.js";
 
 const WHITESPACE_PATTERN = /\s+/gu;
 const SINGLE_WHITESPACE_PATTERN = /\s/u;
@@ -84,8 +86,20 @@ export function resolveChunkingOptions(
     positiveInteger(options?.maxChunks, DEFAULT_MAX_CHUNKS, "maxChunks"),
     DEFAULT_MAX_CHUNKS,
   );
-  const tokenEstimator: TokenEstimator = options?.tokenEstimator ?? defaultTokenEstimator;
-  return { maxTokens, minTokens, overlapTokens, maxChunks, tokenEstimator };
+  const tokenizer = resolveTokenizer(options);
+  return { maxTokens, minTokens, overlapTokens, maxChunks, tokenizer, tokenEstimator: tokenizer.countTokens };
+}
+
+function resolveTokenizer(options: ChunkingOptions | undefined): LocalKnowledgeTokenizer {
+  if (options?.tokenizer !== undefined) return options.tokenizer;
+  if (options?.tokenEstimator !== undefined) {
+    return {
+      identity: CUSTOM_TOKEN_ESTIMATOR_ID,
+      kind: "estimator",
+      countTokens: options.tokenEstimator,
+    };
+  }
+  return conservativeTokenEstimatorTokenizer;
 }
 
 export function chunkingStrategyKey(options: ChunkingOptions | undefined): string {
@@ -97,7 +111,7 @@ export function chunkingStrategyKey(options: ChunkingOptions | undefined): strin
     `min=${String(resolved.minTokens)}`,
     `overlap=${String(resolved.overlapTokens)}`,
     `limit=${String(resolved.maxChunks)}`,
-    options.tokenEstimator === undefined ? "estimator=default" : "estimator=custom",
+    `tokenizer=${resolved.tokenizer.identity}`,
     options.indexingTextStrategyKey ?? DEFAULT_INDEXING_TEXT_STRATEGY_KEY,
   ].join("|");
 }

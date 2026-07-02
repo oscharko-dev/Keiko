@@ -23,6 +23,7 @@ import {
   toScopeInput,
   type RetrievalScopeInput,
 } from "./scoped-vector-search.js";
+import type { VectorIndexAdapter } from "./vector-index.js";
 import { QWEN3_QUERY_INSTRUCTION_TASK } from "./embedding-query-shaping.js";
 import {
   deterministicVector,
@@ -283,6 +284,183 @@ describe("searchVectorsForScope — decoded vector cache", () => {
       { topK: 1 },
     );
     expect(String(afterReindex.references[0]?.chunkId)).toBe(String(secondChunk));
+  });
+});
+
+describe("searchVectorsForScope — vector index adapter", () => {
+  it("uses an available vector index adapter for dense candidates", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-indexed",
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const firstChunk = seeded.chunkIds[0];
+    const secondChunk = seeded.chunkIds[1];
+    if (firstChunk === undefined || secondChunk === undefined) {
+      throw new Error("expected two seeded chunks");
+    }
+    const calls: string[] = [];
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: (request) => {
+        calls.push(String(request.capsule.id));
+        return {
+          ok: true,
+          candidates: [
+            {
+              chunkId: String(secondChunk),
+              capsuleId: request.capsule.id,
+              sourceId: seeded.sourceId,
+              score: 0.99,
+            },
+          ],
+          sawDimensionCompatible: true,
+          sawIdentityIncompatible: false,
+          diagnostics: {
+            provider: "sqlite-vec",
+            status: "available",
+            indexName: "fake-test-index",
+            vectorCount: 1,
+          },
+        };
+      },
+    };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      "unmatched indexed query",
+      { topK: 1, vectorIndex: { adapter } },
+    );
+
+    expect(calls).toEqual(["cap-indexed"]);
+    expect(String(outcome.references[0]?.chunkId)).toBe(String(secondChunk));
+    expect(outcome.diagnostics.vectorIndex).toMatchObject({
+      provider: "sqlite-vec",
+      status: "available",
+      indexName: "fake-test-index",
+    });
+  });
+
+  it("falls back to brute-force scoring when the vector index is unavailable", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-index-fallback",
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const firstChunk = seeded.chunkIds[0];
+    const secondChunk = seeded.chunkIds[1];
+    if (firstChunk === undefined || secondChunk === undefined) {
+      throw new Error("expected two seeded chunks");
+    }
+    setChunkVector(store, seeded.capsuleId, String(firstChunk), vectorBlob(1, 0));
+    setChunkVector(store, seeded.capsuleId, String(secondChunk), vectorBlob(0, 1));
+    const embeddingAdapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: () => ({
+        ok: false,
+        candidates: [],
+        sawDimensionCompatible: false,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "fallback-unavailable",
+          reason: "sqlite-vec-runtime-not-configured",
+          indexName: "fake-test-index",
+        },
+      }),
+    };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      embeddingAdapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "fallback query",
+      { topK: 1, vectorIndex: { adapter } },
+    );
+
+    expect(String(outcome.references[0]?.chunkId)).toBe(String(firstChunk));
+    expect(outcome.diagnostics.vectorIndex).toMatchObject({
+      provider: "sqlite-vec",
+      status: "fallback-unavailable",
+      reason: "sqlite-vec-runtime-not-configured",
+    });
+  });
+
+  it("rejects indexed candidates outside the active capsule/source scope", async () => {
+    const { store } = getFixture();
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-index-scope",
+      sourceId: "src-index-a",
+      documentId: "doc-index-a",
+      contentHash: "a".repeat(64),
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-index-scope",
+      sourceId: "src-index-b",
+      documentId: "doc-index-b",
+      contentHash: "b".repeat(64),
+      text: "epsilon zeta eta theta",
+      unitId: "unit-cap-index-scope-b",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+      skipCapsule: true,
+    });
+    const allowedChunk = seededA.chunkIds[0];
+    const disallowedChunk = seededB.chunkIds[0];
+    if (allowedChunk === undefined || disallowedChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    const adapter: VectorIndexAdapter = {
+      searchCapsule: (request) => ({
+        ok: true,
+        candidates: [
+          {
+            chunkId: String(disallowedChunk),
+            capsuleId: request.capsule.id,
+            sourceId: seededB.sourceId,
+            score: 1,
+          },
+          {
+            chunkId: String(allowedChunk),
+            capsuleId: request.capsule.id,
+            sourceId: seededA.sourceId,
+            score: 0.5,
+          },
+        ],
+        sawDimensionCompatible: true,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "available",
+          indexName: "fake-test-index",
+          vectorCount: 2,
+        },
+      }),
+    };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seededA.capsuleId], sourceFilter: [seededA.sourceId] },
+      "indexed scoped query",
+      { topK: 2, vectorIndex: { adapter } },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(String(outcome.references[0]?.chunkId)).toBe(String(allowedChunk));
+    expect(String(outcome.references[0]?.citation.sourceId)).toBe("src-index-a");
   });
 });
 

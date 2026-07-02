@@ -409,8 +409,7 @@ describe("extractDocument — unsupported OCR and scanned inputs", () => {
           confidence: 0.92,
         }),
     };
-    let registry = createDefaultParserRegistry();
-    registry = registerParser(registry, createOcrPipelineParser(adapter));
+    const registry = createDefaultParserRegistry({ ocrAdapter: adapter });
     const result = await extractDocument(
       { fs, store, parserRegistry: registry },
       {

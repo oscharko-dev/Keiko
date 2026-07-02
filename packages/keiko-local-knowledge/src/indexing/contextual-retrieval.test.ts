@@ -53,15 +53,24 @@ describe("contextualRetrievalStrategyKey", () => {
     );
   });
 
-  it("includes prompt version, model, and chunk hash in enabled keys", () => {
+  it("includes prompt version, model, limits, strict mode, and chunk hash in enabled keys", () => {
     expect(
       contextualRetrievalChunkKey(
-        { enabled: true, promptVersion: "prompt-v2", modelId: "ctx-model" },
+        {
+          enabled: true,
+          promptVersion: "prompt-v2",
+          modelId: "ctx-model",
+          maxContextChars: 320,
+          documentContextMaxChars: 8_000,
+          strict: true,
+        },
         "safe-hash",
       ),
-    ).toBe("indexed-text=contextual-v1|prompt=prompt-v2|model=ctx-model|chunk=safe-hash");
+    ).toBe(
+      "indexed-text=contextual-v1|prompt=prompt-v2|model=ctx-model|maxContextChars=320|documentContextMaxChars=8000|strict=true|chunk=safe-hash",
+    );
     expect(contextualRetrievalStrategyKey({ enabled: true })).toBe(
-      "indexed-text=contextual-v1|prompt=contextual-retrieval-v1|model=unconfigured",
+      "indexed-text=contextual-v1|prompt=contextual-retrieval-v1|model=unconfigured|maxContextChars=480|documentContextMaxChars=12000|strict=false",
     );
   });
 });

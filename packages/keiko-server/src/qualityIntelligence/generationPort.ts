@@ -28,7 +28,6 @@ import type {
 import type { UiHandlerDeps } from "../deps.js";
 
 const BASELINE_GENERATION_OUTPUT = JSON.stringify({ testCases: [] });
-const DETERMINISTIC_GENERATION_TEMPERATURE = 0;
 const DETERMINISTIC_GENERATION_TOP_P = 1;
 const GENERATION_TASK_PROFILE = MgQI.getQualityIntelligenceTaskProfile("qi:test-design");
 
@@ -292,7 +291,7 @@ function buildGenerationRequest(
     messages,
     stream: false,
     cancellationSignal: signal,
-    temperature: DETERMINISTIC_GENERATION_TEMPERATURE,
+    temperature: 0,
     topP: DETERMINISTIC_GENERATION_TOP_P,
     ...(useSeed && requestedSeed !== undefined ? { seed: requestedSeed } : {}),
     ...(useResponseFormat
@@ -314,7 +313,7 @@ function buildModelParameters(
   requestedSeed: number | undefined,
 ): Record<string, unknown> | undefined {
   const modelParameters: Record<string, unknown> = {};
-  modelParameters.temperature = DETERMINISTIC_GENERATION_TEMPERATURE;
+  modelParameters.temperature = 0;
   modelParameters.topP = DETERMINISTIC_GENERATION_TOP_P;
   modelParameters.responseFormatEnforced = useResponseFormat;
   if (useResponseFormat) modelParameters.responseFormat = "json_schema";

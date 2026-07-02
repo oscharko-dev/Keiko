@@ -193,7 +193,6 @@ const SAFE_PROMPT_TOO_LARGE_VERDICT: TestQualityJudgeVerdict = Object.freeze({
     "Judge-Prompt hat das Modellbudget überschritten; Bewertung fällt auf weak zurück",
 });
 
-const DETERMINISTIC_JUDGE_TEMPERATURE = 0;
 const JUDGE_TASK_PROFILE = MgQI.getQualityIntelligenceTaskProfile("qi:judge-logic");
 
 export interface QiJudgePortOptions {
@@ -368,7 +367,7 @@ function buildJudgeModelParameters(
   requestedSeed: number | undefined,
 ): Record<string, unknown> {
   return {
-    judgeTemperature: DETERMINISTIC_JUDGE_TEMPERATURE,
+    judgeTemperature: 0,
     judgeSeedUsed: useSeed,
     ...(useSeed && requestedSeed !== undefined ? { judgeSeed: requestedSeed } : {}),
     ...(useResponseFormat ? { judgeResponseFormat: "json_schema" } : {}),
@@ -455,7 +454,7 @@ export function createQiJudgePort(
         messages,
         stream: false,
         cancellationSignal: cancellation.signal,
-        temperature: DETERMINISTIC_JUDGE_TEMPERATURE,
+        temperature: 0,
         ...(useSeed ? { seed: requestedSeed } : {}),
         responseFormat: buildQiJudgeResponseFormat(),
       };

@@ -34,55 +34,24 @@ import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
-import { lexicalQueryTerms } from "./lexical-normalization.js";
-import { RetrievalError, type QueryTransformer, type RetrievalDiagnostics } from "./types.js";
+import {
+  lexicalExactTerms,
+  lexicalQueryTermGroups,
+  lexicalTextTokens,
+  normaliseLexicalTerm,
+  type LexicalQueryTermGroup,
+} from "./lexical-normalization.js";
+import { RetrievalError, type QueryTransformer, type RetrievalDiagnostics, type RetrievalVectorIndexDiagnostics } from "./types.js";
+import {
+  searchVectorIndex,
+  type VectorIndexCandidate,
+  type VectorIndexOptions,
+} from "./vector-index.js";
 
 const LEXICAL_RECALL_MAX_TERMS = 12;
 const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
-const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
 const BROAD_QUERY_PATTERN =
   /\b(compare|comparez|summari[sz]e|overview|explain|describe|analyse|analyze|erkl[aä]re|ueberblick|überblick|vergleiche|zusammenfassung)\b/iu;
-const SEARCH_STOPWORDS = new Set([
-  "a",
-  "about",
-  "and",
-  "are",
-  "auf",
-  "aus",
-  "bei",
-  "das",
-  "der",
-  "die",
-  "ein",
-  "eine",
-  "einen",
-  "einer",
-  "eines",
-  "for",
-  "from",
-  "how",
-  "in",
-  "ist",
-  "mit",
-  "of",
-  "on",
-  "oder",
-  "sagen",
-  "steht",
-  "the",
-  "to",
-  "und",
-  "uber",
-  "ueber",
-  "über",
-  "von",
-  "was",
-  "what",
-  "wie",
-  "zu",
-  "zum",
-  "zur",
-]);
 
 // ─── Public input shape ──────────────────────────────────────────────────────
 // A pre-built scope (single capsule or composed set) reshaped into the union the search
@@ -102,13 +71,14 @@ export interface SearchOptions {
   readonly strategy?: "auto" | "balanced" | "exact" | "broad";
   readonly queryTransformer?: QueryTransformer;
   readonly queryTransformTimeoutMs?: number;
+  readonly vectorIndex?: VectorIndexOptions;
 }
 
 interface QueryProfile {
   readonly strategy: "balanced" | "exact" | "broad";
   readonly tokens: readonly string[];
   readonly exactTerms: readonly string[];
-  readonly lexicalRecallTerms: readonly string[];
+  readonly lexicalRecallTerms: readonly LexicalQueryTermGroup[];
   readonly documentDiversityPenalty: number;
   readonly sectionDiversityPenalty: number;
 }
@@ -166,6 +136,12 @@ const SELECT_VECTOR_CACHE_STAMP_SQL = [
   "WHERE capsule_id = :c",
 ].join(" ");
 
+const COUNT_VECTORS_FOR_CAPSULE_SCOPE_SQL = [
+  "SELECT COUNT(*) AS n",
+  "FROM vectors",
+  "WHERE capsule_id = :c",
+].join(" ");
+
 const DECODED_VECTOR_CACHE = new WeakMap<KnowledgeStore, Map<string, readonly DecodedVectorRow[]>>();
 
 function readVectorsForCapsule(
@@ -193,6 +169,28 @@ function vectorCacheStamp(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId):
   return store._internal.db
     .prepare(SELECT_VECTOR_CACHE_STAMP_SQL)
     .get({ c: String(capsuleId) }) as unknown as VectorCacheStampRow;
+}
+
+function countVectorsForCapsuleScope(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+): number {
+  if (sourceFilter?.length === 0) return 0;
+  const params: Record<string, string> = { c: String(capsuleId) };
+  const sourceClause =
+    sourceFilter === undefined
+      ? ""
+      : ` AND source_id IN (${sourceFilter.map((_, i) => `:s${String(i)}`).join(", ")})`;
+  if (sourceFilter !== undefined) {
+    for (let i = 0; i < sourceFilter.length; i += 1) {
+      params[`s${String(i)}`] = String(sourceFilter[i]);
+    }
+  }
+  const row = store._internal.db
+    .prepare(`${COUNT_VECTORS_FOR_CAPSULE_SCOPE_SQL}${sourceClause}`)
+    .get(params) as { readonly n: number } | undefined;
+  return typeof row?.n === "number" ? row.n : 0;
 }
 
 function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly DecodedVectorRow[]> {
@@ -704,11 +702,17 @@ function escapeFtsPhrase(value: string): string {
   return `"${value.replace(/"/gu, '""')}"`;
 }
 
+function ftsGroupQuery(group: LexicalQueryTermGroup): string {
+  const terms = group.terms.map(escapeFtsPhrase);
+  if (terms.length === 1) return terms[0] ?? "";
+  return `(${terms.join(" OR ")})`;
+}
+
 function buildFtsMatchQuery(profile: QueryProfile): string | undefined {
-  const terms = profile.lexicalRecallTerms.slice(0, LEXICAL_RECALL_MAX_TERMS);
-  if (terms.length === 0) return undefined;
+  const groups = profile.lexicalRecallTerms.slice(0, LEXICAL_RECALL_MAX_TERMS);
+  if (groups.length === 0) return undefined;
   const operator = profile.strategy === "broad" ? " OR " : " AND ";
-  return terms.map(escapeFtsPhrase).join(operator);
+  return groups.map(ftsGroupQuery).filter((term) => term.length > 0).join(operator);
 }
 
 function readFtsCandidatesForCapsule(
@@ -1082,6 +1086,7 @@ export interface SearchOutcome {
 // has 4 distinct branches; bundling them into one function pushes it past the lint cap).
 interface SearchState {
   readonly candidates: DenseCandidate[];
+  readonly vectorIndexDiagnostics: RetrievalVectorIndexDiagnostics[];
   anyVectorSeen: boolean;
   anyDimensionCompatible: boolean;
   anyIdentityIncompatible: boolean;
@@ -1091,6 +1096,7 @@ interface SearchState {
 function emptyState(): SearchState {
   return {
     candidates: [],
+    vectorIndexDiagnostics: [],
     anyVectorSeen: false,
     anyDimensionCompatible: false,
     anyIdentityIncompatible: false,
@@ -1135,23 +1141,68 @@ async function ensureIdentityPreflight(
   return result;
 }
 
-// eslint-disable-next-line max-lines-per-function
-async function processCapsule(
-  store: KnowledgeStore,
-  embeddingAdapter: OpenAIEmbeddingAdapter,
+function denseCandidatesFromVectorIndex(
+  candidates: readonly VectorIndexCandidate[],
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  query: string,
+): readonly DenseCandidate[] {
+  const allowedSources =
+    sourceFilter === undefined ? undefined : new Set(sourceFilter.map((sourceId) => String(sourceId)));
+  const out: DenseCandidate[] = [];
+  for (const candidate of candidates) {
+    if (String(candidate.capsuleId) !== String(capsule.id)) continue;
+    if (
+      allowedSources !== undefined &&
+      (candidate.sourceId === undefined || !allowedSources.has(String(candidate.sourceId)))
+    ) {
+      continue;
+    }
+    out.push({
+      chunkId: candidate.chunkId,
+      capsuleId: capsule.id,
+      score: candidate.score,
+    });
+  }
+  return out;
+}
+
+function tryVectorIndexForCapsule(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  embedded: EmbeddedQuery,
   options: SearchOptions,
   profile: QueryProfile,
+  state: SearchState,
+): boolean {
+  const indexed = searchVectorIndex(
+    {
+      store,
+      capsule,
+      ...(sourceFilter !== undefined ? { sourceFilter } : {}),
+      queryVector: embedded.vector,
+      candidateLimit: oversampleTopK(options.topK, profile),
+      ...(options.minScore !== undefined ? { minScore: options.minScore } : {}),
+    },
+    options.vectorIndex,
+  );
+  state.vectorIndexDiagnostics.push(indexed.diagnostics);
+  if (indexed.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
+  if (indexed.sawDimensionCompatible) state.anyDimensionCompatible = true;
+  if (!indexed.ok) return false;
+  state.candidates.push(...denseCandidatesFromVectorIndex(indexed.candidates, capsule, sourceFilter));
+  return true;
+}
+
+async function compatibleEmbeddedQueryForCapsule(
+  embeddingAdapter: OpenAIEmbeddingAdapter,
+  capsule: KnowledgeCapsule,
+  query: string,
+  options: SearchOptions,
   cache: Map<string, EmbeddedQuery>,
   preflightCache: Map<string, IdentityPreflightResult>,
   state: SearchState,
-): Promise<void> {
-  const rows = readDecodedVectorsForCapsule(store, capsule, sourceFilter);
-  if (rows.length === 0) return;
-  state.anyVectorSeen = true;
-
+): Promise<EmbeddedQuery | undefined> {
   const preflight = await ensureIdentityPreflight(
     embeddingAdapter,
     capsule.embeddingModelIdentity,
@@ -1160,11 +1211,11 @@ async function processCapsule(
   );
   if (preflight === "incompatible") {
     state.anyIdentityIncompatible = true;
-    return;
+    return undefined;
   }
   if (preflight === "failed") {
     state.embeddingFailed = true;
-    return;
+    return undefined;
   }
 
   const embedded = await ensureQueryEmbedded(
@@ -1180,18 +1231,49 @@ async function processCapsule(
     } else {
       state.embeddingFailed = true;
     }
-    return;
+    return undefined;
   }
   if (embedded === undefined) {
     state.embeddingFailed = true;
-    return;
+    return undefined;
   }
   if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
-    // Adapter returned a dim that doesn't match the capsule's pinned identity — same
-    // failure surface as #192's `INCOMPATIBLE_EMBEDDING_IDENTITY`. Skip this capsule.
     state.anyIdentityIncompatible = true;
-    return;
+    return undefined;
   }
+  return embedded;
+}
+
+async function processCapsule(
+  store: KnowledgeStore,
+  embeddingAdapter: OpenAIEmbeddingAdapter,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  query: string,
+  options: SearchOptions,
+  profile: QueryProfile,
+  cache: Map<string, EmbeddedQuery>,
+  preflightCache: Map<string, IdentityPreflightResult>,
+  state: SearchState,
+): Promise<void> {
+  const vectorCount = countVectorsForCapsuleScope(store, capsule.id, sourceFilter);
+  if (vectorCount === 0) return;
+  state.anyVectorSeen = true;
+
+  const embedded = await compatibleEmbeddedQueryForCapsule(
+    embeddingAdapter,
+    capsule,
+    query,
+    options,
+    cache,
+    preflightCache,
+    state,
+  );
+  if (embedded === undefined) return;
+  if (tryVectorIndexForCapsule(store, capsule, sourceFilter, embedded, options, profile, state)) return;
+
+  const rows = readDecodedVectorsForCapsule(store, capsule, sourceFilter);
+  if (rows.length === 0) return;
   const scored = scoreCapsuleVectors(
     rows,
     capsule,
@@ -1250,6 +1332,20 @@ function selectTopCandidates(
   return { ok: true, top: candidates };
 }
 
+function vectorIndexDiagnostics(
+  diagnostics: readonly RetrievalVectorIndexDiagnostics[],
+): RetrievalVectorIndexDiagnostics {
+  const available = diagnostics.find((diagnostic) => diagnostic.status === "available");
+  if (available !== undefined) return available;
+  const fallback = diagnostics.find((diagnostic) => diagnostic.provider === "sqlite-vec");
+  if (fallback !== undefined) return fallback;
+  return {
+    provider: "brute-force",
+    status: "disabled",
+    reason: "vector-index-disabled",
+  };
+}
+
 function retrievalDiagnostics(
   state: SearchState,
   lexical: LexicalCollection,
@@ -1276,6 +1372,7 @@ function retrievalDiagnostics(
     lexicalCandidateCount: lexical.candidates.length,
     fusedCandidateCount: fused.length,
     lexicalIndex,
+    vectorIndex: vectorIndexDiagnostics(state.vectorIndexDiagnostics),
   };
 }
 
@@ -1298,6 +1395,11 @@ export async function searchVectorsForScope(
         lexicalCandidateCount: 0,
         fusedCandidateCount: 0,
         lexicalIndex: "missing",
+        vectorIndex: {
+          provider: "brute-force",
+          status: "disabled",
+          reason: "vector-index-disabled",
+        },
       },
     };
   }
@@ -1573,22 +1675,7 @@ function balancedQueryProfile(
 }
 
 function extractExactTerms(value: string): readonly string[] {
-  const out: string[] = [];
-  const matches = value.matchAll(EXACT_TERM_PATTERN);
-  for (const match of matches) {
-    const raw = match[0];
-    if (!isExactTerm(raw)) continue;
-    const term = normaliseForSearch(raw);
-    if (term.length > 0) out.push(term);
-  }
-  return uniqueTokens(out);
-}
-
-function isExactTerm(value: string): boolean {
-  if (/\d/u.test(value)) return true;
-  if (/[._:/#-]/u.test(value)) return true;
-  if (/[a-z][A-Z]/u.test(value)) return true;
-  return value.length >= 3 && value === value.toUpperCase() && /\p{L}/u.test(value);
+  return lexicalExactTerms(value);
 }
 
 function hasDigitAndLetter(value: string): boolean {
@@ -1616,20 +1703,15 @@ function uniqueTokens(tokens: readonly string[]): readonly string[] {
 function buildLexicalRecallTerms(
   tokens: readonly string[],
   exactTerms: readonly string[],
-): readonly string[] {
+): readonly LexicalQueryTermGroup[] {
   const tokenTerms = tokens.filter((token) => token.length >= LEXICAL_RECALL_MIN_TOKEN_LENGTH);
-  return uniqueTokens(lexicalQueryTerms([...exactTerms, ...tokenTerms])).slice(
-    0,
-    LEXICAL_RECALL_MAX_TERMS,
-  );
+  return lexicalQueryTermGroups([...exactTerms, ...tokenTerms]).slice(0, LEXICAL_RECALL_MAX_TERMS);
 }
 
 function tokenise(value: string): readonly string[] {
-  return normaliseForSearch(value)
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((token) => token.length >= 2 && !SEARCH_STOPWORDS.has(token));
+  return lexicalTextTokens(value);
 }
 
 function normaliseForSearch(value: string): string {
-  return value.normalize("NFC").toLocaleLowerCase("und");
+  return normaliseLexicalTerm(value);
 }

@@ -6,6 +6,7 @@
 import { ApiError } from "./api";
 import type {
   CapsuleSetId,
+  CapsuleContextualRetrievalSettings,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceScope,
@@ -167,15 +168,19 @@ export async function createCapsuleSet(
 
 // ---------------------------------------------------------------------------
 // PATCH /api/local-knowledge/capsules/:id — Issue #189 Slice 4 "beschriften".
-// Rename a capsule's display name and/or edit its description. At least one field
-// must be present (the BFF rejects an empty patch with 400). Metadata updates are
-// not yet supported and are rejected with a clear 400. Returns the full capsule
-// detail so the caller can refresh in place.
+// Update capsule metadata-like typed fields. At least one field must be present
+// (the BFF rejects an empty patch with 400). Untyped metadata updates are not yet
+// supported and are rejected with a clear 400. Returns the full capsule detail so
+// the caller can refresh in place.
 // ---------------------------------------------------------------------------
 
 export interface RenameCapsulePatch {
   readonly displayName?: string;
   readonly description?: string;
+}
+
+export interface UpdateCapsuleSettingsPatch {
+  readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
 }
 
 export async function renameCapsule(
@@ -185,6 +190,16 @@ export async function renameCapsule(
   return fetchJson<CapsuleDetail>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
     { method: "PATCH", body: JSON.stringify(patch) },
+  );
+}
+
+export async function updateCapsuleContextualRetrieval(
+  capsuleId: KnowledgeCapsuleId,
+  contextualRetrieval: CapsuleContextualRetrievalSettings,
+): Promise<CapsuleDetail> {
+  return fetchJson<CapsuleDetail>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "PATCH", body: JSON.stringify({ contextualRetrieval }) },
   );
 }
 
@@ -363,6 +378,20 @@ export async function reembedCapsuleForCurrentModel(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
   const request: CapsuleReindexRequest = { capsuleId, mode: "full-reembed", force: true };
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify(request) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsules/:id/reindex — rebuild chunks, retrieval text, and vectors
+// ---------------------------------------------------------------------------
+
+export async function rebuildCapsuleIndex(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  const request: CapsuleReindexRequest = { capsuleId, mode: "full-rebuild", force: true };
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
     { method: "POST", body: JSON.stringify(request) },

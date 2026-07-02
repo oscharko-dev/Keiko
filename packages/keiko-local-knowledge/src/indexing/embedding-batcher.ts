@@ -37,7 +37,7 @@ import {
 } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 import { chunkDedupeKey } from "../chunking/chunker.js";
-import { defaultTokenEstimator } from "../chunking/token-estimator.js";
+import { conservativeTokenEstimatorTokenizer } from "../chunking/token-estimator.js";
 
 // ─── Concurrency primitive ───────────────────────────────────────────────────
 // Hand-rolled bounded-concurrency runner. Avoids pulling in `p-limit` (the local-knowledge
@@ -187,14 +187,16 @@ const BATCH_TOKEN_CAP = 30_000;
 
 function groupIntoBatches(
   requests: readonly UniqueChunkRequest[],
+  options: EmbedBatchOptions,
 ): readonly (readonly UniqueChunkRequest[])[] {
+  const tokenizer = options.tokenizer ?? conservativeTokenEstimatorTokenizer;
   const batches: UniqueChunkRequest[][] = [];
   let current: UniqueChunkRequest[] = [];
   let currentChars = 0;
   let currentTokens = 0;
   for (const request of requests) {
     const len = request.representative.text.length;
-    const tokens = defaultTokenEstimator(request.representative.text);
+    const tokens = tokenizer.countTokens(request.representative.text);
     if (
       current.length > 0 &&
       (current.length >= BATCH_ITEM_CAP ||
@@ -212,6 +214,18 @@ function groupIntoBatches(
   }
   if (current.length > 0) batches.push(current);
   return batches;
+}
+
+function tokenBudgetErrorOutcomes(
+  requests: readonly UniqueChunkRequest[],
+  cause: unknown,
+): readonly ChunkOutcome[] {
+  const message = cause instanceof Error ? cause.message : "unknown tokenizer error";
+  const error: IndexingJobError = {
+    code: "CHUNKING_FAILED",
+    message: `tokenizer failed during embedding batch budgeting: ${message}`,
+  };
+  return requests.map((request) => ({ ok: false, chunk: request.representative, error }));
 }
 
 function isTransientBatchOutcome(outcome: OpenAIEmbeddingBatchOutcome): boolean {
@@ -480,7 +494,13 @@ async function buildChunkOutcomes(
   if (typeof options.adapter.requestBatch === "function") {
     // Array-batch path: collapse the unique requests into ceil(N / itemCap) HTTP calls,
     // run those calls with bounded concurrency, then flatten back into request order.
-    const batches = groupIntoBatches(uniqueRequests);
+    let batches: readonly (readonly UniqueChunkRequest[])[];
+    try {
+      batches = groupIntoBatches(uniqueRequests, options);
+    } catch (cause) {
+      const uniqueErrorOutcomes = tokenBudgetErrorOutcomes(uniqueRequests, cause);
+      return { outcomes: expandUniqueOutcomes(uniqueRequests, uniqueErrorOutcomes) };
+    }
     const batchOutcomes = await runBounded(batches, options.concurrency, async (batch) =>
       embedUniqueBatch(batch, options, state),
     );
