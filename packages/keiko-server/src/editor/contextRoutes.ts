@@ -433,16 +433,21 @@ async function runQueryOperation(
   signal: AbortSignal,
 ): Promise<RouteResult> {
   const query = buildRepoSearchQuery(input, Date.now());
+  const workspaceIndex = deps.workspaceIndexForRoot?.(scope.workspace.root);
   const result =
     input.operation === "findFiles"
       ? await findFiles(scope, query, DEFAULT_SEARCH_LIMITS, { signal })
-      : await searchText(scope, query, DEFAULT_SEARCH_LIMITS, { signal });
+      : await searchText(scope, query, DEFAULT_SEARCH_LIMITS, {
+          signal,
+          ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
+        });
   return {
     status: 200,
     body: deps.redactor({
       atoms: result.atoms,
       truncated: result.truncated,
       filesScanned: result.filesScanned,
+      workspaceIndex: result.workspaceIndex,
     }),
   };
 }

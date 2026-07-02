@@ -126,6 +126,8 @@ playwright-report/
 keiko.config.json
 /credentials/
 keiko-live-start.png
+workspace-index-*.json
+workspace-index-*.json.*.tmp
 
 # Versioned developer sandbox. Keep the sandbox sources committed, but never commit generated
 # installs, runtime state, logs, or ad-hoc local config from sandbox runs.

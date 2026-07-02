@@ -83,6 +83,7 @@ import {
   uncertaintyLines,
   withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
+import type { WorkspaceIndexProvider } from "./workspace-index-provider.js";
 
 // ─── Canonical reader + label/budget helpers ──────────────────────────────────
 
@@ -519,7 +520,10 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
-export function defaultRetriever(signal: AbortSignal): GroundedRetriever {
+export function defaultRetriever(
+  signal: AbortSignal,
+  workspaceIndexForRoot?: WorkspaceIndexProvider,
+): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
     return retrieveConnectedContextPack(input, {
@@ -527,6 +531,7 @@ export function defaultRetriever(signal: AbortSignal): GroundedRetriever {
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
+      ...(workspaceIndexForRoot === undefined ? {} : { workspaceIndexForRoot }),
     });
   };
 }

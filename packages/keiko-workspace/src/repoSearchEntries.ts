@@ -19,6 +19,7 @@ interface EntryWalk {
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
   readonly files: DiscoveredFile[];
+  readonly directories: string[];
   truncated: boolean;
 }
 
@@ -88,6 +89,7 @@ function walkEntryDirectory(
   if (depth > 12 || walk.truncated) {
     return;
   }
+  walk.directories.push(dirRel);
   for (const entry of readDirSorted(walk.fs, absoluteDir)) {
     if (walk.files.length > walk.limits.maxFilesScanned) {
       walk.truncated = true;
@@ -128,13 +130,14 @@ export function collectFromEntries(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): { files: readonly DiscoveredFile[]; filesDiscovered: number; truncated: boolean } {
+): { files: readonly DiscoveredFile[]; directories: readonly string[]; filesDiscovered: number; truncated: boolean } {
   const out: DiscoveredFile[] = [];
   const walk: EntryWalk = {
     scope,
     limits,
     fs,
     files: out,
+    directories: [],
     truncated: false,
   };
   for (const entry of scope.relativePaths) {
@@ -145,6 +148,7 @@ export function collectFromEntries(
   }
   return {
     files: out.slice(0, limits.maxFilesScanned),
+    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     filesDiscovered: out.length,
     truncated: walk.truncated,
   };

@@ -12,6 +12,7 @@ import type {
   EvidenceAtom,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { createHash } from "node:crypto";
 import {
   isValidScopePath,
   validateRetrievalQuery,
@@ -48,6 +49,24 @@ import {
   type SearchHints,
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
+import {
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
+  inspectWorkspaceIndexDirectories,
+  prepareCachedWorkspaceIndexSnapshot,
+  prepareWorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
+  type PreparedWorkspaceIndexEntry,
+  type PreparedWorkspaceIndexSnapshot,
+  type WorkspaceIndexDirectoryDelta,
+  type WorkspaceIndexDirectorySnapshot,
+  type WorkspaceIndexPreparationReport,
+  type WorkspaceIndex,
+  type WorkspaceIndexDiscoverySnapshot,
+  type WorkspaceIndexDiscoveredFile,
+  type WorkspaceIndexRecord,
+  type WorkspaceIndexSnapshot,
+} from "./workspaceIndex.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -88,6 +107,7 @@ export interface SearchResult {
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics | undefined;
   readonly coverage: ContextCoverageDiagnostics;
+  readonly workspaceIndex?: WorkspaceIndexPreparationReport | undefined;
 }
 
 export interface ReadExcerptRequest {
@@ -108,6 +128,7 @@ interface FacadeDeps {
   readonly nowMs?: () => number;
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
+  readonly workspaceIndex?: WorkspaceIndex | undefined;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -284,6 +305,7 @@ function abortedSearchResult(
       candidateTruncated,
       truncationReasons,
     }),
+    workspaceIndex: undefined,
   };
 }
 
@@ -316,6 +338,598 @@ function buildSearchTextRunner(
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
   };
+}
+
+interface SearchWorkspaceIndexSession {
+  candidateSet: CandidateSet;
+  readonly preparedEntries: Map<string, PreparedWorkspaceIndexEntry>;
+  readonly recordByPath: Map<string, WorkspaceIndexRecord>;
+  readonly discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>;
+  readonly rebuiltCachedRecords: Set<string>;
+  dirty: boolean;
+  report: WorkspaceIndexPreparationReport | undefined;
+  readonly persist: () => Promise<void>;
+}
+
+type SearchWorkspaceIndexSessionState = Omit<SearchWorkspaceIndexSession, "persist">;
+
+function discoveredFileSnapshot(
+  scopePath: string,
+  sizeBytes: number,
+  mtimeMs: number | undefined,
+): WorkspaceIndexDiscoveredFile {
+  return {
+    scopePath,
+    sizeBytes,
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+  };
+}
+
+function candidateSetDiscoverySnapshot(
+  candidateSet: CandidateSet,
+  discoveryFiles: readonly WorkspaceIndexDiscoveredFile[],
+  directories: readonly WorkspaceIndexDirectorySnapshot[],
+): WorkspaceIndexDiscoverySnapshot {
+  return {
+    files: discoveryFiles,
+    directories,
+    filesDiscovered: candidateSet.diagnostics.filesDiscovered,
+    ignoredByDiscovery: candidateSet.diagnostics.ignoredByDiscovery,
+    deniedByDiscovery: candidateSet.diagnostics.deniedByDiscovery,
+    depthPrunedByDiscovery: candidateSet.diagnostics.depthPrunedByDiscovery,
+    truncated: candidateSet.truncated,
+  };
+}
+
+function directoryFingerprint(entries: readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[]): string {
+  return createHash("sha256").update(JSON.stringify(
+    entries
+      .map((entry) => ({
+        name: entry.name,
+        isDirectory: entry.isDirectory,
+        isFile: entry.isFile,
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+  )).digest("hex");
+}
+
+function ancestorDirectoryPaths(scopePath: string): readonly string[] {
+  const normalized = scopePath.split("\\").join("/");
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  const paths: string[] = [""];
+  let current = "";
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = current.length === 0 ? (parts[index] ?? "") : `${current}/${parts[index] ?? ""}`;
+    paths.push(current);
+  }
+  return [...new Set(paths)];
+}
+
+function parentDirectoryPath(scopePath: string): string {
+  const normalized = scopePath.split("\\").join("/");
+  const slash = normalized.lastIndexOf("/");
+  return slash === -1 ? "" : normalized.slice(0, slash);
+}
+
+function selectedDirectoryPath(
+  workspaceRoot: string,
+  scopePath: string,
+  fs: WorkspaceFs,
+): string | undefined {
+  const normalized = scopePath.split("\\").join("/");
+  if (normalized.length === 0) {
+    return "";
+  }
+  if (!isValidScopePath(normalized, { mustBeRelative: true }) || isDenied(normalized)) {
+    return undefined;
+  }
+  const absolutePath = resolveWithinWorkspace(workspaceRoot, normalized);
+  let contained;
+  try {
+    contained = containedRealPathInfo(fs, workspaceRoot, absolutePath);
+  } catch {
+    return undefined;
+  }
+  const realScopePath = normalizeScopePath(contained.realRelative);
+  if (isDenied(realScopePath)) {
+    return undefined;
+  }
+  try {
+    const stat = fs.stat(contained.path);
+    return stat.isDirectory ? realScopePath : parentDirectoryPath(realScopePath);
+  } catch {
+    return parentDirectoryPath(realScopePath);
+  }
+}
+
+function buildWorkspaceIndexDirectories(
+  workspaceRoot: string,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+  fs: WorkspaceFs,
+  relativePaths: readonly string[],
+  visitedDirectories: readonly string[],
+): readonly WorkspaceIndexDirectorySnapshot[] {
+  const directories = new Set<string>();
+  addVisitedWorkspaceIndexDirectories(directories, visitedDirectories);
+  addSelectedWorkspaceIndexDirectories(directories, workspaceRoot, fs, relativePaths);
+  addIndexedWorkspaceIndexAncestors(directories, discoveryByPath);
+  const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
+  for (const scopePath of [...directories].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const absolutePath = scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
+    try {
+      const entries = fs.readDir(absolutePath);
+      const stat = fs.stat(absolutePath);
+      snapshots.push({
+        scopePath,
+        fingerprint: directoryFingerprint(entries),
+        ...(typeof stat.mtimeMs === "number" ? { mtimeMs: stat.mtimeMs } : {}),
+      });
+    } catch {
+      snapshots.push({ scopePath, fingerprint: "unavailable", mtimeMs: undefined });
+    }
+  }
+  return snapshots;
+}
+
+function addVisitedWorkspaceIndexDirectories(
+  directories: Set<string>,
+  visitedDirectories: readonly string[],
+): void {
+  for (const directory of visitedDirectories) {
+    if (isValidScopePath(directory, { mustBeRelative: true }) && !isDenied(directory)) {
+      directories.add(directory);
+    }
+  }
+}
+
+function addSelectedWorkspaceIndexDirectories(
+  directories: Set<string>,
+  workspaceRoot: string,
+  fs: WorkspaceFs,
+  relativePaths: readonly string[],
+): void {
+  if (relativePaths.length === 0) {
+    directories.add("");
+    return;
+  }
+  for (const scopePath of relativePaths) {
+    const directory = selectedDirectoryPath(workspaceRoot, scopePath, fs);
+    if (directory !== undefined) {
+      directories.add(directory);
+    }
+  }
+}
+
+function addIndexedWorkspaceIndexAncestors(
+  directories: Set<string>,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+): void {
+  for (const scopePath of discoveryByPath.keys()) {
+    for (const ancestor of ancestorDirectoryPaths(scopePath)) {
+      directories.add(ancestor);
+    }
+  }
+}
+
+function sameWorkspaceIndexRecord(
+  a: WorkspaceIndexRecord | undefined,
+  b: WorkspaceIndexRecord | undefined,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function sameDiscoveryFile(
+  a: WorkspaceIndexDiscoveredFile | undefined,
+  b: WorkspaceIndexDiscoveredFile,
+): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function workspaceIndexPolicyShape(runner: SearchTextRunner): {
+  readonly policyMode: SearchTextRunner["policy"]["mode"];
+  readonly applyGitignore: boolean;
+  readonly omitLowValueWorkspaceFiles: boolean;
+} {
+  return {
+    policyMode: runner.policy.mode,
+    applyGitignore: runner.policy.applyGitignore,
+    omitLowValueWorkspaceFiles: runner.policy.omitLowValueWorkspaceFiles,
+  };
+}
+
+function workspaceIndexScopeKey(
+  scope: SearchScope,
+  runner: SearchTextRunner,
+): ReturnType<typeof buildWorkspaceIndexScopeKey> {
+  return buildWorkspaceIndexScopeKey(
+    scope,
+    workspaceIndexPolicyShape(runner),
+    runner.limits.maxBytesPerFileScanned,
+    runner.limits.maxFilesScanned,
+  );
+}
+
+function seedWorkspaceIndexCaches(
+  prepared: PreparedWorkspaceIndexSnapshot | undefined,
+  candidateSet: CandidateSet,
+): Pick<
+  SearchWorkspaceIndexSession,
+  "preparedEntries" | "recordByPath" | "discoveryByPath"
+> {
+  const preparedEntries = new Map<string, PreparedWorkspaceIndexEntry>();
+  const recordByPath = new Map<string, WorkspaceIndexRecord>();
+  const discoveryByPath = new Map<string, WorkspaceIndexDiscoveredFile>();
+  if (prepared === undefined) {
+    for (const file of candidateSet.files) {
+      discoveryByPath.set(
+        file.relativePath,
+        discoveredFileSnapshot(file.relativePath, file.sizeBytes, undefined),
+      );
+    }
+    return { preparedEntries, recordByPath, discoveryByPath };
+  }
+  for (const entry of prepared.entries) {
+    preparedEntries.set(entry.scopePath, entry);
+    discoveryByPath.set(
+      entry.scopePath,
+      discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs),
+    );
+    if (entry.record !== undefined) {
+      recordByPath.set(entry.scopePath, entry.record);
+    }
+  }
+  return { preparedEntries, recordByPath, discoveryByPath };
+}
+
+function sortedDiscoveryFiles(
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+): readonly WorkspaceIndexDiscoveredFile[] {
+  return [...discoveryByPath.values()].sort((a, b) =>
+    a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
+  );
+}
+
+function preparedFromSessionState(
+  discovery: WorkspaceIndexDiscoverySnapshot,
+  preparedEntries: ReadonlyMap<string, PreparedWorkspaceIndexEntry>,
+  discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>,
+  report: WorkspaceIndexPreparationReport,
+): PreparedWorkspaceIndexSnapshot {
+  return {
+    valid: true,
+    dirty: false,
+    entries: [...preparedEntries.values()].sort((a, b) =>
+      a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
+    ),
+    discovery: {
+      ...discovery,
+      files: sortedDiscoveryFiles(discoveryByPath),
+      filesDiscovered: discovery.truncated ? discovery.filesDiscovered : discoveryByPath.size,
+    },
+    report,
+  };
+}
+
+function removeWorkspaceIndexPath(
+  scopePath: string,
+  preparedEntries: Map<string, PreparedWorkspaceIndexEntry>,
+  recordByPath: Map<string, WorkspaceIndexRecord>,
+  discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>,
+): boolean {
+  const hadEntry = preparedEntries.delete(scopePath);
+  const hadRecord = recordByPath.delete(scopePath);
+  const hadDiscovery = discoveryByPath.delete(scopePath);
+  return hadEntry || hadRecord || hadDiscovery;
+}
+
+function removeWorkspaceIndexDirectory(
+  directoryScopePath: string,
+  preparedEntries: Map<string, PreparedWorkspaceIndexEntry>,
+  recordByPath: Map<string, WorkspaceIndexRecord>,
+  discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>,
+): number {
+  const paths = [...discoveryByPath.keys()].filter(
+    (scopePath) =>
+      directoryScopePath.length === 0 ||
+      scopePath === directoryScopePath ||
+      scopePath.startsWith(`${directoryScopePath}/`),
+  );
+  let removed = 0;
+  for (const scopePath of paths) {
+    if (removeWorkspaceIndexPath(scopePath, preparedEntries, recordByPath, discoveryByPath)) {
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+function deltaScanPaths(delta: WorkspaceIndexDirectoryDelta): readonly string[] {
+  return delta.rescanDirectory ? [delta.scopePath] : delta.addedPaths;
+}
+
+function prepareAffectedWorkspaceIndexSnapshot(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  scanPaths: readonly string[],
+  records: Iterable<WorkspaceIndexRecord>,
+): PreparedWorkspaceIndexSnapshot | undefined {
+  if (scanPaths.length === 0) {
+    return undefined;
+  }
+  const affectedScope: SearchScope = { ...scope, relativePaths: scanPaths };
+  const candidateSet = gatherCandidates(affectedScope, query, limits, runner.fs, runner.policy);
+  const discoveryFiles = candidateSet.files.map((file) =>
+    discoveredFileSnapshot(file.relativePath, file.sizeBytes, undefined),
+  );
+  return prepareWorkspaceIndexSnapshot(
+    buildWorkspaceIndexSnapshot({
+      scope: affectedScope,
+      policy: workspaceIndexPolicyShape(runner),
+      maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
+      maxFilesScanned: runner.limits.maxFilesScanned,
+      discovery: candidateSetDiscoverySnapshot(candidateSet, discoveryFiles, []),
+      records,
+    }),
+    scope.workspace,
+    runner.fs,
+  );
+}
+
+function applyAffectedPreparedEntries(
+  prepared: PreparedWorkspaceIndexSnapshot | undefined,
+  preparedEntries: Map<string, PreparedWorkspaceIndexEntry>,
+  recordByPath: Map<string, WorkspaceIndexRecord>,
+  discoveryByPath: Map<string, WorkspaceIndexDiscoveredFile>,
+): WorkspaceIndexPreparationReport {
+  const empty = {
+    discoveredEntries: 0,
+    retainedEntries: 0,
+    indexedRecords: 0,
+    reusedRecords: 0,
+    staleRecords: 0,
+    skippedEntries: 0,
+    deletedEntries: 0,
+    droppedRecords: 0,
+  };
+  if (prepared === undefined) {
+    return empty;
+  }
+  for (const entry of prepared.entries) {
+    preparedEntries.set(entry.scopePath, entry);
+    discoveryByPath.set(entry.scopePath, discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs));
+    if (entry.record !== undefined) {
+      recordByPath.set(entry.scopePath, entry.record);
+    }
+  }
+  return prepared.report;
+}
+
+function reconciledWorkspaceIndexReport(inputs: {
+  readonly discoveryByPath: ReadonlyMap<string, WorkspaceIndexDiscoveredFile>;
+  readonly recordByPath: ReadonlyMap<string, WorkspaceIndexRecord>;
+  readonly affectedReport: WorkspaceIndexPreparationReport;
+  readonly removedEntries: number;
+}): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: inputs.discoveryByPath.size,
+    retainedEntries: inputs.discoveryByPath.size,
+    indexedRecords: inputs.recordByPath.size,
+    reusedRecords: Math.max(0, inputs.recordByPath.size - inputs.affectedReport.staleRecords),
+    staleRecords: inputs.affectedReport.staleRecords,
+    skippedEntries: inputs.affectedReport.skippedEntries,
+    deletedEntries: inputs.removedEntries + inputs.affectedReport.deletedEntries,
+    droppedRecords: inputs.removedEntries + inputs.affectedReport.droppedRecords,
+  };
+}
+
+function emptyWorkspaceIndexPreparationReport(): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: 0,
+    retainedEntries: 0,
+    indexedRecords: 0,
+    reusedRecords: 0,
+    staleRecords: 0,
+    skippedEntries: 0,
+    deletedEntries: 0,
+    droppedRecords: 0,
+  };
+}
+
+function addWorkspaceIndexPreparationReport(
+  a: WorkspaceIndexPreparationReport,
+  b: WorkspaceIndexPreparationReport,
+): WorkspaceIndexPreparationReport {
+  return {
+    discoveredEntries: a.discoveredEntries + b.discoveredEntries,
+    retainedEntries: a.retainedEntries + b.retainedEntries,
+    indexedRecords: a.indexedRecords + b.indexedRecords,
+    reusedRecords: a.reusedRecords + b.reusedRecords,
+    staleRecords: a.staleRecords + b.staleRecords,
+    skippedEntries: a.skippedEntries + b.skippedEntries,
+    deletedEntries: a.deletedEntries + b.deletedEntries,
+    droppedRecords: a.droppedRecords + b.droppedRecords,
+  };
+}
+
+async function loadWorkspaceIndexSnapshot(
+  workspaceIndex: WorkspaceIndex,
+  scope: SearchScope,
+  runner: SearchTextRunner,
+): Promise<WorkspaceIndexSnapshot | undefined> {
+  try {
+    return await workspaceIndex.loadSnapshot(workspaceIndexScopeKey(scope, runner));
+  } catch {
+    return undefined;
+  }
+}
+
+function initialWorkspaceIndexSessionState(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  prepared: PreparedWorkspaceIndexSnapshot | undefined,
+): SearchWorkspaceIndexSessionState {
+  const candidateSet = prepared === undefined
+    ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
+    : workspaceIndexCandidateSet(prepared, query, runner.policy);
+  return {
+    candidateSet,
+    ...seedWorkspaceIndexCaches(prepared, candidateSet),
+    rebuiltCachedRecords: new Set<string>(),
+    dirty: prepared === undefined,
+    report: prepared?.report,
+  };
+}
+
+function applyWorkspaceIndexDelta(
+  delta: WorkspaceIndexDirectoryDelta,
+  state: SearchWorkspaceIndexSessionState,
+  inputs: {
+    readonly scope: SearchScope;
+    readonly query: RetrievalQuery;
+    readonly runner: SearchTextRunner;
+    readonly limits: SearchLimits;
+  },
+): { readonly removedEntries: number; readonly affectedReport: WorkspaceIndexPreparationReport } {
+  let removedEntries = 0;
+  for (const removedPath of delta.removedPaths) {
+    if (removeWorkspaceIndexPath(removedPath, state.preparedEntries, state.recordByPath, state.discoveryByPath)) {
+      removedEntries += 1;
+    }
+  }
+  if (delta.rescanDirectory) {
+    removedEntries += removeWorkspaceIndexDirectory(
+      delta.scopePath,
+      state.preparedEntries,
+      state.recordByPath,
+      state.discoveryByPath,
+    );
+  }
+  const affected = prepareAffectedWorkspaceIndexSnapshot(
+    inputs.scope,
+    inputs.query,
+    inputs.runner,
+    inputs.limits,
+    deltaScanPaths(delta),
+    state.recordByPath.values(),
+  );
+  return {
+    removedEntries,
+    affectedReport: applyAffectedPreparedEntries(
+      affected,
+      state.preparedEntries,
+      state.recordByPath,
+      state.discoveryByPath,
+    ),
+  };
+}
+
+function applyWorkspaceIndexDeltas(
+  state: SearchWorkspaceIndexSessionState,
+  prepared: PreparedWorkspaceIndexSnapshot,
+  deltas: readonly WorkspaceIndexDirectoryDelta[],
+  inputs: {
+    readonly scope: SearchScope;
+    readonly query: RetrievalQuery;
+    readonly runner: SearchTextRunner;
+    readonly limits: SearchLimits;
+  },
+): void {
+  let removedEntries = 0;
+  let affectedReport = emptyWorkspaceIndexPreparationReport();
+  for (const delta of deltas) {
+    const applied = applyWorkspaceIndexDelta(delta, state, inputs);
+    removedEntries += applied.removedEntries;
+    affectedReport = addWorkspaceIndexPreparationReport(affectedReport, applied.affectedReport);
+  }
+  const report = reconciledWorkspaceIndexReport({
+    discoveryByPath: state.discoveryByPath,
+    recordByPath: state.recordByPath,
+    affectedReport,
+    removedEntries,
+  });
+  const reconciled = preparedFromSessionState(
+    prepared.discovery,
+    state.preparedEntries,
+    state.discoveryByPath,
+    report,
+  );
+  state.candidateSet = workspaceIndexCandidateSet(reconciled, inputs.query, inputs.runner.policy);
+  state.report = report;
+  state.dirty = true;
+}
+
+function persistWorkspaceIndexSession(
+  workspaceIndex: WorkspaceIndex,
+  scope: SearchScope,
+  runner: SearchTextRunner,
+  session: Omit<SearchWorkspaceIndexSession, "persist">,
+): () => Promise<void> {
+  const scopeKey = workspaceIndexScopeKey(scope, runner);
+  return async (): Promise<void> => {
+    if (!session.dirty) {
+      return;
+    }
+    const directories = buildWorkspaceIndexDirectories(
+      scope.workspace.root,
+      session.discoveryByPath,
+      runner.fs,
+      scope.relativePaths,
+      session.candidateSet.directories,
+    );
+    try {
+      await workspaceIndex.saveSnapshot(
+        scopeKey,
+        buildWorkspaceIndexSnapshot({
+          scope,
+          policy: workspaceIndexPolicyShape(runner),
+          maxBytesPerFileScanned: runner.limits.maxBytesPerFileScanned,
+          maxFilesScanned: runner.limits.maxFilesScanned,
+          discovery: candidateSetDiscoverySnapshot(
+            session.candidateSet,
+            [...session.discoveryByPath.values()],
+            directories,
+          ),
+          records: session.recordByPath.values(),
+        }),
+      );
+    } catch {
+      // The workspace index is an opportunistic acceleration layer; search correctness must not
+      // depend on the runtime cache directory being writable.
+    }
+  };
+}
+
+async function buildSearchWorkspaceIndexSession(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  runner: SearchTextRunner,
+  limits: SearchLimits,
+  workspaceIndex: WorkspaceIndex,
+): Promise<SearchWorkspaceIndexSession> {
+  const snapshot = await loadWorkspaceIndexSnapshot(workspaceIndex, scope, runner);
+  const cached = snapshot === undefined
+    ? undefined
+    : prepareCachedWorkspaceIndexSnapshot(snapshot, scope.workspace);
+  const inspection = snapshot === undefined
+    ? { valid: false, deltas: [] }
+    : inspectWorkspaceIndexDirectories(snapshot, scope.workspace, runner.fs);
+  const prepared = cached?.valid === true && inspection.valid ? cached : undefined;
+  const session = initialWorkspaceIndexSessionState(scope, query, runner, limits, prepared);
+  if (prepared !== undefined && inspection.deltas.length > 0) {
+    applyWorkspaceIndexDeltas(session, prepared, inspection.deltas, {
+      scope,
+      query,
+      runner,
+      limits,
+    });
+  }
+  return Object.assign(session, {
+    persist: persistWorkspaceIndexSession(workspaceIndex, scope, runner, session),
+  });
 }
 
 async function runScanLoop(
@@ -354,6 +968,7 @@ interface CompletedSearchResultInputs {
   readonly limits: SearchLimits;
   readonly candidateTruncated: boolean;
   readonly truncationReasons: ReadonlySet<ContextCoverageTruncationReason>;
+  readonly workspaceIndex: WorkspaceIndexPreparationReport | undefined;
 }
 
 function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResult {
@@ -374,6 +989,165 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
       candidateTruncated: inputs.candidateTruncated,
       truncationReasons: inputs.truncationReasons,
     }),
+    workspaceIndex: inputs.workspaceIndex,
+  };
+}
+
+function buildSearchTextDeps(
+  deps: FacadeDeps,
+): Required<Pick<FacadeDeps, "fs" | "nowMs">> & Pick<FacadeDeps, "searchHints" | "signal"> {
+  return {
+    fs: deps.fs ?? nodeWorkspaceFs,
+    nowMs: deps.nowMs ?? Date.now,
+    ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
+    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+  };
+}
+
+function searchTextRunner(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  deps: FacadeDeps,
+): SearchTextRunner {
+  return buildSearchTextRunner(scope, query, limits, buildSearchTextDeps(deps));
+}
+
+function candidateSetForSearch(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  runner: SearchTextRunner,
+  session: SearchWorkspaceIndexSession | undefined,
+): CandidateSet {
+  return session?.candidateSet ?? gatherCandidates(scope, query, limits, runner.fs, runner.policy);
+}
+
+function indexedSearchRunner(
+  runner: SearchTextRunner,
+  session: SearchWorkspaceIndexSession | undefined,
+): SearchTextRunner {
+  if (session === undefined) {
+    return runner;
+  }
+  return {
+    ...runner,
+    workspaceIndex: {
+      entries: session.preparedEntries,
+      onRecord: (record: WorkspaceIndexRecord): void => {
+        const previousRecord = session.recordByPath.get(record.scopePath);
+        const discovery = discoveredFileSnapshot(record.scopePath, record.sizeBytes, record.mtimeMs);
+        const previousDiscovery = session.discoveryByPath.get(record.scopePath);
+        const rebuiltCachedRecord = session.preparedEntries.has(record.scopePath);
+        if (
+          rebuiltCachedRecord ||
+          !sameWorkspaceIndexRecord(previousRecord, record) ||
+          !sameDiscoveryFile(previousDiscovery, discovery)
+        ) {
+          if (rebuiltCachedRecord) {
+            session.rebuiltCachedRecords.add(record.scopePath);
+          }
+          session.dirty = true;
+          session.report = undefined;
+        }
+        session.recordByPath.set(record.scopePath, record);
+        session.discoveryByPath.set(record.scopePath, discovery);
+      },
+      onStale: (scopePath: string): void => {
+        if (
+          session.recordByPath.delete(scopePath) ||
+          session.preparedEntries.delete(scopePath)
+        ) {
+          session.dirty = true;
+          session.report = undefined;
+        }
+      },
+    },
+  };
+}
+
+function searchRunState(candidateSet: CandidateSet): {
+  readonly state: RunState;
+  readonly truncationReasons: Set<ContextCoverageTruncationReason>;
+} {
+  const truncationReasons = new Set<ContextCoverageTruncationReason>();
+  return {
+    state: {
+      filesScanned: 0,
+      matchesReturned: 0,
+      truncated: candidateSet.truncated,
+      truncationReasons,
+    },
+    truncationReasons,
+  };
+}
+
+function completedSearchTextResult(
+  runner: SearchTextRunner,
+  candidateSet: CandidateSet,
+  state: RunState,
+  atoms: readonly EvidenceAtom[],
+  candidates: readonly CandidateFile[],
+  truncationReasons: ReadonlySet<ContextCoverageTruncationReason>,
+  workspaceIndex: WorkspaceIndexPreparationReport | undefined,
+): SearchResult {
+  return completedSearchResult({
+    atoms,
+    candidates,
+    filesScanned: state.filesScanned,
+    matchesReturned: state.matchesReturned,
+    elapsedMs: elapsed(runner),
+    truncated: state.truncated,
+    diagnostics: candidateSet.diagnostics,
+    limits: runner.limits,
+    candidateTruncated: candidateSet.truncated,
+    truncationReasons,
+    workspaceIndex,
+  });
+}
+
+async function persistSearchTextSession(
+  session: SearchWorkspaceIndexSession | undefined,
+): Promise<void> {
+  if (session !== undefined) {
+    await session.persist();
+  }
+}
+
+function workspaceIndexReport(
+  session: SearchWorkspaceIndexSession | undefined,
+): WorkspaceIndexPreparationReport | undefined {
+  if (session === undefined) {
+    return undefined;
+  }
+  if (
+    session.report !== undefined &&
+    (!session.dirty ||
+      session.report.deletedEntries > 0 ||
+      session.report.droppedRecords > 0 ||
+      session.report.staleRecords > 0)
+  ) {
+    return session.report;
+  }
+  const reusedRecords = [...session.preparedEntries.values()].filter(
+    (entry) =>
+      entry.record !== undefined &&
+      session.recordByPath.has(entry.scopePath) &&
+      !session.rebuiltCachedRecords.has(entry.scopePath),
+  ).length;
+  const staleRecords = session.rebuiltCachedRecords.size;
+  return {
+    discoveredEntries: session.candidateSet.diagnostics.filesDiscovered,
+    retainedEntries: session.discoveryByPath.size,
+    indexedRecords: session.recordByPath.size,
+    reusedRecords,
+    staleRecords,
+    skippedEntries: Math.max(
+      0,
+      session.candidateSet.diagnostics.filesDiscovered - session.discoveryByPath.size,
+    ),
+    deletedEntries: 0,
+    droppedRecords: 0,
   };
 }
 
@@ -388,44 +1162,38 @@ export async function searchText(
   if (query.kind === "file-pattern") {
     throw new RepoSearchInvalidQueryError("searchText does not accept file-pattern queries");
   }
-  const fs = deps.fs ?? nodeWorkspaceFs;
-  const nowMs = deps.nowMs ?? Date.now;
-  const runner = buildSearchTextRunner(scope, query, limits, {
-    fs,
-    nowMs,
-    ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
-    ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
-  });
+  const runner = searchTextRunner(scope, query, limits, deps);
   if (isAborted(deps.signal)) {
     return abortedSearchResult(elapsed(runner), limits);
   }
-  const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, runner.policy);
+  const workspaceIndexSession =
+    deps.workspaceIndex === undefined
+      ? undefined
+      : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
+  const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
+  const candidateSet = candidateSetForSearch(scope, query, limits, runner, workspaceIndexSession);
   if (isAborted(deps.signal)) {
-    return abortedSearchResult(elapsed(runner), limits, candidateSet.diagnostics, candidateSet.truncated);
+    return abortedSearchResult(
+      elapsed(searchRunner),
+      limits,
+      candidateSet.diagnostics,
+      candidateSet.truncated,
+    );
   }
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
-  const truncationReasons = new Set<ContextCoverageTruncationReason>();
-  // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
-  const state: RunState = {
-    filesScanned: 0,
-    matchesReturned: 0,
-    truncated: candidateSet.truncated,
-    truncationReasons,
-  };
-  await runScanLoop(runner, candidateSet, state, atoms, candidates);
-  return completedSearchResult({
+  const { state, truncationReasons } = searchRunState(candidateSet);
+  await runScanLoop(searchRunner, candidateSet, state, atoms, candidates);
+  await persistSearchTextSession(workspaceIndexSession);
+  return completedSearchTextResult(
+    searchRunner,
+    candidateSet,
+    state,
     atoms,
     candidates,
-    filesScanned: state.filesScanned,
-    matchesReturned: state.matchesReturned,
-    elapsedMs: elapsed(runner),
-    truncated: state.truncated,
-    diagnostics: candidateSet.diagnostics,
-    limits: runner.limits,
-    candidateTruncated: candidateSet.truncated,
     truncationReasons,
-  });
+    workspaceIndexReport(workspaceIndexSession),
+  );
 }
 
 interface FindFilesContext {
@@ -574,6 +1342,7 @@ function findFilesSync(
     limits: { ...limits, maxMatchesReturned: effectiveMaxMatches },
     candidateTruncated: candidateSet.truncated,
     truncationReasons: state.truncationReasons,
+    workspaceIndex: undefined,
   });
 }
 

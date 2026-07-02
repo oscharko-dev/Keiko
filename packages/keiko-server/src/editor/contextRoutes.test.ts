@@ -39,11 +39,12 @@ let root: string;
 let stateRoot: string;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
+function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     store,
     redactor: buildRedactor({}),
     evidenceStore: createInMemoryEvidenceStore(),
+    ...overrides,
   } as unknown as UiHandlerDeps;
 }
 
@@ -225,6 +226,25 @@ describe("POST /api/editor/repo-search", () => {
     expect(Array.isArray(body.atoms)).toBe(true);
     expect(body.atoms.every((a) => typeof a.stableId === "string")).toBe(true);
     expect(JSON.stringify(body.atoms)).not.toContain("value.trim");
+  });
+
+  it("activates the workspace index provider for lexical repo-search requests", async () => {
+    const calls: string[] = [];
+    const result = await handleEditorRepoSearch(
+      postContext(
+        { root, queryText: "parseConfig", paths: ["src/a.ts"] },
+        "/api/editor/repo-search",
+      ),
+      deps({
+        workspaceIndexForRoot: (workspaceRoot) => {
+          calls.push(workspaceRoot);
+          return undefined;
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(calls).toEqual([root]);
   });
 
   it("rejects a request without queryText with 400", async () => {

@@ -1249,7 +1249,7 @@ async function runHybridWithStore(
     ctx,
     capped.folderScopes,
     query,
-    ctx.folderRetriever ?? defaultRetriever(ctx.signal),
+    ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps.workspaceIndexForRoot),
   );
   // Merge upfront-skipped folders (inaccessible/denied at canonicalization), over-cap folder skips,
   // and retrieval-time folder skips so all omissions appear in the assembled uncertainty entries.

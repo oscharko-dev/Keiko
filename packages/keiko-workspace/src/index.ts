@@ -100,6 +100,31 @@ export type {
   SearchPolicy,
   SearchPolicyMode,
 } from "./repoSearchPolicy.js";
+export type {
+  FileWorkspaceIndexStoreOptions,
+  PreparedWorkspaceIndexEntry,
+  WorkspaceIndexPreparationReport,
+  PreparedWorkspaceIndexSnapshot,
+  WorkspaceIndex,
+  WorkspaceIndexCandidateSet,
+  WorkspaceIndexDiscoveredFile,
+  WorkspaceIndexDiscoverySnapshot,
+  WorkspaceIndexRecord,
+  WorkspaceIndexRecordKind,
+  WorkspaceIndexScopeKey,
+  WorkspaceIndexSnapshot,
+  WorkspaceIndexStore,
+} from "./workspaceIndex.js";
+export {
+  WORKSPACE_INDEX_SNAPSHOT_VERSION,
+  buildWorkspaceIndexScopeKey,
+  buildWorkspaceIndexSnapshot,
+  createFileWorkspaceIndexStore,
+  createInMemoryWorkspaceIndexStore,
+  createWorkspaceIndex,
+  prepareWorkspaceIndexSnapshot,
+  workspaceIndexCandidateSet,
+} from "./workspaceIndex.js";
 
 // ─── Language / build-system ecosystem registry (enterprise retrieval, Milestone 1) ──
 export {

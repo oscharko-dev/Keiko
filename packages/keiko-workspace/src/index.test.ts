@@ -18,6 +18,13 @@ describe("keiko-workspace public surface", () => {
     expect(typeof workspace.buildContextPackFromFiles).toBe("function");
     expect(typeof workspace.buildWorkspaceSummary).toBe("function");
     expect(typeof workspace.summarizeForAudit).toBe("function");
+    expect(typeof workspace.createWorkspaceIndex).toBe("function");
+    expect(typeof workspace.createFileWorkspaceIndexStore).toBe("function");
+    expect(typeof workspace.createInMemoryWorkspaceIndexStore).toBe("function");
+    expect(typeof workspace.buildWorkspaceIndexScopeKey).toBe("function");
+    expect(typeof workspace.buildWorkspaceIndexSnapshot).toBe("function");
+    expect(typeof workspace.prepareWorkspaceIndexSnapshot).toBe("function");
+    expect(typeof workspace.workspaceIndexCandidateSet).toBe("function");
     expect(typeof workspace.resolveWithinWorkspace).toBe("function");
     expect(typeof workspace.isWithinWorkspace).toBe("function");
     expect(typeof workspace.compileIgnore).toBe("function");
@@ -32,6 +39,7 @@ describe("keiko-workspace public surface", () => {
     expect(workspace.DEFAULT_CONTEXT_REQUEST).toBeDefined();
     expect(workspace.DEFAULT_DISCOVERY_OPTIONS).toBeDefined();
     expect(workspace.DEFAULT_READ_OPTIONS).toBeDefined();
+    expect(workspace.WORKSPACE_INDEX_SNAPSHOT_VERSION).toBe(2);
     expect(workspace.SELECTION_REASON_PRIORITY).toBeDefined();
     expect(workspace.WORKSPACE_CODES).toBeDefined();
     expect(workspace.WorkspaceError).toBeDefined();

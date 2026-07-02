@@ -34,6 +34,7 @@ interface Walk {
   readonly opts: DiscoveryOptions;
   readonly applyGitignore: boolean;
   readonly out: DiscoveredFile[];
+  readonly directories: string[];
   denied: number;
   ignored: number;
   depthPruned: number;
@@ -41,6 +42,7 @@ interface Walk {
 
 export interface DiscoveryResult {
   readonly files: readonly DiscoveredFile[];
+  readonly directories: readonly string[];
   readonly stats: DiscoveryStats;
 }
 
@@ -139,6 +141,7 @@ function descend(walk: Walk, absoluteDir: string, depth: number): void {
   if (walk.out.length >= walk.opts.maxFiles) {
     return;
   }
+  walk.directories.push(toRelative(walk.root, absoluteDir));
   const entries = [...readDirSafe(walk, absoluteDir)].sort((a, b) => (a.name < b.name ? -1 : 1));
   for (const entry of entries) {
     if (walk.out.length >= walk.opts.maxFiles) {
@@ -156,6 +159,7 @@ function runWalk(workspace: WorkspaceInfo, opts: DiscoveryOptions, fs: Workspace
     opts,
     applyGitignore: opts.applyGitignore,
     out: [],
+    directories: [],
     denied: 0,
     ignored: 0,
     depthPruned: 0,
@@ -193,6 +197,7 @@ export function discoverWithStats(
   const walk = runWalk(workspace, opts, fs);
   return {
     files: walk.out,
+    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     stats: {
       discovered: walk.out.length,
       denied: walk.denied,

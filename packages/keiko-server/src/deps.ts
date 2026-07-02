@@ -144,6 +144,10 @@ import {
   type QiRetentionAuditSink,
 } from "./qualityIntelligence/retentionEnforcement.js";
 import type { PdfCitationPreviewSessionManager } from "./local-knowledge-preview-session-manager.js";
+import {
+  createServerWorkspaceIndexProvider,
+  type WorkspaceIndexProvider,
+} from "./workspace-index-provider.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -360,6 +364,9 @@ export interface UiHandlerDeps {
   // configured chat capabilities so later prompt assembly / compaction wiring can ask for the
   // exact profile of the selected model without inventing a second budget path.
   readonly contextProfileForModel?: ContextProfileResolver | undefined;
+  // Issue #1736 — file-backed, runtime-state workspace index provider for production repository
+  // search paths. Tests may omit it; search falls back to the existing live scan.
+  readonly workspaceIndexForRoot?: WorkspaceIndexProvider | undefined;
   // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0058 D4). Lets the BFF
   // dictation route call the provider-neutral STT adapter without touching global fetch in tests.
   // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
@@ -1634,6 +1641,10 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
       args.contextProfileForModel,
     ),
     contextProfileForModel: args.contextProfileForModel,
+    workspaceIndexForRoot: createServerWorkspaceIndexProvider({
+      runtimeStateDir: dirname(args.resolvedUiDbPath),
+      env: args.options.env,
+    }),
     ...buildPeripherals({
       options: args.options,
       uiStore: args.bundle.uiStore,

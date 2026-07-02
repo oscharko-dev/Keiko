@@ -66,6 +66,7 @@ import {
   testSourcePairingAdapter,
   type WorkspaceDirEntry,
   type WorkspaceFs,
+  type WorkspaceIndex,
   type WorkspaceInfo,
   containedRealPathInfo,
   evidenceAtomStableId,
@@ -112,6 +113,9 @@ export interface OrchestratorDeps {
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
   // ContextBudget to pack.diagnostics.contextBudget? — an additive field no prompt builder reads.
   readonly contextProfile?: ContextProfile | undefined;
+  // Issue #1736 — optional production index provider. Tests and unsupported runtime dirs omit it;
+  // the lexical ring falls back to bounded live scans.
+  readonly workspaceIndexForRoot?: ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
 }
 
 export interface OrchestratorOutput {
@@ -173,6 +177,7 @@ interface SearchInputs {
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
+  readonly workspaceIndex?: WorkspaceIndex | undefined;
 }
 
 interface RingResult {
@@ -473,6 +478,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
       fs: inputs.fs,
       nowMs: inputs.nowMs,
       searchHints: { retrievalIntent: inputs.retrievalIntent },
+      ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
     });
     const coverageMarker = coverageIncomplete(result.coverage, inputs.nowMs());
     // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
@@ -2346,6 +2352,7 @@ export async function retrieveConnectedContextPack(
 
   const workspace = detect(input.workspaceRoot, fs);
   const searchScope = buildSearchScope(input.scope, workspace);
+  const workspaceIndex = deps.workspaceIndexForRoot?.(workspace.root);
   const rings = await runAllRings(
     plan.rings,
     {
@@ -2356,6 +2363,7 @@ export async function retrieveConnectedContextPack(
       fs,
       nowMs,
       signal: deps.signal,
+      ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
     },
     governor,
   );
