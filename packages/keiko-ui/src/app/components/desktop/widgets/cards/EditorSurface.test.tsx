@@ -1,12 +1,16 @@
-import { render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EditorRuntimeStatus } from "@oscharko-dev/keiko-editor";
 import EditorSurface, { type EditorSurfaceProps } from "./EditorSurface";
 
 const ensureMonacoRuntime = vi.fn<() => EditorRuntimeStatus>();
+const ensureMonacoLanguage = vi.fn<(languageId: string) => Promise<void>>();
+const isMonacoLanguageReady = vi.fn<(languageId: string) => boolean>();
 vi.mock("./editorMonacoRuntime", () => ({
   ensureMonacoRuntime: () => ensureMonacoRuntime(),
+  ensureMonacoLanguage: (languageId: string) => ensureMonacoLanguage(languageId),
+  isMonacoLanguageReady: (languageId: string) => isMonacoLanguageReady(languageId),
 }));
 
 // Replace the real KeikoCodeEditor with a probe that records the load state it was driven with, so
@@ -88,6 +92,11 @@ function buildProps(overrides?: Partial<EditorSurfaceProps>): EditorSurfaceProps
   };
 }
 
+beforeEach(() => {
+  isMonacoLanguageReady.mockReturnValue(true);
+  ensureMonacoLanguage.mockResolvedValue(undefined);
+});
+
 afterEach(() => {
   vi.clearAllMocks();
   captured.provideCompletions = undefined;
@@ -115,6 +124,50 @@ describe("EditorSurface", () => {
     const editor = screen.getByTestId("code-editor");
     expect(editor).toHaveAttribute("data-load-status", "ready");
     expect(editor).toHaveAttribute("data-aria-label", "Editor: src/a.ts in /repo");
+  });
+
+  it("holds the editor in loading state while an optional Monaco language chunk loads", async () => {
+    ensureMonacoRuntime.mockReturnValue({ supported: true });
+    isMonacoLanguageReady.mockReturnValue(false);
+    let resolveLanguage = (): void => undefined;
+    ensureMonacoLanguage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveLanguage = resolve;
+      }),
+    );
+
+    render(
+      <EditorSurface
+        {...buildProps({
+          buffer: {
+            language: "go",
+            readOnly: false,
+            content: {
+              relativePath: "cmd/main.go",
+              text: "package main",
+              sizeBytes: 12,
+              truncated: false,
+            },
+          },
+          fileModel: {
+            identity: { uri: "/repo/cmd/main.go", language: "go", version: 0 },
+            savedVersion: 0,
+            dirty: false,
+            readOnly: false,
+            lastChangeOrigin: null,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("code-editor")).toHaveAttribute("data-load-status", "loading");
+    expect(ensureMonacoLanguage).toHaveBeenCalledWith("go");
+    isMonacoLanguageReady.mockReturnValue(true);
+    resolveLanguage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("code-editor")).toHaveAttribute("data-load-status", "ready");
+    });
   });
 
   it("forces a controlled load-error state when the Monaco runtime is unsupported", () => {

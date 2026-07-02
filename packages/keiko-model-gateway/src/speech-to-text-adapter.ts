@@ -166,37 +166,31 @@ function classifyDispatchError(
   return "transport";
 }
 
-// Returns an `ArrayBuffer`-backed Uint8Array (the `new Uint8Array(number)` overload) so the result
-// is a valid `BufferSource`/`BodyInit` for `gatewayFetch` without a type assertion.
-function concatBytes(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
-  let total = 0;
-  for (const part of parts) total += part.byteLength;
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.byteLength;
-  }
-  return out;
-}
-
 // Builds the multipart/form-data body for the OpenAI-compatible `/audio/transcriptions` contract:
 // the binary `file` part, the `model` field, an optional `language` field, and a fixed `json`
 // `response_format`. The audio bytes are embedded verbatim; every textual field is sanitized.
-function buildMultipartBody(
-  request: SpeechToTextRequest,
-  boundary: string,
-): Uint8Array<ArrayBuffer> {
+function audioBlobPart(audio: Uint8Array): BlobPart {
+  if (audio.buffer instanceof ArrayBuffer) {
+    return audio.byteOffset === 0 && audio.byteLength === audio.buffer.byteLength
+      ? audio.buffer
+      : audio.buffer.slice(audio.byteOffset, audio.byteOffset + audio.byteLength);
+  }
+  const copy = new Uint8Array(audio.byteLength);
+  copy.set(audio);
+  return copy.buffer;
+}
+
+function buildMultipartBody(request: SpeechToTextRequest, boundary: string): Blob {
   const enc = new TextEncoder();
   const filename = `audio.${extensionForMime(request.mimeType)}`;
   const mimeType = sanitizeFieldValue(request.mimeType);
-  const parts: Uint8Array[] = [
+  const parts: BlobPart[] = [
     enc.encode(
       `--${boundary}\r\n` +
         `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
         `Content-Type: ${mimeType}\r\n\r\n`,
     ),
-    request.audio,
+    audioBlobPart(request.audio),
     enc.encode(
       `\r\n--${boundary}\r\n` +
         `Content-Disposition: form-data; name="model"\r\n\r\n${sanitizeFieldValue(request.modelId)}\r\n`,
@@ -217,13 +211,13 @@ function buildMultipartBody(
         `--${boundary}--\r\n`,
     ),
   );
-  return concatBytes(parts);
+  return new Blob(parts);
 }
 
 interface BuiltRequest {
   readonly url: string;
   readonly headers: Record<string, string>;
-  readonly body: Uint8Array<ArrayBuffer>;
+  readonly body: Blob;
   readonly signal: AbortSignal;
   readonly timeoutSignal: AbortSignal;
   readonly callerSignal: AbortSignal | undefined;
@@ -237,7 +231,7 @@ function buildRequest(request: SpeechToTextRequest): BuiltRequest {
     "content-type": `multipart/form-data; boundary=${boundary}`,
     // Set explicitly so the proxy/CA-fallback egress path sends a fixed-length body. The Fetch spec
     // treats content-length as a forbidden header on the direct path, where undici computes it.
-    "content-length": String(body.byteLength),
+    "content-length": String(body.size),
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);

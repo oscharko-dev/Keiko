@@ -857,6 +857,12 @@ export function localKnowledgeNoEvidenceAnswer(
     }
     return "No indexed vectors are available for the selected knowledge scope. Index the connector before asking.";
   }
+  if (reason === "dense-scan-too-large") {
+    if (german) {
+      return "Der ausgewaehlte Wissensumfang ist fuer die exakte Vektorsuche zu gross und hat keinen nutzbaren Lexikalindex. Erstelle oder repariere den Suchindex und versuche es erneut.";
+    }
+    return "The selected knowledge scope is too large for exact vector search and has no usable lexical index. Build or repair the search index and try again.";
+  }
   if (german) {
     return "Keine Evidenz im ausgewaehlten Wissensumfang gefunden.";
   }

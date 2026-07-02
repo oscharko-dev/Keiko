@@ -2,11 +2,11 @@
 
 import { useId, type ReactNode } from "react";
 import { Icons } from "../../Icons";
-import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
+import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
 
 export function SearchPanel(): ReactNode {
-  const session = useOptionalChatSessionContext();
-  const projectName = session?.activeProject?.name ?? "No project selected";
+  const catalog = useOptionalChatSessionCatalog();
+  const projectName = catalog?.activeProject?.name ?? "No project selected";
   const comingSoonId = useId();
   return (
     <div className="srch">

@@ -20,7 +20,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_SENSITIVITIES,
 } from "@oscharko-dev/keiko-contracts";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 export interface MemoryFilterState {
   readonly query: string;
@@ -169,7 +169,7 @@ function ChipGroup<T extends string>({
 // ---------------------------------------------------------------------------
 
 export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const scopeText = t("memoria.scope");
   const typeText = t("memoria.type");
   const statusText = t("memoria.status");

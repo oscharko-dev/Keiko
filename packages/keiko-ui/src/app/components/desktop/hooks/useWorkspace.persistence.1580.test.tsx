@@ -170,7 +170,7 @@ describe("Issue #1580 — visibility-gated server poll", () => {
       Promise.resolve({
         ok: true,
         json: async () =>
-          Promise.resolve({ workspace: { revision: 0, windows: [], connections: [] } }),
+          Promise.resolve({ workspace: { revision: 7, windows: [], connections: [] } }),
       } as unknown as Response),
     );
     vi.stubGlobal("fetch", fetchMock);
@@ -189,17 +189,37 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     ).length;
   }
 
-  it("stops polling while hidden and catches up on return to visible", () => {
+  function pollHeaders(index: number): Record<string, string> {
+    const calls = fetchMock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === undefined,
+    );
+    return ((calls[index]?.[1] as RequestInit | undefined)?.headers ?? {}) as Record<
+      string,
+      string
+    >;
+  }
+
+  async function flushAsyncEffects(): Promise<void> {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  it("stops polling while hidden and catches up on return to visible", async () => {
     render(<Harness />);
+    await flushAsyncEffects();
     // initial mount pull
     const afterMount = getPolls();
     expect(afterMount).toBeGreaterThanOrEqual(1);
+    expect(pollHeaders(0)["If-None-Match"]).toBe('"workspace-state-0"');
 
     // a poll interval fires while visible
     act(() => {
       vi.advanceTimersByTime(POLL_MS);
     });
+    await flushAsyncEffects();
     expect(getPolls()).toBeGreaterThan(afterMount);
+    expect(pollHeaders(getPolls() - 1)["If-None-Match"]).toBe('"workspace-state-7"');
     const beforeHidden = getPolls();
 
     // hide → the interval must stop: advancing time produces no new poll

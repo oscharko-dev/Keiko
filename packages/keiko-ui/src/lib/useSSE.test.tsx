@@ -8,6 +8,7 @@ class FakeEventSource {
   readonly url: string;
   onopen: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
   readonly close = vi.fn();
   private readonly listeners = new Map<string, EventListenerOrEventListenerObject[]>();
 
@@ -22,13 +23,22 @@ class FakeEventSource {
     this.listeners.set(type, listeners);
   }
 
-  emit(type: string, data: string): void {
-    const event = { data } as MessageEvent;
+  listenerCount(): number {
+    let count = 0;
+    for (const listeners of this.listeners.values()) count += listeners.length;
+    return count;
+  }
+
+  emit(data: string): void {
+    this.onmessage?.({ data } as MessageEvent);
+  }
+
+  dispatch(type: string, data = "{}"): void {
     for (const listener of this.listeners.get(type) ?? []) {
       if (typeof listener === "function") {
-        listener(event);
+        listener({ data } as MessageEvent);
       } else {
-        listener.handleEvent(event);
+        listener.handleEvent({ data } as MessageEvent);
       }
     }
   }
@@ -49,52 +59,96 @@ describe("useSSE", () => {
   afterEach(() => {
     FakeEventSource.instances = [];
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("opens encoded run streams, recovers after transient errors, ignores malformed frames, and closes on terminal events", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.stubGlobal("EventSource", FakeEventSource);
     const view = renderHook(({ runId }: { runId: string | null }) => useSSE(runId), {
       initialProps: { runId: "run 1" },
     });
     const source = FakeEventSource.instances[0];
 
-    expect(source?.url).toBe("/api/runs/run%201/events");
+    expect(source?.url).toBe("/api/runs/events");
+    expect(source?.listenerCount()).toBe(1);
 
     act(() => {
       source?.onopen?.(new Event("open"));
     });
-    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    expect(view.result.current.status).toBe("live");
 
     act(() => {
-      source?.emit("run:started", event(4, "run:started"));
-      source?.emit("run:started", "not-json");
+      source?.emit(event(4, "run:started"));
+      source?.emit("not-json");
     });
-    await waitFor(() => expect(view.result.current.events).toHaveLength(1));
+    expect(view.result.current.events).toHaveLength(1);
     expect(view.result.current.events[0]?.seq).toBe(4);
 
     act(() => {
       source?.onerror?.(new Event("error"));
     });
-    await waitFor(() => expect(view.result.current.status).toBe("error"));
+    expect(view.result.current.status).toBe("error");
     expect(view.result.current.error).toContain("Attempting to reconnect");
 
     act(() => {
-      source?.onopen?.(new Event("open"));
+      vi.advanceTimersByTime(1000);
     });
-    await waitFor(() => expect(view.result.current.error).toBeNull());
+    const reconnected = FakeEventSource.instances[1];
+    act(() => {
+      reconnected?.onopen?.(new Event("open"));
+    });
+    expect(view.result.current.error).toBeNull();
 
     act(() => {
-      source?.emit("workflow:completed", event(5, "workflow:completed"));
+      reconnected?.emit(event(5, "workflow:completed"));
     });
-    await waitFor(() => expect(view.result.current.status).toBe("terminal"));
-    expect(source?.close).toHaveBeenCalled();
+    expect(view.result.current.status).toBe("terminal");
+    expect(reconnected?.close).not.toHaveBeenCalled();
 
     view.rerender({ runId: "run 2" });
-    expect(FakeEventSource.instances[1]?.url).toBe("/api/runs/run%202/events");
+    expect(reconnected?.close).toHaveBeenCalled();
+    expect(FakeEventSource.instances).toHaveLength(3);
     expect(view.result.current.events).toEqual([]);
 
     view.unmount();
-    expect(FakeEventSource.instances[1]?.close).toHaveBeenCalled();
+    expect(FakeEventSource.instances[2]?.close).toHaveBeenCalled();
+  });
+
+  it("shares one EventSource across run subscribers and filters events by run id", async () => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+
+    const first = renderHook(() => useSSE("run 1"));
+    const second = renderHook(() => useSSE("run 2"));
+    const source = FakeEventSource.instances[0];
+
+    expect(FakeEventSource.instances).toHaveLength(1);
+    act(() => {
+      source?.dispatch("ready");
+      source?.emit(event(1, "run:started"));
+      source?.emit(
+        JSON.stringify({
+          schemaVersion: "1",
+          runId: "run 2",
+          fingerprint: "fp-2",
+          seq: 1,
+          ts: 1,
+          type: "run:started",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(first.result.current.events).toHaveLength(1));
+    await waitFor(() => expect(second.result.current.events).toHaveLength(1));
+    expect(first.result.current.events[0]?.runId).toBe("run 1");
+    expect(second.result.current.events[0]?.runId).toBe("run 2");
+
+    first.unmount();
+    expect(source?.close).not.toHaveBeenCalled();
+    second.unmount();
+    expect(source?.close).toHaveBeenCalled();
   });
 
   it("does not open an EventSource when no run id is selected", () => {

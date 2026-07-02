@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  evaluateInitialPageChunkBudget,
   evaluateOwnCodeBudget,
   extractInitialScriptSrcs,
   extractValueImportSpecifiers,
@@ -46,6 +47,23 @@ describe("evaluateOwnCodeBudget", () => {
     });
     expect(result.ok).toBe(false);
     expect(result.totalGzipBytes).toBe(101);
+  });
+});
+
+describe("evaluateInitialPageChunkBudget", () => {
+  it("measures gzip for first-load script contents against a ceiling", () => {
+    const files = [
+      { path: "a.js", content: "a".repeat(1000) },
+      { path: "b.js", content: "b".repeat(1000) },
+    ];
+    const measured = files.reduce((sum, file) => sum + gzipSizeBytes(file.content), 0);
+    expect(evaluateInitialPageChunkBudget({ files, ceilingBytes: measured })).toEqual({
+      fileCount: 2,
+      totalGzipBytes: measured,
+      ceilingBytes: measured,
+      ok: true,
+    });
+    expect(evaluateInitialPageChunkBudget({ files, ceilingBytes: measured - 1 }).ok).toBe(false);
   });
 });
 

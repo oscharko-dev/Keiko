@@ -28,7 +28,7 @@ import {
 import KeikoSelect from "../KeikoSelect";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 
 interface NewWindowDialogProps {
   readonly type: WindowType;
@@ -1069,7 +1069,7 @@ export function NewWindowDialog({
   onConfirm,
   onClose,
 }: NewWindowDialogProps): ReactNode {
-  const { t: translate } = useI18n();
+  const translate = useTranslate();
   const t = types[type];
   const fields = useMemo(
     () => localizedNewWindowFields(type, t.config ?? [], translate),

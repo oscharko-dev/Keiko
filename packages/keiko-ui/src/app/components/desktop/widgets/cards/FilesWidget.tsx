@@ -124,6 +124,7 @@ interface TreeTooltipState {
 
 const TREE_TOOLTIP_DELAY_MS = 650;
 const TREE_TOOLTIP_MAX_WIDTH = 240;
+const DIRECTORY_RENDER_BATCH_SIZE = 200;
 
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
 function entryParent(path: string): string | null {
@@ -271,6 +272,7 @@ export function FilesWidget({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [currentDirectoryPath, setCurrentDirectoryPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
+  const [directoryRenderLimits, setDirectoryRenderLimits] = useState<Record<string, number>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
   const [treeTooltip, setTreeTooltip] = useState<TreeTooltipState | null>(null);
   const activeFileChangeRef = useRef(onActiveFileChange);
@@ -446,6 +448,7 @@ export function FilesWidget({
     setResolvedRoot(null);
     setExpanded(new Set([""]));
     setDirectories({});
+    setDirectoryRenderLimits({});
     void loadDirectory("");
   }, [apiRoot, loadDirectory]);
 
@@ -737,6 +740,14 @@ export function FilesWidget({
     void loadDirectory(path);
   };
 
+  const showMoreDirectoryEntries = (path: string, entriesCount: number): void => {
+    setDirectoryRenderLimits((current) => {
+      const currentLimit = current[path] ?? DIRECTORY_RENDER_BATCH_SIZE;
+      const nextLimit = Math.min(entriesCount, currentLimit + DIRECTORY_RENDER_BATCH_SIZE);
+      return nextLimit > currentLimit ? { ...current, [path]: nextLimit } : current;
+    });
+  };
+
   const openDiff = useCallback(
     (path: string): void => {
       const targetRoot = resolvedRoot ?? apiRoot;
@@ -816,6 +827,26 @@ export function FilesWidget({
     onOpenGitDelivery !== undefined &&
     gitStatusState.status?.available === true &&
     gitDeliveryRoot.length > 0;
+  const activeTreePath = selectedPath ?? activeFilePath ?? null;
+
+  const renderLimitForDirectory = (
+    path: string,
+    entries: readonly FilesTreeEntry[],
+  ): number => {
+    const configuredLimit = directoryRenderLimits[path] ?? DIRECTORY_RENDER_BATCH_SIZE;
+    const activeIndex =
+      activeTreePath === null
+        ? -1
+        : entries.findIndex((entry) => entry.path === activeTreePath);
+    const pendingIndex =
+      pendingEntry?.kind === "rename"
+        ? entries.findIndex((entry) => entry.path === pendingEntry.path)
+        : -1;
+    return Math.min(
+      entries.length,
+      Math.max(configuredLimit, activeIndex + 1, pendingIndex + 1),
+    );
+  };
 
   // One inline input reused for new file / new folder / rename, styled with the existing root-bar
   // input class so no globals.css change is needed (keeps the #1300 proof gate untouched).
@@ -947,7 +978,6 @@ export function FilesWidget({
       );
     }
 
-    const activePath = selectedPath ?? activeFilePath ?? null;
     const change = gitChangeByPath.get(entry.path);
     return (
       <div className="tr-row-wrap tr-file-wrap" key={entry.path}>
@@ -956,8 +986,8 @@ export function FilesWidget({
           onContextMenu={(event) => openContextMenu(event, entry)}
           role="treeitem"
           aria-level={depth + 1}
-          aria-selected={activePath === entry.path}
-          data-active={activePath === entry.path}
+          aria-selected={activeTreePath === entry.path}
+          data-active={activeTreePath === entry.path}
           data-readable={entry.readable}
           data-path={entry.path}
           style={{ paddingLeft: pad }}
@@ -1013,7 +1043,12 @@ export function FilesWidget({
     );
   };
 
-  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => (
+  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => {
+    const entries = state?.entries ?? [];
+    const visibleCount = renderLimitForDirectory(path, entries);
+    const hiddenCount = entries.length - visibleCount;
+    const visibleEntries = hiddenCount > 0 ? entries.slice(0, visibleCount) : entries;
+    return (
     // Nested levels are role="group" so the treeitem hierarchy is exposed (audit C143);
     // the root level sits directly under role="tree".
     <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
@@ -1065,7 +1100,17 @@ export function FilesWidget({
             pendingEntry.kind === "new-folder" ? "New folder name" : "New file name",
           )
         : null}
-      {state?.entries.map((entry) => renderEntry(entry, depth))}
+      {visibleEntries.map((entry) => renderEntry(entry, depth))}
+      {hiddenCount > 0 ? (
+        <button
+          type="button"
+          className="files-load-more"
+          style={{ marginLeft: treeIndent(depth) + 18 }}
+          onClick={() => showMoreDirectoryEntries(path, entries.length)}
+        >
+          Show {Math.min(DIRECTORY_RENDER_BATCH_SIZE, hiddenCount)} more entries
+        </button>
+      ) : null}
       {state !== undefined &&
       !state.loading &&
       state.error === null &&
@@ -1076,7 +1121,8 @@ export function FilesWidget({
         </div>
       ) : null}
     </div>
-  );
+    );
+  };
 
   if (gitDiffState !== null) {
     const diff = gitDiffState.response?.diff ?? "";

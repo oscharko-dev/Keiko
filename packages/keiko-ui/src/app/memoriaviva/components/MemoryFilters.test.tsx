@@ -47,7 +47,7 @@ describe("MemoryFilters — landmark groups", () => {
     expect(screen.getByRole("group", { name: "Filter by Sensitivity" })).toBeInTheDocument();
   });
 
-  it("renders filter labels in German when the locale is German", () => {
+  it("renders filter labels in German when the locale is German", async () => {
     window.localStorage.setItem(I18N_STORAGE_KEY, "de");
     try {
       render(
@@ -55,7 +55,9 @@ describe("MemoryFilters — landmark groups", () => {
           <MemoryFilters filters={EMPTY_FILTERS} onChange={vi.fn()} />
         </I18nProvider>,
       );
-      expect(screen.getByRole("group", { name: "Nach Bereich filtern" })).toBeInTheDocument();
+      expect(
+        await screen.findByRole("group", { name: "Nach Bereich filtern" }),
+      ).toBeInTheDocument();
       expect(screen.getByRole("searchbox", { name: "Suchen" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Vorgeschlagen" })).toBeInTheDocument();
     } finally {

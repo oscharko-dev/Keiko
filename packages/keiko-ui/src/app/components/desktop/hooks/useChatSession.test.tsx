@@ -16,6 +16,7 @@ import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
   GROUNDED_ATTACHMENT_NOTICE,
   MAX_ATTACHMENT_BYTES,
+  clearChatSessionBootstrapCacheForTests,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
@@ -56,6 +57,7 @@ vi.mock("@/lib/memory-api", () => ({
 
 afterEach(() => {
   vi.clearAllMocks();
+  clearChatSessionBootstrapCacheForTests();
 });
 
 function model(patch: Partial<ModelCapability> = {}): ModelCapability {
@@ -154,6 +156,56 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeChat?.id).toBe("chat-latest");
     expect(result.current.selectedModel).toBe("chat-live");
     expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("shares concurrent cold bootstrap requests across session instances", async () => {
+    const latest = chat({ id: "chat-latest", selectedModel: "chat-live", updatedAt: 20 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [latest] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [message({ id: "msg-latest", chatId: "chat-latest" })],
+    });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => {
+      expect(first.result.current.loading).toBe(false);
+      expect(second.result.current.loading).toBe(false);
+    });
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    expect(fetchProjects).toHaveBeenCalledTimes(1);
+    expect(fetchChats).toHaveBeenCalledTimes(1);
+    expect(fetchChatMessages).toHaveBeenCalledTimes(1);
+    expect(first.result.current.activeChat?.id).toBe("chat-latest");
+    expect(second.result.current.activeChat?.id).toBe("chat-latest");
+  });
+
+  it("uses one shared DOM listener pair for chat mutations across session instances", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat({ id: "chat-live-id" })] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [message()] });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => {
+      expect(first.result.current.loading).toBe(false);
+      expect(second.result.current.loading).toBe(false);
+    });
+    expect(addSpy.mock.calls.filter(([event]) => event === "keiko:chat-upsert")).toHaveLength(1);
+    expect(addSpy.mock.calls.filter(([event]) => event === "keiko:chat-delete")).toHaveLength(1);
+
+    first.unmount();
+    expect(removeSpy.mock.calls.filter(([event]) => event === "keiko:chat-upsert")).toHaveLength(0);
+
+    second.unmount();
+    expect(removeSpy.mock.calls.filter(([event]) => event === "keiko:chat-upsert")).toHaveLength(1);
+    expect(removeSpy.mock.calls.filter(([event]) => event === "keiko:chat-delete")).toHaveLength(1);
   });
 
   it("creates the first chat when auto-create is enabled and no chats exist", async () => {

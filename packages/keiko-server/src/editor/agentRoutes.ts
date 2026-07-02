@@ -54,7 +54,7 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, readyMessage } from "../sse.js";
+import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
 import { readJsonObject } from "../files.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
@@ -564,8 +564,11 @@ function queueAndEmitAction(
 }
 
 export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
-  const sessionId = ctx.url.searchParams.get("sessionId") ?? undefined;
-  openAgentSseStream(ctx, sessionId);
+  const sessionIds = ctx.url.searchParams
+    .getAll("sessionId")
+    .map((sessionId) => sessionId.trim())
+    .filter((sessionId) => sessionId.length > 0);
+  openAgentSseStream(ctx, sessionIds.length === 0 ? undefined : sessionIds);
   return STREAMING;
 }
 
@@ -577,17 +580,35 @@ export function handleEditorAgentAudit(ctx: RouteContext): RouteResult {
   return { status: 200, body: { records: listEditorAgentActionAudit(sessionId) } };
 }
 
-// Opens the SSE stream and registers the connection as either a session bridge (when `?sessionId=` is
-// present) or a global observer. The disposer drops the subscription — and thus the bridge-liveness
-// contribution — when the response closes (AC1: a dropped bridge makes the session unavailable again).
-function openAgentSseStream(ctx: RouteContext, sessionId: string | undefined): void {
+function connectEditorAgentSessions(
+  sessionIds: readonly string[] | undefined,
+  subscriber: (event: EditorAgentEvent) => void,
+): () => void {
+  if (sessionIds === undefined) return editorAgentRegistry.connect(undefined, subscriber);
+  const disposers = [...new Set(sessionIds)].map((sessionId) =>
+    editorAgentRegistry.connect(sessionId, subscriber),
+  );
+  return (): void => {
+    for (const dispose of disposers) dispose();
+  };
+}
+
+// Opens the SSE stream and registers the connection as either one or more session bridges (when
+// `?sessionId=` is present) or a global observer. The disposer drops the subscription — and thus the
+// bridge-liveness contribution — when the response closes (AC1: a dropped bridge makes the session
+// unavailable again).
+function openAgentSseStream(
+  ctx: RouteContext,
+  sessionIds: readonly string[] | undefined,
+): void {
   const res: ServerResponse = ctx.res;
   res.writeHead(200, SSE_HEADERS);
+  startSseHeartbeat(res);
   const subscriber = (event: EditorAgentEvent): void => {
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
     if (!res.write(frame)) res.destroy();
   };
-  const dispose = editorAgentRegistry.connect(sessionId, subscriber);
+  const dispose = connectEditorAgentSessions(sessionIds, subscriber);
   res.write(readyMessage());
   ctx.req.on("close", () => {
     res.end();

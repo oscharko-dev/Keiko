@@ -4,6 +4,8 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
+import { Readable } from "node:stream";
+import { createGzip } from "node:zlib";
 import { applySecurityHeaders } from "./headers.js";
 import { isAllowedHost } from "./host-check.js";
 import { resolveContainedPath, serveFile } from "./static.js";
@@ -25,6 +27,12 @@ import { createInMemoryUiStore } from "./store/index.js";
 
 export const DEFAULT_UI_PORT = 1983;
 export const UI_HOST = "127.0.0.1";
+const CSP_CACHE_TTL_MS = 1000;
+const JSON_GZIP_MIN_BYTES = 1024;
+const cspCache = new WeakMap<
+  UiServerDeps,
+  { readonly value: string; readonly expiresAt: number }
+>();
 
 export interface UiServerDeps {
   // Absolute path to the directory holding the exported static assets (`dist/ui/static`).
@@ -34,6 +42,7 @@ export interface UiServerDeps {
   // Optional live CSP source. The CLI uses this to refresh hashes from the current build artifacts
   // across rebuild/restart races; tests and compatibility callers can keep using the fixed `csp`.
   readonly cspProvider?: (() => string | Promise<string>) | undefined;
+  readonly cspCacheTtlMs?: number | undefined;
   // The port the server will bind; used to validate the request `Host`/`Origin` authority.
   readonly port: number;
   // The JSON/SSE handler dependencies. Optional: when absent the server still serves static assets
@@ -41,10 +50,43 @@ export interface UiServerDeps {
   readonly handlerDeps?: UiHandlerDeps | undefined;
 }
 
-function writeJson(res: ServerResponse, status: number, body: unknown): void {
+function acceptsGzip(acceptEncoding: string | readonly string[] | undefined): boolean {
+  const value =
+    typeof acceptEncoding === "string" ? acceptEncoding : (acceptEncoding ?? []).join(",");
+  return value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .some((item) => item === "gzip" || item.startsWith("gzip;"));
+}
+
+function writeJson(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  body: unknown,
+  headers: Readonly<Record<string, string>> = {},
+): void {
   res.statusCode = status;
+  for (const [key, value] of Object.entries(headers)) {
+    res.setHeader(key, value);
+  }
+  if (status === 304) {
+    res.end();
+    return;
+  }
+  const payload = Buffer.from(JSON.stringify(body), "utf8");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
+  if (
+    payload.byteLength >= JSON_GZIP_MIN_BYTES &&
+    acceptsGzip(req.headers["accept-encoding"])
+  ) {
+    res.setHeader("Content-Encoding", "gzip");
+    res.setHeader("Vary", "Accept-Encoding");
+    Readable.from(payload).pipe(createGzip()).pipe(res);
+    return;
+  }
+  res.setHeader("Content-Length", payload.byteLength);
+  res.end(payload);
 }
 
 function isJsonRequest(req: IncomingMessage): boolean {
@@ -59,16 +101,17 @@ function hasCsrfHeader(req: IncomingMessage): boolean {
   return value === "1";
 }
 
-function rejectUnsupportedMediaType(res: ServerResponse): void {
+function rejectUnsupportedMediaType(req: IncomingMessage, res: ServerResponse): void {
   writeJson(
+    req,
     res,
     415,
     errorBody("UNSUPPORTED_MEDIA_TYPE", "State-changing API requests must use JSON."),
   );
 }
 
-function rejectCsrf(res: ServerResponse): void {
-  writeJson(res, 403, errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."));
+function rejectCsrf(req: IncomingMessage, res: ServerResponse): void {
+  writeJson(req, res, 403, errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."));
 }
 
 // A minimal default deps object so a 3-arg server can still serve the deps-bound read routes (e.g.
@@ -95,11 +138,11 @@ function isStateChangingMethod(method: string): boolean {
 // Returns true when the request was rejected (caller should return immediately).
 function rejectIfInvalidStateChange(req: IncomingMessage, res: ServerResponse): boolean {
   if (!isJsonRequest(req)) {
-    rejectUnsupportedMediaType(res);
+    rejectUnsupportedMediaType(req, res);
     return true;
   }
   if (!hasCsrfHeader(req)) {
-    rejectCsrf(res);
+    rejectCsrf(req, res);
     return true;
   }
   return false;
@@ -114,11 +157,11 @@ async function dispatchApi(
 ): Promise<void> {
   const match = matchRoute(method, url.pathname);
   if (match === undefined) {
-    writeJson(res, 404, notFoundBody());
+    writeJson(req, res, 404, notFoundBody());
     return;
   }
   if (match === "method-not-allowed") {
-    writeJson(res, 405, methodNotAllowedBody());
+    writeJson(req, res, 405, methodNotAllowedBody());
     return;
   }
   if (isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res)) {
@@ -129,10 +172,11 @@ async function dispatchApi(
   if (outcome === STREAMING) {
     return;
   }
-  writeJson(res, outcome.status, outcome.body);
+  writeJson(req, res, outcome.status, outcome.body, outcome.headers);
 }
 
 async function serveStatic(
+  req: IncomingMessage,
   res: ServerResponse,
   staticRoot: string,
   pathname: string,
@@ -145,26 +189,38 @@ async function serveStatic(
         : [pathname];
   for (const target of targets) {
     const resolved = resolveContainedPath(staticRoot, target);
-    if (resolved !== undefined && (await serveFile(res, resolved))) {
+    if (
+      resolved !== undefined &&
+      (await serveFile(res, resolved, req.headers["accept-encoding"]))
+    ) {
       return;
     }
   }
   const indexPath = join(staticRoot, "index.html");
-  if (await serveFile(res, indexPath)) {
+  if (await serveFile(res, indexPath, req.headers["accept-encoding"])) {
     return;
   }
-  writeJson(res, 404, errorBody("NOT_FOUND", "The requested resource was not found."));
+  writeJson(req, res, 404, errorBody("NOT_FOUND", "The requested resource was not found."));
 }
 
-function rejectForbiddenHost(res: ServerResponse): void {
+function rejectForbiddenHost(req: IncomingMessage, res: ServerResponse): void {
   const body: ApiError = errorBody("FORBIDDEN_HOST", "Request host is not the local interface.");
-  writeJson(res, 403, body);
+  writeJson(req, res, 403, body);
 }
 
 async function resolveCsp(deps: UiServerDeps): Promise<string> {
+  const cached = cspCache.get(deps);
+  const now = Date.now();
+  if (cached !== undefined && cached.expiresAt > now) {
+    return cached.value;
+  }
+  const ttlMs = deps.cspCacheTtlMs ?? CSP_CACHE_TTL_MS;
   try {
-    return (await deps.cspProvider?.()) ?? deps.csp;
+    const value = (await deps.cspProvider?.()) ?? deps.csp;
+    cspCache.set(deps, { value, expiresAt: now + ttlMs });
+    return value;
   } catch {
+    cspCache.set(deps, { value: deps.csp, expiresAt: now + ttlMs });
     return deps.csp;
   }
 }
@@ -184,7 +240,7 @@ async function handle(
     allowMicrophone: isVoiceDictationCapable(handlerDeps) || isVoiceRealtimeCapable(handlerDeps),
   });
   if (!isAllowedHost(req, deps.port)) {
-    rejectForbiddenHost(res);
+    rejectForbiddenHost(req, res);
     return;
   }
   const method = (req.method ?? "GET").toUpperCase();
@@ -192,7 +248,7 @@ async function handle(
     await dispatchApi(handlerDeps, req, res, method, url);
     return;
   }
-  await serveStatic(res, deps.staticRoot, url.pathname);
+  await serveStatic(req, res, deps.staticRoot, url.pathname);
 }
 
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
@@ -209,7 +265,7 @@ export function createUiServer(deps: UiServerDeps): Server {
   const server = createServer((req, res) => {
     void handle(deps, handlerDeps, req, res).catch(() => {
       if (!res.headersSent) {
-        writeJson(res, 500, errorBody("INTERNAL", "An unexpected error occurred."));
+        writeJson(req, res, 500, errorBody("INTERNAL", "An unexpected error occurred."));
       } else {
         res.end();
       }

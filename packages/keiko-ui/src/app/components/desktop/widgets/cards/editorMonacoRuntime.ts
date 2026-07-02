@@ -16,14 +16,10 @@
  */
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
-import "monaco-editor/esm/vs/basic-languages/go/go.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/java/java.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/python/python.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js";
-import "monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js";
 // Register the language id + Monarch grammar for css/scss/less/html so they tokenize and Monaco's
@@ -49,6 +45,57 @@ import {
 } from "@oscharko-dev/keiko-editor";
 
 let runtimeConfigured = false;
+
+const optionalLanguageLoaders = {
+  go: () => import("monaco-editor/esm/vs/basic-languages/go/go.contribution.js"),
+  java: () => import("monaco-editor/esm/vs/basic-languages/java/java.contribution.js"),
+  shell: () => import("monaco-editor/esm/vs/basic-languages/shell/shell.contribution.js"),
+  sql: () => import("monaco-editor/esm/vs/basic-languages/sql/sql.contribution.js"),
+} as const;
+
+type OptionalMonacoLanguage = keyof typeof optionalLanguageLoaders;
+
+const loadedOptionalLanguages = new Set<OptionalMonacoLanguage>();
+const loadingOptionalLanguages = new Map<OptionalMonacoLanguage, Promise<void>>();
+
+function optionalMonacoLanguage(languageId: string): OptionalMonacoLanguage | null {
+  return languageId in optionalLanguageLoaders ? (languageId as OptionalMonacoLanguage) : null;
+}
+
+export function isMonacoLanguageReady(languageId: string): boolean {
+  const optionalLanguage = optionalMonacoLanguage(languageId);
+  return optionalLanguage === null || loadedOptionalLanguages.has(optionalLanguage);
+}
+
+export function ensureMonacoLanguage(languageId: string): Promise<void> {
+  const optionalLanguage = optionalMonacoLanguage(languageId);
+  if (optionalLanguage === null || loadedOptionalLanguages.has(optionalLanguage)) {
+    return Promise.resolve();
+  }
+  const inflight = loadingOptionalLanguages.get(optionalLanguage);
+  if (inflight !== undefined) {
+    return inflight;
+  }
+  const promise = optionalLanguageLoaders[optionalLanguage]()
+    .then(() => {
+      loadedOptionalLanguages.add(optionalLanguage);
+    })
+    .finally(() => {
+      loadingOptionalLanguages.delete(optionalLanguage);
+    });
+  loadingOptionalLanguages.set(optionalLanguage, promise);
+  return promise;
+}
+
+export function areMonacoLanguagesReady(languageIds: readonly string[]): boolean {
+  return languageIds.every(isMonacoLanguageReady);
+}
+
+export function ensureMonacoLanguages(languageIds: readonly string[]): Promise<void> {
+  return Promise.all(languageIds.map((languageId) => ensureMonacoLanguage(languageId))).then(
+    () => undefined,
+  );
+}
 
 function registerJsonLanguageId(monacoNamespace: typeof monaco): void {
   if (monacoNamespace.languages.getLanguages().some((language) => language.id === "json")) {

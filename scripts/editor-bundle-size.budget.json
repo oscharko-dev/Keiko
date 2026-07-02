@@ -2,6 +2,7 @@
   "$comment": "Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). Enforced deterministically by scripts/editor-bundle-size.mjs, which runs standalone (`npm run check:editor-bundle-size`) and inside `check:package-surface` (the `ci` prepack chain). PR CI for feat/keiko-editor also runs it after `npm run build:ui` with `--require-static-export` so initial static-export JS is scanned. The 2.5 MB-gzip lazy editor + Monaco runtime budget and the <=750 KB-gzip per-worker-chunk budget are measured against the real production bundle as release evidence by #1209; this file enforces the parts that regress in this repo deterministically: the editor package's own compiled footprint, the pinned Monaco version the runtime footprint was measured against, and the first-load code-split isolation (Monaco/editor runtime value-imported only behind a client-only dynamic boundary). See docs/keiko-editor/1207-performance-budgets.md.",
   "editorOwnCodeGzipBytesCeiling": 98304,
   "editorOwnCodeGzipBytesObserved": 68633,
+  "initialPageChunkGzipBytesCeiling": 307200,
   "monacoEditorPinnedVersion": "0.55.1",
   "firstLoadRuntimeValueImporters": [
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorRuntimeWidget.tsx",

@@ -12,7 +12,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts";
 import { correctMemory, editMemory } from "@/lib/memory-api";
-import { useI18n } from "@/lib/i18n";
+import { useTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 import { sensitivityLabel } from "./MemoryFilters";
 
@@ -36,7 +36,7 @@ export function EditMemoryDialog({
   editMemoryImpl = editMemory,
   correctMemoryImpl = correctMemory,
 }: EditMemoryDialogProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [body, setBody] = useState(record.body);
   const [tagsRaw, setTagsRaw] = useState(record.tags.join(", "));
   const [sensitivity, setSensitivity] = useState<MemorySensitivity>(record.provenance.sensitivity);

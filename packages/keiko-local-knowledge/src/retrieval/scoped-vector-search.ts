@@ -6,10 +6,11 @@
 //
 // Vector blob layout: each row's `embedding` is `vectorDimensions * 4` bytes encoded as
 // a little-endian Float32 array (see `floatToBytes` in `../indexing/embedding-batcher.ts`).
-// We decode to a `Float32Array` view and compute similarity in-process. This is a
-// brute-force O(N·D) scan — that is intentional for the first cut, since capsules are
-// expected to be small (≤ a few thousand vectors) and adding an ANN index pulls in a
-// native dependency we have explicitly avoided in `@oscharko-dev/keiko-local-knowledge`.
+// Exact in-process vector scans are capped. When a capsule is larger than that cap, the
+// lexical index first supplies a bounded chunk-id pool for dense reranking. Dense-only
+// oversized capsules fall back to a scoped ANN sidecar and exact-rerank only those ANN
+// candidates, avoiding an unbounded O(N*D) query scan without widening retrieval outside
+// the requested scope.
 
 import type {
   CitationReference,
@@ -35,13 +36,16 @@ import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
 import {
-  lexicalExactTerms,
   lexicalQueryTermGroups,
-  lexicalTextTokens,
-  normaliseLexicalTerm,
   type LexicalQueryTermGroup,
 } from "./lexical-normalization.js";
-import { RetrievalError, type QueryTransformer, type RetrievalDiagnostics, type RetrievalVectorIndexDiagnostics } from "./types.js";
+import {
+  RetrievalError,
+  type QueryTransformer,
+  type RetrievalDiagnostics,
+  type RetrievalNoEvidenceReason,
+  type RetrievalVectorIndexDiagnostics,
+} from "./types.js";
 import {
   searchVectorIndex,
   type VectorIndexCandidate,
@@ -50,8 +54,57 @@ import {
 
 const LEXICAL_RECALL_MAX_TERMS = 12;
 const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
+const MAX_DECODED_VECTOR_CACHE_ENTRIES = 16;
+const DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS = 20_000;
+const GUIDED_DENSE_RERANK_MAX_ROWS = 1_000;
+const ANN_HASH_BITS = 18;
+const ANN_PROJECTION_WIDTH = 32;
+const ANN_RERANK_MAX_ROWS = 1_000;
+const DEFAULT_MAX_ANN_INDEX_ROWS = 250_000;
+const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
 const BROAD_QUERY_PATTERN =
   /\b(compare|comparez|summari[sz]e|overview|explain|describe|analyse|analyze|erkl[aä]re|ueberblick|überblick|vergleiche|zusammenfassung)\b/iu;
+const SEARCH_STOPWORDS = new Set([
+  "a",
+  "about",
+  "and",
+  "are",
+  "auf",
+  "aus",
+  "bei",
+  "das",
+  "der",
+  "die",
+  "ein",
+  "eine",
+  "einen",
+  "einer",
+  "eines",
+  "for",
+  "from",
+  "how",
+  "in",
+  "ist",
+  "mit",
+  "of",
+  "on",
+  "oder",
+  "sagen",
+  "steht",
+  "the",
+  "to",
+  "und",
+  "uber",
+  "ueber",
+  "über",
+  "von",
+  "was",
+  "what",
+  "wie",
+  "zu",
+  "zum",
+  "zur",
+]);
 
 // ─── Public input shape ──────────────────────────────────────────────────────
 // A pre-built scope (single capsule or composed set) reshaped into the union the search
@@ -71,6 +124,7 @@ export interface SearchOptions {
   readonly strategy?: "auto" | "balanced" | "exact" | "broad";
   readonly queryTransformer?: QueryTransformer;
   readonly queryTransformTimeoutMs?: number;
+  readonly maxExactVectorScanRows?: number;
   readonly vectorIndex?: VectorIndexOptions;
 }
 
@@ -136,33 +190,30 @@ const SELECT_VECTOR_CACHE_STAMP_SQL = [
   "WHERE capsule_id = :c",
 ].join(" ");
 
-const COUNT_VECTORS_FOR_CAPSULE_SCOPE_SQL = [
-  "SELECT COUNT(*) AS n",
-  "FROM vectors",
-  "WHERE capsule_id = :c",
-].join(" ");
-
 const DECODED_VECTOR_CACHE = new WeakMap<KnowledgeStore, Map<string, readonly DecodedVectorRow[]>>();
+const ANN_INDEX_CACHE = new WeakMap<KnowledgeStore, Map<string, AnnIndex>>();
+const ANN_PROJECTION_CACHE = new Map<string, readonly AnnProjection[]>();
 
 function readVectorsForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter?: readonly KnowledgeSourceId[],
+  chunkFilter?: readonly string[],
 ): readonly VectorRow[] {
   if (sourceFilter?.length === 0) return [];
-  const params: Record<string, string> = { c: String(capsuleId) };
-  const sourceClause =
-    sourceFilter === undefined
-      ? ""
-      : ` AND source_id IN (${sourceFilter.map((_, i) => `:s${String(i)}`).join(", ")})`;
-  if (sourceFilter !== undefined) {
-    for (let i = 0; i < sourceFilter.length; i += 1) {
-      params[`s${String(i)}`] = String(sourceFilter[i]);
-    }
-  }
+  if (chunkFilter?.length === 0) return [];
   return store._internal.db
-    .prepare(`${SELECT_VECTORS_FOR_CAPSULE_SQL}${sourceClause}`)
-    .all(params) as unknown as readonly VectorRow[];
+    .prepare(
+      `${SELECT_VECTORS_FOR_CAPSULE_SQL}${sourceFilterClause(
+        sourceFilter,
+        "",
+      )}${chunkFilterClause(chunkFilter, "")}`,
+    )
+    .all({
+      c: String(capsuleId),
+      ...sourceParams(sourceFilter),
+      ...chunkParams(chunkFilter),
+    }) as unknown as readonly VectorRow[];
 }
 
 function vectorCacheStamp(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): VectorCacheStampRow {
@@ -171,26 +222,33 @@ function vectorCacheStamp(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId):
     .get({ c: String(capsuleId) }) as unknown as VectorCacheStampRow;
 }
 
-function countVectorsForCapsuleScope(
+function vectorCacheStampForScope(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
-): number {
-  if (sourceFilter?.length === 0) return 0;
-  const params: Record<string, string> = { c: String(capsuleId) };
-  const sourceClause =
-    sourceFilter === undefined
-      ? ""
-      : ` AND source_id IN (${sourceFilter.map((_, i) => `:s${String(i)}`).join(", ")})`;
-  if (sourceFilter !== undefined) {
-    for (let i = 0; i < sourceFilter.length; i += 1) {
-      params[`s${String(i)}`] = String(sourceFilter[i]);
-    }
+  chunkFilter?: readonly string[],
+): VectorCacheStampRow {
+  if (sourceFilter === undefined && chunkFilter === undefined) {
+    return vectorCacheStamp(store, capsuleId);
   }
-  const row = store._internal.db
-    .prepare(`${COUNT_VECTORS_FOR_CAPSULE_SCOPE_SQL}${sourceClause}`)
-    .get(params) as { readonly n: number } | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+  if (sourceFilter?.length === 0) return { n: 0, max_created_at: null };
+  if (chunkFilter?.length === 0) return { n: 0, max_created_at: null };
+  return store._internal.db
+    .prepare(
+      [
+        "SELECT COUNT(*) AS n, MAX(created_at) AS max_created_at",
+        "FROM vectors",
+        `WHERE capsule_id = :c${sourceFilterClause(sourceFilter, "")}${chunkFilterClause(
+          chunkFilter,
+          "",
+        )}`,
+      ].join(" "),
+    )
+    .get({
+      c: String(capsuleId),
+      ...sourceParams(sourceFilter),
+      ...chunkParams(chunkFilter),
+    }) as unknown as VectorCacheStampRow;
 }
 
 function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly DecodedVectorRow[]> {
@@ -201,31 +259,307 @@ function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly Decode
   return created;
 }
 
+interface AnnProjection {
+  readonly indices: Uint32Array;
+  readonly signs: Int8Array;
+}
+
+interface AnnIndex {
+  readonly rows: readonly DecodedVectorRow[];
+  readonly buckets: ReadonlyMap<number, readonly number[]>;
+  readonly projections: readonly AnnProjection[];
+  readonly rowCount: number;
+}
+
+type AnnIndexReadResult =
+  | { readonly kind: "ready"; readonly index: AnnIndex }
+  | { readonly kind: "empty"; readonly rowCount: number }
+  | { readonly kind: "skipped-too-large"; readonly rowCount: number; readonly limit: number };
+
+function annCacheForStore(store: KnowledgeStore): Map<string, AnnIndex> {
+  const cached = ANN_INDEX_CACHE.get(store);
+  if (cached !== undefined) return cached;
+  const created = new Map<string, AnnIndex>();
+  ANN_INDEX_CACHE.set(store, created);
+  return created;
+}
+
+function fnv1a32(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash >>> 0;
+}
+
+function mix32(value: number): number {
+  let x = value >>> 0;
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x7feb352d) >>> 0;
+  x ^= x >>> 15;
+  x = Math.imul(x, 0x846ca68b) >>> 0;
+  x ^= x >>> 16;
+  return x >>> 0;
+}
+
+function annProjectionCacheKey(identity: EmbeddingModelIdentity): string {
+  return `${identityKey(identity)}|ann:${String(ANN_HASH_BITS)}:${String(ANN_PROJECTION_WIDTH)}`;
+}
+
+function annProjectionsFor(identity: EmbeddingModelIdentity): readonly AnnProjection[] {
+  const key = annProjectionCacheKey(identity);
+  const cached = ANN_PROJECTION_CACHE.get(key);
+  if (cached !== undefined) return cached;
+  const seed = fnv1a32(key);
+  const projections: AnnProjection[] = [];
+  for (let bit = 0; bit < ANN_HASH_BITS; bit += 1) {
+    const indices = new Uint32Array(ANN_PROJECTION_WIDTH);
+    const signs = new Int8Array(ANN_PROJECTION_WIDTH);
+    for (let lane = 0; lane < ANN_PROJECTION_WIDTH; lane += 1) {
+      const mixed = mix32(seed ^ Math.imul(bit + 1, 0x9e3779b1) ^ Math.imul(lane + 1, 0x85ebca6b));
+      indices[lane] = mixed % identity.vectorDimensions;
+      signs[lane] = (mixed & 0x80000000) === 0 ? 1 : -1;
+    }
+    projections.push({ indices, signs });
+  }
+  ANN_PROJECTION_CACHE.set(key, projections);
+  return projections;
+}
+
+function annHash(vector: Float32Array, projections: readonly AnnProjection[]): number {
+  let hash = 0;
+  for (let bit = 0; bit < projections.length; bit += 1) {
+    const projection = projections[bit];
+    if (projection === undefined) continue;
+    let sum = 0;
+    for (let lane = 0; lane < projection.indices.length; lane += 1) {
+      const idx = projection.indices[lane] ?? 0;
+      sum += (vector[idx] ?? 0) * (projection.signs[lane] ?? 1);
+    }
+    if (sum >= 0) hash |= 1 << bit;
+  }
+  return hash;
+}
+
+function hammingDistance(a: number, b: number): number {
+  let x = (a ^ b) >>> 0;
+  let count = 0;
+  while (x !== 0) {
+    x &= x - 1;
+    count += 1;
+  }
+  return count;
+}
+
+function collectAnnBucket(
+  buckets: ReadonlyMap<number, readonly number[]>,
+  bucket: number,
+  seenBuckets: Set<number>,
+  seenRows: Set<number>,
+  out: number[],
+  limit: number,
+): void {
+  if (out.length >= limit || seenBuckets.has(bucket)) return;
+  seenBuckets.add(bucket);
+  const rows = buckets.get(bucket);
+  if (rows === undefined) return;
+  for (const row of rows) {
+    if (seenRows.has(row)) continue;
+    seenRows.add(row);
+    out.push(row);
+    if (out.length >= limit) return;
+  }
+}
+
+// eslint-disable-next-line max-lines-per-function, complexity
+function annCandidateRowsForQuery(
+  index: AnnIndex,
+  queryVector: Float32Array,
+  limit: number,
+): readonly DecodedVectorRow[] {
+  const target = annHash(queryVector, index.projections);
+  const seenBuckets = new Set<number>();
+  const seenRows = new Set<number>();
+  const rowIndexes: number[] = [];
+  collectAnnBucket(index.buckets, target, seenBuckets, seenRows, rowIndexes, limit);
+  for (let bit = 0; bit < ANN_HASH_BITS && rowIndexes.length < limit; bit += 1) {
+    collectAnnBucket(index.buckets, target ^ (1 << bit), seenBuckets, seenRows, rowIndexes, limit);
+  }
+  for (let a = 0; a < ANN_HASH_BITS && rowIndexes.length < limit; a += 1) {
+    for (let b = a + 1; b < ANN_HASH_BITS && rowIndexes.length < limit; b += 1) {
+      collectAnnBucket(
+        index.buckets,
+        target ^ (1 << a) ^ (1 << b),
+        seenBuckets,
+        seenRows,
+        rowIndexes,
+        limit,
+      );
+    }
+  }
+  for (let a = 0; a < ANN_HASH_BITS && rowIndexes.length < limit; a += 1) {
+    for (let b = a + 1; b < ANN_HASH_BITS && rowIndexes.length < limit; b += 1) {
+      for (let c = b + 1; c < ANN_HASH_BITS && rowIndexes.length < limit; c += 1) {
+        collectAnnBucket(
+          index.buckets,
+          target ^ (1 << a) ^ (1 << b) ^ (1 << c),
+          seenBuckets,
+          seenRows,
+          rowIndexes,
+          limit,
+        );
+      }
+    }
+  }
+  if (rowIndexes.length === 0) {
+    const nearestBuckets = [...index.buckets.keys()].sort((a, b) => {
+      const dist = hammingDistance(a, target) - hammingDistance(b, target);
+      return dist !== 0 ? dist : a - b;
+    });
+    for (const bucket of nearestBuckets) {
+      collectAnnBucket(index.buckets, bucket, seenBuckets, seenRows, rowIndexes, limit);
+      if (rowIndexes.length >= limit) break;
+    }
+  }
+  return rowIndexes
+    .map((rowIndex) => index.rows[rowIndex])
+    .filter((row): row is DecodedVectorRow => row !== undefined);
+}
+
+// eslint-disable-next-line complexity
+function readAnnIndexForCapsule(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  maxRows: number = DEFAULT_MAX_ANN_INDEX_ROWS,
+): AnnIndexReadResult {
+  if (sourceFilter?.length === 0) return { kind: "empty", rowCount: 0 };
+  const stamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
+  if (stamp.n === 0) return { kind: "empty", rowCount: 0 };
+  if (stamp.n > maxRows) return { kind: "skipped-too-large", rowCount: stamp.n, limit: maxRows };
+  const cache = annCacheForStore(store);
+  const key = ["ann", decodeCacheKey(capsule, stamp, sourceFilter, undefined)].join("|");
+  const cached = cache.get(key);
+  if (cached !== undefined) return { kind: "ready", index: cached };
+  const projections = annProjectionsFor(capsule.embeddingModelIdentity);
+  const rows = readVectorsForCapsule(store, capsule.id, sourceFilter, undefined).map((row) => ({
+    ...row,
+    vector: normalizeVectorForIdentity(
+      decodeEmbedding(row, store._internal.contentCipher),
+      capsule.embeddingModelIdentity,
+    ),
+  }));
+  const mutableBuckets = new Map<number, number[]>();
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (row === undefined) continue;
+    const bucket = annHash(row.vector, projections);
+    const bucketRows = mutableBuckets.get(bucket);
+    if (bucketRows === undefined) {
+      mutableBuckets.set(bucket, [rowIndex]);
+    } else {
+      bucketRows.push(rowIndex);
+    }
+  }
+  const index: AnnIndex = { rows, buckets: mutableBuckets, projections, rowCount: stamp.n };
+  cache.set(key, index);
+  while (cache.size > MAX_DECODED_VECTOR_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+  return { kind: "ready", index };
+}
+
 function decodeCacheKey(
   capsule: KnowledgeCapsule,
   stamp: VectorCacheStampRow,
+  sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  chunkFilter: readonly string[] | undefined,
 ): string {
   return [
     String(capsule.id),
     identityKey(capsule.embeddingModelIdentity),
+    sourceFilterKey(sourceFilter),
+    chunkFilterKey(chunkFilter),
     String(stamp.n),
     String(stamp.max_created_at ?? 0),
   ].join("|");
 }
 
+function sourceFilterKey(sourceFilter: readonly KnowledgeSourceId[] | undefined): string {
+  if (sourceFilter === undefined) return "*";
+  return [...new Set(sourceFilter.map(String))].sort().join("\u0000");
+}
+
+function chunkFilterKey(chunkFilter: readonly string[] | undefined): string {
+  if (chunkFilter === undefined) return "*";
+  return [...new Set(chunkFilter)].sort().join("\u0000");
+}
+
+function uniqueStrings(values: readonly string[]): readonly string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+type DecodedVectorReadResult =
+  | {
+      readonly kind: "ready";
+      readonly rows: readonly DecodedVectorRow[];
+      readonly rowCount: number;
+      readonly readMode: "exact" | "guided";
+    }
+  | {
+      readonly kind: "skipped-too-large";
+      readonly rowCount: number;
+      readonly limit: number;
+    };
+
+// eslint-disable-next-line max-lines-per-function, complexity
 function readDecodedVectorsForCapsule(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
-): readonly DecodedVectorRow[] {
-  if (sourceFilter?.length === 0) return [];
-  const stamp = vectorCacheStamp(store, capsule.id);
-  if (stamp.n === 0) return [];
+  maxRows: number,
+  guidedChunkIds: readonly string[] | undefined,
+): DecodedVectorReadResult {
+  if (sourceFilter?.length === 0) {
+    return { kind: "ready", rows: [], rowCount: 0, readMode: "exact" };
+  }
+  const fullStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
+  if (fullStamp.n === 0) return { kind: "ready", rows: [], rowCount: 0, readMode: "exact" };
+
+  let stamp = fullStamp;
+  let chunkFilter: readonly string[] | undefined;
+  let readMode: "exact" | "guided" = "exact";
+  let rowLimit = maxRows;
+  if (fullStamp.n > maxRows) {
+    if (guidedChunkIds === undefined || guidedChunkIds.length === 0) {
+      return { kind: "skipped-too-large", rowCount: fullStamp.n, limit: maxRows };
+    }
+    chunkFilter = uniqueStrings(guidedChunkIds);
+    stamp = vectorCacheStampForScope(store, capsule.id, sourceFilter, chunkFilter);
+    readMode = "guided";
+    rowLimit = GUIDED_DENSE_RERANK_MAX_ROWS;
+    if (stamp.n === 0) {
+      return { kind: "ready", rows: [], rowCount: fullStamp.n, readMode };
+    }
+  }
+  if (stamp.n > rowLimit) {
+    return { kind: "skipped-too-large", rowCount: stamp.n, limit: rowLimit };
+  }
   const cache = decodeCacheForStore(store);
-  const key = decodeCacheKey(capsule, stamp);
+  const key = decodeCacheKey(capsule, stamp, sourceFilter, chunkFilter);
   let rows = cache.get(key);
   if (rows === undefined) {
-    rows = readVectorsForCapsule(store, capsule.id).map((row) => ({
+    rows = readVectorsForCapsule(store, capsule.id, sourceFilter, chunkFilter).map((row) => ({
       ...row,
       vector: normalizeVectorForIdentity(
         decodeEmbedding(row, store._internal.contentCipher),
@@ -233,10 +567,16 @@ function readDecodedVectorsForCapsule(
       ),
     }));
     cache.set(key, rows);
+    while (cache.size > MAX_DECODED_VECTOR_CACHE_ENTRIES) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+  } else {
+    cache.delete(key);
+    cache.set(key, rows);
   }
-  if (sourceFilter === undefined) return rows;
-  const allowed = new Set(sourceFilter.map(String));
-  return rows.filter((row) => allowed.has(row.source_id));
+  return { kind: "ready", rows, rowCount: fullStamp.n, readMode };
 }
 
 // ─── Citation row reader ─────────────────────────────────────────────────────
@@ -665,6 +1005,24 @@ function sourceParams(
   return params;
 }
 
+function chunkFilterClause(chunkFilter: readonly string[] | undefined, qualifier: string): string {
+  if (chunkFilter === undefined) return "";
+  if (chunkFilter.length === 0) return " AND 0";
+  return ` AND ${qualifier}chunk_id IN (${chunkFilter
+    .map((_, i) => `:chunk${String(i)}`)
+    .join(", ")})`;
+}
+
+function chunkParams(chunkFilter: readonly string[] | undefined): Record<string, string> {
+  const params: Record<string, string> = {};
+  if (chunkFilter !== undefined) {
+    for (let i = 0; i < chunkFilter.length; i += 1) {
+      params[`chunk${String(i)}`] = chunkFilter[i] ?? "";
+    }
+  }
+  return params;
+}
+
 function countLexicalRowsForCapsuleScope(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -1056,6 +1414,19 @@ function mergeLexicalCollections(collections: readonly LexicalCollection[]): Lex
   };
 }
 
+function guidedChunkIdsForCapsule(
+  candidates: readonly LexicalCandidate[],
+  capsuleId: KnowledgeCapsuleId,
+): readonly string[] | undefined {
+  const chunkIds: string[] = [];
+  for (const candidate of candidates) {
+    if (String(candidate.capsuleId) !== String(capsuleId)) continue;
+    chunkIds.push(candidate.chunkId);
+  }
+  if (chunkIds.length === 0) return undefined;
+  return uniqueStrings(chunkIds);
+}
+
 // ─── Main entry point ────────────────────────────────────────────────────────
 // `searchVectorsForScope` keeps the retrieval legs separate until fusion:
 //   1. Resolve every in-scope capsule (skip ids that no longer exist).
@@ -1072,8 +1443,7 @@ export interface SearchOutcome {
   readonly references: readonly RetrievalReference[];
   // Set when the search produced no references for a reason the runner needs to
   // discriminate. `noEvidence` mirrors `RetrievalResult` (same vocabulary).
-  readonly noEvidenceReason?:
-    "no-vectors" | "incompatible-embedding-identity" | "below-min-score" | "embedding-failed";
+  readonly noEvidenceReason?: RetrievalNoEvidenceReason;
   // True when the embedding adapter failed for at least one capsule but lexical
   // candidates kept the result non-empty. Observability signal only — does not
   // change which references are returned.
@@ -1091,6 +1461,9 @@ interface SearchState {
   anyDimensionCompatible: boolean;
   anyIdentityIncompatible: boolean;
   embeddingFailed: boolean;
+  denseSkippedTooLarge: boolean;
+  denseGuided: boolean;
+  denseAnn: boolean;
 }
 
 function emptyState(): SearchState {
@@ -1101,6 +1474,9 @@ function emptyState(): SearchState {
     anyDimensionCompatible: false,
     anyIdentityIncompatible: false,
     embeddingFailed: false,
+    denseSkippedTooLarge: false,
+    denseGuided: false,
+    denseAnn: false,
   };
 }
 
@@ -1141,13 +1517,76 @@ async function ensureIdentityPreflight(
   return result;
 }
 
+type CapsuleQueryEmbeddingResult =
+  | { readonly kind: "ready"; readonly embedded: EmbeddedQuery }
+  | { readonly kind: "identity-incompatible" }
+  | { readonly kind: "embedding-failed" };
+
+async function ensureCapsuleQueryEmbedding(
+  embeddingAdapter: OpenAIEmbeddingAdapter,
+  capsule: KnowledgeCapsule,
+  query: string,
+  options: SearchOptions,
+  cache: Map<string, EmbeddedQuery>,
+  preflightCache: Map<string, IdentityPreflightResult>,
+): Promise<CapsuleQueryEmbeddingResult> {
+  const preflight = await ensureIdentityPreflight(
+    embeddingAdapter,
+    capsule.embeddingModelIdentity,
+    options.signal,
+    preflightCache,
+  );
+  if (preflight === "incompatible") return { kind: "identity-incompatible" };
+  if (preflight === "failed") return { kind: "embedding-failed" };
+
+  const embedded = await ensureQueryEmbedded(
+    embeddingAdapter,
+    capsule.embeddingModelIdentity,
+    query,
+    options.signal,
+    cache,
+  );
+  if (embedded instanceof RetrievalError) {
+    return {
+      kind:
+        embedded.code === "INCOMPATIBLE_EMBEDDING_IDENTITY"
+          ? "identity-incompatible"
+          : "embedding-failed",
+    };
+  }
+  if (embedded === undefined) return { kind: "embedding-failed" };
+  if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
+    return { kind: "identity-incompatible" };
+  }
+  return { kind: "ready", embedded };
+}
+
+function recordEmbeddingFailure(
+  state: SearchState,
+  result: Exclude<CapsuleQueryEmbeddingResult, { readonly kind: "ready" }>,
+): void {
+  if (result.kind === "identity-incompatible") {
+    state.anyIdentityIncompatible = true;
+  } else {
+    state.embeddingFailed = true;
+  }
+}
+
+function pushScoredCandidates(state: SearchState, scored: CapsuleScoreResult): void {
+  if (scored.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
+  if (scored.sawDimensionCompatible) state.anyDimensionCompatible = true;
+  state.candidates.push(...scored.candidates);
+}
+
 function denseCandidatesFromVectorIndex(
   candidates: readonly VectorIndexCandidate[],
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): readonly DenseCandidate[] {
   const allowedSources =
-    sourceFilter === undefined ? undefined : new Set(sourceFilter.map((sourceId) => String(sourceId)));
+    sourceFilter === undefined
+      ? undefined
+      : new Set(sourceFilter.map((sourceId) => String(sourceId)));
   const out: DenseCandidate[] = [];
   for (const candidate of candidates) {
     if (String(candidate.capsuleId) !== String(capsule.id)) continue;
@@ -1190,65 +1629,18 @@ function tryVectorIndexForCapsule(
   if (indexed.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
   if (indexed.sawDimensionCompatible) state.anyDimensionCompatible = true;
   if (!indexed.ok) return false;
+  state.anyVectorSeen = true;
   state.candidates.push(...denseCandidatesFromVectorIndex(indexed.candidates, capsule, sourceFilter));
   return true;
 }
 
-async function compatibleEmbeddedQueryForCapsule(
-  embeddingAdapter: OpenAIEmbeddingAdapter,
-  capsule: KnowledgeCapsule,
-  query: string,
-  options: SearchOptions,
-  cache: Map<string, EmbeddedQuery>,
-  preflightCache: Map<string, IdentityPreflightResult>,
-  state: SearchState,
-): Promise<EmbeddedQuery | undefined> {
-  const preflight = await ensureIdentityPreflight(
-    embeddingAdapter,
-    capsule.embeddingModelIdentity,
-    options.signal,
-    preflightCache,
-  );
-  if (preflight === "incompatible") {
-    state.anyIdentityIncompatible = true;
-    return undefined;
-  }
-  if (preflight === "failed") {
-    state.embeddingFailed = true;
-    return undefined;
-  }
-
-  const embedded = await ensureQueryEmbedded(
-    embeddingAdapter,
-    capsule.embeddingModelIdentity,
-    query,
-    options.signal,
-    cache,
-  );
-  if (embedded instanceof RetrievalError) {
-    if (embedded.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
-      state.anyIdentityIncompatible = true;
-    } else {
-      state.embeddingFailed = true;
-    }
-    return undefined;
-  }
-  if (embedded === undefined) {
-    state.embeddingFailed = true;
-    return undefined;
-  }
-  if (embedded.dimensions !== capsule.embeddingModelIdentity.vectorDimensions) {
-    state.anyIdentityIncompatible = true;
-    return undefined;
-  }
-  return embedded;
-}
-
+// eslint-disable-next-line max-lines-per-function, complexity
 async function processCapsule(
   store: KnowledgeStore,
   embeddingAdapter: OpenAIEmbeddingAdapter,
   capsule: KnowledgeCapsule,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
+  guidedChunkIds: readonly string[] | undefined,
   query: string,
   options: SearchOptions,
   profile: QueryProfile,
@@ -1256,34 +1648,83 @@ async function processCapsule(
   preflightCache: Map<string, IdentityPreflightResult>,
   state: SearchState,
 ): Promise<void> {
-  const vectorCount = countVectorsForCapsuleScope(store, capsule.id, sourceFilter);
-  if (vectorCount === 0) return;
+  const vectorStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
+  if (vectorStamp.n === 0) return;
   state.anyVectorSeen = true;
 
-  const embedded = await compatibleEmbeddedQueryForCapsule(
+  const queryEmbedding = await ensureCapsuleQueryEmbedding(
     embeddingAdapter,
     capsule,
     query,
     options,
     cache,
     preflightCache,
-    state,
   );
-  if (embedded === undefined) return;
-  if (tryVectorIndexForCapsule(store, capsule, sourceFilter, embedded, options, profile, state)) return;
+  if (queryEmbedding.kind !== "ready") {
+    recordEmbeddingFailure(state, queryEmbedding);
+    return;
+  }
+  if (
+    tryVectorIndexForCapsule(
+      store,
+      capsule,
+      sourceFilter,
+      queryEmbedding.embedded,
+      options,
+      profile,
+      state,
+    )
+  ) {
+    return;
+  }
 
-  const rows = readDecodedVectorsForCapsule(store, capsule, sourceFilter);
+  const vectorRead = readDecodedVectorsForCapsule(
+    store,
+    capsule,
+    sourceFilter,
+    options.maxExactVectorScanRows ?? DEFAULT_MAX_EXACT_VECTOR_SCAN_ROWS,
+    guidedChunkIds,
+  );
+  if (vectorRead.kind === "skipped-too-large") {
+    const annRead = readAnnIndexForCapsule(store, capsule, sourceFilter);
+    if (annRead.kind === "skipped-too-large") {
+      state.denseSkippedTooLarge = true;
+      return;
+    }
+    if (annRead.kind === "empty") return;
+    const annRows = annCandidateRowsForQuery(
+      annRead.index,
+      queryEmbedding.embedded.vector,
+      ANN_RERANK_MAX_ROWS,
+    );
+    if (annRows.length === 0) {
+      state.denseSkippedTooLarge = true;
+      return;
+    }
+    const scored = scoreCapsuleVectors(
+      annRows,
+      capsule,
+      queryEmbedding.embedded.vector,
+      oversampleTopK(options.topK, profile),
+      options.minScore,
+    );
+    state.denseAnn = true;
+    pushScoredCandidates(state, scored);
+    return;
+  }
+  if (vectorRead.rowCount > 0) state.anyVectorSeen = true;
+  if (vectorRead.readMode === "guided") state.denseGuided = true;
+  const rows = vectorRead.rows;
   if (rows.length === 0) return;
+
   const scored = scoreCapsuleVectors(
     rows,
     capsule,
-    embedded.vector,
+    queryEmbedding.embedded.vector,
     oversampleTopK(options.topK, profile),
     options.minScore,
   );
-  if (scored.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
-  if (scored.sawDimensionCompatible) state.anyDimensionCompatible = true;
-  state.candidates.push(...scored.candidates);
+  pushScoredCandidates(state, scored);
 }
 
 async function ensureQueryEmbedded(
@@ -1306,12 +1747,17 @@ async function ensureQueryEmbedded(
 // alias so `selectTopCandidates` can return either the surviving list or one of these
 // reasons without the loose RetrievalReference shape leaking.
 type EmptyReason =
-  "no-vectors" | "incompatible-embedding-identity" | "below-min-score" | "embedding-failed";
+  | "no-vectors"
+  | "incompatible-embedding-identity"
+  | "dense-scan-too-large"
+  | "below-min-score"
+  | "embedding-failed";
 
 type CandidateSelection =
   | { readonly ok: true; readonly top: readonly FusedCandidate[] }
   | { readonly ok: false; readonly reason: EmptyReason };
 
+// eslint-disable-next-line complexity
 function selectTopCandidates(
   state: SearchState,
   candidates: readonly FusedCandidate[],
@@ -1322,10 +1768,18 @@ function selectTopCandidates(
   if (!state.anyVectorSeen && candidates.length === 0) {
     return { ok: false, reason: "no-vectors" };
   }
+  if (state.denseSkippedTooLarge && candidates.length === 0) {
+    return { ok: false, reason: "dense-scan-too-large" };
+  }
   if (state.embeddingFailed && candidates.length === 0) {
     return { ok: false, reason: "embedding-failed" };
   }
-  if (state.anyVectorSeen && !state.anyDimensionCompatible && !state.embeddingFailed) {
+  if (
+    state.anyVectorSeen &&
+    !state.denseSkippedTooLarge &&
+    !state.anyDimensionCompatible &&
+    !state.embeddingFailed
+  ) {
     return { ok: false, reason: "incompatible-embedding-identity" };
   }
   if (candidates.length === 0) return { ok: false, reason: "below-min-score" };
@@ -1346,6 +1800,7 @@ function vectorIndexDiagnostics(
   };
 }
 
+// eslint-disable-next-line complexity
 function retrievalDiagnostics(
   state: SearchState,
   lexical: LexicalCollection,
@@ -1356,10 +1811,20 @@ function retrievalDiagnostics(
     : lexical.indexedRowCount === 0
       ? "missing"
       : "available";
+  const denseIndex = state.denseSkippedTooLarge
+    ? "skipped-too-large"
+    : state.denseAnn
+      ? "ann"
+      : state.denseGuided
+        ? "guided"
+        : state.anyVectorSeen
+          ? "available"
+          : "missing";
   const hasDense = state.candidates.length > 0;
   const hasLexical = lexical.candidates.length > 0;
+  const denseDegraded = state.embeddingFailed || state.denseSkippedTooLarge;
   const mode =
-    state.embeddingFailed && hasLexical
+    denseDegraded && hasLexical && !hasDense
       ? "lexical-degraded"
       : hasDense && hasLexical
         ? "hybrid"
@@ -1371,6 +1836,7 @@ function retrievalDiagnostics(
     denseCandidateCount: state.candidates.length,
     lexicalCandidateCount: lexical.candidates.length,
     fusedCandidateCount: fused.length,
+    denseIndex,
     lexicalIndex,
     vectorIndex: vectorIndexDiagnostics(state.vectorIndexDiagnostics),
   };
@@ -1394,6 +1860,7 @@ export async function searchVectorsForScope(
         denseCandidateCount: 0,
         lexicalCandidateCount: 0,
         fusedCandidateCount: 0,
+        denseIndex: "missing",
         lexicalIndex: "missing",
         vectorIndex: {
           provider: "brute-force",
@@ -1412,12 +1879,21 @@ export async function searchVectorsForScope(
   const lexicalCollections: LexicalCollection[] = [];
   for (const searchQuery of searchQueries) {
     const variantProfile = profileQuery(searchQuery, profile.strategy);
+    const lexicalForQuery = collectLexicalCandidates(
+      store,
+      capsules,
+      scope,
+      variantProfile,
+      options.topK,
+    );
+    lexicalCollections.push(lexicalForQuery);
     for (const capsule of capsules) {
       await processCapsule(
         store,
         embeddingAdapter,
         capsule,
         sourceFilterForCapsule(scope.sourceFilter, capsule),
+        guidedChunkIdsForCapsule(lexicalForQuery.candidates, capsule.id),
         searchQuery,
         options,
         variantProfile,
@@ -1426,9 +1902,6 @@ export async function searchVectorsForScope(
         state,
       );
     }
-    lexicalCollections.push(
-      collectLexicalCandidates(store, capsules, scope, variantProfile, options.topK),
-    );
   }
   const lexical = mergeLexicalCollections(lexicalCollections);
   const fused = fuseCandidates(
@@ -1675,7 +2148,22 @@ function balancedQueryProfile(
 }
 
 function extractExactTerms(value: string): readonly string[] {
-  return lexicalExactTerms(value);
+  const out: string[] = [];
+  const matches = value.matchAll(EXACT_TERM_PATTERN);
+  for (const match of matches) {
+    const raw = match[0];
+    if (!isExactTerm(raw)) continue;
+    const term = normaliseForSearch(raw);
+    if (term.length > 0) out.push(term);
+  }
+  return uniqueTokens(out);
+}
+
+function isExactTerm(value: string): boolean {
+  if (/\d/u.test(value)) return true;
+  if (/[._:/#-]/u.test(value)) return true;
+  if (/[a-z][A-Z]/u.test(value)) return true;
+  return value.length >= 3 && value === value.toUpperCase() && /\p{L}/u.test(value);
 }
 
 function hasDigitAndLetter(value: string): boolean {
@@ -1705,13 +2193,18 @@ function buildLexicalRecallTerms(
   exactTerms: readonly string[],
 ): readonly LexicalQueryTermGroup[] {
   const tokenTerms = tokens.filter((token) => token.length >= LEXICAL_RECALL_MIN_TOKEN_LENGTH);
-  return lexicalQueryTermGroups([...exactTerms, ...tokenTerms]).slice(0, LEXICAL_RECALL_MAX_TERMS);
+  return lexicalQueryTermGroups(uniqueTokens([...exactTerms, ...tokenTerms])).slice(
+    0,
+    LEXICAL_RECALL_MAX_TERMS,
+  );
 }
 
 function tokenise(value: string): readonly string[] {
-  return lexicalTextTokens(value);
+  return normaliseForSearch(value)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length >= 2 && !SEARCH_STOPWORDS.has(token));
 }
 
 function normaliseForSearch(value: string): string {
-  return normaliseLexicalTerm(value);
+  return value.normalize("NFC").toLocaleLowerCase("und");
 }

@@ -221,10 +221,7 @@ export function createBrowserAssistantSpeechStreamingSink():
     },
 
     stop(): void {
-      node?.port.postMessage(null); // flush the queue immediately (barge-in)
-      void context?.suspend().catch(() => {
-        // already suspended/closed
-      });
+      closeContext();
     },
 
     positionMs(): number | undefined {

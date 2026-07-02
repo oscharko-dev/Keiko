@@ -22,6 +22,10 @@ import type {
 } from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
+const voiceCapabilityCache = new WeakMap<
+  ConfiguredCapabilitySource,
+  Map<string, VoiceCapabilityResolution>
+>();
 
 export interface ModelSelectionQuery {
   readonly kind: ModelKind;
@@ -117,6 +121,13 @@ export function selectCompletionModel(
   return selectCompletionModelFromCapabilities(listConfiguredCapabilities(config), options);
 }
 
+function voiceResolutionCacheKey(options: VoiceResolutionOptions): string {
+  const unreachable = options.unreachableProviderIds;
+  const unreachableKey =
+    unreachable === undefined ? "" : [...unreachable].sort((a, b) => a.localeCompare(b)).join("\0");
+  return `${options.policyDisabled === true ? "1" : "0"}:${unreachableKey}`;
+}
+
 // Voice-capability resolution (Issue #493, ADR-0058 D1/D2). Resolves the configured capabilities
 // and applies the voice profile ladder. Only configured providers are eligible, so a voice
 // capability that names no provider can never be elected — the same fail-closed rule as completion
@@ -125,7 +136,19 @@ export function resolveVoiceCapability(
   config: ConfiguredCapabilitySource,
   options: VoiceResolutionOptions = {},
 ): VoiceCapabilityResolution {
-  return resolveVoiceCapabilityFromCapabilities(listConfiguredCapabilities(config), options);
+  const key = voiceResolutionCacheKey(options);
+  let byOptions = voiceCapabilityCache.get(config);
+  if (byOptions === undefined) {
+    byOptions = new Map();
+    voiceCapabilityCache.set(config, byOptions);
+  }
+  const cached = byOptions.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const resolved = resolveVoiceCapabilityFromCapabilities(listConfiguredCapabilities(config), options);
+  byOptions.set(key, resolved);
+  return resolved;
 }
 
 // Speech-to-text model selection (Issue #494, ADR-0058 D2/D4). Returns the configured voice

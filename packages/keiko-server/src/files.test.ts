@@ -866,7 +866,8 @@ describe("desktop files browser", () => {
 
     expect(preview.kind).toBe("image");
     if (preview.kind === "image") {
-      expect(preview.dataUrl).toMatch(/^data:image\/png;base64,/u);
+      expect(preview.url).toMatch(/^\/api\/files\/preview\/image\?/u);
+      expect(preview.url).toContain("path=assets%2Fpixel.png");
       expect(preview.maxBytes).toBe(3_000_000);
     }
   });

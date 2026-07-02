@@ -7,7 +7,10 @@ import {
   showPdfCitationPreviewFailure,
   showPdfCitationPreviewResult,
 } from "../widgets/cards/pdf-citation-preview-session";
-import { usePdfCitationPreviewController } from "./usePdfCitationPreview";
+import {
+  clearPdfCitationPreviewStatusCacheForTests,
+  usePdfCitationPreviewController,
+} from "./usePdfCitationPreview";
 
 vi.mock("@/lib/api", () => ({
   fetchPdfCitationPreviewStatus: vi.fn(),
@@ -85,6 +88,7 @@ function activeResponse(): PdfCitationPreviewOpenResponse {
 describe("usePdfCitationPreviewController", () => {
   afterEach(() => {
     vi.clearAllMocks();
+    clearPdfCitationPreviewStatusCacheForTests();
   });
 
   it("batches passive status by answer and maps only actionable citation states", async () => {

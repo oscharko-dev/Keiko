@@ -16,7 +16,7 @@ import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
 import { Toggle } from "../../components/desktop/widgets/shared/Toggle";
-import { useI18n, type I18nTranslate } from "@/lib/i18n";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatError } from "./format-error";
 import {
   MemoryFilters,
@@ -248,7 +248,7 @@ export function MemoryListContent({
   showWorkspaceBackLink = true,
   settingsSlot,
 }: MemoryListContentProps): ReactNode {
-  const { t } = useI18n();
+  const t = useTranslate();
   const [memories, setMemories] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

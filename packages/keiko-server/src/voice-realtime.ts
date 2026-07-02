@@ -95,6 +95,7 @@ const SESSION_RESUME_TTL_MS = 60_000;
 const MAX_ACTIVE_SESSIONS = 64;
 const MAX_REALTIME_CONTEXT_MESSAGES = 12;
 const MAX_REALTIME_CONTEXT_CHARS = 12_000;
+const REALTIME_INSTRUCTIONS_CACHE_TTL_MS = 2_000;
 // Bound the identifier length/charset before a client-chosen id may be tracked or logged, so a
 // hostile id cannot inject into a log/audit line (content-free redaction class, protocol §8).
 const MAX_ID_LENGTH = 200;
@@ -171,7 +172,29 @@ interface SessionState {
   hostSeq: number;
   lastClientSeq: number;
   readonly replay: VoiceControlMessage[];
+  replayStart: number;
   detachedAt: number | undefined;
+}
+
+function replayEvents(session: SessionState): readonly VoiceControlMessage[] {
+  if (session.replayStart === 0 || session.replay.length < MAX_REPLAY_EVENTS) {
+    return session.replay;
+  }
+  const ordered: VoiceControlMessage[] = [];
+  for (let i = 0; i < session.replay.length; i += 1) {
+    const message = session.replay[(session.replayStart + i) % session.replay.length];
+    if (message !== undefined) ordered.push(message);
+  }
+  return ordered;
+}
+
+function appendReplayEvent(session: SessionState, message: VoiceControlMessage): void {
+  if (session.replay.length < MAX_REPLAY_EVENTS) {
+    session.replay.push(message);
+    return;
+  }
+  session.replay[session.replayStart] = message;
+  session.replayStart = (session.replayStart + 1) % MAX_REPLAY_EVENTS;
 }
 
 type NegotiateFn = (
@@ -254,6 +277,54 @@ const REALTIME_NEGOTIATION_TIMEOUT_MS = 12_000;
 function trimContextText(text: string): string {
   const safe = stripUnsafeFormatChars(text).trim();
   return safe.length <= MAX_REALTIME_CONTEXT_CHARS ? safe : safe.slice(-MAX_REALTIME_CONTEXT_CHARS);
+}
+
+interface CachedRealtimeInstructions {
+  readonly expiresAt: number;
+  readonly value: Promise<string>;
+}
+
+const realtimeInstructionsCache = new WeakMap<
+  UiHandlerDeps,
+  Map<string, CachedRealtimeInstructions>
+>();
+
+function realtimeInstructionsCacheKey(
+  chatContext: VoiceSessionChatContext | undefined,
+  groundingToolEnabled: boolean,
+): string {
+  if (chatContext === undefined) return `none|groundingTool=${String(groundingToolEnabled)}`;
+  return JSON.stringify({
+    chatId: chatContext.chatId,
+    groundingToolEnabled,
+    memoryEnabled: chatContext.memory?.enabled === true,
+    memoryBudgetTokens: chatContext.memory?.budgetTokens ?? null,
+    groundingEnabled: chatContext.grounding?.enabled === true,
+    groundingKind: chatContext.grounding?.kind ?? null,
+    groundingSourceCount: chatContext.grounding?.sourceCount ?? null,
+  });
+}
+
+function cachedRealtimeInstructions(
+  deps: UiHandlerDeps,
+  key: string,
+): CachedRealtimeInstructions | undefined {
+  const byKey = realtimeInstructionsCache.get(deps);
+  const cached = byKey?.get(key);
+  if (cached === undefined) return undefined;
+  if (cached.expiresAt > Date.now()) return cached;
+  byKey?.delete(key);
+  return undefined;
+}
+
+function storeRealtimeInstructions(
+  deps: UiHandlerDeps,
+  key: string,
+  value: Promise<string>,
+): void {
+  const byKey = realtimeInstructionsCache.get(deps) ?? new Map<string, CachedRealtimeInstructions>();
+  byKey.set(key, { expiresAt: Date.now() + REALTIME_INSTRUCTIONS_CACHE_TTL_MS, value });
+  realtimeInstructionsCache.set(deps, byKey);
 }
 
 function recentChatContext(deps: UiHandlerDeps, chatId: string): string {
@@ -401,7 +472,7 @@ async function realtimeMemoryContext(
 
 export const _realtimeMemoryContextForTests = realtimeMemoryContext;
 
-async function realtimeInstructions(
+async function buildRealtimeInstructions(
   deps: UiHandlerDeps,
   chatContext: VoiceSessionChatContext | undefined,
   groundingToolEnabled: boolean,
@@ -423,6 +494,24 @@ async function realtimeInstructions(
     }
   }
   return sections.join("\n\n");
+}
+
+async function realtimeInstructions(
+  deps: UiHandlerDeps,
+  chatContext: VoiceSessionChatContext | undefined,
+  groundingToolEnabled: boolean,
+): Promise<string> {
+  const key = realtimeInstructionsCacheKey(chatContext, groundingToolEnabled);
+  const cached = cachedRealtimeInstructions(deps, key);
+  if (cached !== undefined) return cached.value;
+  const value = buildRealtimeInstructions(deps, chatContext, groundingToolEnabled).catch(
+    (error: unknown) => {
+      realtimeInstructionsCache.get(deps)?.delete(key);
+      throw error;
+    },
+  );
+  storeRealtimeInstructions(deps, key, value);
+  return value;
 }
 
 export const _realtimeInstructionsForTests = realtimeInstructions;
@@ -542,7 +631,7 @@ export class VoiceControlConnection {
   // recorded per session so the contract's `VOICE_CONTROL_TRANSPORT_V1` baseline is never mutated.
   start(resume: boolean): void {
     if (resume) {
-      for (const buffered of this.session.replay) {
+      for (const buffered of replayEvents(this.session)) {
         this.dispatchOut(buffered);
       }
     }
@@ -727,10 +816,7 @@ export class VoiceControlConnection {
     } as VoiceControlMessage;
     this.session.hostSeq += 1;
     if (isVoiceReplayEligible(message.kind)) {
-      this.session.replay.push(message);
-      if (this.session.replay.length > MAX_REPLAY_EVENTS) {
-        this.session.replay.shift();
-      }
+      appendReplayEvent(this.session, message);
     }
     return message;
   }
@@ -1061,6 +1147,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
       hostSeq: 0,
       lastClientSeq: 0,
       replay: [],
+      replayStart: 0,
       detachedAt: undefined,
     };
     this.sessions.set(idempotencyKey, state);

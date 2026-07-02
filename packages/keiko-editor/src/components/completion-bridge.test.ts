@@ -68,11 +68,12 @@ function fakeLanguages(): MonacoLanguagesRegistrar & {
 function fakeModel(
   value = "const a = 1;\n",
   word = { startColumn: 1, endColumn: 5 },
+  uri = "inmemory://model/a.ts",
 ): MonacoCompletionModel {
   return {
     getValue: () => value,
     getWordUntilPosition: () => word,
-    uri: { toString: () => "inmemory://model/a.ts" },
+    uri: { toString: () => uri },
   };
 }
 
@@ -95,6 +96,13 @@ function fakeToken(): MonacoCancellationToken & {
     },
     disposeListener,
   };
+}
+
+function requireCapturedRequest(value: EditorRequestIdentity | null): EditorRequestIdentity {
+  if (value === null) {
+    throw new Error("expected a captured request");
+  }
+  return value;
 }
 
 function position(lineNumber = 1, column = 5): MonacoPositionLike {
@@ -138,6 +146,7 @@ function providerDeps(
   let n = 0;
   return {
     resolve,
+    isCurrentDocument: () => true,
     languages: fakeLanguages(),
     triggerCharacters: ["."],
     documentLanguage: "typescript",
@@ -290,6 +299,80 @@ describe("createKeikoCompletionProvider", () => {
     expect(seen[0]?.documentText).toBe("const a = 1;\n");
     expect(seen[0]?.request).toEqual({ requestId: "req-1", streamId: "stream-1", sequence: 1 });
     expect(provider.triggerCharacters).toEqual(["."]);
+  });
+
+  it("returns an empty list without resolving when the model is not this editor's document", async () => {
+    const resolve = vi.fn<EditorCompletionResolver>();
+    const provider = createKeikoCompletionProvider(
+      providerDeps(resolve, {
+        isCurrentDocument: (documentUri) => documentUri === "inmemory://model/a.ts",
+      }),
+    );
+    const list = await provider.provideCompletionItems(
+      fakeModel("const b = 1;\n", { startColumn: 1, endColumn: 5 }, "inmemory://model/b.ts"),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+    expect(list).toEqual({ suggestions: [], incomplete: false });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("does not abort an active owned request when Monaco invokes the provider for another model", async () => {
+    const first = deferred<EditorCompletionResponse>();
+    const signals: AbortSignal[] = [];
+    const resolve: EditorCompletionResolver = (query, signal) => {
+      signals.push(signal);
+      return first.promise.then(() => response(query.request.request, []));
+    };
+    const provider = createKeikoCompletionProvider(
+      providerDeps(resolve, {
+        isCurrentDocument: (documentUri) => documentUri === "inmemory://model/a.ts",
+      }),
+    );
+
+    const firstCall = provider.provideCompletionItems(
+      fakeModel("const a = 1;\n", { startColumn: 1, endColumn: 5 }, "inmemory://model/a.ts"),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+    const backgroundList = await provider.provideCompletionItems(
+      fakeModel("const b = 1;\n", { startColumn: 1, endColumn: 5 }, "inmemory://model/b.ts"),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+
+    expect(backgroundList).toEqual({ suggestions: [], incomplete: false });
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+    first.resolve(response({ requestId: "ignored", streamId: "ignored", sequence: 0 }, []));
+    await firstCall;
+  });
+
+  it("drops a response when the editor switches documents before completion resolves", async () => {
+    let currentUri = "inmemory://model/a.ts";
+    const pending = deferred<EditorCompletionResponse>();
+    let captured: EditorRequestIdentity | null = null;
+    const resolve: EditorCompletionResolver = (query) => {
+      captured = query.request.request;
+      return pending.promise;
+    };
+    const provider = createKeikoCompletionProvider(
+      providerDeps(resolve, { isCurrentDocument: (documentUri) => documentUri === currentUri }),
+    );
+
+    const call = provider.provideCompletionItems(
+      fakeModel("const a = 1;\n", { startColumn: 1, endColumn: 5 }, "inmemory://model/a.ts"),
+      position(),
+      triggerContext(),
+      fakeToken(),
+    );
+    currentUri = "inmemory://model/b.ts";
+    pending.resolve(response(requireCapturedRequest(captured), [item()]));
+
+    expect(await call).toEqual({ suggestions: [], incomplete: false });
   });
 
   it("advances the per-stream sequence on each call", async () => {
@@ -446,6 +529,7 @@ describe("registerKeikoCompletionProvider", () => {
     const disposer = registerKeikoCompletionProvider({
       languages,
       resolve: () => Promise.resolve(response({ requestId: "r", streamId: "s", sequence: 1 }, [])),
+      isCurrentDocument: () => true,
       documentLanguages: COMPLETION_ELIGIBLE_LANGUAGES,
       triggerCharacters: ["."],
       contextBudgetBytes: 4096,

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../Icons";
-import { useChatSessionContext } from "../../context/ChatSessionContext";
+import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
 
 interface ProjectRowProps {
   readonly project: ProjectWithAvailability;
@@ -157,7 +157,8 @@ function ProjectRow({
 }
 
 export function ProjectPanel(): ReactNode {
-  const session = useChatSessionContext();
+  const session = useChatSessionCatalog();
+  const actions = useChatSessionActions();
   const treeRef = useRef<HTMLDivElement | null>(null);
 
   return (
@@ -190,10 +191,10 @@ export function ProjectPanel(): ReactNode {
               activeChatId={session.activeChat?.id}
               treeRef={treeRef}
               onProject={(nextProject) => {
-                void session.openProject(nextProject);
+                void actions.openProject(nextProject);
               }}
               onChat={(chat) => {
-                void session.openChat(chat);
+                void actions.openChat(chat);
               }}
             />
           ))}

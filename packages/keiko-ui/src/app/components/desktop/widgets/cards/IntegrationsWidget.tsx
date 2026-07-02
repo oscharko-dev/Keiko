@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import styles from "./IntegrationsWidget.module.css";
 
 interface App {
   readonly name: string;
@@ -24,7 +25,7 @@ const APPS: readonly App[] = [
  */
 export function IntegrationsWidget(): ReactNode {
   return (
-    <ul className="integ" aria-label="Integrations">
+    <ul className={`integ ${styles.lazyWidgetScope}`} aria-label="Integrations">
       {APPS.map((a) => (
         <li key={a.name} className="integ-row">
           <span className="integ-glyph mono">{a.glyph}</span>

@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -545,6 +545,48 @@ describe("runGroundedExploration", () => {
     ).toBe(true);
     expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
     expect(JSON.stringify(out.pack)).not.toContain("stale-internal-value");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("uses directory entries instead of stat probes for absent metadata candidates", async () => {
+    writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@10.9.8"\n}\n');
+    const base = countingNodeFs();
+    const absentLockfiles = new Set([
+      "package-lock.json",
+      "pnpm-lock.yaml",
+      "yarn.lock",
+      "bun.lock",
+      "bun.lockb",
+    ]);
+    let absentLockfileStats = 0;
+    const fs: WorkspaceFs = {
+      ...base.fs,
+      stat: (absolutePath): WorkspaceStat => {
+        const relPath = relative(ROOT, absolutePath).replace(/\\/gu, "/");
+        if (absentLockfiles.has(relPath)) {
+          absentLockfileStats += 1;
+        }
+        return base.fs.stat(absolutePath);
+      },
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Using only the connected repository context, what is the exact packageManager value in package.json?",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        fs,
+      },
+    );
+
+    expect(out.pack.files.map((file) => file.scopePath)).toContain("package.json");
+    expect(absentLockfileStats).toBe(0);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

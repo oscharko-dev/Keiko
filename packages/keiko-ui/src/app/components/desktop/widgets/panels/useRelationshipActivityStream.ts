@@ -46,8 +46,9 @@ const MIN_STATE_INTERVAL_MS = 2_000;
 /** SSE endpoint served by relationship-handlers.ts route 11. */
 const EVENTS_URL = "/api/relationships/events";
 
-/** Polling fallback interval in ms. */
-const POLL_INTERVAL_MS = 5_000;
+const RECONNECT_INITIAL_DELAY_MS = 1_000;
+const RECONNECT_MAX_DELAY_MS = 30_000;
+const RECONNECT_JITTER_MS = 500;
 
 /** Hard cap for in-memory activity tracking. */
 const MAX_TRACKED_RELATIONSHIPS = 512;
@@ -325,30 +326,14 @@ export function useRelationshipActivityStream(
     };
   }, [pruneState]);
 
-  // ── Page visibility pause (activity-state.md §5.5) ────────────────────────
-  // When the page is hidden, mark the epoch so window expiry works on resume.
-  useEffect(() => {
-    if (typeof document === "undefined") return;
-    const handler = (): void => {
-      visibleRef.current = document.visibilityState === "visible";
-      if (visibleRef.current) {
-        pruneState(Date.now(), true);
-      }
-    };
-    visibleRef.current = document.visibilityState === "visible";
-    document.addEventListener("visibilitychange", handler);
-    return (): void => {
-      document.removeEventListener("visibilitychange", handler);
-    };
-  }, [pruneState]);
-
   // ── SSE + polling fallback ─────────────────────────────────────────────────
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || typeof document === "undefined") return;
 
     let closed = false;
     let es: EventSource | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempts = 0;
 
     function handleRawData(data: string): void {
       let parsed: unknown;
@@ -376,10 +361,16 @@ export function useRelationshipActivityStream(
 
     function scheduleReconnect(): void {
       if (closed || reconnectTimer !== null || !visibleRef.current) return;
+      const base = Math.min(
+        RECONNECT_MAX_DELAY_MS,
+        RECONNECT_INITIAL_DELAY_MS * 2 ** reconnectAttempts,
+      );
+      reconnectAttempts += 1;
+      const delay = base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         startSSE();
-      }, POLL_INTERVAL_MS);
+      }, delay);
     }
 
     function startSSE(): void {
@@ -397,6 +388,10 @@ export function useRelationshipActivityStream(
         return;
       }
 
+      es.onopen = (): void => {
+        reconnectAttempts = 0;
+      };
+
       es.addEventListener("relationship:activity", (ev: MessageEvent<string>) => {
         handleRawData(ev.data);
       });
@@ -413,6 +408,7 @@ export function useRelationshipActivityStream(
       };
     }
 
+    visibleRef.current = document.visibilityState === "visible";
     startSSE();
 
     const onVisibilityChange = (): void => {

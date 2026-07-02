@@ -83,6 +83,7 @@ export interface WorkspaceApi {
 
 export interface UseWorkspaceResult {
   readonly wins: AppWindow[] | null;
+  readonly winsById: ReadonlyMap<string, AppWindow>;
   readonly snapPrev: SnapPrev | null;
   readonly palOpen: boolean;
   readonly setPalOpen: (open: boolean) => void;

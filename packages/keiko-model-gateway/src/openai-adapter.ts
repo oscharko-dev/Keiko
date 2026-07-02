@@ -281,6 +281,24 @@ function redactResponse(
   };
 }
 
+function configuredSecrets(secrets: readonly string[]): readonly string[] {
+  return secrets.filter((secret) => secret.length > 0);
+}
+
+function longestSecretPrefixSuffix(value: string, secrets: readonly string[]): number {
+  let longest = 0;
+  for (const secret of secrets) {
+    const maxLength = Math.min(value.length, secret.length - 1);
+    for (let length = maxLength; length > longest; length -= 1) {
+      if (value.endsWith(secret.slice(0, length))) {
+        longest = length;
+        break;
+      }
+    }
+  }
+  return longest;
+}
+
 function assertUsableAssistantResponse(
   response: NormalizedResponse,
   modelId: string,
@@ -432,29 +450,29 @@ export class OpenAiAdapter implements ProviderAdapter {
   };
 
   // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.
-  // Redaction is applied to the full accumulated buffer on every delta so that a
-  // configured secret straddling two SSE chunk boundaries is still caught.  We track
-  // how many characters of the REDACTED output we have already emitted and yield only
-  // the new suffix each time.  When a cross-delta match shrinks the redacted string
-  // relative to what was emitted, the cursor overshoots and the tail (containing the
-  // secret or its replacement) is deferred to the terminal `done` chunk, which always
-  // redacts the full `acc.content` independently via redactResponse().
+  // A suffix that matches the start of a configured secret is held until the next
+  // delta proves it safe or completes the secret so redaction can match it.
   private async *streamDeltas(
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
     acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
   ): AsyncGenerator<string> {
-    let emittedRedactedLength = 0;
+    let pending = "";
+    const activeSecrets = configuredSecrets(secrets);
     try {
       for await (const chunk of readSseStream(response)) {
         const content = deltaFromChunk(chunk);
         if (content !== undefined) {
           acc.content += content;
-          const redacted = redact(acc.content, secrets);
-          if (redacted.length > emittedRedactedLength) {
-            yield redacted.slice(emittedRedactedLength);
-            emittedRedactedLength = redacted.length;
+          pending += content;
+          const holdLength = longestSecretPrefixSuffix(pending, activeSecrets);
+          if (pending.length > holdLength) {
+            const emitLength = pending.length - holdLength;
+            const emitNow = pending.slice(0, emitLength);
+            pending = pending.slice(emitLength);
+            const redacted = redact(emitNow, secrets);
+            if (redacted.length > 0) yield redacted;
           }
         }
         const finish = finishReasonFromChunk(chunk);
@@ -464,6 +482,10 @@ export class OpenAiAdapter implements ProviderAdapter {
           acc.prompt = usage.prompt;
           acc.completion = usage.completion;
         }
+      }
+      if (pending.length > 0) {
+        const redacted = redact(pending, secrets);
+        if (redacted.length > 0) yield redacted;
       }
     } catch (error) {
       throw this.mapStreamError(error, config, secrets);

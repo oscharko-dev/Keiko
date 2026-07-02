@@ -639,7 +639,7 @@ function promptBudgetedMessages(
 ): readonly GatewayChatMessage[] {
   const budgetedPack = withPromptModelInputBudget(pack, options.modelInputTokensMax);
   const limit = modelInputPromptByteLimit(budgetedPack.budget.modelInputTokensMax);
-  let messages = build(question, budgetedPack, redactor);
+  const messages = build(question, budgetedPack, redactor);
   if (promptByteLength(messages) <= limit) return messages;
   const excerptCount = packExcerptCount(budgetedPack);
   if (excerptCount === 0) return messages;
@@ -655,15 +655,20 @@ function promptBudgetedMessages(
       `Grounded prompt overhead (${String(overheadBytes)} bytes) exceeds model input limit (${String(limit)} bytes).`,
     );
   }
-  let excerptBudgetBytes = Math.max(0, limit - overheadBytes);
-  while (excerptBudgetBytes >= 0) {
-    messages = build(question, withPromptExcerptBudget(budgetedPack, excerptBudgetBytes), redactor);
-    if (promptByteLength(messages) <= limit || excerptBudgetBytes === 0) {
-      return messages;
+  let low = 0;
+  let high = Math.max(0, limit - overheadBytes);
+  let best = emptyMessages;
+  while (low <= high) {
+    const totalExcerptBytes = Math.floor((low + high) / 2);
+    const candidate = build(question, withPromptExcerptBudget(budgetedPack, totalExcerptBytes), redactor);
+    if (promptByteLength(candidate) <= limit) {
+      best = candidate;
+      low = totalExcerptBytes + 1;
+    } else {
+      high = totalExcerptBytes - 1;
     }
-    excerptBudgetBytes = Math.max(0, Math.floor(excerptBudgetBytes * 0.8));
   }
-  return emptyMessages;
+  return best;
 }
 
 export function packBudgetSummary(pack: ConnectedContextPack): string {

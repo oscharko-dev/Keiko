@@ -163,7 +163,10 @@ const TEST_GENERATION_FAILURE_MESSAGE =
   "Test generation could not be reached. The editor is still usable.";
 // Per-window session-cache cap (Issue 2.8). Open tabs + recently-visited files stay cached for instant
 // switching; the LRU evicts older clean/closed entries beyond this, never a saving/dirty/active one.
-const SESSION_CACHE_CAPACITY = 64;
+const SESSION_CACHE_CAPACITY = 16;
+const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
+const CONTENT_HASH_DEBOUNCE_MS = 150;
+const UTF8_ENCODER = new TextEncoder();
 const READABLE_TAB_TILE_WIDTH_PX = 112;
 const TAB_SUMMARY_TRIGGER_WIDTH_PX = 58;
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
@@ -310,15 +313,15 @@ function documentSessionKey(root: string, file: string): string {
   return `${root}\u0000${file}`;
 }
 
-async function sha256Hex(text: string): Promise<string> {
+async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<string> {
   const cryptoLike = globalThis.crypto;
   if (cryptoLike?.subtle !== undefined) {
-    const digest = await cryptoLike.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    const digest = await cryptoLike.subtle.digest("SHA-256", bytes);
     return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
   }
   let hash = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
+  for (let index = 0; index < fallbackText.length; index += 1) {
+    hash ^= fallbackText.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
   return hash.toString(16).padStart(8, "0").repeat(8).slice(0, 64);
@@ -618,7 +621,10 @@ function EditorRuntimeWidget({
   const [recoveryDiskBaseline, setRecoveryDiskBaseline] = useState<string | null>(null);
   const [reloadConfirm, setReloadConfirm] = useState(false);
   const [recoveryCompare, setRecoveryCompare] = useState(false);
-  const [activeContentHash, setActiveContentHash] = useState<string | null>(null);
+  const [activeContentDigest, setActiveContentDigest] = useState<{
+    readonly content: string;
+    readonly hash: string;
+  } | null>(null);
   // Issue #1394 (ADR-0058 D3/D4): conflict banner and applyPatch review state.
   const [agentConflict, setAgentConflict] = useState<{
     readonly code: AgentConflictCode;
@@ -664,6 +670,11 @@ function EditorRuntimeWidget({
   // buffer moved while the save was in flight so it never clobbers mid-flight edits.
   const contentRef = useRef("");
   contentRef.current = content;
+  const contentBytes = useMemo(() => UTF8_ENCODER.encode(content), [content]);
+  const contentSizeBytes = contentBytes.length;
+  const activeContentHash =
+    activeContentDigest?.content === content ? activeContentDigest.hash : null;
+  const lastHotExitSnapshotKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setCurrentSelection(null);
@@ -678,13 +689,16 @@ function EditorRuntimeWidget({
 
   useEffect(() => {
     let cancelled = false;
-    void sha256Hex(content).then((hash) => {
-      if (!cancelled) setActiveContentHash(hash);
-    });
+    const timer = window.setTimeout(() => {
+      void sha256HexBytes(contentBytes, content).then((hash) => {
+        if (!cancelled) setActiveContentDigest({ content, hash });
+      });
+    }, CONTENT_HASH_DEBOUNCE_MS);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [content]);
+  }, [content, contentBytes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -731,34 +745,39 @@ function EditorRuntimeWidget({
   }, [dirty, file, onDirtyChange]);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
+    const snapshotKey = documentSessionKey(root, file);
     if (!dirty) {
-      void deleteEditorHotExitSnapshot(root, file);
+      if (lastHotExitSnapshotKeyRef.current === snapshotKey) {
+        lastHotExitSnapshotKeyRef.current = null;
+        void deleteEditorHotExitSnapshot(root, file);
+      }
       return;
     }
-    const sizeBytes = new TextEncoder().encode(content).length;
-    if (maxBytes !== null && sizeBytes > maxBytes) return;
-    let cancelled = false;
-    void sha256Hex(content).then((contentHash) => {
-      if (cancelled) return;
+    if (maxBytes !== null && contentSizeBytes > maxBytes) return;
+    if (activeContentHash === null) return;
+    const timer = window.setTimeout(() => {
       const snapshot: EditorHotExitSnapshotV1 = {
         schemaVersion: EDITOR_HOT_EXIT_SCHEMA_VERSION,
         workspaceRoot: root,
         relativePath: file,
         content,
         baseVersion: version,
-        contentHash,
+        contentHash: activeContentHash,
         savedContentHash: version?.contentHash ?? null,
         updatedAt: Date.now(),
         paneId: paneId ?? "pane-1",
         windowId: windowId ?? "editor",
       };
+      lastHotExitSnapshotKeyRef.current = snapshotKey;
       void writeEditorHotExitSnapshot(snapshot);
-    });
+    }, HOT_EXIT_WRITE_DEBOUNCE_MS);
     return () => {
-      cancelled = true;
+      window.clearTimeout(timer);
     };
   }, [
+    activeContentHash,
     content,
+    contentSizeBytes,
     dirty,
     file,
     fileModelMatchesTarget,
@@ -1423,7 +1442,6 @@ function EditorRuntimeWidget({
     [file, hasTarget, root],
   );
 
-  const contentSizeBytes = useMemo(() => new TextEncoder().encode(content).length, [content]);
   const largeFileMode = useMemo(
     () => deriveLargeFileMode({ sizeBytes: contentSizeBytes, text: content }),
     [content, contentSizeBytes],
