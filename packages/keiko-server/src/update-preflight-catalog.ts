@@ -24,7 +24,7 @@ const RELEASE_IMPACT_USER_VISIBLE_CHANGES = [
   "compatibility",
 ] as const;
 
-export const bundledCatalogCache = new Map<string, ReleaseImpactCatalog | undefined>();
+const bundledCatalogCache = new Map<string, ReleaseImpactCatalog | undefined>();
 
 function isString(value: unknown): value is string {
   return typeof value === "string";

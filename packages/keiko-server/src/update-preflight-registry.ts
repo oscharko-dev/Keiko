@@ -7,15 +7,15 @@ import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
 
 export const PACKAGE_NAME = "@oscharko-dev/keiko";
-export const REGISTRY_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}`;
-export const RELEASE_OWNER = "oscharko-dev";
-export const RELEASE_REPO = "keiko";
-export const MAX_METADATA_BYTES = 256_000;
-export const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
-export const DEFAULT_RELEASE_TITLE_PREFIX = "Keiko";
+const REGISTRY_URL = `https://registry.npmjs.org/${encodeURIComponent(PACKAGE_NAME)}`;
+const RELEASE_OWNER = "oscharko-dev";
+const RELEASE_REPO = "keiko";
+const MAX_METADATA_BYTES = 256_000;
+const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
+const DEFAULT_RELEASE_TITLE_PREFIX = "Keiko";
 export const BULLET_LIMIT = 12;
 
-export interface StableSemver {
+interface StableSemver {
   readonly major: number;
   readonly minor: number;
   readonly patch: number;
@@ -51,7 +51,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function parseSemver(version: string): StableSemver | undefined {
+function parseSemver(version: string): StableSemver | undefined {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/u.exec(version);
   if (match === null) return undefined;
   return {
@@ -101,7 +101,7 @@ export function uniqueStrings(values: readonly string[]): readonly string[] {
   return out;
 }
 
-export function extractNotes(body: string): readonly string[] {
+function extractNotes(body: string): readonly string[] {
   const bullets = body
     .split(/\r?\n/u)
     .map((line) => line.trim())
