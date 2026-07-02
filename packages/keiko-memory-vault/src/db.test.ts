@@ -22,7 +22,7 @@ function freshDir(): string {
 }
 
 describe("openMemoryDatabase", () => {
-  it("brings a fresh DB up with WAL mode + FK on + migrated to the schema head", () => {
+  it("brings a fresh DB up with WAL mode + FK on + contention-friendly pragmas", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     const db = openMemoryDatabase(dbPath, TEST_CIPHER);
