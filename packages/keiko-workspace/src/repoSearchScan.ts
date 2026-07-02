@@ -337,6 +337,26 @@ export function gatherCandidates(
   policy?: SearchPolicy,
 ): CandidateSet {
   const inputs = resolveGatherInputs(scope, queryOrLimits, limitsOrFs, fsOrPolicy, policy);
+  return gatherCandidatesFromInputs(scope, inputs);
+}
+
+export function gatherCandidatesWithoutContentPrescore(
+  scope: ScopeShape,
+  query: RetrievalQuery,
+  limits: LimitsShape,
+  fs: WorkspaceFs,
+  policy: SearchPolicy,
+): CandidateSet {
+  return gatherCandidatesFromInputs(scope, {
+    query,
+    limits,
+    fs,
+    policy,
+    prescoreContent: false,
+  });
+}
+
+function gatherCandidatesFromInputs(scope: ScopeShape, inputs: GatherInputs): CandidateSet {
   validateScopeEntries(scope.relativePaths);
   return scope.relativePaths.length === 0
     ? gatherDirectoryCandidates(scope, inputs)

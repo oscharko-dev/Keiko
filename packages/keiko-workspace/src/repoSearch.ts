@@ -37,6 +37,7 @@ import {
   emitFileMatches,
   elapsed,
   gatherCandidates,
+  gatherCandidatesWithoutContentPrescore,
   hitScanLimit,
   isImageScopePath,
   isIoError,
@@ -770,7 +771,13 @@ function prepareAffectedWorkspaceIndexSnapshot(
     return undefined;
   }
   const affectedScope: SearchScope = { ...scope, relativePaths: scanPaths };
-  const candidateSet = gatherCandidates(affectedScope, query, limits, runner.fs, runner.policy);
+  const candidateSet = gatherCandidatesWithoutContentPrescore(
+    affectedScope,
+    query,
+    limits,
+    runner.fs,
+    runner.policy,
+  );
   const discoveryFiles = candidateSet.files.map((file) =>
     discoveredFileSnapshot(file.relativePath, file.sizeBytes, undefined),
   );
@@ -888,7 +895,7 @@ function initialWorkspaceIndexSessionState(
 ): SearchWorkspaceIndexSessionState {
   const candidateSet =
     prepared === undefined
-      ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
+      ? gatherCandidatesWithoutContentPrescore(scope, query, limits, runner.fs, runner.policy)
       : workspaceIndexCandidateSet(prepared, query, runner.policy);
   return {
     candidateSet,

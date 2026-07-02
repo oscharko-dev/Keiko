@@ -138,6 +138,21 @@ function isAllowedControlByte(byte: number): boolean {
   return byte === 9 || byte === 10 || byte === 13;
 }
 
+function exceedsBinaryControlThreshold(
+  firstByte: number,
+  nulCount: number,
+  controlCount: number,
+  limit: number,
+): boolean {
+  if (firstByte === 0) {
+    return true;
+  }
+  if (nulCount > 1 && nulCount / limit > 0.02) {
+    return true;
+  }
+  return controlCount / limit > 0.3;
+}
+
 export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): boolean {
   const limit = probeLimit(bytes, options);
   if (limit === 0) {
@@ -157,5 +172,5 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
       controlCount += 1;
     }
   }
-  return (nulCount > 1 && nulCount / limit > 0.02) || controlCount / limit > 0.3;
+  return exceedsBinaryControlThreshold(bytes[0] ?? 0, nulCount, controlCount, limit);
 }
