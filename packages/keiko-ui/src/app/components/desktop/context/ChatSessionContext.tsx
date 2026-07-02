@@ -12,6 +12,7 @@ type ChatSessionActionKeys =
   | "openChat"
   | "addProject"
   | "sendMessage"
+  | "regenerateMessage"
   | "appendVoiceTurn"
   | "runRealtimeGroundedTool"
   | "cancelSend"
@@ -63,6 +64,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       openChat: value.openChat,
       addProject: value.addProject,
       sendMessage: value.sendMessage,
+      regenerateMessage: value.regenerateMessage,
       cancelSend: value.cancelSend,
       replaceChat: value.replaceChat,
       cancelGrounded: value.cancelGrounded,
@@ -90,6 +92,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.openChat,
       value.addProject,
       value.sendMessage,
+      value.regenerateMessage,
       value.appendVoiceTurn,
       value.runRealtimeGroundedTool,
       value.cancelSend,
@@ -149,6 +152,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       loading: value.loading,
       sending: value.sending,
       sendStatus: value.sendStatus,
+      regeneratingMessageId: value.regeneratingMessageId,
       error: value.error,
       latestGrounded: value.latestGrounded,
       pendingAttachments: value.pendingAttachments,
@@ -171,6 +175,7 @@ export function ChatSessionProvider({ value, children }: ChatSessionProviderProp
       value.loading,
       value.sending,
       value.sendStatus,
+      value.regeneratingMessageId,
       value.error,
       value.latestGrounded,
       value.pendingAttachments,

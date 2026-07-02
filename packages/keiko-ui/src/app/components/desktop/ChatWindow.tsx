@@ -343,9 +343,54 @@ function MessageCopyButton({ content }: { readonly content: string }): ReactNode
   );
 }
 
+function MessageRegenerateButton({
+  messageId,
+  regenerating,
+  onRegenerate,
+  onCancel,
+}: {
+  readonly messageId: string;
+  readonly regenerating: boolean;
+  readonly onRegenerate: (assistantMessageId: string) => Promise<void>;
+  readonly onCancel: () => void;
+}): ReactNode {
+  const [status, setStatus] = useState("");
+  const handleClick = useCallback(() => {
+    if (regenerating) {
+      onCancel();
+      setStatus("Regeneration cancelled");
+      return;
+    }
+    setStatus("Regenerating response");
+    void onRegenerate(messageId);
+  }, [messageId, onCancel, onRegenerate, regenerating]);
+  return (
+    <>
+      <div className="ai-controls" data-live={regenerating ? "true" : "false"}>
+        <button
+          type="button"
+          className="ai-stop"
+          aria-label={regenerating ? "Cancel regeneration" : "Regenerate response"}
+          aria-busy={regenerating ? "true" : undefined}
+          onClick={handleClick}
+        >
+          {regenerating ? "Cancel" : "Regenerate"}
+        </button>
+      </div>
+      <span role="status" className="sr-only">
+        {status}
+      </span>
+    </>
+  );
+}
+
 function ChatBubbleImpl({
   message,
   onOpenRunResult,
+  onRegenerate,
+  onCancelRegenerate,
+  showRegenerate = false,
+  regenerating = false,
   repositoryRoots,
   openRepositoryReference,
   previewWindows,
@@ -355,6 +400,10 @@ function ChatBubbleImpl({
 }: {
   readonly message: ChatMessage;
   readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly onRegenerate?: ((assistantMessageId: string) => Promise<void>) | undefined;
+  readonly onCancelRegenerate?: (() => void) | undefined;
+  readonly showRegenerate?: boolean;
+  readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
@@ -457,6 +506,14 @@ function ChatBubbleImpl({
           </div>
           {isUser ? null : (
             <div className="chat-msg-actions">
+              {showRegenerate && onRegenerate !== undefined && onCancelRegenerate !== undefined ? (
+                <MessageRegenerateButton
+                  messageId={message.id}
+                  regenerating={regenerating}
+                  onRegenerate={onRegenerate}
+                  onCancel={onCancelRegenerate}
+                />
+              ) : null}
               <MessageCopyButton content={message.content} />
               {canCollapse ? (
                 <button
@@ -542,8 +599,12 @@ interface ConversationThreadProps {
   readonly windowId?: string | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
+  readonly regeneratingMessageId: string | undefined;
   readonly activeChat: Chat | undefined;
   readonly onCancelGrounded: () => void;
+  readonly onRegenerate: (assistantMessageId: string) => Promise<void>;
+  readonly onCancelRegenerate: () => void;
+  readonly showRegenerateControls: boolean;
   readonly registerQuestionAnchor?: (messageId: string, node: HTMLDivElement | null) => void;
   readonly focusedMessageId: string | null;
 }
@@ -558,8 +619,12 @@ function ConversationThreadImpl({
   windowId,
   sending,
   sendStatus,
+  regeneratingMessageId,
   activeChat,
   onCancelGrounded,
+  onRegenerate,
+  onCancelRegenerate,
+  showRegenerateControls,
   registerQuestionAnchor,
   focusedMessageId,
 }: ConversationThreadProps): ReactNode {
@@ -574,6 +639,13 @@ function ConversationThreadImpl({
       ? streamingAssistantMessage
       : undefined;
   const lastTurnId = turns[turns.length - 1]?.id;
+  const latestAssistantId = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role === "assistant") return message.id;
+    }
+    return undefined;
+  }, [messages]);
   return (
     <div
       className="chatw-thread"
@@ -625,6 +697,10 @@ function ConversationThreadImpl({
                   previewWindows={previewWindows}
                   windowId={windowId}
                   layout="turn"
+                  onRegenerate={onRegenerate}
+                  onCancelRegenerate={onCancelRegenerate}
+                  showRegenerate={showRegenerateControls && latestAssistantId === response.id}
+                  regenerating={regeneratingMessageId === response.id}
                   streaming={
                     liveAssistant === undefined &&
                     sendStatus === "streaming" &&
@@ -2950,6 +3026,7 @@ function MemoryActionCard({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [confirmForget, setConfirmForget] = useState(false);
+  const [forgetConfirmText, setForgetConfirmText] = useState("");
   const runAction = useCallback(
     (actionCallback: () => Promise<void>, successMessage: string, errorMessage: string): void => {
       if (busy) return;
@@ -3035,21 +3112,41 @@ function MemoryActionCard({
   }
   if (action.kind === "forget") {
     const executeForget = (): void => {
+      if (action.requiresConfirmation && forgetConfirmText !== "FORGET") return;
       runAction(
-        () => forgetMemoryAction(action.memoryId).then(() => setConfirmForget(false)),
+        () =>
+          forgetMemoryAction(action.memoryId).then(() => {
+            setConfirmForget(false);
+            setForgetConfirmText("");
+          }),
         t("chat.memory.forgetCompleted"),
         t("chat.memory.forgetError"),
       );
     };
     return (
-      <article className="chat-memory-action">
-        <div className="chat-memory-action-head">
+      <article className={`chat-memory-action${confirmForget ? " ai-danger" : ""}`}>
+        <div className={`chat-memory-action-head${confirmForget ? " ai-danger-h" : ""}`}>
+          {confirmForget ? (
+            <span className="ic" aria-hidden="true">
+              !
+            </span>
+          ) : null}
           <strong>{t("chat.memory.forgetDetected")}</strong>
           <span>
             {action.requiresConfirmation ? t("chat.memory.confirmationRequired") : action.memoryId}
           </span>
         </div>
         <p>{t("chat.memory.forgetMatched", { id: action.memoryId })}</p>
+        {confirmForget ? (
+          <label className="chat-memory-confirm">
+            <span>{`Type FORGET to remove ${action.memoryId}.`}</span>
+            <input
+              value={forgetConfirmText}
+              onChange={(event) => setForgetConfirmText(event.currentTarget.value)}
+              autoComplete="off"
+            />
+          </label>
+        ) : null}
         <div className="chat-memory-action-buttons">
           {!action.requiresConfirmation ? (
             <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
@@ -3064,13 +3161,19 @@ function MemoryActionCard({
                 if (busy) return;
                 setError(undefined);
                 setConfirmForget(true);
+                setForgetConfirmText("");
               }}
             >
               {t("chat.memory.reviewForget")}
             </button>
           ) : (
             <>
-              <button type="button" aria-disabled={busy} aria-busy={busy} onClick={executeForget}>
+              <button
+                type="button"
+                aria-disabled={busy || forgetConfirmText !== "FORGET"}
+                aria-busy={busy}
+                onClick={executeForget}
+              >
                 {t("chat.memory.forgetPermanently")}
               </button>
               <button
@@ -3081,6 +3184,7 @@ function MemoryActionCard({
                   if (busy) return;
                   setError(undefined);
                   setConfirmForget(false);
+                  setForgetConfirmText("");
                 }}
               >
                 {t("common.cancel")}
@@ -3312,9 +3416,12 @@ export function ChatWindow({
     loading,
     sending,
     sendStatus,
+    regeneratingMessageId,
     error,
     noEligibleModels,
     sendMessage,
+    regenerateMessage,
+    cancelSend,
     cancelGrounded,
     activeProject,
     activeChat,
@@ -3497,8 +3604,12 @@ export function ChatWindow({
                 windowId={windowId}
                 sending={sending}
                 sendStatus={sendStatus}
+                regeneratingMessageId={regeneratingMessageId}
                 activeChat={activeChat}
                 onCancelGrounded={cancelGrounded}
+                onRegenerate={regenerateMessage}
+                onCancelRegenerate={cancelSend}
+                showRegenerateControls={!effectiveMinimal}
                 registerQuestionAnchor={registerQuestionAnchor}
                 focusedMessageId={focusedQuestionId}
               />

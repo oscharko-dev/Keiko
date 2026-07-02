@@ -74,6 +74,11 @@ export interface UiStore {
   readonly findGroundedPreviewCitations: (
     id: string,
   ) => readonly StoredPdfCitationPreviewCitation[] | undefined;
+  readonly replaceAssistantMessageContent: (
+    id: string,
+    content: string,
+    timestamp: number,
+  ) => ChatMessage;
 
   readonly close: () => void;
 }
