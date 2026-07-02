@@ -5,6 +5,7 @@ import {
   buildCodeIntelligenceIndex,
   lookupCodeIntelligenceAtoms,
   queryCodeIntelligenceIndex,
+  type CodeIntelligenceIndex,
 } from "./codeIntelligence.js";
 import type { WorkspaceFs } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
@@ -57,6 +58,10 @@ function sorted<T>(values: readonly T[]): readonly T[] {
   return [...values].sort();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function persistentMemFs(files: Record<string, string>): WorkspaceFs {
   const base = memFs(MEM_ROOT, files);
   const relative = (absolutePath: string): string =>
@@ -68,6 +73,128 @@ function persistentMemFs(files: Record<string, string>): WorkspaceFs {
       files[relative(absolutePath)] = content;
     },
   };
+}
+
+interface CacheEnvelopeForTest {
+  readonly schemaVersion?: number | undefined;
+  readonly fingerprint?: string | undefined;
+  readonly index?: unknown;
+}
+
+function requireCodeIntelligenceCachePath(files: Readonly<Record<string, string>>): string {
+  const cachePath = Object.keys(files).find((path) => path.startsWith(".keiko/code-intelligence/"));
+  if (cachePath === undefined) {
+    throw new Error("expected persistent code-intelligence cache path");
+  }
+  return cachePath;
+}
+
+function parseCacheEnvelope(files: Readonly<Record<string, string>>, cachePath: string): CacheEnvelopeForTest {
+  return JSON.parse(files[cachePath] ?? "{}") as CacheEnvelopeForTest;
+}
+
+function firstRecord(value: unknown): Record<string, unknown> {
+  if (!Array.isArray(value)) {
+    return {};
+  }
+  const first = value[0] as unknown;
+  return isRecord(first) ? first : {};
+}
+
+function corruptIndexVariants(validIndex: Record<string, unknown>): readonly unknown[] {
+  const firstImport = firstRecord(validIndex.imports);
+  const firstSymbol = firstRecord(validIndex.symbols);
+  const firstCall = firstRecord(validIndex.calls);
+  const firstReference = firstRecord(validIndex.references);
+  const firstEndpoint = firstRecord(validIndex.endpoints);
+  const firstApiContract = firstRecord(validIndex.apiContracts);
+  const firstDtoContract = firstRecord(validIndex.dtoContracts);
+  const firstPackageDependency = firstRecord(validIndex.packageDependencies);
+  const firstParserCoverage = firstRecord(validIndex.parserCoverage);
+
+  return [
+    null,
+    [],
+    { ...validIndex, imports: [{ kind: "bad" }] },
+    { ...validIndex, imports: [null] },
+    { ...validIndex, imports: [{ ...firstImport, confidence: "trusted" }] },
+    { ...validIndex, symbols: [{ name: "OrderDto" }] },
+    { ...validIndex, symbols: [null] },
+    { ...validIndex, symbols: [{ ...firstSymbol, lineRange: { startLine: "1", endLine: 2 } }] },
+    { ...validIndex, calls: [{ callerPath: "a.ts" }] },
+    { ...validIndex, calls: [null] },
+    { ...validIndex, calls: [{ ...firstCall, parser: "unknown" }] },
+    { ...validIndex, references: [{ referencerPath: "a.ts" }] },
+    { ...validIndex, references: [null] },
+    { ...validIndex, references: [{ ...firstReference, confidence: "trusted" }] },
+    { ...validIndex, endpoints: [{ role: "server" }] },
+    { ...validIndex, endpoints: [null] },
+    { ...validIndex, endpoints: [{ ...firstEndpoint, role: "worker" }] },
+    { ...validIndex, apiContracts: [{ confidence: "resolved" }] },
+    { ...validIndex, apiContracts: [null] },
+    { ...validIndex, apiContracts: [{ ...firstApiContract, confidence: "trusted" }] },
+    { ...validIndex, dtoContracts: [{ sharedFields: ["status"] }] },
+    { ...validIndex, dtoContracts: [null] },
+    { ...validIndex, dtoContracts: [{ ...firstDtoContract, sharedFields: ["status", 1] }] },
+    { ...validIndex, packageDependencies: [{ sourcePackage: "@demo/root" }] },
+    { ...validIndex, packageDependencies: [null] },
+    {
+      ...validIndex,
+      packageDependencies: [{ ...firstPackageDependency, dependencyKind: "bundled" }],
+    },
+    { ...validIndex, parserCoverage: [{ parser: "unknown", filesIndexed: 1 }] },
+    { ...validIndex, parserCoverage: [null] },
+    { ...validIndex, parserCoverage: [{ ...firstParserCoverage, filesIndexed: "one" }] },
+    { ...validIndex, filesIndexed: "many" },
+    { ...validIndex, filesSkipped: "none" },
+    { ...validIndex, filesPartiallyIndexed: "none" },
+  ];
+}
+
+function requireValidCacheIndex(envelope: CacheEnvelopeForTest): {
+  readonly schemaVersion: number;
+  readonly fingerprint: string;
+  readonly index: Record<string, unknown>;
+} {
+  if (
+    envelope.schemaVersion === undefined ||
+    envelope.fingerprint === undefined ||
+    !isRecord(envelope.index)
+  ) {
+    throw new Error("expected valid persistent code-intelligence cache envelope");
+  }
+  return {
+    schemaVersion: envelope.schemaVersion,
+    fingerprint: envelope.fingerprint,
+    index: envelope.index,
+  };
+}
+
+function writeCacheEnvelope(
+  files: Record<string, string>,
+  cachePath: string,
+  schemaVersion: number,
+  fingerprint: string,
+  index: unknown,
+): void {
+  files[cachePath] = JSON.stringify({ schemaVersion, fingerprint, index });
+}
+
+function hasResolvedApiContract(
+  index: CodeIntelligenceIndex,
+  clientMethod: string,
+  clientPath: string,
+  serverMethod: string,
+  serverPath: string,
+): boolean {
+  return index.apiContracts.some(
+    (contract) =>
+      contract.confidence === "resolved" &&
+      contract.client.method === clientMethod &&
+      contract.client.path === clientPath &&
+      contract.server.method === serverMethod &&
+      contract.server.path === serverPath,
+  );
 }
 
 function enterpriseFixture(): Record<string, string> {
@@ -770,12 +897,9 @@ describe("buildCodeIntelligenceIndex", () => {
 
     expect(index.filesIndexed).toBeGreaterThan(15);
     expect(index.filesSkipped).toBe(0);
-    expect(index.parserCoverage).toEqual(
-      expect.arrayContaining([
-        { parser: "polyglot-regex", filesIndexed: expect.any(Number) },
-        { parser: "typescript-compiler-ast", filesIndexed: expect.any(Number) },
-      ]),
-    );
+    const parserCoverage = new Map(index.parserCoverage.map((entry) => [entry.parser, entry.filesIndexed]));
+    expect(parserCoverage.get("polyglot-regex")).toBeGreaterThan(0);
+    expect(parserCoverage.get("typescript-compiler-ast")).toBeGreaterThan(0);
     expect(index.imports).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -897,35 +1021,28 @@ describe("buildCodeIntelligenceIndex", () => {
         "server:RPC:/protobuf/orderservice/getorder",
       ]),
     );
-    expect(index.apiContracts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          confidence: "resolved",
-          client: expect.objectContaining({ method: "GET", path: "/api/orders/:param" }),
-          server: expect.objectContaining({ method: "GET", path: "/api/orders/:param" }),
-        }),
-        expect.objectContaining({
-          confidence: "resolved",
-          client: expect.objectContaining({ method: "POST", path: "/api/orders" }),
-          server: expect.objectContaining({ method: "POST", path: "/api/orders" }),
-        }),
-        expect.objectContaining({
-          confidence: "resolved",
-          client: expect.objectContaining({ method: "RPC", path: "/protobuf/orderservice/getorder" }),
-          server: expect.objectContaining({ method: "RPC", path: "/protobuf/orderservice/getorder" }),
-        }),
-      ]),
+    expect(hasResolvedApiContract(index, "GET", "/api/orders/:param", "GET", "/api/orders/:param")).toBe(
+      true,
     );
-    expect(index.dtoContracts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          confidence: "resolved",
-          sharedFields: ["orderId", "status", "totalAmount"],
-          source: expect.objectContaining({ scopePath: "packages/domain/src/order.ts" }),
-          target: expect.objectContaining({ scopePath: "src/main/java/com/acme/domain/OrderDto.java" }),
-        }),
-      ]),
-    );
+    expect(hasResolvedApiContract(index, "POST", "/api/orders", "POST", "/api/orders")).toBe(true);
+    expect(
+      hasResolvedApiContract(
+        index,
+        "RPC",
+        "/protobuf/orderservice/getorder",
+        "RPC",
+        "/protobuf/orderservice/getorder",
+      ),
+    ).toBe(true);
+    expect(
+      index.dtoContracts.some(
+        (contract) =>
+          contract.confidence === "resolved" &&
+          contract.source.scopePath === "packages/domain/src/order.ts" &&
+          contract.target.scopePath === "src/main/java/com/acme/domain/OrderDto.java" &&
+          contract.sharedFields.join(",") === "orderId,status,totalAmount",
+      ),
+    ).toBe(true);
 
     const atoms = queryCodeIntelligenceIndex(
       scope,
@@ -1042,18 +1159,20 @@ describe("buildCodeIntelligenceIndex", () => {
         expect.objectContaining({
           name: "SharedDto",
           scopePath: "src/main/java/com/edge/shared/SharedDto.java",
-          fields: expect.arrayContaining(["wire_id", "label"]),
         }),
-        expect.objectContaining({
-          name: "GoEdge",
-          fields: expect.arrayContaining(["wire_id", "Ignored", "Label"]),
-        }),
+        expect.objectContaining({ name: "GoEdge" }),
         expect.objectContaining({
           name: "EdgeOpenApiDto",
           fields: ["id", "label"],
         }),
       ]),
     );
+    const sharedDto = index.symbols.find(
+      (symbol) => symbol.name === "SharedDto" && symbol.scopePath === "src/main/java/com/edge/shared/SharedDto.java",
+    );
+    expect(sharedDto?.fields).toEqual(expect.arrayContaining(["wire_id", "label"]));
+    const goEdge = index.symbols.find((symbol) => symbol.name === "GoEdge");
+    expect(goEdge?.fields).toEqual(expect.arrayContaining(["wire_id", "Ignored", "Label"]));
     expect(
       sorted(index.endpoints.map((endpoint) => `${endpoint.role}:${endpoint.method}:${endpoint.path}`)),
     ).toEqual(
@@ -1104,24 +1223,25 @@ describe("buildCodeIntelligenceIndex", () => {
         }),
       ]),
     );
-    expect(index.apiContracts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          confidence: "heuristic",
-          client: expect.objectContaining({ method: "ANY", path: "/rtk-default" }),
-          server: expect.objectContaining({ method: "POST", path: "/rtk-default" }),
-        }),
-      ]),
-    );
-    expect(index.dtoContracts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          confidence: "heuristic",
-          sharedFields: expect.arrayContaining(["wire_id", "Label"]),
-          target: expect.objectContaining({ name: "SharedDto" }),
-        }),
-      ]),
-    );
+    expect(
+      index.apiContracts.some(
+        (contract) =>
+          contract.confidence === "heuristic" &&
+          contract.client.method === "ANY" &&
+          contract.client.path === "/rtk-default" &&
+          contract.server.method === "POST" &&
+          contract.server.path === "/rtk-default",
+      ),
+    ).toBe(true);
+    expect(
+      index.dtoContracts.some(
+        (contract) =>
+          contract.confidence === "heuristic" &&
+          contract.target.name === "SharedDto" &&
+          contract.sharedFields.includes("wire_id") &&
+          contract.sharedFields.includes("Label"),
+      ),
+    ).toBe(true);
 
     const exactImportAtoms = queryCodeIntelligenceIndex(
       scope,
@@ -1129,14 +1249,11 @@ describe("buildCodeIntelligenceIndex", () => {
       index,
       FIXED_NOW(),
     );
-    expect(exactImportAtoms).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          score: 1,
-          edge: expect.objectContaining({ kind: "import", label: "@exact/shared" }),
-        }),
-      ]),
-    );
+    expect(
+      exactImportAtoms.some(
+        (atom) => atom.score === 1 && atom.edge?.kind === "import" && atom.edge.label === "@exact/shared",
+      ),
+    ).toBe(true);
 
     const caseSensitiveAtoms = queryCodeIntelligenceIndex(
       scope,
@@ -1175,84 +1292,22 @@ describe("buildCodeIntelligenceIndex", () => {
     const cached = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, firstFs);
 
     expect(cached).toBe(first);
-    const cachePath = Object.keys(files).find((path) => path.startsWith(".keiko/code-intelligence/"));
-    expect(cachePath).toBeDefined();
+    const cachePath = requireCodeIntelligenceCachePath(files);
 
     const secondFs = persistentMemFs(files);
     const fromPersistent = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, secondFs);
     expect(fromPersistent).not.toBe(first);
     expect(fromPersistent.imports).toEqual(first.imports);
 
-    if (cachePath !== undefined) {
-      files[cachePath] = JSON.stringify({ schemaVersion: -1, fingerprint: "stale", index: null });
-    }
+    files[cachePath] = JSON.stringify({ schemaVersion: -1, fingerprint: "stale", index: null });
     const rebuilt = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, persistentMemFs(files));
     expect(rebuilt.imports).toEqual(first.imports);
 
-    const validEnvelope = JSON.parse(files[cachePath ?? ""] ?? "{}") as {
-      readonly schemaVersion?: number;
-      readonly fingerprint?: string;
-      readonly index?: unknown;
-    };
-    expect(validEnvelope.fingerprint).toEqual(expect.any(String));
-    const validIndex = validEnvelope.index as Record<string, unknown>;
-    const firstImport = (validIndex.imports as readonly Record<string, unknown>[])[0] ?? {};
-    const firstSymbol = (validIndex.symbols as readonly Record<string, unknown>[])[0] ?? {};
-    const firstCall = (validIndex.calls as readonly Record<string, unknown>[])[0] ?? {};
-    const firstReference = (validIndex.references as readonly Record<string, unknown>[])[0] ?? {};
-    const firstEndpoint = (validIndex.endpoints as readonly Record<string, unknown>[])[0] ?? {};
-    const firstApiContract = (validIndex.apiContracts as readonly Record<string, unknown>[])[0] ?? {};
-    const firstDtoContract = (validIndex.dtoContracts as readonly Record<string, unknown>[])[0] ?? {};
-    const firstPackageDependency =
-      (validIndex.packageDependencies as readonly Record<string, unknown>[])[0] ?? {};
-    const firstParserCoverage = (validIndex.parserCoverage as readonly Record<string, unknown>[])[0] ?? {};
-    const corruptions: readonly ((index: Record<string, unknown>) => unknown)[] = [
-      () => null,
-      () => [],
-      (index) => ({ ...index, imports: [{ kind: "bad" }] }),
-      (index) => ({ ...index, imports: [null] }),
-      (index) => ({ ...index, imports: [{ ...firstImport, confidence: "trusted" }] }),
-      (index) => ({ ...index, symbols: [{ name: "OrderDto" }] }),
-      (index) => ({ ...index, symbols: [null] }),
-      (index) => ({ ...index, symbols: [{ ...firstSymbol, lineRange: { startLine: "1", endLine: 2 } }] }),
-      (index) => ({ ...index, calls: [{ callerPath: "a.ts" }] }),
-      (index) => ({ ...index, calls: [null] }),
-      (index) => ({ ...index, calls: [{ ...firstCall, parser: "unknown" }] }),
-      (index) => ({ ...index, references: [{ referencerPath: "a.ts" }] }),
-      (index) => ({ ...index, references: [null] }),
-      (index) => ({ ...index, references: [{ ...firstReference, confidence: "trusted" }] }),
-      (index) => ({ ...index, endpoints: [{ role: "server" }] }),
-      (index) => ({ ...index, endpoints: [null] }),
-      (index) => ({ ...index, endpoints: [{ ...firstEndpoint, role: "worker" }] }),
-      (index) => ({ ...index, apiContracts: [{ confidence: "resolved" }] }),
-      (index) => ({ ...index, apiContracts: [null] }),
-      (index) => ({ ...index, apiContracts: [{ ...firstApiContract, confidence: "trusted" }] }),
-      (index) => ({ ...index, dtoContracts: [{ sharedFields: ["status"] }] }),
-      (index) => ({ ...index, dtoContracts: [null] }),
-      (index) => ({ ...index, dtoContracts: [{ ...firstDtoContract, sharedFields: ["status", 1] }] }),
-      (index) => ({ ...index, packageDependencies: [{ sourcePackage: "@demo/root" }] }),
-      (index) => ({ ...index, packageDependencies: [null] }),
-      (index) => ({
-        ...index,
-        packageDependencies: [{ ...firstPackageDependency, dependencyKind: "bundled" }],
-      }),
-      (index) => ({ ...index, parserCoverage: [{ parser: "unknown", filesIndexed: 1 }] }),
-      (index) => ({ ...index, parserCoverage: [null] }),
-      (index) => ({ ...index, parserCoverage: [{ ...firstParserCoverage, filesIndexed: "one" }] }),
-      (index) => ({ ...index, filesIndexed: "many" }),
-      (index) => ({ ...index, filesSkipped: "none" }),
-      (index) => ({ ...index, filesPartiallyIndexed: "none" }),
-    ];
+    const validCache = requireValidCacheIndex(parseCacheEnvelope(files, cachePath));
+    expect(typeof validCache.fingerprint).toBe("string");
 
-    for (const corrupt of corruptions) {
-      if (cachePath === undefined || validEnvelope.schemaVersion === undefined) {
-        throw new Error("expected persistent code-intelligence cache path");
-      }
-      files[cachePath] = JSON.stringify({
-        schemaVersion: validEnvelope.schemaVersion,
-        fingerprint: validEnvelope.fingerprint,
-        index: corrupt(validIndex),
-      });
+    for (const corruptIndex of corruptIndexVariants(validCache.index)) {
+      writeCacheEnvelope(files, cachePath, validCache.schemaVersion, validCache.fingerprint, corruptIndex);
       const recovered = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, persistentMemFs(files));
       expect(recovered.imports).toEqual(first.imports);
     }
@@ -1274,8 +1329,8 @@ describe("lookupCodeIntelligenceAtoms", () => {
     expect(atoms).toHaveLength(4);
     expect(atoms[0]).toMatchObject({
       scopePath: "packages/api/src/orders.ts",
-      provenance: expect.objectContaining({ tool: "code-intelligence-index" }),
     });
+    expect(atoms[0]?.provenance.tool).toBe("code-intelligence-index");
     expect(atoms.some((atom) => atom.edge?.kind === "call" || atom.edge?.kind === "reference")).toBe(
       true,
     );

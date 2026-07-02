@@ -491,7 +491,10 @@ describe("workspaceIndex", () => {
     expect(snapshot.discovery.files.map((file) => file.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
     expect(snapshot.discovery.directories.map((directory) => directory.scopePath)).toEqual(["", "src"]);
     expect(snapshot.records).toHaveLength(1);
-    expect(snapshot.records[0]).toMatchObject({
+    const record = snapshot.records[0];
+    expect(record).toBeDefined();
+    if (record === undefined) return;
+    expect(record).toMatchObject({
       scopePath: "src/a.ts",
       kind: "text",
       lexical: {
@@ -499,7 +502,7 @@ describe("workspaceIndex", () => {
         lines: [{ startLine: 1, endLine: 1, termHashes: ["hash-a"] }],
       },
     });
-    expect("fingerprint" in snapshot.records[0]!).toBe(false);
+    expect("fingerprint" in record).toBe(false);
   });
 
   it("reports directory freshness and changed-directory deltas from cached snapshots", async () => {
