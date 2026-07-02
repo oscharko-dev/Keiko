@@ -362,6 +362,9 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat"),
     ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/regenerate"),
+    ).toBeDefined();
     // Issue #152 — additive SSE streaming surface alongside the buffered send route.
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),

@@ -23,6 +23,7 @@ import {
   fetchModels,
   fetchPdfCitationPreviewDocument,
   fetchProjects,
+  regenerateDesktopChat,
   fetchStartupUpdatePreflight,
   fetchUpdateRemediationStatus,
   fetchUpdateSessionStatus,
@@ -1477,6 +1478,51 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
   });
 });
 
+describe("regenerateDesktopChat", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the assistant turn id to the regenerate route with CSRF and an abort signal", async () => {
+    const controller = new AbortController();
+    const response = { chat: { id: "chat-1" }, messages: [{ id: "a1", role: "assistant" }] };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await regenerateDesktopChat(
+      {
+        chatId: "chat-1",
+        projectPath: "/repo",
+        assistantMessageId: "a1",
+        modelId: "example-chat-model",
+        memory: { enabled: false, context: { userId: "user-1" } },
+      },
+      controller.signal,
+    );
+
+    expect(result).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/desktop/chat/regenerate",
+      expect.objectContaining({
+        method: "POST",
+        signal: controller.signal,
+        body: JSON.stringify({
+          chatId: "chat-1",
+          projectPath: "/repo",
+          assistantMessageId: "a1",
+          modelId: "example-chat-model",
+          memory: { enabled: false, context: { userId: "user-1" } },
+        }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+});
+
 describe("synthesizeAssistantSpeech (Issue #1558)", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1614,10 +1660,7 @@ describe("pdf citation preview api helpers", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await closePdfCitationPreviewSession(
-      "preview/session#1",
-      "2026-06-28T12:00:00.000Z",
-    );
+    await closePdfCitationPreviewSession("preview/session#1", "2026-06-28T12:00:00.000Z");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/citation-preview/sessions/preview%2Fsession%231",

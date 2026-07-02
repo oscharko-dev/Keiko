@@ -45,15 +45,21 @@ export function AgentGateCard({
   return (
     // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-reject on the alertdialog container mirrors the Reject button for keyboard users
     <div
-      className="arun-gate"
+      className="arun-gate ai-permit"
       data-esc={escalated}
       role="alertdialog"
       aria-labelledby={titleId}
       aria-describedby={detailId}
       onKeyDown={handleKeyDown}
     >
-      <div className="arun-gate-h">
-        <Icons.bell size={13} /> {escalated ? "Keiko escalated to you" : "Approval required"}
+      <div className="arun-gate-h ai-permit-h">
+        <span className="ic">
+          <Icons.bell size={13} />
+        </span>
+        <div>
+          <div className="tt">{escalated ? "Keiko escalated to you" : "Approval required"}</div>
+          <div className="ts">Grant applies only to this queued action.</div>
+        </div>
       </div>
       <div className="arun-gate-t" id={titleId}>
         {gate.title}
@@ -61,7 +67,19 @@ export function AgentGateCard({
       <div className="arun-gate-d mono" id={detailId}>
         {gate.detail}
       </div>
-      <div className="arun-gate-btns">
+      <div className="ai-permit-scope" aria-label="Permission scope">
+        <div className="row">
+          <span className="gr" aria-hidden="true">
+            ✓
+          </span>
+          {`Allow ${gate.kind} action after review`}
+        </div>
+        <div className="row">
+          <span aria-hidden="true">✗</span>
+          No extra BFF authority or autonomous follow-up
+        </div>
+      </div>
+      <div className="arun-gate-btns ai-permit-act">
         <button type="button" className="arun-btn ghost" onClick={onReject} ref={rejectRef}>
           Reject
         </button>

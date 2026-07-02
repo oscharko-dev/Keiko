@@ -47,6 +47,7 @@ import {
 import {
   handleAppendDesktopVoiceTurn,
   handleCreateDesktopChat,
+  handleRegenerateDesktopChat,
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
@@ -382,6 +383,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
+  { method: "POST", pattern: "/api/desktop/chat/regenerate", handler: handleRegenerateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
   {
     method: "POST",
