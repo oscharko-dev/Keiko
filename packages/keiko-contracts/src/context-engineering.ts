@@ -487,6 +487,8 @@ export function resolveContextTokenAccounting(
 function calibratedTokenCount(fallbackTokens: number, accounting: ContextTokenAccounting): number {
   const scaleMilli = accounting.scaleMilli ?? 1_000;
   const offsetTokens = accounting.offsetTokens ?? 0;
+  // Clamp defends callers that construct a ContextTokenAccounting object literal directly (the
+  // type system permits it) without passing through validateContextProfile.
   return Math.max(0, Math.ceil((fallbackTokens * scaleMilli) / 1_000 + offsetTokens));
 }
 

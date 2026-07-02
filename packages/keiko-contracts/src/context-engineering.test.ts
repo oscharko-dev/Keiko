@@ -577,6 +577,34 @@ describe("validateContextProfile", () => {
     );
   });
 
+  it("rejects a fallback-estimated accounting carrying a stray scaleMilli", () => {
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: {
+          source: "fallback-estimated",
+          counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
+          scaleMilli: 1_250,
+        },
+      }),
+      "tokenAccounting.scaleMilli",
+    );
+  });
+
+  it("rejects a fallback-estimated accounting carrying a stray offsetTokens", () => {
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: {
+          source: "fallback-estimated",
+          counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
+          offsetTokens: 2,
+        },
+      }),
+      "tokenAccounting.offsetTokens",
+    );
+  });
+
   it("rejects a non-string model field", () => {
     expectInvalidWithReason(
       validateContextProfile({ ...happyProfile(), model: { id: 42 } }),

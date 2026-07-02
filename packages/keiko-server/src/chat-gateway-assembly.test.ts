@@ -13,6 +13,7 @@ import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  countContextTokens,
   countContextTokensForSegments,
   deriveContextProfile,
   estimateTokensForSegments,
@@ -290,6 +291,53 @@ describe("buildGatewayAssembly", () => {
     expect(outcome.messages.map((message) => message.content).join("\n")).not.toContain(
       "x".repeat(1_000),
     );
+  });
+
+  it("attributes the embedded compaction summary's tokens to history-summary, not system-contract", () => {
+    const { store, chatId } = createStore();
+    seedHistory(chatId, store, [
+      `Fact: prior branch decision ${"x".repeat(80_000)}`,
+      "recent turn one",
+      "recent turn two",
+    ]);
+    store.createMessage(createMessage(chatId, "user", "Keep the current request exact.", NOW + 99));
+
+    const profile = deriveContextProfile({
+      maxInputTokens: 1_400,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+      tokenAccounting: {
+        source: "calibrated",
+        counterId: "chat-assembly-compacted-lane-split-fixture-v1",
+        scaleMilli: 1_200,
+        offsetTokens: 1,
+      },
+    });
+    const deps = createDeps(store, profile);
+    const request = makeRequest(chatId, "Keep the current request exact.");
+
+    const outcome = buildGatewayAssembly(deps, request, makeMemoryResult([]), CHAT_MODEL);
+    const tokenAccounting = outcome.diagnostics.profile.tokenAccounting;
+    const systemLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "system-contract");
+    const historyLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "history-summary");
+    const retainedTurns = outcome.messages.slice(1, -1);
+    const retainedTurnsTokens = countContextTokensForSegments(
+      retainedTurns.map((message) => message.content),
+      tokenAccounting,
+    );
+    const laneTokenSum = outcome.diagnostics.lanes.reduce(
+      (sum, lane) => sum + lane.estimatedTokens,
+      0,
+    );
+
+    expect(outcome.compaction).toBeDefined();
+    expect(retainedTurns.length).toBeGreaterThan(0);
+    expect(systemLane?.estimatedTokens).toBe(
+      countContextTokens(CONVERSATION_SYSTEM_PROMPT, tokenAccounting),
+    );
+    expect(historyLane?.includedItems).toBe(retainedTurns.length + 1);
+    expect(historyLane?.estimatedTokens).toBeGreaterThan(retainedTurnsTokens);
+    expect(laneTokenSum).toBe(outcome.diagnostics.totalEstimatedTokens);
   });
 
   it("keeps a simple prompt unchanged while exposing allocator lane diagnostics", () => {

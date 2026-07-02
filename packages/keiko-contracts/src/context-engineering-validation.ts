@@ -165,6 +165,16 @@ function collectTokenAccountingNumbers(value: Record<string, unknown>, prefix: s
         value.offsetTokens < 0),
     `${prefix}.tokenAccounting.offsetTokens invalid`,
   );
+  pushIf(
+    reasons,
+    value.source === "fallback-estimated" && value.scaleMilli !== undefined,
+    `${prefix}.tokenAccounting.scaleMilli unexpected`,
+  );
+  pushIf(
+    reasons,
+    value.source === "fallback-estimated" && value.offsetTokens !== undefined,
+    `${prefix}.tokenAccounting.offsetTokens unexpected`,
+  );
   return reasons;
 }
 
