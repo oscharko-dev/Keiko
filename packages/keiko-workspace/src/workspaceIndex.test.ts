@@ -360,7 +360,9 @@ function removeRuntimeDir(runtimeDir: string): void {
 }
 
 function runtimeFiles(runtimeDir: string): readonly string[] {
-  return readdirSync(runtimeDir).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return readdirSync(runtimeDir)
+    .filter((name) => /^workspace-index-[0-9a-f]{64}\.json$/u.test(name))
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function sampleSnapshot(content: string): WorkspaceIndexSnapshot {

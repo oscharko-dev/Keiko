@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, lstatSync, realpathSync } from "node:fs";
 import {
   chmod,
@@ -196,6 +196,7 @@ const FILE_WORKSPACE_INDEX_PREFIX = "workspace-index-";
 const FILE_WORKSPACE_INDEX_EXTENSION = ".json";
 const FILE_WORKSPACE_INDEX_SEGMENT_RE =
   /^workspace-index-[0-9a-f]{64}\.json(?:\.[0-9a-f]{16}\.tmp)?$/u;
+const RUNTIME_DIR_MARKER_SEGMENT = "workspace-index-runtime-id";
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS = 128;
 const DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES = 16_384;
@@ -539,13 +540,19 @@ interface RuntimeDirIdentity {
   readonly realPath: string;
   readonly dev: number | undefined;
   readonly ino: number | undefined;
+  readonly marker: string | undefined;
 }
 
-function runtimeDirIdentity(realPath: string, stat: { readonly dev?: number; readonly ino?: number }): RuntimeDirIdentity {
+function runtimeDirIdentity(
+  realPath: string,
+  stat: { readonly dev?: number; readonly ino?: number },
+  marker?: string,
+): RuntimeDirIdentity {
   return {
     realPath,
     dev: typeof stat.dev === "number" ? stat.dev : undefined,
     ino: typeof stat.ino === "number" ? stat.ino : undefined,
+    marker,
   };
 }
 
@@ -556,7 +563,10 @@ function sameRuntimeDirIdentity(a: RuntimeDirIdentity, b: RuntimeDirIdentity): b
   if (a.dev === undefined || a.ino === undefined || b.dev === undefined || b.ino === undefined) {
     return true;
   }
-  return a.dev === b.dev && a.ino === b.ino;
+  if (a.dev !== b.dev || a.ino !== b.ino) {
+    return false;
+  }
+  return a.marker === undefined || b.marker === undefined || a.marker === b.marker;
 }
 
 function resolvedRuntimeDirRealPath(
@@ -596,6 +606,71 @@ function resolvedRuntimeDirIdentity(
   }
 }
 
+function runtimeDirMarkerPath(runtimeDir: string): string {
+  const markerPath = resolve(runtimeDir, RUNTIME_DIR_MARKER_SEGMENT);
+  if (dirname(markerPath) !== runtimeDir) {
+    throw new Error("workspace index runtime marker path escaped runtimeDir");
+  }
+  return markerPath;
+}
+
+function isRuntimeDirMarker(value: string): boolean {
+  if (value.length !== 36) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    const isHyphen = [8, 13, 18, 23].includes(index) && code === 45;
+    const isHex = (code >= 48 && code <= 57) || (code >= 97 && code <= 102);
+    if (!isHyphen && !isHex) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseRuntimeDirMarker(raw: string): string | undefined {
+  const marker = raw.trim();
+  return isRuntimeDirMarker(marker) ? marker : undefined;
+}
+
+async function readRuntimeDirMarker(realPath: string): Promise<string | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(runtimeDirMarkerPath(realPath), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const markerStat = await handle.stat();
+    if (!markerStat.isFile() || markerStat.size > 128) {
+      return undefined;
+    }
+    const raw = await readSnapshotHandleWithinLimit(handle, 128);
+    return raw === undefined ? undefined : parseRuntimeDirMarker(raw.toString("utf8"));
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function ensureRuntimeDirMarker(realPath: string): Promise<string | undefined> {
+  const existing = await readRuntimeDirMarker(realPath);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const marker = randomUUID();
+  const markerPath = runtimeDirMarkerPath(realPath);
+  try {
+    await writeFile(markerPath, `${marker}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    await bestEffortChmod(markerPath, 0o600);
+    return marker;
+  } catch {
+    return await readRuntimeDirMarker(realPath);
+  }
+}
+
 async function runtimeDirIdentityIfSafe(
   runtimeDir: string,
   workspaceRoot: string | undefined,
@@ -607,7 +682,11 @@ async function runtimeDirIdentityIfSafe(
       return undefined;
     }
     const realPath = resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
-    return realPath === undefined ? undefined : runtimeDirIdentity(realPath, dirStat);
+    if (realPath === undefined) {
+      return undefined;
+    }
+    const marker = await ensureRuntimeDirMarker(realPath);
+    return runtimeDirIdentity(realPath, dirStat, marker);
   } catch {
     return undefined;
   }
@@ -864,6 +943,14 @@ function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDi
       return undefined;
     }
     if (expectedRuntimeDirIdentity === undefined) {
+      expectedRuntimeDirIdentity = current;
+      return current.realPath;
+    }
+    if (
+      expectedRuntimeDirIdentity.marker === undefined &&
+      current.marker !== undefined &&
+      sameRuntimeDirIdentity(expectedRuntimeDirIdentity, current)
+    ) {
       expectedRuntimeDirIdentity = current;
       return current.realPath;
     }
