@@ -75,15 +75,20 @@ function utf8OnlyFs(files: Readonly<Record<string, string>>): WorkspaceFs {
 
 function openReaderOnlyFs(files: Readonly<Record<string, string>>): WorkspaceFs {
   const base = memFs(ROOT, files);
-  return {
+  const fs: WorkspaceFs = {
     readFileUtf8: base.readFileUtf8,
     stat: base.stat,
     readDir: base.readDir,
     realPath: base.realPath,
     exists: base.exists,
-    readFileBytes: base.readFileBytes,
-    openFileReader: base.openFileReader,
   };
+  if (base.readFileBytes !== undefined) {
+    Object.assign(fs, { readFileBytes: base.readFileBytes });
+  }
+  if (base.openFileReader !== undefined) {
+    Object.assign(fs, { openFileReader: base.openFileReader });
+  }
+  return fs;
 }
 
 function utf16Bytes(value: string, endian: "le" | "be", bom = true): Uint8Array {
