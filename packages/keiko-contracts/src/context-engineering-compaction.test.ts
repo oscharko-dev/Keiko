@@ -8,6 +8,8 @@
 import { describe, it, expect } from "vitest";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
 } from "./context-engineering.js";
@@ -525,6 +527,79 @@ describe("validateContextCompactionRecord", () => {
         },
       }),
       "modelSummary.content",
+    );
+  });
+
+  it("accepts a structured accepted modelSummary", () => {
+    expect(
+      validateContextCompactionRecord({
+        ...minimalRecord(),
+        modelSummary: {
+          promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+          modelId: "summary-model",
+          status: "valid",
+          validationState: "accepted",
+          content: "Continue the audit implementation.",
+          decisions: ["preserve ordinary decisions"],
+          constraints: ["do not inject generated text as user-authored content"],
+          filesAndSymbols: ["chat-compaction-model-summary.ts parseStructuredSummary"],
+          debuggingContext: ["invalid structured output is rejected"],
+          openThreads: ["verify buffered and streaming paths"],
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts rejected modelSummary metadata without generated content", () => {
+    expect(
+      validateContextCompactionRecord({
+        ...minimalRecord(),
+        modelSummary: {
+          promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+          modelId: "summary-model",
+          status: "invalid",
+          validationState: "rejected",
+          failureReason: "invalid-structured-output",
+          content: "",
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects invalid structured modelSummary status", () => {
+    expectInvalidWithReason(
+      validateContextCompactionRecord({
+        ...minimalRecord(),
+        modelSummary: {
+          promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+          modelId: "summary-model",
+          status: "maybe",
+          validationState: "accepted",
+          content: "summary",
+        },
+      }),
+      "modelSummary.status",
+    );
+  });
+
+  it("rejects oversized structured modelSummary arrays and items", () => {
+    expectInvalidWithReason(
+      validateContextCompactionRecord({
+        ...minimalRecord(),
+        modelSummary: {
+          promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+          modelId: "summary-model",
+          status: "valid",
+          validationState: "redacted",
+          content: "summary",
+          decisions: Array.from(
+            { length: CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS + 1 },
+            (_, index) => `decision-${String(index)}`,
+          ),
+          constraints: ["x".repeat(CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS + 1)],
+        },
+      }),
+      "modelSummary.decisions",
     );
   });
 

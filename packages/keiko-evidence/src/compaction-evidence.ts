@@ -171,7 +171,25 @@ function redactModelSummary(
   return {
     promptVersion: summary.promptVersion,
     modelId: redactedPathSafe(summary.modelId, redact),
+    ...(summary.status === undefined ? {} : { status: summary.status }),
+    ...(summary.validationState === undefined ? {} : { validationState: summary.validationState }),
+    ...(summary.failureReason === undefined ? {} : { failureReason: summary.failureReason }),
     content: redactedPathSafe(summary.content, redact),
+    ...(summary.decisions === undefined
+      ? {}
+      : { decisions: redactStrings(summary.decisions, redact) }),
+    ...(summary.constraints === undefined
+      ? {}
+      : { constraints: redactStrings(summary.constraints, redact) }),
+    ...(summary.filesAndSymbols === undefined
+      ? {}
+      : { filesAndSymbols: redactStrings(summary.filesAndSymbols, redact) }),
+    ...(summary.debuggingContext === undefined
+      ? {}
+      : { debuggingContext: redactStrings(summary.debuggingContext, redact) }),
+    ...(summary.openThreads === undefined
+      ? {}
+      : { openThreads: redactStrings(summary.openThreads, redact) }),
   };
 }
 

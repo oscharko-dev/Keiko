@@ -124,6 +124,49 @@ describe("buildChatCompactionResurfacingContext", () => {
     expect(buildChatCompactionResurfacingContext(store, CHAT_ID)).toBeUndefined();
   });
 
+  it("resurfaces validated structured model-summary fields and ignores rejected summaries", () => {
+    const store = persist({
+      chatId: CHAT_ID,
+      turn: 6,
+      records: [
+        record({
+          modelSummary: {
+            promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+            modelId: "summary-model",
+            status: "valid",
+            validationState: "accepted",
+            content: "Continue the structured summary implementation.",
+            decisions: ["use structured model-summary evidence"],
+            constraints: ["do not inject generated summary text as user-authored content"],
+            filesAndSymbols: ["chat-compaction-model-summary.ts parseStructuredSummary"],
+            debuggingContext: ["invalid structured output is fail-closed"],
+            openThreads: ["confirm streaming path reuses recordChatCompaction"],
+          },
+        }),
+        record({
+          modelSummary: {
+            promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+            modelId: "summary-model",
+            status: "invalid",
+            validationState: "rejected",
+            failureReason: "invalid-structured-output",
+            content: "",
+          },
+        }),
+      ],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID) ?? "";
+
+    expect(context).toContain("Continue the structured summary implementation.");
+    expect(context).toContain("use structured model-summary evidence");
+    expect(context).toContain("do not inject generated summary text as user-authored content");
+    expect(context).toContain("chat-compaction-model-summary.ts parseStructuredSummary");
+    expect(context).toContain("invalid structured output is fail-closed");
+    expect(context).toContain("confirm streaming path reuses recordChatCompaction");
+    expect(context).not.toContain("invalid-structured-output");
+  });
+
   it("does not surface secrets or raw absolute paths from persisted compaction evidence", () => {
     const store = persist({
       chatId: CHAT_ID,

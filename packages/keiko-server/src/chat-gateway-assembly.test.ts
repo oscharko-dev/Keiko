@@ -397,6 +397,38 @@ describe("buildGatewayAssembly", () => {
     expect(memoryLane?.compactionReason).toBe("budget");
   });
 
+  it("keeps included resurfaced compaction context system-scoped", () => {
+    const profile = deriveContextProfile({
+      maxInputTokens: 2_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const compactionContextText =
+      "# Persisted compaction context\nModel-written continuity summary:\n- structured model-summary evidence";
+    const outcome = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "Continue with the current task.", discussionMode: undefined },
+      profile,
+      memoryEntries: [],
+      compactionContextText,
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    expect(outcome).toBeDefined();
+    if (outcome === undefined) return;
+    const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
+    const systemText = outcome.messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n");
+    const memoryLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "working-memory");
+
+    expect(latestUserTurn).not.toContain("structured model-summary evidence");
+    expect(systemText).toContain("structured model-summary evidence");
+    expect(memoryLane?.includedItems).toBe(1);
+  });
+
   it("returns path-free aggregate diagnostics with history, memory, doc, and reserve lanes", () => {
     const { store, chatId } = createStore();
     seedHistory(chatId, store, ["one", "two", "three"]);

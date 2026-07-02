@@ -25,6 +25,9 @@ interface ResurfacingBuckets {
   readonly constraints: string[];
   readonly decisions: string[];
   readonly questions: string[];
+  readonly filesAndSymbols: string[];
+  readonly debuggingContext: string[];
+  readonly openThreads: string[];
   readonly assumptions: string[];
   readonly rehydration: string[];
   readonly invalidation: string[];
@@ -87,6 +90,9 @@ function renderRecords(records: readonly TimedRecord[]): string | undefined {
   addSection(lines, "Pinned facts", buckets.facts);
   addSection(lines, "Constraints", buckets.constraints);
   addSection(lines, "Decisions", buckets.decisions);
+  addSection(lines, "Files and symbols", buckets.filesAndSymbols);
+  addSection(lines, "Debugging context", buckets.debuggingContext);
+  addSection(lines, "Open threads", buckets.openThreads);
   addSection(lines, "Open questions", buckets.questions);
   addSection(lines, "Assumptions (not facts)", buckets.assumptions);
   addSection(lines, "Rehydration available", buckets.rehydration);
@@ -109,6 +115,9 @@ function emptyBuckets(): ResurfacingBuckets {
     constraints: [],
     decisions: [],
     questions: [],
+    filesAndSymbols: [],
+    debuggingContext: [],
+    openThreads: [],
     assumptions: [],
     rehydration: [],
     invalidation: [],
@@ -116,11 +125,49 @@ function emptyBuckets(): ResurfacingBuckets {
 }
 
 function collectRecordBuckets(buckets: ResurfacingBuckets, record: ContextCompactionRecord): void {
-  pushSafe(buckets.modelSummaries, record.modelSummary?.content);
+  collectModelSummaryBuckets(buckets, record);
   collectFactBuckets(buckets, record);
   collectStringBuckets(buckets, record);
   collectRehydrationBuckets(buckets, record);
   collectInvalidationBuckets(buckets, record);
+}
+
+function collectModelSummaryBuckets(
+  buckets: ResurfacingBuckets,
+  record: ContextCompactionRecord,
+): void {
+  const summary = record.modelSummary;
+  if (summary === undefined || isRejectedModelSummary(summary)) {
+    return;
+  }
+  pushSafe(buckets.modelSummaries, summary.content);
+  collectModelSummaryArrayBuckets(buckets, summary);
+}
+
+function isRejectedModelSummary(summary: NonNullable<ContextCompactionRecord["modelSummary"]>): boolean {
+  return summary.status !== undefined && summary.status !== "valid";
+}
+
+function collectModelSummaryArrayBuckets(
+  buckets: ResurfacingBuckets,
+  summary: NonNullable<ContextCompactionRecord["modelSummary"]>,
+): void {
+  const pairs = [
+    [buckets.decisions, summary.decisions],
+    [buckets.constraints, summary.constraints],
+    [buckets.filesAndSymbols, summary.filesAndSymbols],
+    [buckets.debuggingContext, summary.debuggingContext],
+    [buckets.openThreads, summary.openThreads],
+  ] as const;
+  for (const [bucket, values] of pairs) {
+    pushSafeMany(bucket, values);
+  }
+}
+
+function pushSafeMany(bucket: string[], values: readonly string[] | undefined): void {
+  for (const value of values ?? []) {
+    pushSafe(bucket, value);
+  }
 }
 
 function collectFactBuckets(buckets: ResurfacingBuckets, record: ContextCompactionRecord): void {

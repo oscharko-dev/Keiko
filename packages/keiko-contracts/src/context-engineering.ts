@@ -229,13 +229,49 @@ export interface ContextInvalidationKey {
 export const CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION =
   "keiko-chat-compaction-summary-v1" as const;
 export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS = 1_200 as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS = 6 as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS = 180 as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES = [
+  "valid",
+  "invalid",
+  "timed-out",
+  "unavailable",
+] as const;
+export type ContextCompactionModelSummaryStatus =
+  (typeof CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES)[number];
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES = [
+  "accepted",
+  "redacted",
+  "rejected",
+] as const;
+export type ContextCompactionModelSummaryValidationState =
+  (typeof CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES)[number];
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS = [
+  "missing-structured-output",
+  "invalid-structured-output",
+  "unsafe-output",
+  "timed-out",
+  "model-unavailable",
+] as const;
+export type ContextCompactionModelSummaryFailureReason =
+  (typeof CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS)[number];
 
 // Optional model-written continuity summary. This is an enrichment, not the authoritative raw
 // source: structured fields, sourceSpans, and rehydration handles remain the auditable basis.
 export interface ContextCompactionModelSummary {
   readonly promptVersion: typeof CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION;
   readonly modelId: string;
+  readonly status?: ContextCompactionModelSummaryStatus | undefined;
+  readonly validationState?: ContextCompactionModelSummaryValidationState | undefined;
+  readonly failureReason?: ContextCompactionModelSummaryFailureReason | undefined;
+  // Backward-compatible free-text continuity summary used by resurfacing. Failure statuses persist
+  // the empty string so governed failure metadata never injects unsafe text into future prompts.
   readonly content: string;
+  readonly decisions?: readonly string[] | undefined;
+  readonly constraints?: readonly string[] | undefined;
+  readonly filesAndSymbols?: readonly string[] | undefined;
+  readonly debuggingContext?: readonly string[] | undefined;
+  readonly openThreads?: readonly string[] | undefined;
 }
 
 // ─── Compaction record (PR1 stub extended additively) ─────────────────────── [PR2, additive]

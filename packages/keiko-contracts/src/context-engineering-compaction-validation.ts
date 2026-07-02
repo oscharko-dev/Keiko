@@ -10,7 +10,12 @@
 
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
 } from "./context-engineering.js";
 import type { ContextProvenanceRefKind } from "./context-engineering.js";
@@ -57,6 +62,10 @@ function buildResult(reasons: readonly string[]): ContextValidationResult {
 
 function schemaMismatch(actual: unknown): boolean {
   return actual !== CONTEXT_ENGINEERING_SCHEMA_VERSION;
+}
+
+function isOneOf(value: unknown, allowed: readonly string[]): value is string {
+  return typeof value === "string" && allowed.includes(value);
 }
 
 // ─── ContextProvenanceRefKind ──────────────────────────────────────────────────
@@ -318,11 +327,167 @@ function collectModelSummary(value: unknown, prefix: string): string[] {
   pushIf(reasons, !isNonEmptyTrimmed(value.modelId), `${prefix}.modelSummary.modelId invalid`);
   pushIf(
     reasons,
-    !isNonEmptyTrimmed(value.content) ||
+    typeof value.content !== "string" ||
       value.content.length > CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
     `${prefix}.modelSummary.content invalid`,
   );
+  reasons.push(
+    ...collectModelSummaryStrings(value.decisions, `${prefix}.modelSummary.decisions`),
+    ...collectModelSummaryStrings(value.constraints, `${prefix}.modelSummary.constraints`),
+    ...collectModelSummaryStrings(
+      value.filesAndSymbols,
+      `${prefix}.modelSummary.filesAndSymbols`,
+    ),
+    ...collectModelSummaryStrings(
+      value.debuggingContext,
+      `${prefix}.modelSummary.debuggingContext`,
+    ),
+    ...collectModelSummaryStrings(value.openThreads, `${prefix}.modelSummary.openThreads`),
+  );
+  reasons.push(...collectModelSummaryStatusRules(value, prefix));
   return reasons;
+}
+
+function collectModelSummaryStrings(value: unknown, prefix: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS) {
+    return [`${prefix} invalid`];
+  }
+  const reasons: string[] = [];
+  value.forEach((entry, index) => {
+    pushIf(
+      reasons,
+      !isNonEmptyTrimmed(entry) || entry.length > CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
+      `${prefix}[${String(index)}] invalid`,
+    );
+  });
+  return reasons;
+}
+
+function collectModelSummaryStatusRules(value: Record<string, unknown>, prefix: string): string[] {
+  const hasStructuredFields = hasStructuredSummaryFields(value);
+  if (!hasModernModelSummaryMetadata(value)) {
+    return collectLegacyModelSummaryRules(value, prefix, hasStructuredFields);
+  }
+  const reasons = collectModernModelSummaryMetadataRules(value, prefix);
+  if (value.status === "valid") {
+    reasons.push(...collectValidModelSummaryRules(value, prefix));
+    return reasons;
+  }
+  if (isOneOf(value.status, ["invalid", "timed-out", "unavailable"])) {
+    reasons.push(...collectRejectedModelSummaryRules(value, prefix, hasStructuredFields));
+  }
+  return reasons;
+}
+
+function hasModernModelSummaryMetadata(value: Record<string, unknown>): boolean {
+  return (
+    value.status !== undefined ||
+    value.validationState !== undefined ||
+    value.failureReason !== undefined
+  );
+}
+
+function hasStructuredSummaryFields(value: Record<string, unknown>): boolean {
+  return (
+    hasValues(value.decisions) ||
+    hasValues(value.constraints) ||
+    hasValues(value.filesAndSymbols) ||
+    hasValues(value.debuggingContext) ||
+    hasValues(value.openThreads)
+  );
+}
+
+function collectLegacyModelSummaryRules(
+  value: Record<string, unknown>,
+  prefix: string,
+  hasStructuredFields: boolean,
+): string[] {
+  const reasons: string[] = [];
+  pushIf(reasons, !isNonEmptyTrimmed(value.content), `${prefix}.modelSummary.content invalid`);
+  pushIf(reasons, hasStructuredFields, `${prefix}.modelSummary invalid`);
+  return reasons;
+}
+
+function collectModernModelSummaryMetadataRules(
+  value: Record<string, unknown>,
+  prefix: string,
+): string[] {
+  const reasons: string[] = [];
+  pushIf(
+    reasons,
+    !isOneOf(value.status, CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES),
+    `${prefix}.modelSummary.status invalid`,
+  );
+  pushIf(
+    reasons,
+    !isOneOf(value.validationState, CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES),
+    `${prefix}.modelSummary.validationState invalid`,
+  );
+  pushIf(
+    reasons,
+    value.failureReason !== undefined &&
+      !isOneOf(value.failureReason, CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS),
+    `${prefix}.modelSummary.failureReason invalid`,
+  );
+  return reasons;
+}
+
+function collectValidModelSummaryRules(value: Record<string, unknown>, prefix: string): string[] {
+  const reasons: string[] = [];
+  pushIf(reasons, !isNonEmptyTrimmed(value.content), `${prefix}.modelSummary.content invalid`);
+  pushIf(
+    reasons,
+    value.validationState === "rejected",
+    `${prefix}.modelSummary.validationState invalid`,
+  );
+  pushIf(
+    reasons,
+    value.failureReason !== undefined,
+    `${prefix}.modelSummary.failureReason invalid`,
+  );
+  return reasons;
+}
+
+function collectRejectedModelSummaryRules(
+  value: Record<string, unknown>,
+  prefix: string,
+  hasStructuredFields: boolean,
+): string[] {
+  const reasons: string[] = [];
+  const allowedFailureReasons = modelSummaryFailureReasonsForStatus(value.status);
+  pushIf(reasons, value.content !== "", `${prefix}.modelSummary.content invalid`);
+  pushIf(
+    reasons,
+    value.validationState !== "rejected",
+    `${prefix}.modelSummary.validationState invalid`,
+  );
+  pushIf(reasons, hasStructuredFields, `${prefix}.modelSummary invalid`);
+  pushIf(
+    reasons,
+    allowedFailureReasons === undefined || !isOneOf(value.failureReason, allowedFailureReasons),
+    `${prefix}.modelSummary.failureReason invalid`,
+  );
+  return reasons;
+}
+
+function modelSummaryFailureReasonsForStatus(status: unknown): readonly string[] | undefined {
+  if (status === "invalid") {
+    return ["missing-structured-output", "invalid-structured-output", "unsafe-output"];
+  }
+  if (status === "timed-out") {
+    return ["timed-out"];
+  }
+  if (status === "unavailable") {
+    return ["model-unavailable"];
+  }
+  return undefined;
+}
+
+function hasValues(value: unknown): boolean {
+  return Array.isArray(value) && value.length > 0;
 }
 
 function collectStringArray(value: unknown, prefix: string): string[] {
