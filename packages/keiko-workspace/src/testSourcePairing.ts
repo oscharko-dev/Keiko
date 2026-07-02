@@ -12,6 +12,13 @@ import { assertContainedRealPath } from "./realpath.js";
 import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
+import {
+  buildImportGraph,
+  importersForTarget,
+  importsFromSource,
+  type ImportGraph,
+  type ResolvedImportEdge,
+} from "./importGraphEdges.js";
 
 // Canonical fingerprint shared by every structural adapter: SHA-256({kind,text}) → 16 hex chars.
 function queryFingerprint(query: RetrievalQuery): string {
@@ -111,7 +118,7 @@ function firstExistingPair(ctx: PairContext, candidates: readonly string[]): str
   return undefined;
 }
 
-function emitPairAtom(ctx: PairContext, pairedPath: string): EvidenceAtom {
+function emitPairAtom(ctx: PairContext, pairedPath: string, score = 0.8): EvidenceAtom {
   return buildAtom({
     scopeId: ctx.scope.scopeId,
     scopePath: pairedPath,
@@ -119,12 +126,52 @@ function emitPairAtom(ctx: PairContext, pairedPath: string): EvidenceAtom {
     provenanceKind: "structural",
     tool: "test-source-pairing",
     queryFingerprint: ctx.fingerprint,
-    score: 0.8,
+    score,
     emittedAtMs: ctx.nowMs(),
   });
 }
 
-function pairForPath(ctx: PairContext, path: string): EvidenceAtom | undefined {
+function compareEdges(a: ResolvedImportEdge, b: ResolvedImportEdge): number {
+  if (a.score !== b.score) return b.score - a.score;
+  if (a.importerPath !== b.importerPath) return a.importerPath < b.importerPath ? -1 : 1;
+  return a.targetPath === b.targetPath ? 0 : (a.targetPath ?? "") < (b.targetPath ?? "") ? -1 : 1;
+}
+
+function importEdgePairForPath(
+  ctx: PairContext,
+  graph: ImportGraph | undefined,
+  path: string,
+): EvidenceAtom | undefined {
+  if (graph === undefined) {
+    return undefined;
+  }
+  const edges = TEST_MARKER_RE.test(path)
+    ? importsFromSource(graph, path).filter(
+        (edge) =>
+          edge.targetPath !== undefined &&
+          !TEST_MARKER_RE.test(edge.targetPath) &&
+          isAllowedPath(ctx, edge.targetPath),
+      )
+    : importersForTarget(graph, path).filter(
+        (edge) => TEST_MARKER_RE.test(edge.importerPath) && isAllowedPath(ctx, edge.importerPath),
+      );
+  const best = [...edges].sort(compareEdges)[0];
+  if (best === undefined) {
+    return undefined;
+  }
+  const pairedPath = TEST_MARKER_RE.test(path) ? best.targetPath : best.importerPath;
+  return pairedPath === undefined ? undefined : emitPairAtom(ctx, pairedPath, 0.95);
+}
+
+function pairForPath(
+  ctx: PairContext,
+  path: string,
+  graph: ImportGraph | undefined,
+): EvidenceAtom | undefined {
+  const importPair = importEdgePairForPath(ctx, graph, path);
+  if (importPair !== undefined) {
+    return importPair;
+  }
   const isTest = TEST_MARKER_RE.test(path);
   const candidates = isTest ? candidateSourcesFor(path) : candidateTestsFor(path);
   const found = firstExistingPair(ctx, candidates);
@@ -176,33 +223,32 @@ function inputsForQuery(
 export const testSourcePairingAdapter: StructuralAdapter = {
   name: "test-source-pairing",
   isAvailable: (): Promise<boolean> => Promise.resolve(true),
-  lookup: (
+  lookup: async (
     scope: SearchScope,
     query: RetrievalQuery,
     limits: SearchLimits,
     fs: WorkspaceFs,
     deps?: StructuralAdapterDeps,
   ): Promise<readonly EvidenceAtom[]> => {
-    // Wrap the synchronous body so that throws from assertContainedRealPath surface as a
-    // rejected Promise (which the registry runner and `await expect(...).rejects.…` tests
-    // can observe). Without this wrapper the throw escapes the call site before the Promise
-    // is built.
     try {
-      return Promise.resolve(runLookup(scope, query, limits, fs, deps));
+      return await runLookup(scope, query, limits, fs, deps);
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
   },
 };
 
-function runLookup(
+async function runLookup(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
   fs: WorkspaceFs,
   deps: StructuralAdapterDeps | undefined,
-): readonly EvidenceAtom[] {
+): Promise<readonly EvidenceAtom[]> {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
+    return [];
+  }
+  if (limits.maxMatchesReturned <= 0) {
     return [];
   }
   const ctx: PairContext = {
@@ -213,12 +259,13 @@ function runLookup(
     allowedPaths: allowedPathsForScope(scope, limits, fs),
   };
   const inputs = inputsForQuery(ctx, query, limits);
+  const graph = inputs.length === 0 ? undefined : await buildImportGraph(scope, limits, fs);
   const atoms: EvidenceAtom[] = [];
   for (const input of inputs) {
     if (atoms.length >= limits.maxMatchesReturned) {
       break;
     }
-    const atom = pairForPath(ctx, input);
+    const atom = pairForPath(ctx, input, graph);
     if (atom !== undefined) {
       atoms.push(atom);
     }

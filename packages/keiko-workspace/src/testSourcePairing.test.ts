@@ -97,6 +97,43 @@ describe("testSourcePairingAdapter", () => {
     expect(atoms.map((a) => a.scopePath)).toEqual(["src/foo.ts"]);
   });
 
+  it("prefers a real import edge over a same-name convention pair", async () => {
+    const { scope, fs } = makeScope({
+      "src/order-service.ts": "export const orderTotal = 1;\n",
+      "tests/order-service.test.ts": "test('same-name decoy', () => {});\n",
+      "tests/payment-flow.test.ts":
+        "import { orderTotal } from '../src/order-service';\n" +
+        "test('payment flow uses order total', () => orderTotal);\n",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("src/order-service.ts"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual(["tests/payment-flow.test.ts"]);
+    expect(atoms[0]?.score).toBe(0.95);
+  });
+
+  it("pairs a mismatched test filename back to its imported source edge", async () => {
+    const { scope, fs } = makeScope({
+      "src/order-service.ts": "export const orderTotal = 1;\n",
+      "tests/payment-flow.test.ts":
+        "import { orderTotal } from '../src/order-service';\n" +
+        "test('payment flow uses order total', () => orderTotal);\n",
+    });
+    const atoms = await testSourcePairingAdapter.lookup(
+      scope,
+      nlq("tests/payment-flow.test.ts"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.map((a) => a.scopePath)).toEqual(["src/order-service.ts"]);
+    expect(atoms[0]?.score).toBe(0.95);
+  });
+
   it("pairs src/foo.tsx to tests/foo.test.tsx", async () => {
     const { scope, fs } = makeScope({
       "src/foo.tsx": "x",

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -940,6 +940,46 @@ describe("searchText (memFs)", () => {
     expect(r.diagnostics?.ignoredByDiscovery).toBeGreaterThan(0);
     expect(r.truncated).toBe(false);
   });
+
+  it("includes allowlisted generated source without relaxing denied secret paths", async () => {
+    const { scope, fs } = memScope({
+      "generated/contracts/OrderClient.java": "class OrderClient { String auditNeedle; }\n",
+      "src/ordinary.ts": "export const ordinary = 'auditNeedle';\n",
+      ".env": "auditNeedle=secret\n",
+    });
+    const r = await searchText(scope, nlq("auditNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: {
+        retrievalIntent: "targeted-code-search",
+        lowValuePathAllowlist: ["generated/contracts/OrderClient.java", ".env"],
+      },
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toContain("generated/contracts/OrderClient.java");
+    expect(r.atoms.map((a) => a.scopePath)).not.toContain(".env");
+    expect(r.coverage.deniedByDiscovery).toBeGreaterThan(0);
+  });
+
+  it("boosts injected git-recent files in candidate ranking diagnostics", async () => {
+    const { scope, fs } = memScope({
+      "src/old.ts": "export const sharedNeedle = 1;\n",
+      "src/recent.ts": "export const sharedNeedle = 2;\n",
+    });
+    const r = await searchText(scope, nlq("sharedNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: {
+        retrievalIntent: "targeted-code-search",
+        recentPaths: ["src/recent.ts"],
+      },
+    });
+    expect(r.atoms[0]?.scopePath).toBe("src/recent.ts");
+    expect(r.diagnostics?.rankedCandidates[0]?.scopePath).toBe("src/recent.ts");
+    expect(r.diagnostics?.rankedCandidates[0]?.signals).toContainEqual({
+      name: "git-recency",
+      value: 28,
+    });
+  });
 });
 
 describe("findFiles (memFs)", () => {
@@ -1510,6 +1550,19 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(r.atoms).toHaveLength(1);
   });
 
+  it("searches UTF-16LE source files instead of classifying them as binary", async () => {
+    mkdirSync(join(tmp, "src"), { recursive: true });
+    writeFileSync(
+      join(tmp, "src", "utf16.ts"),
+      Buffer.from("\ufeffexport const utf16Needle = 1;\n", "utf16le"),
+    );
+    const r = await searchText(scope, nlq("utf16Needle"), DEFAULT_SEARCH_LIMITS, {
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/utf16.ts"]);
+    expect(r.candidates.some((candidate) => candidate.scopePath === "src/utf16.ts")).toBe(false);
+  });
+
   it("blocks a symlink that escapes the workspace root", async () => {
     const outside = mkdtempSync(join(tmpdir(), "keiko-outside-"));
     try {
@@ -1611,6 +1664,43 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(byteProbeCalls).toBe(0);
   });
 
+  it("searchText skips a hard-linked alias before the binary probe reads bytes", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-hardlink-"));
+    try {
+      writeFileSync(join(outside, "aliased.ts"), "export const secret = 'do not ingest';\n");
+      mkdirSync(join(tmp, "src"), { recursive: true });
+      linkSync(join(outside, "aliased.ts"), join(tmp, "src/alias.ts"));
+      scope = { ...scope, relativePaths: ["src/alias.ts"] };
+      let byteProbeCalls = 0;
+      const readFileBytes = nodeWorkspaceFs.readFileBytes;
+      if (readFileBytes === undefined) {
+        throw new Error("nodeWorkspaceFs.readFileBytes is required for this test");
+      }
+      const fs: WorkspaceFs = {
+        ...nodeWorkspaceFs,
+        readFileBytes: async (absolutePath, maxBytes): Promise<Uint8Array> => {
+          byteProbeCalls += 1;
+          return await readFileBytes(absolutePath, maxBytes);
+        },
+      };
+
+      const result = await searchText(scope, nlq("secret"), DEFAULT_SEARCH_LIMITS, {
+        fs,
+        nowMs: FIXED_NOW,
+      });
+      expect(result.atoms).toHaveLength(0);
+      expect(result.candidates).toContainEqual({
+        scopePath: "src/alias.ts",
+        score: 0,
+        signals: [],
+        omitted: "ignored",
+      });
+      expect(byteProbeCalls).toBe(0);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("readExcerpt refuses a binary file with RepoSearchUnsupportedFileError", async () => {
     const buf = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x00, 0x00]);
     writeFileSync(join(tmp, "img.png"), buf);
@@ -1704,6 +1794,15 @@ describe("IO-error resilience (Audit Finding 1 – scan path)", () => {
           throw makeErrnoError("EACCES");
         }
         return baseFs.readFileUtf8(absolutePath);
+      },
+      readFileBytes: (absolutePath, maxBytes): Promise<Uint8Array> => {
+        if (absolutePath.includes("secret.ts")) {
+          return Promise.reject(makeErrnoError("EACCES"));
+        }
+        if (baseFs.readFileBytes !== undefined) {
+          return baseFs.readFileBytes(absolutePath, maxBytes);
+        }
+        return Promise.resolve(new Uint8Array());
       },
     };
     const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
