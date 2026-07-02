@@ -7,6 +7,8 @@ const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
 const FIXTURE_ROOT = "tests/architecture/fixtures";
 
 const PROVIDER_SDK_PATTERN = /^(openai($|\/)|@anthropic-ai\/|[^/]+-ai-sdk($|\/))/;
+const MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN =
+  /^@oscharko-dev\/keiko-model-gateway\/internal\/(openai-adapter|normalize)($|\/)/;
 const LOCAL_KNOWLEDGE_EGRESS_PATTERN =
   /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|tesseract\.js($|\/)|@google-cloud\/vision($|\/)|@aws-sdk\/client-textract($|\/)|libreoffice-convert($|\/)|pdf-poppler($|\/)|sharp($|\/))/;
 const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
@@ -48,6 +50,15 @@ const IMPORT_POLICY_RULES = [
         ? path.startsWith(`${FIXTURE_ROOT}/local-knowledge-no-egress/`)
         : path.startsWith("packages/keiko-local-knowledge/src/"),
     matchesSpecifier: (specifier) => LOCAL_KNOWLEDGE_EGRESS_PATTERN.test(specifier),
+  },
+  {
+    name: "adr-0100-provider-runtime-no-internal-bypass",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/provider-runtime-internal-bypass/`)
+        : /^(packages\/keiko-|src\/)/.test(path) &&
+          !path.startsWith("packages/keiko-model-gateway/src/"),
+    matchesSpecifier: (specifier) => MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN.test(specifier),
   },
 ];
 
