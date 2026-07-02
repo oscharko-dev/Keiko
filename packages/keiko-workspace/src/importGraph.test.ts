@@ -496,17 +496,14 @@ describe("importGraphAdapter", () => {
       expect.arrayContaining([
         expect.objectContaining({
           name: "OrderService",
-          fields: expect.arrayContaining(["order_id", "tags"]),
           parser: "polyglot-regex",
         }),
         expect.objectContaining({
           name: "KOrder",
-          fields: expect.arrayContaining(["order_id", "total"]),
           parser: "polyglot-regex",
         }),
         expect.objectContaining({
           name: "Payload",
-          fields: expect.arrayContaining(["order_id", "Ignored"]),
           parser: "polyglot-regex",
         }),
         expect.objectContaining({
@@ -515,6 +512,15 @@ describe("importGraphAdapter", () => {
           scopePath: "frontend/src/Widget.vue",
         }),
       ]),
+    );
+    expect(present(index.symbols.find((symbol) => symbol.name === "OrderService")).fields).toEqual(
+      expect.arrayContaining(["order_id", "tags"]),
+    );
+    expect(present(index.symbols.find((symbol) => symbol.name === "KOrder")).fields).toEqual(
+      expect.arrayContaining(["order_id", "total"]),
+    );
+    expect(present(index.symbols.find((symbol) => symbol.name === "Payload")).fields).toEqual(
+      expect.arrayContaining(["order_id", "Ignored"]),
     );
     expect(index.calls).toEqual(
       expect.arrayContaining([
@@ -530,12 +536,16 @@ describe("importGraphAdapter", () => {
         }),
       ]),
     );
-    expect(index.parserCoverage).toEqual(
-      expect.arrayContaining([
-        { parser: "polyglot-regex", filesIndexed: expect.any(Number) },
-        { parser: "typescript-compiler-ast", filesIndexed: expect.any(Number) },
-      ]),
-    );
+    expect(
+      index.parserCoverage.some(
+        (coverage) => coverage.parser === "polyglot-regex" && coverage.filesIndexed > 0,
+      ),
+    ).toBe(true);
+    expect(
+      index.parserCoverage.some(
+        (coverage) => coverage.parser === "typescript-compiler-ast" && coverage.filesIndexed > 0,
+      ),
+    ).toBe(true);
   });
 
   it("indexes declaration and schema edge cases used by structural contracts", () => {
@@ -607,19 +617,25 @@ describe("importGraphAdapter", () => {
         expect.objectContaining({
           name: "TypeDto",
           kind: "type",
-          fields: expect.arrayContaining(["orderId", "total"]),
         }),
         expect.objectContaining({
           name: "OrderYaml",
           scopePath: "openapi.yaml",
-          fields: expect.arrayContaining(["order_id", "total"]),
         }),
         expect.objectContaining({
           name: "OrderJson",
           scopePath: "openapi.json",
-          fields: expect.arrayContaining(["orderId", "total"]),
         }),
       ]),
+    );
+    expect(present(index.symbols.find((symbol) => symbol.name === "TypeDto")).fields).toEqual(
+      expect.arrayContaining(["orderId", "total"]),
+    );
+    expect(present(index.symbols.find((symbol) => symbol.name === "OrderYaml")).fields).toEqual(
+      expect.arrayContaining(["order_id", "total"]),
+    );
+    expect(present(index.symbols.find((symbol) => symbol.name === "OrderJson")).fields).toEqual(
+      expect.arrayContaining(["orderId", "total"]),
     );
   });
 

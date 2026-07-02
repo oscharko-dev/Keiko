@@ -116,4 +116,78 @@ describe("grounded turn registry", () => {
     expect(excerpt.content).toBe("");
     expect(excerpt.contentBytes).toBe(0);
   });
+
+  it("expires, evicts, and clears grounded handoff records by scope", () => {
+    const registry = createGroundedTurnRegistry(5, 2);
+
+    registry.remember(
+      {
+        assistantMessageId: "assistant-a",
+        chatId: "chat-a",
+        workspaceRoot: "/workspace-a",
+        packs: [packWithExcerpt("a")],
+      },
+      () => 0,
+    );
+    registry.remember(
+      {
+        assistantMessageId: "assistant-b",
+        chatId: "chat-b",
+        workspaceRoot: "/workspace-b",
+        packs: [packWithExcerpt("b")],
+      },
+      () => 1,
+    );
+    expect(registry.lookup("assistant-a", () => 2)?.assistantMessageId).toBe("assistant-a");
+
+    registry.remember(
+      {
+        assistantMessageId: "assistant-c",
+        chatId: "chat-c",
+        workspaceRoot: "/workspace-c",
+        packs: [packWithExcerpt("c")],
+      },
+      () => 3,
+    );
+
+    expect(registry.lookup("assistant-b", () => 4)).toBeUndefined();
+    expect(registry.lookup("assistant-c", () => 9)).toBeUndefined();
+
+    registry.remember(
+      {
+        assistantMessageId: "assistant-d",
+        chatId: "chat-clear",
+        workspaceRoot: "/workspace-clear",
+        packs: [packWithExcerpt("d")],
+      },
+      () => 10,
+    );
+    registry.remember(
+      {
+        assistantMessageId: "assistant-e",
+        chatId: "chat-keep",
+        workspaceRoot: "/workspace-keep",
+        packs: [packWithExcerpt("e")],
+      },
+      () => 11,
+    );
+    registry.clearConversation("chat-clear");
+    expect(registry.lookup("assistant-d", () => 12)).toBeUndefined();
+    expect(registry.lookup("assistant-e", () => 12)?.chatId).toBe("chat-keep");
+
+    registry.remember(
+      {
+        assistantMessageId: "assistant-f",
+        chatId: "chat-keep",
+        workspaceRoot: "/workspace-clear",
+        packs: [packWithExcerpt("f")],
+      },
+      () => 13,
+    );
+    registry.clearWorkspace("/workspace-clear");
+    expect(registry.lookup("assistant-f", () => 14)).toBeUndefined();
+
+    registry.clearAll();
+    expect(registry.lookup("assistant-e", () => 15)).toBeUndefined();
+  });
 });
