@@ -119,18 +119,12 @@ function chatCapability(
   };
 }
 
-function minimumTokenBudgetForBytes(bytes: number): number {
-  let low = 0;
-  let high = bytes + 2;
-  while (low < high) {
-    const mid = Math.floor((low + high) / 2);
-    if (maxUtf8BytesForTokenBudget(mid) >= bytes) {
-      high = mid;
-    } else {
-      low = mid + 1;
-    }
-  }
-  return low;
+function baselineTokenBudgetForBytes(bytes: number): number {
+  return 2 + Math.ceil(bytes / 3.5);
+}
+
+function denseTokenBudgetForBytes(bytes: number): number {
+  return 2 + Math.ceil(bytes / 3);
 }
 
 function expectInvalidWithReason(result: ContextValidationResult, fragment: string): void {
@@ -181,7 +175,7 @@ describe("DEFAULT_CONTEXT_PROFILE", () => {
   });
 
   it("carries the default estimator provenance id", () => {
-    expect(DEFAULT_CONTEXT_PROFILE.tokenEstimatorId).toBe("keiko-conservative-utf8-v1");
+    expect(DEFAULT_CONTEXT_PROFILE.tokenEstimatorId).toBe("keiko-conservative-content-v2");
   });
 
   it("omits the optional model metadata", () => {
@@ -217,6 +211,7 @@ describe("estimateTokens", () => {
     "",
     "hello world",
     "für eine Straße",
+    "变量未定义，请检查配置",
     "emoji 😀👨‍👩‍👧‍👦 and surrogate 😀",
     "x".repeat(1_048_576),
   ];
@@ -247,18 +242,41 @@ describe("estimateTokens", () => {
     }
   });
 
-  it("is conservative against the canonical token->byte bridge for non-empty inputs", () => {
+  it("never drops below the baseline UTF-8 byte floor for non-empty inputs", () => {
     for (const input of cases) {
       if (input.length === 0) continue;
       const bytes = new TextEncoder().encode(input).length;
-      expect(estimateTokens(input)).toBeGreaterThanOrEqual(minimumTokenBudgetForBytes(bytes));
+      expect(estimateTokens(input)).toBeGreaterThanOrEqual(baselineTokenBudgetForBytes(bytes));
     }
   });
 
-  it("has a sane upper bound: estimate <= byteLength + overhead", () => {
+  it("uses the dense floor for CJK-heavy text", () => {
+    const input = "变量未定义请检查配置".repeat(20);
+    const bytes = new TextEncoder().encode(input).length;
+    expect(estimateTokens(input)).toBe(denseTokenBudgetForBytes(bytes));
+    expect(estimateTokens(input)).toBeGreaterThan(baselineTokenBudgetForBytes(bytes));
+  });
+
+  it("charges dense structural text more than same-byte plain ASCII", () => {
+    const bytes = 120;
+    const plain = "x".repeat(bytes);
+    const structural = "{".repeat(bytes);
+    expect(new TextEncoder().encode(plain)).toHaveLength(bytes);
+    expect(new TextEncoder().encode(structural)).toHaveLength(bytes);
+    expect(estimateTokens(structural)).toBe(denseTokenBudgetForBytes(bytes));
+    expect(estimateTokens(structural)).toBeGreaterThan(estimateTokens(plain));
+  });
+
+  it("uses the dense floor for short-line output", () => {
+    const input = ["a", "b", "c", "d", "e"].join("\n");
+    const bytes = new TextEncoder().encode(input).length;
+    expect(estimateTokens(input)).toBe(denseTokenBudgetForBytes(bytes));
+  });
+
+  it("has a sane upper bound: estimate <= dense byte floor", () => {
     for (const input of cases) {
       const bytes = new TextEncoder().encode(input).length;
-      expect(estimateTokens(input)).toBeLessThanOrEqual(bytes + 2);
+      expect(estimateTokens(input)).toBeLessThanOrEqual(denseTokenBudgetForBytes(bytes));
     }
   });
 });
@@ -294,11 +312,11 @@ describe("maxUtf8BytesForTokenBudget", () => {
     expect(maxUtf8BytesForTokenBudget(2)).toBe(0);
   });
 
-  it("stays aligned with estimateTokens for ASCII fixtures", () => {
+  it("stays aligned with estimateTokens for dense structural fixtures", () => {
     for (const tokenBudget of [3, 8, 32, 512]) {
       const maxBytes = maxUtf8BytesForTokenBudget(tokenBudget);
-      expect(estimateTokens("x".repeat(maxBytes))).toBeLessThanOrEqual(tokenBudget);
-      expect(estimateTokens("x".repeat(maxBytes + 1))).toBeGreaterThan(tokenBudget);
+      expect(estimateTokens("{".repeat(maxBytes))).toBeLessThanOrEqual(tokenBudget);
+      expect(estimateTokens("{".repeat(maxBytes + 1))).toBeGreaterThan(tokenBudget);
     }
   });
 });

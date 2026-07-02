@@ -12,8 +12,9 @@
 // SLOW PATH (full filtered history exceeds the effective input budget): the oldest prefix that
 // still allows the system message, a deterministic redacted summary, and the retained recent tail
 // are compacted into a generated system-scoped continuity block accompanied by a validated
-// ContextCompactionRecord. This is an interim deterministic digest, not the model-written running
-// summary required to close COMPACT-02 / CTXMODEL-04 / B2-1.
+// ContextCompactionRecord. This function is the deterministic in-prompt safety layer; post-turn
+// model-written enrichment is handled by chat-compaction-model-summary.ts and resurfaced on later
+// turns through chat-compaction-resurfacing.ts.
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -40,6 +41,7 @@ export interface ConversationCompactionOptions {
   readonly contextProfile?: ContextProfile | undefined;
   readonly effectiveInputBudget?: number | undefined;
   readonly redactionSecrets?: readonly string[] | undefined;
+  readonly preserveNewestTurn?: boolean | undefined;
 }
 
 export interface ConversationCompactionOutcome {
@@ -91,6 +93,7 @@ export function conversationForGatewayWithCompaction(
     systemMessage,
     effectiveInputBudget,
     opts.redactionSecrets,
+    opts.preserveNewestTurn ?? true,
   );
   if (selection === undefined) {
     throw new ContextOverflowError(
@@ -140,13 +143,14 @@ function selectCompaction(
   systemMessage: GatewayConversationMessage | undefined,
   effectiveInputBudget: number,
   redactionSecrets: readonly string[] | undefined,
+  preserveNewestTurn: boolean,
 ): CompactionSelection | undefined {
   const systemContent = systemMessage?.content;
   if (systemContent === undefined && prepared.length === 0) {
     return undefined;
   }
   const tokenPrefix = buildTokenPrefix(prepared);
-  const maxDropCount = prepared.length - 1;
+  const maxDropCount = preserveNewestTurn ? prepared.length - 1 : prepared.length;
   if (maxDropCount < 1) {
     return undefined;
   }

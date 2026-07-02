@@ -9,6 +9,7 @@ import {
   type GatewayConversationMessage,
   type SendDesktopChatRequest,
 } from "./chat-handlers.js";
+import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   DEFAULT_CONTEXT_PROFILE,
@@ -17,6 +18,10 @@ import {
   type ContextProfile,
   type ConversationDocumentContextWire,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  CONVERSATION_SYSTEM_PROMPT,
+  renderConversationDocumentContextBlock,
+} from "./conversation-prompt.js";
 import type {
   ConversationMemoryContextEntryWire,
   ConversationMemoryResultWire,
@@ -254,6 +259,30 @@ describe("buildGatewayAssembly", () => {
     expect(latestUserTurn).toContain("# Relevant memories");
   });
 
+  it("summarizes a single oversized prior history turn instead of failing the current prompt", () => {
+    const { store, chatId } = createStore();
+    seedHistory(chatId, store, [`Fact: prior branch decision ${"x".repeat(80_000)}`]);
+    store.createMessage(createMessage(chatId, "user", "Keep the current request exact.", NOW + 99));
+
+    const profile = deriveContextProfile({
+      maxInputTokens: 1_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const deps = createDeps(store, profile);
+    const request = makeRequest(chatId, "Keep the current request exact.");
+
+    const outcome = buildGatewayAssembly(deps, request, makeMemoryResult([]), CHAT_MODEL);
+    const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
+
+    expect(outcome.compaction?.itemsBefore).toBe(1);
+    expect(totalTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect(outcome.messages.at(-1)?.content).toBe("Keep the current request exact.");
+    expect(outcome.messages.map((message) => message.content).join("\n")).not.toContain(
+      "x".repeat(1_000),
+    );
+  });
+
   it("keeps a simple prompt unchanged while exposing allocator lane diagnostics", () => {
     const { store, chatId } = createStore();
     store.createMessage(createMessage(chatId, "user", "Simple prompt", NOW + 99));
@@ -307,6 +336,65 @@ describe("buildGatewayAssembly", () => {
     expect(latestUserTurn).not.toContain(secondDoc.text);
     expect(repoLane?.includedItems).toBe(1);
     expect(repoLane?.excludedItems).toBe(1);
+  });
+
+  it("reserves prompt wrapper overhead before including optional document context", () => {
+    const { store, chatId } = createStore();
+    store.createMessage(createMessage(chatId, "user", "Wrapper overhead check", NOW + 99));
+
+    const requestText = "Review the attached document.";
+    const doc = makeDocument("doc-1", "edge.txt", "EDGE-DOC-" + "e".repeat(600));
+    const budgetThatFitsRawLanesButNotWrappedPrompt = estimateTokensForSegments([
+      CONVERSATION_SYSTEM_PROMPT,
+      requestText,
+      renderConversationDocumentContextBlock(doc),
+    ]);
+    const profile = deriveContextProfile({
+      maxInputTokens: budgetThatFitsRawLanesButNotWrappedPrompt,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const deps = createDeps(store, profile);
+    const memory = makeMemoryResult([]);
+    const request = makeRequest(chatId, requestText, { documentContext: [doc] });
+
+    const outcome = buildGatewayAssembly(deps, request, memory, CHAT_MODEL);
+    const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
+    const totalTokens = estimateTokensForSegments(assemblyMessages(outcome));
+    const repoLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence");
+
+    expect(totalTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
+    expect(latestUserTurn).not.toContain(doc.text);
+    expect(repoLane?.includedItems).toBe(0);
+    expect(repoLane?.excludedItems).toBe(1);
+    expect(repoLane?.compactionReason).toBe("budget");
+  });
+
+  it("counts dropped resurfaced compaction context in working-memory diagnostics", () => {
+    const profile = deriveContextProfile({
+      maxInputTokens: 500,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const outcome = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "Continue with the current task.", discussionMode: undefined },
+      profile,
+      memoryEntries: [],
+      compactionContextText: "# Persisted compaction context\n" + "c".repeat(4_000),
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    expect(outcome).toBeDefined();
+    if (outcome === undefined) return;
+    const latestUserTurn = outcome.messages.at(-1)?.content ?? "";
+    const memoryLane = outcome.diagnostics.lanes.find((lane) => lane.laneId === "working-memory");
+
+    expect(latestUserTurn).not.toContain("Persisted compaction context");
+    expect(memoryLane?.includedItems).toBe(0);
+    expect(memoryLane?.excludedItems).toBe(1);
+    expect(memoryLane?.compactionReason).toBe("budget");
   });
 
   it("returns path-free aggregate diagnostics with history, memory, doc, and reserve lanes", () => {

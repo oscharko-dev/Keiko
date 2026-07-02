@@ -24,6 +24,7 @@ import type {
   GatewayReadinessReport,
   GatewayReadinessRequest,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -885,7 +886,7 @@ function longContextBody(tokens: number): {
   readonly body: Readonly<Record<string, unknown>>;
   readonly sentinel: string;
 } {
-  const approximateChars = tokens * 4;
+  const approximateChars = maxUtf8BytesForTokenBudget(tokens);
   const filler = "alpha beta gamma delta epsilon zeta eta theta\n".repeat(
     Math.max(1, Math.ceil(approximateChars / 46)),
   );

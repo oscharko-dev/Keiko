@@ -12,6 +12,7 @@ import { createHash } from "node:crypto";
 import {
   HARNESS_VERSION,
   type ContextCommandOutcome,
+  type ContextCompactionModelSummary,
   type ContextCompactionRecord,
   type ContextInvalidationKey,
   type ContextPreservedFact,
@@ -163,6 +164,17 @@ function redactInvalidationKey(
   };
 }
 
+function redactModelSummary(
+  summary: ContextCompactionModelSummary,
+  redact: Redactor,
+): ContextCompactionModelSummary {
+  return {
+    promptVersion: summary.promptVersion,
+    modelId: redactedPathSafe(summary.modelId, redact),
+    content: redactedPathSafe(summary.content, redact),
+  };
+}
+
 function redactStrings(values: readonly string[], redact: Redactor): readonly string[] {
   return values.map((value) => redactedPathSafe(value, redact));
 }
@@ -240,6 +252,9 @@ function redactScalarFields(
       ? {}
       : { rehydration: redactRehydration(record.rehydration, redact) }),
     ...(record.orderedAt === undefined ? {} : { orderedAt: record.orderedAt }),
+    ...(record.modelSummary === undefined
+      ? {}
+      : { modelSummary: redactModelSummary(record.modelSummary, redact) }),
   };
 }
 

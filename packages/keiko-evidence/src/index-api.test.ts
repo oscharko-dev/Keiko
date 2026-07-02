@@ -3,6 +3,7 @@ import { listEvidence, loadEvidence } from "./index-api.js";
 import { createInMemoryEvidenceStore } from "./store.js";
 import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
 import type { EvidenceManifest } from "./types.js";
+import { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
 
 function manifestFixture(runId: string, startedAt: number): EvidenceManifest {
   return {
@@ -159,7 +160,7 @@ describe("loadEvidence", () => {
           reservedOutputTokens: 8_000,
           safetyMarginTokens: 4_000,
           effectiveInputBudget: 116_000,
-          tokenEstimatorId: "keiko-conservative-utf8-v1",
+          tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
         },
         totalEstimatedTokens: 1_200,
         budgetPressure: "moderate",

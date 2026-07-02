@@ -178,6 +178,25 @@ describe("conversationForGatewayWithCompaction — fast path (unchanged guarante
     ).toThrow(ContextOverflowError);
   });
 
+  it("can compact every turn when the caller passes a history prefix without the current request", () => {
+    const messages = [msg("user", `old context ${"x".repeat(80_000)}`, 0)];
+    const tightProfile = deriveContextProfile({
+      maxInputTokens: 1_000,
+      reservedOutputTokens: 0,
+      safetyMarginTokens: 0,
+    });
+    const outcome = conversationForGatewayWithCompaction(messages, {
+      contextProfile: tightProfile,
+      preserveNewestTurn: false,
+    });
+    expect(outcome.compaction?.itemsBefore).toBe(1);
+    expect(outcome.messages).toHaveLength(1);
+    expect(requiredSystemContent(outcome)).toContain("Automated structured summary");
+    expect(
+      estimateTokensForSegments(outcome.messages.map((message) => message.content)),
+    ).toBeLessThanOrEqual(tightProfile.effectiveInputBudget);
+  });
+
   it("manyShortTurnsStayVerbatim: count above MAX_CONTEXT_MESSAGES still stays byte-identical when under budget", () => {
     const messages = history(30);
     const outcome = conversationForGatewayWithCompaction(messages, {

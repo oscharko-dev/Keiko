@@ -21,6 +21,7 @@ import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   buildGroundedGatewayMessages,
   handleGroundedAsk,
+  modelWindowAwareBudget,
   modelInputPromptByteLimit,
   promptByteLength,
   withPromptExcerptByteLimit,
@@ -87,7 +88,10 @@ function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   };
 }
 
-function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
+function customModelConfig(
+  modelId = CHAT_MODEL,
+  capability: { readonly contextWindow?: number; readonly maxOutputTokens?: number } = {},
+): GatewayConfig {
   return {
     providers: [
       {
@@ -112,8 +116,8 @@ function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
       {
         id: modelId,
         kind: "chat",
-        contextWindow: 64_000,
-        maxOutputTokens: 4_096,
+        contextWindow: capability.contextWindow ?? 64_000,
+        maxOutputTokens: capability.maxOutputTokens ?? 4_096,
         toolCalling: true,
         structuredOutput: true,
         streaming: true,
@@ -515,6 +519,21 @@ describe("buildGroundedGatewayMessages", () => {
         buildRedactor({}, undefined),
       ),
     ).toThrow(ContextOverflowError);
+  });
+});
+
+describe("modelWindowAwareBudget", () => {
+  it("uses the configured model context profile instead of a fixed grounded prompt ceiling", () => {
+    const longContextDeps = deps(undefined, {}, {
+      config: customModelConfig(CHAT_MODEL, { contextWindow: 200_000, maxOutputTokens: 12_000 }),
+      configPresent: true,
+    });
+
+    const budget = modelWindowAwareBudget(longContextDeps, CHAT_MODEL);
+
+    expect(budget.modelInputTokensMax).toBe(181_750);
+    expect(budget.modelInputTokensMax).toBeGreaterThan(96_000);
+    expect(budget.modelOutputTokensMax).toBe(12_000);
   });
 });
 

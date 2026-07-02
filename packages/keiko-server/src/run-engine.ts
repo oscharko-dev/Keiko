@@ -15,7 +15,15 @@ import {
   type AgentConfig,
 } from "@oscharko-dev/keiko-harness";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { generateUnitTests, investigateBug } from "@oscharko-dev/keiko-workflows";
+import {
+  generateUnitTests,
+  investigateBug,
+  type BugInvestigationInput,
+  type BugInvestigationReport,
+  type ToolResultArtifactWriter,
+  type UnitTestWorkflowInput,
+  type UnitTestWorkflowReport,
+} from "@oscharko-dev/keiko-workflows";
 import {
   buildVerificationPlan,
   detectScripts,
@@ -23,8 +31,6 @@ import {
   type VerificationReport,
 } from "@oscharko-dev/keiko-verification";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
-import type { UnitTestWorkflowInput, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
-import type { BugInvestigationInput, BugInvestigationReport } from "@oscharko-dev/keiko-workflows";
 import type {
   HarnessEvent,
   RunCompletedEvent,
@@ -48,6 +54,7 @@ import {
 } from "./evidence.js";
 import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
+import { createServerHarnessToolShaper } from "./harness-tool-shaper.js";
 
 export interface StartRunResult {
   readonly runId: string;
@@ -72,6 +79,7 @@ interface EngineContext {
   // Where terminated runs persist their redacted evidence manifest (AC5). Optional so the 3-arg
   // engine-context form in older tests still compiles; persistence is simply skipped when absent.
   readonly evidence?: EvidencePersistContext | undefined;
+  readonly toolArtifacts?: ToolResultArtifactWriter | undefined;
   readonly memoryVault?: MemoryVaultStore | undefined;
   readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
   readonly memoryCustomerIdentifierMatchers?: readonly RegExp[] | undefined;
@@ -268,6 +276,9 @@ function dispatchExplain(
     model: ctx.model,
     tools: new DryRunToolPort(),
     sink,
+    shaperPort: createServerHarnessToolShaper({
+      ...(ctx.toolArtifacts === undefined ? {} : { artifactWriter: ctx.toolArtifacts }),
+    }),
     ...(reservedRunId === undefined ? {} : { idSource: { newRunId: (): string => reservedRunId } }),
   });
   const result = session.result.then((runResult): DispatchOutcome => ({

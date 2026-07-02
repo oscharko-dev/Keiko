@@ -8,8 +8,18 @@ const TEST_SUFFIX_RE = /(?:tests?|specs?)$/iu;
 
 const MAX_EXPANDED_QUERY_TERMS = 48;
 const DOMAIN_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
+  ["auth", ["authentication", "authorize", "authorization", "login", "signin", "token", "jwt"]],
+  ["authn", ["authentication", "login", "signin"]],
+  ["authz", ["authorization", "permission", "policy", "role"]],
+  ["authenticate", ["authentication", "auth", "login", "signin"]],
+  ["authentication", ["auth", "authenticate", "login", "signin", "authn"]],
+  ["authorization", ["authz", "permission", "policy", "role"]],
+  ["failure", ["fail", "failed", "error", "exception", "crash"]],
+  ["failed", ["fail", "failure", "error", "exception", "crash"]],
+  ["failing", ["fail", "failure", "error", "exception", "crash"]],
   ["front-end", ["web", "ui", "client"]],
   ["frontend", ["web", "ui", "client"]],
+  ["login", ["auth", "authenticate", "authentication", "signin", "token"]],
   ["oberflaeche", ["web", "ui", "client"]],
   ["oberfläche", ["web", "ui", "client"]],
   ["back-end", ["server", "api", "service"]],
@@ -17,6 +27,15 @@ const DOMAIN_ALIASES: ReadonlyMap<string, readonly string[]> = new Map([
   ["infra", ["terraform", "kubernetes", "helm"]],
   ["infrastructure", ["terraform", "kubernetes", "helm"]],
   ["infrastruktur", ["terraform", "kubernetes", "helm"]],
+  ["bug", ["failure", "error", "incorrect", "wrong", "regression"]],
+  ["calculate", ["calculation", "compute", "computed", "sum", "total"]],
+  ["calculation", ["calculate", "compute", "computed", "sum", "total"]],
+  ["cart", ["checkout", "basket", "order", "purchase"]],
+  ["checkout", ["cart", "basket", "order", "purchase", "payment"]],
+  ["compute", ["calculate", "calculation", "computed"]],
+  ["incorrect", ["wrong", "bug", "failure", "error"]],
+  ["total", ["sum", "amount", "subtotal", "grandtotal", "price"]],
+  ["wrong", ["incorrect", "bug", "failure", "error", "regression"]],
 ]);
 
 function normalizeCase(term: string, caseSensitive: boolean): string {
@@ -131,6 +150,57 @@ function addIdentifierDerivatives(
   }
 }
 
+function pluralYCandidate(lower: string, token: string): readonly string[] {
+  return lower.length > 5 && lower.endsWith("ies") ? [`${token.slice(0, -3)}y`] : [];
+}
+
+function ingCandidates(lower: string, token: string): readonly string[] {
+  if (lower.length <= 5 || !lower.endsWith("ing")) {
+    return [];
+  }
+  const base = token.slice(0, -3);
+  return [base, `${base}e`];
+}
+
+function edCandidates(lower: string, token: string): readonly string[] {
+  if (lower.length <= 4 || !lower.endsWith("ed")) {
+    return [];
+  }
+  const base = token.slice(0, -2);
+  return [base, `${base}e`];
+}
+
+function esCandidate(lower: string, token: string): readonly string[] {
+  return lower.length > 4 && lower.endsWith("es") ? [token.slice(0, -2)] : [];
+}
+
+function sCandidate(lower: string, token: string): readonly string[] {
+  return lower.length > 3 && lower.endsWith("s") ? [token.slice(0, -1)] : [];
+}
+
+function morphologicalCandidates(token: string): readonly string[] {
+  const lower = token.toLowerCase();
+  return [
+    ...pluralYCandidate(lower, token),
+    ...ingCandidates(lower, token),
+    ...edCandidates(lower, token),
+    ...esCandidate(lower, token),
+    ...sCandidate(lower, token),
+  ];
+}
+
+function addMorphologicalDerivatives(
+  out: string[],
+  seen: Set<string>,
+  token: string,
+  caseSensitive: boolean,
+): void {
+  for (const candidate of morphologicalCandidates(token)) {
+    addTerm(out, seen, candidate, caseSensitive);
+    addDomainAliases(out, seen, candidate, caseSensitive);
+  }
+}
+
 function addDomainAliases(
   out: string[],
   seen: Set<string>,
@@ -162,6 +232,7 @@ function expandToken(
   for (const segment of segments) {
     addTerm(out, seen, segment, caseSensitive);
     addDomainAliases(out, seen, segment, caseSensitive);
+    addMorphologicalDerivatives(out, seen, segment, caseSensitive);
     addIdentifierDerivatives(out, seen, segment, caseSensitive);
   }
 }
@@ -185,4 +256,42 @@ export function expandedQueryTerms(queryText: string, caseSensitive: boolean): r
     }
   }
   return out;
+}
+
+export function expandedQueryTermGroups(
+  queryText: string,
+  caseSensitive: boolean,
+): readonly (readonly string[])[] {
+  const groups: string[][] = [];
+  const singleCharacterFallbacks: string[] = [];
+  let total = 0;
+  for (const match of queryText.matchAll(QUERY_TOKEN_RE)) {
+    if (match[0].length === 1) {
+      singleCharacterFallbacks.push(match[0]);
+    }
+    const group: string[] = [];
+    expandToken(group, new Set<string>(), match[0], caseSensitive);
+    if (group.length > 0) {
+      const remaining = MAX_EXPANDED_QUERY_TERMS - total;
+      if (remaining <= 0) {
+        break;
+      }
+      const capped = group.slice(0, remaining);
+      groups.push(capped);
+      total += capped.length;
+    }
+    if (total >= MAX_EXPANDED_QUERY_TERMS) {
+      break;
+    }
+  }
+  if (groups.length === 0) {
+    for (const token of singleCharacterFallbacks) {
+      const group: string[] = [];
+      addTerm(group, new Set<string>(), token, caseSensitive, 1);
+      if (group.length > 0) {
+        groups.push(group);
+      }
+    }
+  }
+  return groups;
 }

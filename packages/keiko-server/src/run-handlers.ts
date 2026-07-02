@@ -23,6 +23,7 @@ import {
   type VoiceProfile,
 } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createNodeToolResultArtifactStore } from "@oscharko-dev/keiko-evidence";
 import { validateWorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { approvalTokenInputFor, createApprovalToken } from "./governed-workflow.js";
@@ -188,6 +189,26 @@ function mapRunStartError(error: unknown): RouteResult {
   throw error;
 }
 
+function buildEngineContext(
+  request: RunRequest,
+  model: ModelPort,
+  deps: UiHandlerDeps,
+): EngineContext {
+  return {
+    request,
+    model,
+    registry: deps.registry,
+    evidence: {
+      store: deps.evidenceStore,
+      env: deps.env,
+      additionalSecrets: currentRedactionSecrets(deps),
+    },
+    ...(deps.evidenceDir === undefined
+      ? {}
+      : { toolArtifacts: createNodeToolResultArtifactStore(deps.evidenceDir) }),
+  };
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -221,18 +242,8 @@ export async function handleCreateRun(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const engineCtx: EngineContext = {
-    request: governed,
-    model,
-    registry: deps.registry,
-    evidence: {
-      store: deps.evidenceStore,
-      env: deps.env,
-      additionalSecrets: currentRedactionSecrets(deps),
-    },
-  };
   try {
-    const started = startRun(engineCtx, deps.redactor);
+    const started = startRun(buildEngineContext(governed, model, deps), deps.redactor);
     return { status: 202, body: { runId: started.runId, fingerprint: started.fingerprint } };
   } catch (error) {
     return mapRunStartError(error);

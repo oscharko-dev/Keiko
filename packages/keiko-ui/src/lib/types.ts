@@ -224,6 +224,7 @@ export { isEditorAgentActionAuditRecord } from "@oscharko-dev/keiko-contracts";
 // aggregate carried on a grounded answer's pack summary) comes from the bff-wire subpath. All
 // three are structurally path-free (string literal unions, numbers, booleans) by construction.
 export type { ContextLaneId, ContextBudgetPressure } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_TOKEN_ESTIMATOR_ID } from "@oscharko-dev/keiko-contracts";
 
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019

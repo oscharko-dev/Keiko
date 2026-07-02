@@ -74,6 +74,41 @@ describe("detectWorkspace", () => {
     expect(detectWorkspace(dir).languages).toContain("typescript");
   });
 
+  it("reports java without inventing javascript for a pure Maven workspace", () => {
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    writeFileSync(join(dir, "pom.xml"), "<project />", "utf8");
+    const info = detectWorkspace(dir);
+    expect(info.languages).toContain("java");
+    expect(info.languages).not.toContain("javascript");
+  });
+
+  it("detects a pure Maven root without .git or package.json", () => {
+    writeFileSync(join(dir, "pom.xml"), "<project />", "utf8");
+    const nested = join(dir, "src", "main", "java", "com", "acme");
+    mkdirSync(nested, { recursive: true });
+
+    const info = detectWorkspace(nested);
+
+    expect(info.root).toBe(dir);
+    expect(info.languages).toContain("java");
+    expect(info.languages).not.toContain("javascript");
+  });
+
+  it("detects source languages that are legal in the workspace contract", () => {
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "openapi.yaml"), "openapi: 3.1.0\n", "utf8");
+    writeFileSync(join(dir, "schema.sql"), "create table demo(id integer);\n", "utf8");
+    writeFileSync(join(dir, "src", "native.cpp"), "int main() { return 0; }\n", "utf8");
+    writeFileSync(join(dir, "src", "build.gradle"), "plugins { id 'groovy' }\n", "utf8");
+    writeFileSync(join(dir, "src", "Program.fs"), "module Program\n", "utf8");
+    writeFileSync(join(dir, "src", "script.csx"), "Console.WriteLine(1);\n", "utf8");
+    const info = detectWorkspace(dir);
+    expect(info.languages).toEqual(
+      expect.arrayContaining(["openapi", "sql", "cpp", "groovy", "fsharp", "csharp"]),
+    );
+  });
+
   it("reads .gitignore lines", () => {
     writePkg(dir, { name: "demo" });
     writeFileSync(join(dir, ".gitignore"), "dist/\n*.log\n", "utf8");

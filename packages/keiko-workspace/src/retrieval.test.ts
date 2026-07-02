@@ -41,23 +41,29 @@ describe("lexicalRetrievalStrategy", () => {
     expect(reasonOf("src/util.ts")).toBe("source");
   });
 
-  it("orders by reason priority then path", () => {
+  it("orders by task relevance, then reason priority, then path", () => {
+    const taskRanked = lexicalRetrievalStrategy.rank(
+      files("src/z.ts", "src/a.ts", "README.md", "src/index.ts"),
+      "README",
+    );
+    expect(taskRanked[0]?.file.relativePath).toBe("README.md");
+
     const ranked = lexicalRetrievalStrategy.rank(
       files("src/z.ts", "src/a.ts", "README.md", "src/index.ts"),
       undefined,
     );
     expect(ranked.map((r) => r.file.relativePath)).toEqual([
       "src/index.ts",
-      "README.md",
       "src/a.ts",
       "src/z.ts",
+      "README.md",
     ]);
   });
 
-  it("is deterministic across calls", () => {
+  it("is deterministic across calls for the same task", () => {
     const input = files("b.ts", "a.ts", "c.ts");
     expect(lexicalRetrievalStrategy.rank(input, "task")).toEqual(
-      lexicalRetrievalStrategy.rank(input, "other"),
+      lexicalRetrievalStrategy.rank(input, "task"),
     );
   });
 
