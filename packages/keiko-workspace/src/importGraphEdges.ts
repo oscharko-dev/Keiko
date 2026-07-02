@@ -397,6 +397,7 @@ async function readImportSource(
   try {
     const absolutePath = resolveWithinWorkspace(scope.workspace.root, scopePath);
     const contained = containedRealPathInfo(fs, scope.workspace.root, absolutePath);
+    if (isDenied(normalizeScopePath(contained.realRelative))) return undefined;
     const stat = fs.stat(contained.path);
     if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) return undefined;
     if (await probeBinary(fs, contained.path, stat.size)) return undefined;
@@ -434,8 +435,10 @@ function traverseEdges(
   const visitedNodes = new Set<string>();
   const queue = [...seed];
   const result: ResolvedImportEdge[] = [];
-  while (queue.length > 0) {
-    const edge = queue.shift();
+  let index = 0;
+  while (index < queue.length) {
+    const edge = queue[index];
+    index += 1;
     if (edge === undefined || visitedEdges.has(edge.stableId)) continue;
     visitedEdges.add(edge.stableId);
     result.push(edge);
