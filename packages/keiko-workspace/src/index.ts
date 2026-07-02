@@ -163,8 +163,10 @@ export {
   connectedContextPackStableId,
   fileContentHash,
   hashExcerptContent,
+  importEdgeStableId,
   MAX_HASH_FILE_BYTES,
 } from "./stableId.js";
+export type { ImportEdgeStableIdInput } from "./stableId.js";
 
 // ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
 export type {
@@ -180,6 +182,20 @@ export {
   createEcosystemStructureAdapters,
   runStructuralAdapters,
 } from "./structuralAdapters.js";
+export type {
+  ImportEdgeKind,
+  ImportGraph,
+  ImportGraphTraversalOptions,
+  ImportResolutionKind,
+  ImportSpecifierHit,
+  ResolvedImportEdge,
+} from "./importGraphEdges.js";
+export {
+  buildImportGraph,
+  collectImportSpecifiers,
+  importsFromSource,
+  importersForTarget,
+} from "./importGraphEdges.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";

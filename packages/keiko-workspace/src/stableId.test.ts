@@ -3,7 +3,11 @@ import type {
   ConnectedContextPackStableIdInput,
   EvidenceAtomStableIdInput,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { connectedContextPackStableId, evidenceAtomStableId } from "./stableId.js";
+import {
+  connectedContextPackStableId,
+  evidenceAtomStableId,
+  importEdgeStableId,
+} from "./stableId.js";
 
 function atomInput(overrides: Partial<EvidenceAtomStableIdInput> = {}): EvidenceAtomStableIdInput {
   return {
@@ -130,5 +134,36 @@ describe("connectedContextPackStableId", () => {
     expect(connectedContextPackStableId(packInput({ atomStableIds: [] }))).toBe(
       connectedContextPackStableId(packInput({ atomStableIds: [] })),
     );
+  });
+});
+
+describe("importEdgeStableId", () => {
+  const input = {
+    importerPath: "src/a.ts",
+    specifier: "./b",
+    targetPath: "src/b.ts",
+    kind: "static-import",
+    line: 1,
+    ordinal: 0,
+  };
+
+  it("is deterministic across invocations", () => {
+    expect(importEdgeStableId(input)).toBe(importEdgeStableId(input));
+  });
+
+  it("changes when the resolved target changes", () => {
+    expect(importEdgeStableId(input)).not.toBe(
+      importEdgeStableId({ ...input, targetPath: "src/c.ts" }),
+    );
+  });
+
+  it("distinguishes multiple edges on the same line by ordinal", () => {
+    expect(importEdgeStableId(input)).not.toBe(importEdgeStableId({ ...input, ordinal: 1 }));
+  });
+
+  it("returns the 'ie-' prefix and 67 chars", () => {
+    const id = importEdgeStableId(input);
+    expect(id.startsWith("ie-")).toBe(true);
+    expect(id.length).toBe(67);
   });
 });
