@@ -120,9 +120,11 @@ function coverageDiagnostics(
     filesAfterPolicy: 100,
     filesScanned: 50,
     filesSkipped: 51,
+    truncated: true,
     ignoredByDiscovery: 1,
     deniedByDiscovery: 0,
     depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
     matchesReturned: 12,
     elapsedMs: 250,
     limits: {
@@ -173,8 +175,8 @@ describe("DEFAULT_EXPLORATION_BUDGET", () => {
     }
   });
 
-  it("rerankCallsMax defaults to 0 (rerank disabled)", () => {
-    expect(DEFAULT_EXPLORATION_BUDGET.rerankCallsMax).toBe(0);
+  it("rerankCallsMax defaults to 1 (one bounded rerank pass enabled)", () => {
+    expect(DEFAULT_EXPLORATION_BUDGET.rerankCallsMax).toBe(1);
   });
 
   it("excerptBytesMax is 128 KiB", () => {
@@ -512,6 +514,22 @@ describe("validateEvidenceAtom", () => {
     expect(validateEvidenceAtom(atom)).toEqual({ ok: true });
   });
 
+  it("accepts the semantic-search provenance kind", () => {
+    const atom: EvidenceAtom = {
+      ...happyAtom(),
+      provenance: { ...happyAtom().provenance, kind: "semantic-search" },
+    };
+    expect(validateEvidenceAtom(atom)).toEqual({ ok: true });
+  });
+
+  it("accepts bounded evidence metrics", () => {
+    const atom: EvidenceAtom = {
+      ...happyAtom(),
+      metrics: { gitRecency: 0.8, gitChurn: 0.25 },
+    };
+    expect(validateEvidenceAtom(atom)).toEqual({ ok: true });
+  });
+
   it("rejects schemaVersion mismatch", () => {
     const atom = { ...happyAtom(), schemaVersion: "2" as unknown as "1" };
     expectInvalidWithReason(validateEvidenceAtom(atom), "schemaVersion");
@@ -559,6 +577,17 @@ describe("validateEvidenceAtom", () => {
     expectInvalidWithReason(
       validateEvidenceAtom({ ...happyAtom(), score: Number.POSITIVE_INFINITY }),
       "score",
+    );
+  });
+
+  it("rejects evidence metrics outside the unit interval", () => {
+    expectInvalidWithReason(
+      validateEvidenceAtom({ ...happyAtom(), metrics: { gitRecency: 1.01 } }),
+      "gitRecency",
+    );
+    expectInvalidWithReason(
+      validateEvidenceAtom({ ...happyAtom(), metrics: { gitChurn: -0.01 } }),
+      "gitChurn",
     );
   });
 
@@ -1291,6 +1320,39 @@ describe("validateConnectedContextPack", () => {
     expectInvalidWithReason(validateConnectedContextPack(pack), "coverage.filesScanned invalid");
   });
 
+  it("accepts additive low-value rescue coverage diagnostics", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: {
+          incomplete: false,
+          reasons: [],
+          filesDiscovered: 0,
+          filesAfterPolicy: 0,
+          filesScanned: 1,
+          filesSkipped: 0,
+          oversizedFilesScanned: 0,
+          lowValueRescueFilesDiscovered: 1,
+          lowValueRescueFilesScanned: 1,
+          truncated: false,
+          ignoredByDiscovery: 1,
+          deniedByDiscovery: 0,
+          depthPrunedByDiscovery: 0,
+          maxFilesPrunedByDiscovery: 0,
+          matchesReturned: 1,
+          elapsedMs: 1,
+          limits: {
+            maxFilesScanned: 50,
+            maxMatchesReturned: 100,
+            elapsedMsMax: 5_000,
+          },
+        },
+      },
+    };
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
   it("rejects more than MAX_RANKED_CANDIDATE_DIAGNOSTICS entries", () => {
     const entry = {
       scopePath: "a.ts",
@@ -1361,6 +1423,7 @@ describe("frozen-constant arrays", () => {
   it("every EvidenceAtomProvenanceKind appears in EVIDENCE_ATOM_PROVENANCE_KINDS", () => {
     const expected: readonly EvidenceAtomProvenanceKind[] = [
       "lexical-search",
+      "semantic-search",
       "file-listing",
       "excerpt-read",
       "structural",

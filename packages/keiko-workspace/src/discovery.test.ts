@@ -58,7 +58,7 @@ describe("discoverFiles", () => {
     expect(found).toContain("README.md");
   });
 
-  it("skips always-on denied paths even when not gitignored", () => {
+  it("skips always-on denied security paths even when not gitignored", () => {
     file("node_modules/left-pad/index.js");
     file(".env", "SECRET=1");
     file("dist/out.js");
@@ -67,7 +67,7 @@ describe("discoverFiles", () => {
     expect(found).toContain("src/keep.ts");
     expect(found).not.toContain(".env");
     expect(found.some((p) => p.startsWith("node_modules"))).toBe(false);
-    expect(found.some((p) => p.startsWith("dist"))).toBe(false);
+    expect(found).toContain("dist/out.js");
   });
 
   it("respects .gitignore patterns", () => {

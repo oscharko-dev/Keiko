@@ -12,6 +12,7 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
   isValidScopePath,
   type CandidateFile,
   type ConnectedContextPack,
@@ -40,6 +41,7 @@ import {
   type ExplorationPlan,
   type GovernorState,
   type MicroIndex,
+  type RerankerSeam,
   type RetrievalIntent,
   type RetrievalRing,
   type SearchAnchor,
@@ -66,6 +68,7 @@ import {
   type SearchScope,
   type SemanticSearchProvider,
   type StructuralAdapterRegistry,
+  type StructuralCoverageDiagnostics,
   testSourcePairingAdapter,
   type WorkspaceDirEntry,
   type WorkspaceFs,
@@ -78,6 +81,10 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { normalizeGroundedAnswerPayload, type GroundedAnswerPayload } from "./grounded-answer.js";
 import { collectFollowSymbolTraceEvidence } from "./grounded-symbol-trace.js";
+import {
+  defaultGitFileHistoryEvidenceProvider,
+  type GitFileHistoryEvidenceProvider,
+} from "./grounded-git-history-evidence.js";
 import {
   collectConnectedDocumentEvidence,
   isConnectedDocumentPath,
@@ -112,6 +119,9 @@ export interface OrchestratorDeps {
   readonly recordPlan?: (plan: ExplorationPlan) => void;
   // Ephemeral #183 context-pack cache for one connected scope/session.
   readonly microIndex?: MicroIndex;
+  readonly contextPackReranker?: RerankerSeam | undefined;
+  readonly repoSemanticSearchProvider?: SemanticSearchProvider | undefined;
+  readonly gitFileHistoryEvidence?: GitFileHistoryEvidenceProvider | undefined;
   // Optional context profile (ADR-0055 D1, PR4-W1). When absent (legacy callers, multi-source and
   // hybrid paths in W1), the diagnostics observer is NOT invoked and the assembled pack is
   // byte-identical to today. When present, the observer attaches ContextAssemblyDiagnostics-derived
@@ -184,7 +194,8 @@ interface SearchInputs {
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
-  readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
+  readonly repoSemanticSearchProvider?: SemanticSearchProvider | undefined;
+  readonly gitFileHistoryEvidence: GitFileHistoryEvidenceProvider;
 }
 
 interface RingResult {
@@ -220,6 +231,41 @@ function toPackDiagnostics(result: Awaited<ReturnType<typeof searchText>>): Cont
     })),
     ...coverageDiagnostics,
   };
+}
+
+function coverageUncertainty(
+  result: Awaited<ReturnType<typeof searchText>>,
+  nowMs: number,
+): readonly UncertaintyMarker[] {
+  const coverage = result.coverage;
+  if (!coverage.incomplete) {
+    return [];
+  }
+  const diagnostics = result.diagnostics;
+  const details =
+    diagnostics === undefined
+      ? `scanned ${String(coverage.filesScanned)} file(s), reasons ${coverage.reasons.join(", ")}`
+      : [
+          `reasons ${coverage.reasons.join(", ")}`,
+          `discovered ${String(coverage.filesDiscovered)} file(s)`,
+          `kept ${String(coverage.filesAfterPolicy)} after policy`,
+          `scanned ${String(coverage.filesScanned)}`,
+          `oversized-prefix ${String(coverage.oversizedFilesScanned ?? 0)}`,
+          `low-value-rescue-discovered ${String(coverage.lowValueRescueFilesDiscovered ?? 0)}`,
+          `low-value-rescue-scanned ${String(coverage.lowValueRescueFilesScanned ?? 0)}`,
+          `ignored ${String(coverage.ignoredByDiscovery)}`,
+          `denied ${String(coverage.deniedByDiscovery)}`,
+          `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
+          `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
+        ].join(", ");
+  return [
+    {
+      kind: "scope-incomplete",
+      claim: `repository search coverage was incomplete (${details}); relevant files may be missing from the context pack`,
+      impactedAtomIds: [],
+      emittedAtMs: nowMs,
+    },
+  ];
 }
 
 function throwIfCancelled(signal: AbortSignal | undefined): void {
@@ -355,10 +401,34 @@ function safeAdapterName(name: string): string {
   return cleaned.length === 0 ? "structural-adapter" : cleaned;
 }
 
+function structuralCoverageMarker(
+  coverage: StructuralCoverageDiagnostics,
+  nowMs: number,
+): UncertaintyMarker | undefined {
+  const partiallyIndexed = coverage.filesPartiallyIndexed ?? 0;
+  if (coverage.filesSkipped <= 0 && partiallyIndexed <= 0) {
+    return undefined;
+  }
+  const safeName = safeAdapterName(coverage.name);
+  return {
+    kind: "scope-incomplete",
+    claim:
+      `structural adapter coverage was incomplete: ${safeName} indexed ` +
+      `${String(coverage.filesIndexed)} file(s), skipped ${String(
+        coverage.filesSkipped,
+      )} file(s), partially indexed ${String(
+        partiallyIndexed,
+      )} file(s); structural edges may be missing from the context pack`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
 function adapterDiagnostics(
   result: {
     readonly unavailable: readonly string[];
     readonly errored: readonly { readonly name: string }[];
+    readonly coverage?: readonly StructuralCoverageDiagnostics[] | undefined;
   },
   nowMs: number,
 ): readonly UncertaintyMarker[] {
@@ -380,6 +450,16 @@ function adapterDiagnostics(
     seen.add(`errored:${safeName}`);
     markers.push(toolUnavailable(`structural adapter failed safely: ${safeName}`, nowMs));
   }
+  for (const coverage of result.coverage ?? []) {
+    const marker = structuralCoverageMarker(coverage, nowMs);
+    if (marker === undefined) continue;
+    const key = `${marker.kind}:${marker.claim}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    markers.push(marker);
+  }
   return markers;
 }
 
@@ -395,6 +475,16 @@ function dedupeUncertainty(markers: readonly UncertaintyMarker[]): readonly Unce
     out.push(marker);
   }
   return out;
+}
+
+function suppressGitMetadataAdapterDiagnostics(
+  markers: readonly UncertaintyMarker[],
+  gitFileAtomCount: number,
+): readonly UncertaintyMarker[] {
+  if (gitFileAtomCount === 0) {
+    return markers;
+  }
+  return markers.filter((marker) => !marker.claim.includes("git-history"));
 }
 
 function anchorKindForTerm(
@@ -445,8 +535,12 @@ function structuralQueriesForRing(
   return queries.length === 0 ? [inputs.query] : queries;
 }
 
+const MAX_STRUCTURAL_FOLLOW_UP_QUERIES = 6;
+
 function plannedSearchCallsForRing(ring: RetrievalRing, inputs: SearchInputs): number {
-  return ring.kind === "structural" ? structuralQueriesForRing(ring, inputs).length : 1;
+  return ring.kind === "structural"
+    ? structuralQueriesForRing(ring, inputs).length + MAX_STRUCTURAL_FOLLOW_UP_QUERIES
+    : 1;
 }
 
 function mergeAtomsByStableId(
@@ -470,12 +564,136 @@ function mergeAtomsByStableId(
   return atoms;
 }
 
+function isGitMetadataPath(scopePath: string): boolean {
+  return scopePath === ".git" || scopePath.startsWith(".git/");
+}
+
+function isRankableFileAtom(atom: EvidenceAtom, inputs: SearchInputs): boolean {
+  return (
+    isValidScopePath(atom.scopePath, { mustBeRelative: true }) &&
+    !isGitMetadataPath(atom.scopePath) &&
+    !isDenied(atom.scopePath) &&
+    fileExistsInSearchScope(inputs.searchScope, inputs.fs, atom.scopePath)
+  );
+}
+
 interface RunRingStructuralResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly unavailable: readonly string[];
   readonly errored: readonly { readonly name: string }[];
+  readonly coverage: readonly StructuralCoverageDiagnostics[];
   readonly elapsedMs: number;
 }
+
+function structuralFollowUpQueries(
+  atoms: readonly EvidenceAtom[],
+  base: RetrievalQuery,
+): readonly RetrievalQuery[] {
+  const queries: RetrievalQuery[] = [];
+  const seen = new Set<string>([`${base.kind}:${base.text}`]);
+  const push = (text: string | undefined, kind: SearchAnchor["kind"]): void => {
+    const clean = text?.trim();
+    if (
+      clean === undefined ||
+      clean.length === 0 ||
+      queries.length >= MAX_STRUCTURAL_FOLLOW_UP_QUERIES
+    ) {
+      return;
+    }
+    const query = queryForStructuralAnchor(clean, kind, base);
+    const key = `${query.kind}:${query.text}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    queries.push(query);
+  };
+  for (const atom of atoms) {
+    const edge = atom.edge;
+    if (edge === undefined) {
+      continue;
+    }
+    push(edge.target.scopePath, "path");
+    push(edge.target.symbol, "identifier");
+    push(edge.source.scopePath, "path");
+    push(edge.source.symbol, "identifier");
+    if (queries.length >= MAX_STRUCTURAL_FOLLOW_UP_QUERIES) {
+      break;
+    }
+  }
+  return queries;
+}
+
+function structuralEdgeTargetAtoms(
+  atoms: readonly EvidenceAtom[],
+  inputs: SearchInputs,
+): readonly EvidenceAtom[] {
+  const out: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const atom of atoms) {
+    const edge = atom.edge;
+    const target = edge?.target;
+    if (
+      target === undefined ||
+      target.scopePath === atom.scopePath ||
+      !isValidScopePath(target.scopePath, { mustBeRelative: true }) ||
+      isDenied(target.scopePath) ||
+      !fileExistsInSearchScope(inputs.searchScope, inputs.fs, target.scopePath)
+    ) {
+      continue;
+    }
+    const stableId = evidenceAtomStableId({
+      scopeId: inputs.searchScope.scopeId,
+      scopePath: target.scopePath,
+      lineRange: target.lineRange,
+      edge,
+      provenanceKind: "structural",
+      provenanceTool: "structural-edge-target",
+      queryFingerprint: atom.provenance.queryFingerprint,
+    });
+    if (seen.has(stableId)) {
+      continue;
+    }
+    seen.add(stableId);
+    out.push({
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      stableId,
+      scopePath: target.scopePath,
+      lineRange: target.lineRange,
+      score: Math.max(0, Math.min(1, atom.score * 0.96)),
+      provenance: {
+        kind: "structural",
+        tool: "structural-edge-target",
+        queryFingerprint: atom.provenance.queryFingerprint,
+      },
+      edge,
+      redactionState: "redacted",
+      emittedAtMs: inputs.nowMs(),
+      ledgerRef: undefined,
+    });
+  }
+  return out;
+}
+
+function dedupeAtoms(atoms: readonly EvidenceAtom[], cap: number): readonly EvidenceAtom[] {
+  const out: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const atom of atoms) {
+    if (out.length >= cap) {
+      break;
+    }
+    if (seen.has(atom.stableId)) {
+      continue;
+    }
+    seen.add(atom.stableId);
+    out.push(atom);
+  }
+  return out;
+}
+
+type NonLexicalRing = Omit<RetrievalRing, "kind"> & {
+  readonly kind: "structural" | "git-history";
+};
 
 async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
   const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
@@ -483,67 +701,137 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
     nowMs: inputs.nowMs,
     searchHints: { retrievalIntent: inputs.retrievalIntent },
     ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
-    ...(inputs.semanticSearchProvider === undefined
-      ? {}
-      : { semanticSearchProvider: inputs.semanticSearchProvider }),
+    ...(inputs.repoSemanticSearchProvider !== undefined
+      ? { semanticSearchProvider: inputs.repoSemanticSearchProvider }
+      : {}),
   });
-  const coverageMarker = coverageIncomplete(result.coverage, inputs.nowMs());
+  // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
+  // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
     atoms: result.atoms,
     omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
-    uncertainty: coverageMarker === undefined ? [] : [coverageMarker],
+    uncertainty: coverageUncertainty(result, inputs.nowMs()),
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
     diagnostics: toPackDiagnostics(result),
   };
 }
 
-async function runStructuralOrHistoryRing(
-  ring: RetrievalRing,
-  inputs: SearchInputs,
-): Promise<RingResult> {
+function registryForRing(ring: NonLexicalRing): StructuralAdapterRegistry {
   // Keep the planner's ring split authoritative: the structural ring should only run the
   // structural adapters, while the git-history ring should only run the repo-level history
   // adapter. Reusing the full default registry for both rings duplicates atoms and inflates
   // downstream ranking signals whenever a workspace-root query plans both rings.
-  const registry: StructuralAdapterRegistry =
-    ring.kind === "structural"
-      ? {
-          adapters: [
-            testSourcePairingAdapter,
-            symbolGraphAdapter,
-            importGraphAdapter,
-            endpointContractAdapter,
-            ...createEcosystemStructureAdapters(),
-          ],
-        }
-      : { adapters: [gitHistoryAdapter] };
-  const queries =
-    ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
-  const results = await Promise.all(
+  return ring.kind === "structural"
+    ? {
+        adapters: [
+          testSourcePairingAdapter,
+          symbolGraphAdapter,
+          importGraphAdapter,
+          endpointContractAdapter,
+          ...createEcosystemStructureAdapters(),
+        ],
+      }
+    : { adapters: [gitHistoryAdapter] };
+}
+
+async function runAdapterQueries(
+  registry: StructuralAdapterRegistry,
+  ring: NonLexicalRing,
+  queries: readonly RetrievalQuery[],
+  inputs: SearchInputs,
+): Promise<readonly RunRingStructuralResult[]> {
+  return Promise.all(
     queries.map((query) =>
       runStructuralAdapters(registry, inputs.searchScope, query, ring.searchLimits, inputs.fs, {
         nowMs: inputs.nowMs,
       }),
     ),
   );
-  const elapsedMs = results.reduce((sum, result) => sum + result.elapsedMs, 0);
+}
+
+async function runNonLexicalAdapters(
+  ring: NonLexicalRing,
+  inputs: SearchInputs,
+): Promise<readonly RunRingStructuralResult[]> {
+  const registry = registryForRing(ring);
+  const queries =
+    ring.kind === "structural" ? structuralQueriesForRing(ring, inputs) : [inputs.query];
+  const results = await runAdapterQueries(registry, ring, queries, inputs);
+  const followUpQueries =
+    ring.kind === "structural"
+      ? structuralFollowUpQueries(
+          mergeAtomsByStableId(results, ring.searchLimits.maxMatchesReturned),
+          inputs.query,
+        )
+      : [];
+  const followUpResults = await runAdapterQueries(registry, ring, followUpQueries, inputs);
+  return [...results, ...followUpResults];
+}
+
+async function gitFileAtomsForRing(
+  ring: NonLexicalRing,
+  inputs: SearchInputs,
+  cap: number,
+): Promise<{ readonly atoms: readonly EvidenceAtom[]; readonly elapsedMs: number }> {
+  if (ring.kind !== "git-history") {
+    return { atoms: [], elapsedMs: 0 };
+  }
+  const startedAtMs = inputs.nowMs();
+  const atoms = await inputs.gitFileHistoryEvidence({
+    searchScope: inputs.searchScope,
+    query: inputs.query,
+    fs: inputs.fs,
+    nowMs: inputs.nowMs,
+    signal: inputs.signal,
+    maxFiles: cap,
+  });
+  return { atoms, elapsedMs: Math.max(0, inputs.nowMs() - startedAtMs) };
+}
+
+function nonLexicalAtoms(
+  ring: NonLexicalRing,
+  merged: readonly EvidenceAtom[],
+  gitAtoms: readonly EvidenceAtom[],
+  inputs: SearchInputs,
+  cap: number,
+): readonly EvidenceAtom[] {
+  if (ring.kind === "structural") {
+    return dedupeAtoms([...merged, ...structuralEdgeTargetAtoms(merged, inputs)], cap);
+  }
+  return dedupeAtoms(
+    [...merged, ...gitAtoms].filter((atom) => isRankableFileAtom(atom, inputs)),
+    cap,
+  );
+}
+
+async function runNonLexicalRing(ring: NonLexicalRing, inputs: SearchInputs): Promise<RingResult> {
+  const allResults = await runNonLexicalAdapters(ring, inputs);
+  const elapsedMs = allResults.reduce((sum, result) => sum + result.elapsedMs, 0);
   const cap = Math.min(ring.searchLimits.maxMatchesReturned, inputs.query.maxResults);
-  const atoms = ring.kind === "git-history" ? [] : mergeAtomsByStableId(results, cap);
+  const merged = mergeAtomsByStableId(allResults, cap);
+  const git = await gitFileAtomsForRing(ring, inputs, cap);
+  const atoms = nonLexicalAtoms(ring, merged, git.atoms, inputs, cap);
+  const adapterUncertainty = allResults.flatMap((result) =>
+    adapterDiagnostics(result, inputs.nowMs()),
+  );
   const uncertainty = dedupeUncertainty(
-    results.flatMap((result) => adapterDiagnostics(result, inputs.nowMs())),
+    ring.kind === "git-history"
+      ? suppressGitMetadataAdapterDiagnostics(adapterUncertainty, git.atoms.length)
+      : adapterUncertainty,
   );
   return {
     atoms,
     omitted: [],
     uncertainty,
-    usage: usageDelta({ elapsedMs }),
+    usage: usageDelta({ elapsedMs: elapsedMs + git.elapsedMs }),
   };
 }
 
 async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
-  return ring.kind === "lexical"
-    ? runLexicalRing(ring, inputs)
-    : runStructuralOrHistoryRing(ring, inputs);
+  if (ring.kind === "lexical") {
+    return runLexicalRing(ring, inputs);
+  }
+  return runNonLexicalRing(ring as NonLexicalRing, inputs);
 }
 
 interface RingRunSummary {
@@ -731,7 +1019,36 @@ const REPOSITORY_OVERVIEW_FILENAMES = [
 ] as const;
 const WORKSPACE_PACKAGE_DIRS = ["packages", "apps", "services", "libs"] as const;
 const MAX_WORKSPACE_MANIFESTS = 24;
-const EXTRA_SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(["vue"]);
+const SYMBOL_FILE_EXTENSIONS = [
+  "cs",
+  "fs",
+  "go",
+  "graphql",
+  "gql",
+  "groovy",
+  "java",
+  "ts",
+  "tsx",
+  "js",
+  "jsx",
+  "kt",
+  "kts",
+  "mts",
+  "cts",
+  "mjs",
+  "cjs",
+  "php",
+  "proto",
+  "py",
+  "pyi",
+  "rb",
+  "rs",
+  "scala",
+  "swift",
+  "vb",
+  "vue",
+] as const;
+const SYMBOL_FILE_EXTENSION_SET: ReadonlySet<string> = new Set(SYMBOL_FILE_EXTENSIONS);
 // Aggregate cap on firstSymbolLine reads across ALL terms in one question, so a vague code question
 // on a large customer repo can never trigger an unbounded number of full-file reads even if many
 // files match the symbol globs (each read also re-stats + splits the file — see firstSymbolLine).
@@ -1057,6 +1374,7 @@ function symbolFileQuery(input: OrchestratorInput, pattern: string): RetrievalQu
   };
 }
 
+// eslint-disable-next-line complexity -- Guard chain keeps symbol-anchor filtering explicit.
 function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
   if (
     plan.retrievalIntent !== "targeted-code-search" &&
@@ -1067,7 +1385,7 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
   const terms: string[] = [];
   const seen = new Set<string>();
   for (const anchor of plan.anchors) {
-    if (anchor.kind !== "identifier" || anchor.weight < 0.85) {
+    if ((anchor.kind !== "identifier" && anchor.kind !== "quoted") || anchor.weight < 0.7) {
       continue;
     }
     if (!/^[a-z_$][a-z0-9_$-]+$/u.test(anchor.term) || anchor.term.includes(".")) {
@@ -1076,6 +1394,9 @@ function symbolFileAnchorTerms(plan: ExplorationPlan): readonly string[] {
     if (!seen.has(anchor.term)) {
       seen.add(anchor.term);
       terms.push(anchor.term);
+    }
+    if (terms.length >= 8) {
+      break;
     }
   }
   return terms;
@@ -1091,6 +1412,17 @@ function symbolDefinitionPatterns(term: string): readonly RegExp[] {
     new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, "iu"),
     new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, "iu"),
     new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, "iu"),
+    new RegExp(
+      `\\b(?:public\\s+|private\\s+|protected\\s+|abstract\\s+|final\\s+|data\\s+)*(?:class|interface|record|enum)\\s+${escaped}\\b`,
+      "iu",
+    ),
+    new RegExp(
+      `\\b(?:public\\s+|private\\s+|protected\\s+|static\\s+|final\\s+)*[A-Za-z_$][\\w$<>, ?.[\\]]+\\s+${escaped}\\s*\\(`,
+      "iu",
+    ),
+    new RegExp(`\\b(?:def|func|fn|fun)\\s+${escaped}\\s*\\(`, "iu"),
+    new RegExp(`\\btype\\s+${escaped}\\s+(?:struct|interface)\\b`, "iu"),
+    new RegExp(`\\b(?:struct|trait|enum|class)\\s+${escaped}\\b`, "iu"),
   ];
 }
 
@@ -1176,7 +1508,7 @@ function scopePathExtension(scopePath: string): string {
 export function isSymbolDefinitionPath(scopePath: string, term: string): boolean {
   const extension = scopePathExtension(scopePath);
   return (
-    (isEcosystemSourceFile(scopePath) || EXTRA_SYMBOL_FILE_EXTENSION_SET.has(extension)) &&
+    (SYMBOL_FILE_EXTENSION_SET.has(extension) || isEcosystemSourceFile(scopePath)) &&
     scopePath.toLowerCase().endsWith(`${term.toLowerCase()}.${extension}`)
   );
 }
@@ -1795,6 +2127,7 @@ function refineCandidateOrdering(
   omitted: readonly OmittedContextEntry[],
   queryText: string,
   anchors: readonly SearchAnchor[],
+  diagnostics: ContextPackDiagnostics | undefined,
   nowMs: number,
 ): CandidateOrdering {
   const preferred: CandidateFile[] = [];
@@ -1830,10 +2163,53 @@ function refineCandidateOrdering(
     });
   }
   nextOmitted.sort(compareByScopePath);
+  const orderedPreferred = queryTargetsRouteImplementation(queryText)
+    ? orderPreferredCandidates(preferred, diagnostics)
+    : preferred;
   return {
-    kept: [...preferred, ...lockfiles],
+    kept: [...orderedPreferred, ...lockfiles],
     omitted: nextOmitted,
   };
+}
+
+const ROUTE_METHOD_QUERY_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
+const ROUTE_PATH_QUERY_RE = /\/[A-Za-z0-9:_?&=./-]+/u;
+const ROUTE_INTENT_QUERY_RE = /\b(?:api|endpoint|handler|implement|implements|implemented|route)\b/iu;
+
+function queryTargetsRouteImplementation(queryText: string): boolean {
+  return (
+    ROUTE_METHOD_QUERY_RE.test(queryText) &&
+    ROUTE_PATH_QUERY_RE.test(queryText) &&
+    ROUTE_INTENT_QUERY_RE.test(queryText)
+  );
+}
+
+function orderPreferredCandidates(
+  kept: readonly CandidateFile[],
+  diagnostics: ContextPackDiagnostics | undefined,
+): readonly CandidateFile[] {
+  const ranked = diagnostics?.rankedCandidates ?? [];
+  if (ranked.length === 0 || kept.length <= 1) {
+    return kept;
+  }
+  const order = new Map(ranked.map((candidate, index) => [candidate.scopePath, index]));
+  return [...kept].sort((a, b) => {
+    const aIndex = order.get(a.scopePath);
+    const bIndex = order.get(b.scopePath);
+    if (aIndex !== undefined && bIndex !== undefined && aIndex !== bIndex) {
+      return aIndex - bIndex;
+    }
+    if (aIndex !== undefined && bIndex === undefined) {
+      return -1;
+    }
+    if (aIndex === undefined && bIndex !== undefined) {
+      return 1;
+    }
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
+  });
 }
 
 function groupEvidenceAtomsByPath(
@@ -2189,9 +2565,23 @@ interface GroundedPackCacheLookupInputs {
   readonly assembleOptions: AssembleOptionsForGroundedPack;
 }
 
-type AssembleOptionsForGroundedPack =
-  | { readonly nowMs: () => number }
-  | { readonly nowMs: () => number; readonly microIndex: MicroIndex };
+interface AssembleOptionsForGroundedPack {
+  readonly nowMs: () => number;
+  readonly microIndex?: MicroIndex;
+  readonly reranker?: RerankerSeam;
+}
+
+function assembleOptionsFor(
+  deps: OrchestratorDeps,
+  nowMs: () => number,
+  includeMicroIndex: boolean,
+): AssembleOptionsForGroundedPack {
+  return {
+    nowMs,
+    ...(includeMicroIndex && deps.microIndex !== undefined ? { microIndex: deps.microIndex } : {}),
+    ...(deps.contextPackReranker === undefined ? {} : { reranker: deps.contextPackReranker }),
+  };
+}
 
 interface PreparedPackAssembly {
   readonly atoms: readonly EvidenceAtom[];
@@ -2237,8 +2627,7 @@ async function assembleEmptyGroundedPack({
   nowMs,
   stopReason,
 }: EmptyGroundedPackInputs): Promise<ConnectedContextPack> {
-  const assembleOptions =
-    deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
+  const assembleOptions = assembleOptionsFor(deps, nowMs, true);
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
@@ -2307,6 +2696,7 @@ function preparePackAssembly(
     ranking.omitted,
     input.query.text,
     plan.anchors,
+    rings.diagnostics,
     nowMs(),
   );
   return {
@@ -2423,10 +2813,7 @@ async function prepareGroundedAssembly(
     deps.microIndex === undefined || hasDocumentEvidence
       ? undefined
       : fileStateCacheIdentity(prepared.keptPaths, searchScope, fs);
-  const assembleOptions =
-    deps.microIndex === undefined || hasDocumentEvidence
-      ? { nowMs }
-      : { nowMs, microIndex: deps.microIndex };
+  const assembleOptions = assembleOptionsFor(deps, nowMs, !hasDocumentEvidence);
   // The micro-index cache key does not model request-local document evidence, so a scope that
   // carried documents this run must not be served from (or written to) the shared cache.
   const cached = hasDocumentEvidence
@@ -2539,9 +2926,8 @@ export async function retrieveConnectedContextPack(
       nowMs,
       signal: deps.signal,
       ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
-      ...(deps.semanticSearchProvider === undefined
-        ? {}
-        : { semanticSearchProvider: deps.semanticSearchProvider }),
+      repoSemanticSearchProvider: deps.repoSemanticSearchProvider ?? deps.semanticSearchProvider,
+      gitFileHistoryEvidence: deps.gitFileHistoryEvidence ?? defaultGitFileHistoryEvidenceProvider,
     },
     governor,
   );

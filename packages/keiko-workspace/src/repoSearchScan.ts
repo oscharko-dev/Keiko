@@ -8,6 +8,7 @@ import type {
   CandidateOmissionReason,
   ContextCoverageTruncationReason,
   EvidenceAtom,
+  EvidenceEdge,
   EvidenceAtomProvenanceKind,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -22,7 +23,7 @@ import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
-import { decodeTextBytes, looksBinary } from "./binaryDetect.js";
+import { DEFAULT_BINARY_PROBE, decodeTextBytes, looksBinary } from "./binaryDetect.js";
 import { collectFromEntries } from "./repoSearchEntries.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
@@ -36,6 +37,7 @@ import {
   orderCandidatesForSearch,
   policyOmissionReason,
   resolveSearchPolicy,
+  scoreContentForSearch,
   shouldScoreContent,
   type SearchDiagnostics,
   type SearchPolicy,
@@ -54,7 +56,7 @@ import {
 } from "./workspaceIndex.js";
 import { createHash } from "node:crypto";
 
-const BINARY_PROBE_BYTES = 512;
+const BINARY_PROBE_BYTES = DEFAULT_BINARY_PROBE.maxProbeBytes;
 const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".avif",
   ".bmp",
@@ -101,6 +103,7 @@ export interface AtomShape {
   readonly provenanceKind: EvidenceAtomProvenanceKind;
   readonly tool: string;
   readonly queryFingerprint: string;
+  readonly edge?: EvidenceEdge | undefined;
   readonly score: number;
   readonly emittedAtMs: number;
 }
@@ -110,6 +113,7 @@ export function buildAtom(shape: AtomShape): EvidenceAtom {
     scopeId: shape.scopeId,
     scopePath: shape.scopePath,
     lineRange: shape.lineRange,
+    edge: shape.edge,
     provenanceKind: shape.provenanceKind,
     provenanceTool: shape.tool,
     queryFingerprint: shape.queryFingerprint,
@@ -125,6 +129,7 @@ export function buildAtom(shape: AtomShape): EvidenceAtom {
       tool: shape.tool,
       queryFingerprint: shape.queryFingerprint,
     },
+    edge: shape.edge,
     redactionState: "redacted",
     emittedAtMs: shape.emittedAtMs,
     ledgerRef: undefined,
@@ -151,30 +156,33 @@ function collectFromDirectory(
   readonly ignored: number;
   readonly denied: number;
   readonly depthPruned: number;
+  readonly maxFilesPruned: number;
 } {
   const extraIgnoreLines = extraIgnoreLinesForSearch(policy);
   const workspace =
     extraIgnoreLines.length === 0
       ? scope.workspace
       : { ...scope.workspace, ignoreLines: [...scope.workspace.ignoreLines, ...extraIgnoreLines] };
+  const discoveryMaxFiles = Math.max(limits.maxFilesScanned * 25, limits.maxFilesScanned + 1);
   const result = discoverWithStats(
     workspace,
     {
-      maxDepth: 12,
-      maxFiles: limits.maxFilesScanned + 1,
+      maxDepth: 40,
+      maxFiles: discoveryMaxFiles,
       applyGitignore: policy.applyGitignore,
     },
     fs,
   );
   const files = result.files;
   return {
-    files: files.slice(0, limits.maxFilesScanned),
+    files,
     directories: result.directories,
     filesDiscovered: files.length,
-    truncated: files.length > limits.maxFilesScanned || result.stats.depthPruned > 0,
+    truncated: result.stats.maxFilesPruned > 0,
     ignored: result.stats.ignored,
     denied: result.stats.denied,
     depthPruned: result.stats.depthPruned,
+    maxFilesPruned: result.stats.maxFilesPruned,
   };
 }
 
@@ -193,6 +201,10 @@ const DEFAULT_GATHER_QUERY: RetrievalQuery = {
   emittedAtMs: 0,
 };
 
+const CONTENT_PRESCORE_MAX_BYTES = 65_536;
+const CONTENT_PRESCORE_MAX_FILES = 5_000;
+const PROJECT_METADATA_CONTENT_PRESCORE_MAX_FILES = 256;
+
 function isRetrievalQuery(value: unknown): value is RetrievalQuery {
   return typeof value === "object" && value !== null && "kind" in value && "text" in value;
 }
@@ -202,6 +214,73 @@ interface GatherInputs {
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
   readonly policy: SearchPolicy;
+  readonly prescoreContent: boolean;
+}
+
+function shouldPrescoreContent(query: RetrievalQuery): boolean {
+  return query.kind === "natural-language" || query.kind === "exact-symbol";
+}
+
+function contentPrescoreLimit(
+  limits: LimitsShape,
+  fileCount: number,
+  policy: SearchPolicy,
+): number {
+  const defaultLimit = Math.min(
+    fileCount,
+    CONTENT_PRESCORE_MAX_FILES,
+    Math.max(limits.maxFilesScanned * 25, 0),
+  );
+  return policy.intent === "project-metadata"
+    ? Math.min(defaultLimit, PROJECT_METADATA_CONTENT_PRESCORE_MAX_FILES)
+    : defaultLimit;
+}
+
+function readContentPreview(
+  scope: ScopeShape,
+  file: DiscoveredFile,
+  fs: WorkspaceFs,
+): string | undefined {
+  if (file.sizeBytes > CONTENT_PRESCORE_MAX_BYTES) {
+    return undefined;
+  }
+  try {
+    return readWorkspaceFile(
+      scope.workspace,
+      file.relativePath,
+      { maxBytes: CONTENT_PRESCORE_MAX_BYTES },
+      fs,
+    ).text;
+  } catch {
+    return undefined;
+  }
+}
+
+function contentScoresForOrdering(
+  scope: ScopeShape,
+  files: readonly DiscoveredFile[],
+  inputs: GatherInputs,
+): ReadonlyMap<string, number> | undefined {
+  if (!inputs.prescoreContent || !shouldPrescoreContent(inputs.query) || files.length === 0) {
+    return undefined;
+  }
+  const scores = new Map<string, number>();
+  const limit = contentPrescoreLimit(inputs.limits, files.length, inputs.policy);
+  const prescoreFiles =
+    inputs.policy.intent === "project-metadata" && files.length > limit
+      ? orderCandidatesForSearch(files, inputs.query, inputs.policy, 0, 0).files.slice(0, limit)
+      : files.slice(0, limit);
+  for (const file of prescoreFiles) {
+    const preview = readContentPreview(scope, file, inputs.fs);
+    if (preview === undefined) {
+      continue;
+    }
+    const score = scoreContentForSearch(inputs.query, preview, inputs.policy);
+    if (score > 0) {
+      scores.set(file.relativePath, score);
+    }
+  }
+  return scores.size === 0 ? undefined : scores;
 }
 
 function resolveGatherInputs(
@@ -217,6 +296,7 @@ function resolveGatherInputs(
       limits: limitsOrFs as LimitsShape,
       fs: fsOrPolicy as WorkspaceFs,
       policy: policy ?? resolveSearchPolicy(scope.relativePaths.length > 0, undefined),
+      prescoreContent: true,
     };
   }
   return {
@@ -224,6 +304,7 @@ function resolveGatherInputs(
     limits: queryOrLimits,
     fs: limitsOrFs as WorkspaceFs,
     policy: legacyDiscoveryPolicy(scope.relativePaths.length > 0),
+    prescoreContent: false,
   };
 }
 
@@ -259,6 +340,7 @@ export function gatherCandidates(
   }
   if (scope.relativePaths.length === 0) {
     const result = collectFromDirectory(scope, inputs.limits, inputs.fs, inputs.policy);
+    const contentScores = contentScoresForOrdering(scope, result.files, inputs);
     const ordered = orderCandidatesForSearch(
       result.files,
       inputs.query,
@@ -266,28 +348,38 @@ export function gatherCandidates(
       result.ignored,
       result.denied,
       result.depthPruned,
+      result.maxFilesPruned,
+      contentScores,
     );
     return {
       files: ordered.files,
       directories: result.directories,
-      truncated: result.truncated,
+      truncated: result.truncated || result.depthPruned > 0,
       diagnostics: {
         ...ordered.diagnostics,
         filesDiscovered: result.filesDiscovered,
-        filesAfterPolicy: result.filesDiscovered,
       },
     };
   }
   const result = collectFromEntries(scope, inputs.limits, inputs.fs);
-  const ordered = orderCandidatesForSearch(result.files, inputs.query, inputs.policy, 0, 0);
+  const contentScores = contentScoresForOrdering(scope, result.files, inputs);
+  const ordered = orderCandidatesForSearch(
+    result.files,
+    inputs.query,
+    inputs.policy,
+    0,
+    0,
+    result.depthPruned,
+    result.maxFilesPruned,
+    contentScores,
+  );
   return {
     files: ordered.files,
     directories: result.directories,
-    truncated: result.truncated,
+    truncated: result.truncated || result.depthPruned > 0 || result.maxFilesPruned > 0,
     diagnostics: {
       ...ordered.diagnostics,
       filesDiscovered: result.filesDiscovered,
-      filesAfterPolicy: result.filesDiscovered,
     },
   };
 }
@@ -328,6 +420,7 @@ export interface SearchTextRunner {
 export interface RunState {
   filesScanned: number;
   matchesReturned: number;
+  oversizedFilesScanned?: number | undefined;
   truncated: boolean;
   truncationReasons?: Set<ContextCoverageTruncationReason> | undefined;
 }
@@ -356,6 +449,22 @@ export function hitLimit(runner: SearchTextRunner, state: RunState): boolean {
   }
   if (state.matchesReturned >= runner.limits.maxMatchesReturned) {
     markTruncated(state, "match-cap");
+    return true;
+  }
+  if (elapsed(runner) > runner.limits.elapsedMsMax) {
+    markTruncated(state, "timeout");
+    return true;
+  }
+  return false;
+}
+
+export function hitScanLimit(runner: SearchTextRunner, state: RunState): boolean {
+  if (isRunnerAborted(runner)) {
+    markTruncated(state, "aborted");
+    return true;
+  }
+  if (state.filesScanned >= runner.limits.maxFilesScanned) {
+    markTruncated(state, "file-cap");
     return true;
   }
   if (elapsed(runner) > runner.limits.elapsedMsMax) {
@@ -558,18 +667,33 @@ function persistWorkspaceIndexRecord(
 function recordSizeExceeded(
   runner: SearchTextRunner,
   relativePath: string,
-  absolutePath: string,
+  absolutePath: string | undefined,
   sizeBytes: number,
   candidates: CandidateFile[],
 ): undefined {
-  persistWorkspaceIndexRecord(runner, {
-    kind: "size-exceeded",
-    scopePath: relativePath,
-    absolutePath,
-    sizeBytes,
-  });
+  if (absolutePath !== undefined) {
+    persistWorkspaceIndexRecord(runner, {
+      kind: "size-exceeded",
+      scopePath: relativePath,
+      absolutePath,
+      sizeBytes,
+    });
+  }
   recordCandidateOmission(candidates, relativePath, "size-exceeded");
   return undefined;
+}
+
+async function readTextPrefixForScan(
+  runner: SearchTextRunner,
+  absolutePath: string,
+): Promise<string | undefined> {
+  const readFileBytes = runner.fs.readFileBytes;
+  if (readFileBytes === undefined) {
+    return undefined;
+  }
+  const bytes = await readFileBytes(absolutePath, runner.limits.maxBytesPerFileScanned);
+  const decoded = decodeTextBytes(bytes, undefined, { allowIncompleteTail: true });
+  return decoded === undefined ? undefined : redact(decoded.text);
 }
 
 async function readRawTextForScan(
@@ -577,9 +701,22 @@ async function readRawTextForScan(
   relativePath: string,
   absolutePath: string,
   sizeBytes: number,
+  state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   if (sizeBytes > runner.limits.maxBytesPerFileScanned) {
+    markTruncated(state, "file-cap");
+    try {
+      const prefix = await readTextPrefixForScan(runner, absolutePath);
+      if (prefix !== undefined) {
+        state.oversizedFilesScanned = (state.oversizedFilesScanned ?? 0) + 1;
+        return prefix;
+      }
+    } catch (err) {
+      if (!isIoError(err)) {
+        throw err;
+      }
+    }
     recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
     return undefined;
   }
@@ -608,13 +745,14 @@ async function readRawTextForScan(
   }
 }
 
-function readUtf8TextForScan(
+async function readUtf8TextForScan(
   runner: SearchTextRunner,
   relativePath: string,
   absolutePath: string | undefined,
   sizeBytes: number,
+  state: RunState,
   candidates: CandidateFile[],
-): string | undefined {
+): Promise<string | undefined> {
   try {
     const text = readWorkspaceFile(
       runner.scope.workspace,
@@ -634,15 +772,21 @@ function readUtf8TextForScan(
     return text;
   } catch (err) {
     if (err instanceof FileTooLargeError) {
+      markTruncated(state, "file-cap");
       if (absolutePath !== undefined) {
-        persistWorkspaceIndexRecord(runner, {
-          kind: "size-exceeded",
-          scopePath: relativePath,
-          absolutePath,
-          sizeBytes,
-        });
+        try {
+          const prefix = await readTextPrefixForScan(runner, absolutePath);
+          if (prefix !== undefined) {
+            state.oversizedFilesScanned = (state.oversizedFilesScanned ?? 0) + 1;
+            return prefix;
+          }
+        } catch (prefixErr) {
+          if (!isIoError(prefixErr)) {
+            throw prefixErr;
+          }
+        }
       }
-      recordCandidateOmission(candidates, relativePath, "size-exceeded");
+      recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
       return undefined;
     }
     // TOCTOU: permissions or availability may change between discovery and read.
@@ -660,12 +804,27 @@ async function readForScan(
   relativePath: string,
   absolutePath: string | undefined,
   sizeBytes: number,
+  state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   if (absolutePath !== undefined && runner.fs.readFileBytes !== undefined) {
-    return await readRawTextForScan(runner, relativePath, absolutePath, sizeBytes, candidates);
+    return await readRawTextForScan(
+      runner,
+      relativePath,
+      absolutePath,
+      sizeBytes,
+      state,
+      candidates,
+    );
   }
-  return readUtf8TextForScan(runner, relativePath, absolutePath, sizeBytes, candidates);
+  return await readUtf8TextForScan(
+    runner,
+    relativePath,
+    absolutePath,
+    sizeBytes,
+    state,
+    candidates,
+  );
 }
 
 function emitBestLines(
@@ -695,14 +854,19 @@ function emitBestLines(
   }
 }
 
-function scanLines(
-  runner: SearchTextRunner,
-  relativePath: string,
-  text: string,
-  state: RunState,
-  atoms: EvidenceAtom[],
-): void {
-  emitBestLines(runner, relativePath, state, atoms, collectBestLines(runner, text, state));
+export interface FileMatches {
+  readonly relativePath: string;
+  readonly order: number;
+  readonly best: readonly ScoredLine[];
+  readonly maxScore: number;
+}
+
+function maxLineScore(best: readonly ScoredLine[]): number {
+  return best.reduce((max, line) => Math.max(max, line.score), 0);
+}
+
+function scanLines(runner: SearchTextRunner, text: string, state: RunState): readonly ScoredLine[] {
+  return collectBestLines(runner, text, state);
 }
 
 function abortScanFile(runner: SearchTextRunner, state: RunState): boolean {
@@ -794,86 +958,37 @@ function cachedLexicalRecord(
   return queryTermHashes.size === 0 ? undefined : { lexical, queryTermHashes };
 }
 
-function handleCachedRecord(
+function cachedFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
   state: RunState,
-  atoms: EvidenceAtom[],
   candidates: CandidateFile[],
-): boolean {
+  order: number,
+): FileMatches | "handled" | undefined {
   const cached = cachedRecord(runner, file.relativePath);
   if (cached === undefined) {
-    return false;
+    return undefined;
   }
   if (cached.kind === "binary" || cached.kind === "size-exceeded") {
     recordCandidateOmission(candidates, file.relativePath, cached.kind);
-    return true;
+    return "handled";
   }
   if (runner.semantic !== undefined) {
-    return false;
+    return undefined;
   }
   if (abortScanFile(runner, state)) {
-    return true;
+    return "handled";
   }
   const lexical = cachedLexicalRecord(runner, cached);
   if (lexical === undefined) {
-    return false;
+    return undefined;
   }
   state.filesScanned += 1;
   if (!lexicalMatchesQuery(lexical.lexical, lexical.queryTermHashes)) {
-    return true;
+    return "handled";
   }
-  emitBestLines(
-    runner,
-    file.relativePath,
-    state,
-    atoms,
-    bestCachedLines(lexical.lexical, lexical.queryTermHashes),
-  );
-  return true;
-}
-
-async function handleLiveRecord(
-  runner: SearchTextRunner,
-  file: DiscoveredFile,
-  state: RunState,
-  atoms: EvidenceAtom[],
-  candidates: CandidateFile[],
-  absolutePath: string | undefined,
-): Promise<void> {
-  const binary =
-    absolutePath === undefined ? "binary" : await binaryOmission(runner, file, absolutePath);
-  if (binary !== undefined) {
-    if (binary === "binary" && absolutePath !== undefined) {
-      persistWorkspaceIndexRecord(runner, {
-        kind: "binary",
-        scopePath: file.relativePath,
-        absolutePath,
-        sizeBytes: file.sizeBytes,
-      });
-    }
-    recordCandidateOmission(candidates, file.relativePath, binary);
-    return;
-  }
-  if (abortScanFile(runner, state)) {
-    return;
-  }
-  state.filesScanned += 1;
-  const text = await readForScan(
-    runner,
-    file.relativePath,
-    absolutePath,
-    file.sizeBytes,
-    candidates,
-  );
-  if (text === undefined) {
-    return;
-  }
-  collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
-  if (!shouldScoreContent(runner.query, text, runner.policy)) {
-    return;
-  }
-  scanLines(runner, file.relativePath, text, state, atoms);
+  const best = bestCachedLines(lexical.lexical, lexical.queryTermHashes);
+  return { relativePath: file.relativePath, order, best, maxScore: maxLineScore(best) };
 }
 
 export async function scanFile(
@@ -883,21 +998,84 @@ export async function scanFile(
   atoms: EvidenceAtom[],
   candidates: CandidateFile[],
 ): Promise<void> {
+  const matches = await collectFileMatches(runner, file, state, candidates, 0);
+  if (matches !== undefined) {
+    emitFileMatches(runner, state, atoms, matches);
+  }
+}
+
+export async function collectFileMatches(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  candidates: CandidateFile[],
+  order: number,
+): Promise<FileMatches | undefined> {
   if (abortScanFile(runner, state)) {
-    return;
+    return undefined;
   }
   const pathOmission = filePathPolicyOmission(runner, file);
   if (pathOmission !== undefined) {
     recordCandidateOmission(candidates, file.relativePath, pathOmission);
-    return;
+    return undefined;
   }
-  if (handleCachedRecord(runner, file, state, atoms, candidates)) {
-    return;
+  const cached = cachedFileMatches(runner, file, state, candidates, order);
+  if (cached === "handled") {
+    return undefined;
+  }
+  if (cached !== undefined) {
+    return cached;
   }
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
     recordCandidateOmission(candidates, file.relativePath, policy.omitted);
-    return;
+    return undefined;
   }
-  await handleLiveRecord(runner, file, state, atoms, candidates, policy.path);
+  const binary =
+    policy.path === undefined ? "binary" : await binaryOmission(runner, file, policy.path);
+  if (binary !== undefined) {
+    if (binary === "binary" && policy.path !== undefined) {
+      persistWorkspaceIndexRecord(runner, {
+        kind: "binary",
+        scopePath: file.relativePath,
+        absolutePath: policy.path,
+        sizeBytes: file.sizeBytes,
+      });
+    }
+    recordCandidateOmission(candidates, file.relativePath, binary);
+    return undefined;
+  }
+  if (abortScanFile(runner, state)) {
+    return undefined;
+  }
+  state.filesScanned += 1;
+  const text = await readForScan(
+    runner,
+    file.relativePath,
+    policy.path,
+    file.sizeBytes,
+    state,
+    candidates,
+  );
+  if (text === undefined) {
+    return undefined;
+  }
+  collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
+  if (!shouldScoreContent(runner.query, text, runner.policy)) {
+    return undefined;
+  }
+  const best = scanLines(runner, text, state);
+  if (best.length === 0) {
+    return undefined;
+  }
+  return { relativePath: file.relativePath, order, best, maxScore: maxLineScore(best) };
+}
+
+export function emitFileMatches(
+  runner: SearchTextRunner,
+  state: RunState,
+  atoms: EvidenceAtom[],
+  matches: FileMatches,
+): void {
+  emitBestLines(runner, matches.relativePath, state, atoms, matches.best);
 }

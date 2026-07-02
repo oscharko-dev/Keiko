@@ -10,10 +10,23 @@ export const WORKSPACE_LANGUAGES = [
   "javascript",
   "java",
   "kotlin",
-  "python",
+  "scala",
+  "groovy",
   "go",
   "rust",
+  "python",
   "csharp",
+  "fsharp",
+  "vb",
+  "cpp",
+  "swift",
+  "ruby",
+  "php",
+  "terraform",
+  "sql",
+  "protobuf",
+  "openapi",
+  "graphql",
 ] as const;
 
 export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
@@ -45,8 +58,8 @@ export interface DiscoveryOptions {
 }
 
 export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
-  maxDepth: 12,
-  maxFiles: 5_000,
+  maxDepth: 40,
+  maxFiles: 50_000,
   applyGitignore: true,
 } as const;
 
@@ -55,6 +68,7 @@ export interface DiscoveryStats {
   readonly denied: number;
   readonly ignored: number;
   readonly depthPruned: number;
+  readonly maxFilesPruned: number;
 }
 
 // ─── File reads ─────────────────────────────────────────────────────────────────
@@ -83,11 +97,11 @@ export type SelectionReason =
 // Priority order used to rank candidates: lower index wins. Ties break on lexical path.
 export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = [
   "entrypoint",
-  "manifest",
-  "documentation",
-  "config",
   "source",
   "test",
+  "manifest",
+  "config",
+  "documentation",
 ] as const;
 
 export interface ContextRequest {

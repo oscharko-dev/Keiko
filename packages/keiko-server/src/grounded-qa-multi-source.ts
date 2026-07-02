@@ -53,6 +53,7 @@ import {
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
@@ -84,7 +85,6 @@ import {
   uncertaintyLines,
   withPromptExcerptByteLimit,
 } from "./grounded-qa.js";
-import type { WorkspaceIndexProvider } from "./workspace-index-provider.js";
 
 export { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 
@@ -278,6 +278,7 @@ function mergeCoverageSummaries(
     ),
     filesScanned: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesScanned, 0),
     filesSkipped: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesSkipped, 0),
+    truncated: coverageSummaries.some((coverage) => coverage.truncated),
     ignoredByDiscovery: coverageSummaries.reduce(
       (sum, coverage) => sum + coverage.ignoredByDiscovery,
       0,
@@ -288,6 +289,10 @@ function mergeCoverageSummaries(
     ),
     depthPrunedByDiscovery: coverageSummaries.reduce(
       (sum, coverage) => sum + coverage.depthPrunedByDiscovery,
+      0,
+    ),
+    maxFilesPrunedByDiscovery: coverageSummaries.reduce(
+      (sum, coverage) => sum + coverage.maxFilesPrunedByDiscovery,
       0,
     ),
     matchesReturned: coverageSummaries.reduce((sum, coverage) => sum + coverage.matchesReturned, 0),
@@ -503,18 +508,20 @@ export type GroundedRetriever = (input: OrchestratorInput) => Promise<RetrievalO
 
 // Production retriever: retrieval-only orchestrator pass with a per-scope micro-index cache. No
 // modelId is needed — retrieval performs no model call.
-export function defaultRetriever(
-  signal: AbortSignal,
-  workspaceIndexForRoot?: WorkspaceIndexProvider,
-): GroundedRetriever {
+export function defaultRetriever(signal: AbortSignal, deps?: UiHandlerDeps): GroundedRetriever {
   return (input: OrchestratorInput): Promise<RetrievalOnlyOutput> => {
     const nowMs = Date.now;
+    const repoSemanticSearchProvider =
+      deps === undefined ? undefined : configuredRepoSemanticSearchProviderFor(deps, signal);
     return retrieveConnectedContextPack(input, {
       answerer: { answer: (): Promise<string> => Promise.resolve("") },
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(input.scope, nowMs),
-      ...(workspaceIndexForRoot === undefined ? {} : { workspaceIndexForRoot }),
+      ...(deps?.workspaceIndexForRoot === undefined
+        ? {}
+        : { workspaceIndexForRoot: deps.workspaceIndexForRoot }),
+      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
     });
   };
 }
@@ -622,7 +629,7 @@ interface RetrieveAccumulator {
 async function retrieveOneSource(
   ctx: MultiSourceAskInput,
   query: RetrievalQuery,
-  perScopeBudget: ExplorationBudget,
+  perScopeBudgets: readonly ExplorationBudget[],
   labels: readonly string[],
   acc: RetrieveAccumulator,
   i: number,
@@ -631,6 +638,7 @@ async function retrieveOneSource(
   const cs = ctx.scopes[i];
   const label = labels[i];
   if (cs === undefined || label === undefined) return;
+  const budget = perScopeBudgets[i] ?? DEFAULT_EXPLORATION_BUDGET;
   const scope = buildSelectedScopeFrom(ctx.chat, cs, deriveScopeIdFrom(ctx.chat, cs, i));
   let out: Awaited<ReturnType<GroundedRetriever>>;
   try {
@@ -638,7 +646,7 @@ async function retrieveOneSource(
       scope,
       query,
       workspaceRoot: scope.workspaceRoot,
-      budget: perScopeBudget,
+      budget,
     });
   } catch (error) {
     const classified = classifyPerSourceRetrieveError(error, label);
@@ -676,7 +684,7 @@ async function retrieveAllSources(
       await retrieveOneSource(
         ctx,
         query,
-        perScopeBudgets[i] ?? splitExplorationBudget(DEFAULT_EXPLORATION_BUDGET, ctx.scopes.length),
+        perScopeBudgets,
         labels,
         acc,
         i,
@@ -831,7 +839,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   const perScopeBudgets = splitExplorationBudgets(
     DEFAULT_EXPLORATION_BUDGET,
     ctx.scopes,
-    ctx.content,
+    query,
   );
   let outcome: RetrievalOutcome | RouteResult;
   try {

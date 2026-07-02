@@ -21,5 +21,15 @@ export type {
 } from "./structured-digest.js";
 export { buildStructuredCompactionDigest } from "./structured-digest.js";
 
-export type { RehydrationResult } from "./rehydration.js";
-export { rehydrateProvenanceRef, rehydrateHandle } from "./rehydration.js";
+export type {
+  EvidenceAtomReader,
+  MessageReader,
+  RehydrationDeps,
+  RehydrationResult,
+  ToolResultArtifactReader,
+} from "./rehydration.js";
+export {
+  rehydrateProvenanceRef,
+  rehydrateHandle,
+  rehydrateToolResultHandle,
+} from "./rehydration.js";

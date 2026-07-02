@@ -48,7 +48,11 @@ import {
   type GroundedEvidenceCitation,
   type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
+import {
+  deriveContextProfileFromCapability,
+  maxUtf8BytesForTokenBudget,
+  type ContextProfile,
+} from "@oscharko-dev/keiko-contracts";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -72,6 +76,8 @@ import {
 import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { deriveGroundedContextAssembly } from "./grounded-context-diagnostics.js";
+import { configuredContextPackRerankerFor } from "./grounded-context-pack-reranker.js";
+import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
 import { pathIsDenied } from "./files-deny.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
@@ -448,26 +454,29 @@ export function modelInputPromptByteLimit(modelInputTokensMax: number): number {
   return maxUtf8BytesForTokenBudget(modelInputTokensMax);
 }
 
-const MAX_GROUNDED_MODEL_INPUT_TOKENS = 96_000;
-
-function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
+function contextProfileForGroundedModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ContextProfile | undefined {
+  const resolvedProfile = currentContextProfileForModel(deps, modelId);
+  if (resolvedProfile !== undefined) {
+    return resolvedProfile;
+  }
   const config = currentGatewayConfig(deps);
-  if (config === undefined) return DEFAULT_EXPLORATION_BUDGET;
+  if (config === undefined) {
+    return undefined;
+  }
   const capability = findConfiguredCapability(config, modelId);
-  const contextWindow = capability?.contextWindow;
-  if (contextWindow === undefined || contextWindow <= 0) return DEFAULT_EXPLORATION_BUDGET;
-  const inputTokens = Math.max(
-    1_024,
-    Math.min(MAX_GROUNDED_MODEL_INPUT_TOKENS, Math.floor(contextWindow * 0.7)),
-  );
-  const outputTokens = Math.max(
-    512,
-    Math.min(DEFAULT_EXPLORATION_BUDGET.modelOutputTokensMax, Math.floor(contextWindow * 0.1)),
-  );
+  return capability?.kind === "chat" ? deriveContextProfileFromCapability(capability) : undefined;
+}
+
+export function modelWindowAwareBudget(deps: UiHandlerDeps, modelId: string): ExplorationBudget {
+  const profile = contextProfileForGroundedModel(deps, modelId);
+  if (profile === undefined) return DEFAULT_EXPLORATION_BUDGET;
   return {
     ...DEFAULT_EXPLORATION_BUDGET,
-    modelInputTokensMax: inputTokens,
-    modelOutputTokensMax: outputTokens,
+    modelInputTokensMax: profile.effectiveInputBudget,
+    modelOutputTokensMax: profile.reservedOutputTokens,
   };
 }
 
@@ -521,6 +530,7 @@ function packExcerptCount(pack: ConnectedContextPack): number {
 
 const PROMPT_PROVENANCE_PRIORITY: Record<EvidenceAtom["provenance"]["kind"], number> = {
   "model-rerank": 7,
+  "semantic-search": 7,
   structural: 6,
   "excerpt-read": 5,
   "lexical-search": 4,
@@ -851,12 +861,20 @@ function defaultRunner(
       input.budget === undefined
         ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
         : input;
+    const contextPackReranker = configuredContextPackRerankerFor(
+      deps,
+      budgetedInput.query,
+      signal,
+    );
+    const repoSemanticSearchProvider = configuredRepoSemanticSearchProviderFor(deps, signal);
     return runGroundedExploration(budgetedInput, {
       answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
       nowMs,
       signal,
       microIndex: microIndexForGroundedScope(budgetedInput.scope, nowMs),
       workspaceIndexForRoot: deps.workspaceIndexForRoot,
+      ...(contextPackReranker === undefined ? {} : { contextPackReranker }),
+      ...(repoSemanticSearchProvider === undefined ? {} : { repoSemanticSearchProvider }),
       // ADR-0055 D1/D5 (PR4-W1): thread the provisioned profile so the diagnostics observer fires
       // on the assembled pack. exactOptionalPropertyTypes — omit the key entirely when absent so
       // the legacy no-profile path stays byte-identical (observer guard never sees a key).
@@ -1206,7 +1224,7 @@ function resolveMultiSourceSeam(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   return {
-    retriever: defaultRetriever(signal, deps.workspaceIndexForRoot),
+    retriever: defaultRetriever(signal, deps),
     answerer: createMultiSourceAnswerer(model, modelId, deps.redactor, signal),
   };
 }

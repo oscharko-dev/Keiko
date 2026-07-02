@@ -77,10 +77,33 @@ describe("evidenceAtomStableId", () => {
     );
   });
 
+  it("changes when the optional evidence fingerprint changes", () => {
+    expect(evidenceAtomStableId(atomInput({ evidenceFingerprint: "git-r1-c1" }))).not.toBe(
+      evidenceAtomStableId(atomInput({ evidenceFingerprint: "git-r2-c3" })),
+    );
+  });
+
   it("distinguishes undefined lineRange from a concrete one", () => {
     const withoutRange = evidenceAtomStableId(atomInput({ lineRange: undefined }));
     const withRange = evidenceAtomStableId(atomInput({ lineRange: { startLine: 1, endLine: 1 } }));
     expect(withoutRange).not.toBe(withRange);
+  });
+
+  it("distinguishes structural edges with different targets", () => {
+    const baseEdge = {
+      kind: "import" as const,
+      source: { scopePath: "src/foo.ts", lineRange: { startLine: 1, endLine: 1 } },
+      target: { scopePath: "src/a.ts" },
+      label: "./a",
+      confidence: "resolved" as const,
+    };
+    expect(evidenceAtomStableId(atomInput({ edge: baseEdge }))).not.toBe(
+      evidenceAtomStableId(
+        atomInput({
+          edge: { ...baseEdge, target: { scopePath: "src/b.ts" }, label: "./b" },
+        }),
+      ),
+    );
   });
 
   it("returns the 'a-' prefix", () => {

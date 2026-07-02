@@ -11,7 +11,7 @@ export const CONTEXT_ENGINEERING_SCHEMA_VERSION = "1" as const;
 
 // Provenance string recording which estimator produced a profile's counts. The estimator
 // function itself cannot be a JSON-serializable contract field, so the id is carried instead.
-export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-utf8-v1" as const;
+export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-content-v2" as const;
 
 // ─── Lane identity (the eight lanes) ──────────────────────────────────────── [PR1]
 export type ContextLaneId =
@@ -226,6 +226,18 @@ export interface ContextInvalidationKey {
   readonly contentHash: string;
 }
 
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION =
+  "keiko-chat-compaction-summary-v1" as const;
+export const CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS = 1_200 as const;
+
+// Optional model-written continuity summary. This is an enrichment, not the authoritative raw
+// source: structured fields, sourceSpans, and rehydration handles remain the auditable basis.
+export interface ContextCompactionModelSummary {
+  readonly promptVersion: typeof CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION;
+  readonly modelId: string;
+  readonly content: string;
+}
+
 // ─── Compaction record (PR1 stub extended additively) ─────────────────────── [PR2, additive]
 export interface ContextCompactionRecord {
   // ── PR1 fields (unchanged) ───────────────────────────────
@@ -269,6 +281,8 @@ export interface ContextCompactionRecord {
   readonly droppedCategories?: readonly string[] | undefined;
   // Invalidation keys: one entry per source file whose hash was recorded.
   readonly invalidationKeys?: readonly ContextInvalidationKey[] | undefined;
+  // Optional post-turn, model-written rolling summary used to improve future continuity prompts.
+  readonly modelSummary?: ContextCompactionModelSummary | undefined;
 }
 
 // ─── Rehydration handle (PR1 stub extended additively) ────────────────────── [PR2, additive]
@@ -297,6 +311,10 @@ export interface ContextRehydrationHandle {
   readonly contentHash?: string | undefined;
   // For kind === "evidence-atom": the stable atom id.
   readonly evidenceAtomId?: string | undefined;
+  // For kind === "tool-result": the persisted tool artifact id (same opaque id used by
+  // ContextToolRehydrationHandle). Present only when the original redacted tool output was
+  // actually persisted.
+  readonly artifactId?: string | undefined;
   // If the original output was intentionally not persisted, a short reason plus the approved
   // summary that IS the authoritative content (no rehydration path exists).
   readonly notPersistedReason?: string | undefined;
@@ -306,26 +324,125 @@ export interface ContextRehydrationHandle {
 // ─── Canonical token estimator (the single token currency) ─────────────────── [PR1]
 // Deterministic, conservative (slightly over-estimates), total (never throws), offline.
 //
-// bytes-per-token divisor. Deliberately SMALLER than the repo's looser bytes/4 norm so the
-// estimate over-counts versus a typical provider tokenization. Over-estimation is the safe
-// direction: the allocator fits fewer tokens than the provider would, never more.
-const TOKEN_BYTES_PER_TOKEN_DIVISOR = 3.5;
+// Baseline bytes-per-token divisor. Deliberately smaller than the repo's old bytes/4 norm.
+const TOKEN_BASE_BYTES_PER_TOKEN_DIVISOR = 3.5;
+// Content-agnostic worst-case divisor used for dense CJK/emoji/code-shaped text and for the
+// token->byte bridge. This keeps byte-capped prompt assembly conservative for unknown text.
+const TOKEN_WORST_CASE_BYTES_PER_TOKEN_DIVISOR = 3;
 // Small fixed structural overhead per segment, modelling per-message framing. Empty input
 // returns exactly this (never 0 / NaN).
 const TOKEN_STRUCTURAL_OVERHEAD = 2;
+const TOKEN_DENSE_STRUCTURAL_MIN_CHARS = 6;
+const TOKEN_CJK_CODE_POINT_RANGES: readonly (readonly [number, number])[] = [
+  [0x3400, 0x4dbf],
+  [0x4e00, 0x9fff],
+  [0xf900, 0xfaff],
+  [0x3040, 0x30ff],
+  [0x3130, 0x318f],
+  [0xac00, 0xd7af],
+] as const;
+const TOKEN_EMOJI_LIKE_CODE_POINT_RANGES: readonly (readonly [number, number])[] = [
+  [0x1f000, 0x1faff],
+  [0x2600, 0x27bf],
+] as const;
+const TOKEN_WHITESPACE_CODE_POINTS: readonly number[] = [
+  0x09,
+  0x0a,
+  0x0b,
+  0x0c,
+  0x0d,
+  0x20,
+] as const;
+const TOKEN_ESTIMATE_CACHE_MAX_ENTRIES = 4_096;
+const tokenEstimateCache = new Map<string, number>();
+const tokenTextEncoder: TextEncoder | undefined =
+  typeof TextEncoder === "undefined" ? undefined : new TextEncoder();
 
-// Uses TextEncoder when available, with a char-length fallback for any legacy
-// harness without it. Never throws.
+interface TokenShapeStats {
+  readonly cjkChars: number;
+  readonly emojiLikeChars: number;
+  readonly structuralChars: number;
+  readonly newlineChars: number;
+  readonly nonWhitespaceChars: number;
+}
+
+// Uses TextEncoder when available, with a manual UTF-8 byte counter for any legacy harness
+// without it. Never throws.
 function utf8ByteLength(text: string): number {
-  if (typeof TextEncoder !== "undefined") {
-    return new TextEncoder().encode(text).length;
+  if (tokenTextEncoder !== undefined) {
+    return tokenTextEncoder.encode(text).length;
   }
-  return text.length;
+  let bytes = 0;
+  for (const char of text) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
+function isCodePointInRanges(
+  codePoint: number,
+  ranges: readonly (readonly [number, number])[],
+): boolean {
+  return ranges.some(([start, end]) => codePoint >= start && codePoint <= end);
+}
+
+function isCjkCodePoint(codePoint: number): boolean {
+  return isCodePointInRanges(codePoint, TOKEN_CJK_CODE_POINT_RANGES);
+}
+
+function isEmojiLikeCodePoint(codePoint: number): boolean {
+  return isCodePointInRanges(codePoint, TOKEN_EMOJI_LIKE_CODE_POINT_RANGES);
+}
+
+function isWhitespaceCodePoint(codePoint: number): boolean {
+  return TOKEN_WHITESPACE_CODE_POINTS.includes(codePoint);
+}
+
+function tokenShapeStats(text: string): TokenShapeStats {
+  let cjkChars = 0;
+  let emojiLikeChars = 0;
+  let structuralChars = 0;
+  let newlineChars = 0;
+  let nonWhitespaceChars = 0;
+  for (const char of text) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (!isWhitespaceCodePoint(codePoint)) nonWhitespaceChars += 1;
+    if (isCjkCodePoint(codePoint)) cjkChars += 1;
+    if (isEmojiLikeCodePoint(codePoint)) emojiLikeChars += 1;
+    if (codePoint === 0x0a) newlineChars += 1;
+    if ("{}[]()<>;:=+-*/%&|!?,.#`$@\\\"'".includes(char)) structuralChars += 1;
+  }
+  return { cjkChars, emojiLikeChars, structuralChars, newlineChars, nonWhitespaceChars };
+}
+
+function requiresDenseTokenizerFloor(text: string): boolean {
+  const stats = tokenShapeStats(text);
+  return (
+    stats.cjkChars > 0 ||
+    stats.emojiLikeChars > 0 ||
+    stats.newlineChars >= 4 ||
+    (stats.structuralChars >= TOKEN_DENSE_STRUCTURAL_MIN_CHARS &&
+      stats.structuralChars * 3 >= Math.max(1, stats.nonWhitespaceChars))
+  );
 }
 
 export function estimateTokens(text: string): number {
+  const cached = tokenEstimateCache.get(text);
+  if (cached !== undefined) {
+    return cached;
+  }
   const bytes = utf8ByteLength(text);
-  return TOKEN_STRUCTURAL_OVERHEAD + Math.ceil(bytes / TOKEN_BYTES_PER_TOKEN_DIVISOR);
+  const baseline = Math.ceil(bytes / TOKEN_BASE_BYTES_PER_TOKEN_DIVISOR);
+  const denseFloor = requiresDenseTokenizerFloor(text)
+    ? Math.ceil(bytes / TOKEN_WORST_CASE_BYTES_PER_TOKEN_DIVISOR)
+    : baseline;
+  const tokens = TOKEN_STRUCTURAL_OVERHEAD + Math.max(baseline, denseFloor);
+  if (tokenEstimateCache.size >= TOKEN_ESTIMATE_CACHE_MAX_ENTRIES) {
+    tokenEstimateCache.clear();
+  }
+  tokenEstimateCache.set(text, tokens);
+  return tokens;
 }
 
 // Sum estimateTokens over a set of segments (e.g. messages). The per-segment overhead models
@@ -338,13 +455,16 @@ export function estimateTokensForSegments(segments: readonly string[]): number {
   return total;
 }
 
-// Converts a token budget back into a conservative UTF-8 byte ceiling using the SAME estimator
-// constants as estimateTokens(). This is the only approved token->byte bridge for prompt assembly.
+// Converts a token budget back into a conservative UTF-8 byte ceiling. Since estimateTokens() is
+// content-aware, the bridge uses the worst-case divisor so callers can cap bytes before seeing
+// the final token shape. This is the only approved token->byte bridge for prompt assembly.
 export function maxUtf8BytesForTokenBudget(tokenBudget: number): number {
   const normalized = Number.isFinite(tokenBudget) ? Math.max(0, Math.floor(tokenBudget)) : 0;
   return normalized <= TOKEN_STRUCTURAL_OVERHEAD
     ? 0
-    : Math.floor((normalized - TOKEN_STRUCTURAL_OVERHEAD) * TOKEN_BYTES_PER_TOKEN_DIVISOR);
+    : Math.floor(
+        (normalized - TOKEN_STRUCTURAL_OVERHEAD) * TOKEN_WORST_CASE_BYTES_PER_TOKEN_DIVISOR,
+      );
 }
 
 // Derives effectiveInputBudget = maxInputTokens − reservedOutputTokens − safetyMarginTokens,

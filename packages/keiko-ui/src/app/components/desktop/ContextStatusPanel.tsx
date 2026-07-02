@@ -12,10 +12,14 @@
 import type { ReactNode } from "react";
 import { formatTokens } from "@/lib/format";
 import { MetricRow, humanizeToken } from "./GroundedAnswer";
-import type { ContextBudgetPressure, GroundedAnswerContextSummary } from "@/lib/types";
+import {
+  DEFAULT_TOKEN_ESTIMATOR_ID,
+  type ContextBudgetPressure,
+  type GroundedAnswerContextSummary,
+} from "@/lib/types";
 
 const ASSEMBLED_TOKEN_HINT =
-  "Conservative assembled-context estimate for this grounded answer, produced by the context allocator's keiko-conservative-utf8-v1 token estimator. It is separate from the live composer context below.";
+  `Conservative assembled-context estimate for this grounded answer, produced by the context allocator's ${DEFAULT_TOKEN_ESTIMATOR_ID} token estimator. It is separate from the live composer context below.`;
 
 // Sentence-case the four-value pressure enum for the metric column (e.g. "moderate" → "Moderate").
 function pressureLabel(pressure: ContextBudgetPressure): string {
@@ -78,7 +82,7 @@ export function ContextStatusPanel({
       </summary>
       <div className="ctx-status-body grounded-evidence-body">
         <dl className="ctx-status-dl grounded-context-pack-dl">
-          <MetricRow label="Estimator" value="keiko-conservative-utf8-v1" />
+          <MetricRow label="Estimator" value={DEFAULT_TOKEN_ESTIMATOR_ID} />
           <MetricRow
             label="Assembled estimate"
             value={`${formatTokens(contextSummary.totalEstimatedTokens)} tok`}

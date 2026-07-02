@@ -1,7 +1,7 @@
-// Retrieval seam (ADR-0005 D5). `RetrievalStrategy` is the typed extension point a future
-// embedding ranker (e.g. `example-embedding-model`) plugs into. Wave-1 ships ONLY the seam and
-// a deterministic lexical default — no embeddings, no vector DB, no new dependency. The
-// default ranker is pure and clock/RNG-free so context packs are reproducible.
+// Retrieval seam (ADR-0005 D5). `RetrievalStrategy` is the typed extension point for alternate
+// repository rankers. The default remains deterministic and local-first: query-expanded lexical
+// scoring first, file-role priority as a tie-breaker, and no clock/RNG input so context packs are
+// reproducible.
 
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { SELECTION_REASON_PRIORITY, type DiscoveredFile, type SelectionReason } from "./types.js";

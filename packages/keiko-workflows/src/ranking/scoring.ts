@@ -23,6 +23,8 @@ export interface ScoringWeights {
   // skips an absent weight). Non-zero only for the intents weightsForIntent boosts.
   readonly canonicalMetadata?: number;
   readonly structuralEdge?: number;
+  readonly gitRecency?: number;
+  readonly gitChurn?: number;
 }
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
@@ -52,15 +54,25 @@ export function isIntentBoosted(intent: string | undefined): boolean {
   return intent !== undefined && INTENT_BOOSTED.has(intent);
 }
 
+function isMetadataIntent(intent: string): boolean {
+  return intent === "project-metadata" || intent === "repository-overview";
+}
+
+function isCodeSearchIntent(intent: string): boolean {
+  return intent === "targeted-code-search" || intent === "diagnostic-search";
+}
+
 export function weightsForIntent(intent: string | undefined): ScoringWeights {
   if (intent === undefined || !INTENT_BOOSTED.has(intent)) {
     return DEFAULT_SCORING_WEIGHTS;
   }
-  const canonicalMetadata =
-    intent === "project-metadata" || intent === "repository-overview" ? 0.25 : 0.1;
-  const structuralEdge =
-    intent === "targeted-code-search" || intent === "diagnostic-search" ? 0.2 : 0.1;
-  return { ...DEFAULT_SCORING_WEIGHTS, canonicalMetadata, structuralEdge };
+  const metadataIntent = isMetadataIntent(intent);
+  const codeSearchIntent = isCodeSearchIntent(intent);
+  const canonicalMetadata = metadataIntent ? 0.25 : 0.1;
+  const structuralEdge = codeSearchIntent ? 0.2 : 0.1;
+  const gitRecency = codeSearchIntent ? 0.12 : 0.06;
+  const gitChurn = codeSearchIntent ? 0.08 : 0.04;
+  return { ...DEFAULT_SCORING_WEIGHTS, canonicalMetadata, structuralEdge, gitRecency, gitChurn };
 }
 
 const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
@@ -75,6 +87,8 @@ const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "generated-penalty": "generatedPenalty",
   "canonical-metadata": "canonicalMetadata",
   "structural-edge": "structuralEdge",
+  "git-recency": "gitRecency",
+  "git-churn": "gitChurn",
 };
 
 function clampUnit(value: number): number {

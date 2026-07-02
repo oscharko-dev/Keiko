@@ -96,6 +96,7 @@ export function classifyPid(
 //     memory/keiko-memory.db[-wal|-shm|.*]  keiko-memory-vault paths.ts (MEMORY_DB_FILENAME)
 //     local-knowledge/<ns>/capsules.db[…]   keiko-local-knowledge store-paths.ts
 //     evidence/<runId>.json|.lock|…         keiko-evidence store.ts
+//     evidence/tool-results/<sha>.tool-result.txt|… keiko-evidence tool-result-artifact-store.ts
 //     evidence/figma/*.vault, *.key         keiko-server  figmaTokenStore.ts (sealed Figma PAT + keyfile)
 //     evidence/qi/<runId>.qi.json|…         keiko-evidence qualityIntelligence/*
 //     evidence/qi/figma-snapshots/<runId>/… keiko-evidence figmaSnapshot side files
@@ -127,6 +128,7 @@ const CREDENTIALS_SUBDIR = "credentials"; // keiko-server/src/credentialVault.ts
 const MEMORY_SUBDIR = "memory"; // keiko-memory-vault/src/paths.ts (MEMORY_DIR_NAME)
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge"; // keiko-local-knowledge store-paths.ts (SUBSYSTEM_DIR)
 const EVIDENCE_SUBDIR = "evidence"; // keiko-evidence/src/store.ts (DEFAULT_EVIDENCE_DIR)
+const TOOL_RESULTS_SUBDIR = "tool-results"; // keiko-evidence/src/tool-result-artifact-store.ts
 const UPDATE_SUBDIR = "updates"; // keiko-server/src/update-local-state.ts (UPDATE_DIR)
 const FIGMA_VAULT_SUBDIR = "figma"; // keiko-server figmaTokenStore.ts (Figma PAT vault dir, under evidence)
 const QI_SUBDIR = "qi"; // keiko-evidence/src/qualityIntelligence/store.ts (QI_SUBDIR)
@@ -139,6 +141,7 @@ const FIGMA_TOKEN_KEYFILE = "figma-vault.key"; // keiko-server figmaTokenStore.t
 
 const EVIDENCE_MANIFEST_SUFFIX = ".json"; // keiko-evidence/src/store.ts
 const EVIDENCE_LOCK_SUFFIX = ".lock"; // keiko-evidence/src/store.ts
+const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt"; // keiko-evidence tool-result-artifact-store.ts
 const PRODUCER_TEMP_SUFFIX = ".tmp"; // atomic-save temp files (`<target>.<random>.tmp`)
 const PRODUCER_TEMP_TOKEN = /^[A-Za-z0-9._-]{8,}$/u;
 const SECRET_VAULT_TEMP_FILE = /^\.secret-vault\.[1-9][0-9]*\.[0-9a-f]{16}\.tmp$/u;
@@ -224,6 +227,40 @@ function isEvidenceRecord(name: string): boolean {
   );
 }
 
+function isSha256Hex(value: string): boolean {
+  if (value.length !== 64) return false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    const isDigit = code >= 48 && code <= 57;
+    const isLowerHex = code >= 97 && code <= 102;
+    if (!isDigit && !isLowerHex) return false;
+  }
+  return true;
+}
+
+function hasSha256ArtifactSuffix(name: string, suffix: string): boolean {
+  if (!name.endsWith(suffix)) return false;
+  return isSha256Hex(name.slice(0, -suffix.length));
+}
+
+function hasSha256ProducerTempSuffix(name: string, suffix: string): boolean {
+  if (!name.endsWith(PRODUCER_TEMP_SUFFIX)) return false;
+  const withoutTmp = name.slice(0, -PRODUCER_TEMP_SUFFIX.length);
+  const marker = `${suffix}.`;
+  const markerIndex = withoutTmp.lastIndexOf(marker);
+  if (markerIndex < 0) return false;
+  const artifactId = withoutTmp.slice(0, markerIndex);
+  const token = withoutTmp.slice(artifactId.length + marker.length);
+  return PRODUCER_TEMP_TOKEN.test(token) && isSha256Hex(artifactId);
+}
+
+function isToolResultArtifact(name: string): boolean {
+  return (
+    hasSha256ArtifactSuffix(name, TOOL_RESULT_ARTIFACT_SUFFIX) ||
+    hasSha256ProducerTempSuffix(name, TOOL_RESULT_ARTIFACT_SUFFIX)
+  );
+}
+
 function isQiRecord(name: string): boolean {
   return QI_OWNED_SUFFIXES.some((suffix) => hasRunIdArtifactSuffix(name, suffix));
 }
@@ -294,9 +331,17 @@ const figmaVaultSubtree: OwnedSubtree = {
   childSubtree: NO_CHILD,
 };
 
+const toolResultsSubtree: OwnedSubtree = {
+  category: "evidence",
+  whole: false,
+  ownsFile: isToolResultArtifact,
+  childSubtree: NO_CHILD,
+};
+
 function evidenceChildSubtree(name: string): OwnedSubtree | undefined {
   if (name === QI_SUBDIR) return qiSubtree;
   if (name === FIGMA_VAULT_SUBDIR) return figmaVaultSubtree;
+  if (name === TOOL_RESULTS_SUBDIR) return toolResultsSubtree;
   return undefined;
 }
 

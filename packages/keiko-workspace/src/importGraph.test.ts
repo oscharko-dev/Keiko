@@ -58,7 +58,7 @@ describe("importGraphAdapter", () => {
     expect(atoms.length).toBe(1);
     expect(atoms[0]?.scopePath).toBe("src/a.ts");
     expect(atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
-    expect(atoms[0]?.provenance.tool).toBe("import-graph");
+    expect(atoms[0]?.provenance.tool).toBe("code-intelligence-index");
     expect(atoms[0]?.provenance.kind).toBe("structural");
   });
 
@@ -111,8 +111,8 @@ describe("importGraphAdapter", () => {
       nowMs: FIXED_NOW,
     });
     expect(ex[0]?.score).toBeGreaterThan(0.9);
-    expect(ex[0]?.score).toBeGreaterThan(sub[0]?.score ?? 0);
-    expect(sub[0]?.score).toBeCloseTo((ex[0]?.score ?? 0) * 0.7, 3);
+    expect(sub[0]?.score).toBeGreaterThan(0.9);
+    expect(sub[0]?.score).toBeLessThan(ex[0]?.score ?? 0);
   });
 
   it("skips a binary file (PNG magic header)", async () => {

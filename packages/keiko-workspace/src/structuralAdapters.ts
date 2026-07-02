@@ -34,6 +34,12 @@ export interface StructuralAdapter {
     fs: WorkspaceFs,
     deps?: StructuralAdapterDeps,
   ) => Promise<readonly EvidenceAtom[]>;
+  readonly coverage?: (
+    scope: SearchScope,
+    limits: SearchLimits,
+    fs: WorkspaceFs,
+    deps?: StructuralAdapterDeps,
+  ) => Promise<StructuralCoverageDiagnostics | undefined>;
 }
 
 export interface StructuralAdapterRegistry {
@@ -49,10 +55,24 @@ export interface AdapterError {
   readonly message: string;
 }
 
+export interface StructuralParserCoverage {
+  readonly parser: string;
+  readonly filesIndexed: number;
+}
+
+export interface StructuralCoverageDiagnostics {
+  readonly name: string;
+  readonly filesIndexed: number;
+  readonly filesSkipped: number;
+  readonly filesPartiallyIndexed?: number | undefined;
+  readonly parserCoverage: readonly StructuralParserCoverage[];
+}
+
 export interface RunAllResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly unavailable: readonly string[];
   readonly errored: readonly AdapterError[];
+  readonly coverage: readonly StructuralCoverageDiagnostics[];
   readonly elapsedMs: number;
 }
 
@@ -134,6 +154,24 @@ interface LookupOutcome {
   readonly name: string;
   readonly atoms: readonly EvidenceAtom[];
   readonly error: AdapterError | undefined;
+  readonly coverage: StructuralCoverageDiagnostics | undefined;
+}
+
+async function coverageFor(
+  adapter: StructuralAdapter,
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): Promise<StructuralCoverageDiagnostics | undefined> {
+  if (adapter.coverage === undefined) {
+    return undefined;
+  }
+  try {
+    return await adapter.coverage(scope, limits, fs, deps);
+  } catch {
+    return undefined;
+  }
 }
 
 async function runOne(
@@ -146,7 +184,8 @@ async function runOne(
 ): Promise<LookupOutcome> {
   try {
     const atoms = await adapter.lookup(scope, query, limits, fs, deps);
-    return { name: adapter.name, atoms, error: undefined };
+    const coverage = await coverageFor(adapter, scope, limits, fs, deps);
+    return { name: adapter.name, atoms, error: undefined, coverage };
   } catch (error) {
     if (isTypedAdapterError(error)) {
       throw error;
@@ -155,6 +194,7 @@ async function runOne(
       name: adapter.name,
       atoms: [],
       error: { name: adapter.name, message: describeError(error) },
+      coverage: undefined,
     };
   }
 }
@@ -203,12 +243,16 @@ export async function runStructuralAdapters(
   const errored = outcomes
     .map((outcome) => outcome.error)
     .filter((error): error is AdapterError => error !== undefined);
+  const coverage = outcomes
+    .map((outcome) => outcome.coverage)
+    .filter((diagnostics): diagnostics is StructuralCoverageDiagnostics => diagnostics !== undefined);
   const cap = Math.min(limits.maxMatchesReturned, query.maxResults);
   const atoms = mergeAtoms(outcomes, cap);
   return {
     atoms,
     unavailable,
     errored,
+    coverage,
     elapsedMs: nowMs() - startMs,
   };
 }

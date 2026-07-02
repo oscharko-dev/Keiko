@@ -7,6 +7,7 @@ import type {
   RetrievalQueryKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  FileTooLargeError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
@@ -212,6 +213,38 @@ describe("searchText (memFs)", () => {
     expect(result.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts", "src/b.ts", "src/c.ts"]);
   });
 
+  it("uses content relevance before the scan cap when paths are not helpful", async () => {
+    const { scope, fs } = memScope({
+      "src/a.ts": "export const unrelated = 1;\n",
+      "src/b.ts": "export const stillUnrelated = 2;\n",
+      "src/z.ts": [
+        "export function calculateTotal(cart: Cart) {",
+        "  return cart.items.reduce((sum, item) => sum + item.price, 0);",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(
+      scope,
+      nlq("why is calculateTotal wrong"),
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 },
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "diagnostic-search" },
+      },
+    );
+    expect(result.filesScanned).toBe(1);
+    expect(result.atoms[0]?.scopePath).toBe("src/z.ts");
+    const rankedTarget = result.diagnostics?.rankedCandidates.find(
+      (candidate) => candidate.scopePath === "src/z.ts",
+    );
+    expect(
+      rankedTarget?.signals.some(
+        (signal) => signal.name === "content-term-score" && signal.value > 0,
+      ),
+    ).toBe(true);
+  });
+
   it("matches multiple lines within one file", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "alpha\nbeta\nalpha again\n" });
     const result = await searchText(scope, nlq("alpha"), DEFAULT_SEARCH_LIMITS, {
@@ -245,6 +278,143 @@ describe("searchText (memFs)", () => {
     expect(result.atoms).toHaveLength(1);
     expect(result.atoms[0]?.lineRange).toEqual({ startLine: 3, endLine: 9 });
     expect(result.coverage.matchesReturned).toBe(1);
+  });
+
+  it("expands code matches to the enclosing function range when one is clear", async () => {
+    const { scope, fs } = memScope({
+      "src/checkout.ts": [
+        "export function calculateTotal(cart: Cart) {",
+        "  const discountedTotal = cart.total - cart.discount;",
+        "  return discountedTotal;",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, nlq("discountedTotal"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 4 });
+  });
+
+  it("expands matches inside multiline signatures to the full enclosing function range", async () => {
+    const { scope, fs } = memScope({
+      "src/checkout.ts": [
+        "export function calculateTotal(",
+        "  cart: Cart,",
+        "  discounts: Discounts,",
+        ") {",
+        "  const discountedTotal = cart.total - discounts.amount;",
+        "  return discountedTotal;",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, nlq("discountedTotal"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 7 });
+  });
+
+  it("expands Java package-private method matches to the enclosing method, not the whole class", async () => {
+    const { scope, fs } = memScope({
+      "src/main/java/CheckoutService.java": [
+        "class CheckoutService {",
+        "  int calculateTotal(Cart cart) {",
+        "    int discountedTotal = cart.total - cart.discount;",
+        "    return discountedTotal;",
+        "  }",
+        "  int unrelated() {",
+        "    return 0;",
+        "  }",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, nlq("discountedTotal"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 5 });
+  });
+
+  it("includes Java annotations immediately above enclosing method ranges", async () => {
+    const { scope, fs } = memScope({
+      "src/main/java/OrderController.java": [
+        "class OrderController {",
+        '  @GetMapping("/api/orders/{id}")',
+        "  OrderDto loadOrder(String id) {",
+        "    OrderDto loadedOrder = service.load(id);",
+        "    return loadedOrder;",
+        "  }",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, exq("loadedOrder"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 6 });
+  });
+
+  it("includes C# attributes immediately above enclosing method ranges", async () => {
+    const { scope, fs } = memScope({
+      "src/Controllers/OrdersController.cs": [
+        "class OrdersController {",
+        '  [HttpGet("/api/orders/{id}")]',
+        "  OrderDto LoadOrder(string id) {",
+        "    var loadedOrder = service.Load(id);",
+        "    return loadedOrder;",
+        "  }",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, exq("loadedOrder"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 6 });
+  });
+
+  it("includes Python decorators immediately above enclosing function ranges", async () => {
+    const { scope, fs } = memScope({
+      "backend/app/routes.py": [
+        "from fastapi import FastAPI",
+        "app = FastAPI()",
+        '@app.get("/api/orders/{id}")',
+        "def load_order(id: str):",
+        "    loaded_order = service.load(id)",
+        "    return loaded_order",
+        "def unrelated():",
+        "    return None",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, exq("loaded_order"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 3, endLine: 6 });
+  });
+
+  it("dedupes repeated hits in one function so later matching functions still surface", async () => {
+    const { scope, fs } = memScope({
+      "src/workflow.ts": [
+        "export function first() {",
+        "  const needle = 1;",
+        "  const again = needle + 1;",
+        "  return needle;",
+        "}",
+        "export function second() {",
+        "  return needle;",
+        "}",
+      ].join("\n"),
+    });
+    const result = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms.map((atom) => atom.lineRange)).toEqual([
+      { startLine: 1, endLine: 5 },
+      { startLine: 6, endLine: 8 },
+    ]);
   });
 
   it("scores natural-language as tokensHit/tokensTotal", async () => {
@@ -326,6 +496,96 @@ describe("searchText (memFs)", () => {
     expect(files.has("src/z_late.ts")).toBe(true);
   });
 
+  it("globally reranks content matches before applying maxMatchesReturned", async () => {
+    const { scope, fs } = memScope({
+      "src/a_early.ts": "checkout\n",
+      "src/z_late.ts": "checkout total\n",
+    });
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 1 };
+    const r = await searchText(scope, nlq("checkout total"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/z_late.ts"]);
+    expect(r.atoms[0]?.score).toBeCloseTo(1, 6);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("uses query expansion to bridge common debugging synonyms", async () => {
+    const { scope, fs } = memScope({
+      "src/cart.ts": "export const subtotal = calculateCartSum(items);",
+    });
+    const r = await searchText(
+      scope,
+      nlq("checkout totals are calculating wrong"),
+      {
+        ...DEFAULT_SEARCH_LIMITS,
+        maxMatchesReturned: 1,
+      },
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/cart.ts"]);
+  });
+
+  it("merges injected semantic hits so non-literal code can outrank lexical noise", async () => {
+    const { scope, fs } = memScope({
+      "src/discount.ts": [
+        "export function computeSubtotal(items: readonly Item[]): number {",
+        "  return items.reduce((sum, item) => sum + item.price, 0);",
+        "}",
+      ].join("\n"),
+      "docs/noise.md": "checkout mentioned in a support note\n",
+    });
+    const observedDocumentPaths: string[][] = [];
+    const semanticSearchProvider: SemanticSearchProvider = {
+      name: "local fixture",
+      search: ({ documents }) => {
+        observedDocumentPaths.push(documents.map((document) => document.scopePath));
+        return Promise.resolve([
+          {
+            scopePath: "src/discount.ts",
+            line: 1,
+            score: 1,
+          },
+        ]);
+      },
+    };
+
+    const result = await searchText(
+      scope,
+      nlq("checkout price bug"),
+      { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 1 },
+      { fs, nowMs: FIXED_NOW, semanticSearchProvider },
+    );
+
+    expect(observedDocumentPaths[0]).toEqual(expect.arrayContaining(["src/discount.ts"]));
+    expect(result.atoms).toHaveLength(1);
+    expect(result.atoms[0]?.scopePath).toBe("src/discount.ts");
+    expect(result.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(result.atoms[0]?.provenance.kind).toBe("model-rerank");
+    expect(result.atoms[0]?.provenance.tool).toBe("repo.semanticSearch:local-fixture");
+    expect(result.truncated).toBe(true);
+  });
+
+  it("ignores semantic provider hits outside the discovered scope", async () => {
+    const { scope, fs } = memScope({
+      "src/visible.ts": "checkout price bug\n",
+    });
+    const semanticSearchProvider: SemanticSearchProvider = {
+      name: "local fixture",
+      search: () =>
+        Promise.resolve([
+          { scopePath: "../escape.ts", line: 1, score: 1 },
+          { scopePath: "src/missing.ts", line: 1, score: 1 },
+        ]),
+    };
+
+    const result = await searchText(scope, nlq("checkout price bug"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      semanticSearchProvider,
+    });
+
+    expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["src/visible.ts"]);
+  });
+
   it("reads an excerpt window from a file larger than the request byte budget", async () => {
     const big = `${"x\n".repeat(8000)}TARGET\n`;
     const { scope, fs } = memScope({ "src/big.ts": big });
@@ -335,6 +595,30 @@ describe("searchText (memFs)", () => {
       { fs },
     );
     expect(r.content).toContain("TARGET");
+  });
+
+  it("reads an early excerpt window from a file larger than the excerpt read cap", async () => {
+    const big = `TARGET\n${"x".repeat(2_200_000)}`;
+    const { scope, fs } = memScope({ "src/huge.ts": big });
+    const r = await readExcerpt(
+      scope,
+      { scopePath: "src/huge.ts", startLine: 1, endLine: 1, maxBytes: 64 },
+      { fs },
+    );
+    expect(r.content).toBe("TARGET");
+    expect(r.truncated).toBe(false);
+  });
+
+  it("keeps deep excerpt windows beyond the bounded prefix as FileTooLargeError", async () => {
+    const big = "x\n".repeat(1_100_000);
+    const { scope, fs } = memScope({ "src/huge.ts": big });
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/huge.ts", startLine: 1_090_000, endLine: 1_090_000, maxBytes: 64 },
+        { fs },
+      ),
+    ).rejects.toBeInstanceOf(FileTooLargeError);
   });
 
   it("rejects an exact-symbol query containing whitespace", async () => {
@@ -752,7 +1036,7 @@ describe("searchText (memFs)", () => {
   });
 
   it("surfaces max-depth pruning as incomplete coverage without implying a file-cap hit", async () => {
-    const deepPath = `${Array.from({ length: 14 }, (_, i) => `d${String(i)}`).join("/")}/deep.ts`;
+    const deepPath = `${Array.from({ length: 45 }, (_, i) => `d${String(i)}`).join("/")}/deep.ts`;
     const { scope, fs } = memScope({
       "src/top.ts": "match\n",
       [deepPath]: "match\n",
@@ -769,7 +1053,24 @@ describe("searchText (memFs)", () => {
     expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
-  it("omits oversize files as size-exceeded candidates rather than failing the run", async () => {
+  it("scans the bounded prefix of oversize files and marks coverage truncated", async () => {
+    const content = `needle in prefix\n${"alpha\n".repeat(20)}`;
+    const { scope, fs } = memScope({ "src/a.ts": content });
+    const limits: SearchLimits = {
+      ...DEFAULT_SEARCH_LIMITS,
+      maxBytesPerFileScanned: 50,
+    };
+    const r = await searchText(scope, nlq("needle"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["src/a.ts"]);
+    expect(r.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 1 });
+    expect(r.truncated).toBe(true);
+    expect(r.oversizedFilesScanned).toBe(1);
+    expect(r.candidates.some((c) => c.scopePath === "src/a.ts" && c.omitted !== undefined)).toBe(
+      false,
+    );
+  });
+
+  it("marks oversize tail-only matches as truncated instead of claiming full coverage", async () => {
     const head = "alpha\n".repeat(20);
     const tail = "needle\n";
     const { scope, fs } = memScope({ "src/a.ts": head + tail });
@@ -779,9 +1080,8 @@ describe("searchText (memFs)", () => {
     };
     const r = await searchText(scope, nlq("needle"), limits, { fs, nowMs: FIXED_NOW });
     expect(r.atoms).toHaveLength(0);
-    expect(
-      r.candidates.some((c) => c.scopePath === "src/a.ts" && c.omitted === "size-exceeded"),
-    ).toBe(true);
+    expect(r.truncated).toBe(true);
+    expect(r.oversizedFilesScanned).toBe(1);
   });
 
   it("returns an empty result for an empty workspace", async () => {
@@ -884,6 +1184,33 @@ describe("searchText (memFs)", () => {
     expect(r.diagnostics?.intent).toBe("project-metadata");
   });
 
+  it("bounds project metadata scans to the ranked candidate prefix", async () => {
+    const files: Record<string, string> = {
+      "pom.xml":
+        "<project>\n  <properties>\n    <maven.compiler.release>21</maven.compiler.release>\n  </properties>\n</project>\n",
+    };
+    for (let i = 0; i < 700; i += 1) {
+      files[`src/mod${String(i % 20)}/file${String(i)}.ts`] =
+        `export function handler${String(i)}(): string { return "handler"; }\n`;
+    }
+    const { scope, fs } = memScope(files);
+
+    const r = await searchText(
+      scope,
+      nlq("Which Java version does this project use and where is the handler function?"),
+      DEFAULT_SEARCH_LIMITS,
+      {
+        fs,
+        nowMs: FIXED_NOW,
+        searchHints: { retrievalIntent: "project-metadata" },
+      },
+    );
+
+    expect(r.atoms.map((atom) => atom.scopePath)).toContain("pom.xml");
+    expect(r.filesScanned).toBeLessThan(700);
+    expect(r.truncated).toBe(true);
+  });
+
   it("prioritizes symbol implementation files over docs for targeted questions", async () => {
     const { scope, fs } = memScope({
       "docs/window-frame.md": "WindowFrame is documented here.\n",
@@ -909,8 +1236,11 @@ describe("searchText (memFs)", () => {
 
   it("omits low-value workspace-root files before they consume match budget", async () => {
     const { scope, fs } = memScope({
+      "build/needle.ts": "needle\n",
+      "coverage/needle.ts": "needle\n",
       "dist/needle.ts": "needle\n",
       "generated/needle.ts": "needle\n",
+      "out/needle.ts": "needle\n",
       "src/needle.ts": "needle\n",
     });
     const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
@@ -921,7 +1251,46 @@ describe("searchText (memFs)", () => {
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/needle.ts"]);
     expect(r.candidates.filter((c) => c.omitted === "generated")).toHaveLength(0);
     expect(r.diagnostics?.ignoredByDiscovery).toBeGreaterThan(0);
+    expect(r.atoms.some((a) => a.scopePath === "build/needle.ts")).toBe(false);
+    expect(r.atoms.some((a) => a.scopePath === "coverage/needle.ts")).toBe(false);
     expect(r.atoms.some((a) => a.scopePath === "dist/needle.ts")).toBe(false);
+    expect(r.atoms.some((a) => a.scopePath === "out/needle.ts")).toBe(false);
+    expect(r.diagnostics?.lowValueRescueFilesDiscovered).toBeUndefined();
+    expect(r.diagnostics?.lowValueRescueFilesScanned).toBeUndefined();
+  });
+
+  it("rescues generated workspace-root evidence when no primary source evidence matches", async () => {
+    const { scope, fs } = memScope({
+      "generated/client.ts": "export const GeneratedNeedle = 1;\n",
+    });
+    const r = await searchText(scope, nlq("GeneratedNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: "targeted-code-search" },
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["generated/client.ts"]);
+    expect(r.candidates.some((candidate) => candidate.scopePath === "generated/client.ts")).toBe(
+      false,
+    );
+    expect(r.diagnostics?.ignoredByDiscovery).toBeGreaterThan(0);
+    expect(r.diagnostics?.lowValueRescueFilesDiscovered).toBe(1);
+    expect(r.diagnostics?.lowValueRescueFilesScanned).toBe(1);
+    expect(r.filesScanned).toBe(1);
+  });
+
+  it("rescues generated artifacts that were discovered but omitted by policy", async () => {
+    const { scope, fs } = memScope({
+      "api/user.pb.go": "package api\nconst GeneratedNeedle = 1\n",
+    });
+    const r = await searchText(scope, exq("GeneratedNeedle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+      searchHints: { retrievalIntent: "targeted-code-search" },
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["api/user.pb.go"]);
+    expect(r.candidates.some((candidate) => candidate.scopePath === "api/user.pb.go")).toBe(false);
+    expect(r.diagnostics?.lowValueRescueFilesDiscovered).toBe(1);
+    expect(r.diagnostics?.lowValueRescueFilesScanned).toBe(1);
   });
 
   it("finds relevant source when a 10k generated tree would otherwise exhaust discovery", async () => {
@@ -997,6 +1366,36 @@ describe("findFiles (memFs)", () => {
     expect(r.atoms[0]?.provenance.kind).toBe("file-listing");
     expect(r.atoms[0]?.lineRange).toBeUndefined();
     expect(r.atoms[0]?.score).toBe(1);
+  });
+
+  it("rescues generated workspace-root file listings when no primary source path matches", async () => {
+    const { scope, fs } = memScope({
+      "generated/client.ts": "x",
+    });
+    const r = await findFiles(scope, fpq("**/client.ts"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["generated/client.ts"]);
+    expect(r.candidates.some((candidate) => candidate.scopePath === "generated/client.ts")).toBe(
+      false,
+    );
+    expect(r.diagnostics?.lowValueRescueFilesDiscovered).toBe(1);
+    expect(r.diagnostics?.lowValueRescueFilesScanned).toBe(1);
+  });
+
+  it("keeps source file listings on the primary path without low-value rescue", async () => {
+    const { scope, fs } = memScope({
+      "generated/client.ts": "x",
+      "src/client.ts": "x",
+    });
+    const r = await findFiles(scope, fpq("**/client.ts"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["src/client.ts"]);
+    expect(r.diagnostics?.lowValueRescueFilesDiscovered).toBeUndefined();
+    expect(r.diagnostics?.lowValueRescueFilesScanned).toBeUndefined();
   });
 
   it("honors an already-aborted signal before listing files", async () => {
@@ -1087,6 +1486,22 @@ describe("findFiles (memFs)", () => {
     expect(r.coverage.filesSkipped).toBeGreaterThan(0);
   });
 
+  it("reports max-file pruning for explicit-scope file discovery", async () => {
+    const { scope, fs } = memScope(
+      {
+        "pkg/f0.ts": "",
+        "pkg/f1.ts": "",
+        "pkg/f2.ts": "",
+      },
+      { relativePaths: ["pkg"] },
+    );
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const r = await findFiles(scope, fpq("**/*.ts"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(["pkg/f0.ts"]);
+    expect(r.truncated).toBe(true);
+    expect(r.diagnostics?.maxFilesPrunedByDiscovery).toBeGreaterThan(0);
+  });
+
   it("includes safe gitignored files from explicit-scope file search", async () => {
     const { scope, fs } = memScope(
       {
@@ -1121,6 +1536,49 @@ describe("findFiles (memFs)", () => {
     expect(r.truncated).toBe(false);
     expect(r.coverage.incomplete).toBe(false);
     expect(r.coverage.reasons).toEqual([]);
+  });
+
+  it("walks explicit-scope Java package trees beyond the old depth-12 cap", async () => {
+    const deepJavaPath =
+      "backend/src/main/java/com/example/orders/internal/workflow/approval/v1/service/OrderService.java";
+    const { scope, fs } = memScope(
+      { [deepJavaPath]: "class OrderService {}" },
+      {
+        workspace: {
+          root: MEM_ROOT,
+          name: "demo",
+          version: "1.0.0",
+          testFramework: "unknown",
+          sourceDirs: ["backend/src/main/java"],
+          testDirs: [],
+          languages: ["java"],
+          ignoreLines: [],
+        },
+        relativePaths: ["backend"],
+      },
+    );
+    const r = await findFiles(scope, fpq("**/*.java"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual([deepJavaPath]);
+    expect(r.truncated).toBe(false);
+    expect(r.diagnostics?.depthPrunedByDiscovery).toBe(0);
+  });
+
+  it("reports truncation when explicit-scope walking exceeds the shared depth cap", async () => {
+    const tooDeepPath = `backend/${Array.from({ length: 42 }, (_, index) => `d${String(index)}`).join("/")}/TooDeep.java`;
+    const { scope, fs } = memScope(
+      { [tooDeepPath]: "class TooDeep {}" },
+      { relativePaths: ["backend"] },
+    );
+    const r = await findFiles(scope, fpq("**/*.java"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms).toHaveLength(0);
+    expect(r.truncated).toBe(true);
+    expect(r.diagnostics?.depthPrunedByDiscovery).toBeGreaterThan(0);
   });
 
   it("omits node_modules from candidates", async () => {
@@ -1410,7 +1868,11 @@ describe("Copilot finding fixes (memFs)", () => {
 
   it("readExcerpt allows safe gitignored and hidden files", async () => {
     const { scope, fs } = memScope(
-      { "generated/report.txt": "generated context\n", ".toolrc": "hidden config\n" },
+      {
+        "build/generated/Client.java": "class Client {}\n",
+        "generated/report.txt": "generated context\n",
+        ".toolrc": "hidden config\n",
+      },
       {
         workspace: {
           root: MEM_ROOT,
@@ -1420,11 +1882,16 @@ describe("Copilot finding fixes (memFs)", () => {
           sourceDirs: ["src"],
           testDirs: ["tests"],
           languages: ["typescript"],
-          ignoreLines: ["generated/", ".toolrc"],
+          ignoreLines: ["build/", "generated/", ".toolrc"],
         },
       },
     );
 
+    const buildStub = await readExcerpt(
+      scope,
+      { scopePath: "build/generated/Client.java", startLine: 1, endLine: 1, maxBytes: 64 },
+      { fs, nowMs: FIXED_NOW },
+    );
     const generated = await readExcerpt(
       scope,
       { scopePath: "generated/report.txt", startLine: 1, endLine: 1, maxBytes: 64 },
@@ -1436,6 +1903,7 @@ describe("Copilot finding fixes (memFs)", () => {
       { fs, nowMs: FIXED_NOW },
     );
 
+    expect(buildStub.content).toBe("class Client {}");
     expect(generated.content).toBe("generated context");
     expect(hidden.content).toBe("hidden config");
   });
@@ -1530,6 +1998,17 @@ describe("repoSearch (mkdtemp / real fs)", () => {
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
     expect(r.candidates.some((c) => c.scopePath === "img.png" && c.omitted === "binary")).toBe(
       true,
+    );
+  });
+
+  it("does not drop source files that contain a sparse embedded NUL", async () => {
+    file("src/a.ts", "needle\u0000still textual\n");
+    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+    expect(r.candidates.some((c) => c.scopePath === "src/a.ts" && c.omitted === "binary")).toBe(
+      false,
     );
   });
 

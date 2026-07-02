@@ -32,9 +32,14 @@ export interface RankingHints {
   readonly duplicateOf?: ReadonlyMap<string, string>;
 }
 
-// True when this candidate is reachable via an inbound import edge or a test↔source pairing, derived
-// from atoms already present (the structural ring's provenance tools). No extra IO.
-const STRUCTURAL_TOOLS: ReadonlySet<string> = new Set(["import-graph", "test-source-pairing"]);
+// True when this candidate is reachable via an inbound import edge, code-intelligence lookup, or a
+// test↔source pairing, derived from atoms already present. No extra IO.
+const STRUCTURAL_TOOLS: ReadonlySet<string> = new Set([
+  "import-graph",
+  "test-source-pairing",
+  "code-intelligence-index",
+  "structural-edge-target",
+]);
 const SEMANTIC_TOOL_PREFIX = "repo.semanticSearch";
 
 function hasStructuralEdge(atoms: readonly EvidenceAtom[]): boolean {
@@ -49,6 +54,34 @@ function bestSemanticScore(atoms: readonly EvidenceAtom[]): number {
   return computeBestScoreByTool(atoms, (atom) =>
     atom.provenance.tool.startsWith(SEMANTIC_TOOL_PREFIX),
   );
+}
+
+function computeGitRecency(atoms: readonly EvidenceAtom[]): number {
+  let best = 0;
+  for (const atom of atoms) {
+    if (atom.provenance.kind !== "git-history") {
+      continue;
+    }
+    const value = atom.metrics?.gitRecency;
+    if (value !== undefined && value > best) {
+      best = value;
+    }
+  }
+  return clampUnit(best);
+}
+
+function computeGitChurn(atoms: readonly EvidenceAtom[]): number {
+  let best = 0;
+  for (const atom of atoms) {
+    if (atom.provenance.kind !== "git-history") {
+      continue;
+    }
+    const value = atom.metrics?.gitChurn;
+    if (value !== undefined && value > best) {
+      best = value;
+    }
+  }
+  return clampUnit(best);
 }
 
 export const DEFAULT_GENERATED_PATTERNS: readonly string[] = [
@@ -211,6 +244,8 @@ export function extractSignals(
   const depthAff = computePathDepthAffinity(scopePath);
   const testBonus = computeTestPairBonus(scopePath, anchors);
   const stackBonus = computeStacktracePositionBonus(scopePath, anchors);
+  const gitRecency = computeGitRecency(atomsForPath);
+  const gitChurn = computeGitChurn(atomsForPath);
   const penalty = generatedHint ? -1 : 0;
   const baseSignals: CandidateSignal[] = [
     { name: "provenance-best-score", value: provBest },
@@ -223,6 +258,10 @@ export function extractSignals(
     { name: "stacktrace-position-bonus", value: stackBonus },
     { name: "generated-penalty", value: penalty },
   ];
+  if (gitRecency > 0 || gitChurn > 0) {
+    baseSignals.push({ name: "git-recency", value: gitRecency });
+    baseSignals.push({ name: "git-churn", value: gitChurn });
+  }
   // M4: only a boosted intent appends the two new signals (and weightsForIntent only weights them
   // for the same intents), so the signal vector — and therefore the pack/cache content — is
   // byte-identical for every other intent and for callers that pass no context.

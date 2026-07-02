@@ -26,13 +26,21 @@ interface DigestBuckets {
   readonly userConstraints: ContextUserConstraint[];
   readonly decisions: string[];
   readonly openQuestions: string[];
+  readonly resolvedQuestionKeys: string[];
   readonly filesInspected: string[];
   readonly failingTests: string[];
   readonly droppedCategories: string[];
 }
 
 interface Classification {
-  readonly kind: "fact" | "assumption" | "constraint" | "decision" | "question" | "other";
+  readonly kind:
+    | "fact"
+    | "assumption"
+    | "constraint"
+    | "decision"
+    | "question"
+    | "resolved-question"
+    | "other";
   readonly text: string;
 }
 
@@ -58,6 +66,9 @@ const EXPLICIT_CLASSIFICATIONS = new Map<string, Classification["kind"]>([
   ["decided", "decision"],
   ["open question", "question"],
   ["question", "question"],
+  ["resolved question", "resolved-question"],
+  ["answered question", "resolved-question"],
+  ["closed question", "resolved-question"],
 ]);
 
 export function buildStructuredCompactionDigest(
@@ -77,6 +88,7 @@ function emptyBuckets(): DigestBuckets {
     userConstraints: [],
     decisions: [],
     openQuestions: [],
+    resolvedQuestionKeys: [],
     filesInspected: [],
     failingTests: [],
     droppedCategories: [],
@@ -143,7 +155,7 @@ function classifyLine(line: string): Classification {
 
 function explicitClassification(line: string): Classification | undefined {
   const match =
-    /^(fact|known|confirmed|assumption|assume|constraint|requirement|decision|decided|open question|question)\s*[:=-]\s*(.+)$/iu.exec(
+    /^(fact|known|confirmed|assumption|assume|constraint|requirement|decision|decided|open question|question|resolved question|answered question|closed question)\s*[:=-]\s*(.+)$/iu.exec(
       line,
     );
   if (match === null) {
@@ -172,7 +184,9 @@ function collectClassified(
   } else if (classification.kind === "decision") {
     pushUnique(buckets.decisions, classification.text);
   } else if (classification.kind === "question") {
-    pushUnique(buckets.openQuestions, classification.text);
+    pushOpenQuestion(buckets, classification.text);
+  } else if (classification.kind === "resolved-question") {
+    resolveQuestion(buckets, classification.text);
   }
 }
 
@@ -274,6 +288,54 @@ function pushUnique(values: string[], value: string): void {
     return;
   }
   values.push(value);
+}
+
+function pushOpenQuestion(buckets: DigestBuckets, question: string): void {
+  if (questionWasResolved(buckets, question)) {
+    return;
+  }
+  pushUnique(buckets.openQuestions, question);
+}
+
+function resolveQuestion(buckets: DigestBuckets, resolution: string): void {
+  const key = questionKey(resolution);
+  if (key.length === 0) {
+    return;
+  }
+  pushUnique(buckets.resolvedQuestionKeys, key);
+  removeResolvedOpenQuestions(buckets, key);
+  pushUnique(buckets.decisions, `Resolved question: ${resolution}`);
+}
+
+function questionWasResolved(buckets: DigestBuckets, question: string): boolean {
+  const key = questionKey(question);
+  return (
+    key.length > 0 &&
+    buckets.resolvedQuestionKeys.some((resolved) => sameQuestionKey(key, resolved))
+  );
+}
+
+function removeResolvedOpenQuestions(buckets: DigestBuckets, resolvedKey: string): void {
+  for (let index = buckets.openQuestions.length - 1; index >= 0; index -= 1) {
+    const candidate = buckets.openQuestions[index];
+    if (candidate !== undefined && sameQuestionKey(questionKey(candidate), resolvedKey)) {
+      buckets.openQuestions.splice(index, 1);
+    }
+  }
+}
+
+function sameQuestionKey(left: string, right: string): boolean {
+  return left === right || left.includes(right) || right.includes(left);
+}
+
+function questionKey(text: string): string {
+  const questionMark = text.indexOf("?");
+  const question = questionMark < 0 ? text : text.slice(0, questionMark + 1);
+  return question
+    .replace(/^(?:open|resolved|answered|closed)\s+question\s*[:=-]\s*/iu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
 }
 
 function compactBuckets(buckets: DigestBuckets): CompactionDigest {

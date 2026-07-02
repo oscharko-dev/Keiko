@@ -62,6 +62,50 @@ function binaryFs(absPath: string, bytes: Uint8Array): WorkspaceFs {
   };
 }
 
+function utf16Bytes(value: string, endian: "le" | "be", bom = true): Uint8Array {
+  const bytes = new Uint8Array((bom ? 2 : 0) + value.length * 2);
+  let offset = 0;
+  if (bom) {
+    if (endian === "le") {
+      bytes[offset++] = 0xff;
+      bytes[offset++] = 0xfe;
+    } else {
+      bytes[offset++] = 0xfe;
+      bytes[offset++] = 0xff;
+    }
+  }
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (endian === "le") {
+      bytes[offset++] = code & 0xff;
+      bytes[offset++] = code >> 8;
+    } else {
+      bytes[offset++] = code >> 8;
+      bytes[offset++] = code & 0xff;
+    }
+  }
+  return bytes;
+}
+
+function utf32LeBytes(value: string, bom = true): Uint8Array {
+  const codePoints = Array.from(value, (char) => char.codePointAt(0) ?? 0);
+  const bytes = new Uint8Array((bom ? 4 : 0) + codePoints.length * 4);
+  let offset = 0;
+  if (bom) {
+    bytes[offset++] = 0xff;
+    bytes[offset++] = 0xfe;
+    bytes[offset++] = 0x00;
+    bytes[offset++] = 0x00;
+  }
+  for (const codePoint of codePoints) {
+    bytes[offset++] = codePoint & 0xff;
+    bytes[offset++] = (codePoint >> 8) & 0xff;
+    bytes[offset++] = (codePoint >> 16) & 0xff;
+    bytes[offset++] = (codePoint >> 24) & 0xff;
+  }
+  return bytes;
+}
+
 function failureHasNoPath(failure: DocumentExtractionFailure): boolean {
   // The failure tagged-union must never carry an absolute or workspace-relative path string.
   // We enumerate explicitly so an added field still has to opt out by name.
@@ -111,6 +155,35 @@ describe("extractDocumentContext — happy path", () => {
     expect(result.context.mimeType).toBe("application/typescript");
     expect(result.context.text).toContain("documentNeedle");
     expect(result.context.truncated).toBe(false);
+  });
+
+  it("extracts UTF-16LE text when a BOM is present", async () => {
+    const text = "class Order {}\n";
+    const fs = binaryFs(`${ROOT}/order.ts`, utf16Bytes(text, "le"));
+    const result = await extractDocumentContext(fs, ROOT, "order.ts", fullBudget());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe("class Order {}");
+    expect(result.context.mimeType).toBe("application/typescript");
+  });
+
+  it("extracts UTF-16BE text when alternating NUL bytes identify text", async () => {
+    const text = "SELECT * FROM orders;\n";
+    const fs = binaryFs(`${ROOT}/query.sql`, utf16Bytes(text, "be", false));
+    const result = await extractDocumentContext(fs, ROOT, "query.sql", fullBudget());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe("SELECT * FROM orders;");
+    expect(result.context.mimeType).toBe("application/sql");
+  });
+
+  it("extracts UTF-32LE text when a BOM is present", async () => {
+    const text = "let answer = 42;\n";
+    const fs = binaryFs(`${ROOT}/answer.ts`, utf32LeBytes(text));
+    const result = await extractDocumentContext(fs, ROOT, "answer.ts", fullBudget());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe("let answer = 42;");
   });
 });
 
@@ -186,6 +259,39 @@ describe("extractDocumentContext — truncation", () => {
     expect(result.context.truncated).toBe(true);
   });
 
+  it("extracts a focused source span beyond the 64 KiB prefix cap", async () => {
+    const prefixLines = Array.from({ length: 7_000 }, (_, index) => `// padding ${String(index)}`);
+    const targetStartLine = prefixLines.length + 1;
+    const source = [
+      ...prefixLines,
+      "export class CheckoutTotals {",
+      "  computeGrandTotal() { return 42; }",
+      "}",
+      "// suffix that should not be included",
+    ].join("\n");
+    expect(Buffer.byteLength(source, "utf8")).toBeGreaterThan(MAX_EXTRACTED_BYTES);
+    const fs = memFs(ROOT, { "src/large.ts": source });
+    const result = await extractDocumentContext(fs, ROOT, "src/large.ts", fullBudget(), {
+      focus: {
+        kind: "line-range",
+        startLine: targetStartLine,
+        endLine: targetStartLine + 2,
+        contextLines: 0,
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe(
+      ["export class CheckoutTotals {", "  computeGrandTotal() { return 42; }", "}"].join("\n"),
+    );
+    expect(result.context.text).not.toContain("padding");
+    expect(result.context.text).not.toContain("suffix");
+    expect(result.context.truncated).toBe(true);
+    expect(result.context.truncationMarker).toContain(
+      `selected lines ${String(targetStartLine)}-${String(targetStartLine + 2)}`,
+    );
+  });
+
   it("budget fully exhausted ⇒ extractedBytes:0, truncated:true, text empty", async () => {
     const fs = memFs(ROOT, { "doc.txt": "any content" });
     const budget: DocumentExtractionBudget = {
@@ -243,16 +349,40 @@ describe("extractDocumentContext — path-safe failures", () => {
     expect(failureHasNoPath(result.failure)).toBe(true);
   });
 
-  it("returns binary-file when NUL/control bytes dominate the first 512 bytes", async () => {
+  it("returns binary-file when control bytes exceed the binary ratio threshold", async () => {
     const bytes = new Uint8Array(64);
     bytes.fill(0x41);
-    bytes.fill(0x00, 10, 40);
+    for (let i = 0; i < 9; i += 1) {
+      bytes[i] = 0x00;
+    }
     const fs = binaryFs(`${ROOT}/payload.bin`, bytes);
     const result = await extractDocumentContext(fs, ROOT, "payload.bin", fullBudget());
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failure.kind).toBe("binary-file");
     expect(failureHasNoPath(result.failure)).toBe(true);
+  });
+
+  it("probes beyond the first 512 bytes before accepting a text extension", async () => {
+    const bytes = new Uint8Array(800);
+    bytes.fill(0x41);
+    for (let i = 600; i < 700; i += 1) {
+      bytes[i] = 0x00;
+    }
+    const fs = binaryFs(`${ROOT}/late-control.txt`, bytes);
+    const result = await extractDocumentContext(fs, ROOT, "late-control.txt", fullBudget());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.kind).toBe("binary-file");
+  });
+
+  it("strips a sparse embedded NUL from supported text documents", async () => {
+    const bytes = new TextEncoder().encode(`hello\u0000world ${"text ".repeat(20)}\n`);
+    const fs = binaryFs(`${ROOT}/payload.txt`, bytes);
+    const result = await extractDocumentContext(fs, ROOT, "payload.txt", fullBudget());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe(`helloworld ${"text ".repeat(20)}`.trimEnd());
   });
 
   it("denies a path inside a deny-list directory (e.g. .git)", async () => {
@@ -266,7 +396,12 @@ describe("extractDocumentContext — path-safe failures", () => {
 
   it("denies a path that contains a NUL byte", async () => {
     const fs = memFs(ROOT, { "ok.txt": "ok" });
-    const result = await extractDocumentContext(fs, ROOT, "ok .txt", fullBudget());
+    const result = await extractDocumentContext(
+      fs,
+      ROOT,
+      `ok${String.fromCharCode(0)}.txt`,
+      fullBudget(),
+    );
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failure.kind).toBe("denied-path");
@@ -325,5 +460,7 @@ describe("extractDocumentContext — constants and stability", () => {
     expect(SUPPORTED_MIME_PREFIXES).toContain("text/");
     expect(SUPPORTED_MIME_LITERALS.has("application/json")).toBe(true);
     expect(SUPPORTED_MIME_LITERALS.has("application/yaml")).toBe(true);
+    expect(SUPPORTED_MIME_LITERALS.has("application/toml")).toBe(true);
+    expect(SUPPORTED_MIME_LITERALS.has("application/sql")).toBe(true);
   });
 });

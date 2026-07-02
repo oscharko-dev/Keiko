@@ -2,7 +2,7 @@ import type { WorkspaceDirEntry, WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
-import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveredFile, type WorkspaceInfo } from "./types.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 
 interface ScopeShape {
@@ -20,8 +20,12 @@ interface EntryWalk {
   readonly fs: WorkspaceFs;
   readonly files: DiscoveredFile[];
   readonly directories: string[];
+  depthPruned: number;
+  maxFilesPruned: number;
   truncated: boolean;
 }
+
+const EXPLICIT_SCOPE_MAX_DEPTH = DEFAULT_DISCOVERY_OPTIONS.maxDepth;
 
 function normalizeScopePath(scopePath: string): string {
   return scopePath.split("\\").join("/");
@@ -36,7 +40,9 @@ function readDirSorted(fs: WorkspaceFs, absoluteDir: string): readonly Workspace
 }
 
 function pushAllowedFile(walk: EntryWalk, relPath: string, absPath: string): void {
-  if (walk.files.length > walk.limits.maxFilesScanned) {
+  if (walk.files.length >= walk.limits.maxFilesScanned) {
+    walk.maxFilesPruned += 1;
+    walk.truncated = true;
     return;
   }
   const stat = walk.fs.stat(absPath);
@@ -44,9 +50,6 @@ function pushAllowedFile(walk: EntryWalk, relPath: string, absPath: string): voi
     return;
   }
   walk.files.push({ relativePath: relPath, sizeBytes: stat.size });
-  if (walk.files.length > walk.limits.maxFilesScanned) {
-    walk.truncated = true;
-  }
 }
 
 function allowedByFilters(relPath: string): boolean {
@@ -86,12 +89,18 @@ function walkEntryDirectory(
   dirRel: string,
   depth: number,
 ): void {
-  if (depth > 12 || walk.truncated) {
+  if (walk.truncated) {
+    return;
+  }
+  if (depth > EXPLICIT_SCOPE_MAX_DEPTH) {
+    walk.depthPruned += 1;
+    walk.truncated = true;
     return;
   }
   walk.directories.push(dirRel);
   for (const entry of readDirSorted(walk.fs, absoluteDir)) {
-    if (walk.files.length > walk.limits.maxFilesScanned) {
+    if (walk.files.length >= walk.limits.maxFilesScanned) {
+      walk.maxFilesPruned += 1;
       walk.truncated = true;
       return;
     }
@@ -130,7 +139,14 @@ export function collectFromEntries(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): { files: readonly DiscoveredFile[]; directories: readonly string[]; filesDiscovered: number; truncated: boolean } {
+): {
+  files: readonly DiscoveredFile[];
+  directories: readonly string[];
+  filesDiscovered: number;
+  truncated: boolean;
+  depthPruned: number;
+  maxFilesPruned: number;
+} {
   const out: DiscoveredFile[] = [];
   const walk: EntryWalk = {
     scope,
@@ -138,6 +154,8 @@ export function collectFromEntries(
     fs,
     files: out,
     directories: [],
+    depthPruned: 0,
+    maxFilesPruned: 0,
     truncated: false,
   };
   for (const entry of scope.relativePaths) {
@@ -151,5 +169,7 @@ export function collectFromEntries(
     directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     filesDiscovered: out.length,
     truncated: walk.truncated,
+    depthPruned: walk.depthPruned,
+    maxFilesPruned: walk.maxFilesPruned,
   };
 }

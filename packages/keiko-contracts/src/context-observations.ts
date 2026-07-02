@@ -151,19 +151,18 @@ export type ContextToolObservation =
 
 // ─── Tool-result rehydration handle ───────────────────────────────── [PR3, additive]
 // An opaque, content-free pointer to the full (pre-shaping) redacted tool output. The artifactId
-// is the sha256Hex of the ToolCallResult.toolCallId — stable and reproducible across the same
-// session turn. Evidence persistence is PR5.
+// is a deterministic hash of the producer-supplied seed — stable and reproducible across the same
+// session turn. Production evidence wiring persists artifacts under this key when a writer exists.
 export interface ContextToolRehydrationHandle {
   readonly schemaVersion: typeof CONTEXT_ENGINEERING_SCHEMA_VERSION;
   readonly laneId: ContextLaneId;
   readonly kind: "tool-result";
-  // Opaque stable key. sha256Hex(toolCallId). PR5 uses this as the EvidenceStore key.
+  // Opaque stable key used by the injected tool-result artifact store.
   readonly artifactId: string;
   // Number of original content items (1 for a command, N for a test with N failing cases).
   readonly itemCount: number;
   // Approximate token cost of the full unshaped output (for PR4 lane-budget decisions).
   readonly approxTokens: number;
-  // Set when the full output was intentionally not persisted (e.g. output exceeded cap AND the
-  // redacted truncation marker is the authoritative content). No PR5 write expected.
+  // Set when the full output was intentionally not persisted, or persistence failed closed.
   readonly notPersistedReason?: string | undefined;
 }

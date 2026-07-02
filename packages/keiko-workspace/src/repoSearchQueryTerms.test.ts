@@ -34,6 +34,22 @@ describe("expandedQueryTerms", () => {
     );
   });
 
+  it("adds morphology and debugging-domain aliases for code questions", () => {
+    const terms = expandedQueryTerms("checkout totals are calculating wrong", false);
+    expect(terms).toEqual(
+      expect.arrayContaining([
+        "checkout",
+        "cart",
+        "total",
+        "sum",
+        "calculating",
+        "calculate",
+        "wrong",
+        "incorrect",
+      ]),
+    );
+  });
+
   it("keeps pathological identifier input linear and bounded", () => {
     const query = `${"PaymentServiceTest ".repeat(20_000)} /api/${"x".repeat(100_000)}`;
     const start = performance.now();

@@ -17,8 +17,10 @@ import {
   isValidScopePath,
   validateRetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { redact } from "@oscharko-dev/keiko-security";
 import { readWorkspaceFile } from "./discovery.js";
 import {
+  FileTooLargeError,
   RepoSearchInvalidQueryError,
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
@@ -31,14 +33,16 @@ import { buildMatcher, compileGlob, fingerprintFor } from "./repoSearchMatchers.
 import {
   buildAtom,
   buildCandidate,
+  collectFileMatches,
+  emitFileMatches,
   elapsed,
   gatherCandidates,
-  hitLimit,
+  hitScanLimit,
   isImageScopePath,
   isIoError,
   probeBinary,
-  scanFile,
   type CandidateSet,
+  type FileMatches,
   type RunState,
   type SearchTextRunner,
 } from "./repoSearchScan.js";
@@ -50,11 +54,13 @@ import {
   type SemanticSearchProvider,
 } from "./repoSearchSemantic.js";
 import {
+  lowValueRescuePolicy,
   policyOmissionReason,
   resolveSearchPolicy,
   withSemanticRankingDiagnostics,
   type SearchDiagnostics,
   type SearchHints,
+  type SearchPolicy,
 } from "./repoSearchPolicy.js";
 import type { WorkspaceInfo } from "./types.js";
 import {
@@ -111,6 +117,7 @@ export interface SearchResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly candidates: readonly CandidateFile[];
   readonly filesScanned: number;
+  readonly oversizedFilesScanned: number;
   readonly elapsedMs: number;
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics | undefined;
@@ -155,6 +162,10 @@ function clampToBytes(text: string, maxBytes: number): { excerpt: string; trunca
   return { excerpt, truncated: true };
 }
 
+function decodeUtf8Prefix(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes).replace(/�+$/u, "");
+}
+
 function assertQuery(query: RetrievalQuery): void {
   const result = validateRetrievalQuery(query);
   if (!result.ok) {
@@ -187,6 +198,7 @@ function coverageReasons(
 interface CoverageInputs {
   readonly diagnostics: SearchDiagnostics | undefined;
   readonly filesScanned: number;
+  readonly oversizedFilesScanned: number;
   readonly matchesReturned: number;
   readonly elapsedMs: number;
   readonly limits: SearchLimits;
@@ -201,6 +213,9 @@ interface CoverageStats {
   readonly ignoredByDiscovery: number;
   readonly deniedByDiscovery: number;
   readonly depthPrunedByDiscovery: number;
+  readonly maxFilesPrunedByDiscovery: number;
+  readonly lowValueRescueFilesDiscovered: number;
+  readonly lowValueRescueFilesScanned: number;
 }
 
 const EMPTY_COVERAGE_STATS: CoverageStats = {
@@ -209,6 +224,9 @@ const EMPTY_COVERAGE_STATS: CoverageStats = {
   ignoredByDiscovery: 0,
   deniedByDiscovery: 0,
   depthPrunedByDiscovery: 0,
+  maxFilesPrunedByDiscovery: 0,
+  lowValueRescueFilesDiscovered: 0,
+  lowValueRescueFilesScanned: 0,
 };
 
 function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStats {
@@ -221,6 +239,9 @@ function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStat
     ignoredByDiscovery: diagnostics.ignoredByDiscovery,
     deniedByDiscovery: diagnostics.deniedByDiscovery,
     depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
+    maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
+    lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
+    lowValueRescueFilesScanned: diagnostics.lowValueRescueFilesScanned ?? 0,
   };
 }
 
@@ -277,9 +298,14 @@ function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagno
     filesAfterPolicy: stats.filesAfterPolicy,
     filesScanned: inputs.filesScanned,
     filesSkipped: skippedFileCount(inputs, stats),
+    oversizedFilesScanned: inputs.oversizedFilesScanned,
+    lowValueRescueFilesDiscovered: stats.lowValueRescueFilesDiscovered,
+    lowValueRescueFilesScanned: stats.lowValueRescueFilesScanned,
+    truncated: orderedReasons.length > 0,
     ignoredByDiscovery: stats.ignoredByDiscovery,
     deniedByDiscovery: stats.deniedByDiscovery,
     depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
+    maxFilesPrunedByDiscovery: stats.maxFilesPrunedByDiscovery,
     matchesReturned: inputs.matchesReturned,
     elapsedMs: inputs.elapsedMs,
     limits: {
@@ -301,12 +327,14 @@ function abortedSearchResult(
     atoms: [],
     candidates: [],
     filesScanned: 0,
+    oversizedFilesScanned: 0,
     elapsedMs,
     truncated: true,
     diagnostics,
     coverage: buildCoverageDiagnostics({
       diagnostics,
       filesScanned: 0,
+      oversizedFilesScanned: 0,
       matchesReturned: 0,
       elapsedMs,
       limits,
@@ -318,6 +346,37 @@ function abortedSearchResult(
   };
 }
 
+function compareAtoms(a: EvidenceAtom, b: EvidenceAtom): number {
+  return (
+    b.score - a.score ||
+    a.scopePath.localeCompare(b.scopePath) ||
+    a.stableId.localeCompare(b.stableId)
+  );
+}
+
+function mergeSearchAtoms(
+  lexical: readonly EvidenceAtom[],
+  semantic: readonly EvidenceAtom[],
+  cap: number,
+): readonly EvidenceAtom[] {
+  if (semantic.length === 0) {
+    return lexical;
+  }
+  const out: EvidenceAtom[] = [];
+  const seen = new Set<string>();
+  for (const atom of [...lexical, ...semantic].sort(compareAtoms)) {
+    if (out.length >= cap) {
+      break;
+    }
+    if (seen.has(atom.stableId)) {
+      continue;
+    }
+    seen.add(atom.stableId);
+    out.push(atom);
+  }
+  return out;
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 // Yields to the event loop every SCAN_YIELD_INTERVAL files so a large cold NFS/SMB workspace
@@ -325,6 +384,35 @@ function abortedSearchResult(
 // (sync walk is load-bearing for importGraph/testSourcePairing callers); the yield here covers
 // the already-async per-file scan pass where the loop overhead is measurable.
 const SCAN_YIELD_INTERVAL = 64;
+const PROJECT_METADATA_SCAN_MIN_FILES = 256;
+const PROJECT_METADATA_SCAN_MAX_FILES = 512;
+
+interface SearchTextCollection {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly lexicalAtoms: readonly EvidenceAtom[];
+  readonly semanticMatches: readonly SemanticSearchMatch[];
+  readonly candidates: readonly CandidateFile[];
+  readonly state: RunState;
+}
+
+function effectiveScanCandidateLimit(
+  runner: SearchTextRunner,
+  candidateCount: number,
+): number {
+  if (runner.policy.intent !== "project-metadata") {
+    return candidateCount;
+  }
+  const matchScaledLimit = Math.max(
+    PROJECT_METADATA_SCAN_MIN_FILES,
+    runner.limits.maxMatchesReturned * 4,
+  );
+  return Math.min(
+    candidateCount,
+    runner.limits.maxFilesScanned,
+    PROJECT_METADATA_SCAN_MAX_FILES,
+    matchScaledLimit,
+  );
+}
 
 function buildSearchTextRunner(
   scope: SearchScope,
@@ -975,9 +1063,14 @@ async function runScanLoop(
   atoms: EvidenceAtom[],
   candidates: CandidateFile[],
 ): Promise<void> {
+  const matches: FileMatches[] = [];
   let loopIndex = 0;
-  for (const file of candidateSet.files) {
-    if (hitLimit(runner, state)) {
+  const scanLimit = effectiveScanCandidateLimit(runner, candidateSet.files.length);
+  if (scanLimit < candidateSet.files.length) {
+    state.truncated = true;
+  }
+  for (const file of candidateSet.files.slice(0, scanLimit)) {
+    if (hitScanLimit(runner, state)) {
       break;
     }
     loopIndex += 1;
@@ -985,18 +1078,223 @@ async function runScanLoop(
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      if (hitLimit(runner, state)) {
+      if (hitScanLimit(runner, state)) {
         break;
       }
     }
-    await scanFile(runner, file, state, atoms, candidates);
+    const fileMatches = await collectFileMatches(runner, file, state, candidates, loopIndex);
+    if (fileMatches !== undefined) {
+      matches.push(fileMatches);
+    }
   }
+  matches.sort((a, b) => b.maxScore - a.maxScore || a.order - b.order);
+  for (const fileMatches of matches) {
+    emitFileMatches(runner, state, atoms, fileMatches);
+  }
+}
+
+function assertSearchTextQuery(query: RetrievalQuery): void {
+  assertQuery(query);
+  if (query.kind === "file-pattern") {
+    throw new RepoSearchInvalidQueryError("searchText does not accept file-pattern queries");
+  }
+}
+
+function buildRunState(candidateSet: CandidateSet): RunState {
+  return {
+    filesScanned: 0,
+    matchesReturned: 0,
+    oversizedFilesScanned: 0,
+    truncated: candidateSet.truncated,
+  };
+}
+
+async function collectSearchTextAtoms(
+  runner: SearchTextRunner,
+  candidateSet: CandidateSet,
+  state: RunState = buildRunState(candidateSet),
+): Promise<SearchTextCollection> {
+  const atoms: EvidenceAtom[] = [];
+  const candidates: CandidateFile[] = [];
+  await runScanLoop(runner, candidateSet, state, atoms, candidates);
+  const lexicalAtoms = [...atoms];
+  const semanticMatches = await runSemanticSearchSession(runner.semantic, runner.query, runner.signal);
+  const semanticAtoms = semanticMatches.map((match) => semanticAtom(runner, match));
+  const cap = Math.min(runner.limits.maxMatchesReturned, runner.query.maxResults);
+  const mergedAtoms = mergeSearchAtoms(lexicalAtoms, semanticAtoms, cap);
+  if (lexicalAtoms.length + semanticAtoms.length > mergedAtoms.length) {
+    state.truncated = true;
+  }
+  state.matchesReturned = mergedAtoms.length;
+  return { atoms: mergedAtoms, lexicalAtoms, semanticMatches, candidates, state };
+}
+
+function shouldConsiderLowValueRescue(
+  runner: SearchTextRunner,
+  primary: SearchTextCollection,
+): boolean {
+  if (!runner.policy.omitLowValueWorkspaceFiles || primary.atoms.length > 0) {
+    return false;
+  }
+  if (primary.state.filesScanned >= runner.limits.maxFilesScanned) {
+    return false;
+  }
+  if (runner.query.kind === "exact-symbol") {
+    return true;
+  }
+  return (
+    runner.query.kind === "natural-language" &&
+    runner.policy.intent !== "repository-overview" &&
+    runner.policy.intent !== "project-metadata"
+  );
+}
+
+function hasLowValueEvidenceSkipped(
+  primary: SearchTextCollection,
+  diagnostics: SearchDiagnostics,
+): boolean {
+  return (
+    diagnostics.ignoredByDiscovery > 0 ||
+    primary.candidates.some((candidate) => candidate.omitted === "generated")
+  );
+}
+
+function remainingScanLimit(
+  runner: SearchTextRunner,
+  primary: SearchTextCollection,
+): number {
+  return Math.max(0, runner.limits.maxFilesScanned - primary.state.filesScanned);
+}
+
+function lowValueOnlyCandidateSet(
+  candidateSet: CandidateSet,
+  primaryPolicy: SearchPolicy,
+): CandidateSet {
+  return {
+    ...candidateSet,
+    files: candidateSet.files.filter(
+      (file) => policyOmissionReason(file.relativePath, primaryPolicy) === "generated",
+    ),
+  };
+}
+
+function rescueRunner(
+  runner: SearchTextRunner,
+  maxFilesScanned: number,
+): SearchTextRunner {
+  return {
+    ...runner,
+    limits: { ...runner.limits, maxFilesScanned },
+    policy: lowValueRescuePolicy(runner.policy),
+    semantic: createSemanticSearchSession(runner.semantic?.provider, runner.query),
+  };
+}
+
+function combineStates(primary: RunState, rescue: RunState): RunState {
+  const truncationReasons = new Set<ContextCoverageTruncationReason>([
+    ...(primary.truncationReasons ?? []),
+    ...(rescue.truncationReasons ?? []),
+  ]);
+  return {
+    filesScanned: primary.filesScanned + rescue.filesScanned,
+    matchesReturned: primary.matchesReturned + rescue.matchesReturned,
+    oversizedFilesScanned:
+      (primary.oversizedFilesScanned ?? 0) + (rescue.oversizedFilesScanned ?? 0),
+    truncated: primary.truncated || rescue.truncated,
+    ...(truncationReasons.size > 0 ? { truncationReasons } : {}),
+  };
+}
+
+function diagnosticsWithLowValueRescue(
+  diagnostics: SearchDiagnostics,
+  rescueFilesDiscovered: number,
+  rescueFilesScanned: number,
+): SearchDiagnostics {
+  return {
+    ...diagnostics,
+    lowValueRescueFilesDiscovered: rescueFilesDiscovered,
+    lowValueRescueFilesScanned: rescueFilesScanned,
+  };
+}
+
+function mergeCollections(
+  runner: SearchTextRunner,
+  primary: SearchTextCollection,
+  rescue: SearchTextCollection,
+): SearchTextCollection {
+  const cap = Math.min(runner.limits.maxMatchesReturned, runner.query.maxResults);
+  const atoms = mergeSearchAtoms(primary.atoms, rescue.atoms, cap);
+  const selectedPaths = new Set(atoms.map((atom) => atom.scopePath));
+  return {
+    atoms,
+    lexicalAtoms: [...primary.lexicalAtoms, ...rescue.lexicalAtoms],
+    semanticMatches: [...primary.semanticMatches, ...rescue.semanticMatches],
+    candidates: [...primary.candidates, ...rescue.candidates].filter(
+      (candidate) => !selectedPaths.has(candidate.scopePath),
+    ),
+    state: combineStates(primary.state, rescue.state),
+  };
+}
+
+async function rescueLowValueEvidence(
+  runner: SearchTextRunner,
+  primarySet: CandidateSet,
+  primary: SearchTextCollection,
+): Promise<{ readonly collection: SearchTextCollection; readonly candidateSet: CandidateSet }> {
+  if (
+    !shouldConsiderLowValueRescue(runner, primary) ||
+    !hasLowValueEvidenceSkipped(primary, primarySet.diagnostics)
+  ) {
+    return { collection: primary, candidateSet: primarySet };
+  }
+  const maxFilesScanned = remainingScanLimit(runner, primary);
+  const lowValueRunner = rescueRunner(runner, maxFilesScanned);
+  const gatheredSet = gatherCandidates(
+    runner.scope,
+    runner.query,
+    lowValueRunner.limits,
+    runner.fs,
+    lowValueRunner.policy,
+  );
+  const lowValueSet = lowValueOnlyCandidateSet(gatheredSet, runner.policy);
+  if (lowValueSet.files.length === 0) {
+    return {
+      collection: primary,
+      candidateSet: {
+        ...primarySet,
+        diagnostics: diagnosticsWithLowValueRescue(
+          primarySet.diagnostics,
+          0,
+          0,
+        ),
+      },
+    };
+  }
+  const rescue = await collectSearchTextAtoms(lowValueRunner, lowValueSet, {
+    filesScanned: 0,
+    matchesReturned: 0,
+    oversizedFilesScanned: 0,
+    truncated: lowValueSet.truncated,
+    truncationReasons: primary.state.truncationReasons,
+  });
+  return {
+    collection: mergeCollections(runner, primary, rescue),
+    candidateSet: {
+      ...primarySet,
+      diagnostics: diagnosticsWithLowValueRescue(
+        primarySet.diagnostics,
+        lowValueSet.files.length,
+        rescue.state.filesScanned,
+      ),
+    },
+  };
 }
 
 interface CompletedSearchResultInputs {
   readonly atoms: readonly EvidenceAtom[];
   readonly candidates: readonly CandidateFile[];
   readonly filesScanned: number;
+  readonly oversizedFilesScanned: number;
   readonly matchesReturned: number;
   readonly elapsedMs: number;
   readonly truncated: boolean;
@@ -1012,12 +1310,14 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
     atoms: inputs.atoms,
     candidates: inputs.candidates,
     filesScanned: inputs.filesScanned,
+    oversizedFilesScanned: inputs.oversizedFilesScanned,
     elapsedMs: inputs.elapsedMs,
     truncated: inputs.truncated,
     diagnostics: inputs.diagnostics,
     coverage: buildCoverageDiagnostics({
       diagnostics: inputs.diagnostics,
       filesScanned: inputs.filesScanned,
+      oversizedFilesScanned: inputs.oversizedFilesScanned,
       matchesReturned: inputs.matchesReturned,
       elapsedMs: inputs.elapsedMs,
       limits: inputs.limits,
@@ -1116,6 +1416,7 @@ function searchRunState(candidateSet: CandidateSet): {
     state: {
       filesScanned: 0,
       matchesReturned: 0,
+      oversizedFilesScanned: 0,
       truncated: candidateSet.truncated,
       truncationReasons,
     },
@@ -1136,6 +1437,7 @@ function completedSearchTextResult(
     atoms,
     candidates,
     filesScanned: state.filesScanned,
+    oversizedFilesScanned: state.oversizedFilesScanned ?? 0,
     matchesReturned: state.matchesReturned,
     elapsedMs: elapsed(runner),
     truncated: state.truncated,
@@ -1168,25 +1470,21 @@ async function executeSearchText(
       candidateSet.truncated,
     );
   }
-  const atoms: EvidenceAtom[] = [];
-  const candidates: CandidateFile[] = [];
   const { state, truncationReasons } = searchRunState(candidateSet);
-  await runScanLoop(searchRunner, candidateSet, state, atoms, candidates);
-  const lexicalAtoms = [...atoms];
-  const semanticMatches = await runSemanticSearchSession(searchRunner.semantic, query, deps.signal);
-  appendSemanticAtoms(searchRunner, state, atoms, semanticMatches);
+  const primary = await collectSearchTextAtoms(searchRunner, candidateSet, state);
+  const rescued = await rescueLowValueEvidence(searchRunner, candidateSet, primary);
   await persistSearchTextSession(workspaceIndexSession);
   const diagnostics = withSemanticRankingDiagnostics(
-    candidateSet.diagnostics,
-    bestLexicalAtomsByPath(lexicalAtoms),
-    semanticMatches,
+    rescued.candidateSet.diagnostics,
+    bestLexicalAtomsByPath(rescued.collection.lexicalAtoms),
+    rescued.collection.semanticMatches,
   );
   return completedSearchTextResult(
     searchRunner,
-    { ...candidateSet, diagnostics },
-    state,
-    atoms,
-    candidates,
+    { ...rescued.candidateSet, diagnostics },
+    rescued.collection.state,
+    rescued.collection.atoms,
+    rescued.collection.candidates,
     truncationReasons,
     workspaceIndexReport(workspaceIndexSession),
   );
@@ -1211,31 +1509,21 @@ function semanticAtomLineRange(
   return match.line === undefined ? undefined : { startLine: match.line, endLine: match.line };
 }
 
-function appendSemanticAtoms(
+function semanticAtom(
   runner: SearchTextRunner,
-  state: RunState,
-  atoms: EvidenceAtom[],
-  matches: readonly SemanticSearchMatch[],
-): void {
+  match: SemanticSearchMatch,
+): EvidenceAtom {
   const tool = semanticSearchTool(runner.semantic?.provider.name ?? "disabled");
-  for (const match of matches) {
-    if (hitLimit(runner, state)) {
-      return;
-    }
-    atoms.push(
-      buildAtom({
-        scopeId: runner.scope.scopeId,
-        scopePath: match.scopePath,
-        lineRange: semanticAtomLineRange(match),
-        provenanceKind: "model-rerank",
-        tool,
-        queryFingerprint: runner.fingerprint,
-        score: match.score,
-        emittedAtMs: runner.nowMs(),
-      }),
-    );
-    state.matchesReturned += 1;
-  }
+  return buildAtom({
+    scopeId: runner.scope.scopeId,
+    scopePath: match.scopePath,
+    lineRange: semanticAtomLineRange(match),
+    provenanceKind: "model-rerank",
+    tool,
+    queryFingerprint: runner.fingerprint,
+    score: match.score,
+    emittedAtMs: runner.nowMs(),
+  });
 }
 
 async function persistSearchTextSession(
@@ -1290,10 +1578,7 @@ export async function searchText(
   deps: FacadeDeps = {},
 ): Promise<SearchResult> {
   assertWorkspaceRoot(scope.workspace);
-  assertQuery(query);
-  if (query.kind === "file-pattern") {
-    throw new RepoSearchInvalidQueryError("searchText does not accept file-pattern queries");
-  }
+  assertSearchTextQuery(query);
   const runner = searchTextRunner(scope, query, limits, deps);
   if (isAborted(deps.signal)) {
     return abortedSearchResult(elapsed(runner), limits);
@@ -1343,6 +1628,10 @@ function hitFileListingLimit(
     state.truncationReasons.add("aborted");
     return true;
   }
+  if (state.filesScanned >= limits.maxFilesScanned) {
+    state.truncationReasons.add("file-cap");
+    return true;
+  }
   if (state.atoms.length >= maxMatches) {
     state.truncationReasons.add("match-cap");
     return true;
@@ -1357,7 +1646,7 @@ function hitFileListingLimit(
 function collectFileListings(
   ctx: FindFilesContext,
   candidateSet: CandidateSet,
-  policy: ReturnType<typeof resolveSearchPolicy>,
+  policy: SearchPolicy,
   inputs: {
     readonly limits: SearchLimits;
     readonly maxMatches: number;
@@ -1403,6 +1692,141 @@ function collectFileListings(
   return state;
 }
 
+function selectedPathSet(atoms: readonly EvidenceAtom[]): ReadonlySet<string> {
+  return new Set(atoms.map((atom) => atom.scopePath));
+}
+
+function omitSelectedCandidates(
+  candidates: readonly CandidateFile[],
+  selectedPaths: ReadonlySet<string>,
+): CandidateFile[] {
+  return candidates.filter((candidate) => !selectedPaths.has(candidate.scopePath));
+}
+
+function shouldConsiderLowValueFileListingRescue(
+  policy: SearchPolicy,
+  state: FindFilesState,
+  candidateSet: CandidateSet,
+  limits: SearchLimits,
+): boolean {
+  if (!policy.omitLowValueWorkspaceFiles || state.atoms.length > 0) {
+    return false;
+  }
+  if (state.filesScanned >= limits.maxFilesScanned) {
+    return false;
+  }
+  return (
+    candidateSet.diagnostics.ignoredByDiscovery > 0 ||
+    state.candidates.some((candidate) => candidate.omitted === "generated")
+  );
+}
+
+function combineFileListingStates(primary: FindFilesState, rescue: FindFilesState): FindFilesState {
+  const atoms = [...primary.atoms, ...rescue.atoms];
+  const truncationReasons = new Set<ContextCoverageTruncationReason>([
+    ...primary.truncationReasons,
+    ...rescue.truncationReasons,
+  ]);
+  return {
+    atoms,
+    candidates: omitSelectedCandidates(
+      [...primary.candidates, ...rescue.candidates],
+      selectedPathSet(atoms),
+    ),
+    filesScanned: primary.filesScanned + rescue.filesScanned,
+    truncated: primary.truncated || rescue.truncated,
+    truncationReasons,
+  };
+}
+
+function candidateSetWithLowValueRescueDiagnostics(
+  primarySet: CandidateSet,
+  lowValueSet: CandidateSet,
+  rescueState: FindFilesState,
+): CandidateSet {
+  return {
+    ...primarySet,
+    diagnostics: diagnosticsWithLowValueRescue(
+      primarySet.diagnostics,
+      lowValueSet.files.length,
+      rescueState.filesScanned,
+    ),
+  };
+}
+
+function rescueLowValueFileListings(
+  ctx: FindFilesContext,
+  inputs: {
+    readonly query: RetrievalQuery;
+    readonly limits: SearchLimits;
+    readonly fs: WorkspaceFs;
+    readonly policy: SearchPolicy;
+    readonly candidateSet: CandidateSet;
+    readonly state: FindFilesState;
+    readonly maxMatches: number;
+    readonly startMs: number;
+    readonly signal?: AbortSignal | undefined;
+  },
+): { readonly state: FindFilesState; readonly candidateSet: CandidateSet } {
+  if (
+    !shouldConsiderLowValueFileListingRescue(
+      inputs.policy,
+      inputs.state,
+      inputs.candidateSet,
+      inputs.limits,
+    )
+  ) {
+    return { state: inputs.state, candidateSet: inputs.candidateSet };
+  }
+  const maxFilesScanned = Math.max(0, inputs.limits.maxFilesScanned - inputs.state.filesScanned);
+  const lowValuePolicy = lowValueRescuePolicy(inputs.policy);
+  const lowValueLimits = { ...inputs.limits, maxFilesScanned };
+  const gatheredSet = gatherCandidates(
+    ctx.scope,
+    inputs.query,
+    lowValueLimits,
+    inputs.fs,
+    lowValuePolicy,
+  );
+  const lowValueSet = lowValueOnlyCandidateSet(gatheredSet, inputs.policy);
+  const rescueState = collectFileListings(ctx, lowValueSet, lowValuePolicy, {
+    limits: lowValueLimits,
+    maxMatches: inputs.maxMatches,
+    startMs: inputs.startMs,
+    ...(inputs.signal !== undefined ? { signal: inputs.signal } : {}),
+  });
+  return {
+    state: combineFileListingStates(inputs.state, rescueState),
+    candidateSet: candidateSetWithLowValueRescueDiagnostics(
+      inputs.candidateSet,
+      lowValueSet,
+      rescueState,
+    ),
+  };
+}
+
+function fileListingResult(
+  state: FindFilesState,
+  candidateSet: CandidateSet,
+  elapsedMs: number,
+  limits: SearchLimits,
+): SearchResult {
+  return completedSearchResult({
+    atoms: state.atoms,
+    candidates: state.candidates,
+    filesScanned: state.filesScanned,
+    oversizedFilesScanned: 0,
+    matchesReturned: state.atoms.length,
+    elapsedMs,
+    truncated: state.truncated,
+    diagnostics: candidateSet.diagnostics,
+    limits,
+    candidateTruncated: candidateSet.truncated,
+    truncationReasons: state.truncationReasons,
+    workspaceIndex: undefined,
+  });
+}
+
 function findFilesSync(
   scope: SearchScope,
   query: RetrievalQuery,
@@ -1440,18 +1864,20 @@ function findFilesSync(
     startMs,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return completedSearchResult({
-    atoms: state.atoms,
-    candidates: state.candidates,
-    filesScanned: state.filesScanned,
-    matchesReturned: state.atoms.length,
-    elapsedMs: nowMs() - startMs,
-    truncated: state.truncated,
-    diagnostics: candidateSet.diagnostics,
-    limits: { ...limits, maxMatchesReturned: effectiveMaxMatches },
-    candidateTruncated: candidateSet.truncated,
-    truncationReasons: state.truncationReasons,
-    workspaceIndex: undefined,
+  const rescued = rescueLowValueFileListings(ctx, {
+    query,
+    limits,
+    fs,
+    policy,
+    candidateSet,
+    state,
+    maxMatches: effectiveMaxMatches,
+    startMs,
+    ...(signal !== undefined ? { signal } : {}),
+  });
+  return fileListingResult(rescued.state, rescued.candidateSet, nowMs() - startMs, {
+    ...limits,
+    maxMatchesReturned: effectiveMaxMatches,
   });
 }
 
@@ -1586,6 +2012,47 @@ async function assertExcerptNotBinary(
   }
 }
 
+async function readExcerptLines(
+  scope: SearchScope,
+  request: ReadExcerptRequest,
+  fs: WorkspaceFs,
+  targetPath: string,
+): Promise<readonly string[]> {
+  try {
+    return readWorkspaceFile(
+      scope.workspace,
+      request.scopePath,
+      { maxBytes: MAX_EXCERPT_FILE_BYTES },
+      fs,
+    ).text.split("\n");
+  } catch (err) {
+    if (!(err instanceof FileTooLargeError)) {
+      throw err;
+    }
+    const readFileBytes = fs.readFileBytes;
+    if (readFileBytes === undefined) {
+      throw err;
+    }
+    let bytes: Uint8Array;
+    try {
+      bytes = await readFileBytes(targetPath, MAX_EXCERPT_FILE_BYTES);
+    } catch (readErr) {
+      if (isIoError(readErr)) {
+        throw new RepoSearchUnsupportedFileError(
+          `cannot read excerpt of unreadable file: ${request.scopePath}`,
+          "io-error",
+        );
+      }
+      throw readErr;
+    }
+    const lines = redact(decodeUtf8Prefix(bytes)).split("\n");
+    if (request.startLine > lines.length) {
+      throw err;
+    }
+    return lines;
+  }
+}
+
 export async function readExcerpt(
   scope: SearchScope,
   request: ReadExcerptRequest,
@@ -1614,16 +2081,9 @@ export async function readExcerpt(
     throw new RepoSearchUnsupportedFileError("repo-search operation aborted", "aborted");
   }
   // Read enough of the file to reach the requested line window (bounded by MAX_EXCERPT_FILE_BYTES),
-  // then clamp the returned content to the caller's request.maxBytes budget. The read cap is
-  // intentionally larger than request.maxBytes so a window deep in a multi-kibibyte file is still
-  // reachable instead of the whole file being rejected.
-  const content = readWorkspaceFile(
-    scope.workspace,
-    request.scopePath,
-    { maxBytes: MAX_EXCERPT_FILE_BYTES },
-    fs,
-  );
-  const allLines = content.text.split("\n");
+  // then clamp the returned content to the caller's request.maxBytes budget. For files larger than
+  // the read cap, the optional raw-byte port can still serve early windows from the bounded prefix.
+  const allLines = await readExcerptLines(scope, request, fs, target.path);
   const slice = allLines.slice(request.startLine - 1, request.endLine).join("\n");
   const clamped = clampToBytes(slice, request.maxBytes);
   const atom = buildAtom({

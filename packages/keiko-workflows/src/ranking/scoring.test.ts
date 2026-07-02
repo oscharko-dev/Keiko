@@ -124,6 +124,8 @@ describe("weightsForIntent / isIntentBoosted", () => {
     expect(meta.canonicalMetadata).toBeGreaterThan(0);
     const targeted = weightsForIntent("targeted-code-search");
     expect(targeted.structuralEdge).toBeGreaterThan(0);
+    expect(targeted.gitRecency).toBeGreaterThan(0);
+    expect(targeted.gitChurn).toBeGreaterThan(0);
     // The base weights are preserved unchanged.
     expect(meta.provenanceBestScore).toBe(DEFAULT_SCORING_WEIGHTS.provenanceBestScore);
   });
@@ -141,19 +143,21 @@ describe("weightsForIntent / isIntentBoosted", () => {
     expect(isIntentBoosted(undefined)).toBe(false);
   });
 
-  it("computeScore ignores the new signals under DEFAULT weights (inert) but rewards them when weighted", () => {
+  it("computeScore ignores optional signals under DEFAULT weights but rewards them when weighted", () => {
     const signals: ExtractedSignals = {
       scopePath: "pom.xml",
       signals: [
         { name: "provenance-best-score", value: 0.5 },
         { name: "canonical-metadata", value: 1 },
         { name: "structural-edge", value: 1 },
+        { name: "git-recency", value: 1 },
+        { name: "git-churn", value: 1 },
       ],
       baseScore: 0,
       generatedHint: false,
     };
     const defaultScore = computeScore(signals, DEFAULT_SCORING_WEIGHTS);
-    const boostedScore = computeScore(signals, weightsForIntent("project-metadata"));
+    const boostedScore = computeScore(signals, weightsForIntent("targeted-code-search"));
     // Under DEFAULT weights the unknown-to-default signals contribute nothing.
     expect(defaultScore).toBeCloseTo(0.5 * DEFAULT_SCORING_WEIGHTS.provenanceBestScore, 10);
     expect(boostedScore).toBeGreaterThan(defaultScore);

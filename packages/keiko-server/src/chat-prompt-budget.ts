@@ -10,14 +10,19 @@ import type {
   ConversationDocumentContextWire,
   DiscussionMode,
 } from "@oscharko-dev/keiko-contracts";
+import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { ConversationMemoryContextEntryWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ChatMessage } from "./store/index.js";
 import { usableGatewayMessages } from "./conversation-gateway.js";
 import {
+  CONVERSATION_CONTEXT_BLOCK_HEADER,
+  CONVERSATION_MEMORY_BLOCK_HEADER,
   CONVERSATION_SYSTEM_PROMPT,
+  CONVERSATION_USER_BLOCK_HEADER,
   composeConversationPrompt,
   renderConversationDocumentContextBlock,
 } from "./conversation-prompt.js";
+import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import {
   conversationForGatewayWithCompaction,
   type ConversationCompactionOutcome,
@@ -44,6 +49,7 @@ interface PromptAssemblyInput {
   readonly profile: ContextProfile;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly totalMemoryEntries: number;
+  readonly totalCompactionContextItems: number;
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
@@ -58,6 +64,8 @@ interface PromptLaneSelection {
   readonly diagnostics: ContextAssemblyDiagnostics;
 }
 
+const MEMORY_LIST_HEADER = "# Relevant memories";
+
 function renderMemoryContextText(
   memories: readonly ConversationMemoryContextEntryWire[],
   compactionContextText: string | undefined,
@@ -67,7 +75,7 @@ function renderMemoryContextText(
   }
   const lines: string[] = [];
   if (memories.length > 0) {
-    lines.push("# Relevant memories");
+    lines.push(MEMORY_LIST_HEADER);
     for (const memory of memories) {
       lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
     }
@@ -134,6 +142,40 @@ function documentLaneItems(
   }));
 }
 
+function allocatorUserTaskText(input: {
+  readonly request: PromptAssemblyInput["request"];
+  readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly compactionContextText?: string | undefined;
+  readonly documentContext: readonly ConversationDocumentContextWire[];
+}): string {
+  const hasMemoryContext =
+    input.memoryEntries.length > 0 || input.compactionContextText !== undefined;
+  const hasDocumentContext = input.documentContext.length > 0;
+  if (!hasMemoryContext && !hasDocumentContext) {
+    return composeConversationPrompt(
+      input.request.content,
+      [],
+      undefined,
+      input.request.discussionMode,
+    );
+  }
+  const blocks = [`${CONVERSATION_USER_BLOCK_HEADER}\n${input.request.content}`];
+  if (hasMemoryContext) {
+    blocks.push(
+      input.memoryEntries.length > 0
+        ? `${CONVERSATION_MEMORY_BLOCK_HEADER}\n${MEMORY_LIST_HEADER}`
+        : CONVERSATION_MEMORY_BLOCK_HEADER,
+    );
+  }
+  if (hasDocumentContext) {
+    blocks.push(CONVERSATION_CONTEXT_BLOCK_HEADER);
+  }
+  const body = blocks.join("\n\n");
+  return input.request.discussionMode === undefined
+    ? body
+    : `${composeDiscussionDirectiveBlock(input.request.discussionMode)}\n\n${body}`;
+}
+
 function historyLaneItems(historyPrefix: readonly ChatMessage[]): ContextLaneInput["items"] {
   const usable = usableGatewayMessages(historyPrefix);
   return usable.map((message, index) => ({
@@ -160,12 +202,7 @@ function buildPromptAllocatorLanes(input: {
       items: [
         {
           id: "latest-user-task",
-          text: composeConversationPrompt(
-            input.request.content,
-            [],
-            undefined,
-            input.request.discussionMode,
-          ),
+          text: allocatorUserTaskText(input),
           score: 1,
         },
       ],
@@ -217,6 +254,72 @@ function selectPromptLanes(input: {
   };
 }
 
+function promptLaneSelectionVariants(selection: PromptLaneSelection): readonly PromptLaneSelection[] {
+  const variants: PromptLaneSelection[] = [];
+  const seen = new Set<string>();
+  const pushVariant = (
+    memoryEntries: readonly ConversationMemoryContextEntryWire[],
+    compactionContextText: string | undefined,
+    documentContext: readonly ConversationDocumentContextWire[],
+  ): void => {
+    const key = [
+      memoryEntries.length,
+      compactionContextText === undefined ? "0" : "1",
+      documentContext.length,
+    ].join(":");
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    variants.push({
+      memoryEntries,
+      compactionContextText,
+      documentContext,
+      diagnostics: selection.diagnostics,
+    });
+  };
+
+  pushVariant(
+    selection.memoryEntries,
+    selection.compactionContextText,
+    selection.documentContext,
+  );
+  for (let documentCount = selection.documentContext.length - 1; documentCount >= 0; documentCount -= 1) {
+    pushVariant(
+      selection.memoryEntries,
+      selection.compactionContextText,
+      selection.documentContext.slice(0, documentCount),
+    );
+  }
+  for (let memoryCount = selection.memoryEntries.length; memoryCount >= 0; memoryCount -= 1) {
+    const memoryEntries = selection.memoryEntries.slice(0, memoryCount);
+    pushVariant(memoryEntries, selection.compactionContextText, []);
+    if (selection.compactionContextText !== undefined) {
+      pushVariant(memoryEntries, undefined, []);
+    }
+  }
+  return variants;
+}
+
+function compactHistoryForBudget(
+  input: PromptAssemblyInput,
+  historyBudget: number,
+): ConversationCompactionOutcome | undefined {
+  try {
+    return conversationForGatewayWithCompaction(input.historyPrefix, {
+      contextProfile: input.profile,
+      effectiveInputBudget: historyBudget,
+      preserveNewestTurn: false,
+      redactionSecrets: input.redactionSecrets,
+    });
+  } catch (error) {
+    if (error instanceof ContextOverflowError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function assembleGatewayPromptCandidate(
   input: PromptAssemblyInput,
 ): GatewayPromptAssembly | undefined {
@@ -232,11 +335,8 @@ function assembleGatewayPromptCandidate(
     return undefined;
   }
   const historyBudget = input.profile.effectiveInputBudget - latestTurnTokens;
-  const historyOutcome = conversationForGatewayWithCompaction(input.historyPrefix, {
-    contextProfile: input.profile,
-    effectiveInputBudget: historyBudget,
-    redactionSecrets: input.redactionSecrets,
-  });
+  const historyOutcome = compactHistoryForBudget(input, historyBudget);
+  if (historyOutcome === undefined) return undefined;
   const messages = [...historyOutcome.messages, { role: "user" as const, content: latestTurn }];
   if (
     estimateTokensForSegments(messages.map((message) => message.content)) >
@@ -253,6 +353,7 @@ function assembleGatewayPromptCandidate(
       historyTurnCount: input.historyTurnCount,
       memoryEntries: input.memoryEntries,
       totalMemoryEntries: input.totalMemoryEntries,
+      totalCompactionContextItems: input.totalCompactionContextItems,
       documentContext: input.documentContext,
       totalDocumentEntries: input.totalDocumentEntries,
       request: input.request,
@@ -282,6 +383,7 @@ export function selectGatewayPromptAssembly(input: {
     request: input.request,
     profile: input.profile,
     totalMemoryEntries: input.memoryEntries.length,
+    totalCompactionContextItems: input.compactionContextText === undefined ? 0 : 1,
     totalDocumentEntries: input.documentContext.length,
     compactionContextText: input.compactionContextText,
     redactionSecrets: input.redactionSecrets,
@@ -294,13 +396,19 @@ export function selectGatewayPromptAssembly(input: {
     compactionContextText: input.compactionContextText,
     documentContext: input.documentContext,
   });
-  return assembleGatewayPromptCandidate({
-    ...baseInput,
-    memoryEntries: selection.memoryEntries,
-    compactionContextText: selection.compactionContextText,
-    documentContext: selection.documentContext,
-    allocatorDiagnostics: selection.diagnostics,
-  });
+  for (const variant of promptLaneSelectionVariants(selection)) {
+    const candidate = assembleGatewayPromptCandidate({
+      ...baseInput,
+      memoryEntries: variant.memoryEntries,
+      compactionContextText: variant.compactionContextText,
+      documentContext: variant.documentContext,
+      allocatorDiagnostics: variant.diagnostics,
+    });
+    if (candidate !== undefined) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 export function buildChatCompactionContextText(

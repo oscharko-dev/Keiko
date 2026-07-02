@@ -44,6 +44,10 @@ function laneDiagnostics(input: {
   return input;
 }
 
+function budgetCompactionReason(excludedItems: number): { readonly compactionReason?: string } {
+  return excludedItems > 0 ? { compactionReason: "budget" } : {};
+}
+
 function textTokens(text: string | undefined): number {
   return estimateTokensForSegments(text === undefined ? [] : [text]);
 }
@@ -148,14 +152,21 @@ function buildWorkingMemoryLane(input: {
   readonly memoryTokens: number;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly totalMemoryEntries: number;
+  readonly compactionContextText?: string | undefined;
+  readonly totalCompactionContextItems: number;
   readonly inputBudget: number;
 }): ContextLaneDiagnostics {
+  const includedItems =
+    input.memoryEntries.length + (input.compactionContextText === undefined ? 0 : 1);
+  const excludedItems =
+    input.totalMemoryEntries + input.totalCompactionContextItems - includedItems;
   return laneDiagnostics({
     laneId: "working-memory",
     estimatedTokens: input.memoryTokens,
-    includedItems: input.memoryEntries.length,
-    excludedItems: input.totalMemoryEntries - input.memoryEntries.length,
+    includedItems,
+    excludedItems,
     budgetPressure: pressureForTokens(input.memoryTokens, input.inputBudget),
+    ...budgetCompactionReason(excludedItems),
   });
 }
 
@@ -165,12 +176,14 @@ function buildRepoEvidenceLane(input: {
   readonly totalDocumentEntries: number;
   readonly inputBudget: number;
 }): ContextLaneDiagnostics {
+  const excludedItems = input.totalDocumentEntries - input.documentContext.length;
   return laneDiagnostics({
     laneId: "repo-evidence",
     estimatedTokens: input.documentTokens,
     includedItems: input.documentContext.length,
-    excludedItems: input.totalDocumentEntries - input.documentContext.length,
+    excludedItems,
     budgetPressure: pressureForTokens(input.documentTokens, input.inputBudget),
+    ...budgetCompactionReason(excludedItems),
   });
 }
 
@@ -228,45 +241,95 @@ function buildHistorySummaryLane(input: {
             droppedTurns: droppedHistoryTurns,
             retainedTurns: retainedHistoryTurns,
           },
-        }),
+    }),
   });
 }
 
-function buildPromptAssemblyLanes(input: {
+function allocatorLane(
+  diagnostics: ContextAssemblyDiagnostics | undefined,
+  laneId: ContextLaneDiagnostics["laneId"],
+): ContextLaneDiagnostics | undefined {
+  return diagnostics?.lanes.find((lane) => lane.laneId === laneId);
+}
+
+function withAllocatorSignals(
+  lane: ContextLaneDiagnostics,
+  allocator: ContextLaneDiagnostics | undefined,
+): ContextLaneDiagnostics {
+  if (allocator === undefined) {
+    return lane;
+  }
+  const compactionReason = lane.compactionReason ?? allocator.compactionReason;
+  return {
+    ...lane,
+    budgetPressure: allocator.budgetPressure,
+    ...(compactionReason === undefined ? {} : { compactionReason }),
+    ...(allocator.provenanceCounts === undefined
+      ? {}
+      : { provenanceCounts: allocator.provenanceCounts }),
+  };
+}
+
+function buildPromptWorkingMemoryLane(input: {
+  readonly memoryTokens: number;
+  readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
+  readonly totalMemoryEntries: number;
+  readonly compactionContextText?: string | undefined;
+  readonly totalCompactionContextItems: number;
+  readonly inputBudget: number;
+}): ContextLaneDiagnostics {
+  return buildWorkingMemoryLane({
+    memoryTokens: input.memoryTokens,
+    memoryEntries: input.memoryEntries,
+    totalMemoryEntries: input.totalMemoryEntries,
+    compactionContextText: input.compactionContextText,
+    totalCompactionContextItems: input.totalCompactionContextItems,
+    inputBudget: input.inputBudget,
+  });
+}
+
+interface BuildPromptAssemblyLanesInput {
   readonly tokenSummary: ReturnType<typeof buildPromptAssemblyTokenSummary>;
   readonly profile: ContextProfile;
   readonly historyOutcome: ConversationCompactionOutcome;
   readonly historyTurnCount: number;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly totalMemoryEntries: number;
+  readonly compactionContextText?: string | undefined;
+  readonly totalCompactionContextItems: number;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
   readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
-}): ContextLaneDiagnostics[] {
+}
+
+function buildPromptAssemblyLanes(input: BuildPromptAssemblyLanesInput): ContextLaneDiagnostics[] {
   const inputBudget = input.profile.effectiveInputBudget;
   const { historyTokens, memoryTokens, documentTokens, latestTurnTokens, systemTokens } =
     input.tokenSummary;
-  const allocatorLane = (
-    laneId: ContextLaneDiagnostics["laneId"],
-  ): ContextLaneDiagnostics | undefined =>
-    input.allocatorDiagnostics?.lanes.find((lane) => lane.laneId === laneId);
+  const systemLane = buildSystemContractLane({ systemTokens, inputBudget });
+  const userTaskLane = buildUserTaskLane({ latestTurnTokens, inputBudget });
+  const repoEvidenceLane = buildRepoEvidenceLane({
+    documentTokens,
+    documentContext: input.documentContext,
+    totalDocumentEntries: input.totalDocumentEntries,
+    inputBudget,
+  });
+  const workingMemoryLane = buildPromptWorkingMemoryLane({
+    memoryTokens,
+    memoryEntries: input.memoryEntries,
+    totalMemoryEntries: input.totalMemoryEntries,
+    compactionContextText: input.compactionContextText,
+    totalCompactionContextItems: input.totalCompactionContextItems,
+    inputBudget,
+  });
   return [
-    allocatorLane("system-contract") ?? buildSystemContractLane({ systemTokens, inputBudget }),
-    allocatorLane("user-task") ?? buildUserTaskLane({ latestTurnTokens, inputBudget }),
-    allocatorLane("repo-evidence") ??
-      buildRepoEvidenceLane({
-        documentTokens,
-        documentContext: input.documentContext,
-        totalDocumentEntries: input.totalDocumentEntries,
-        inputBudget,
-      }),
-    allocatorLane("working-memory") ??
-      buildWorkingMemoryLane({
-        memoryTokens,
-        memoryEntries: input.memoryEntries,
-        totalMemoryEntries: input.totalMemoryEntries,
-        inputBudget,
-      }),
+    withAllocatorSignals(systemLane, allocatorLane(input.allocatorDiagnostics, "system-contract")),
+    withAllocatorSignals(userTaskLane, allocatorLane(input.allocatorDiagnostics, "user-task")),
+    withAllocatorSignals(repoEvidenceLane, allocatorLane(input.allocatorDiagnostics, "repo-evidence")),
+    withAllocatorSignals(
+      workingMemoryLane,
+      allocatorLane(input.allocatorDiagnostics, "working-memory"),
+    ),
     buildHistorySummaryLane({
       historyOutcome: input.historyOutcome,
       historyTurnCount: input.historyTurnCount,
@@ -286,6 +349,7 @@ export function buildPromptAssemblyDiagnostics(input: {
   readonly historyTurnCount: number;
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly totalMemoryEntries: number;
+  readonly totalCompactionContextItems: number;
   readonly documentContext: readonly ConversationDocumentContextWire[];
   readonly totalDocumentEntries: number;
   readonly compactionContextText?: string | undefined;
@@ -312,6 +376,8 @@ export function buildPromptAssemblyDiagnostics(input: {
       historyTurnCount: input.historyTurnCount,
       memoryEntries: input.memoryEntries,
       totalMemoryEntries: input.totalMemoryEntries,
+      compactionContextText: input.compactionContextText,
+      totalCompactionContextItems: input.totalCompactionContextItems,
       documentContext: input.documentContext,
       totalDocumentEntries: input.totalDocumentEntries,
       allocatorDiagnostics: input.allocatorDiagnostics,

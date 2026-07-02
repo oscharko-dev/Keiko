@@ -7,7 +7,7 @@ export interface BinaryProbeOptions {
 }
 
 export const DEFAULT_BINARY_PROBE: BinaryProbeOptions = {
-  maxProbeBytes: 512,
+  maxProbeBytes: 4096,
 } as const;
 
 export type TextByteEncoding = "utf-8" | "utf-16le" | "utf-16be";
@@ -157,5 +157,5 @@ export function looksBinary(bytes: Uint8Array, options?: BinaryProbeOptions): bo
       controlCount += 1;
     }
   }
-  return nulCount / limit > 0.02 || controlCount / limit > 0.3;
+  return (nulCount > 1 && nulCount / limit > 0.02) || controlCount / limit > 0.3;
 }

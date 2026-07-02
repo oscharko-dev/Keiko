@@ -62,6 +62,22 @@ function memReadFileBytes(
   return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, cap)));
 }
 
+function memReadFileUtf8Prefix(
+  files: Readonly<Record<string, string>>,
+  key: string | undefined,
+  absolutePath: string,
+  maxBytes: number,
+): string {
+  const cap = Math.max(0, Math.floor(maxBytes));
+  const encoded = encodedFile(files, key);
+  if (encoded === undefined) {
+    throw new Error(`ENOENT: ${absolutePath}`);
+  }
+  return new TextDecoder("utf-8", { fatal: false })
+    .decode(encoded.subarray(0, Math.min(encoded.length, cap)))
+    .replace(/�+$/u, "");
+}
+
 function memReadFileRange(
   files: Readonly<Record<string, string>>,
   key: string | undefined,
@@ -132,6 +148,8 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
     readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
       return memReadFileBytes(files, findKey(absolutePath), absolutePath, maxBytes);
     },
+    readFileUtf8Prefix: (absolutePath: string, maxBytes: number): string =>
+      memReadFileUtf8Prefix(files, findKey(absolutePath), absolutePath, maxBytes),
     readFileRange: (
       absolutePath: string,
       startByte: number,

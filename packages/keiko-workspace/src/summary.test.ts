@@ -53,15 +53,23 @@ describe("buildWorkspaceSummary", () => {
   });
 
   it("uses explicit discovery stats when supplied", () => {
-    const stats: DiscoveryStats = { discovered: 5, denied: 3, ignored: 7, depthPruned: 0 };
+    const stats: DiscoveryStats = {
+      discovered: 5,
+      denied: 3,
+      ignored: 7,
+      depthPruned: 2,
+      maxFilesPruned: 1,
+    };
     expect(buildWorkspaceSummary(workspace(), pack(), stats).counts).toEqual(stats);
   });
 
-  it("defaults denied/ignored to zero and discovered to candidates when stats absent", () => {
+  it("defaults discovery diagnostics to zero and discovered to candidates when stats absent", () => {
     const summary = buildWorkspaceSummary(workspace(), pack());
     expect(summary.counts.discovered).toBe(5);
     expect(summary.counts.denied).toBe(0);
     expect(summary.counts.ignored).toBe(0);
+    expect(summary.counts.depthPruned).toBe(0);
+    expect(summary.counts.maxFilesPruned).toBe(0);
   });
 });
 

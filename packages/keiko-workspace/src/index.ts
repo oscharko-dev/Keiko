@@ -188,9 +188,11 @@ export type {
   AdapterError,
   RunAllResult,
   StructuralAdapter,
+  StructuralCoverageDiagnostics,
   StructuralAdapterDeps,
   StructuralAdapterRegistry,
   StructuralAdapterRegistryOptions,
+  StructuralParserCoverage,
 } from "./structuralAdapters.js";
 export {
   createDefaultStructuralRegistry,
@@ -253,6 +255,23 @@ export { followSymbolTrace } from "./followSymbolTrace.js";
 export { testSourcePairingAdapter } from "./testSourcePairing.js";
 export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";
+export {
+  buildCodeIntelligenceIndex,
+  lookupCodeIntelligenceAtoms,
+  queryCodeIntelligenceIndex,
+  type ApiContractEdge,
+  type ApiEndpoint,
+  type CodeCallEdge,
+  type CodeImportEdge,
+  type CodeIntelligenceIndex,
+  type CodeLanguage,
+  type CodeParserCoverage,
+  type CodeParserKind,
+  type CodeReferenceEdge,
+  type CodeSymbol,
+  type CodeSymbolKind,
+  type DtoContractEdge,
+} from "./codeIntelligence.js";
 
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";
 

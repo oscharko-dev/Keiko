@@ -36,7 +36,7 @@ import {
   type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
-import type { MicroIndex } from "@oscharko-dev/keiko-workflows";
+import type { MicroIndex, RerankerSeam } from "@oscharko-dev/keiko-workflows";
 import { DEFAULT_CONTEXT_PROFILE, validateContextBudget } from "@oscharko-dev/keiko-contracts";
 
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
@@ -49,6 +49,7 @@ import {
   type GroundedAnswerer,
   type OrchestratorInput,
 } from "./grounded-orchestrator.js";
+import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
 
 const NOW = 1_700_000_000_000;
 let ROOT = "";
@@ -192,6 +193,21 @@ function happyQuery(overrides: Partial<RetrievalQuery> = {}): RetrievalQuery {
   };
 }
 
+function gitHistoryAtom(scopePath: string, nowMs: number): EvidenceAtom {
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    stableId: `git-${scopePath}`,
+    scopePath,
+    lineRange: undefined,
+    score: 1,
+    provenance: { kind: "git-history", tool: "git-file-history", queryFingerprint: "fp-git" },
+    metrics: { gitRecency: 1, gitChurn: 0.75 },
+    redactionState: "redacted",
+    emittedAtMs: nowMs,
+    ledgerRef: undefined,
+  };
+}
+
 function issue672Workspace(): WorkspaceInfo {
   return {
     ...fakeWorkspace(),
@@ -327,6 +343,68 @@ describe("runGroundedExploration", () => {
     expect(Array.isArray(out.pack.omitted)).toBe(true);
   });
 
+  it("threads an injected context-pack reranker into assembly when budget allows", async () => {
+    let rerankCalls = 0;
+    const observedCandidateCounts: number[] = [];
+    const reranker: RerankerSeam = {
+      name: "test-model-reranker",
+      isAvailable: () => Promise.resolve({ available: true, modelLabel: "test-reranker" }),
+      rerank: (candidates, atomsByPath, topK) => {
+        rerankCalls += 1;
+        observedCandidateCounts.push(candidates.length);
+        expect(topK).toBe(candidates.length);
+        expect(atomsByPath.size).toBeGreaterThan(0);
+        return Promise.resolve([...candidates].reverse());
+      },
+    };
+
+    const out = await runGroundedExploration(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and src/bar.ts MyClass" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        contextPackReranker: reranker,
+      },
+    );
+
+    expect(rerankCalls).toBe(1);
+    expect(observedCandidateCounts[0]).toBeGreaterThan(0);
+    expect(out.pack.usage.rerankCalls).toBe(1);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("threads an injected repository semantic-search provider into lexical retrieval", async () => {
+    let semanticCalls = 0;
+    const semanticProvider: SemanticSearchProvider = {
+      search: (request) => {
+        semanticCalls += 1;
+        expect(request.candidatePaths).toContain("src/bar.ts");
+        return Promise.resolve([
+          {
+            scopePath: "src/bar.ts",
+            lineRange: { startLine: 2, endLine: 2 },
+            score: 0.99,
+          },
+        ]);
+      },
+    };
+
+    const out = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      repoSemanticSearchProvider: semanticProvider,
+    });
+
+    expect(semanticCalls).toBeGreaterThan(0);
+    expect(out.pack.files.some((file) => file.scopePath === "src/bar.ts")).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("runs structural adapters over planner anchors instead of the full natural-language prompt", async () => {
     const out = await retrieveConnectedContextPack(
       input({
@@ -343,6 +421,30 @@ describe("runGroundedExploration", () => {
       out.pack.files
         .find((file) => file.scopePath === "tests/foo.test.ts")
         ?.excerpts.some((excerpt) => excerpt.content.includes("MyClass")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("follows structural edges for one bounded second hop", async () => {
+    writeFileSync(join(ROOT, "src/root.ts"), 'import { midValue } from "./mid";\nmidValue();\n');
+    writeFileSync(join(ROOT, "src/mid.ts"), 'import { leafValue } from "./leaf";\nleafValue();\n');
+    writeFileSync(join(ROOT, "src/leaf.ts"), "export const leafValue = 42;\n");
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/root.ts data flow" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "src/leaf.ts")).toBe(true);
+    expect(
+      out.pack.files
+        .find((file) => file.scopePath === "src/leaf.ts")
+        ?.excerpts.some((excerpt) => excerpt.content.includes("leafValue")),
     ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
@@ -368,6 +470,34 @@ describe("runGroundedExploration", () => {
     } finally {
       adapter.isAvailable = originalIsAvailable;
     }
+  });
+
+  it("surfaces incomplete structural coverage through sanitized uncertainty", async () => {
+    writeFileSync(
+      join(ROOT, "src/huge.ts"),
+      `export const HugeGraphOnly = 1;\n${"x".repeat(2_200_000)}\n`,
+    );
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Investigate HugeGraphOnly data flow" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    const marker = out.pack.uncertainty.find(
+      (entry) =>
+        entry.kind === "scope-incomplete" &&
+        entry.claim.includes("structural adapter coverage was incomplete"),
+    );
+    expect(marker?.claim).toContain("import-graph indexed");
+    expect(marker?.claim).toContain("skipped 0 file(s)");
+    expect(marker?.claim).toContain("partially indexed 1 file(s)");
+    expect(marker?.claim).not.toContain(ROOT);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("records the exploration plan before workspace detection or repository exploration", async () => {
@@ -647,7 +777,7 @@ describe("runGroundedExploration", () => {
   });
 
   it("surfaces incomplete coverage when workspace discovery prunes deep directories", async () => {
-    const deepDir = join(ROOT, ...Array.from({ length: 14 }, (_, i) => `depth-${String(i)}`));
+    const deepDir = join(ROOT, ...Array.from({ length: 45 }, (_, i) => `depth-${String(i)}`));
     mkdirSync(deepDir, { recursive: true });
     writeFileSync(join(deepDir, "deep.ts"), "export const DepthProbe = 'hidden';\n");
     writeFileSync(join(ROOT, "src/top.ts"), "export const DepthProbe = 'visible';\n");
@@ -665,8 +795,94 @@ describe("runGroundedExploration", () => {
     expect(coverage?.incomplete).toBe(true);
     expect(coverage?.reasons).toContain("depth-pruned");
     expect(coverage?.depthPrunedByDiscovery).toBeGreaterThan(0);
-    expect(marker?.claim).toContain("Incomplete repository coverage");
-    expect(marker?.claim).toContain("depthPruned=");
+    expect(marker?.claim).toContain("repository search coverage was incomplete");
+    expect(marker?.claim).toContain("depth-pruned");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("promotes lexical scan truncation to model-facing uncertainty", async () => {
+    writeFileSync(join(ROOT, "src/coverage-a.ts"), "export const coverageMarker = 'alpha';\n");
+    writeFileSync(join(ROOT, "src/coverage-b.ts"), "export const coverageMarker = 'beta';\n");
+    writeFileSync(join(ROOT, ".env"), "SECRET=value\n");
+    mkdirSync(join(ROOT, "ignored"), { recursive: true });
+    writeFileSync(join(ROOT, "ignored/coverage-c.ts"), "export const coverageMarker = 'gamma';\n");
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Investigate coverageMarker coverage truncation",
+          maxResults: 1,
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => ({ ...fakeWorkspace(), ignoreLines: ["ignored/"] }),
+      },
+    );
+    expect(out.pack.diagnostics?.coverage?.truncated).toBe(true);
+    expect(out.pack.diagnostics?.coverage?.ignoredByDiscovery).toBeGreaterThan(0);
+    expect(out.pack.diagnostics?.coverage?.deniedByDiscovery).toBeGreaterThan(0);
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" &&
+          marker.claim.includes("repository search coverage was incomplete") &&
+          marker.claim.includes("scanned") &&
+          marker.claim.includes("ignored") &&
+          marker.claim.includes("denied"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reports oversized prefix scans in coverage diagnostics without marking the selected file omitted", async () => {
+    writeFileSync(join(ROOT, "src/oversized.ts"), `oversizedNeedle\n${"x".repeat(2_200_000)}`);
+    const counted = countingNodeFs();
+    const out = await retrieveConnectedContextPack(
+      input({
+        query: happyQuery({ text: "Find oversizedNeedle" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: counted.fs,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "src/oversized.ts")).toBe(true);
+    expect(out.pack.omitted.some((entry) => entry.scopePath === "src/oversized.ts")).toBe(false);
+    expect(out.pack.diagnostics?.coverage?.truncated).toBe(true);
+    expect(out.pack.diagnostics?.coverage?.oversizedFilesScanned).toBe(1);
+    expect(
+      out.pack.uncertainty.some(
+        (marker) =>
+          marker.kind === "scope-incomplete" && marker.claim.includes("oversized-prefix 1"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reports low-value rescue coverage when generated source is the only evidence", async () => {
+    mkdirSync(join(ROOT, "generated"), { recursive: true });
+    writeFileSync(join(ROOT, "generated/client.ts"), "export const GeneratedNeedle = 1;\n");
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Where is GeneratedNeedle defined?" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files.some((file) => file.scopePath === "generated/client.ts")).toBe(true);
+    expect(out.pack.omitted.some((entry) => entry.scopePath === "generated/client.ts")).toBe(
+      false,
+    );
+    expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesDiscovered).toBe(1);
+    expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesScanned).toBe(1);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
@@ -1268,6 +1484,34 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("uses file-scoped git-history atoms as rankable evidence", async () => {
+    writeFileSync(join(ROOT, "src/recent.ts"), "export const recentlyChanged = true;\n");
+    const gitFileHistoryEvidence: GitFileHistoryEvidenceProvider = ({ nowMs }) =>
+      Promise.resolve([gitHistoryAtom("src/recent.ts", nowMs())]);
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and src/recent.ts recent git history" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        gitFileHistoryEvidence,
+      },
+    );
+    const recent = out.pack.files.find((file) => file.scopePath === "src/recent.ts");
+    expect(recent).toBeDefined();
+    expect(
+      recent?.excerpts.some((excerpt) => excerpt.atom.provenance.tool === "git-file-history"),
+    ).toBe(true);
+    expect(out.pack.files.every((file) => !file.scopePath.startsWith(".git/"))).toBe(true);
+    expect(out.pack.uncertainty.every((marker) => !marker.claim.includes("git-history"))).toBe(
+      true,
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
     const out = await runGroundedExploration(
       input({
@@ -1397,7 +1641,7 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
-  it("surfaces when same-file evidence exceeds the excerpt-window cap", async () => {
+  it("retains repeated same-file evidence windows without a false incomplete marker", async () => {
     const lines = Array.from({ length: 96 }, (_unused, i) =>
       i % 10 === 0
         ? `export const hit${String(i)} = 'MyClass repeated target';`
@@ -1444,11 +1688,17 @@ describe("runGroundedExploration", () => {
         true,
       );
       expect(
-        out.pack.uncertainty.some(
+        repeatedFile?.excerpts.filter((excerpt) => excerpt.content.includes("MyClass repeated"))
+          .length,
+      ).toBeGreaterThan(8);
+      expect(
+        out.pack.uncertainty.every(
           (marker) =>
-            marker.kind === "scope-incomplete" &&
-            marker.claim.includes("additional matching range") &&
-            marker.claim.includes("src/repeated.ts"),
+            !(
+              marker.kind === "scope-incomplete" &&
+              marker.claim.includes("additional matching range") &&
+              marker.claim.includes("src/repeated.ts")
+            ),
         ),
       ).toBe(true);
       expect(validateConnectedContextPack(out.pack).ok).toBe(true);
@@ -1775,6 +2025,13 @@ describe("isSymbolDefinitionPath", () => {
     ).toBe(true);
     expect(isSymbolDefinitionPath("app/payment_service.py", "payment_service")).toBe(true);
     expect(isSymbolDefinitionPath("cmd/api/payment_service.go", "payment_service")).toBe(true);
+    expect(
+      isSymbolDefinitionPath("backend/src/main/java/com/acme/OrderService.java", "OrderService"),
+    ).toBe(true);
+    expect(isSymbolDefinitionPath("services/api/order_service.py", "order_service")).toBe(true);
+    expect(isSymbolDefinitionPath("cmd/orders/OrderService.go", "orderservice")).toBe(true);
+    expect(isSymbolDefinitionPath("src/PaymentService.cs", "PaymentService")).toBe(true);
+    expect(isSymbolDefinitionPath("crates/core/src/OrderService.rs", "OrderService")).toBe(true);
   });
 
   it("rejects co-named spec/story/non-code files the broad `**/term.*` glob over-matches", () => {

@@ -2,11 +2,11 @@ import type { LineMatcher } from "./repoSearchMatchers.js";
 
 // Per-file cap on emitted lexical matches (Epic #177 retrieval fix). A connected-scope question
 // carries several content tokens, so a prose-heavy file can match many low-signal lines. Keeping
-// only each file's best lines makes the evidence diverse across the scope.
+// only each file's best windows makes the evidence diverse across the scope without starving
+// code-tracing tasks that need multiple local anchors from one file.
 const MAX_MATCHES_PER_FILE = 3;
 const LINE_TIMEOUT_CHECK_INTERVAL = 256;
-const MAX_DECLARATION_LOOKBACK_LINES = 120;
-const MAX_ENCLOSING_WINDOW_LINES = 80;
+const MAX_ENCLOSING_RANGE_LINES = 80;
 
 export interface LineSelectionRunner {
   readonly limits: { readonly elapsedMsMax: number };
@@ -24,6 +24,176 @@ export interface ScoredLine {
   readonly startLine: number;
   readonly endLine: number;
   readonly score: number;
+}
+
+function lineIndent(line: string): number {
+  const match = /^\s*/u.exec(line);
+  return match?.[0].length ?? 0;
+}
+
+function looksLikeBlockHeader(line: string): boolean {
+  const trimmed = line.trim();
+  if (looksLikeControlFlowHeader(trimmed)) {
+    return false;
+  }
+  if (
+    /\b(?:class|interface|record|struct|enum|trait|function|def|func|fn|fun|public|private|protected|static|async|const|let|var)\b/u.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+  return /\b[A-Za-z_$][\w$<>,.[\]?]*\s+[A-Za-z_$][\w$]*\s*\([^;{}]*\)\s*(?:throws\s+[^{]+)?\{/u.test(
+    trimmed,
+  );
+}
+
+function looksLikeControlFlowHeader(trimmedLine: string): boolean {
+  return /^(?:if|for|while|switch|catch|else|do|try|finally|using|lock|when)\b/u.test(trimmedLine);
+}
+
+function looksLikeSignatureStart(line: string): boolean {
+  const trimmed = line.trim();
+  if (trimmed.length === 0 || looksLikeControlFlowHeader(trimmed)) {
+    return false;
+  }
+  return (
+    looksLikeBlockHeader(trimmed) ||
+    /\b(?:[A-Za-z_$][\w$<>,.[\]?]*\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(trimmed)
+  );
+}
+
+function braceStartLine(lines: readonly string[], braceLineIndex: number): number | undefined {
+  const line = lines[braceLineIndex] ?? "";
+  if (looksLikeBlockHeader(line)) {
+    return includeLeadingDecorators(lines, braceLineIndex);
+  }
+  for (let i = braceLineIndex - 1; i >= Math.max(0, braceLineIndex - 12); i -= 1) {
+    const trimmed = (lines[i] ?? "").trim();
+    if (trimmed.length === 0 || looksLikeDecoratorLine(trimmed)) {
+      continue;
+    }
+    if (looksLikeSignatureStart(trimmed)) {
+      return includeLeadingDecorators(lines, i);
+    }
+    if (/[;{}]/u.test(trimmed)) {
+      break;
+    }
+  }
+  return undefined;
+}
+
+function includeLeadingDecorators(lines: readonly string[], startIndex: number): number {
+  let start = startIndex;
+  const baseIndent = lineIndent(lines[startIndex] ?? "");
+  for (let i = startIndex - 1; i >= Math.max(0, startIndex - 12); i -= 1) {
+    const line = lines[i] ?? "";
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      break;
+    }
+    if (looksLikeDecoratorLine(trimmed) && lineIndent(line) <= baseIndent) {
+      start = i;
+      continue;
+    }
+    break;
+  }
+  return start;
+}
+
+function looksLikeDecoratorLine(trimmedLine: string): boolean {
+  return (
+    trimmedLine.startsWith("@") ||
+    /^\[[A-Za-z_][\w]*(?:Attribute)?(?:\([^;\n]*\))?\]$/u.test(trimmedLine)
+  );
+}
+
+// eslint-disable-next-line complexity -- Indentation walk is clearer kept as one bounded scan.
+function pythonRange(lines: readonly string[], index: number): { start: number; end: number } {
+  let start = index;
+  let declarationStart = index;
+  const currentIndent = lineIndent(lines[index] ?? "");
+  for (let i = index; i >= Math.max(0, index - MAX_ENCLOSING_RANGE_LINES); i -= 1) {
+    const line = lines[i] ?? "";
+    if (/^\s*(?:async\s+def|def|class)\s+\w+/u.test(line) && line.trimEnd().endsWith(":")) {
+      declarationStart = i;
+      start = includeLeadingDecorators(lines, i);
+      break;
+    }
+    if (i < index && line.trimEnd().endsWith(":") && lineIndent(line) < currentIndent) {
+      declarationStart = i;
+      start = includeLeadingDecorators(lines, i);
+      break;
+    }
+  }
+  let end = index;
+  const baseIndent = lineIndent(lines[declarationStart] ?? "");
+  for (
+    let i = declarationStart + 1;
+    i < Math.min(lines.length, declarationStart + MAX_ENCLOSING_RANGE_LINES);
+    i += 1
+  ) {
+    const line = lines[i] ?? "";
+    if (line.trim().length > 0 && lineIndent(line) <= baseIndent) {
+      break;
+    }
+    end = i;
+  }
+  return { start: start + 1, end: end + 1 };
+}
+
+// eslint-disable-next-line complexity -- Brace balancing is a single bounded state machine.
+function braceRange(lines: readonly string[], index: number): { start: number; end: number } {
+  let start = index;
+  let balanceStart = index;
+  for (let i = index; i >= Math.max(0, index - MAX_ENCLOSING_RANGE_LINES); i -= 1) {
+    const line = lines[i] ?? "";
+    if (line.includes("{")) {
+      const candidate = braceStartLine(lines, i);
+      if (candidate === undefined) {
+        continue;
+      }
+      start = candidate;
+      balanceStart = i;
+      break;
+    }
+  }
+  if (start === index && !looksLikeBlockHeader(lines[index] ?? "")) {
+    return { start: index + 1, end: index + 1 };
+  }
+  let balance = 0;
+  let seenOpen = false;
+  let end = index;
+  for (
+    let i = balanceStart;
+    i < Math.min(lines.length, balanceStart + MAX_ENCLOSING_RANGE_LINES);
+    i += 1
+  ) {
+    for (const char of lines[i] ?? "") {
+      if (char === "{") {
+        balance += 1;
+        seenOpen = true;
+      } else if (char === "}") {
+        balance -= 1;
+      }
+    }
+    end = i;
+    if (seenOpen && balance <= 0) {
+      break;
+    }
+  }
+  return { start: start + 1, end: end + 1 };
+}
+
+function enclosingRange(lines: readonly string[], index: number): { start: number; end: number } {
+  const line = lines[index] ?? "";
+  if (/^\s*(?:async\s+def|def|class)\s+\w+/u.test(line) || lineIndent(line) > 0) {
+    const range = pythonRange(lines, index);
+    if (range.start < range.end) {
+      return range;
+    }
+  }
+  return braceRange(lines, index);
 }
 
 function elapsed(runner: LineSelectionRunner): number {
@@ -46,158 +216,29 @@ function timedOut(
 }
 
 function insertBestLine(best: ScoredLine[], candidate: ScoredLine): void {
-  const existingIndex = best.findIndex(
-    (entry) => entry.startLine === candidate.startLine && entry.endLine === candidate.endLine,
-  );
-  if (existingIndex >= 0) {
-    const existing = best[existingIndex];
+  let merged: ScoredLine = candidate;
+  for (let index = best.length - 1; index >= 0; index -= 1) {
+    const existing = best[index];
     if (existing === undefined) {
-      return;
+      continue;
     }
-    best[existingIndex] = {
-      ...existing,
-      line: Math.min(existing.line, candidate.line),
-      score: Math.max(existing.score, candidate.score),
+    const overlaps = merged.startLine <= existing.endLine && existing.startLine <= merged.endLine;
+    if (!overlaps) {
+      continue;
+    }
+    merged = {
+      line: Math.min(merged.line, existing.line),
+      startLine: Math.min(merged.startLine, existing.startLine),
+      endLine: Math.max(merged.endLine, existing.endLine),
+      score: Math.max(merged.score, existing.score),
     };
-    best.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine));
-    return;
+    best.splice(index, 1);
   }
-  best.push(candidate);
+  best.push(merged);
   best.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine));
   if (best.length > MAX_MATCHES_PER_FILE) {
     best.pop();
   }
-}
-
-function countLeadingWhitespace(line: string): number {
-  let count = 0;
-  for (const char of line) {
-    if (char === " ") {
-      count += 1;
-      continue;
-    }
-    if (char === "\t") {
-      count += 2;
-      continue;
-    }
-    break;
-  }
-  return count;
-}
-
-function stripInlineStrings(line: string): string {
-  return line.replace(/(["'`])(?:\\.|(?!\1).)*\1/gu, "");
-}
-
-function braceDelta(line: string): number {
-  let delta = 0;
-  for (const char of stripInlineStrings(line)) {
-    if (char === "{") {
-      delta += 1;
-    } else if (char === "}") {
-      delta -= 1;
-    }
-  }
-  return delta;
-}
-
-function isControlStatement(trimmed: string): boolean {
-  return /^(?:if|else|for|while|switch|case|catch|try|finally|do|return|throw|await|using)\b/iu.test(
-    trimmed,
-  );
-}
-
-function isDeclarationLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (trimmed.length === 0 || trimmed.startsWith("//") || trimmed.startsWith("*")) {
-    return false;
-  }
-  if (isControlStatement(trimmed)) {
-    return false;
-  }
-  return [
-    /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+[$_a-z][$_a-z0-9]*\b/iu,
-    /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?(?:class|interface|enum|namespace|type)\s+[$_a-z][$_a-z0-9]*\b/iu,
-    /^(?:export\s+)?(?:const|let|var)\s+[$_a-z][$_a-z0-9]*\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[$_a-z][$_a-z0-9]*\s*=>)/iu,
-    /^(?:async\s+)?def\s+[$_a-z][$_a-z0-9]*\s*\(/iu,
-    /^class\s+[$_a-z][$_a-z0-9]*\b/iu,
-    /^func\s+(?:\([^)]*\)\s*)?[$_a-z][$_a-z0-9]*\s*\(/iu,
-    /^(?:pub\s+)?(?:async\s+)?fn\s+[$_a-z][$_a-z0-9]*\s*\(/iu,
-    /^(?:public|private|protected|internal|static|final|abstract|open|override|suspend|sealed|async|readonly)\b.*\b[$_a-z][$_a-z0-9]*\s*\([^)]*\)\s*(?:\{|=>)?/iu,
-  ].some((pattern) => pattern.test(trimmed));
-}
-
-function includeLeadingDecorators(lines: readonly string[], declarationIndex: number): number {
-  let start = declarationIndex;
-  while (start > 0 && lines[start - 1]?.trim().startsWith("@") === true) {
-    start -= 1;
-  }
-  return start;
-}
-
-function findDeclarationStart(lines: readonly string[], matchIndex: number): number | undefined {
-  const min = Math.max(0, matchIndex - MAX_DECLARATION_LOOKBACK_LINES);
-  for (let i = matchIndex; i >= min; i -= 1) {
-    if (isDeclarationLine(lines[i] ?? "")) {
-      return includeLeadingDecorators(lines, i);
-    }
-  }
-  return undefined;
-}
-
-function braceWindowEnd(lines: readonly string[], startIndex: number): number | undefined {
-  let balance = 0;
-  let sawOpenBrace = false;
-  const maxExclusive = Math.min(lines.length, startIndex + MAX_ENCLOSING_WINDOW_LINES);
-  for (let i = startIndex; i < maxExclusive; i += 1) {
-    const line = lines[i] ?? "";
-    if (line.includes("{")) {
-      sawOpenBrace = true;
-    }
-    balance += braceDelta(line);
-    if (sawOpenBrace && balance <= 0 && i > startIndex) {
-      return i;
-    }
-  }
-  return sawOpenBrace ? maxExclusive - 1 : undefined;
-}
-
-function indentationWindowEnd(lines: readonly string[], startIndex: number): number | undefined {
-  const startIndent = countLeadingWhitespace(lines[startIndex] ?? "");
-  const maxExclusive = Math.min(lines.length, startIndex + MAX_ENCLOSING_WINDOW_LINES);
-  let sawNestedLine = false;
-  let lastContent = startIndex;
-  for (let i = startIndex + 1; i < maxExclusive; i += 1) {
-    const line = lines[i] ?? "";
-    if (line.trim().length === 0) {
-      continue;
-    }
-    const indent = countLeadingWhitespace(line);
-    if (indent <= startIndent && sawNestedLine) {
-      return lastContent;
-    }
-    if (indent > startIndent) {
-      sawNestedLine = true;
-    }
-    lastContent = i;
-  }
-  return sawNestedLine ? lastContent : undefined;
-}
-
-function enclosingWindow(lines: readonly string[], matchIndex: number): {
-  readonly startLine: number;
-  readonly endLine: number;
-} {
-  const declarationStart = findDeclarationStart(lines, matchIndex);
-  if (declarationStart === undefined) {
-    return { startLine: matchIndex + 1, endLine: matchIndex + 1 };
-  }
-  const endIndex =
-    braceWindowEnd(lines, declarationStart) ?? indentationWindowEnd(lines, declarationStart);
-  if (endIndex === undefined || endIndex < matchIndex) {
-    return { startLine: matchIndex + 1, endLine: matchIndex + 1 };
-  }
-  return { startLine: declarationStart + 1, endLine: endIndex + 1 };
 }
 
 export function collectBestLines(
@@ -206,16 +247,18 @@ export function collectBestLines(
   state: LineSelectionState,
 ): readonly ScoredLine[] {
   const best: ScoredLine[] = [];
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/u);
   for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
     if (timedOut(runner, state, lineIndex)) {
       break;
     }
     const score = runner.matcher.match(lines[lineIndex] ?? "");
     if (score > 0) {
+      const range = enclosingRange(lines, lineIndex);
       insertBestLine(best, {
         line: lineIndex + 1,
-        ...enclosingWindow(lines, lineIndex),
+        startLine: range.start,
+        endLine: range.end,
         score,
       });
     }

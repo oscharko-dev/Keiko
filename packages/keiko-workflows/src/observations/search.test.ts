@@ -43,6 +43,7 @@ function searchResult(atoms: readonly EvidenceAtom[]): SearchResult {
     atoms,
     candidates: [],
     filesScanned: atoms.length,
+    oversizedFilesScanned: 0,
     elapsedMs: 1,
     truncated: false,
     diagnostics: undefined,

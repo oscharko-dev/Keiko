@@ -1250,7 +1250,7 @@ async function runHybridWithStore(
       ctx,
       capped.folderScopes,
       query,
-      ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps.workspaceIndexForRoot),
+      ctx.folderRetriever ?? defaultRetriever(ctx.signal, ctx.deps),
     ),
     retrieveConnectors(ctx, store, capped.connectorScopes, resolved),
   ]);

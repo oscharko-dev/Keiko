@@ -57,17 +57,37 @@ function sha256Hex(canonical: string): string {
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+function canonicalLineRange(range: EvidenceAtomStableIdInput["lineRange"]): JsonObject | undefined {
+  return range === undefined ? undefined : { startLine: range.startLine, endLine: range.endLine };
+}
+
 export function evidenceAtomStableId(input: EvidenceAtomStableIdInput): string {
   const shape: JsonObject = {
     scopeId: input.scopeId,
     scopePath: input.scopePath,
-    lineRange:
-      input.lineRange === undefined
+    lineRange: canonicalLineRange(input.lineRange),
+    edge:
+      input.edge === undefined
         ? undefined
-        : { startLine: input.lineRange.startLine, endLine: input.lineRange.endLine },
+        : {
+            kind: input.edge.kind,
+            source: {
+              scopePath: input.edge.source.scopePath,
+              lineRange: canonicalLineRange(input.edge.source.lineRange),
+              symbol: input.edge.source.symbol,
+            },
+            target: {
+              scopePath: input.edge.target.scopePath,
+              lineRange: canonicalLineRange(input.edge.target.lineRange),
+              symbol: input.edge.target.symbol,
+            },
+            label: input.edge.label,
+            confidence: input.edge.confidence,
+          },
     provenanceKind: input.provenanceKind,
     provenanceTool: input.provenanceTool,
     queryFingerprint: input.queryFingerprint,
+    evidenceFingerprint: input.evidenceFingerprint,
   };
   return `a-${sha256Hex(canonicalize(shape))}`;
 }
