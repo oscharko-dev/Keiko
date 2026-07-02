@@ -28,6 +28,8 @@ import {
   createFileWorkspaceIndexStore,
   createInMemoryWorkspaceIndexStore,
   createWorkspaceIndex,
+  inspectWorkspaceIndexDirectories,
+  isWorkspaceIndexSnapshotFresh,
   prepareWorkspaceIndexSnapshot,
   type WorkspaceIndex,
   type WorkspaceIndexStore,
@@ -396,6 +398,145 @@ function sampleSnapshot(content: string): WorkspaceIndexSnapshot {
 }
 
 describe("workspaceIndex", () => {
+  it("normalizes noisy snapshot inputs and caps lexical records deterministically", () => {
+    const lineCapped = buildWorkspaceIndexLexicalRecord(
+      Array.from({ length: 40 }, (_, index) => `Token${String(index)}`).join(" "),
+    );
+    expect(lineCapped.truncated).toBe(true);
+    expect(lineCapped.lines).toHaveLength(1);
+    expect(lineCapped.lines[0]?.termHashes.length).toBeLessThanOrEqual(16);
+
+    const fileTermCapped = buildWorkspaceIndexLexicalRecord(
+      Array.from({ length: 40 }, (_, line) =>
+        Array.from({ length: 16 }, (_, index) => `Line${String(line)}Term${String(index)}`).join(" "),
+      ).join("\n"),
+    );
+    expect(fileTermCapped.truncated).toBe(true);
+    expect(fileTermCapped.termHashes.length).toBeLessThanOrEqual(512);
+
+    const lineCountCapped = buildWorkspaceIndexLexicalRecord(
+      Array.from({ length: 300 }, (_, index) => `line${String(index)}`).join("\n"),
+    );
+    expect(lineCountCapped.truncated).toBe(true);
+    expect(lineCountCapped.lines.length).toBeLessThanOrEqual(256);
+
+    const snapshot = buildWorkspaceIndexSnapshot({
+      scope: {
+        relativePaths: ["src\\b.ts", "../escape.ts", ".git/config", "src/a.ts", "src/a.ts"],
+      },
+      policy: {
+        policyMode: "workspace-root-default",
+        applyGitignore: true,
+        omitLowValueWorkspaceFiles: true,
+      },
+      maxBytesPerFileScanned: DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned,
+      maxFilesScanned: DEFAULT_SEARCH_LIMITS.maxFilesScanned,
+      discovery: {
+        files: [
+          { scopePath: "src/a.ts", sizeBytes: 10, mtimeMs: 1.5 },
+          { scopePath: "../escape.ts", sizeBytes: 10 },
+          { scopePath: "src/b.ts", sizeBytes: -1 },
+          { scopePath: "src\\c.ts", sizeBytes: 5, mtimeMs: -1 },
+        ],
+        directories: [
+          { scopePath: "", fingerprint: "root", mtimeMs: 1 },
+          { scopePath: "../escape", fingerprint: "bad", mtimeMs: 1 },
+          { scopePath: "src", fingerprint: "", mtimeMs: 1 },
+          { scopePath: "src", fingerprint: "src-fingerprint", mtimeMs: -1 },
+        ],
+        filesDiscovered: 1,
+        ignoredByDiscovery: 0,
+        deniedByDiscovery: 0,
+        depthPrunedByDiscovery: 0,
+        truncated: false,
+      },
+      records: [
+        {
+          scopePath: "src/a.ts",
+          sizeBytes: 10,
+          mtimeMs: 1.5,
+          kind: "text",
+          fingerprint: "not-a-sha",
+          lexical: {
+            truncated: false,
+            termHashes: ["", "hash-a", "hash-a"],
+            lines: [
+              { startLine: 0, endLine: 1, termHashes: ["bad"] },
+              { startLine: 3, endLine: 2, termHashes: ["bad"] },
+              { startLine: 1, endLine: 1, termHashes: ["", "hash-a", "hash-a"] },
+            ],
+          },
+        },
+        {
+          scopePath: "src/a.ts",
+          sizeBytes: 10,
+          kind: "binary",
+          fingerprint: "0".repeat(64),
+        },
+        {
+          scopePath: "src/missing.ts",
+          sizeBytes: 1,
+          kind: "binary",
+        },
+        {
+          scopePath: "src/empty.ts",
+          sizeBytes: 1,
+          kind: "text",
+          lexical: { truncated: false, termHashes: [], lines: [] },
+        },
+      ],
+    });
+
+    expect(snapshot.relativePaths).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(snapshot.discovery.files.map((file) => file.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
+    expect(snapshot.discovery.directories.map((directory) => directory.scopePath)).toEqual(["", "src"]);
+    expect(snapshot.records).toHaveLength(1);
+    expect(snapshot.records[0]).toMatchObject({
+      scopePath: "src/a.ts",
+      kind: "text",
+      lexical: {
+        termHashes: ["hash-a"],
+        lines: [{ startLine: 1, endLine: 1, termHashes: ["hash-a"] }],
+      },
+    });
+    expect("fingerprint" in snapshot.records[0]!).toBe(false);
+  });
+
+  it("reports directory freshness and changed-directory deltas from cached snapshots", async () => {
+    const tracked = createTrackedFs({
+      "src/a.ts": "export const alpha = 'needle';\n",
+    });
+    const currentScope = scope();
+    const index = createWorkspaceIndex();
+
+    await searchText(currentScope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs: tracked.fs,
+      nowMs: FIXED_NOW,
+      workspaceIndex: index,
+    });
+    const snapshot = await snapshotFor(index, currentScope);
+    expect(snapshot).toBeDefined();
+    if (snapshot === undefined) return;
+
+    expect(isWorkspaceIndexSnapshotFresh(snapshot, currentScope.workspace, tracked.fs)).toBe(true);
+
+    tracked.writeFile("src/new.ts", "export const beta = 'needle';\n");
+    expect(isWorkspaceIndexSnapshotFresh(snapshot, currentScope.workspace, tracked.fs)).toBe(false);
+
+    const inspection = inspectWorkspaceIndexDirectories(snapshot, currentScope.workspace, tracked.fs);
+    expect(inspection.valid).toBe(true);
+    expect(inspection.deltas).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scopePath: "src",
+          addedPaths: ["src/new.ts"],
+          removedPaths: [],
+          rescanDirectory: false,
+        }),
+      ]),
+    );
+  });
+
   it("reuses unchanged indexed files without rereading file contents", async () => {
     const tracked = createTrackedFs({
       "README.md": "needle in docs\n",
