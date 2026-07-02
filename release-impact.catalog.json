@@ -160,6 +160,126 @@
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
         "rationale": "Final epic verification records the end-to-end governed update experience delivered across issues #1693 through #1697; release-owner approval is recorded in PR review #4606286126."
       }
+    },
+    {
+      "id": "2026-07-02-keiko-0.2.12-repository-understanding-tracing",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.12",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.12",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Repository understanding is more accurate across large polyglot workspaces through improved ranking, diagnostics, tracing, indexing, semantic retrieval, and code graph links.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Improves repository understanding with query-aware ranking, coverage diagnostics, persistent indexing, resolved import and symbol graph traversal, endpoint-to-client linking, semantic reranking, and large-repo hardening."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-02",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "The 0.2.12 release rollup includes PR #1796 repository-understanding delivery; release-owner approval is recorded in PR review #4618551973."
+      }
+    },
+    {
+      "id": "2026-07-02-keiko-0.2.12-performance-stability-hotspots",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.12",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.12",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Targeted performance and stability fixes reduce duplicate startup reads, bound retained run-stream events, improve cold-start request reuse, and make Memory Vault SQLite contention more resilient.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Fixes targeted performance and stability hotspots by deduplicating startup reads and cold-start requests, bounding retained run-stream events, improving SSE buffering behavior, and making Memory Vault SQLite contention more resilient."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-02",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "PR #1800 delivers the targeted performance and stability fixes included in 0.2.12; release-owner approval is recorded in PR review #4618551973."
+      }
+    },
+    {
+      "id": "2026-07-02-keiko-0.2.12-security-supply-chain-hardening",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.12",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.12",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "security",
+      "userVisibleSummary": "Security and supply-chain posture is hardened through audit remediation, safe dependency updates, and release-gate verification.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Hardens security and supply-chain posture with audit remediation, safe dependency updates, and release-gate verification."
+      ],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-02",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "The 0.2.12 release rollup includes PR #1799 audit remediation and PR #1801 dependency updates; release-owner approval is recorded in PR review #4618551973."
+      }
     }
   ]
 }

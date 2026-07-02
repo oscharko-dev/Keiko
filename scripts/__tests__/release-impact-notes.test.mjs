@@ -231,9 +231,9 @@ describe("release-impact release notes", () => {
 
     expect(result.status).toBe(0);
     expect(output).toContain("-----BEGIN KEIKO RELEASE NOTES-----");
-    expect(output).toContain("## Keiko 0.2.11 Release Notes");
+    expect(output).toContain("## Keiko 0.2.12 Release Notes");
     expect(output).toContain(
-      "Release-impact metadata and validation now govern stable package publication.",
+      "Improves repository understanding with query-aware ranking, coverage diagnostics, persistent indexing, resolved import and symbol graph traversal, endpoint-to-client linking, semantic reranking, and large-repo hardening.",
     );
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
   }, 20_000);

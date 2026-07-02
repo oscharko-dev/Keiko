@@ -749,9 +749,9 @@ describe("update preflight route handlers", () => {
   it("reuses the startup session on GET and retries on manual POST", async () => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.12" } }))
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.13" } }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 }))
-      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.12" } }))
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.13" } }))
       .mockResolvedValueOnce(new Response("missing", { status: 404 })) as typeof fetch;
     const deps = depsWith(fetchImpl);
 
