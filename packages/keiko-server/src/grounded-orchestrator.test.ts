@@ -30,6 +30,7 @@ import {
   importGraphAdapter,
   symbolGraphAdapter,
   testSourcePairingAdapter,
+  type SemanticSearchProvider,
   type WorkspaceFs,
   type WorkspaceDirEntry,
   type WorkspaceInfo,
@@ -808,6 +809,47 @@ describe("runGroundedExploration", () => {
         "src/client/orders.ts",
       ]),
     );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("adds approved semantic provider evidence without direct token overlap", async () => {
+    mkdirSync(join(ROOT, "src/billing"), { recursive: true });
+    writeFileSync(
+      join(ROOT, "README.md"),
+      "CheckoutMismatch reports the wrong purchase sum in production.\n",
+    );
+    writeFileSync(
+      join(ROOT, "src/billing/calculateCharge.ts"),
+      "export function deriveCharge(amount: number, tax: number): number {\n  return amount + tax;\n}\n",
+    );
+    const semanticSearchProvider: SemanticSearchProvider = {
+      name: "local fixture",
+      search: ({ documents }) =>
+        Promise.resolve(
+          documents.some((document) => document.scopePath === "src/billing/calculateCharge.ts")
+            ? [{ scopePath: "src/billing/calculateCharge.ts", score: 0.98, line: 1 }]
+            : [],
+        ),
+    };
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({ text: "Investigate CheckoutMismatch purchase sum" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        semanticSearchProvider,
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/billing/calculateCharge.ts");
+    expect(out.pack.diagnostics?.rankedCandidates[0]?.signals.map((signal) => signal.name)).toEqual(
+      expect.arrayContaining(["semantic-score", "rrf:semantic"]),
+    );
+    expect(JSON.stringify(out.pack.diagnostics)).not.toContain("embedding");
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 

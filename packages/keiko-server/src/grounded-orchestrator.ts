@@ -63,6 +63,7 @@ import {
   searchText,
   symbolGraphAdapter,
   type SearchScope,
+  type SemanticSearchProvider,
   type StructuralAdapterRegistry,
   testSourcePairingAdapter,
   type WorkspaceDirEntry,
@@ -119,6 +120,7 @@ export interface OrchestratorDeps {
   // the lexical ring falls back to bounded live scans.
   readonly workspaceIndexForRoot?:
     ((workspaceRoot: string) => WorkspaceIndex | undefined) | undefined;
+  readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
 }
 
 export interface OrchestratorOutput {
@@ -181,6 +183,7 @@ interface SearchInputs {
   readonly nowMs: () => number;
   readonly signal?: AbortSignal | undefined;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
+  readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
 }
 
 interface RingResult {
@@ -475,29 +478,30 @@ interface RunRingStructuralResult {
   readonly elapsedMs: number;
 }
 
-async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
-  if (ring.kind === "lexical") {
-    const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
-      fs: inputs.fs,
-      nowMs: inputs.nowMs,
-      searchHints: { retrievalIntent: inputs.retrievalIntent },
-      ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
-    });
-    const coverageMarker = coverageIncomplete(result.coverage, inputs.nowMs());
-    // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
-    // It does NOT consume the excerpt budget. Charging result.filesScanned against filesReadMax
-    // (Epic #177 retrieval defect) let a wide scan exhaust the budget the excerpt READ phase needs
-    // and starved multi-file scopes — the scan could only ever examine ~4 files. The reserved
-    // search call (one per ring) plus elapsedMs already bound the scan; the files whose content
-    // actually enters the pack are charged when their excerpts are read in the assembler.
-    return {
-      atoms: result.atoms,
-      omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
-      uncertainty: coverageMarker === undefined ? [] : [coverageMarker],
-      usage: usageDelta({ elapsedMs: result.elapsedMs }),
-      diagnostics: toPackDiagnostics(result),
-    };
-  }
+async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
+  const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
+    fs: inputs.fs,
+    nowMs: inputs.nowMs,
+    searchHints: { retrievalIntent: inputs.retrievalIntent },
+    ...(inputs.workspaceIndex === undefined ? {} : { workspaceIndex: inputs.workspaceIndex }),
+    ...(inputs.semanticSearchProvider === undefined
+      ? {}
+      : { semanticSearchProvider: inputs.semanticSearchProvider }),
+  });
+  const coverageMarker = coverageIncomplete(result.coverage, inputs.nowMs());
+  return {
+    atoms: result.atoms,
+    omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
+    uncertainty: coverageMarker === undefined ? [] : [coverageMarker],
+    usage: usageDelta({ elapsedMs: result.elapsedMs }),
+    diagnostics: toPackDiagnostics(result),
+  };
+}
+
+async function runStructuralOrHistoryRing(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+): Promise<RingResult> {
   // Keep the planner's ring split authoritative: the structural ring should only run the
   // structural adapters, while the git-history ring should only run the repo-level history
   // adapter. Reusing the full default registry for both rings duplicates atoms and inflates
@@ -534,6 +538,12 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     uncertainty,
     usage: usageDelta({ elapsedMs }),
   };
+}
+
+async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
+  return ring.kind === "lexical"
+    ? runLexicalRing(ring, inputs)
+    : runStructuralOrHistoryRing(ring, inputs);
 }
 
 interface RingRunSummary {
@@ -2383,6 +2393,9 @@ export async function retrieveConnectedContextPack(
       nowMs,
       signal: deps.signal,
       ...(workspaceIndex === undefined ? {} : { workspaceIndex }),
+      ...(deps.semanticSearchProvider === undefined
+        ? {}
+        : { semanticSearchProvider: deps.semanticSearchProvider }),
     },
     governor,
   );

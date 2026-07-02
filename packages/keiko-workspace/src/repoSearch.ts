@@ -43,8 +43,16 @@ import {
   type SearchTextRunner,
 } from "./repoSearchScan.js";
 import {
+  createSemanticSearchSession,
+  runSemanticSearchSession,
+  semanticSearchTool,
+  type SemanticSearchMatch,
+  type SemanticSearchProvider,
+} from "./repoSearchSemantic.js";
+import {
   policyOmissionReason,
   resolveSearchPolicy,
+  withSemanticRankingDiagnostics,
   type SearchDiagnostics,
   type SearchHints,
 } from "./repoSearchPolicy.js";
@@ -129,6 +137,7 @@ interface FacadeDeps {
   readonly searchHints?: SearchHints | undefined;
   readonly signal?: AbortSignal;
   readonly workspaceIndex?: WorkspaceIndex | undefined;
+  readonly semanticSearchProvider?: SemanticSearchProvider | undefined;
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -321,7 +330,8 @@ function buildSearchTextRunner(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
-  deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> & Pick<FacadeDeps, "searchHints" | "signal">,
+  deps: Required<Pick<FacadeDeps, "fs" | "nowMs">> &
+    Pick<FacadeDeps, "searchHints" | "signal" | "semanticSearchProvider">,
 ): SearchTextRunner {
   return {
     scope,
@@ -337,6 +347,7 @@ function buildSearchTextRunner(
     fingerprint: fingerprintFor(query),
     policy: resolveSearchPolicy(scope.relativePaths.length > 0, deps.searchHints),
     query,
+    semantic: createSemanticSearchSession(deps.semanticSearchProvider, query),
   };
 }
 
@@ -381,16 +392,26 @@ function candidateSetDiscoverySnapshot(
   };
 }
 
-function directoryFingerprint(entries: readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[]): string {
-  return createHash("sha256").update(JSON.stringify(
-    entries
-      .map((entry) => ({
-        name: entry.name,
-        isDirectory: entry.isDirectory,
-        isFile: entry.isFile,
-      }))
-      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
-  )).digest("hex");
+function directoryFingerprint(
+  entries: readonly {
+    readonly name: string;
+    readonly isDirectory: boolean;
+    readonly isFile: boolean;
+  }[],
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        entries
+          .map((entry) => ({
+            name: entry.name,
+            isDirectory: entry.isDirectory,
+            isFile: entry.isFile,
+          }))
+          .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
+      ),
+    )
+    .digest("hex");
 }
 
 function ancestorDirectoryPaths(scopePath: string): readonly string[] {
@@ -455,7 +476,8 @@ function buildWorkspaceIndexDirectories(
   addIndexedWorkspaceIndexAncestors(directories, discoveryByPath);
   const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
   for (const scopePath of [...directories].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
-    const absolutePath = scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
+    const absolutePath =
+      scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
     try {
       const entries = fs.readDir(absolutePath);
       const stat = fs.stat(absolutePath);
@@ -552,10 +574,7 @@ function workspaceIndexScopeKey(
 function seedWorkspaceIndexCaches(
   prepared: PreparedWorkspaceIndexSnapshot | undefined,
   candidateSet: CandidateSet,
-): Pick<
-  SearchWorkspaceIndexSession,
-  "preparedEntries" | "recordByPath" | "discoveryByPath"
-> {
+): Pick<SearchWorkspaceIndexSession, "preparedEntries" | "recordByPath" | "discoveryByPath"> {
   const preparedEntries = new Map<string, PreparedWorkspaceIndexEntry>();
   const recordByPath = new Map<string, WorkspaceIndexRecord>();
   const discoveryByPath = new Map<string, WorkspaceIndexDiscoveredFile>();
@@ -698,7 +717,10 @@ function applyAffectedPreparedEntries(
   }
   for (const entry of prepared.entries) {
     preparedEntries.set(entry.scopePath, entry);
-    discoveryByPath.set(entry.scopePath, discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs));
+    discoveryByPath.set(
+      entry.scopePath,
+      discoveredFileSnapshot(entry.scopePath, entry.file.sizeBytes, entry.mtimeMs),
+    );
     if (entry.record !== undefined) {
       recordByPath.set(entry.scopePath, entry.record);
     }
@@ -772,9 +794,10 @@ function initialWorkspaceIndexSessionState(
   limits: SearchLimits,
   prepared: PreparedWorkspaceIndexSnapshot | undefined,
 ): SearchWorkspaceIndexSessionState {
-  const candidateSet = prepared === undefined
-    ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
-    : workspaceIndexCandidateSet(prepared, query, runner.policy);
+  const candidateSet =
+    prepared === undefined
+      ? gatherCandidates(scope, query, limits, runner.fs, runner.policy)
+      : workspaceIndexCandidateSet(prepared, query, runner.policy);
   return {
     candidateSet,
     ...seedWorkspaceIndexCaches(prepared, candidateSet),
@@ -796,7 +819,14 @@ function applyWorkspaceIndexDelta(
 ): { readonly removedEntries: number; readonly affectedReport: WorkspaceIndexPreparationReport } {
   let removedEntries = 0;
   for (const removedPath of delta.removedPaths) {
-    if (removeWorkspaceIndexPath(removedPath, state.preparedEntries, state.recordByPath, state.discoveryByPath)) {
+    if (
+      removeWorkspaceIndexPath(
+        removedPath,
+        state.preparedEntries,
+        state.recordByPath,
+        state.discoveryByPath,
+      )
+    ) {
       removedEntries += 1;
     }
   }
@@ -911,12 +941,14 @@ async function buildSearchWorkspaceIndexSession(
   workspaceIndex: WorkspaceIndex,
 ): Promise<SearchWorkspaceIndexSession> {
   const snapshot = await loadWorkspaceIndexSnapshot(workspaceIndex, scope, runner);
-  const cached = snapshot === undefined
-    ? undefined
-    : prepareCachedWorkspaceIndexSnapshot(snapshot, scope.workspace);
-  const inspection = snapshot === undefined
-    ? { valid: false, deltas: [] }
-    : inspectWorkspaceIndexDirectories(snapshot, scope.workspace, runner.fs);
+  const cached =
+    snapshot === undefined
+      ? undefined
+      : prepareCachedWorkspaceIndexSnapshot(snapshot, scope.workspace);
+  const inspection =
+    snapshot === undefined
+      ? { valid: false, deltas: [] }
+      : inspectWorkspaceIndexDirectories(snapshot, scope.workspace, runner.fs);
   const prepared = cached?.valid === true && inspection.valid ? cached : undefined;
   const session = initialWorkspaceIndexSessionState(scope, query, runner, limits, prepared);
   if (prepared !== undefined && inspection.deltas.length > 0) {
@@ -995,12 +1027,16 @@ function completedSearchResult(inputs: CompletedSearchResultInputs): SearchResul
 
 function buildSearchTextDeps(
   deps: FacadeDeps,
-): Required<Pick<FacadeDeps, "fs" | "nowMs">> & Pick<FacadeDeps, "searchHints" | "signal"> {
+): Required<Pick<FacadeDeps, "fs" | "nowMs">> &
+  Pick<FacadeDeps, "searchHints" | "signal" | "semanticSearchProvider"> {
   return {
     fs: deps.fs ?? nodeWorkspaceFs,
     nowMs: deps.nowMs ?? Date.now,
     ...(deps.searchHints !== undefined ? { searchHints: deps.searchHints } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    ...(deps.semanticSearchProvider !== undefined
+      ? { semanticSearchProvider: deps.semanticSearchProvider }
+      : {}),
   };
 }
 
@@ -1036,7 +1072,11 @@ function indexedSearchRunner(
       entries: session.preparedEntries,
       onRecord: (record: WorkspaceIndexRecord): void => {
         const previousRecord = session.recordByPath.get(record.scopePath);
-        const discovery = discoveredFileSnapshot(record.scopePath, record.sizeBytes, record.mtimeMs);
+        const discovery = discoveredFileSnapshot(
+          record.scopePath,
+          record.sizeBytes,
+          record.mtimeMs,
+        );
         const previousDiscovery = session.discoveryByPath.get(record.scopePath);
         const rebuiltCachedRecord = session.preparedEntries.has(record.scopePath);
         if (
@@ -1054,10 +1094,7 @@ function indexedSearchRunner(
         session.discoveryByPath.set(record.scopePath, discovery);
       },
       onStale: (scopePath: string): void => {
-        if (
-          session.recordByPath.delete(scopePath) ||
-          session.preparedEntries.delete(scopePath)
-        ) {
+        if (session.recordByPath.delete(scopePath) || session.preparedEntries.delete(scopePath)) {
           session.dirty = true;
           session.report = undefined;
         }
@@ -1104,6 +1141,97 @@ function completedSearchTextResult(
     truncationReasons,
     workspaceIndex,
   });
+}
+
+async function executeSearchText(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  deps: FacadeDeps,
+  runner: SearchTextRunner,
+): Promise<SearchResult> {
+  const workspaceIndexSession =
+    deps.workspaceIndex === undefined
+      ? undefined
+      : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
+  const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
+  const candidateSet = candidateSetForSearch(scope, query, limits, runner, workspaceIndexSession);
+  if (isAborted(deps.signal)) {
+    return abortedSearchResult(
+      elapsed(searchRunner),
+      limits,
+      candidateSet.diagnostics,
+      candidateSet.truncated,
+    );
+  }
+  const atoms: EvidenceAtom[] = [];
+  const candidates: CandidateFile[] = [];
+  const { state, truncationReasons } = searchRunState(candidateSet);
+  await runScanLoop(searchRunner, candidateSet, state, atoms, candidates);
+  const lexicalAtoms = [...atoms];
+  const semanticMatches = await runSemanticSearchSession(searchRunner.semantic, query, deps.signal);
+  appendSemanticAtoms(searchRunner, state, atoms, semanticMatches);
+  await persistSearchTextSession(workspaceIndexSession);
+  const diagnostics = withSemanticRankingDiagnostics(
+    candidateSet.diagnostics,
+    bestLexicalAtomsByPath(lexicalAtoms),
+    semanticMatches,
+  );
+  return completedSearchTextResult(
+    searchRunner,
+    { ...candidateSet, diagnostics },
+    state,
+    atoms,
+    candidates,
+    truncationReasons,
+    workspaceIndexReport(workspaceIndexSession),
+  );
+}
+
+function bestLexicalAtomsByPath(
+  atoms: readonly EvidenceAtom[],
+): readonly { readonly scopePath: string; readonly score: number }[] {
+  const best = new Map<string, number>();
+  for (const atom of atoms) {
+    if (atom.provenance.kind !== "lexical-search") {
+      continue;
+    }
+    best.set(atom.scopePath, Math.max(best.get(atom.scopePath) ?? 0, atom.score));
+  }
+  return [...best.entries()].map(([scopePath, score]) => ({ scopePath, score }));
+}
+
+function semanticAtomLineRange(
+  match: SemanticSearchMatch,
+): { readonly startLine: number; readonly endLine: number } | undefined {
+  return match.line === undefined ? undefined : { startLine: match.line, endLine: match.line };
+}
+
+function appendSemanticAtoms(
+  runner: SearchTextRunner,
+  state: RunState,
+  atoms: EvidenceAtom[],
+  matches: readonly SemanticSearchMatch[],
+): void {
+  const tool = semanticSearchTool(runner.semantic?.provider.name ?? "disabled");
+  for (const match of matches) {
+    if (hitLimit(runner, state)) {
+      return;
+    }
+    atoms.push(
+      buildAtom({
+        scopeId: runner.scope.scopeId,
+        scopePath: match.scopePath,
+        lineRange: semanticAtomLineRange(match),
+        provenanceKind: "model-rerank",
+        tool,
+        queryFingerprint: runner.fingerprint,
+        score: match.score,
+        emittedAtMs: runner.nowMs(),
+      }),
+    );
+    state.matchesReturned += 1;
+  }
 }
 
 async function persistSearchTextSession(
@@ -1166,34 +1294,7 @@ export async function searchText(
   if (isAborted(deps.signal)) {
     return abortedSearchResult(elapsed(runner), limits);
   }
-  const workspaceIndexSession =
-    deps.workspaceIndex === undefined
-      ? undefined
-      : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
-  const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
-  const candidateSet = candidateSetForSearch(scope, query, limits, runner, workspaceIndexSession);
-  if (isAborted(deps.signal)) {
-    return abortedSearchResult(
-      elapsed(searchRunner),
-      limits,
-      candidateSet.diagnostics,
-      candidateSet.truncated,
-    );
-  }
-  const atoms: EvidenceAtom[] = [];
-  const candidates: CandidateFile[] = [];
-  const { state, truncationReasons } = searchRunState(candidateSet);
-  await runScanLoop(searchRunner, candidateSet, state, atoms, candidates);
-  await persistSearchTextSession(workspaceIndexSession);
-  return completedSearchTextResult(
-    searchRunner,
-    candidateSet,
-    state,
-    atoms,
-    candidates,
-    truncationReasons,
-    workspaceIndexReport(workspaceIndexSession),
-  );
+  return executeSearchText(scope, query, limits, deps, runner);
 }
 
 interface FindFilesContext {
@@ -1322,7 +1423,12 @@ function findFilesSync(
   const policy = resolveSearchPolicy(scope.relativePaths.length > 0, hints);
   const candidateSet: CandidateSet = gatherCandidates(scope, query, limits, fs, policy);
   if (isAborted(signal)) {
-    return abortedSearchResult(nowMs() - startMs, limits, candidateSet.diagnostics, candidateSet.truncated);
+    return abortedSearchResult(
+      nowMs() - startMs,
+      limits,
+      candidateSet.diagnostics,
+      candidateSet.truncated,
+    );
   }
   const state = collectFileListings(ctx, candidateSet, policy, {
     limits,
@@ -1330,13 +1436,12 @@ function findFilesSync(
     startMs,
     ...(signal !== undefined ? { signal } : {}),
   });
-  const elapsedMs = nowMs() - startMs;
   return completedSearchResult({
     atoms: state.atoms,
     candidates: state.candidates,
     filesScanned: state.filesScanned,
     matchesReturned: state.atoms.length,
-    elapsedMs,
+    elapsedMs: nowMs() - startMs,
     truncated: state.truncated,
     diagnostics: candidateSet.diagnostics,
     limits: { ...limits, maxMatchesReturned: effectiveMaxMatches },

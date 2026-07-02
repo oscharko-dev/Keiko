@@ -28,6 +28,10 @@ describe("keiko-workspace public surface", () => {
     expect(typeof workspace.buildImportGraph).toBe("function");
     expect(typeof workspace.buildEndpointContractGraph).toBe("function");
     expect(typeof workspace.normalizeEndpointPath).toBe("function");
+    expect(typeof workspace.fuseLexicalAndSemanticRanks).toBe("function");
+    expect(typeof workspace.semanticSearchTool).toBe("function");
+    expect(typeof workspace.candidateBucketForPath).toBe("function");
+    expect(workspace.SEMANTIC_RRF_K).toBe(60);
     expect(typeof workspace.buildSymbolGraph).toBe("function");
     expect(typeof workspace.definitionsForSymbol).toBe("function");
     expect(typeof workspace.referencesForSymbol).toBe("function");

@@ -12,6 +12,7 @@ import {
 } from "./ecosystems.js";
 import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
+import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
 import type { DiscoveredFile } from "./types.js";
 
 export type SearchIntent =
@@ -285,6 +286,10 @@ function bucketByPath(scopePath: string): CandidateBucket {
   return "other";
 }
 
+export function candidateBucketForPath(scopePath: string): CandidateBucket {
+  return bucketByPath(scopePath);
+}
+
 function bucketScore(bucket: CandidateBucket, intent: SearchIntent): number {
   if (intent === "project-metadata") {
     return metadataBucketScore(bucket);
@@ -536,6 +541,86 @@ export function orderCandidatesForSearch(
       candidateBuckets: bucketCounts(ranked),
       rankedCandidates,
     },
+  };
+}
+
+function semanticScoreByPath(
+  matches: readonly SemanticSearchMatch[],
+): ReadonlyMap<string, SemanticSearchMatch> {
+  const out = new Map<string, SemanticSearchMatch>();
+  for (const match of matches) {
+    const current = out.get(match.scopePath);
+    if (current === undefined || match.score > current.score) {
+      out.set(match.scopePath, match);
+    }
+  }
+  return out;
+}
+
+function semanticDiagnosticEntry(
+  fused: ReturnType<typeof fuseLexicalAndSemanticRanks>[number],
+  match: SemanticSearchMatch,
+  current: RankedCandidateDiagnostic | undefined,
+): RankedCandidateDiagnostic {
+  const semanticSignals: readonly CandidateSignal[] = [
+    { name: "semantic-score", value: match.score },
+    ...fused.signals,
+  ];
+  return current === undefined
+    ? {
+        scopePath: fused.scopePath,
+        bucket: candidateBucketForPath(fused.scopePath),
+        score: match.score * 100 + fused.normalizedFusedScore,
+        ecosystem: undefined,
+        signals: semanticSignals,
+      }
+    : {
+        ...current,
+        score: Math.max(current.score, current.score + match.score * 10),
+        signals: [...current.signals, ...semanticSignals],
+      };
+}
+
+function compareRankedCandidateDiagnostic(
+  a: RankedCandidateDiagnostic,
+  b: RankedCandidateDiagnostic,
+): number {
+  if (a.score !== b.score) return b.score - a.score;
+  return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
+}
+
+export function withSemanticRankingDiagnostics(
+  diagnostics: SearchDiagnostics,
+  lexical: readonly { readonly scopePath: string; readonly score: number }[],
+  matches: readonly SemanticSearchMatch[],
+): SearchDiagnostics {
+  if (matches.length === 0) {
+    return diagnostics;
+  }
+  const semanticByPath = semanticScoreByPath(matches);
+  const existing = new Map(diagnostics.rankedCandidates.map((entry) => [entry.scopePath, entry]));
+  const fusion = fuseLexicalAndSemanticRanks(
+    lexical,
+    [...semanticByPath.values()].map((match) => ({
+      scopePath: match.scopePath,
+      score: match.score,
+    })),
+  );
+  for (const fused of fusion) {
+    const match = semanticByPath.get(fused.scopePath);
+    if (match === undefined) {
+      continue;
+    }
+    existing.set(
+      fused.scopePath,
+      semanticDiagnosticEntry(fused, match, existing.get(fused.scopePath)),
+    );
+  }
+  return {
+    ...diagnostics,
+    rankedCandidates: [...existing.values()]
+      .sort(compareRankedCandidateDiagnostic)
+      .slice(0, MAX_RANKED_CANDIDATE_DIAGNOSTICS),
   };
 }
 

@@ -39,6 +39,8 @@ function anchor(term: string, kind: SearchAnchor["kind"], weight = 0.7): SearchA
 
 const SIGNAL_NAME_ORDER: readonly string[] = [
   "provenance-best-score",
+  "lexical-score",
+  "semantic-score",
   "provenance-count",
   "anchor-overlap",
   "path-depth-affinity",
@@ -197,13 +199,24 @@ function structuralAtom(scopePath: string, score: number, tool: string): Evidenc
   };
 }
 
+function semanticAtom(scopePath: string, score: number): EvidenceAtom {
+  return {
+    ...atom(scopePath, score),
+    provenance: {
+      kind: "model-rerank",
+      tool: "repo.semanticSearch:fixture",
+      queryFingerprint: "fp",
+    },
+  };
+}
+
 describe("extractSignals — intent context (M4)", () => {
-  it("appends nothing without a context (byte-identical signal vector)", () => {
+  it("appends no intent-only signals without a context", () => {
     const result = extractSignals([atom("pom.xml", 0.5)], [], REQUIRED_HINTS);
     expect(result.signals.map((s) => s.name)).toEqual(SIGNAL_NAME_ORDER);
   });
 
-  it("appends nothing for a non-boosted intent (clarification)", () => {
+  it("appends no intent-only signals for a non-boosted intent (clarification)", () => {
     const result = extractSignals([atom("pom.xml", 0.5)], [], REQUIRED_HINTS, {
       retrievalIntent: "clarification-needed",
     });
@@ -239,5 +252,15 @@ describe("extractSignals — intent context (M4)", () => {
     expect(result.signals.find((s) => s.name === "structural-edge")?.value).toBe(1);
     expect(result.baseScore >= 0).toBe(true);
     expect(result.baseScore <= 1).toBe(true);
+  });
+
+  it("records semantic-score only for approved semantic evidence atoms", () => {
+    const result = extractSignals(
+      [atom("src/lexical.ts", 0.9), semanticAtom("src/lexical.ts", 0.8)],
+      [],
+      REQUIRED_HINTS,
+    );
+    expect(result.signals.find((s) => s.name === "lexical-score")?.value).toBe(0.9);
+    expect(result.signals.find((s) => s.name === "semantic-score")?.value).toBe(0.8);
   });
 });

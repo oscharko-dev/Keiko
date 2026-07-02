@@ -10,6 +10,8 @@ import type { ExtractedSignals } from "./signals.js";
 
 export interface ScoringWeights {
   readonly provenanceBestScore: number;
+  readonly lexicalScore?: number;
+  readonly semanticScore?: number;
   readonly provenanceCount: number;
   readonly anchorOverlap: number;
   readonly pathDepthAffinity: number;
@@ -25,6 +27,7 @@ export interface ScoringWeights {
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   provenanceBestScore: 0.35,
+  semanticScore: 0.25,
   provenanceCount: 0.1,
   anchorOverlap: 0.25,
   pathDepthAffinity: 0.1,
@@ -62,6 +65,8 @@ export function weightsForIntent(intent: string | undefined): ScoringWeights {
 
 const SIGNAL_WEIGHT_KEYS: Readonly<Record<string, keyof ScoringWeights>> = {
   "provenance-best-score": "provenanceBestScore",
+  "lexical-score": "lexicalScore",
+  "semantic-score": "semanticScore",
   "provenance-count": "provenanceCount",
   "anchor-overlap": "anchorOverlap",
   "path-depth-affinity": "pathDepthAffinity",
