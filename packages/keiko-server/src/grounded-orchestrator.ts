@@ -51,6 +51,7 @@ import {
   RepoSearchUnsupportedFileError,
   createEcosystemStructureAdapters,
   detectWorkspaceAt,
+  endpointContractAdapter,
   findFiles,
   gitHistoryAdapter,
   importGraphAdapter,
@@ -513,6 +514,7 @@ async function runStructuralOrHistoryRing(
             testSourcePairingAdapter,
             symbolGraphAdapter,
             importGraphAdapter,
+            endpointContractAdapter,
             ...createEcosystemStructureAdapters(),
           ],
         }

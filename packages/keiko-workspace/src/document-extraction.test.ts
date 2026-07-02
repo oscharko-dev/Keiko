@@ -96,6 +96,22 @@ describe("extractDocumentContext — happy path", () => {
     expect(r2.ok && r2.context.mimeType).toBe("application/yaml");
     expect(r3.ok && r3.context.mimeType).toBe("application/typescript");
   });
+
+  it("extracts UTF-16LE text documents instead of classifying them as binary", async () => {
+    const absPath = `${ROOT}/windows-source.ts`;
+    const bytes = Buffer.from("\ufeffexport const documentNeedle = 1;\n", "utf16le");
+    const result = await extractDocumentContext(
+      binaryFs(absPath, bytes),
+      ROOT,
+      "windows-source.ts",
+      fullBudget(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.mimeType).toBe("application/typescript");
+    expect(result.context.text).toContain("documentNeedle");
+    expect(result.context.truncated).toBe(false);
+  });
 });
 
 describe("extractDocumentContext — truncation", () => {
@@ -227,10 +243,10 @@ describe("extractDocumentContext — path-safe failures", () => {
     expect(failureHasNoPath(result.failure)).toBe(true);
   });
 
-  it("returns binary-file when a NUL byte appears in the first 512 bytes", async () => {
+  it("returns binary-file when NUL/control bytes dominate the first 512 bytes", async () => {
     const bytes = new Uint8Array(64);
     bytes.fill(0x41);
-    bytes[10] = 0x00;
+    bytes.fill(0x00, 10, 40);
     const fs = binaryFs(`${ROOT}/payload.bin`, bytes);
     const result = await extractDocumentContext(fs, ROOT, "payload.bin", fullBudget());
     expect(result.ok).toBe(false);

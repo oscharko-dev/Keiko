@@ -3,6 +3,7 @@ import type {
   CandidateSignal,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   canonicalMetadataEcosystem,
   isCanonicalMetadataFile,
@@ -13,6 +14,7 @@ import {
 import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
 import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
 import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
+import { isDenied } from "./ignore.js";
 import type { DiscoveredFile } from "./types.js";
 
 export type SearchIntent =
@@ -40,6 +42,8 @@ export type CandidateBucket =
 
 export interface SearchHints {
   readonly retrievalIntent?: SearchIntent | undefined;
+  readonly lowValuePathAllowlist?: readonly string[] | undefined;
+  readonly recentPaths?: readonly string[] | undefined;
 }
 
 export interface SearchPolicy {
@@ -47,6 +51,8 @@ export interface SearchPolicy {
   readonly intent: SearchIntent;
   readonly applyGitignore: boolean;
   readonly omitLowValueWorkspaceFiles: boolean;
+  readonly lowValuePathAllowlist: readonly string[];
+  readonly recentPaths: readonly string[];
 }
 
 // Explainable per-file ranking diagnostic: why a candidate ended up where it did. `signals`
@@ -210,6 +216,27 @@ function normalizedPath(scopePath: string): string {
   return scopePath.split("\\").join("/").toLowerCase();
 }
 
+function normalizedScopePath(scopePath: string): string | undefined {
+  const normalized = scopePath.replace(/\\/g, "/").replace(/^\.\//u, "").replace(/\/+$/u, "");
+  if (normalized.length === 0 || !isValidScopePath(normalized, { mustBeRelative: true })) {
+    return undefined;
+  }
+  return isDenied(normalized) ? undefined : normalized;
+}
+
+function normalizedHintPaths(paths: readonly string[] | undefined): readonly string[] {
+  if (paths === undefined) {
+    return [];
+  }
+  return [
+    ...new Set(
+      paths
+        .map((path) => normalizedScopePath(path))
+        .filter((path): path is string => path !== undefined),
+    ),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 function pathSegments(scopePath: string): readonly string[] {
   return normalizedPath(scopePath)
     .split("/")
@@ -228,6 +255,14 @@ function hasLowValueSegment(scopePath: string): boolean {
 
 function isLowValueOrGenerated(scopePath: string): boolean {
   return hasLowValueSegment(scopePath) || isGeneratedArtifactPath(scopePath);
+}
+
+function pathMatchesHint(scopePath: string, paths: readonly string[]): boolean {
+  const normalized = normalizedPath(scopePath);
+  return paths.some((path) => {
+    const hint = path.toLowerCase();
+    return normalized === hint || normalized.startsWith(`${hint}/`);
+  });
 }
 
 function isSourceExtension(ext: string, scopePath: string): boolean {
@@ -388,6 +423,13 @@ function queryIntentBoost(bucket: CandidateBucket, terms: readonly string[]): nu
   return 0;
 }
 
+function recentPathBoost(scopePath: string, recentPaths: readonly string[]): number {
+  if (recentPaths.length === 0) {
+    return 0;
+  }
+  return pathMatchesHint(scopePath, recentPaths) ? 28 : 0;
+}
+
 interface ScoredCandidate {
   readonly file: DiscoveredFile;
   readonly bucket: CandidateBucket;
@@ -412,11 +454,13 @@ function scoreCandidate(
   const depth = depthPenalty(path);
   const bucketTiebreak = bucketScore(bucket, policy.intent);
   const intentBoost = queryIntentBoost(bucket, terms);
+  const recencyBoost = recentPathBoost(path, policy.recentPaths);
   const ecosystem = bucket === "canonical-metadata" ? canonicalMetadataEcosystem(path) : undefined;
   const signals: CandidateSignal[] = [
     { name: "query-path-score", value: lexical.score },
     { name: "query-coverage", value: lexical.coverageBonus },
     { name: "query-intent-boost", value: intentBoost },
+    { name: "git-recency", value: recencyBoost },
     { name: `bucket:${bucket}`, value: bucketTiebreak / 100 },
     { name: "depth-penalty", value: -(depth / 1000) },
   ];
@@ -426,7 +470,7 @@ function scoreCandidate(
   return {
     file,
     bucket,
-    score: lexical.score + intentBoost + bucketTiebreak / 100 - depth / 1000,
+    score: lexical.score + intentBoost + recencyBoost + bucketTiebreak / 100 - depth / 1000,
     bucketTiebreak,
     signals,
     ecosystem,
@@ -474,6 +518,8 @@ export function resolveSearchPolicy(
     intent,
     applyGitignore: mode === "workspace-root-default",
     omitLowValueWorkspaceFiles: mode === "workspace-root-default",
+    lowValuePathAllowlist: normalizedHintPaths(hints?.lowValuePathAllowlist),
+    recentPaths: normalizedHintPaths(hints?.recentPaths),
   };
 }
 
@@ -488,6 +534,8 @@ export function legacyDiscoveryPolicy(hasExplicitRelativePaths: boolean): Search
     intent: "generic",
     applyGitignore: false,
     omitLowValueWorkspaceFiles: false,
+    lowValuePathAllowlist: [],
+    recentPaths: [],
   };
 }
 
@@ -496,6 +544,9 @@ export function policyOmissionReason(
   policy: SearchPolicy,
 ): CandidateOmissionReason | undefined {
   if (!policy.omitLowValueWorkspaceFiles) {
+    return undefined;
+  }
+  if (pathMatchesHint(scopePath, policy.lowValuePathAllowlist)) {
     return undefined;
   }
   if (isLockfile(scopePath) && policy.intent !== "project-metadata") {
@@ -507,7 +558,24 @@ export function policyOmissionReason(
 }
 
 export function extraIgnoreLinesForSearch(policy: SearchPolicy): readonly string[] {
-  return policy.omitLowValueWorkspaceFiles ? LOW_VALUE_IGNORE_LINES : [];
+  if (!policy.omitLowValueWorkspaceFiles) {
+    return [];
+  }
+  return [...LOW_VALUE_IGNORE_LINES, ...unignoreLinesForAllowlist(policy.lowValuePathAllowlist)];
+}
+
+function unignoreLinesForAllowlist(paths: readonly string[]): readonly string[] {
+  const lines: string[] = [];
+  for (const scopePath of paths) {
+    const segments = scopePath.split("/").filter((segment) => segment.length > 0);
+    let current = "";
+    for (const segment of segments) {
+      current = current.length === 0 ? segment : `${current}/${segment}`;
+      lines.push(`!/${current}/`);
+    }
+    lines.push(`!/${scopePath}`);
+  }
+  return [...new Set(lines)];
 }
 
 export function orderCandidatesForSearch(

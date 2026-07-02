@@ -15,13 +15,14 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   isValidScopePath,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { redact } from "@oscharko-dev/keiko-security";
 import { discoverWithStats, readWorkspaceFile } from "./discovery.js";
 import { FileTooLargeError, RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { containedRealPathInfo } from "./realpath.js";
-import { looksBinary } from "./binaryDetect.js";
+import { decodeTextBytes, looksBinary } from "./binaryDetect.js";
 import { collectFromEntries } from "./repoSearchEntries.js";
 import { collectBestLines, type ScoredLine } from "./repoSearchLineSelection.js";
 import { evidenceAtomStableId } from "./stableId.js";
@@ -554,7 +555,60 @@ function persistWorkspaceIndexRecord(
   runner.workspaceIndex?.onRecord({ ...metadata, kind: record.kind });
 }
 
-function readForScan(
+function recordSizeExceeded(
+  runner: SearchTextRunner,
+  relativePath: string,
+  absolutePath: string,
+  sizeBytes: number,
+  candidates: CandidateFile[],
+): undefined {
+  persistWorkspaceIndexRecord(runner, {
+    kind: "size-exceeded",
+    scopePath: relativePath,
+    absolutePath,
+    sizeBytes,
+  });
+  recordCandidateOmission(candidates, relativePath, "size-exceeded");
+  return undefined;
+}
+
+async function readRawTextForScan(
+  runner: SearchTextRunner,
+  relativePath: string,
+  absolutePath: string,
+  sizeBytes: number,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
+  if (sizeBytes > runner.limits.maxBytesPerFileScanned) {
+    recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
+    return undefined;
+  }
+  try {
+    const bytes = await runner.fs.readFileBytes?.(absolutePath, sizeBytes);
+    const decoded = bytes === undefined ? undefined : decodeTextBytes(bytes);
+    if (decoded === undefined) {
+      recordCandidateOmission(candidates, relativePath, "binary");
+      return undefined;
+    }
+    const text = redact(decoded.text);
+    persistWorkspaceIndexRecord(runner, {
+      kind: "text",
+      scopePath: relativePath,
+      absolutePath,
+      sizeBytes,
+      content: text,
+    });
+    return text;
+  } catch (err) {
+    if (isIoError(err)) {
+      recordCandidateOmission(candidates, relativePath, "tool-unavailable");
+      return undefined;
+    }
+    throw err;
+  }
+}
+
+function readUtf8TextForScan(
   runner: SearchTextRunner,
   relativePath: string,
   absolutePath: string | undefined,
@@ -599,6 +653,19 @@ function readForScan(
     }
     throw err;
   }
+}
+
+async function readForScan(
+  runner: SearchTextRunner,
+  relativePath: string,
+  absolutePath: string | undefined,
+  sizeBytes: number,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
+  if (absolutePath !== undefined && runner.fs.readFileBytes !== undefined) {
+    return await readRawTextForScan(runner, relativePath, absolutePath, sizeBytes, candidates);
+  }
+  return readUtf8TextForScan(runner, relativePath, absolutePath, sizeBytes, candidates);
 }
 
 function emitBestLines(
@@ -672,6 +739,17 @@ function filePolicyOmission(
   const realRel = normalizeScopePath(contained.realRelative);
   if (isDenied(realRel)) {
     return { omitted: "ignored" };
+  }
+  try {
+    const stat = runner.fs.stat(contained.path);
+    if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
+      return { omitted: "ignored" };
+    }
+  } catch (err) {
+    if (isIoError(err)) {
+      return { omitted: "tool-unavailable" };
+    }
+    throw err;
   }
   return { omitted: policyOmissionReason(file.relativePath, runner.policy), path: contained.path };
 }
@@ -781,7 +859,13 @@ async function handleLiveRecord(
     return;
   }
   state.filesScanned += 1;
-  const text = readForScan(runner, file.relativePath, absolutePath, file.sizeBytes, candidates);
+  const text = await readForScan(
+    runner,
+    file.relativePath,
+    absolutePath,
+    file.sizeBytes,
+    candidates,
+  );
   if (text === undefined) {
     return;
   }

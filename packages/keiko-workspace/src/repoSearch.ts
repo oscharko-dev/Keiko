@@ -559,6 +559,10 @@ function workspaceIndexPolicyShape(runner: SearchTextRunner): {
   };
 }
 
+function workspaceIndexCompatiblePolicy(runner: SearchTextRunner): boolean {
+  return runner.policy.lowValuePathAllowlist.length === 0 && runner.policy.recentPaths.length === 0;
+}
+
 function workspaceIndexScopeKey(
   scope: SearchScope,
   runner: SearchTextRunner,
@@ -1151,7 +1155,7 @@ async function executeSearchText(
   runner: SearchTextRunner,
 ): Promise<SearchResult> {
   const workspaceIndexSession =
-    deps.workspaceIndex === undefined
+    deps.workspaceIndex === undefined || !workspaceIndexCompatiblePolicy(runner)
       ? undefined
       : await buildSearchWorkspaceIndexSession(scope, query, runner, limits, deps.workspaceIndex);
   const searchRunner = indexedSearchRunner(runner, workspaceIndexSession);
