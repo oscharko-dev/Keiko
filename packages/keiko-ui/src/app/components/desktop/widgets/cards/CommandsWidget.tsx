@@ -52,7 +52,8 @@ function createRequestId(): string {
 }
 
 function taskLabel(task: CommandTask): string {
-  return `${task.kind} · ${task.label}`;
+  const trust = task.trustState === "trusted" ? "" : " · approval required";
+  return `${task.kind} · ${task.label}${trust}`;
 }
 
 function eventLabel(kind: CommandRunnerEvent["kind"]): string {
@@ -112,6 +113,10 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const pendingRequestIdRef = useRef<string | null>(null);
   const runBtnRef = useRef<HTMLButtonElement | null>(null);
   const prevRunningRef = useRef(false);
+  const selectedTask = tasks.find((task) => task.id === taskId);
+  const runnableTaskSelected = selectedTask !== undefined && selectedTask.trustState === "trusted";
+  const selectedTaskRequiresApproval = selectedTask?.trustState === "approval-required";
+  const runDisabled = running || !runnableTaskSelected;
 
   // Load the discovered task catalog whenever the project path changes. A failure surfaces as an
   // error; an empty catalog is a valid "no runnable scripts" state.
@@ -175,7 +180,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const onSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
-      if (running || runningRef.current || taskId.length === 0) return;
+      if (running || runningRef.current || !runnableTaskSelected) return;
       setError(null);
       setResult(null);
       setInFlightRunId(null);
@@ -195,7 +200,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         setInFlightRunId(null);
       }
     },
-    [projectInput, running, taskId],
+    [projectInput, runnableTaskSelected, running, taskId],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
@@ -242,8 +247,8 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             className="tm-action"
             data-primary="true"
             ref={runBtnRef}
-            disabled={running || tasks.length === 0 || taskId.length === 0}
-            aria-disabled={running || tasks.length === 0 || taskId.length === 0}
+            disabled={runDisabled}
+            aria-disabled={runDisabled}
           >
             {running ? "Running…" : "Run task"}
           </button>
@@ -262,6 +267,11 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         {tasks.length === 0 && projectInput.length > 0 && error === null ? (
           <p className="tm-limits" role="status">
             No runnable test, build, or run tasks were discovered for this project.
+          </p>
+        ) : null}
+        {selectedTaskRequiresApproval ? (
+          <p className="tm-limits" role="status">
+            Server-side workspace trust is required before this repository-authored script can run.
           </p>
         ) : null}
       </form>

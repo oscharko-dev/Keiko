@@ -18,7 +18,7 @@
 // clock reads, no randomness — and the WorkspaceFs port is the only IO surface.
 
 import type { KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
-import { isSafeScopePath } from "@oscharko-dev/keiko-contracts";
+import { isSafeScopePath, isSafeStorageReference } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 
@@ -112,10 +112,10 @@ function deriveScopeBounds(scope: KnowledgeSourceScope): ScopeBounds | Discovery
     return { code: "INVALID_SCOPE", message: "scope.rootPath failed the safe-path gate" };
   }
   for (const entry of scope.files) {
-    if (!isSafeScopePath(entry)) {
+    if (!isSafeStorageReference(entry)) {
       return {
         code: "INVALID_SCOPE",
-        message: `scope.files entry failed the safe-path gate: ${entry}`,
+        message: `scope.files entry failed the storage-reference gate: ${entry}`,
       };
     }
   }

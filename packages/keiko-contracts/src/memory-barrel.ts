@@ -62,6 +62,7 @@ export type {
   MemoryAuditInitiatorSurface,
   MemoryAuditRecord,
   MemoryForget,
+  MemoryForgetReason,
   MemoryPin,
   MemoryProposal,
   MemoryRejection,
@@ -71,7 +72,18 @@ export type {
   MemoryUpdate,
   MemoryUpdateField,
 } from "./memory-operations.js";
-export { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
+export {
+  MEMORY_AUDIT_INITIATOR_SURFACES,
+  MEMORY_FORGET_REASON_EVICT_OVERFLOW,
+  MEMORY_FORGET_REASON_EXPIRE_AGE,
+  MEMORY_FORGET_REASON_EXPIRE_PROPOSAL,
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+  MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT,
+  MEMORY_FORGET_REASON_USER_REQUEST,
+  MEMORY_FORGET_REASON_VALIDITY_EXPIRED,
+  MEMORY_FORGET_REASONS,
+  MEMORY_UPDATE_FIELDS,
+} from "./memory-operations.js";
 
 // ─── Validators ───────────────────────────────────────────────────────────────
 export type {

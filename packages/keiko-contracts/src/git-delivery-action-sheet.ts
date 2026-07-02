@@ -267,7 +267,6 @@ export interface GitDeliveryActionSheetRequest {
   readonly schemaVersion: typeof GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION;
   readonly resolvedInputs: GitDeliveryResolvedInputs;
   readonly worktreeSnapshot: GitDeliveryWorktreeSnapshot;
-  readonly approval?: GitDeliveryApprovalRequirement | undefined;
   readonly providerState?: GitDeliveryActionSheetProviderState | undefined;
   readonly activeProviderCapabilities?: readonly GitDeliveryProviderCapability[] | undefined;
 }

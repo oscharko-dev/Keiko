@@ -6,7 +6,13 @@
 
 export { KEIKO_SECURITY_VERSION } from "./version.js";
 
-export { redact, createAuditRedactor, deepRedactStrings } from "./redaction.js";
+export {
+  redact,
+  createAuditRedactor,
+  deepRedactStrings,
+  isCredentialKeyName,
+  objectContainsCredentialKey,
+} from "./redaction.js";
 
 export { assertValidRunId } from "./runid.js";
 

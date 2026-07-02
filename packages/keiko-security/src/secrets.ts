@@ -16,12 +16,14 @@ export type EnvSource = Readonly<Record<string, string | undefined>>;
 // provider API key:
 //   - KEIKO_DEFAULT_API_KEY  (the fallback used when no per-model key is set)
 //   - KEIKO_MODEL_<id>_API_KEY  (per-model override; <id> is opaque to this helper)
+//   - KEIKO_RERANKER_API_KEY  (optional reranker provider override)
 //
 // The match is exact prefix + exact suffix to avoid false positives (e.g. "KEIKO_API_KEY_NOTE"
 // would not match because of the missing "_MODEL_" segment).
 export function isKeikoApiKeyEnvName(name: string): boolean {
   return (
     name === "KEIKO_DEFAULT_API_KEY" ||
+    name === "KEIKO_RERANKER_API_KEY" ||
     (name.startsWith("KEIKO_MODEL_") && name.endsWith("_API_KEY"))
   );
 }

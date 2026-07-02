@@ -1,6 +1,7 @@
-// Issue #1387 — controlled test/build/run command executor. A closed catalog of vetted tasks is
-// discovered from the project's package.json scripts; a run names a catalog task id (never free-form
-// argv) and is executed through the SINGLE governed spawn boundary, keiko-tools `runCommand`
+// Issue #1387 — controlled test/build/run command executor. A closed catalog of syntactically vetted
+// tasks is discovered from the project's package.json scripts; execution additionally requires a
+// server-owned workspace trust decision. A run names a catalog task id (never free-form argv) and is
+// executed through the SINGLE governed spawn boundary, keiko-tools `runCommand`
 // (ADR-0043 D2): no shell, name-allowlisted env, ephemeral HOME, workspace-contained cwd, output
 // byte cap with truncation, timeout SIGTERM→SIGKILL, and AbortController cancellation. Nothing new is
 // invented here — the executor allowlist (COMMAND_TASK_RULES) and the discovery source are the only
@@ -51,6 +52,11 @@ const MAX_SCRIPT_NAME_LENGTH = 120;
 // First char must not be `-` (flag injection) and only conservative script-name characters are
 // allowed, so a discovered name can never smuggle a flag or shell metacharacter into `npm run`.
 const SAFE_SCRIPT_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const COMMAND_RUNNER_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
+  ...DEFAULT_SANDBOX_POLICY,
+  network: "none",
+  filesystem: "execution-root",
+});
 
 // ─── Public types ─────────────────────────────────────────────────────────────────
 
@@ -62,6 +68,7 @@ export interface CommandRunInput {
 }
 
 export type CommandRunnerEventEmitter = (event: CommandRunnerEvent) => void;
+export type CommandRunnerWorkspaceTrustDecider = (workspace: WorkspaceInfo) => boolean;
 
 export interface CommandRunnerManager {
   readonly discover: (projectId: string) => CommandTaskCatalog;
@@ -78,10 +85,11 @@ export interface CommandRunnerManagerOptions {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
+  readonly isWorkspaceTrustedForPackageScripts?: CommandRunnerWorkspaceTrustDecider | undefined;
   readonly now?: (() => number) | undefined;
 }
 
-// ─── Discovery (package.json scripts → vetted task catalog) ──────────────────────
+// ─── Discovery (package.json scripts → name-vetted task catalog) ─────────────────
 
 function projectFor(store: UiStore, projectId: string): Project | undefined {
   for (const project of store.listProjects()) {
@@ -155,7 +163,11 @@ function classifyScriptKind(name: string): CommandTaskKind {
   return "run";
 }
 
-function discoverTasks(workspace: WorkspaceInfo, fs: WorkspaceFs): readonly CommandTask[] {
+function discoverTasks(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  trusted: boolean,
+): readonly CommandTask[] {
   const tasks: CommandTask[] = [];
   for (const name of readPackageScripts(workspace, fs)) {
     if (!SAFE_SCRIPT_NAME.test(name)) {
@@ -168,6 +180,8 @@ function discoverTasks(workspace: WorkspaceInfo, fs: WorkspaceFs): readonly Comm
       executable: "npm",
       args: ["run", name],
       source: "package-json-script",
+      trustState: trusted ? "trusted" : "approval-required",
+      trustReason: "repository-authored-script",
     });
   }
   return tasks;
@@ -258,6 +272,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
   private readonly runDeps: Partial<RunCommandDeps>;
+  private readonly isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider;
   private readonly now: () => number;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<CommandRunnerEventEmitter>();
@@ -265,10 +280,12 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   public constructor(opts: CommandRunnerManagerOptions) {
     this.store = opts.store;
     this.evidenceStore = opts.evidenceStore;
-    this.policy = opts.policy ?? DEFAULT_SANDBOX_POLICY;
+    this.policy = opts.policy ?? COMMAND_RUNNER_SANDBOX_POLICY;
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? ((input: string): string => input);
     this.runDeps = opts.runDeps ?? {};
+    this.isWorkspaceTrustedForPackageScripts =
+      opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
   }
 
@@ -294,19 +311,29 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     return {
       schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
       projectId,
-      tasks: discoverTasks(workspace, this.fs()),
+      tasks: discoverTasks(workspace, this.fs(), this.workspaceTrustedForPackageScripts(workspace)),
     };
   };
 
   public readonly execute = async (input: CommandRunInput): Promise<CommandTaskRunResult> => {
     const workspace = this.resolveWorkspace(input.projectId);
     // Re-discover the catalog at execute time on purpose: the requested taskId is untrusted, so the
-    // server re-derives the vetted task from the CURRENT package.json rather than trusting a catalog
-    // the client fetched earlier (which may be stale or forged). The extra manifest read is a
+    // server re-derives the name-vetted task from the CURRENT package.json rather than trusting a
+    // catalog the client fetched earlier (which may be stale or forged). The extra manifest read is a
     // deliberate security re-validation on a low-frequency, user-triggered path, not a hot loop.
-    const task = discoverTasks(workspace, this.fs()).find((entry) => entry.id === input.taskId);
+    const task = discoverTasks(
+      workspace,
+      this.fs(),
+      this.workspaceTrustedForPackageScripts(workspace),
+    ).find((entry) => entry.id === input.taskId);
     if (task === undefined) {
       throw new CommandRunnerError("TASK_NOT_FOUND", "Task is not in the discovered catalog.");
+    }
+    if (task.trustState !== "trusted") {
+      throw new CommandRunnerError(
+        "TASK_REQUIRES_TRUST",
+        "Repository package scripts require server-side workspace trust before execution.",
+      );
     }
     if (this.runs.size >= MAX_CONCURRENT_RUNS) {
       throw new CommandRunnerError("RUN_LIMIT_EXCEEDED", "Too many in-flight command runs.");
@@ -316,6 +343,14 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
 
   private fs(): WorkspaceFs {
     return this.runDeps.fs ?? nodeWorkspaceFs;
+  }
+
+  private workspaceTrustedForPackageScripts(workspace: WorkspaceInfo): boolean {
+    try {
+      return this.isWorkspaceTrustedForPackageScripts(workspace);
+    } catch {
+      return false;
+    }
   }
 
   private resolveWorkspace(projectId: string): WorkspaceInfo {
@@ -339,6 +374,10 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
         : { resolveExecutable: this.runDeps.resolveExecutable }),
       ...(this.runDeps.fs === undefined ? {} : { fs: this.runDeps.fs }),
       ...(this.runDeps.home === undefined ? {} : { home: this.runDeps.home }),
+      ...(this.runDeps.sandboxAvailability === undefined
+        ? {}
+        : { sandboxAvailability: this.runDeps.sandboxAvailability }),
+      ...(this.runDeps.platform === undefined ? {} : { platform: this.runDeps.platform }),
     };
   }
 
@@ -374,6 +413,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   ): Promise<CommandTaskRunResult> {
     const deps = this.buildRunDeps(workspace);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
+    let outcome: SettledOutcome;
     try {
       const result = await runCommand(
         {
@@ -385,11 +425,11 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
         },
         deps,
       );
-      return this.finalize(runId, task, input, outcomeFromResult(result), startedAt);
+      outcome = outcomeFromResult(result);
     } catch (error) {
-      const outcome = outcomeFromError(error, entry.cancelledByUser, this.now() - startedAt);
-      return this.finalize(runId, task, input, outcome, startedAt);
+      outcome = outcomeFromError(error, entry.cancelledByUser, this.now() - startedAt);
     }
+    return this.finalize(runId, task, input, outcome, startedAt);
   }
 
   private finalize(
@@ -434,7 +474,12 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     outcome: SettledOutcome,
     startedAt: number,
   ): void {
-    if (this.evidenceStore === undefined) return;
+    if (this.evidenceStore === undefined) {
+      throw new CommandRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Command run evidence could not be persisted.",
+      );
+    }
     try {
       const evidence = buildCommandRunEvidenceEntry({
         runId,
@@ -454,7 +499,10 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       });
       appendCommandRunEvidence(this.evidenceStore, evidence, this.redactor);
     } catch {
-      // Evidence is best-effort process-evidence; a write hiccup must not corrupt a real run result.
+      throw new CommandRunnerError(
+        "EVIDENCE_WRITE_FAILED",
+        "Command run evidence could not be persisted.",
+      );
     }
   }
 

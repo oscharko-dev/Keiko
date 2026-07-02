@@ -1,9 +1,8 @@
 import type { IncomingMessage } from "node:http";
 import {
-  apiKeyHeaderValue,
-  DEFAULT_API_KEY_HEADER_NAME,
   isConversationEligibleModel,
   listConfiguredCapabilities,
+  requestGatewayReadinessChatCompletion,
   requestLiteLLMRerank,
   requestOpenAIEmbedding,
   vectorL2Norm,
@@ -12,11 +11,7 @@ import {
   type ModelProviderConfig,
   type RerankerConfig,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  gatewayFetch,
-  readJsonCapped,
-  readSseStream,
-} from "@oscharko-dev/keiko-model-gateway/internal/http";
+import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   GatewayReadinessOptions,
   GatewayReadinessProbeName,
@@ -26,7 +21,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
+import { currentGatewayConfig } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
@@ -218,33 +213,20 @@ function chooseProvider(
   return { config, provider, capability };
 }
 
-function providerHeaders(provider: ModelProviderConfig): Record<string, string> {
-  const headerName = provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
-  return {
-    "content-type": "application/json",
-    [headerName]: apiKeyHeaderValue(headerName, provider.apiKey),
-  };
-}
-
 async function providerRequest(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
   body: Readonly<Record<string, unknown>>,
   options: ProviderRequestOptions = {},
 ): Promise<Response> {
-  const requestBody = JSON.stringify({
-    model: provider.modelId,
-    ...body,
-    ...(options.stream === true ? { stream: true, stream_options: { include_usage: true } } : {}),
-  });
-  return gatewayFetch(`${provider.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: providerHeaders(provider),
-    body: requestBody,
-    fetchImpl: deps.gatewayReadinessFetch,
-    timeoutMs: provider.timeoutMs,
+  return requestGatewayReadinessChatCompletion({
+    config,
+    provider,
+    body,
+    ...(deps.gatewayReadinessFetch !== undefined ? { fetchImpl: deps.gatewayReadinessFetch } : {}),
+    ...(options.stream === true ? { stream: true } : {}),
     maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
-    egress: provider.egress ?? currentGatewayEgressConfig(deps),
   });
 }
 
@@ -267,7 +249,7 @@ function roundedNorm(value: number): number {
   return Math.round(value * 10_000) / 10_000;
 }
 
-// eslint-disable-next-line max-lines-per-function, complexity
+// eslint-disable-next-line max-lines-per-function
 async function probeEmbedding(
   deps: UiHandlerDeps,
   config: GatewayConfig,
@@ -290,7 +272,7 @@ async function probeEmbedding(
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
       timeoutMs: provider.timeoutMs,
-      egress: provider.egress ?? currentGatewayEgressConfig(deps),
+      egress: config.egress,
     });
     if (!outcome.ok) {
       return result(
@@ -325,6 +307,7 @@ async function probeEmbedding(
 // eslint-disable-next-line max-lines-per-function, complexity
 async function probeReranker(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   reranker: RerankerConfig | undefined,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
@@ -346,7 +329,7 @@ async function probeReranker(
         ? { fetchImpl: deps.gatewayReadinessFetch }
         : {}),
       timeoutMs: reranker.timeoutMs,
-      egress: reranker.egress ?? currentGatewayEgressConfig(deps),
+      egress: config.egress,
     });
     if (!outcome.ok) {
       return result(
@@ -484,11 +467,12 @@ async function readProviderJson(response: Response): Promise<unknown> {
 
 async function probeChat(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, provider, {
+    const response = await providerRequest(deps, config, provider, {
       messages: [
         { role: "system", content: "You are checking whether a chat endpoint can answer." },
         { role: "user", content: "Reply with exactly: OK" },
@@ -520,12 +504,14 @@ async function probeChat(
 
 async function probeStreaming(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
     const response = await providerRequest(
       deps,
+      config,
       provider,
       {
         messages: [
@@ -565,11 +551,12 @@ async function probeStreaming(
 
 async function probeToolCalling(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, provider, toolCallingBody());
+    const response = await providerRequest(deps, config, provider, toolCallingBody());
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return toolCallingResult(provider, status, start);
@@ -650,11 +637,12 @@ function qwenToolWarning(provider: ModelProviderConfig, status: ProbeStatus): st
 
 async function probeJsonSchema(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, provider, jsonSchemaBody());
+    const response = await providerRequest(deps, config, provider, jsonSchemaBody());
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return jsonSchemaResult(status, start);
@@ -717,11 +705,12 @@ function jsonSchemaPayloadResult(start: number, payload: unknown): GatewayReadin
 
 async function probeReasoning(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, provider, {
+    const response = await providerRequest(deps, config, provider, {
       messages: [
         { role: "system", content: "Run a reasoning readiness probe. Do not reveal private data." },
         { role: "user", content: "/think\nWhat is 1 + 1? End with FINAL: 2." },
@@ -768,11 +757,12 @@ function qwenReasoningWarning(provider: ModelProviderConfig): string | undefined
 
 async function probeImageInput(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, provider, {
+    const response = await providerRequest(deps, config, provider, {
       messages: [
         {
           role: "user",
@@ -809,11 +799,12 @@ async function probeImageInput(
 
 async function probeDocumentInput(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
 ): Promise<GatewayReadinessProbeResult> {
   const start = Date.now();
   try {
-    const response = await providerRequest(deps, provider, documentInputBody());
+    const response = await providerRequest(deps, config, provider, documentInputBody());
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return documentInputResult(status, start);
@@ -926,6 +917,7 @@ function longContextPayloadResult(
 
 async function probeLongContext(
   deps: UiHandlerDeps,
+  config: GatewayConfig,
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
   options: GatewayReadinessOptions | undefined,
@@ -934,7 +926,7 @@ async function probeLongContext(
   const tokens = longContextTokens(options, capability);
   const { body, sentinel } = longContextBody(tokens);
   try {
-    const response = await providerRequest(deps, provider, body);
+    const response = await providerRequest(deps, config, provider, body);
     if (!response.ok) {
       const status = unsupportedStatus(response) ? "unsupported" : "failed";
       return result(
@@ -962,16 +954,18 @@ async function runProbe(
   selection: ProviderSelection,
   options: GatewayReadinessOptions | undefined,
 ): Promise<GatewayReadinessProbeResult> {
-  if (name === "chat") return probeChat(deps, selection.provider);
-  if (name === "streaming") return probeStreaming(deps, selection.provider);
-  if (name === "tool_calling") return probeToolCalling(deps, selection.provider);
-  if (name === "json_schema") return probeJsonSchema(deps, selection.provider);
+  if (name === "chat") return probeChat(deps, selection.config, selection.provider);
+  if (name === "streaming") return probeStreaming(deps, selection.config, selection.provider);
+  if (name === "tool_calling")
+    return probeToolCalling(deps, selection.config, selection.provider);
+  if (name === "json_schema") return probeJsonSchema(deps, selection.config, selection.provider);
   if (name === "embedding") return probeEmbedding(deps, selection.config);
-  if (name === "reranker") return probeReranker(deps, selection.config.reranker);
-  if (name === "reasoning") return probeReasoning(deps, selection.provider);
-  if (name === "image_input") return probeImageInput(deps, selection.provider);
-  if (name === "document_input") return probeDocumentInput(deps, selection.provider);
-  return probeLongContext(deps, selection.provider, selection.capability, options);
+  if (name === "reranker") return probeReranker(deps, selection.config, selection.config.reranker);
+  if (name === "reasoning") return probeReasoning(deps, selection.config, selection.provider);
+  if (name === "image_input") return probeImageInput(deps, selection.config, selection.provider);
+  if (name === "document_input")
+    return probeDocumentInput(deps, selection.config, selection.provider);
+  return probeLongContext(deps, selection.config, selection.provider, selection.capability, options);
 }
 
 function reportStatus(

@@ -107,8 +107,8 @@ async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promi
   }
 }
 
-// GET /api/commands/catalog — the discovered, vetted task list for a project. Requires the runner so
-// discovery uses the same workspace containment as execution.
+// GET /api/commands/catalog — the discovered task list for a project, including server-owned trust
+// state. Requires the runner so discovery uses the same workspace containment as execution.
 export async function handleCommandCatalog(
   ctx: RouteContext,
   deps: UiHandlerDeps,

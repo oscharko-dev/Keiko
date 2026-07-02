@@ -1626,7 +1626,7 @@ function finalRawConfigForTestedSetup(
 async function verifySetupCandidate(input: SetupVerificationInput): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
-  validateBaseUrl(input.baseUrl, "candidate");
+  validateBaseUrl(input.baseUrl, "candidate", input.egress);
   const validationConfig = validationConfigForSetup(input);
   const candidateModels = await candidateModelIdsForSetup(input, validationConfig);
   const smokeTimeoutMs =

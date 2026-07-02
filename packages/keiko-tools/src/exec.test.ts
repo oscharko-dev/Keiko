@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -755,7 +756,9 @@ describe("runCommand — enforced network egress (ADR-0043, network:'none')", ()
     spawn.child.emit("close", 0, null);
     const result = await promise;
     const call = spawn.calls()[0];
-    expect(call?.args).toEqual(expect.arrayContaining(["--bind", root, root]));
+    expect(call?.args).toEqual(
+      expect.arrayContaining(["--bind", realpathSync(root), "/keiko-execution-root"]),
+    );
     expect(call?.args).not.toEqual(expect.arrayContaining(["--dev-bind", "/", "/"]));
     expect(result.attestation).toMatchObject({
       networkEnforced: true,

@@ -4,7 +4,7 @@
 // accepted only for a full-realtime deployment on a loopback origin — then drives the proxied-SDP
 // handshake end to end. This is the security-critical gate (ADR-0058 D3/D6, AC1/AC3).
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +12,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { WebSocket } from "ws";
 import { createUiServer, UI_HOST } from "./server.js";
+import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
@@ -511,6 +512,52 @@ describe("WebSocket voice control upgrade — protocol behavior", () => {
     socket.send(sessionCreate(chat.id, { requestedProfile: "speech-to-text" }));
     const message = await next();
     expect(message).toMatchObject({ kind: "error", code: "not-allowed-for-profile" });
+  });
+
+  it("closes an oversized opening control frame before parsing or allocating a session", async () => {
+    const negotiate = vi.fn();
+    const { deps } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: negotiate,
+    });
+    const port = await boot(deps);
+    const { ws: socket } = expectOpen(await connect(port));
+    const oversized = JSON.stringify({
+      padding: "x".repeat(MAX_VOICE_CONTROL_FRAME_BYTES + 1),
+    });
+    socket.send(oversized);
+    const code = await nextClose(socket);
+
+    expect(code).toBe(1009);
+    expect(negotiate).not.toHaveBeenCalled();
+  });
+
+  it("closes an oversized subsequent control frame before provider negotiation", async () => {
+    const negotiate = vi.fn();
+    const { deps, chat } = depsWithChat({
+      config: voiceConfig(true),
+      configPresent: true,
+      voiceRealtimeNegotiationRequest: negotiate,
+    });
+    const port = await boot(deps);
+    const { ws: socket, next } = expectOpen(await connect(port));
+    socket.send(sessionCreate(chat.id));
+    await next(); // session.created
+    await next(); // capability.offer
+    const oversized = JSON.stringify({
+      protocolVersion: "1",
+      sessionId: "sess-int-1",
+      seq: 1,
+      direction: "client-to-host",
+      kind: "signal.sdp.offer",
+      sdp: `v=${"x".repeat(MAX_VOICE_CONTROL_FRAME_BYTES + 1)}`,
+    });
+    socket.send(oversized);
+    const code = await nextClose(socket);
+
+    expect(code).toBe(1009);
+    expect(negotiate).not.toHaveBeenCalled();
   });
 
   it("closes the connection when a binary (raw audio) frame is sent on the control plane", async () => {

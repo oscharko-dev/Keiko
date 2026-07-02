@@ -16,8 +16,13 @@
 // The two-stage shape is deliberate: callers can present the selection to the user for
 // confirmation (MemoriaViva UI #211) before materialising the destructive envelopes.
 
-import type { MemoryForget, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
-import { validateMemoryForget } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  MEMORY_FORGET_REASON_USER_REQUEST,
+  type MemoryForget,
+  type MemoryRecord,
+  type MemoryScope,
+  validateMemoryForget,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import { GovernanceError } from "./errors.js";
 import type {
@@ -148,7 +153,7 @@ export function selectMemoriesForForget(
 }
 
 // ─── Envelope construction ────────────────────────────────────────────────────
-const DEFAULT_FORGET_REASON = "user-requested forget";
+const DEFAULT_FORGET_REASON = MEMORY_FORGET_REASON_USER_REQUEST;
 
 function buildForgetEnvelope(
   record: MemoryRecord,

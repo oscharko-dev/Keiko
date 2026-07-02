@@ -165,6 +165,19 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     }
   });
 
+  it("refuses a symlinked QI sub-store directory before writing", async () => {
+    if (process.platform === "win32") return;
+    const outside = await mkdtemp(join(tmpdir(), "keiko-qi-substore-victim-"));
+    try {
+      await symlink(outside, join(evidenceDir, QI_SUBDIR), "dir");
+      expect(() => recordQualityIntelligenceRun(baseInput("run-substore-link"), { evidenceDir }))
+        .toThrow(EvidenceWriteError);
+      await expect(readFile(join(outside, "run-substore-link.qi.json"), "utf8")).rejects.toThrow();
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
   it("loadQualityIntelligenceRun returns undefined for a missing runId", () => {
     expect(loadQualityIntelligenceRun("run-absent", { evidenceDir })).toBeUndefined();
   });

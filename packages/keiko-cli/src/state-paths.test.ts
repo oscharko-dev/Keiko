@@ -147,6 +147,7 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "evidence", "tool-results"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "figma"), { recursive: true });
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
+  mkdirSync(join(stateDir, "editor-hot-exit"), { recursive: true });
   mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
@@ -192,6 +193,9 @@ function seedRuntimeState(root: string): string {
     ),
   );
   touch(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1", "screen.png"));
+  touch(join(stateDir, "editor-hot-exit", "snapshots.vault"));
+  touch(join(stateDir, "editor-hot-exit", "editor-hot-exit-vault.key"));
+  touch(join(stateDir, "editor-hot-exit", ".secret-vault.1234.deadbeefdeadbeef.tmp"));
   touch(join(stateDir, "updates", "runtime-state.json"));
   touch(join(stateDir, "updates", "update-audit.jsonl"));
   touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
@@ -291,6 +295,11 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     ).toBe("quality-intelligence");
     expect(categoryOf(scan, "evidence/qi/figma-snapshots/run-1/screen.png")).toBe(
       "quality-intelligence",
+    );
+    expect(categoryOf(scan, "editor-hot-exit/snapshots.vault")).toBe("editor-hot-exit");
+    expect(categoryOf(scan, "editor-hot-exit/editor-hot-exit-vault.key")).toBe("editor-hot-exit");
+    expect(categoryOf(scan, "editor-hot-exit/.secret-vault.1234.deadbeefdeadbeef.tmp")).toBe(
+      "editor-hot-exit",
     );
     expect(categoryOf(scan, "updates")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/runtime-state.json")).toBe("update-recovery");
@@ -397,6 +406,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     touch(join(stateDir, "credentials", ".secret-vault.abc.deadbeefdeadbeef.tmp"));
     touch(join(stateDir, "evidence", "figma", "backup.key"));
     touch(join(stateDir, "evidence", "figma", "backup.vault"));
+    touch(join(stateDir, "editor-hot-exit", "snapshots.vault.backup"));
+    touch(join(stateDir, "editor-hot-exit", "backup.key"));
+    touch(join(stateDir, "editor-hot-exit", ".secret-vault.abc.deadbeefdeadbeef.tmp"));
 
     const scan = scanRuntimeState(stateDir);
     const retained = scan.retained.map((r) => r.relPath);
@@ -415,6 +427,9 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(retained).toContain("credentials/.secret-vault.abc.deadbeefdeadbeef.tmp");
     expect(retained).toContain("evidence/figma/backup.key");
     expect(retained).toContain("evidence/figma/backup.vault");
+    expect(retained).toContain("editor-hot-exit/snapshots.vault.backup");
+    expect(retained).toContain("editor-hot-exit/backup.key");
+    expect(retained).toContain("editor-hot-exit/.secret-vault.abc.deadbeefdeadbeef.tmp");
   });
 
   it("retains an owned-looking hardlink without classifying it as an owned file", () => {

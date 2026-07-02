@@ -654,6 +654,51 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     expect(readFileSync(configPath, "utf8")).not.toContain("figd_config-redaction-token");
     store.close();
   });
+
+  it("includes resolved reranker config secrets and topology in current redaction secrets", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-reranker-redaction-");
+    const configPath = join(evidenceDir, "keiko.config.json");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        providers: [
+          {
+            modelId: "example-chat-model",
+            baseUrl: "https://models.example.invalid/openai/v1",
+            apiKey: "fake-test-key",
+            timeoutMs: 30000,
+            maxRetries: 2,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://reranker.example.invalid/v1",
+          apiKey: "reranker-config-secret",
+        },
+      }),
+      "utf8",
+    );
+    const deps = buildUiHandlerDeps({
+      configPath,
+      evidenceDir,
+      env: {},
+      store,
+    });
+
+    expect(currentRedactionSecrets(deps)).toContain("reranker-config-secret");
+    expect(currentRedactionSecrets(deps)).toContain("https://reranker.example.invalid/v1");
+    expect(readFileSync(configPath, "utf8")).not.toContain("reranker-config-secret");
+    expect(
+      deps.redactor({
+        secret: "reranker-config-secret",
+        endpoint: "https://reranker.example.invalid/v1",
+      }),
+    ).toEqual({ secret: "[REDACTED]", endpoint: "[REDACTED]" });
+    store.close();
+  });
 });
 
 describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () => {

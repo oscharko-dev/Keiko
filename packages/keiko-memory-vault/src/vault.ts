@@ -11,7 +11,7 @@
 // or redact exception leaves the database untouched. Step 4 sees only the post-commit truth.
 
 import { DatabaseSync } from "node:sqlite";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type {
   MemoryEdge,
   MemoryEdgeId,
@@ -56,6 +56,7 @@ import {
   deleteTombstonesByScopeBeforeRows,
   insertTombstoneRow,
   listTombstonesByScopeRows,
+  updateTombstoneBodyHashByScopeRows,
 } from "./tombstones.js";
 import {
   gateDeleteOptions,
@@ -66,7 +67,11 @@ import {
 } from "./validate.js";
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
 import { MemoryStorageError } from "./errors.js";
-import { memoryBodySuppressionHash } from "./body-fingerprint.js";
+import {
+  memoryBodySuppressionHash,
+  memoryBodySuppressionHashForVault,
+} from "./body-fingerprint.js";
+import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import type {
   MemoryBatchDelete,
   DeleteMemoryOptions,
@@ -90,6 +95,7 @@ interface ResolvedOptions {
   readonly beforeDeleteCommit: (events: readonly MemoryEvent[]) => void;
   readonly hardenSidecars: () => void;
   readonly cipher: MemoryContentCipher;
+  readonly bodySuppressionHash: (body: string) => string;
 }
 
 const IDENTITY: (s: string) => string = (s) => s;
@@ -108,6 +114,7 @@ function resolveOptions(
   opts: MemoryVaultFactoryOptions | undefined,
   cipher: MemoryContentCipher,
   dbPath: string,
+  bodySuppressionKey: Buffer,
 ): ResolvedOptions {
   const resolved: MemoryVaultFactoryOptions = opts ?? {};
   return {
@@ -120,6 +127,8 @@ function resolveOptions(
       hardenVaultSidecars(dbPath);
     },
     cipher,
+    bodySuppressionHash: (body: string): string =>
+      memoryBodySuppressionHashForVault(body, bodySuppressionKey),
   };
 }
 
@@ -135,6 +144,30 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
   } finally {
     opts.hardenSidecars();
   }
+}
+
+const SUPPRESSION_HMAC_KEY_NAME = "body-suppression-hmac-v1";
+const SUPPRESSION_HMAC_KEY_BYTES = 32;
+
+function decodeSuppressionKey(raw: string): Buffer | undefined {
+  const decoded = Buffer.from(raw, "base64");
+  return decoded.length === SUPPRESSION_HMAC_KEY_BYTES ? decoded : undefined;
+}
+
+function resolveBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher): Buffer {
+  const existing = db
+    .prepare("SELECT value FROM memory_vault_secrets WHERE name = ?")
+    .get(SUPPRESSION_HMAC_KEY_NAME) as { value?: string } | undefined;
+  if (typeof existing?.value === "string") {
+    const opened = decodeSuppressionKey(cipher.openString(existing.value));
+    if (opened !== undefined) return opened;
+  }
+  const key = randomBytes(SUPPRESSION_HMAC_KEY_BYTES);
+  db.prepare("INSERT OR REPLACE INTO memory_vault_secrets (name, value) VALUES (?, ?)").run(
+    SUPPRESSION_HMAC_KEY_NAME,
+    cipher.sealString(key.toString("base64")),
+  );
+  return key;
 }
 
 // Resolve the content cipher. Precedence: an explicitly injected cipher (tests), then an injected
@@ -197,6 +230,7 @@ function buildTombstone(
   options: DeleteMemoryOptions,
   opts: ResolvedOptions,
 ): MemoryTombstone {
+  const reason = sanitizeMemoryTombstoneReason(options.reason);
   const base = {
     id: opts.newTombstoneId(),
     memoryId: record.id,
@@ -205,13 +239,13 @@ function buildTombstone(
     type: record.type,
     forgottenAt: options.nowMs,
     forgetterSurface: options.forgetterSurface,
-    bodyHash: memoryBodySuppressionHash(record.body),
+    bodyHash: opts.bodySuppressionHash(record.body),
     originalStatus: record.status,
   };
   return {
     ...base,
     ...(options.reviewerId === undefined ? {} : { reviewerId: options.reviewerId }),
-    ...(options.reason === undefined ? {} : { reason: options.reason }),
+    ...(reason === undefined ? {} : { reason }),
   };
 }
 
@@ -500,6 +534,7 @@ type EmbeddingOps = Pick<
 type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
+  | "hasForgetTombstoneForBody"
   | "purgeTombstonesByScopeBefore"
   | "recordAccess"
   | "recordOutcome"
@@ -586,6 +621,22 @@ function buildTombstoneAndAccessOps(
       gateMemoryScope(scope);
       return listTombstonesByScopeRows(db, scope, opts.cipher);
     },
+    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean => {
+      gateMemoryScope(scope);
+      const currentHash = opts.bodySuppressionHash(body);
+      const legacyHash = memoryBodySuppressionHash(body);
+      const tombstones = listTombstonesByScopeRows(db, scope, opts.cipher);
+      if (tombstones.some((tombstone) => tombstone.bodyHash === currentHash)) {
+        return true;
+      }
+      if (!tombstones.some((tombstone) => tombstone.bodyHash === legacyHash)) {
+        return false;
+      }
+      withSidecarHardening(opts, () => {
+        updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
+      });
+      return true;
+    },
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
       return withSidecarHardening(opts, () => {
         gateMemoryScope(scope);
@@ -623,5 +674,7 @@ export function createMemoryVault(options?: MemoryVaultFactoryOptions): MemoryVa
   const dbPath = resolveMemoryDbPath(options?.memoryDir, env);
   const cipher = resolveCipher(options, env);
   const db = openMemoryDatabase(dbPath, cipher);
-  return buildStore(db, resolveOptions(options, cipher, dbPath));
+  const bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
+  hardenVaultSidecars(dbPath);
+  return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));
 }

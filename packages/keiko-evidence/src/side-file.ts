@@ -5,17 +5,13 @@
 // stays "1" (additive manifest field consumed by callers).
 
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, lstatSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import type { SideFileWriteResult } from "@oscharko-dev/keiko-contracts";
-import {
-  assertContainedRealPath,
-  resolveWithinWorkspace,
-  type WorkspaceFs,
-} from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "./runid.js";
 import { EvidenceWriteError } from "./errors.js";
+import { ownedChildPath, prepareOwnedDirectory } from "./fs-safety.js";
 
 const MAX_NAME_LENGTH = 128;
 
@@ -53,24 +49,6 @@ function isAllowedNameChar(code: number): boolean {
   return isDigit || isUpper || isLower || isPunct;
 }
 
-function ensureDir(absolute: string): void {
-  try {
-    // owner-only: evidence artifacts are local regulated-use machine state, ADR-0048 D2
-    mkdirSync(absolute, { recursive: true, mode: 0o700 });
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create evidence subdirectory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
-}
-
-function assertRealDirectoryEntry(absolute: string): void {
-  const stat = lstatSync(absolute, { throwIfNoEntry: false });
-  if (stat === undefined || !stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new EvidenceWriteError("side-file run directory must be a real directory");
-  }
-}
-
 function atomicWriteBytes(target: string, data: Buffer, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
@@ -93,6 +71,25 @@ function atomicWriteBytes(target: string, data: Buffer, randomSuffix: () => stri
   }
 }
 
+function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
+  try {
+    const stat = fs.stat(path);
+    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
+  } catch (error) {
+    throw new EvidenceWriteError(
+      `cannot inspect side-file target: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+function assertWritableSideFileEntry(target: string, fs: WorkspaceFs): void {
+  const entry = lstatSync(target, { throwIfNoEntry: false });
+  if (entry === undefined) return;
+  if (!entry.isFile() || entry.isSymbolicLink() || !isSingleLinkRegularFile(target, fs)) {
+    throw new EvidenceWriteError("cannot overwrite a non-ledger side-file");
+  }
+}
+
 // Writes a binary side-file under `<baseDir>/<runId>/<name>` atomically. Containment is enforced
 // by realpath-resolving the per-run directory after creation, then checking the final lexical path
 // against that real root via assertContainedRealPath. Returns the relative path to embed in the
@@ -108,20 +105,13 @@ export function writeSideFile(
   assertValidName(name);
   const fs = options.fs ?? nodeWorkspaceFs;
   const randomSuffix = options.randomSuffix ?? randomUUID;
-  ensureDir(baseDir);
-  const realBase = fs.realPath(baseDir);
-  const runDir = join(realBase, runId);
-  const existingRunDir = lstatSync(runDir, { throwIfNoEntry: false });
-  if (
-    existingRunDir !== undefined &&
-    (!existingRunDir.isDirectory() || existingRunDir.isSymbolicLink())
-  ) {
-    throw new EvidenceWriteError("side-file run directory must be a real directory");
-  }
-  ensureDir(runDir);
-  assertRealDirectoryEntry(runDir);
-  const lexicalTarget = resolveWithinWorkspace(realBase, join(runId, name));
-  const absoluteTarget = assertContainedRealPath(fs, realBase, lexicalTarget, `${runId}/${name}`);
+  const realBase = prepareOwnedDirectory(baseDir, fs, "side-file base directory", { mode: 0o700 });
+  const runDir = prepareOwnedDirectory(ownedChildPath(realBase, runId), fs, "side-file run directory", {
+    mode: 0o700,
+    parentReal: realBase,
+  });
+  const absoluteTarget = ownedChildPath(runDir, name);
+  assertWritableSideFileEntry(absoluteTarget, fs);
   const sha256 = createHash("sha256").update(data).digest("hex");
   atomicWriteBytes(absoluteTarget, data, randomSuffix);
   return {

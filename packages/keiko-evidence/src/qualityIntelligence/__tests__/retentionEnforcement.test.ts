@@ -179,7 +179,7 @@ describe("enforceQualityIntelligenceRetentionPolicy — age expiry", () => {
     }
   });
 
-  it("allows a symlinked evidence root when the side-file root resolves inside it", async () => {
+  it("refuses a symlinked evidence root even when the side-file root resolves inside it", async () => {
     if (process.platform === "win32") return;
     const realEvidenceDir = await mkdtemp(join(tmpdir(), "keiko-qi-ret-real-"));
     const linkParent = await mkdtemp(join(tmpdir(), "keiko-qi-ret-link-parent-"));
@@ -198,14 +198,15 @@ describe("enforceQualityIntelligenceRetentionPolicy — age expiry", () => {
         sideFileRoot,
       });
 
-      expect(failures).toEqual([]);
-      expect(receipts.map((r) => r.runId)).toEqual(["run-linked-root"]);
+      expect(receipts).toEqual([]);
+      expect(failures.map((f) => f.runId)).toEqual(["run-linked-root"]);
+      expect(failures[0]?.message).toContain("symlink");
       await expect(
         stat(join(realEvidenceDir, QI_SUBDIR, "run-linked-root.qi.json")),
-      ).rejects.toThrow();
+      ).resolves.toBeDefined();
       await expect(
         stat(join(realEvidenceDir, QI_SUBDIR, "side-files", "run-linked-root")),
-      ).rejects.toThrow();
+      ).resolves.toBeDefined();
     } finally {
       await rm(linkParent, { recursive: true, force: true });
       await rm(realEvidenceDir, { recursive: true, force: true });
@@ -246,12 +247,13 @@ describe("enforceQualityIntelligenceRetentionPolicy — fail-safe retention (nev
     const qiDir = join(evidenceDir, QI_SUBDIR);
     await mkdir(qiDir, { recursive: true });
     await writeFile(join(qiDir, "run-corrupt.qi.json"), "{ not json ");
-    const { receipts, result } = enforceQualityIntelligenceRetentionPolicy({
+    const { receipts, result, skipped } = enforceQualityIntelligenceRetentionPolicy({
       evidenceDir,
       now: NOW_FAR_FUTURE,
     });
     expect(receipts).toEqual([]);
     expect(result.expiredRunIds).toEqual([]);
+    expect(skipped).toEqual([{ runId: "run-corrupt", reason: "manifest-load-failed" }]);
     // The corrupt file is still on disk (never purged on a load fault).
     expect(await readdir(qiDir)).toContain("run-corrupt.qi.json");
   });

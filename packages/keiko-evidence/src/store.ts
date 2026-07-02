@@ -16,7 +16,6 @@ import {
   readFileSync,
   openSync,
   lstatSync,
-  mkdirSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -26,6 +25,7 @@ import { join, resolve } from "node:path";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
+import { existingOwnedDirectory, prepareOwnedDirectory, removeOwnedRunDirectory } from "./fs-safety.js";
 import { assertValidRunId } from "./runid.js";
 
 const MANIFEST_SUFFIX = ".json";
@@ -106,28 +106,11 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
 // Resolves the base dir, creates it if absent, then realpath-contains it against itself so the
 // returned path is the canonical (symlink-followed) base every child path is checked against.
 function prepareBaseDir(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    // owner-only: evidence artifacts are local regulated-use machine state, ADR-0048 D2
-    mkdirSync(baseDir, { recursive: true, mode: 0o700 });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "evidence directory", { mode: 0o700 });
 }
 
 function existingBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) {
-    return undefined;
-  }
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "evidence directory");
 }
 
 // Returns the lexical absolute path of <runId>.json inside the already-real base dir. The runId is
@@ -377,6 +360,7 @@ function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
   if (realBase === undefined) {
     return;
   }
+  removeOwnedRunDirectory(realBase, runId, fs, "evidence side-file", { containmentRoot: realBase });
   const target = lexicalManifestPath(runId, realBase);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
     return;

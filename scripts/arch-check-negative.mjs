@@ -47,7 +47,7 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,
   "adr-0043-sandbox-only-contracts": 1,
   "adr-0019-direction-3d-evidence-only-contracts-security-workspace": 1,
-  "adr-0019-direction-3e-local-knowledge-only-contracts": 1,
+  "adr-0019-direction-3e-local-knowledge-only-contracts-security-workspace-model-gateway": 1,
   "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools": 1,
   "adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence": 1,
   "adr-0019-direction-3f-memory-vault-only-contracts-security": 1,

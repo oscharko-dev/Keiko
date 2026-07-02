@@ -217,7 +217,10 @@ and **every browser-exposed credential** directly from the contract:
 - **ICE candidate privacy.** Candidates are opaque, `secret-bearing`, and `ephemeral`; the protocol
   never logs or persists them. Local-IP exposure relies on browser mDNS `.local` host-candidate
   obfuscation (privacy-contract §4); behavior varies per OS/managed network and is verified per
-  deployment.
+  deployment. The shipped browser transport constructs `RTCPeerConnection` with
+  `APPROVED_VOICE_RTC_CONFIGURATION` (`voice-rtc-transport.ts`), whose `iceServers` list is empty; a
+  future STUN/TURN, relay, or browser-direct media configuration must update this protocol and its
+  tests in the same change.
 - **Provider allowlisting & local-only state.** Reachability is bounded by configured providers +
   capability selection (privacy-contract §1); session state, policy decisions, and audit metadata stay
   local. The honest limitation that no positive destination host allowlist exists yet (ADR-0058 D4) is

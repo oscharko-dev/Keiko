@@ -168,6 +168,10 @@ function looksLikeLocalPath(value: string): boolean {
   );
 }
 
+function containsTraversalSegment(value: string): boolean {
+  return value.replace(/\\/gu, "/").split("/").some((segment) => segment === "..");
+}
+
 function isAllowedReferenceChar(char: string): boolean {
   const code = char.charCodeAt(0);
   const isDigit = code >= 48 && code <= 57;
@@ -310,6 +314,7 @@ function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined 
     if (
       path.length === 0 ||
       path.length > MAX_EDITOR_OPEN_FILE_LENGTH ||
+      containsTraversalSegment(path) ||
       isSecretShapedString(path) ||
       out.includes(path)
     ) {
@@ -319,6 +324,13 @@ function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined 
     if (out.length >= MAX_EDITOR_OPEN_FILES) break;
   }
   return out.length > 0 ? out : undefined;
+}
+
+function sanitizeEditorLayoutRoot(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const root = value.trim();
+  if (root.length === 0 || root.length > MAX_EDITOR_OPEN_FILE_LENGTH) return "";
+  return isSecretShapedString(root) ? "" : root;
 }
 
 function sanitizeEditorLayoutJson(value: unknown): string | undefined {
@@ -339,16 +351,21 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
     > = {};
     for (const [paneId, pane] of Object.entries(rawPanes)) {
       if (!isRecord(pane)) continue;
-      const activeFile = typeof pane["activeFile"] === "string" ? pane["activeFile"].trim() : "";
+      const activeFiles =
+        typeof pane["activeFile"] === "string"
+          ? sanitizeEditorOpenFiles([pane["activeFile"]])
+          : undefined;
+      const activeFile = activeFiles?.[0];
       const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
       const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
-      if (openFiles === undefined && activeFile.length === 0) continue;
-      const files = openFiles ?? sanitizeEditorOpenFiles([activeFile]);
+      if (openFiles === undefined && activeFile === undefined) continue;
+      const files = openFiles ?? activeFiles;
       if (files === undefined) continue;
+      const resolvedActiveFile =
+        activeFile !== undefined && files.includes(activeFile) ? activeFile : files[0]!;
       panes[paneId.slice(0, 48)] = {
         id: paneId.slice(0, 48),
-        activeFile:
-          activeFile.length > 0 ? activeFile.replace(/\\/gu, "/").replace(/^\/+/u, "") : files[0]!,
+        activeFile: resolvedActiveFile,
         openFiles: files,
         tabOrder: tabOrder ?? files,
       };
@@ -395,7 +412,7 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
         : 260;
     return JSON.stringify({
       schemaVersion: 2,
-      root: typeof record["root"] === "string" ? record["root"] : "",
+      root: sanitizeEditorLayoutRoot(record["root"]),
       activePaneId,
       tree,
       panes,
@@ -607,15 +624,11 @@ export function sanitizePersistedConnections(
     ) {
       continue;
     }
-    // Release 0.2.0 — carry the bind-time snapshot fields through persistence (typed-checked,
-    // never trusted blindly) so unbind-after-reload still removes the source the edge bound.
-    const boundRoot = typeof conn.boundRoot === "string" && conn.boundRoot.length > 0;
-    const boundScopeKind =
-      conn.boundScopeKind === "workspace-root" ||
-      conn.boundScopeKind === "directory" ||
-      conn.boundScopeKind === "files";
-    const boundRelativePath =
-      typeof conn.boundRelativePath === "string" && conn.boundRelativePath.length > 0;
+    const scopeSnapshotElided =
+      conn.boundScopeElided === true ||
+      typeof conn.boundRoot === "string" ||
+      typeof conn.boundScopeKind === "string" ||
+      typeof conn.boundRelativePath === "string";
     const boundChatWindowId =
       typeof conn.boundChatWindowId === "string" &&
       conn.boundChatWindowId.length > 0 &&
@@ -629,9 +642,7 @@ export function sanitizePersistedConnections(
       a: conn.a,
       b: conn.b,
       ...(boundChatWindowId ? { boundChatWindowId: conn.boundChatWindowId } : {}),
-      ...(boundRoot ? { boundRoot: conn.boundRoot } : {}),
-      ...(boundScopeKind ? { boundScopeKind: conn.boundScopeKind } : {}),
-      ...(boundRelativePath ? { boundRelativePath: conn.boundRelativePath } : {}),
+      ...(scopeSnapshotElided ? { boundScopeElided: true } : {}),
       ...(boundConnector
         ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
         : {}),

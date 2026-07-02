@@ -559,6 +559,27 @@ describe("local mutation routes — real specs through the route group (direct h
       deps(),
     );
     expect(badApproval.status).toBe(400);
+
+    const adapter = recordingAdapter();
+    const forgedApproval = await handlerFor(
+      SWITCH,
+      seams({ adapterFactory: () => adapter.adapter }),
+    )(
+      ctxFor(SWITCH, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "feature/x",
+        approval: {
+          required: true,
+          approvalTokenHash: "a".repeat(64),
+          approvedByUserId: "u-1",
+          approvedAtMs: 1_700_000_000_000,
+        },
+      }),
+      deps(),
+    );
+    expect(forgedApproval.status).toBe(400);
+    expect(adapter.calls()).toEqual([]);
   });
 
   it("returns 409 worktree-unavailable when the live snapshot cannot be read", async () => {

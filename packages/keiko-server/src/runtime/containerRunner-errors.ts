@@ -3,16 +3,19 @@
 // engine/OS error text, or the constructed argv into the HTTP response or SSE payload. Mirrors the
 // #1387 command-runner error model.
 //
-// Only PRE-spawn GOVERNANCE failures surface as a thrown ContainerRunnerError (the route maps each
-// to a 4xx/5xx envelope) — most importantly CONTAINER_ENGINE_UNAVAILABLE, thrown BEFORE any run id
-// is minted so there is no run/event/evidence for a run that never started. Every actual EXECUTION
-// outcome (non-zero exit, timeout, cancellation, image-missing, denied spawn) is reported as a
-// ContainerRunResult with a `failureReason`, never as a thrown error.
+// PRE-spawn GOVERNANCE failures surface as a thrown ContainerRunnerError (the route maps each to a
+// 4xx/5xx envelope) — most importantly CONTAINER_ENGINE_UNAVAILABLE, thrown BEFORE any run id is
+// minted so there is no run/event/evidence for a run that never started. Actual EXECUTION outcomes
+// (non-zero exit, timeout, cancellation, image-missing, denied spawn) are reported as a
+// ContainerRunResult with a `failureReason`. The one post-execution exception is fail-closed evidence
+// persistence: a settled run is not reported successful unless its content-free evidence manifest is
+// durably written.
 
 export const CONTAINER_RUNNER_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
   IMAGE_NOT_ALLOWED: "IMAGE_NOT_ALLOWED",
+  EVIDENCE_WRITE_FAILED: "EVIDENCE_WRITE_FAILED",
   RUN_LIMIT_EXCEEDED: "RUN_LIMIT_EXCEEDED",
   RUN_NOT_FOUND: "RUN_NOT_FOUND",
   BAD_REQUEST: "BAD_REQUEST",
@@ -28,6 +31,7 @@ const STATUS_MAP: Readonly<Record<ContainerRunnerErrorCode, number>> = {
   PROJECT_NOT_FOUND: 404,
   TASK_NOT_FOUND: 404,
   IMAGE_NOT_ALLOWED: 403,
+  EVIDENCE_WRITE_FAILED: 500,
   RUN_LIMIT_EXCEEDED: 429,
   RUN_NOT_FOUND: 404,
   BAD_REQUEST: 400,

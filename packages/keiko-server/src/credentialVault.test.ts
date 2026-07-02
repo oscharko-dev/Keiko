@@ -8,10 +8,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
+  RERANKER_SECRET_REF,
   createProviderSecretResolver,
   credentialVaultDir,
   hasPlaintextGatewayCredentials,
   isEnvProvidedApiKey,
+  isEnvProvidedRerankerApiKey,
   openProviderCredentialVault,
   prepareSealedProviderApiKeys,
   providerSecretRef,
@@ -44,6 +46,7 @@ function envWith(key: string): EnvSource {
 describe("providerSecretRef / credentialVaultDir", () => {
   it("derives a stable, prefixed reference from the modelId", () => {
     expect(providerSecretRef("gpt-x")).toBe("cred:gpt-x");
+    expect(RERANKER_SECRET_REF).toBe("model-gateway:reranker");
   });
 
   it("places the vault dir next to the config file", () => {
@@ -75,6 +78,14 @@ describe("isEnvProvidedApiKey", () => {
   });
 });
 
+describe("isEnvProvidedRerankerApiKey", () => {
+  it("is true only when a reranker/default env key equals the effective value", () => {
+    expect(isEnvProvidedRerankerApiKey("k", { KEIKO_RERANKER_API_KEY: "k" })).toBe(true);
+    expect(isEnvProvidedRerankerApiKey("k", { KEIKO_RERANKER_API_KEY: "other" })).toBe(false);
+    expect(isEnvProvidedRerankerApiKey("k", { KEIKO_DEFAULT_API_KEY: "k" })).toBe(true);
+  });
+});
+
 describe("hasPlaintextGatewayCredentials", () => {
   it("flags a plaintext provider apiKey", () => {
     expect(
@@ -88,9 +99,21 @@ describe("hasPlaintextGatewayCredentials", () => {
     ).toBe(true);
   });
 
+  it("flags a plaintext reranker apiKey", () => {
+    expect(hasPlaintextGatewayCredentials({ reranker: { apiKey: "rerank-secret" } })).toBe(true);
+  });
+
   it("does not flag a reference-only provider", () => {
     expect(
       hasPlaintextGatewayCredentials({ providers: [{ modelId: "m", apiKeySecretRef: "cred:m" }] }),
+    ).toBe(false);
+  });
+
+  it("does not flag a reference-only reranker", () => {
+    expect(
+      hasPlaintextGatewayCredentials({
+        reranker: { apiKeySecretRef: RERANKER_SECRET_REF },
+      }),
     ).toBe(false);
   });
 
@@ -140,6 +163,33 @@ describe("sealProviderApiKeys", () => {
     expect(vault.get("cred:m2")).toBe("k2");
   });
 
+  it("seals plaintext reranker keys into the provider credential vault", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const prepared = prepareSealedProviderApiKeys({
+      raw: {
+        providers: [],
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://rerank.local/v1",
+          apiKey: "rerank-secret",
+        },
+      },
+      env,
+      configPath,
+    });
+
+    expect(prepared.reranker).toEqual({
+      modelId: "qwen3-reranker",
+      baseUrl: "https://rerank.local/v1",
+      apiKeySecretRef: RERANKER_SECRET_REF,
+    });
+    expect(prepared.activeSecretRefs).toEqual([RERANKER_SECRET_REF]);
+    expect(openProviderCredentialVault({ configPath, env }).get(RERANKER_SECRET_REF)).toBe(
+      "rerank-secret",
+    );
+  });
+
   it("drops env-provided credentials without a reference or vault entry", () => {
     const configPath = tempConfigPath();
     const env: EnvSource = { ...envWith(KEY1), KEIKO_DEFAULT_API_KEY: "env-key" };
@@ -149,6 +199,33 @@ describe("sealProviderApiKeys", () => {
       configPath,
     });
     expect(providers).toEqual([{ modelId: "m1", baseUrl: "https://gw" }]);
+    expect(existsSync(join(credentialVaultDir(configPath), "provider-credentials.vault"))).toBe(
+      false,
+    );
+  });
+
+  it("drops env-provided reranker credentials without a reference or vault entry", () => {
+    const configPath = tempConfigPath();
+    const env: EnvSource = {
+      ...envWith(KEY1),
+      KEIKO_RERANKER_API_KEY: "env-rerank-key",
+    };
+    const prepared = prepareSealedProviderApiKeys({
+      raw: {
+        providers: [],
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://rerank.local/v1",
+          apiKey: "env-rerank-key",
+        },
+      },
+      env,
+      configPath,
+    });
+    expect(prepared.reranker).toEqual({
+      modelId: "qwen3-reranker",
+      baseUrl: "https://rerank.local/v1",
+    });
     expect(existsSync(join(credentialVaultDir(configPath), "provider-credentials.vault"))).toBe(
       false,
     );
@@ -227,6 +304,28 @@ describe("sealProviderApiKeys", () => {
     );
   });
 
+  it("preserves a reference-only reranker and its vault entry", () => {
+    const configPath = tempConfigPath();
+    openProviderCredentialVault({ configPath, env: envWith(KEY1) }).set(
+      RERANKER_SECRET_REF,
+      "rerank-secret",
+    );
+    const prepared = prepareSealedProviderApiKeys({
+      raw: {
+        providers: [],
+        reranker: { modelId: "rerank", baseUrl: "https://gw", apiKeySecretRef: RERANKER_SECRET_REF },
+      },
+      env: envWith(KEY1),
+      configPath,
+    });
+    expect(prepared.reranker).toEqual({
+      modelId: "rerank",
+      baseUrl: "https://gw",
+      apiKeySecretRef: RERANKER_SECRET_REF,
+    });
+    expect(prepared.activeSecretRefs).toEqual([RERANKER_SECRET_REF]);
+  });
+
   it("preserves active reference-only credentials while pruning stale refs after config rewrite", () => {
     const configPath = tempConfigPath();
     const env = envWith(KEY1);
@@ -247,6 +346,27 @@ describe("sealProviderApiKeys", () => {
       { modelId: "m1", baseUrl: "https://gw", apiKeySecretRef: "cred:m1" },
     ]);
     expect(vault.get("cred:m1")).toBe("active-secret");
+    expect(vault.get("cred:stale")).toBeUndefined();
+  });
+
+  it("keeps active reranker refs while pruning stale provider vault entries", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const vault = openProviderCredentialVault({ configPath, env });
+    vault.set(RERANKER_SECRET_REF, "rerank-secret");
+    vault.set("cred:stale", "stale-secret");
+
+    const prepared = prepareSealedProviderApiKeys({
+      raw: {
+        providers: [],
+        reranker: { modelId: "rerank", baseUrl: "https://gw", apiKeySecretRef: RERANKER_SECRET_REF },
+      },
+      env,
+      configPath,
+    });
+    pruneProviderCredentialVault({ configPath, env }, prepared.activeSecretRefs);
+
+    expect(vault.get(RERANKER_SECRET_REF)).toBe("rerank-secret");
     expect(vault.get("cred:stale")).toBeUndefined();
   });
 

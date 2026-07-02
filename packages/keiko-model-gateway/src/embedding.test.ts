@@ -673,13 +673,22 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
   it("returns 'cancelled' when the caller's signal aborts (#192 Copilot)", async () => {
     const controller = new AbortController();
     const fetchImpl = mockFetch(
-      () =>
+      (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
-          // Simulate fetch reacting to the abort. The classifier should treat caller-abort
-          // as cancellation, NOT a timeout.
-          controller.signal.addEventListener("abort", () => {
-            reject(new DOMException("aborted", "AbortError"));
-          });
+          // Simulate fetch reacting to the composed request signal. The classifier should treat
+          // caller-abort as cancellation, NOT a timeout, even if the abort beats listener setup.
+          const abortError = new DOMException("aborted", "AbortError");
+          if (init.signal?.aborted === true) {
+            reject(abortError);
+            return;
+          }
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(abortError);
+            },
+            { once: true },
+          );
         }),
     );
     const promise = requestOpenAIEmbedding({

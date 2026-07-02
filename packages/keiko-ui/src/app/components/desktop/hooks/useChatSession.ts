@@ -961,7 +961,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   const forgetMemoryAction = useCallback(async (memoryId: string): Promise<void> => {
-    await forgetMemory(memoryId as MemoryId, "user-initiated forget from Conversation Center");
+    await forgetMemory(memoryId as MemoryId);
     setLatestMemory((previous) =>
       previous === undefined
         ? previous

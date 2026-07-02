@@ -79,7 +79,11 @@ export function persistSealedGatewayConfig(
     ...(ctx.keychainAccess !== undefined ? { keychainAccess: ctx.keychainAccess } : {}),
   });
   const withSealedProviders = { ...raw, providers: sealedProviders.providers };
-  const sealed = stripAndStoreFigmaToken(withSealedProviders, ctx);
+  const withSealedCredentials =
+    sealedProviders.reranker === undefined
+      ? withSealedProviders
+      : { ...withSealedProviders, reranker: sealedProviders.reranker };
+  const sealed = stripAndStoreFigmaToken(withSealedCredentials, ctx);
   savePrivateJson(ctx.storagePath, sealed);
   pruneProviderCredentialVault(
     {

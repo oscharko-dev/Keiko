@@ -63,6 +63,8 @@ const CATALOG: CommandTaskCatalog = {
       executable: "npm",
       args: ["run", "test"],
       source: "package-json-script",
+      trustState: "trusted",
+      trustReason: "repository-authored-script",
     },
     {
       id: "npm-script:build",
@@ -71,6 +73,8 @@ const CATALOG: CommandTaskCatalog = {
       executable: "npm",
       args: ["run", "build"],
       source: "package-json-script",
+      trustState: "trusted",
+      trustReason: "repository-authored-script",
     },
   ],
 };
@@ -151,6 +155,26 @@ describe("CommandsWidget", () => {
       taskId: "npm-script:test",
       requestId: "req-own",
     });
+  });
+
+  it("disables run for scripts that require server-side workspace trust", async () => {
+    vi.mocked(fetchCommandCatalog).mockResolvedValue({
+      ...CATALOG,
+      tasks: [
+        {
+          ...CATALOG.tasks[0]!,
+          trustState: "approval-required",
+          trustReason: "repository-authored-script",
+        },
+      ],
+    });
+    render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    const runButton = screen.getByRole("button", { name: /run task/i });
+    await waitFor(() => expect(runButton).toBeDisabled());
+    expect(screen.getByText(/server-side workspace trust is required/i)).toBeInTheDocument();
+    await userEvent.click(runButton);
+    expect(createCommandRun).not.toHaveBeenCalled();
   });
 
   it("guards against duplicate submissions before React rerenders the running state", async () => {

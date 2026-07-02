@@ -37,10 +37,10 @@ workspace packages under `packages/`:
 All ten carry `"private": true` in their `package.json`. A separate UI package,
 `@oscharko-dev/keiko-ui`, also exists under `packages/` and is build-time-only.
 
-The root `package.json` lists all ten domain packages as `"*"` dependencies
-(`package.json:67-77`). These resolve at install time via npm workspace symlinks during
-development. The root manifest does not yet set `private: true`, and currently carries no
-`bundleDependencies` field.
+The root `package.json` lists private runtime workspaces as pinned dependencies and
+`bundleDependencies`. These resolve at install time via npm workspace symlinks during development,
+and `npm pack` bundles their built `dist/` payload into the root package. The root manifest remains
+publishable; workspace manifests remain `private: true`.
 
 An empirical verification on 2026-06-03 confirmed the gap: running `npm pack` at the repo root
 produces `oscharko-dev-keiko-0.1.6.tgz`. Installing that tarball into a clean `tmpdir` fails with
@@ -49,14 +49,15 @@ and are therefore unreachable. Every package dependency resolves to MISSING. Thi
 correctness gap that Issue #169 Acceptance Criterion 2 gates against.
 
 The architectural question resolved here: how should the root product artifact be made
-self-contained without publishing the ten private workspace packages to the registry?
+self-contained without publishing private workspace packages to the registry?
 
 ## Decision
 
 ### D1 — Strategy: `bundleDependencies` in the root package
 
-We will add a `bundleDependencies` array to the root `package.json` listing every
-`@oscharko-dev/keiko-*` workspace package except `keiko-ui`:
+The root `package.json` carries a `bundleDependencies` array listing every runtime
+`@oscharko-dev/keiko-*` workspace package. Build-time-only workspaces such as `keiko-ui` and
+`keiko-editor` are excluded:
 
 ```json
 "bundleDependencies": [
@@ -64,10 +65,21 @@ We will add a `bundleDependencies` array to the root `package.json` listing ever
   "@oscharko-dev/keiko-security",
   "@oscharko-dev/keiko-model-gateway",
   "@oscharko-dev/keiko-workspace",
+  "@oscharko-dev/keiko-sandbox",
   "@oscharko-dev/keiko-tools",
+  "@oscharko-dev/keiko-verification",
   "@oscharko-dev/keiko-evidence",
+  "@oscharko-dev/keiko-quality-intelligence",
+  "@oscharko-dev/keiko-sdk",
+  "@oscharko-dev/keiko-local-knowledge",
+  "@oscharko-dev/keiko-memory-vault",
+  "@oscharko-dev/keiko-memory-capture",
+  "@oscharko-dev/keiko-memory-consolidation",
+  "@oscharko-dev/keiko-memory-governance",
+  "@oscharko-dev/keiko-memory-retrieval",
   "@oscharko-dev/keiko-harness",
   "@oscharko-dev/keiko-workflows",
+  "@oscharko-dev/keiko-evaluations",
   "@oscharko-dev/keiko-server",
   "@oscharko-dev/keiko-cli"
 ]
@@ -82,7 +94,7 @@ published surface (governed by that package's own `files` list — `dist/` only)
 `node_modules/@oscharko-dev/keiko-<name>/` tree in the tarball. On `npm install`, npm extracts the
 bundle in place and no registry lookup occurs for those names.
 
-### D2 — keiko-ui is excluded from `bundleDependencies`
+### D2 — build-time browser workspaces are excluded from `bundleDependencies`
 
 `@oscharko-dev/keiko-ui` is a build-time-only package. `scripts/build-ui.mjs:51` runs
 `npm run build --workspace @oscharko-dev/keiko-ui`, which invokes the Next.js static export.
@@ -99,13 +111,17 @@ Including `keiko-ui` in `bundleDependencies` would:
 The existing `scripts/check-package-surface.mjs:101-103` already enforces that no
 `packages/keiko-ui/` source enters the tarball. That rule is unchanged.
 
+`@oscharko-dev/keiko-editor` is also build-time-only for the published root product and is excluded
+from `bundleDependencies`. Its build output is checked by repository build gates, but it is not an
+independently published npm package and not a runtime dependency of the root artifact.
+
 ### D3 — Why NOT publish every workspace package independently
 
 Publishing each `@oscharko-dev/keiko-*` package independently to the npm registry would require:
 
-- removing `"private": true` from all ten packages;
+- removing `"private": true` from internal packages;
 - independently versioning each package and managing inter-package version ranges;
-- releasing all ten in lock-step on every product change (any domain update touches multiple
+- releasing all internal workspaces in lock-step on every product change (any domain update touches multiple
   packages simultaneously);
 - re-auditing every package's `files` manifest, `exports` surface, and public API contract as a
   stable, consumer-facing interface;

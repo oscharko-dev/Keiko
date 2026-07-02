@@ -124,6 +124,15 @@ section uniqueness while randomized AES-GCM keeps the actual labels sealed. The
 cleartext-metadata split mirrors ADR-0035 and is documented in
 `docs/local-knowledge/runtime-state-protection.md`.
 
+`chunk_lexical_index.text` and `chunk_lexical_index.exact_text` are not classified as
+safe metadata: they are a deliberate plaintext FTS/BM25 projection required by the
+current local lexical fallback. The store records the narrowed guarantee with
+`schema_meta.content_encryption_scope=reconstructive-columns/v3`; local-state audit
+checks that marker and scans the projection for secret-shaped material. This ADR
+therefore claims encryption of reconstructive source-of-truth columns, vectors, blobs,
+and path labels, not whole-database encryption and not encryption of the lexical
+retrieval projection.
+
 ### D4 — Idempotent, crash-aware forward migration with WAL/freelist hygiene
 
 When an encrypted store opens, a one-time content-encryption migration runs before any
@@ -140,6 +149,7 @@ read, gated on a `schema_meta` marker so it is idempotent and skipped once compl
    missing key fails clearly instead of returning ciphertext as text.
 3. `PRAGMA wal_checkpoint(TRUNCATE)` then `VACUUM` so plaintext pages that lingered in the
    WAL or on the freelist after the in-place `UPDATE` are rewritten out of the file.
+4. Write the explicit encryption-scope marker only after the rewrite completes.
 
 On every subsequent encrypted open, the store verifies the sealed probe and exact marker
 value. A wrong key, a tampered probe, an unsupported marker, or an encrypted store opened
@@ -153,11 +163,13 @@ visible capsule behavior change.
 
 ## Consequences
 
-- A fresh encrypted store never writes plaintext extracted text, section/heading labels,
-  or vector bytes to disk; a migrated store is rewritten (VACUUM) so prior plaintext does
-  not linger. Verified by raw-SQLite / `strings`-equivalent on-disk assertions over known
-  fixture text, section labels, heading labels, and vector bytes, by migration round-trip
-  tests, and by wrong-key/tamper fail-closed tests.
+- A fresh encrypted store never writes plaintext source-of-truth extracted text,
+  section/heading labels, document blobs, or vector bytes to disk. It does write a
+  plaintext lexical FTS projection for local retrieval; that exception is explicitly
+  scoped and audit-checked. A migrated store is rewritten (VACUUM) so prior plaintext in
+  the encrypted columns does not linger. Verified by raw-SQLite / `strings`-equivalent
+  on-disk assertions over known fixture text, section labels, heading labels, and vector
+  bytes, by migration round-trip tests, and by wrong-key/tamper fail-closed tests.
 - Retrieval, hybrid lexical recall, citation excerpts, grounding, QI corpus ingestion,
   diagnostics, and incremental refresh continue to work unchanged through existing APIs;
   the cipher decrypts transparently at the row boundary.
@@ -196,6 +208,9 @@ the key; tampering or a wrong key fails GCM authentication and the store refuses
   running as the same user, or a machine where the key is already unlocked.
 - Cleartext metadata (identifiers, offsets, hashes, embedding identity, lifecycle) is retained by
   design for deterministic retrieval; it leaks the shape of the corpus, not its content.
+- The plaintext lexical FTS projection can reveal normalized terms from indexed content. It is
+  retained for local fallback search, protected by owner-only file modes, declared by the encryption
+  scope marker, and audited for secret-shaped material, but it is still residual privacy risk.
 
 ## Alternatives considered
 

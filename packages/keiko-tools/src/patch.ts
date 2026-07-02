@@ -24,7 +24,7 @@ import {
 import { computeFileContent } from "./patch-content.js";
 import { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
 import { parseUnifiedDiff, PatchParseError } from "./patch-parse.js";
-import { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
+import { createContainedNodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 import {
   DEFAULT_PATCH_LIMITS,
   type PatchApplyResult,
@@ -640,7 +640,7 @@ export function applyPatch(
     throw new PatchApplyDisabledError("apply is disabled (applyEnabled is false)");
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const writer = deps.writer ?? nodeWorkspaceWriter;
+  const writer = deps.writer ?? createContainedNodeWorkspaceWriter(workspace.root);
   const allowOverwrite = deps.allowOverwrite ?? false;
   const validation = validatePatch(workspace, diff, {
     fs,

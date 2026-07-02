@@ -20,6 +20,7 @@ import {
   type RecordFigmaSnapshotInput,
 } from "../store.js";
 import type { FigmaSnapshotRecord, FigmaSnapshotScreenRow } from "../schema.js";
+import { QI_SUBDIR } from "../../store.js";
 
 const RUN_ID = "00000000-0000-4000-8000-000000000001";
 const RUN_ID_2 = "00000000-0000-4000-8000-000000000002";
@@ -253,6 +254,19 @@ describe("createNodeFigmaSnapshotStore", () => {
     store.record(baseInput());
 
     expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
+  });
+
+  it("refuses a symlinked QI snapshot sub-store before writing", () => {
+    const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-substore-"));
+    try {
+      symlinkSync(outside, join(dir, QI_SUBDIR), "dir");
+      const store = createNodeFigmaSnapshotStore(dir);
+
+      expect(() => store.record(baseInput())).toThrow(/symlink/u);
+      expect(() => readFileSync(join(outside, `${RUN_ID}.figma-snapshot.json`), "utf8")).toThrow();
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("stores mutable display metadata without mutating the immutable snapshot record", () => {

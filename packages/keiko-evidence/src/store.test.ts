@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   existsSync,
   linkSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -107,6 +108,36 @@ describe("createNodeEvidenceStore", () => {
     expect(store.update?.("run-1", (existing) => `${existing ?? "[]"},2`)).toMatch(/run-1\.json$/);
     expect(store.get("run-1")).toBe("[1],2");
     expect(store.list()).toEqual(["run-1"]);
+  });
+
+  it("deletes the owned per-run side-file directory with the manifest", () => {
+    const dir = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    store.put("run-1", "{}");
+    const sideDir = join(dir, "run-1");
+    mkdirSync(sideDir);
+    writeFileSync(join(sideDir, "browser-1.png"), "png");
+
+    store.delete("run-1");
+
+    expect(store.list()).toEqual([]);
+    expect(existsSync(sideDir)).toBe(false);
+  });
+
+  it("refuses a symlinked side-file directory before deleting the manifest", () => {
+    if (process.platform === "win32") return;
+    const dir = freshDir();
+    const outside = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    store.put("run-1", "{}");
+    mkdirSync(join(outside, "run-1"));
+    symlinkSync(join(outside, "run-1"), join(dir, "run-1"), "dir");
+
+    expect(() => {
+      store.delete("run-1");
+    }).toThrow(EvidenceWriteError);
+    expect(store.list()).toEqual(["run-1"]);
+    expect(existsSync(join(outside, "run-1"))).toBe(true);
   });
 
   it("removes a stale update lock before appending", () => {

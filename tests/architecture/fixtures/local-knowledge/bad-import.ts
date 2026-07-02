@@ -8,7 +8,7 @@
  * boundary.
  *
  * Gate wiring:
- *   - rule `adr-0019-direction-3e-local-knowledge-only-contracts`
+ *   - rule `adr-0019-direction-3e-local-knowledge-only-contracts-security-workspace-model-gateway`
  *     in `.dependency-cruiser.cjs` extends its `from.path` regex to
  *     include `tests/architecture/fixtures/local-knowledge/` so this
  *     file is treated as if it were under the `keiko-local-knowledge`

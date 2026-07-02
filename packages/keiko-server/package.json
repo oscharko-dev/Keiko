@@ -49,5 +49,6 @@
     "@oscharko-dev/keiko-memory-consolidation": "0.2.11",
     "ws": "^8.21.0",
     "typescript": "^6.0.3"
-  }
+  },
+  "private": true
 }

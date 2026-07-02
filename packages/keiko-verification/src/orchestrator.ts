@@ -33,9 +33,8 @@ import type {
 } from "./types.js";
 
 // How the orchestrator treats a step that declares `limits.network === "none"` (ADR-0043).
-//   - "inherit"               — never enforce egress; every step runs with network:"inherit". This is
-//                               the default and preserves the historical behaviour exactly for every
-//                               existing caller (the harness verification path, the CLI, the run engine).
+//   - "inherit"               — explicit compatibility escape hatch: never enforce egress; every step
+//                               runs with network:"inherit".
 //   - "enforce-or-degrade"    — request an enforced network:"none" run when an enforcing sandbox backend
 //                               is available; otherwise fall back to network:"inherit" and report it
 //                               honestly (appliedLimits network `enforced: false`). A strict improvement
@@ -55,7 +54,11 @@ export interface VerificationDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly fs?: WorkspaceFs | undefined;
-  // Egress-enforcement policy for `network:"none"` steps (default "inherit" = historical behaviour).
+  readonly resolveExecutable?: RunCommandDeps["resolveExecutable"] | undefined;
+  readonly sandboxAvailability?: RunCommandDeps["sandboxAvailability"] | undefined;
+  readonly platform?: RunCommandDeps["platform"] | undefined;
+  // Egress-enforcement policy for `network:"none"` steps. Default is "enforce-or-fail-closed": a
+  // no-network verification step does not execute unless the caller attests an enforcing backend.
   readonly networkEnforcement?: NetworkEnforcementMode | undefined;
   // Whether an enforcing sandbox backend is available on this host for a network:"none" run. The caller
   // probes keiko-sandbox once (a synchronous PATH/binary check) and injects the result, so the
@@ -95,8 +98,7 @@ const ALL_STATUSES: readonly VerificationStatus[] = [
 // handled by the SpawnFn-wrapper monitor, so it does not appear here. The network policy is resolved by
 // `resolveStepNetwork` from the run's enforcement mode and probed backend availability (ADR-0043); for
 // an enforced "none" run, runCommand wraps the spawn through keiko-sandbox and records the attestation,
-// which `buildAppliedLimits` reports honestly. The default mode resolves to "inherit", so existing
-// callers are unaffected.
+// which `buildAppliedLimits` reports honestly.
 function policyForStep(limits: VerificationResourceLimits, network: NetworkPolicy): SandboxPolicy {
   return {
     ...DEFAULT_SANDBOX_POLICY,
@@ -111,10 +113,9 @@ type NetworkResolution =
   { readonly kind: "run"; readonly network: NetworkPolicy } | { readonly kind: "fail-closed" };
 
 // Pure resolution of a step's effective network policy from the run's enforcement mode and whether an
-// enforcing backend is available. The default mode ("inherit") and any step that does not declare
-// `network:"none"` always run with "inherit" — byte-identical to the historical orchestrator. Only an
-// explicit enforce-* mode on a `network:"none"` step requests enforcement; when no backend is available
-// it degrades honestly or fails closed per the mode.
+// enforcing backend is available. An explicit compatibility mode ("inherit") and any step that does
+// not declare `network:"none"` run with inherited network. Enforce modes on a `network:"none"` step
+// request enforcement; when no backend is available they degrade honestly or fail closed per the mode.
 export function resolveStepNetwork(
   limits: VerificationResourceLimits,
   mode: NetworkEnforcementMode,
@@ -349,6 +350,11 @@ function buildRunDeps(
     processEnv: deps.processEnv ?? process.env,
     now: deps.now ?? Date.now,
     fs: deps.fs ?? nodeWorkspaceFs,
+    ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
+    ...(deps.sandboxAvailability === undefined
+      ? {}
+      : { sandboxAvailability: deps.sandboxAvailability }),
+    ...(deps.platform === undefined ? {} : { platform: deps.platform }),
   };
 }
 
@@ -514,7 +520,7 @@ async function runPlanSteps(
   monitor: ResourceMonitor,
 ): Promise<{ readonly results: readonly VerificationResult[]; readonly cancelled: boolean }> {
   const results: VerificationResult[] = [];
-  const mode = deps.networkEnforcement ?? "inherit";
+  const mode = deps.networkEnforcement ?? "enforce-or-fail-closed";
   const available = deps.enforcedNetworkAvailable ?? false;
   let cancelled = false;
   for (const step of plan.steps) {

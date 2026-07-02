@@ -43,6 +43,26 @@ const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]
 // separator, dropping the value. ReDoS-safe: alternation of literals + one linear value class.
 const SECRET_KEY_NAMES =
   "passwd|password|api_?token|token|secret_key|secret|client_secret|refresh_token|access_token|id_token|private_key|aws_secret_access_key|secret_access_key|sas_token|jwt_secret|db_password|connection_?string|credential";
+const NORMALIZED_SECRET_KEY_NAMES: ReadonlySet<string> = new Set([
+  "passwd",
+  "password",
+  "apitoken",
+  "token",
+  "secretkey",
+  "secret",
+  "clientsecret",
+  "refreshtoken",
+  "accesstoken",
+  "idtoken",
+  "privatekey",
+  "awssecretaccesskey",
+  "secretaccesskey",
+  "sastoken",
+  "jwtsecret",
+  "dbpassword",
+  "connectionstring",
+  "credential",
+]);
 const SECRET_KEY_VALUE_PATTERN = new RegExp(
   `(?<![A-Za-z0-9])(${SECRET_KEY_NAMES})(["']?\\s*[:=]\\s*["']?)[^\\s"'\`,;&]+`,
   "gi",
@@ -76,6 +96,28 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function isCredentialKeyName(value: string): boolean {
+  const normalized = value.toLowerCase().replace(/[^a-z0-9]/gu, "");
+  return NORMALIZED_SECRET_KEY_NAMES.has(normalized);
+}
+
+export function objectContainsCredentialKey(
+  value: unknown,
+  seen = new WeakSet(),
+): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) => objectContainsCredentialKey(entry, seen));
+  }
+  for (const [key, entry] of Object.entries(value as Readonly<Record<string, unknown>>)) {
+    if (isCredentialKeyName(key)) return true;
+    if (objectContainsCredentialKey(entry, seen)) return true;
+  }
+  return false;
 }
 
 // Strips known secret shapes and any caller-supplied literal secrets from `input`.

@@ -16,6 +16,12 @@ function fail(message) {
   process.exit(1);
 }
 
+function assertTlsVerificationEnabled() {
+  if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
+    fail("NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.");
+  }
+}
+
 function run(cmd, args, options = {}) {
   const result = spawnSync(cmd, args, {
     encoding: "utf8",
@@ -61,11 +67,12 @@ function npmSmoke() {
       `registry=${registry}\n` +
         `@oscharko-dev:registry=${registry}\n` +
         `cache=${join(projectDir, ".npm-cache")}\n` +
-        "strict-ssl=false\n",
+        "strict-ssl=true\n",
     );
     run(
       "npm",
       ["install", packageSpec, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
+      // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility for install smoke; argv is fixed.
       { cwd: projectDir, shell: process.platform === "win32" },
     );
     assertCliVersion(projectDir);
@@ -102,7 +109,7 @@ function yarnSmoke() {
       [
         "nodeLinker: node-modules",
         "enableGlobalCache: false",
-        "enableStrictSsl: false",
+        "enableStrictSsl: true",
         `cacheFolder: "${join(projectDir, ".yarn-cache").replaceAll("\\", "/")}"`,
         `npmRegistryServer: "${registry}"`,
         "npmScopes:",
@@ -125,6 +132,7 @@ function yarnSmoke() {
   }
 }
 
+assertTlsVerificationEnabled();
 npmSmoke();
 yarnSmoke();
 

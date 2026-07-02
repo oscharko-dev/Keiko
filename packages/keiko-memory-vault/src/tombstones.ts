@@ -17,6 +17,7 @@ import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { MemoryTombstone } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { cachedPrepare } from "./statements.js";
+import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 
 interface TombstoneRow {
   readonly id: string;
@@ -50,8 +51,16 @@ DELETE FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND forgotten_at < ?
 `;
 
+const UPDATE_BODY_HASH_BY_SCOPE_SQL = `
+UPDATE memory_tombstones
+SET body_hash = ?
+WHERE scope_kind = ? AND scope_coordinate = ? AND body_hash = ?
+`;
+
 // `reason` is the only free-text tombstone column, so it is the only sealed one (ADR-0035).
 function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryTombstone {
+  const reason =
+    row.reason === null ? undefined : sanitizeMemoryTombstoneReason(cipher.openString(row.reason));
   const base = {
     id: row.id,
     memoryId: row.memory_id as MemoryId,
@@ -68,7 +77,7 @@ function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryT
     ...(row.original_status === null
       ? {}
       : { originalStatus: row.original_status as MemoryStatus }),
-    ...(row.reason === null ? {} : { reason: cipher.openString(row.reason) }),
+    ...(reason === undefined ? {} : { reason }),
   };
 }
 
@@ -77,7 +86,8 @@ export function insertTombstoneRow(
   tombstone: MemoryTombstone,
   cipher: MemoryContentCipher,
 ): void {
-  const reason = tombstone.reason === undefined ? null : cipher.sealString(tombstone.reason);
+  const safeReason = sanitizeMemoryTombstoneReason(tombstone.reason);
+  const reason = safeReason === undefined ? null : cipher.sealString(safeReason);
   cachedPrepare(db, INSERT_SQL).run(
     tombstone.id,
     tombstone.memoryId,
@@ -114,6 +124,21 @@ export function deleteTombstonesByScopeBeforeRows(
     scopeKindOf(scope),
     scopeCoordinateOf(scope),
     forgottenBeforeMs,
+  );
+  return Number(info.changes);
+}
+
+export function updateTombstoneBodyHashByScopeRows(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  previousBodyHash: string,
+  nextBodyHash: string,
+): number {
+  const info = cachedPrepare(db, UPDATE_BODY_HASH_BY_SCOPE_SQL).run(
+    nextBodyHash,
+    scopeKindOf(scope),
+    scopeCoordinateOf(scope),
+    previousBodyHash,
   );
   return Number(info.changes);
 }
