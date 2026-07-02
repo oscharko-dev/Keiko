@@ -62,6 +62,7 @@ function coverageDiagnostics(
   overrides: Partial<ContextCoverageDiagnostics> = {},
 ): ContextCoverageDiagnostics {
   return {
+    truncated: true,
     incomplete: true,
     reasons: ["file-cap"],
     filesDiscovered: 101,
@@ -71,6 +72,7 @@ function coverageDiagnostics(
     ignoredByDiscovery: 1,
     deniedByDiscovery: 0,
     depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
     matchesReturned: 12,
     elapsedMs: 250,
     limits: {

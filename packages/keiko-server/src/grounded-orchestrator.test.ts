@@ -380,13 +380,14 @@ describe("runGroundedExploration", () => {
   it("threads an injected repository semantic-search provider into lexical retrieval", async () => {
     let semanticCalls = 0;
     const semanticProvider: SemanticSearchProvider = {
+      name: "local fixture",
       search: (request) => {
         semanticCalls += 1;
-        expect(request.candidatePaths).toContain("src/bar.ts");
+        expect(request.documents.map((document) => document.scopePath)).toContain("src/bar.ts");
         return Promise.resolve([
           {
             scopePath: "src/bar.ts",
-            lineRange: { startLine: 2, endLine: 2 },
+            line: 2,
             score: 0.99,
           },
         ]);

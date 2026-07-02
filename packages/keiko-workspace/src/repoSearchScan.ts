@@ -308,6 +308,15 @@ function resolveGatherInputs(
   };
 }
 
+interface CollectedCandidates {
+  readonly files: readonly DiscoveredFile[];
+  readonly directories: readonly string[];
+  readonly filesDiscovered: number;
+  readonly truncated: boolean;
+  readonly depthPruned: number;
+  readonly maxFilesPruned: number;
+}
+
 export function gatherCandidates(
   scope: ScopeShape,
   limits: LimitsShape,
@@ -328,47 +337,44 @@ export function gatherCandidates(
   policy?: SearchPolicy,
 ): CandidateSet {
   const inputs = resolveGatherInputs(scope, queryOrLimits, limitsOrFs, fsOrPolicy, policy);
-  // Defense in depth alongside the realpath gate: validate scope.relativePaths against the
-  // contracts-layer shape rules (no absolute paths, no `..`, no drive letters, no backslashes).
-  // resolveWithinWorkspace + assertContainedRealPath already provide a complete barrier; this
-  // pre-check rejects shape-invalid inputs at the API boundary with a typed error rather than
-  // letting a normalization quirk slip past unnoticed.
-  for (const entry of scope.relativePaths) {
+  validateScopeEntries(scope.relativePaths);
+  return scope.relativePaths.length === 0
+    ? gatherDirectoryCandidates(scope, inputs)
+    : gatherEntryCandidates(scope, inputs);
+}
+
+function validateScopeEntries(relativePaths: readonly string[]): void {
+  for (const entry of relativePaths) {
     if (!isValidScopePath(entry, { mustBeRelative: true })) {
       throw new RepoSearchInvalidQueryError(`invalid scope.relativePaths entry: ${entry}`);
     }
   }
-  if (scope.relativePaths.length === 0) {
-    const result = collectFromDirectory(scope, inputs.limits, inputs.fs, inputs.policy);
-    const contentScores = contentScoresForOrdering(scope, result.files, inputs);
-    const ordered = orderCandidatesForSearch(
-      result.files,
-      inputs.query,
-      inputs.policy,
-      result.ignored,
-      result.denied,
-      result.depthPruned,
-      result.maxFilesPruned,
-      contentScores,
-    );
-    return {
-      files: ordered.files,
-      directories: result.directories,
-      truncated: result.truncated || result.depthPruned > 0,
-      diagnostics: {
-        ...ordered.diagnostics,
-        filesDiscovered: result.filesDiscovered,
-      },
-    };
-  }
+}
+
+function gatherDirectoryCandidates(scope: ScopeShape, inputs: GatherInputs): CandidateSet {
+  const result = collectFromDirectory(scope, inputs.limits, inputs.fs, inputs.policy);
+  return orderCollectedCandidates(scope, inputs, result, result.ignored, result.denied);
+}
+
+function gatherEntryCandidates(scope: ScopeShape, inputs: GatherInputs): CandidateSet {
   const result = collectFromEntries(scope, inputs.limits, inputs.fs);
+  return orderCollectedCandidates(scope, inputs, result, 0, 0);
+}
+
+function orderCollectedCandidates(
+  scope: ScopeShape,
+  inputs: GatherInputs,
+  result: CollectedCandidates,
+  ignoredByDiscovery: number,
+  deniedByDiscovery: number,
+): CandidateSet {
   const contentScores = contentScoresForOrdering(scope, result.files, inputs);
   const ordered = orderCandidatesForSearch(
     result.files,
     inputs.query,
     inputs.policy,
-    0,
-    0,
+    ignoredByDiscovery,
+    deniedByDiscovery,
     result.depthPruned,
     result.maxFilesPruned,
     contentScores,
@@ -705,37 +711,10 @@ async function readRawTextForScan(
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   if (sizeBytes > runner.limits.maxBytesPerFileScanned) {
-    markTruncated(state, "file-cap");
-    try {
-      const prefix = await readTextPrefixForScan(runner, absolutePath);
-      if (prefix !== undefined) {
-        state.oversizedFilesScanned = (state.oversizedFilesScanned ?? 0) + 1;
-        return prefix;
-      }
-    } catch (err) {
-      if (!isIoError(err)) {
-        throw err;
-      }
-    }
-    recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
-    return undefined;
+    return await readOversizedRawText(runner, relativePath, absolutePath, sizeBytes, state, candidates);
   }
   try {
-    const bytes = await runner.fs.readFileBytes?.(absolutePath, sizeBytes);
-    const decoded = bytes === undefined ? undefined : decodeTextBytes(bytes);
-    if (decoded === undefined) {
-      recordCandidateOmission(candidates, relativePath, "binary");
-      return undefined;
-    }
-    const text = redact(decoded.text);
-    persistWorkspaceIndexRecord(runner, {
-      kind: "text",
-      scopePath: relativePath,
-      absolutePath,
-      sizeBytes,
-      content: text,
-    });
-    return text;
+    return await readBoundedRawText(runner, relativePath, absolutePath, sizeBytes, candidates);
   } catch (err) {
     if (isIoError(err)) {
       recordCandidateOmission(candidates, relativePath, "tool-unavailable");
@@ -743,6 +722,54 @@ async function readRawTextForScan(
     }
     throw err;
   }
+}
+
+async function readOversizedRawText(
+  runner: SearchTextRunner,
+  relativePath: string,
+  absolutePath: string,
+  sizeBytes: number,
+  state: RunState,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
+  markTruncated(state, "file-cap");
+  try {
+    const prefix = await readTextPrefixForScan(runner, absolutePath);
+    if (prefix !== undefined) {
+      state.oversizedFilesScanned = (state.oversizedFilesScanned ?? 0) + 1;
+      return prefix;
+    }
+  } catch (err) {
+    if (!isIoError(err)) {
+      throw err;
+    }
+  }
+  recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
+  return undefined;
+}
+
+async function readBoundedRawText(
+  runner: SearchTextRunner,
+  relativePath: string,
+  absolutePath: string,
+  sizeBytes: number,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
+  const bytes = await runner.fs.readFileBytes?.(absolutePath, sizeBytes);
+  const decoded = bytes === undefined ? undefined : decodeTextBytes(bytes);
+  if (decoded === undefined) {
+    recordCandidateOmission(candidates, relativePath, "binary");
+    return undefined;
+  }
+  const text = redact(decoded.text);
+  persistWorkspaceIndexRecord(runner, {
+    kind: "text",
+    scopePath: relativePath,
+    absolutePath,
+    sizeBytes,
+    content: text,
+  });
+  return text;
 }
 
 async function readUtf8TextForScan(
@@ -772,22 +799,14 @@ async function readUtf8TextForScan(
     return text;
   } catch (err) {
     if (err instanceof FileTooLargeError) {
-      markTruncated(state, "file-cap");
-      if (absolutePath !== undefined) {
-        try {
-          const prefix = await readTextPrefixForScan(runner, absolutePath);
-          if (prefix !== undefined) {
-            state.oversizedFilesScanned = (state.oversizedFilesScanned ?? 0) + 1;
-            return prefix;
-          }
-        } catch (prefixErr) {
-          if (!isIoError(prefixErr)) {
-            throw prefixErr;
-          }
-        }
-      }
-      recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
-      return undefined;
+      return await readOversizedUtf8Text(
+        runner,
+        relativePath,
+        absolutePath,
+        sizeBytes,
+        state,
+        candidates,
+      );
     }
     // TOCTOU: permissions or availability may change between discovery and read.
     // A single unreadable file must degrade to a skip, not crash the whole scan.
@@ -797,6 +816,22 @@ async function readUtf8TextForScan(
     }
     throw err;
   }
+}
+
+async function readOversizedUtf8Text(
+  runner: SearchTextRunner,
+  relativePath: string,
+  absolutePath: string | undefined,
+  sizeBytes: number,
+  state: RunState,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
+  if (absolutePath !== undefined) {
+    return await readOversizedRawText(runner, relativePath, absolutePath, sizeBytes, state, candidates);
+  }
+  markTruncated(state, "file-cap");
+  recordSizeExceeded(runner, relativePath, absolutePath, sizeBytes, candidates);
+  return undefined;
 }
 
 async function readForScan(
@@ -1026,6 +1061,37 @@ export async function collectFileMatches(
   if (cached !== undefined) {
     return cached;
   }
+  return await collectLiveFileMatches(runner, file, state, candidates, order);
+}
+
+async function collectLiveFileMatches(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  candidates: CandidateFile[],
+  order: number,
+): Promise<FileMatches | undefined> {
+  const policyPath = await readablePolicyPath(runner, file, candidates);
+  if (policyPath === undefined || abortScanFile(runner, state)) {
+    return undefined;
+  }
+  state.filesScanned += 1;
+  const text = await readForScan(
+    runner,
+    file.relativePath,
+    policyPath,
+    file.sizeBytes,
+    state,
+    candidates,
+  );
+  return text === undefined ? undefined : textFileMatches(runner, file, state, order, text);
+}
+
+async function readablePolicyPath(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  candidates: CandidateFile[],
+): Promise<string | undefined> {
   const policy = filePolicyOmission(runner, file);
   if (policy.omitted !== undefined) {
     recordCandidateOmission(candidates, file.relativePath, policy.omitted);
@@ -1045,21 +1111,16 @@ export async function collectFileMatches(
     recordCandidateOmission(candidates, file.relativePath, binary);
     return undefined;
   }
-  if (abortScanFile(runner, state)) {
-    return undefined;
-  }
-  state.filesScanned += 1;
-  const text = await readForScan(
-    runner,
-    file.relativePath,
-    policy.path,
-    file.sizeBytes,
-    state,
-    candidates,
-  );
-  if (text === undefined) {
-    return undefined;
-  }
+  return policy.path;
+}
+
+function textFileMatches(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  order: number,
+  text: string,
+): FileMatches | undefined {
   collectSemanticSearchDocument(runner.semantic, { scopePath: file.relativePath, text });
   if (!shouldScoreContent(runner.query, text, runner.policy)) {
     return undefined;

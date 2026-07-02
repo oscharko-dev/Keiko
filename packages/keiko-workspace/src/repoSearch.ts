@@ -1258,35 +1258,53 @@ async function rescueLowValueEvidence(
   );
   const lowValueSet = lowValueOnlyCandidateSet(gatheredSet, runner.policy);
   if (lowValueSet.files.length === 0) {
-    return {
-      collection: primary,
-      candidateSet: {
-        ...primarySet,
-        diagnostics: diagnosticsWithLowValueRescue(
-          primarySet.diagnostics,
-          0,
-          0,
-        ),
-      },
-    };
+    return emptyLowValueRescue(primarySet, primary);
   }
-  const rescue = await collectSearchTextAtoms(lowValueRunner, lowValueSet, {
+  const rescue = await collectSearchTextAtoms(lowValueRunner, lowValueSet, lowValueRescueState(
+    lowValueSet,
+    primary,
+  ));
+  return {
+    collection: mergeCollections(runner, primary, rescue),
+    candidateSet: rescueCandidateSet(primarySet, lowValueSet, rescue),
+  };
+}
+
+function emptyLowValueRescue(
+  primarySet: CandidateSet,
+  primary: SearchTextCollection,
+): { readonly collection: SearchTextCollection; readonly candidateSet: CandidateSet } {
+  return {
+    collection: primary,
+    candidateSet: {
+      ...primarySet,
+      diagnostics: diagnosticsWithLowValueRescue(primarySet.diagnostics, 0, 0),
+    },
+  };
+}
+
+function lowValueRescueState(lowValueSet: CandidateSet, primary: SearchTextCollection): RunState {
+  return {
     filesScanned: 0,
     matchesReturned: 0,
     oversizedFilesScanned: 0,
     truncated: lowValueSet.truncated,
     truncationReasons: primary.state.truncationReasons,
-  });
+  };
+}
+
+function rescueCandidateSet(
+  primarySet: CandidateSet,
+  lowValueSet: CandidateSet,
+  rescue: SearchTextCollection,
+): CandidateSet {
   return {
-    collection: mergeCollections(runner, primary, rescue),
-    candidateSet: {
-      ...primarySet,
-      diagnostics: diagnosticsWithLowValueRescue(
-        primarySet.diagnostics,
-        lowValueSet.files.length,
-        rescue.state.filesScanned,
-      ),
-    },
+    ...primarySet,
+    diagnostics: diagnosticsWithLowValueRescue(
+      primarySet.diagnostics,
+      lowValueSet.files.length,
+      rescue.state.filesScanned,
+    ),
   };
 }
 
@@ -1840,8 +1858,8 @@ function findFilesSync(
   if (isAborted(signal)) {
     return abortedSearchResult(0, limits);
   }
-  // Honor the per-query cap alongside the global limit (Finding 2).
   const effectiveMaxMatches = Math.min(limits.maxMatchesReturned, query.maxResults);
+  const effectiveLimits = { ...limits, maxMatchesReturned: effectiveMaxMatches };
   const ctx: FindFilesContext = {
     scope,
     regex: compileGlob(query.text, query.caseSensitive),
@@ -1875,10 +1893,7 @@ function findFilesSync(
     startMs,
     ...(signal !== undefined ? { signal } : {}),
   });
-  return fileListingResult(rescued.state, rescued.candidateSet, nowMs() - startMs, {
-    ...limits,
-    maxMatchesReturned: effectiveMaxMatches,
-  });
+  return fileListingResult(rescued.state, rescued.candidateSet, nowMs() - startMs, effectiveLimits);
 }
 
 export async function findFiles(

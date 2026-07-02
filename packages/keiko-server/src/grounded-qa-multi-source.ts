@@ -57,7 +57,7 @@ import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semanti
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
-import { splitExplorationBudget, splitExplorationBudgets } from "./grounded-multi-source-budget.js";
+import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -253,11 +253,43 @@ function mergeContextSummaries(
 }
 
 type CoverageSummary = NonNullable<GroundedAnswerContextPackSummary["coverage"]>;
+type SummableCoverageField =
+  | "filesDiscovered"
+  | "filesAfterPolicy"
+  | "filesScanned"
+  | "filesSkipped"
+  | "ignoredByDiscovery"
+  | "deniedByDiscovery"
+  | "depthPrunedByDiscovery"
+  | "maxFilesPrunedByDiscovery"
+  | "matchesReturned"
+  | "elapsedMs";
 
 function isCoverageSummary(
   coverage: GroundedAnswerContextPackSummary["coverage"],
 ): coverage is CoverageSummary {
   return coverage !== undefined;
+}
+
+function sumCoverage(
+  summaries: readonly CoverageSummary[],
+  field: SummableCoverageField,
+): number {
+  return summaries.reduce((sum, coverage) => sum + coverage[field], 0);
+}
+
+function mergeCoverageLimits(summaries: readonly CoverageSummary[]): CoverageSummary["limits"] {
+  return {
+    maxFilesScanned: summaries.reduce(
+      (sum, coverage) => sum + coverage.limits.maxFilesScanned,
+      0,
+    ),
+    maxMatchesReturned: summaries.reduce(
+      (sum, coverage) => sum + coverage.limits.maxMatchesReturned,
+      0,
+    ),
+    elapsedMsMax: summaries.reduce((sum, coverage) => sum + coverage.limits.elapsedMsMax, 0),
+  };
 }
 
 function mergeCoverageSummaries(
@@ -271,46 +303,18 @@ function mergeCoverageSummaries(
   return {
     incomplete: coverageSummaries.some((coverage) => coverage.incomplete),
     reasons,
-    filesDiscovered: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesDiscovered, 0),
-    filesAfterPolicy: coverageSummaries.reduce(
-      (sum, coverage) => sum + coverage.filesAfterPolicy,
-      0,
-    ),
-    filesScanned: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesScanned, 0),
-    filesSkipped: coverageSummaries.reduce((sum, coverage) => sum + coverage.filesSkipped, 0),
+    filesDiscovered: sumCoverage(coverageSummaries, "filesDiscovered"),
+    filesAfterPolicy: sumCoverage(coverageSummaries, "filesAfterPolicy"),
+    filesScanned: sumCoverage(coverageSummaries, "filesScanned"),
+    filesSkipped: sumCoverage(coverageSummaries, "filesSkipped"),
     truncated: coverageSummaries.some((coverage) => coverage.truncated),
-    ignoredByDiscovery: coverageSummaries.reduce(
-      (sum, coverage) => sum + coverage.ignoredByDiscovery,
-      0,
-    ),
-    deniedByDiscovery: coverageSummaries.reduce(
-      (sum, coverage) => sum + coverage.deniedByDiscovery,
-      0,
-    ),
-    depthPrunedByDiscovery: coverageSummaries.reduce(
-      (sum, coverage) => sum + coverage.depthPrunedByDiscovery,
-      0,
-    ),
-    maxFilesPrunedByDiscovery: coverageSummaries.reduce(
-      (sum, coverage) => sum + coverage.maxFilesPrunedByDiscovery,
-      0,
-    ),
-    matchesReturned: coverageSummaries.reduce((sum, coverage) => sum + coverage.matchesReturned, 0),
-    elapsedMs: coverageSummaries.reduce((sum, coverage) => sum + coverage.elapsedMs, 0),
-    limits: {
-      maxFilesScanned: coverageSummaries.reduce(
-        (sum, coverage) => sum + coverage.limits.maxFilesScanned,
-        0,
-      ),
-      maxMatchesReturned: coverageSummaries.reduce(
-        (sum, coverage) => sum + coverage.limits.maxMatchesReturned,
-        0,
-      ),
-      elapsedMsMax: coverageSummaries.reduce(
-        (sum, coverage) => sum + coverage.limits.elapsedMsMax,
-        0,
-      ),
-    },
+    ignoredByDiscovery: sumCoverage(coverageSummaries, "ignoredByDiscovery"),
+    deniedByDiscovery: sumCoverage(coverageSummaries, "deniedByDiscovery"),
+    depthPrunedByDiscovery: sumCoverage(coverageSummaries, "depthPrunedByDiscovery"),
+    maxFilesPrunedByDiscovery: sumCoverage(coverageSummaries, "maxFilesPrunedByDiscovery"),
+    matchesReturned: sumCoverage(coverageSummaries, "matchesReturned"),
+    elapsedMs: sumCoverage(coverageSummaries, "elapsedMs"),
+    limits: mergeCoverageLimits(coverageSummaries),
   };
 }
 

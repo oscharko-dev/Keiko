@@ -367,6 +367,7 @@ describe("splitExplorationBudgets", () => {
         text: "Trace the api payment flow",
         caseSensitive: false,
         maxResults: 5,
+        emittedAtMs: NOW,
       },
     );
 

@@ -1330,20 +1330,52 @@ function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: strin
   }
 }
 
+const REQUIRED_COVERAGE_FIELDS = [
+  "filesDiscovered",
+  "filesAfterPolicy",
+  "filesScanned",
+  "filesSkipped",
+  "ignoredByDiscovery",
+  "deniedByDiscovery",
+  "depthPrunedByDiscovery",
+  "maxFilesPrunedByDiscovery",
+  "matchesReturned",
+  "elapsedMs",
+] as const;
+
+const OPTIONAL_COVERAGE_FIELDS = [
+  "oversizedFilesScanned",
+  "lowValueRescueFilesDiscovered",
+  "lowValueRescueFilesScanned",
+] as const;
+
+const COVERAGE_LIMIT_FIELDS = ["maxFilesScanned", "maxMatchesReturned", "elapsedMsMax"] as const;
+
 function validateDiagnosticsCoverage(coverage: unknown, reasons: string[]): void {
   if (coverage === undefined) {
     return;
   }
-  if (!isRecord(coverage) || !Array.isArray(coverage.reasons) || !isRecord(coverage.limits)) {
+  if (!isValidCoverageShape(coverage)) {
     reasons.push("pack.diagnostics.coverage invalid");
     return;
   }
   pushIf(reasons, typeof coverage.incomplete !== "boolean", "coverage.incomplete invalid");
-  pushIf(
-    reasons,
-    !coverage.reasons.every(isContextCoverageReason),
-    "coverage.reasons invalid",
-  );
+  pushIf(reasons, typeof coverage.truncated !== "boolean", "coverage.truncated invalid");
+  validateCoverageReasons(coverage, reasons);
+  validateCoverageCounters(coverage, reasons);
+}
+
+function isValidCoverageShape(
+  coverage: unknown,
+): coverage is Record<string, unknown> & { reasons: unknown[]; limits: Record<string, unknown> } {
+  return isRecord(coverage) && Array.isArray(coverage.reasons) && isRecord(coverage.limits);
+}
+
+function validateCoverageReasons(
+  coverage: Record<string, unknown> & { reasons: unknown[] },
+  reasons: string[],
+): void {
+  pushIf(reasons, !coverage.reasons.every(isContextCoverageReason), "coverage.reasons invalid");
   pushIf(
     reasons,
     coverage.incomplete === true && coverage.reasons.length === 0,
@@ -1354,33 +1386,23 @@ function validateDiagnosticsCoverage(coverage: unknown, reasons: string[]): void
     coverage.incomplete === false && coverage.reasons.length > 0,
     "coverage.reasons present for complete coverage",
   );
-  pushIf(reasons, typeof coverage.truncated !== "boolean", "coverage.truncated invalid");
-  for (const field of [
-    "filesDiscovered",
-    "filesAfterPolicy",
-    "filesScanned",
-    "filesSkipped",
-    "ignoredByDiscovery",
-    "deniedByDiscovery",
-    "depthPrunedByDiscovery",
-    "maxFilesPrunedByDiscovery",
-    "matchesReturned",
-    "elapsedMs",
-  ] as const) {
+}
+
+function validateCoverageCounters(
+  coverage: Record<string, unknown> & { limits: Record<string, unknown> },
+  reasons: string[],
+): void {
+  for (const field of REQUIRED_COVERAGE_FIELDS) {
     pushIf(reasons, !isFiniteNonNegativeInteger(coverage[field]), `coverage.${field} invalid`);
   }
-  for (const field of [
-    "oversizedFilesScanned",
-    "lowValueRescueFilesDiscovered",
-    "lowValueRescueFilesScanned",
-  ] as const) {
+  for (const field of OPTIONAL_COVERAGE_FIELDS) {
     pushIf(
       reasons,
       coverage[field] !== undefined && !isFiniteNonNegativeInteger(coverage[field]),
       `coverage.${field} invalid`,
     );
   }
-  for (const field of ["maxFilesScanned", "maxMatchesReturned", "elapsedMsMax"] as const) {
+  for (const field of COVERAGE_LIMIT_FIELDS) {
     pushIf(reasons, !isFiniteNonNegativeInteger(coverage.limits[field]), `coverage.${field} invalid`);
   }
 }

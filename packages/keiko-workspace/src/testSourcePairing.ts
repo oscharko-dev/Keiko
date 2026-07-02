@@ -380,7 +380,7 @@ function inputsForQuery(
 export const testSourcePairingAdapter: StructuralAdapter = {
   name: "test-source-pairing",
   isAvailable: (): Promise<boolean> => Promise.resolve(true),
-  lookup: async (
+  lookup: (
     scope: SearchScope,
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -388,20 +388,20 @@ export const testSourcePairingAdapter: StructuralAdapter = {
     deps?: StructuralAdapterDeps,
   ): Promise<readonly EvidenceAtom[]> => {
     try {
-      return await runLookup(scope, query, limits, fs, deps);
+      return Promise.resolve(runLookup(scope, query, limits, fs, deps));
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
   },
 };
 
-async function runLookup(
+function runLookup(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
   fs: WorkspaceFs,
   deps: StructuralAdapterDeps | undefined,
-): Promise<readonly EvidenceAtom[]> {
+): readonly EvidenceAtom[] {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
     return [];
   }

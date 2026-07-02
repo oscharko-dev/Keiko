@@ -48,6 +48,7 @@ function searchResult(atoms: readonly EvidenceAtom[]): SearchResult {
     truncated: false,
     diagnostics: undefined,
     coverage: {
+      truncated: false,
       incomplete: false,
       reasons: [],
       filesDiscovered: atoms.length,
@@ -57,6 +58,7 @@ function searchResult(atoms: readonly EvidenceAtom[]): SearchResult {
       ignoredByDiscovery: 0,
       deniedByDiscovery: 0,
       depthPrunedByDiscovery: 0,
+      maxFilesPrunedByDiscovery: 0,
       matchesReturned: atoms.length,
       elapsedMs: 1,
       limits: {

@@ -10,7 +10,6 @@ import {
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
-  type SemanticSearchDocument,
   type SemanticSearchInput,
   type SemanticSearchMatch,
   type SemanticSearchProvider,
@@ -26,11 +25,8 @@ import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 
 const MAX_SEMANTIC_CANDIDATES = 32;
 const SEMANTIC_CANDIDATE_RESULT_MULTIPLIER = 4;
-const SEMANTIC_EXCERPT_LINES = 240;
 const SEMANTIC_EXCERPT_BYTES = 16_384;
 const SEMANTIC_VECTOR_CACHE_SCHEMA_VERSION = 1;
-const SEMANTIC_VECTOR_CACHE_DIR = ".keiko/repo-semantic-search";
-const MAX_CACHED_VECTOR_DIMS = 16_384;
 const EMBEDDING_INPUT_SAFETY_TOKENS = 16;
 
 interface ProviderCredentials {
@@ -60,12 +56,6 @@ interface CandidateDocument {
   readonly scopePath: string;
   readonly text: string;
   readonly order: number;
-}
-
-interface CachedDocumentVector {
-  readonly schemaVersion: number;
-  readonly key: string;
-  readonly vector: readonly number[];
 }
 
 export interface ConfiguredRepoSemanticSearchOptions {

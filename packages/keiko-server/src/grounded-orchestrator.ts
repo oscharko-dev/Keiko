@@ -330,31 +330,6 @@ function noEvidence(nowMs: number): UncertaintyMarker {
   };
 }
 
-function coverageIncomplete(
-  coverage: ContextCoverageDiagnostics | undefined,
-  nowMs: number,
-): UncertaintyMarker | undefined {
-  if (coverage?.incomplete !== true) {
-    return undefined;
-  }
-  return {
-    kind: "scope-incomplete",
-    claim:
-      `Incomplete repository coverage: reasons=${coverage.reasons.join(",")}; ` +
-      `filesDiscovered=${String(coverage.filesDiscovered)}, ` +
-      `filesAfterPolicy=${String(coverage.filesAfterPolicy)}, ` +
-      `filesScanned=${String(coverage.filesScanned)}, ` +
-      `filesSkipped=${String(coverage.filesSkipped)}, ` +
-      `matchesReturned=${String(coverage.matchesReturned)}, ` +
-      `depthPruned=${String(coverage.depthPrunedByDiscovery)}, ` +
-      `limits=maxFilesScanned:${String(coverage.limits.maxFilesScanned)},` +
-      `maxMatchesReturned:${String(coverage.limits.maxMatchesReturned)},` +
-      `elapsedMsMax:${String(coverage.limits.elapsedMsMax)}.`,
-    impactedAtomIds: [],
-    emittedAtMs: nowMs,
-  };
-}
-
 function toolUnavailable(claim: string, nowMs: number): UncertaintyMarker {
   return {
     kind: "tool-unavailable",
@@ -2193,23 +2168,32 @@ function orderPreferredCandidates(
     return kept;
   }
   const order = new Map(ranked.map((candidate, index) => [candidate.scopePath, index]));
-  return [...kept].sort((a, b) => {
-    const aIndex = order.get(a.scopePath);
-    const bIndex = order.get(b.scopePath);
-    if (aIndex !== undefined && bIndex !== undefined && aIndex !== bIndex) {
-      return aIndex - bIndex;
-    }
-    if (aIndex !== undefined && bIndex === undefined) {
-      return -1;
-    }
-    if (aIndex === undefined && bIndex !== undefined) {
-      return 1;
-    }
-    if (b.score !== a.score) {
-      return b.score - a.score;
-    }
-    return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
-  });
+  return [...kept].sort((a, b) => comparePreferredCandidate(a, b, order));
+}
+
+function comparePreferredCandidate(
+  a: CandidateFile,
+  b: CandidateFile,
+  order: ReadonlyMap<string, number>,
+): number {
+  const diagnosticOrder = compareDiagnosticOrder(order.get(a.scopePath), order.get(b.scopePath));
+  if (diagnosticOrder !== 0) {
+    return diagnosticOrder;
+  }
+  if (b.score !== a.score) {
+    return b.score - a.score;
+  }
+  return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
+}
+
+function compareDiagnosticOrder(aIndex: number | undefined, bIndex: number | undefined): number {
+  if (aIndex !== undefined && bIndex !== undefined) {
+    return aIndex - bIndex;
+  }
+  if (aIndex !== undefined) {
+    return -1;
+  }
+  return bIndex !== undefined ? 1 : 0;
 }
 
 function groupEvidenceAtomsByPath(

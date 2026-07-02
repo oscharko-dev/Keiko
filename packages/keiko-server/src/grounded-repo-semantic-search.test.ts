@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import {
-  DEFAULT_SEARCH_LIMITS,
   type SemanticSearchMatch,
   type SemanticSearchProvider,
   type WorkspaceDirEntry,
   type WorkspaceFs,
-  type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import type {
@@ -93,19 +91,6 @@ function testFs(files: Record<string, string>): WorkspaceFs {
       const bytes = new TextEncoder().encode(files[key] ?? "");
       return Promise.resolve(bytes.subarray(0, Math.max(0, Math.min(bytes.length, maxBytes))));
     },
-  };
-}
-
-function workspace(): WorkspaceInfo {
-  return {
-    root: ROOT,
-    name: "repo",
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: ["src"],
-    testDirs: [],
-    languages: ["typescript"],
-    ignoreLines: [],
   };
 }
 
