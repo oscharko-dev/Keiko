@@ -43,6 +43,7 @@ import {
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
   listMessagesLimited as sqlListMessagesLimited,
+  replaceAssistantMessageContent as sqlReplaceAssistantMessageContent,
   updateMessage as sqlUpdateMessage,
 } from "./messages.js";
 import { validateProjectPath } from "./validation.js";
@@ -200,6 +201,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     attachGroundedAnswer: (id: string, answer, previewCitations): ChatMessage =>
       sqlAttachGroundedAnswer(db, id, answer, previewCitations, options.redactString),
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
+    replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
+      sqlReplaceAssistantMessageContent(db, id, content, timestamp),
     close: (): void => {
       db.close();
     },
