@@ -107,6 +107,7 @@ function buildRealtimeSessionUpdate(
     turnDetection.create_response = false;
   }
   const session: Record<string, unknown> = {
+    type: "realtime",
     instructions,
     output_modalities: ["audio"],
     audio: {

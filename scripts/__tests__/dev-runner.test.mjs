@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { checkNextPortFree, readNextLockInfo } from "../dev-runner.mjs";
+import {
+  canonicalLocalhostRedirectLocation,
+  checkNextPortFree,
+  publicBrowserUrl,
+  readNextLockInfo,
+} from "../dev-runner.mjs";
 
 // ---------------------------------------------------------------------------
 // checkNextPortFree
@@ -116,5 +121,49 @@ describe("readNextLockInfo", () => {
     writeFileSync(lockPath, "42", "utf8");
     const result = await readNextLockInfo(lockPath);
     expect(result).toBeUndefined();
+  });
+});
+
+describe("canonical localhost browser URL", () => {
+  function req({ url = "/", method = "GET", host = "127.0.0.1:1983", accept = "text/html" } = {}) {
+    return {
+      method,
+      url,
+      headers: {
+        host,
+        accept,
+      },
+    };
+  }
+
+  it("uses localhost for the public browser URL", () => {
+    expect(publicBrowserUrl(1983)).toBe("http://localhost:1983");
+  });
+
+  it("redirects 127.0.0.1 document navigations to localhost", () => {
+    expect(canonicalLocalhostRedirectLocation(req(), 1983)).toBe("http://localhost:1983/");
+    expect(canonicalLocalhostRedirectLocation(req({ url: "/workspace?chat=1" }), 1983)).toBe(
+      "http://localhost:1983/workspace?chat=1",
+    );
+  });
+
+  it("does not redirect requests that are already on localhost", () => {
+    expect(
+      canonicalLocalhostRedirectLocation(req({ host: "localhost:1983" }), 1983),
+    ).toBeUndefined();
+  });
+
+  it("does not redirect API calls or static asset requests", () => {
+    expect(canonicalLocalhostRedirectLocation(req({ url: "/api/health" }), 1983)).toBeUndefined();
+    expect(
+      canonicalLocalhostRedirectLocation(req({ url: "/_next/static/chunk.js" }), 1983),
+    ).toBeUndefined();
+    expect(
+      canonicalLocalhostRedirectLocation(req({ url: "/assets/keiko-logo.svg" }), 1983),
+    ).toBeUndefined();
+  });
+
+  it("does not redirect state-changing requests", () => {
+    expect(canonicalLocalhostRedirectLocation(req({ method: "POST" }), 1983)).toBeUndefined();
   });
 });
