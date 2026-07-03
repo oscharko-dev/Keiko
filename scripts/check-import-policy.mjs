@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { basename, join, relative, resolve, sep } from "node:path";
+import { basename, join, posix, relative, resolve, sep } from "node:path";
 
 import ts from "typescript";
 
@@ -9,6 +9,8 @@ const FIXTURE_ROOT = "tests/architecture/fixtures";
 const PROVIDER_SDK_PATTERN = /^(openai($|\/)|@anthropic-ai\/|[^/]+-ai-sdk($|\/))/;
 const MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN =
   /^@oscharko-dev\/keiko-model-gateway\/internal\/(openai-adapter|normalize)($|\/)/;
+const MODEL_GATEWAY_PROVIDER_RUNTIME_DEEP_PATH_PATTERN =
+  /^(node_modules\/@oscharko-dev\/keiko-model-gateway\/|packages\/keiko-model-gateway\/)(src|dist)\/(openai-adapter|normalize)(\.[cm]?[jt]s)?($|\/)/;
 const LOCAL_KNOWLEDGE_EGRESS_PATTERN =
   /^(fetch$|node:(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|(child_process|http|https|http2|net|tls|dgram|dns|worker_threads)$|undici($|\/)|node-fetch($|\/)|axios($|\/)|got($|\/)|tesseract\.js($|\/)|@google-cloud\/vision($|\/)|@aws-sdk\/client-textract($|\/)|libreoffice-convert($|\/)|pdf-poppler($|\/)|sharp($|\/))/;
 const CONTROLLED_TOOLS_FS_ADAPTER_PATTERN =
@@ -58,7 +60,8 @@ const IMPORT_POLICY_RULES = [
         ? path.startsWith(`${FIXTURE_ROOT}/provider-runtime-internal-bypass/`)
         : /^(packages\/keiko-|src\/)/.test(path) &&
           !path.startsWith("packages/keiko-model-gateway/src/"),
-    matchesSpecifier: (specifier) => MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN.test(specifier),
+    matchesSpecifier: (specifier, path) =>
+      matchesModelGatewayProviderRuntimeInternalSpecifier(specifier, path),
   },
 ];
 
@@ -172,6 +175,27 @@ function importSpecifierEntry(node) {
   return moduleSpecifierEntry(node) ?? importTypeEntry(node) ?? callExpressionEntry(node);
 }
 
+function normalizeImportPath(path) {
+  return path.split("\\").join("/");
+}
+
+function candidateImportPaths(specifier, relativePath) {
+  const normalizedSpecifier = normalizeImportPath(specifier);
+  const candidates = [normalizedSpecifier.replace(/^\.\//, "")];
+  if (normalizedSpecifier.startsWith(".")) {
+    const fromDir = posix.dirname(relativePath);
+    candidates.push(posix.normalize(posix.join(fromDir, normalizedSpecifier)));
+  }
+  return candidates;
+}
+
+function matchesModelGatewayProviderRuntimeInternalSpecifier(specifier, relativePath) {
+  if (MODEL_GATEWAY_PROVIDER_RUNTIME_INTERNAL_PATTERN.test(specifier)) return true;
+  return candidateImportPaths(specifier, relativePath).some((path) =>
+    MODEL_GATEWAY_PROVIDER_RUNTIME_DEEP_PATH_PATTERN.test(path),
+  );
+}
+
 function collectImportSpecifiers(sourceFile) {
   const specifiers = [];
 
@@ -208,7 +232,7 @@ async function collectPolicyFiles(root, mode) {
 
 function matchingRules(relativePath, mode, specifier) {
   return IMPORT_POLICY_RULES.filter(
-    (rule) => rule.matchesFile(relativePath, mode) && rule.matchesSpecifier(specifier),
+    (rule) => rule.matchesFile(relativePath, mode) && rule.matchesSpecifier(specifier, relativePath),
   );
 }
 

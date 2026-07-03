@@ -15,10 +15,6 @@
       "types": "./dist/http.d.ts",
       "import": "./dist/http.js"
     },
-    "./internal/normalize": {
-      "types": "./dist/normalize.d.ts",
-      "import": "./dist/normalize.js"
-    },
     "./internal/resilience": {
       "types": "./dist/resilience.d.ts",
       "import": "./dist/resilience.js"

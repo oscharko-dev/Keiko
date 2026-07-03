@@ -52,6 +52,16 @@ describe("checkArchitectureImportPolicy", () => {
     writeText(root, "packages/keiko-harness/src/patch.ts", 'const fs = require("fs/promises");\n');
     writeText(root, "src/workflows/provider.ts", 'await import("@anthropic-ai/sdk");\n');
     writeText(root, "packages/keiko-local-knowledge/src/egress.ts", "await fetch(url);\n");
+    writeText(
+      root,
+      "packages/keiko-server/src/bypass.ts",
+      'import { OpenAIChatAdapter } from "../../keiko-model-gateway/dist/openai-adapter.js";\n',
+    );
+    writeText(
+      root,
+      "packages/keiko-cli/src/bypass.ts",
+      'const normalize = require("node_modules/@oscharko-dev/keiko-model-gateway/dist/normalize.js");\n',
+    );
 
     const violations = await checkArchitectureImportPolicy(root);
     expect(violations.map((violation) => violation.rule).sort()).toEqual([
@@ -59,6 +69,8 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0019-trust-4-no-direct-fs-outside-workspace",
       "adr-0019-trust-5-patch-routes-through-tools",
       "adr-0019-trust-9-local-knowledge-no-egress",
+      "adr-0100-provider-runtime-no-internal-bypass",
+      "adr-0100-provider-runtime-no-internal-bypass",
     ]);
   });
 
@@ -72,7 +84,7 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
       "adr-0019-trust-5-patch-routes-through-tools": 1,
       "adr-0019-trust-9-local-knowledge-no-egress": 1,
-      "adr-0100-provider-runtime-no-internal-bypass": 1,
+      "adr-0100-provider-runtime-no-internal-bypass": 3,
     });
   });
 });
