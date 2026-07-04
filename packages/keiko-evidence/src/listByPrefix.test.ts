@@ -19,9 +19,9 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
   const dirs: string[] = [];
   afterEach(async () => {
     await Promise.all(
-      dirs.splice(0).map((dir) =>
-        rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }),
-      ),
+      dirs
+        .splice(0)
+        .map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })),
     );
   }, 30_000);
 
