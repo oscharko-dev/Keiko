@@ -108,7 +108,9 @@ describe("typescript language provider registry reuse (GEN-PERF-EDITOR-001)", ()
 
     // One shared registry for all 10 requests — pre-fix this was 10 (one per withService).
     expect(registryConstructions.count - before).toBe(1);
-  });
+    // 60s: this drives the real TypeScript language service over a 20-module overlay 10x; cold on a
+    // shared CI runner it exceeds the 15s default (passes well under it locally). GEN-PERF-EDITOR-001.
+  }, 60_000);
 
   it("produces identical diagnostics on warm requests (registry sharing is behavior-preserving)", () => {
     // The overlay imports 20 modules and has a real type error (adding a string to the
@@ -128,5 +130,6 @@ describe("typescript language provider registry reuse (GEN-PERF-EDITOR-001)", ()
     // shared registry and reflect the new buffer — the cache never serves stale diagnostics.
     const fixed = `${importingOverlay()}export const good: number = total + 1;\n`;
     expect(runDiagnostics(fixed)).not.toBe(cold);
-  });
+    // 60s for the same reason as the sibling test: ~20 warm language-service passes on a cold CI runner.
+  }, 60_000);
 });
