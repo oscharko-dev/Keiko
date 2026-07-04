@@ -76,8 +76,8 @@ const SOURCE_KIND_OPTIONS: ReadonlyArray<{ id: ManualSourceKind; label: string; 
   { id: "requirements", label: "Requirements", hint: "Paste text" },
   { id: "workspace", label: "Folder", hint: "Browse local" },
   { id: "file", label: "File", hint: "Browse local" },
-  { id: "capsule", label: "Capsule", hint: "Local Knowledge" },
-  { id: "capsule-set", label: "Capsule set", hint: "Local Knowledge" },
+  { id: "capsule", label: "Knowledge Pod", hint: "Local Knowledge" },
+  { id: "capsule-set", label: "Knowledge Pod Set", hint: "Local Knowledge" },
 ];
 
 function SourceKindIcon({ kind }: { readonly kind: ManualSourceKind }): ReactNode {
@@ -308,13 +308,29 @@ function sourceKindLabel(source: ConnectedRunSource): string {
     case "workspace":
       return "Folder";
     case "capsule":
-      return "Capsule";
+      return "Knowledge Pod";
     case "capsule-set":
-      return "Capsule set";
+      return "Knowledge Pod Set";
     case "figma-snapshot":
       return source.label.startsWith("JSON ·") ? "Figma JSON" : "Figma snapshot";
     case "image":
       return "Image";
+  }
+}
+
+function sourceKindSentenceLabel(source: ConnectedRunSource): string {
+  switch (source.kind) {
+    case "file":
+      return "file";
+    case "workspace":
+      return "folder";
+    case "capsule":
+    case "capsule-set":
+      return sourceKindLabel(source);
+    case "figma-snapshot":
+      return source.label.startsWith("JSON ·") ? "Figma JSON" : "figma snapshot";
+    case "image":
+      return "image";
   }
 }
 
@@ -728,7 +744,7 @@ export function RunLauncher({
       return [
         {
           kind: "capsule",
-          label: trimmedLabel || selectedCapsule?.displayName || "Knowledge capsule",
+          label: trimmedLabel || selectedCapsule?.displayName || "Knowledge Pod",
           capsuleId: capsuleId.trim(),
         },
       ];
@@ -737,7 +753,7 @@ export function RunLauncher({
       return [
         {
           kind: "capsule-set",
-          label: trimmedLabel || selectedCapsuleSet?.displayName || "Capsule set",
+          label: trimmedLabel || selectedCapsuleSet?.displayName || "Knowledge Pod Set",
           capsuleSetId: capsuleSetId.trim(),
         },
       ];
@@ -955,7 +971,7 @@ export function RunLauncher({
     const options = isCapsule ? capsules : capsuleSets;
     return (
       <label className="qi-field">
-        <span className="qi-field-label">{isCapsule ? "Knowledge capsule" : "Capsule set"}</span>
+        <span className="qi-field-label">{isCapsule ? "Knowledge Pod" : "Knowledge Pod Set"}</span>
         <select
           className="qi-select"
           value={isCapsule ? capsuleId : capsuleSetId}
@@ -967,7 +983,9 @@ export function RunLauncher({
         >
           {connectorLoading ? <option value="">Loading connectors...</option> : null}
           {!connectorLoading && options.length === 0 ? (
-            <option value="">{isCapsule ? "No ready capsules" : "No capsule sets"}</option>
+            <option value="">
+              {isCapsule ? "No ready Knowledge Pods" : "No Knowledge Pod Sets"}
+            </option>
           ) : null}
           {isCapsule
             ? capsules.map((cap) => (
@@ -977,7 +995,7 @@ export function RunLauncher({
               ))
             : capsuleSets.map((set) => (
                 <option key={set.id} value={set.id}>
-                  {`${set.displayName} (${String(set.capsuleCount)} capsules)`}
+                  {`${set.displayName} (${String(set.capsuleCount)} pods)`}
                 </option>
               ))}
         </select>
@@ -1012,7 +1030,7 @@ export function RunLauncher({
         {connectedSources.length === 1 && connectedSources[0] !== undefined ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">
-              Connected {sourceKindLabel(connectedSources[0]).toLowerCase()}
+              Connected {sourceKindSentenceLabel(connectedSources[0])}
             </span>
             <span
               className="qi-connected-path qi-monospace"
@@ -1023,7 +1041,7 @@ export function RunLauncher({
             <span className="qi-connected-hint">
               {manualReady
                 ? "Manual input below overrides the connected source for this run."
-                : `Generate uses the connected ${sourceKindLabel(connectedSources[0]).toLowerCase()}.`}
+                : `Generate uses the connected ${sourceKindSentenceLabel(connectedSources[0])}.`}
             </span>
           </div>
         ) : connectedSources.length > 1 ? (
@@ -1184,8 +1202,8 @@ export function RunLauncher({
           </button>
           {!running && !ready ? (
             <span className="qi-generate-hint" id={generateHintId}>
-              Add requirements text, a folder path, a file path, select a capsule, select a capsule
-              set, or connect a source to generate.
+              Add requirements text, a folder path, a file path, select a Knowledge Pod, select a
+              Knowledge Pod Set, or connect a source to generate.
             </span>
           ) : null}
         </div>

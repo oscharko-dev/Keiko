@@ -83,7 +83,7 @@ describe("ConnectorPickerWidget", () => {
     expect(screen.getByTestId("knowledge-connector-node")).toBeInTheDocument();
     expect(screen.getByText("First KC")).toBeInTheDocument();
     expect(screen.getByText("Indexed")).toBeInTheDocument();
-    expect(screen.getByText("Local Knowledge capsule")).toBeInTheDocument();
+    expect(screen.getByText("Local Knowledge Pod")).toBeInTheDocument();
     expect(screen.queryByText("cap-abc")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(mockFetchCapsules).not.toHaveBeenCalled();

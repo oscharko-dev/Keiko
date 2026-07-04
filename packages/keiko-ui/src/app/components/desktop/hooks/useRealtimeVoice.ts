@@ -66,7 +66,7 @@ const REALTIME_CLIENT_SPOKEN_INSTRUCTIONS =
   "Do not read code, file paths, or long identifiers aloud verbatim; summarize them in words.";
 const REALTIME_CLIENT_GROUNDED_TOOL_INSTRUCTIONS =
   " This voice session is connected to Keiko grounding sources. For any substantive question about " +
-  "the connected repository, files, documents, knowledge capsules, or project context, call the " +
+  "the connected repository, files, documents, Knowledge Pods, or project context, call the " +
   "search_keiko_grounding tool before giving the final answer. Do not state factual conclusions until " +
   "the tool result is available, and do not add unsupported facts.";
 const REALTIME_CLIENT_GROUNDED_FALLBACK_INSTRUCTIONS =

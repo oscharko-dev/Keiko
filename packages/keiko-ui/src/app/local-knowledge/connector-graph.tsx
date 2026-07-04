@@ -57,7 +57,7 @@ function AlertBanner({
         <button
           type="button"
           onClick={onRetry}
-          aria-label="Retry loading capsules"
+          aria-label="Retry loading Knowledge Pods"
           className="lk-alert-retry"
         >
           Retry
@@ -169,7 +169,7 @@ function CreateCapsuleDialog({
     event.preventDefault();
     const trimmed = name.trim();
     if (trimmed.length === 0) {
-      setValidationError("Capsule display name is required.");
+      setValidationError("Pod display name is required.");
       return;
     }
     setValidationError(null);
@@ -189,18 +189,17 @@ function CreateCapsuleDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Create capsule
+          Create Knowledge Pod
         </h2>
         {/* Copy used to promise "creates and indexes it" — POST /capsules only
             creates a Draft; indexing is a separate step on the capsule page
             (uiux-fix F032, C232). */}
         <p id={descriptionId} className="mc-dialog-body">
-          Name the capsule. After creating it, connect a source and start indexing from the capsule
-          page.
+          Name the pod. After creating it, connect a source and start indexing from the pod page.
         </p>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={inputId}>
-            <span className="mc-dialog-label">Capsule display name</span>
+            <span className="mc-dialog-label">Pod display name</span>
             <input
               id={inputId}
               ref={inputRef}
@@ -232,7 +231,7 @@ function CreateCapsuleDialog({
               Cancel
             </button>
             <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-              {busy ? "Creating…" : "Create capsule"}
+              {busy ? "Creating…" : "Create pod"}
             </button>
           </div>
         </form>
@@ -311,10 +310,10 @@ function DisconnectConfirmDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Disconnect capsule
+          Disconnect Knowledge Pod
         </h2>
         <p id={descriptionId} className="mc-dialog-body">
-          Disconnect &quot;{capsuleName}&quot;? The capsule keeps its index, but the source link is
+          Disconnect &quot;{capsuleName}&quot;? The pod keeps its index, but the source link is
           removed.
         </p>
         <div className="mc-dialog-actions">
@@ -382,7 +381,7 @@ function IndexOrCancelBtn({
         type="button"
         disabled={busy}
         aria-busy={busyKind === "cancel"}
-        aria-label={`Cancel indexing for capsule ${displayName}`}
+        aria-label={`Cancel indexing for Knowledge Pod ${displayName}`}
         onClick={() => {
           onCancel(id);
         }}
@@ -400,9 +399,9 @@ function IndexOrCancelBtn({
         disabled={busy}
         aria-disabled={hasSources ? undefined : true}
         aria-busy={busyKind === "index"}
-        aria-label={`Start indexing capsule ${displayName}`}
+        aria-label={`Start indexing Knowledge Pod ${displayName}`}
         aria-describedby={hasSources ? undefined : noSourceHintId}
-        title={hasSources ? undefined : "Attach a source before indexing this capsule."}
+        title={hasSources ? undefined : "Attach a source before indexing this Knowledge Pod."}
         onClick={() => {
           if (!hasSources) return;
           onStart(id);
@@ -434,7 +433,7 @@ function CapsuleRowActions({
   return (
     <div
       role="group"
-      aria-label={`Actions for capsule ${displayName}`}
+      aria-label={`Actions for Knowledge Pod ${displayName}`}
       className="lk-capsule-actions"
     >
       <IndexOrCancelBtn
@@ -447,7 +446,7 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Add capsule ${displayName} to workspace`}
+        aria-label={`Add Knowledge Pod ${displayName} to workspace`}
         onClick={() => {
           onAddToWorkspace(id);
         }}
@@ -458,7 +457,7 @@ function CapsuleRowActions({
       <button
         type="button"
         disabled={busy}
-        aria-label={`Open details for capsule ${displayName}`}
+        aria-label={`Open details for Knowledge Pod ${displayName}`}
         onClick={() => {
           onHealth(id);
         }}
@@ -470,7 +469,7 @@ function CapsuleRowActions({
         type="button"
         disabled={busy}
         aria-busy={busyKind === "disconnect"}
-        aria-label={`Disconnect capsule ${displayName}`}
+        aria-label={`Disconnect Knowledge Pod ${displayName}`}
         onClick={() => {
           onDisconnect(id);
         }}
@@ -651,7 +650,7 @@ function CapsuleRow({
 
   return (
     <>
-      <article aria-label={`Capsule: ${capsule.displayName}`} className="lk-capsule-row">
+      <article aria-label={`Knowledge Pod: ${capsule.displayName}`} className="lk-capsule-row">
         <button
           type="button"
           className="lk-capsule-drag-handle"
@@ -660,7 +659,7 @@ function CapsuleRow({
           // is removed from the Tab order (tabIndex={-1}) to avoid a redundant,
           // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
           tabIndex={-1}
-          aria-label={`Drag ${capsule.displayName} to the workspace`}
+          aria-label={`Drag Knowledge Pod ${capsule.displayName} to the workspace`}
           title="Drag to the workspace to create a connector card"
           onPointerDown={onPointerDown}
           onMouseDown={onMouseDown}
@@ -726,21 +725,21 @@ function EmptyState({
         ⬡
       </span>
       <div>
-        <p className="lk-empty-title">No capsules yet</p>
+        <p className="lk-empty-title">No Knowledge Pods yet</p>
         <p className="lk-empty-body">
-          Create a capsule to start indexing your local knowledge sources.
+          Create a pod to start indexing governed local knowledge sources.
         </p>
       </div>
       <button
         type="button"
         disabled={creating}
-        aria-label="Create your first knowledge capsule"
+        aria-label="Create your first Knowledge Pod"
         onClick={onCreateCapsule}
         className="lk-btn lk-btn-primary lk-btn-xl"
       >
-        {creating ? "Creating…" : "Create your first capsule"}
+        {creating ? "Creating…" : "Create your first pod"}
       </button>
-      {/* The permanently-disabled "Connect to existing capsule" button (with a
+      {/* The permanently-disabled "Connect to existing Knowledge Pod" button (with a
           dev-jargon title tooltip nobody could reach by keyboard) is removed
           until the feature exists (uiux-fix F032, C149/C227). */}
     </div>
@@ -779,7 +778,7 @@ function CapsuleSection({
   if (isLoading) {
     return (
       <p role="status" aria-live="polite" className="lk-loading">
-        Loading capsules…
+        Loading Knowledge Pods…
       </p>
     );
   }
@@ -788,7 +787,7 @@ function CapsuleSection({
   }
   return (
     <ul
-      aria-label="Knowledge capsule list"
+      aria-label="Knowledge Pod list"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -869,7 +868,7 @@ function GraphPageHeader({
   return (
     <>
       <header className="lk-header">
-        <h1 className="lk-title">Local Knowledge Connector</h1>
+        <h1 className="lk-title">Knowledge Pods</h1>
         <div className="lk-header-actions">
           {showBackToWorkspace ? (
             <Link href="/" className="lk-btn lk-btn-ghost lk-btn-lg">
@@ -883,34 +882,32 @@ function GraphPageHeader({
             type="button"
             aria-disabled={combineDisabled}
             aria-describedby={combineDisabled ? combineHintId : undefined}
-            aria-label="Combine capsules into a set"
+            aria-label="Create a Knowledge Pod Set"
             aria-haspopup="dialog"
             aria-expanded={combineDialogOpen}
-            title={
-              combineDisabled ? "Create capsules first, then combine them into a set." : undefined
-            }
+            title={combineDisabled ? "Create pods first, then combine them into a set." : undefined}
             onClick={() => {
               if (!combineDisabled) onCombineCapsules();
             }}
             className="lk-btn lk-btn-ghost lk-btn-lg"
           >
-            Combine capsules
+            Create pod set
           </button>
           {combineDisabled ? (
             <span id={combineHintId} className="visually-hidden">
-              Create capsules first, then combine them into a set.
+              Create pods first, then combine them into a set.
             </span>
           ) : null}
           <button
             type="button"
             disabled={creating}
-            aria-label="Create a new knowledge capsule"
+            aria-label="Create a new Knowledge Pod"
             aria-haspopup="dialog"
             aria-expanded={createDialogOpen}
             onClick={onCreateCapsule}
             className="lk-btn lk-btn-primary lk-btn-lg"
           >
-            {creating ? "Creating…" : "Create capsule"}
+            {creating ? "Creating…" : "Create pod"}
           </button>
         </div>
       </header>
@@ -938,7 +935,7 @@ function GraphPageHeader({
 // announces reload results without re-reading every row.
 function capsuleAnnouncement(capsules: readonly CapsuleListEntry[]): string {
   const indexing = capsules.filter((c) => c.lifecycleState === "indexing").length;
-  const base = `${capsules.length.toString()} capsule${capsules.length === 1 ? "" : "s"}`;
+  const base = `${capsules.length.toString()} Knowledge Pod${capsules.length === 1 ? "" : "s"}`;
   return indexing > 0 ? `${base}, ${indexing.toString()} indexing` : base;
 }
 
@@ -1005,7 +1002,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
             reload();
           }}
         >
-          Back to capsules
+          Back to Knowledge Pods
         </button>
         <CapsuleDetail
           capsuleId={activeCapsuleId}
@@ -1043,11 +1040,11 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         {!isLoading && loadError === null ? capsuleAnnouncement(capsules) : null}
       </p>
       <section
-        aria-label="Knowledge capsules"
+        aria-label="Knowledge Pods"
         aria-busy={isLoading}
         style={{ flex: 1, minHeight: 0, overflowY: "auto" }}
       >
-        <h2 className="lk-section-head">Knowledge Capsules</h2>
+        <h2 className="lk-section-head">Knowledge Pods</h2>
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}

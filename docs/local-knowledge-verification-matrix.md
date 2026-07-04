@@ -6,6 +6,18 @@ This document is the current audit artifact for Issue [#203](https://github.com/
 
 It replaces earlier, stale closure text with evidence that matches the repository as checked on 2026-06-05. Every local repository link in this document is covered by a docs-drift test so the matrix cannot silently regress back to nonexistent paths.
 
+## Knowledge Pods Compatibility
+
+Epic [#1815](https://github.com/oscharko-dev/Keiko/issues/1815) introduces
+**Knowledge Pod** and **Knowledge Pod Set** as the user-facing terms for the existing
+Local Knowledge capsule and capsule-set capabilities. The compatibility note lives at
+[`docs/local-knowledge/knowledge-pods.md`](local-knowledge/knowledge-pods.md).
+
+The compatibility rule is intentionally additive: existing `capsules` and `capsuleSets`
+responses stay in place, while BFF list responses also expose redacted `knowledgePods`
+summaries. Persisted Local Knowledge state remains in `capsules.db`; no state migration,
+store repair, reindex, vector copy, or persisted field rename is required.
+
 ## Acceptance Criteria
 
 | #   | Criterion                                                                                                                    | Current evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Status |
@@ -71,6 +83,7 @@ The current audit used these repository commands:
 
 ## See Also
 
+- [`docs/local-knowledge/knowledge-pods.md`](local-knowledge/knowledge-pods.md)
 - [Issue #203](https://github.com/oscharko-dev/Keiko/issues/203)
 - [Epic #189](https://github.com/oscharko-dev/Keiko/issues/189)
 - [`docs/connected-context-verification.md`](connected-context-verification.md)

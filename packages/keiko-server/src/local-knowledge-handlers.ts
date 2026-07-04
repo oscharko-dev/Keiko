@@ -20,6 +20,7 @@ import {
   listCapsuleSets,
   listCapsuleSources,
   listCapsules,
+  listKnowledgePodSummaries,
   listExtractionCheckpoints,
   listResumableDocuments,
   openKnowledgeStore,
@@ -1984,7 +1985,8 @@ export async function handleListLocalKnowledgeCapsules(
         sourceCount: capsule.sourceIds.length,
         updatedAt: capsule.updatedAt,
       }));
-      return { status: 200, body: { capsules } };
+      const knowledgePods = listKnowledgePodSummaries(env.store);
+      return { status: 200, body: { capsules, knowledgePods } };
     } finally {
       env.close();
     }
@@ -2004,7 +2006,10 @@ export async function handleListLocalKnowledgeCapsuleSets(
         capsuleCount: capsuleSet.capsuleIds.length,
         composedAt: capsuleSet.composedAt,
       }));
-      return { status: 200, body: { capsuleSets } };
+      const knowledgePods = listKnowledgePodSummaries(env.store).filter(
+        (summary) => summary.kind === "pod-set",
+      );
+      return { status: 200, body: { capsuleSets, knowledgePods } };
     } finally {
       env.close();
     }

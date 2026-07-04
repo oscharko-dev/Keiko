@@ -80,7 +80,7 @@ function fetchWith(capsules: readonly CapsuleListEntry[]): () => Promise<Capsule
 // ---------------------------------------------------------------------------
 
 describe("ConnectorGraph — empty state", () => {
-  it("shows the create-capsule call-to-action when there are no capsules", async () => {
+  it("shows the create-pod call-to-action when there are no pods", async () => {
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
 
     await waitFor(() => {
@@ -89,7 +89,7 @@ describe("ConnectorGraph — empty state", () => {
 
     // The primary CTA button
     const ctaButton = screen.getByRole("button", {
-      name: /create your first knowledge capsule/i,
+      name: /create your first Knowledge Pod/i,
     });
     expect(ctaButton).toBeInTheDocument();
 
@@ -98,9 +98,7 @@ describe("ConnectorGraph — empty state", () => {
     expect(screen.queryByRole("button", { name: /connect to an existing capsule/i })).toBeNull();
 
     // Header button still present
-    expect(
-      screen.getByRole("button", { name: /create a new knowledge capsule/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create a new Knowledge Pod/i })).toBeInTheDocument();
   });
 
   it("does not render the former pipeline visualization", async () => {
@@ -125,10 +123,10 @@ describe("ConnectorGraph — empty state", () => {
       expect(screen.getByTestId("empty-state")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /create your first knowledge capsule/i }));
+    await user.click(screen.getByRole("button", { name: /create your first Knowledge Pod/i }));
 
     expect(promptSpy).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: /create capsule/i })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /create Knowledge Pod/i })).toBeInTheDocument();
     promptSpy.mockRestore();
   });
 });
@@ -158,7 +156,7 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.queryByTestId("empty-state")).toBeNull();
   });
 
-  it("renders capsules list region with capsule count in the status summary", async () => {
+  it("renders the Knowledge Pod list region with pod count in the status summary", async () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "A" }),
       makeCapsule({ id: makeCapsuleId("2"), displayName: "B" }),
@@ -169,15 +167,17 @@ describe("ConnectorGraph — with capsules", () => {
       expect(screen.getByText("A")).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("region", { name: /knowledge capsules/i })).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("2 capsules");
+    expect(screen.getByRole("region", { name: /knowledge pods/i })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 Knowledge Pods");
   });
 
   it("exports a capsule drag payload for dropping onto the workspace", async () => {
     const capsule = makeCapsule({ id: makeCapsuleId("drag"), displayName: "First KC" });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag First KC to the workspace" });
+    const row = await screen.findByRole("button", {
+      name: "Drag Knowledge Pod First KC to the workspace",
+    });
     const dataTransfer = {
       effectAllowed: "none",
       setData: vi.fn(),
@@ -211,7 +211,9 @@ describe("ConnectorGraph — with capsules", () => {
     window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag First KC to the workspace" });
+    const row = await screen.findByRole("button", {
+      name: "Drag Knowledge Pod First KC to the workspace",
+    });
     fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
     fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
     fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
@@ -246,7 +248,7 @@ describe("ConnectorGraph — with capsules", () => {
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
     const row = await screen.findByRole("button", {
-      name: "Drag Blocked KC to the workspace",
+      name: "Drag Knowledge Pod Blocked KC to the workspace",
     });
     fireEvent.pointerDown(row, { button: 2, clientX: 10, clientY: 10 });
     fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
@@ -274,7 +276,9 @@ describe("ConnectorGraph — with capsules", () => {
     const removeSpy = vi.spyOn(window, "removeEventListener");
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag Cancel KC to the workspace" });
+    const row = await screen.findByRole("button", {
+      name: "Drag Knowledge Pod Cancel KC to the workspace",
+    });
     fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
     // Move far enough to enter the dragging state (sets body cursor to grabbing).
     fireEvent.pointerMove(window, { clientX: 60, clientY: 64 });
@@ -311,7 +315,9 @@ describe("ConnectorGraph — with capsules", () => {
     window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag First KC to the workspace" });
+    const row = await screen.findByRole("button", {
+      name: "Drag Knowledge Pod First KC to the workspace",
+    });
     const dragEnd = createEvent.dragEnd(row);
     Object.defineProperties(dragEnd, {
       clientX: { value: 240 },
@@ -369,7 +375,9 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
       expect(screen.getByText("KB Capsule")).toBeInTheDocument();
     });
 
-    const addBtn = screen.getByRole("button", { name: /add capsule KB Capsule to workspace/i });
+    const addBtn = screen.getByRole("button", {
+      name: /add Knowledge Pod KB Capsule to workspace/i,
+    });
     await user.click(addBtn);
 
     expect(dropListener).toHaveBeenCalledTimes(1);
@@ -403,7 +411,7 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 
     // No main.workspace in the DOM — click should silently no-op
     const addBtn = screen.getByRole("button", {
-      name: /add capsule No WS Capsule to workspace/i,
+      name: /add Knowledge Pod No WS Capsule to workspace/i,
     });
     await user.click(addBtn);
 
@@ -424,13 +432,13 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /create a new knowledge capsule/i }),
+        screen.getByRole("button", { name: /create a new Knowledge Pod/i }),
       ).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /create a new knowledge capsule/i }));
-    await user.type(screen.getByLabelText(/capsule display name/i), "  Treasury Docs  ");
-    await user.click(screen.getByRole("button", { name: /^create capsule$/i }));
+    await user.click(screen.getByRole("button", { name: /create a new Knowledge Pod/i }));
+    await user.type(screen.getByLabelText(/pod display name/i), "  Treasury Docs  ");
+    await user.click(screen.getByRole("button", { name: /^create pod$/i }));
 
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({ displayName: "Treasury Docs" });
@@ -455,7 +463,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
 
     const indexBtn = screen.getByRole("button", {
-      name: /start indexing capsule index me/i,
+      name: /start indexing Knowledge Pod index me/i,
     });
     await user.click(indexBtn);
 
@@ -486,12 +494,15 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
 
     const indexBtn = screen.getByRole("button", {
-      name: /start indexing capsule empty cap/i,
+      name: /start indexing Knowledge Pod empty cap/i,
     });
     expect(indexBtn).not.toBeDisabled();
     expect(indexBtn).toHaveAttribute("aria-disabled", "true");
     expect(indexBtn).toHaveAccessibleDescription("Attach a source before indexing.");
-    expect(indexBtn).toHaveAttribute("title", "Attach a source before indexing this capsule.");
+    expect(indexBtn).toHaveAttribute(
+      "title",
+      "Attach a source before indexing this Knowledge Pod.",
+    );
 
     await userEvent.setup().click(indexBtn);
     expect(startIndexingImpl).not.toHaveBeenCalled();
@@ -520,7 +531,9 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Slow Cap")).toBeInTheDocument();
     });
 
-    const indexBtn = screen.getByRole("button", { name: /start indexing capsule slow cap/i });
+    const indexBtn = screen.getByRole("button", {
+      name: /start indexing Knowledge Pod slow cap/i,
+    });
     await user.click(indexBtn);
 
     // In flight: the triggered button swaps its label and announces aria-busy
@@ -532,7 +545,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     resolveAction({ ok: true, capsuleId: id });
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /start indexing capsule slow cap/i }),
+        screen.getByRole("button", { name: /start indexing Knowledge Pod slow cap/i }),
       ).toHaveTextContent(/^Index$/);
     });
   });
@@ -555,7 +568,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
 
     const cancelBtn = screen.getByRole("button", {
-      name: /cancel indexing for capsule running cap/i,
+      name: /cancel indexing for Knowledge Pod running cap/i,
     });
     await user.click(cancelBtn);
 
@@ -582,13 +595,13 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     });
 
     const disconnectBtn = screen.getByRole("button", {
-      name: /disconnect capsule ready cap/i,
+      name: /disconnect Knowledge Pod ready cap/i,
     });
     await user.click(disconnectBtn);
 
     // Row click opens the confirm dialog — nothing is deleted yet (uiux-fix F033, C064).
     expect(disconnectCapsuleImpl).not.toHaveBeenCalled();
-    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     expect(dialog.textContent).toContain("Ready Cap");
 
     await user.click(within(dialog).getByRole("button", { name: /^disconnect$/i }));
@@ -616,8 +629,8 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Keep Cap")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /disconnect capsule keep cap/i }));
-    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    await user.click(screen.getByRole("button", { name: /disconnect Knowledge Pod keep cap/i }));
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -638,7 +651,9 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       expect(screen.getByText("Health Cap")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /open details for capsule health cap/i }));
+    await user.click(
+      screen.getByRole("button", { name: /open details for Knowledge Pod health cap/i }),
+    );
 
     expect(onOpenCapsule).toHaveBeenCalledWith(id);
     expect(pushMock).not.toHaveBeenCalled();
@@ -666,7 +681,7 @@ describe("ConnectorGraph — status badges", () => {
 
       // Static badge text — no per-row live region: every aria-live badge made
       // screen readers re-announce the whole list on reload (uiux-fix F032, C226).
-      const row = screen.getByRole("article", { name: `Capsule: Cap-${state}` });
+      const row = screen.getByRole("article", { name: `Knowledge Pod: Cap-${state}` });
       const badge = within(row).getByText(expectedLabel);
       expect(badge).toHaveClass("lk-badge");
       expect(badge).not.toHaveAttribute("aria-live");
@@ -686,7 +701,9 @@ describe("ConnectorGraph — error states", () => {
     });
 
     // Retry button is reachable
-    expect(screen.getByRole("button", { name: /retry loading capsules/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /retry loading Knowledge Pods/i }),
+    ).toBeInTheDocument();
   });
 
   it("renders an alert when an action rejects", async () => {
@@ -707,7 +724,7 @@ describe("ConnectorGraph — error states", () => {
     });
 
     const indexBtn = screen.getByRole("button", {
-      name: /start indexing capsule error cap/i,
+      name: /start indexing Knowledge Pod error cap/i,
     });
     await user.click(indexBtn);
 
@@ -729,7 +746,7 @@ describe("ConnectorGraph — a11y", () => {
     expect(results).toHaveNoViolations();
   });
 
-  it("jest-axe: capsule list has no violations", async () => {
+  it("jest-axe: Knowledge Pod list has no violations", async () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "A Doc", lifecycleState: "ready" }),
       makeCapsule({ id: makeCapsuleId("2"), displayName: "B Doc", lifecycleState: "indexing" }),
@@ -750,13 +767,15 @@ describe("ConnectorGraph — drag handle keyboard semantics (GEN-UI-KEYBOARD-004
     const capsule = makeCapsule({ id: makeCapsuleId("dh"), displayName: "Handle Cap" });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const handle = await screen.findByRole("button", { name: "Drag Handle Cap to the workspace" });
+    const handle = await screen.findByRole("button", {
+      name: "Drag Knowledge Pod Handle Cap to the workspace",
+    });
     // Removed from the Tab order so it is not a redundant / keyboard-inert stop;
     // the "Add to workspace" button is the keyboard equivalent.
     expect(handle).toHaveAttribute("tabindex", "-1");
     // The keyboard control that actually performs the action is a real button.
     expect(
-      screen.getByRole("button", { name: /add capsule Handle Cap to workspace/i }),
+      screen.getByRole("button", { name: /add Knowledge Pod Handle Cap to workspace/i }),
     ).toBeInTheDocument();
   });
 });
@@ -770,48 +789,48 @@ describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /create a new knowledge capsule/i }),
+        screen.getByRole("button", { name: /create a new Knowledge Pod/i }),
       ).toBeInTheDocument();
     });
-    const trigger = screen.getByRole("button", { name: /create a new knowledge capsule/i });
+    const trigger = screen.getByRole("button", { name: /create a new Knowledge Pod/i });
     trigger.focus();
     await user.click(trigger);
-    await screen.findByRole("dialog", { name: /create capsule/i });
+    await screen.findByRole("dialog", { name: /create Knowledge Pod/i });
     return { user, trigger };
   }
 
   it("moves focus into the dialog (the name input) on open", async () => {
     await openCreateDialog();
-    expect(document.activeElement).toBe(screen.getByLabelText(/capsule display name/i));
+    expect(document.activeElement).toBe(screen.getByLabelText(/pod display name/i));
   });
 
   it("traps Tab within the dialog, wrapping last -> first", async () => {
     await openCreateDialog();
-    const dialog = screen.getByRole("dialog", { name: /create capsule/i });
-    const submitBtn = within(dialog).getByRole("button", { name: /^create capsule$/i });
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
+    const submitBtn = within(dialog).getByRole("button", { name: /^create pod$/i });
     submitBtn.focus();
     // Tab off the last focusable wraps back to the first (the input).
     fireEvent.keyDown(dialog, { key: "Tab" });
-    expect(document.activeElement).toBe(within(dialog).getByLabelText(/capsule display name/i));
+    expect(document.activeElement).toBe(within(dialog).getByLabelText(/pod display name/i));
   });
 
   it("traps Shift+Tab within the dialog, wrapping first -> last", async () => {
     await openCreateDialog();
-    const dialog = screen.getByRole("dialog", { name: /create capsule/i });
-    const input = within(dialog).getByLabelText(/capsule display name/i);
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
+    const input = within(dialog).getByLabelText(/pod display name/i);
     input.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(
-      within(dialog).getByRole("button", { name: /^create capsule$/i }),
+      within(dialog).getByRole("button", { name: /^create pod$/i }),
     );
   });
 
   it("closes on Escape and restores focus to the trigger", async () => {
     const { trigger } = await openCreateDialog();
-    const dialog = screen.getByRole("dialog", { name: /create capsule/i });
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: /create capsule/i })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: /create Knowledge Pod/i })).toBeNull();
     });
     expect(document.activeElement).toBe(trigger);
   });
@@ -834,22 +853,22 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
     await waitFor(() => {
       expect(screen.getByText("Ready Cap")).toBeInTheDocument();
     });
-    const trigger = screen.getByRole("button", { name: /disconnect capsule ready cap/i });
+    const trigger = screen.getByRole("button", { name: /disconnect Knowledge Pod ready cap/i });
     trigger.focus();
     await user.click(trigger);
-    await screen.findByRole("dialog", { name: /disconnect capsule/i });
+    await screen.findByRole("dialog", { name: /disconnect Knowledge Pod/i });
     return { user, trigger };
   }
 
   it("moves focus into the dialog (first focusable) on open", async () => {
     await openDisconnectDialog();
-    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: /cancel/i }));
   });
 
   it("traps Tab within the dialog, wrapping last -> first", async () => {
     await openDisconnectDialog();
-    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     const confirmBtn = within(dialog).getByRole("button", { name: /^disconnect$/i });
     confirmBtn.focus();
     fireEvent.keyDown(dialog, { key: "Tab" });
@@ -858,7 +877,7 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
 
   it("traps Shift+Tab within the dialog, wrapping first -> last", async () => {
     await openDisconnectDialog();
-    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     const cancelBtn = within(dialog).getByRole("button", { name: /cancel/i });
     cancelBtn.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
@@ -869,10 +888,10 @@ describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan
 
   it("closes on Escape and restores focus to the trigger", async () => {
     const { trigger } = await openDisconnectDialog();
-    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const dialog = screen.getByRole("dialog", { name: /disconnect Knowledge Pod/i });
     fireEvent.keyDown(dialog, { key: "Escape" });
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: /disconnect capsule/i })).toBeNull();
+      expect(screen.queryByRole("dialog", { name: /disconnect Knowledge Pod/i })).toBeNull();
     });
     expect(document.activeElement).toBe(trigger);
   });

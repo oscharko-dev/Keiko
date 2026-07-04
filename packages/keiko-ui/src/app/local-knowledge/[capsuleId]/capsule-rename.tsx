@@ -66,7 +66,12 @@ function RenameFields({
     };
   }, [busy, onCancel]);
   return (
-    <form className="lkd-rename-form" aria-label="Rename capsule" onSubmit={onSubmit} ref={formRef}>
+    <form
+      className="lkd-rename-form"
+      aria-label="Rename Knowledge Pod"
+      onSubmit={onSubmit}
+      ref={formRef}
+    >
       <div className="dlg-field">
         <label htmlFor="lkd-rename-name" className="dlg-label">
           Display name
@@ -79,7 +84,7 @@ function RenameFields({
           value={name}
           disabled={busy}
           autoComplete="off"
-          aria-label="Capsule display name"
+          aria-label="Pod display name"
           onChange={(event) => onNameChange(event.target.value)}
         />
       </div>
@@ -94,7 +99,7 @@ function RenameFields({
           value={description}
           disabled={busy}
           autoComplete="off"
-          aria-label="Capsule description"
+          aria-label="Pod description"
           onChange={(event) => onDescriptionChange(event.target.value)}
         />
       </div>
@@ -194,7 +199,7 @@ export function CapsuleRename({
       <button
         type="button"
         className="lk-btn lk-btn-ghost"
-        aria-label={`Rename capsule ${displayName}`}
+        aria-label={`Rename Knowledge Pod ${displayName}`}
         ref={renameButtonRef}
         onClick={open}
       >

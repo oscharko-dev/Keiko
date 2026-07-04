@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addSourceToCapsule,
   createCapsule,
+  createCapsuleSet,
   getCapsule,
   listCapsules,
   openKnowledgeStore,
@@ -20,6 +21,7 @@ import type {
   CapsuleHealth,
   CapsuleLargeDocumentHealth,
   DocumentId,
+  CapsuleSetId,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
@@ -40,6 +42,7 @@ import {
   handleUpdateLocalKnowledgeCapsule,
   handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
+  handleListLocalKnowledgeCapsuleSets,
   handleListLocalKnowledgeCapsules,
   handleReindexLocalKnowledgeCapsule,
   handleRebindLocalKnowledgeCapsuleSource,
@@ -1034,6 +1037,72 @@ describe("local-knowledge handlers", () => {
           displayName: "Audit Capsule",
           lifecycleState: "ready",
           sourceCount: 0,
+        },
+      ],
+      knowledgePods: [
+        {
+          id: "cap-1",
+          kind: "pod",
+          displayName: "Audit Capsule",
+          readiness: "degraded",
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 0,
+            documentCount: 0,
+            chunkCount: 0,
+            vectorCount: 0,
+          },
+          privacy: {
+            localFirst: true,
+            rawContentExposed: false,
+            privatePathsExposed: false,
+          },
+          compatibility: {
+            backingKind: "knowledge-capsule",
+            migrationRequired: false,
+            persistedStateRenamed: false,
+          },
+        },
+      ],
+    });
+    expect(JSON.stringify(result.body)).not.toContain(tmp);
+  });
+
+  it("lists persisted capsule sets with additive pod-set summaries", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: ["audit"],
+      capsuleIds: [capId],
+    });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsuleSets: [
+        {
+          id: "set-1",
+          displayName: "Audit Pod Set",
+          capsuleCount: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          id: "set-1",
+          kind: "pod-set",
+          displayName: "Audit Pod Set",
+          readiness: "degraded",
+          counts: { capsuleCount: 1, sourceCount: 0 },
+          compatibility: {
+            backingKind: "capsule-set",
+            capsuleIds: [capId],
+            migrationRequired: false,
+            persistedStateRenamed: false,
+          },
         },
       ],
     });

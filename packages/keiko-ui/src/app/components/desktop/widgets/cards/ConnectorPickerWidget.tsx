@@ -128,11 +128,11 @@ function selectedLabel(
   if (kind === undefined || id === undefined || id.length === 0) return null;
   if (kind === "capsule") {
     const cap = capsules.find((c) => c.id === id);
-    return cap !== undefined ? cap.displayName : `Capsule ${id}`;
+    return cap !== undefined ? cap.displayName : `Knowledge Pod ${id}`;
   }
   if (kind === "capsule-set") {
     const set = capsuleSets.find((s) => s.id === id);
-    return set !== undefined ? set.displayName : `Set ${id}`;
+    return set !== undefined ? set.displayName : `Knowledge Pod Set ${id}`;
   }
   return null;
 }
@@ -182,7 +182,7 @@ function KnowledgeConnectorNode({
   const label =
     selectedLabel !== undefined && selectedLabel.trim().length > 0
       ? selectedLabel.trim()
-      : "Knowledge capsule";
+      : "Knowledge Pod";
   return (
     <div className="connector-node" data-testid="knowledge-connector-node">
       <div className="connector-node-icon" aria-hidden="true">
@@ -195,7 +195,7 @@ function KnowledgeConnectorNode({
         <p className="connector-node-title" title={label}>
           {label}
         </p>
-        <p className="connector-node-meta">Local Knowledge capsule</p>
+        <p className="connector-node-meta">Local Knowledge Pod</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>
         Manage
@@ -326,7 +326,7 @@ export function ConnectorPickerWidget({
           ...(hasCapsules
             ? [
                 {
-                  label: "Capsules",
+                  label: "Knowledge Pods",
                   options: capsules.map((cap) => ({
                     value: `capsule:${cap.id}`,
                     label: `${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`,
@@ -337,10 +337,10 @@ export function ConnectorPickerWidget({
           ...(hasSets
             ? [
                 {
-                  label: "Capsule sets",
+                  label: "Knowledge Pod Sets",
                   options: capsuleSets.map((set) => ({
                     value: `capsule-set:${set.id}`,
-                    label: `${set.displayName} (${String(set.capsuleCount)} capsules)`,
+                    label: `${set.displayName} (${String(set.capsuleCount)} pods)`,
                   })),
                 },
               ]
@@ -353,7 +353,7 @@ export function ConnectorPickerWidget({
 
       {setsFailed ? (
         <p className="connector-picker-notice" role="status">
-          Capsule sets could not be loaded.
+          Knowledge Pod Sets could not be loaded.
         </p>
       ) : null}
 

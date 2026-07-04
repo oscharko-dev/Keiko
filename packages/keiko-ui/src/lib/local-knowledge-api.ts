@@ -18,6 +18,7 @@ import type {
   CapsuleDeleteRequest,
   ParserDiagnostic,
   IndexingJobRecord,
+  KnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ export interface CapsuleListEntry {
 
 export interface CapsulesResponse {
   readonly capsules: readonly CapsuleListEntry[];
+  readonly knowledgePods?: readonly KnowledgePodSummary[];
 }
 
 export interface CapsuleSetListEntry {
@@ -45,6 +47,7 @@ export interface CapsuleSetListEntry {
 
 export interface CapsuleSetsResponse {
   readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly knowledgePods?: readonly KnowledgePodSummary[];
 }
 
 export interface CapsuleDetailResponse {

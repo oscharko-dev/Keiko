@@ -670,7 +670,7 @@ function LocalKnowledgeContextPackSummary({
       <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
       <dl className="grounded-context-pack-dl">
         <MetricRow label="Mode" value={humanizeToken(contextPack.scopeKind)} />
-        <MetricRow label="Capsules" value={String(contextPack.capsuleCount)} />
+        <MetricRow label="Knowledge Pods" value={String(contextPack.capsuleCount)} />
         <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
         <MetricRow label="Citations" value={String(contextPack.citationCount)} />
         <MetricRow

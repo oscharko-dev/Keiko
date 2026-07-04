@@ -168,7 +168,7 @@ describe("CapsuleDetail — overview section", () => {
     render(<CapsuleDetail fetchDetailImpl={fetchDetailImpl} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent("No capsule selected.");
+      expect(screen.getByRole("alert")).toHaveTextContent("No Knowledge Pod selected.");
     });
 
     expect(fetchDetailImpl).not.toHaveBeenCalled();
@@ -192,10 +192,10 @@ describe("CapsuleDetail — overview section", () => {
     render(<CapsuleDetail fetchDetailImpl={fetchDetailImpl} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent("This capsule no longer exists.");
+      expect(screen.getByRole("alert")).toHaveTextContent("This Knowledge Pod no longer exists.");
     });
 
-    expect(screen.getByRole("link", { name: /back to capsules/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /back to Knowledge Pods/i })).toHaveAttribute(
       "href",
       "/local-knowledge",
     );
@@ -444,9 +444,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
       });
     });
     expect(
-      screen.getByText(
-        "Saved. Full rebuild / rechunk this capsule to apply retrieval text changes.",
-      ),
+      screen.getByText("Saved. Full rebuild / rechunk this pod to apply retrieval text changes."),
     ).toBeInTheDocument();
   });
 
@@ -504,7 +502,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
     });
     expect(screen.getByText("7")).toBeInTheDocument();
     expect(screen.getByText(/1 degraded/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /full rebuild capsule/i })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /full rebuild Knowledge Pod/i })).toHaveAttribute(
       "data-recommended",
       "true",
     );
@@ -542,7 +540,7 @@ describe("CapsuleDetail — sources section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail(noSources)} />);
 
     await waitFor(() => {
-      expect(screen.getByText("No sources attached to this capsule.")).toBeInTheDocument();
+      expect(screen.getByText("No sources attached to this pod.")).toBeInTheDocument();
     });
   });
 
@@ -749,7 +747,7 @@ describe("CapsuleDetail — error state", () => {
 
     expect(screen.getByRole("alert").textContent).toContain("network failure");
     expect(
-      screen.getByRole("button", { name: /retry loading capsule detail/i }),
+      screen.getByRole("button", { name: /retry loading Knowledge Pod detail/i }),
     ).toBeInTheDocument();
   });
 
@@ -766,7 +764,7 @@ describe("CapsuleDetail — error state", () => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /retry loading capsule detail/i }));
+    await user.click(screen.getByRole("button", { name: /retry loading Knowledge Pod detail/i }));
 
     // After retry the page heading appears — use heading role to avoid duplicate-match error
     // (name also appears in the Overview "Name" row)
@@ -805,7 +803,7 @@ describe("CapsuleDetail — vectorCompatible=false", () => {
   });
 
   it("renders stale-reason list items when staleReasons is non-empty", async () => {
-    const staleReason = "The configured embedding model no longer matches this capsule.";
+    const staleReason = "The configured embedding model no longer matches this pod.";
     const detail: CapsuleDetailData = {
       ...FULL_DETAIL,
       health: { ...BASE_HEALTH, vectorCompatible: false, staleReasons: [staleReason] },
