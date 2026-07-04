@@ -126,6 +126,7 @@ export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
+  listSafeConfiguredCapabilities,
   resolveVoiceCapability,
   selectCompletionModel,
   selectConfiguredModel,

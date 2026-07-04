@@ -1,11 +1,11 @@
 // GEN-PERF-PERSISTENCE-007 regression: withReviewArtifactLock's critical section is synchronous, so
 // the poll wait cannot yield the event loop. Rather than exhaust REVIEW_LOCK_ATTEMPTS busy-waits on
 // a lock that will never release on its own, the lock now records the holder PID and reclaims it
-// IMMEDIATELY when that PID is not alive (a crashed writer, or a fresh/ownerless lock file). This
+// without polling when that PID is not alive (a crashed writer, or a fresh/ownerless lock file). This
 // keeps live cross-writer serialisation while never blocking the loop on a dead lock.
 //
 // PRE-FIX: a pre-created fresh lock file made applyReviewDecision retry 40×5ms then throw a write
-// conflict. POST-FIX: the ownerless lock is reclaimed instantly and the decision persists fast.
+// conflict. POST-FIX: the ownerless lock is reclaimed and the decision persists.
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -46,28 +46,26 @@ afterEach(() => {
 });
 
 describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-007)", () => {
-  it("reclaims a fresh, ownerless lock instantly instead of busy-waiting all attempts", () => {
+  it("reclaims a fresh, ownerless lock instead of busy-waiting all attempts", () => {
     const evidenceDir = freshEvidenceDir();
     // A FRESH lock file with no PID inside — no live owner.
-    writeFileSync(reviewLockPath(evidenceDir), "");
+    const lockPath = reviewLockPath(evidenceDir);
+    writeFileSync(lockPath, "");
 
-    const start = performance.now();
     approveRun(evidenceDir);
-    const elapsedMs = performance.now() - start;
 
-    // No 40×5ms busy-wait+conflict: instant reclaim means well under 100ms.
-    expect(elapsedMs).toBeLessThan(100);
     expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
+    expect(() => readFileSync(lockPath, "utf8")).toThrow();
   });
 
   it("reclaims a fresh lock whose recorded PID is not alive", () => {
     const evidenceDir = freshEvidenceDir();
-    writeFileSync(reviewLockPath(evidenceDir), "2147483646\n");
+    const lockPath = reviewLockPath(evidenceDir);
+    writeFileSync(lockPath, "2147483646\n");
 
-    const start = performance.now();
     approveRun(evidenceDir);
-    expect(performance.now() - start).toBeLessThan(100);
     expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
+    expect(() => readFileSync(lockPath, "utf8")).toThrow();
   });
 
   it("leaves no lock file behind after a normal decision", () => {

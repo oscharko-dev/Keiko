@@ -12,11 +12,13 @@ import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
   CONTEXT_LANE_IDS,
+  CONTEXT_TOKEN_ACCOUNTING_SOURCES,
 } from "./context-engineering.js";
 import type {
   ContextBudgetPressure,
   ContextEvictionPolicy,
   ContextLaneId,
+  ContextTokenAccountingSource,
 } from "./context-engineering.js";
 
 // ─── Result envelope (house pattern) ───────────────────────────────────────────
@@ -67,7 +69,21 @@ function isBudgetPressure(value: unknown): value is ContextBudgetPressure {
   return typeof value === "string" && BUDGET_PRESSURES.includes(value as ContextBudgetPressure);
 }
 
+function isTokenAccountingSource(value: unknown): value is ContextTokenAccountingSource {
+  return (
+    typeof value === "string" &&
+    CONTEXT_TOKEN_ACCOUNTING_SOURCES.includes(value as ContextTokenAccountingSource)
+  );
+}
+
 // ─── ContextProfile ─────────────────────────────────────────────────────────────
+const TOKEN_ACCOUNTING_KEYS: ReadonlySet<string> = new Set([
+  "source",
+  "counterId",
+  "scaleMilli",
+  "offsetTokens",
+]);
+
 function collectProfileReasons(profile: Record<string, unknown>, prefix: string): string[] {
   const reasons: string[] = [];
   pushIf(reasons, schemaMismatch(profile.schemaVersion), `${prefix}.schemaVersion mismatch`);
@@ -92,6 +108,73 @@ function collectProfileReasons(profile: Record<string, unknown>, prefix: string)
     `${prefix}.effectiveInputBudget invalid`,
   );
   pushIf(reasons, !isNonEmptyTrimmed(profile.tokenEstimatorId), `${prefix}.tokenEstimatorId empty`);
+  return reasons;
+}
+
+function collectTokenAccounting(value: unknown, prefix: string): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!isRecord(value)) {
+    return [`${prefix}.tokenAccounting invalid`];
+  }
+  const reasons: string[] = [];
+  reasons.push(...collectTokenAccountingKnownKeys(value, prefix));
+  pushIf(
+    reasons,
+    !isTokenAccountingSource(value.source),
+    `${prefix}.tokenAccounting.source invalid`,
+  );
+  pushIf(reasons, !isNonEmptyTrimmed(value.counterId), `${prefix}.tokenAccounting.counterId empty`);
+  reasons.push(...collectTokenAccountingNumbers(value, prefix));
+  return reasons;
+}
+
+function collectTokenAccountingKnownKeys(value: Record<string, unknown>, prefix: string): string[] {
+  const reasons: string[] = [];
+  for (const key of Object.keys(value)) {
+    pushIf(
+      reasons,
+      !TOKEN_ACCOUNTING_KEYS.has(key),
+      `${prefix}.tokenAccounting.${key} unrecognised`,
+    );
+  }
+  return reasons;
+}
+
+function collectTokenAccountingNumbers(value: Record<string, unknown>, prefix: string): string[] {
+  const reasons: string[] = [];
+  pushIf(
+    reasons,
+    value.scaleMilli !== undefined &&
+      (typeof value.scaleMilli !== "number" ||
+        !Number.isInteger(value.scaleMilli) ||
+        value.scaleMilli <= 0),
+    `${prefix}.tokenAccounting.scaleMilli invalid`,
+  );
+  pushIf(
+    reasons,
+    value.source === "calibrated" && value.scaleMilli === undefined,
+    `${prefix}.tokenAccounting.scaleMilli invalid`,
+  );
+  pushIf(
+    reasons,
+    value.offsetTokens !== undefined &&
+      (typeof value.offsetTokens !== "number" ||
+        !Number.isInteger(value.offsetTokens) ||
+        value.offsetTokens < 0),
+    `${prefix}.tokenAccounting.offsetTokens invalid`,
+  );
+  pushIf(
+    reasons,
+    value.source === "fallback-estimated" && value.scaleMilli !== undefined,
+    `${prefix}.tokenAccounting.scaleMilli unexpected`,
+  );
+  pushIf(
+    reasons,
+    value.source === "fallback-estimated" && value.offsetTokens !== undefined,
+    `${prefix}.tokenAccounting.offsetTokens unexpected`,
+  );
   return reasons;
 }
 
@@ -137,6 +220,7 @@ function collectProfile(value: unknown, prefix: string): string[] {
   }
   const reasons = collectProfileReasons(value, prefix);
   reasons.push(...checkBudgetIdentity(value, prefix));
+  reasons.push(...collectTokenAccounting(value.tokenAccounting, prefix));
   reasons.push(...validateModelMetadata(value.model, prefix));
   return reasons;
 }

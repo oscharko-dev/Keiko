@@ -8,8 +8,12 @@ import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_EVICTION_POLICIES,
   CONTEXT_LANE_IDS,
+  CONTEXT_TOKEN_ACCOUNTING_SOURCES,
   DEFAULT_CONTEXT_PROFILE,
+  DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
   DEFAULT_TOKEN_ESTIMATOR_ID,
+  countContextTokens,
+  countContextTokensForSegments,
   deriveContextProfile,
   deriveContextProfileFromCapability,
   estimateTokens,
@@ -45,6 +49,13 @@ import type {
 } from "./connected-context.js";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
+const CALIBRATED_ACCOUNTING = {
+  source: "calibrated",
+  counterId: "fixture-calibrated-counter-v1",
+  scaleMilli: 1_250,
+  offsetTokens: 2,
+} as const;
+
 function happyProfile(): ContextProfile {
   return {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
@@ -162,6 +173,10 @@ describe("context-engineering vocabulary", () => {
       "drop-lowest-score",
     ]);
   });
+
+  it("declares the token accounting source vocabulary", () => {
+    expect(CONTEXT_TOKEN_ACCOUNTING_SOURCES).toEqual(["calibrated", "fallback-estimated"]);
+  });
 });
 
 // ─── DEFAULT_CONTEXT_PROFILE ─────────────────────────────────────────────────────
@@ -176,6 +191,14 @@ describe("DEFAULT_CONTEXT_PROFILE", () => {
 
   it("carries the default estimator provenance id", () => {
     expect(DEFAULT_CONTEXT_PROFILE.tokenEstimatorId).toBe("keiko-conservative-content-v2");
+  });
+
+  it("reports fallback-estimated token accounting by default", () => {
+    expect(DEFAULT_CONTEXT_TOKEN_ACCOUNTING).toEqual({
+      source: "fallback-estimated",
+      counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
+    });
+    expect(DEFAULT_CONTEXT_PROFILE.tokenAccounting).toEqual(DEFAULT_CONTEXT_TOKEN_ACCOUNTING);
   });
 
   it("omits the optional model metadata", () => {
@@ -304,6 +327,32 @@ describe("estimateTokensForSegments", () => {
   });
 });
 
+describe("countContextTokens", () => {
+  it("matches estimateTokens under fallback accounting", () => {
+    const text = "function hello() { return 42; }";
+    expect(countContextTokens(text)).toBe(estimateTokens(text));
+    expect(countContextTokens(text, DEFAULT_CONTEXT_TOKEN_ACCOUNTING)).toBe(estimateTokens(text));
+  });
+
+  it("applies calibrated scale and offset deterministically", () => {
+    const text = "tool observation\n".repeat(8);
+    const fallback = estimateTokens(text);
+    expect(countContextTokens(text, CALIBRATED_ACCOUNTING)).toBe(
+      Math.ceil((fallback * 1_250) / 1_000 + 2),
+    );
+    expect(countContextTokens(text, CALIBRATED_ACCOUNTING)).toBeGreaterThan(fallback);
+  });
+
+  it("sums calibrated segment counts", () => {
+    const segments = ["chat segment", "memory segment", "document segment"];
+    const expected = segments.reduce(
+      (sum, segment) => sum + countContextTokens(segment, CALIBRATED_ACCOUNTING),
+      0,
+    );
+    expect(countContextTokensForSegments(segments, CALIBRATED_ACCOUNTING)).toBe(expected);
+  });
+});
+
 // ─── maxUtf8BytesForTokenBudget ────────────────────────────────────────────────
 describe("maxUtf8BytesForTokenBudget", () => {
   it("returns 0 for empty or overhead-only budgets", () => {
@@ -349,6 +398,19 @@ describe("deriveContextProfile", () => {
     });
     expect(profile.schemaVersion).toBe(CONTEXT_ENGINEERING_SCHEMA_VERSION);
     expect(profile.tokenEstimatorId).toBe(DEFAULT_TOKEN_ESTIMATOR_ID);
+    expect(profile.tokenAccounting).toEqual(DEFAULT_CONTEXT_TOKEN_ACCOUNTING);
+  });
+
+  it("records calibrated token accounting and uses its counter id as provenance", () => {
+    const profile = deriveContextProfile({
+      maxInputTokens: 10_000,
+      reservedOutputTokens: 1_000,
+      safetyMarginTokens: 500,
+      tokenAccounting: CALIBRATED_ACCOUNTING,
+    });
+    expect(profile.tokenEstimatorId).toBe(CALIBRATED_ACCOUNTING.counterId);
+    expect(profile.tokenAccounting).toEqual(CALIBRATED_ACCOUNTING);
+    expect(validateContextProfile(profile).ok).toBe(true);
   });
 
   it("produces a profile that validates", () => {
@@ -402,6 +464,17 @@ describe("deriveContextProfileFromCapability", () => {
       model: { id: "runtime-chat" },
     });
   });
+
+  it("derives calibrated token accounting from model capability metadata", () => {
+    const capability = {
+      ...chatCapability("calibrated-chat", 64_000, 4_000),
+      tokenAccounting: CALIBRATED_ACCOUNTING,
+    };
+    const profile = deriveContextProfileFromCapability(capability);
+    expect(profile.model).toEqual({ id: "calibrated-chat" });
+    expect(profile.tokenEstimatorId).toBe(CALIBRATED_ACCOUNTING.counterId);
+    expect(profile.tokenAccounting).toEqual(CALIBRATED_ACCOUNTING);
+  });
 });
 
 // ─── validateContextProfile ──────────────────────────────────────────────────────
@@ -417,6 +490,28 @@ describe("validateContextProfile", () => {
         model: { id: "m", provider: "p", notes: "n" },
       }).ok,
     ).toBe(true);
+  });
+
+  it("accepts optional calibrated token accounting metadata", () => {
+    expect(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: CALIBRATED_ACCOUNTING,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("rejects exact token accounting until an exact counter is implemented", () => {
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: {
+          source: "exact",
+          counterId: "provider-tokenizer-v1",
+        },
+      }),
+      "tokenAccounting.source",
+    );
   });
 
   it("rejects a non-object", () => {
@@ -462,6 +557,51 @@ describe("validateContextProfile", () => {
     expectInvalidWithReason(
       validateContextProfile({ ...happyProfile(), tokenEstimatorId: "  " }),
       "tokenEstimatorId",
+    );
+  });
+
+  it("rejects invalid token accounting metadata", () => {
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: { ...CALIBRATED_ACCOUNTING, scaleMilli: 0 },
+      }),
+      "tokenAccounting.scaleMilli",
+    );
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: { ...CALIBRATED_ACCOUNTING, vocabularyPath: "nope" },
+      }),
+      "tokenAccounting.vocabularyPath",
+    );
+  });
+
+  it("rejects a fallback-estimated accounting carrying a stray scaleMilli", () => {
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: {
+          source: "fallback-estimated",
+          counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
+          scaleMilli: 1_250,
+        },
+      }),
+      "tokenAccounting.scaleMilli",
+    );
+  });
+
+  it("rejects a fallback-estimated accounting carrying a stray offsetTokens", () => {
+    expectInvalidWithReason(
+      validateContextProfile({
+        ...happyProfile(),
+        tokenAccounting: {
+          source: "fallback-estimated",
+          counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
+          offsetTokens: 2,
+        },
+      }),
+      "tokenAccounting.offsetTokens",
     );
   });
 

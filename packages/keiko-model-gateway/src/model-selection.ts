@@ -18,6 +18,7 @@ import type {
   GatewayConfig,
   ModelCapability,
   ModelKind,
+  ModelTokenAccounting,
   VoiceCapabilityResolution,
   VoicePersona,
 } from "./types.js";
@@ -44,6 +45,10 @@ export interface ConfiguredCapabilityProvider {
 export interface ConfiguredCapabilitySource {
   readonly providers: readonly ConfiguredCapabilityProvider[];
   readonly capabilities?: readonly ModelCapability[] | undefined;
+}
+
+export interface SafeModelCapability extends Omit<ModelCapability, "tokenAccounting"> {
+  readonly tokenAccounting?: Omit<ModelTokenAccounting, "counterId"> | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -92,6 +97,31 @@ export function listConfiguredCapabilities(
   return config.providers
     .map((provider) => findConfiguredCapability(config, provider.modelId))
     .filter((capability): capability is ModelCapability => capability !== undefined);
+}
+
+function projectSafeTokenAccounting(
+  tokenAccounting: ModelTokenAccounting,
+): Omit<ModelTokenAccounting, "counterId"> {
+  const { counterId, ...safeTokenAccounting } = tokenAccounting;
+  void counterId;
+  return safeTokenAccounting;
+}
+
+export function projectSafeCapabilities(
+  capabilities: readonly ModelCapability[],
+): readonly SafeModelCapability[] {
+  return capabilities.map((capability) => {
+    const { tokenAccounting, ...rest } = capability;
+    return tokenAccounting === undefined
+      ? rest
+      : { ...rest, tokenAccounting: projectSafeTokenAccounting(tokenAccounting) };
+  });
+}
+
+export function listSafeConfiguredCapabilities(
+  config: ConfiguredCapabilitySource,
+): readonly SafeModelCapability[] {
+  return projectSafeCapabilities(listConfiguredCapabilities(config));
 }
 
 export function selectConfiguredModel(

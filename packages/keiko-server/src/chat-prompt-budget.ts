@@ -1,4 +1,4 @@
-import { estimateTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
+import { countContextTokensForSegments, type ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   allocateContext,
   DEFAULT_CONTEXT_BUDGET,
@@ -343,7 +343,10 @@ function assembleGatewayPromptCandidate(
     memoryText,
     input.request.discussionMode,
   );
-  const latestTurnTokens = estimateTokensForSegments([latestTurn]);
+  const latestTurnTokens = countContextTokensForSegments(
+    [latestTurn],
+    input.profile.tokenAccounting,
+  );
   if (latestTurnTokens > input.profile.effectiveInputBudget) {
     return undefined;
   }
@@ -352,8 +355,10 @@ function assembleGatewayPromptCandidate(
   if (historyOutcome === undefined) return undefined;
   const messages = [...historyOutcome.messages, { role: "user" as const, content: latestTurn }];
   if (
-    estimateTokensForSegments(messages.map((message) => message.content)) >
-    input.profile.effectiveInputBudget
+    countContextTokensForSegments(
+      messages.map((message) => message.content),
+      input.profile.tokenAccounting,
+    ) > input.profile.effectiveInputBudget
   ) {
     return undefined;
   }

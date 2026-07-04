@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTEXT_LANE_IDS,
   DEFAULT_CONTEXT_PROFILE,
+  countContextTokens,
   deriveContextProfile,
   estimateTokens,
   type ContextBudget,
@@ -38,6 +39,22 @@ function bulk(unit: string, repeats: number): string {
 const EVICTABLE_LANES: readonly ContextLaneId[] = CONTEXT_LANE_IDS.filter(
   (id) => id !== "system-contract" && id !== "user-task",
 );
+
+const CALIBRATED_PROFILE: ContextProfile = deriveContextProfile({
+  maxInputTokens: DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+  reservedOutputTokens: DEFAULT_CONTEXT_PROFILE.reservedOutputTokens,
+  safetyMarginTokens: DEFAULT_CONTEXT_PROFILE.safetyMarginTokens,
+  tokenAccounting: {
+    source: "calibrated",
+    counterId: "allocator-calibrated-fixture-v1",
+    scaleMilli: 1_250,
+    offsetTokens: 1,
+  },
+});
+
+function budgetForProfile(profile: ContextProfile): ContextBudget {
+  return { ...DEFAULT_CONTEXT_BUDGET, profile };
+}
 
 describe("DEFAULT_CONTEXT_BUDGET", () => {
   it("pins one row per lane against DEFAULT_CONTEXT_PROFILE with the fixed allocation order", () => {
@@ -84,6 +101,22 @@ describe("allocateContext — gate 3 (single token currency)", () => {
     const repo = result.lanes.find((l) => l.laneId === "repo-evidence");
     expect(repo?.estimatedTokens).toBe(estimateTokens(text));
     expect(result.totalEstimatedTokens).toBe(estimateTokens(text));
+  });
+
+  it("uses calibrated profile accounting when supplied", () => {
+    const text = "Memory: confirm tool observation and document context boundaries.";
+    const input: AllocateContextInput = {
+      profile: CALIBRATED_PROFILE,
+      budget: budgetForProfile(CALIBRATED_PROFILE),
+      lanes: [lane("working-memory", [item("memory-1", text, 1)])],
+    };
+    const result = allocateContext(input);
+    const workingMemory = result.lanes.find((l) => l.laneId === "working-memory");
+    const calibrated = countContextTokens(text, CALIBRATED_PROFILE.tokenAccounting);
+    expect(workingMemory?.estimatedTokens).toBe(calibrated);
+    expect(result.totalEstimatedTokens).toBe(calibrated);
+    expect(calibrated).toBeGreaterThan(estimateTokens(text));
+    expect(result.diagnostics.profile.tokenAccounting?.source).toBe("calibrated");
   });
 
   it("charges two lanes with identical text identical tokens", () => {
