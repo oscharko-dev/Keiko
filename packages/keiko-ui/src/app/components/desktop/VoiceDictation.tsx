@@ -40,6 +40,8 @@ function micLabel(phase: DictationPhase): string {
       return "Starting microphone…";
     case "recording":
       return "Stop dictation";
+    case "finalizing":
+      return "Finishing dictation…";
     case "transcribing":
       return "Transcribing your dictation…";
     default:
@@ -50,6 +52,7 @@ function micLabel(phase: DictationPhase): string {
 
 interface VoiceDictationButtonProps {
   readonly phase: DictationPhase;
+  readonly audioLevel?: number | undefined;
   readonly onStart: () => void;
   readonly onStop: () => void;
   readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
@@ -58,25 +61,27 @@ interface VoiceDictationButtonProps {
 
 export function VoiceDictationButton({
   phase,
+  audioLevel = 0,
   onStart,
   onStop,
   buttonRef,
   compact = false,
 }: VoiceDictationButtonProps): ReactNode {
   const recording = phase === "recording";
+  const live = recording || phase === "finalizing";
   // Interactive only when there is a clear action: start from idle/preview/error, stop while
   // recording. The transient requesting / transcribing states are announced but not clickable.
-  const busy = phase === "requesting" || phase === "transcribing";
+  const busy = phase === "requesting" || phase === "finalizing" || phase === "transcribing";
   const label = micLabel(phase);
   return (
     <button
       type="button"
       ref={buttonRef}
       className={`cmp-icon cmp-voice ui-tip${compact ? " cmp-mode-compact" : ""}`}
-      data-recording={recording ? "true" : "false"}
+      data-recording={live ? "true" : "false"}
       data-tip={label}
       aria-label={label}
-      aria-pressed={recording}
+      aria-pressed={live}
       aria-busy={busy}
       aria-describedby={VOICE_PRIVACY_HINT_ID}
       // `aria-disabled` (not the native `disabled` attribute) for the transient busy states, so the
@@ -93,9 +98,10 @@ export function VoiceDictationButton({
         }
       }}
     >
-      {recording ? (
+      {live ? (
         <span className="cmp-voice-recording" aria-hidden="true">
           <span className="cmp-voice-dot" />
+          <VoiceLevelMeter level={audioLevel} compact />
           <Icons.close size={14} />
         </span>
       ) : (
@@ -105,6 +111,28 @@ export function VoiceDictationButton({
         {PRIVACY_MESSAGE}
       </span>
     </button>
+  );
+}
+
+function VoiceLevelMeter({
+  level,
+  compact = false,
+}: {
+  readonly level: number;
+  readonly compact?: boolean | undefined;
+}): ReactNode {
+  const safeLevel = Number.isFinite(level) ? Math.min(1, Math.max(0, level)) : 0;
+  const bars = compact ? [0.22, 0.44, 0.66] : [0.18, 0.34, 0.5, 0.66, 0.82];
+  return (
+    <span className="cmp-voice-level" aria-hidden="true">
+      {bars.map((threshold, index) => (
+        <span
+          key={threshold}
+          className="cmp-voice-level-bar"
+          data-active={safeLevel >= threshold || (safeLevel > 0 && index === 0) ? "true" : "false"}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -127,6 +155,11 @@ function errorHeadline(reason: DictationErrorReason): string {
 interface VoiceDictationPreviewProps {
   readonly phase: DictationPhase;
   readonly transcript: string;
+  readonly liveTranscript?: string | undefined;
+  readonly finalizationNote?: string | undefined;
+  readonly audioLevel?: number | undefined;
+  readonly heardSpeech?: boolean | undefined;
+  readonly micReady?: boolean | undefined;
   readonly error: { readonly reason: DictationErrorReason; readonly message: string } | undefined;
   readonly onTranscriptChange: (value: string) => void;
   readonly onInsert: () => void;
@@ -137,6 +170,11 @@ interface VoiceDictationPreviewProps {
 export function VoiceDictationPreview({
   phase,
   transcript,
+  liveTranscript = "",
+  finalizationNote,
+  audioLevel = 0,
+  heardSpeech = false,
+  micReady = false,
   error,
   onTranscriptChange,
   onInsert,
@@ -156,6 +194,37 @@ export function VoiceDictationPreview({
       retryRef.current?.focus();
     }
   }, [phase]);
+
+  if (phase === "recording") {
+    // "Preparing mic" until capture is verified live, so the user is only invited to speak once audio is
+    // actually flowing; then "Listening" / "Capturing speech" as the level crosses the speech gate.
+    const recordingLabel = !micReady
+      ? "Preparing mic…"
+      : heardSpeech
+        ? "Capturing speech…"
+        : "Listening…";
+    return (
+      <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
+        <VoiceLevelMeter level={micReady ? audioLevel : 0} />
+        <span>{recordingLabel}</span>
+        {liveTranscript.trim().length > 0 ? (
+          <span className="cmp-voice-label">{liveTranscript}</span>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (phase === "finalizing") {
+    return (
+      <div className="cmp-voice-preview cmp-voice-live" role="status" aria-live="polite">
+        <VoiceLevelMeter level={0} />
+        <span>Finishing dictation…</span>
+        {liveTranscript.trim().length > 0 ? (
+          <span className="cmp-voice-label">{liveTranscript}</span>
+        ) : null}
+      </div>
+    );
+  }
 
   if (phase === "transcribing") {
     return (
@@ -206,6 +275,9 @@ export function VoiceDictationPreview({
       <p id={VOICE_PRIVACY_NOTE_ID} className="cmp-voice-privacy">
         {PRIVACY_MESSAGE}
       </p>
+      {finalizationNote !== undefined ? (
+        <p className="cmp-voice-privacy">{finalizationNote}</p>
+      ) : null}
       <div className="cmp-voice-actions">
         <button
           type="button"
@@ -252,6 +324,11 @@ export function VoiceDictationPreviewFromController({
     <VoiceDictationPreview
       phase={controller.phase}
       transcript={controller.transcript}
+      liveTranscript={controller.liveTranscript}
+      finalizationNote={controller.finalizationNote}
+      audioLevel={controller.audioLevel}
+      heardSpeech={controller.heardSpeech}
+      micReady={controller.micReady}
       error={controller.error}
       onTranscriptChange={controller.setTranscript}
       onInsert={controller.insert}

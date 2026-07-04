@@ -1177,7 +1177,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.getByRole("option", { name: "Live Files context" })).not.toBeDisabled();
     expect(screen.queryByRole("option", { name: /Still indexing/i })).toBeNull();
 
-    await user.click(screen.getByRole("option", { name: "Knowledge capsule: Release notes" }));
+    await user.click(screen.getByRole("option", { name: "Knowledge Pod: Release notes" }));
 
     await waitFor(() => {
       // GRD-009: connecting a connector must NOT clear connected folders (no connectedScopes
@@ -1229,7 +1229,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       }),
     );
 
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Bravo");
 
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
@@ -1281,7 +1281,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -1329,7 +1329,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         replaceChat,
       }),
     );
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Bravo");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Bravo");
     await waitFor(() => {
       const arg = updateChatMock.mock.calls[0]?.[1] as {
         readonly localKnowledgeScopes?: readonly { readonly capsuleId?: string }[];
@@ -1366,7 +1366,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await openCombobox(user, "Grounding mode");
     expect(screen.getByRole("option", { name: "Live Files context" })).toBeDisabled();
 
-    await user.click(screen.getByRole("option", { name: "Capsule set: Release pack" }));
+    await user.click(screen.getByRole("option", { name: "Knowledge Pod Set: Release pack" }));
 
     await waitFor(() => {
       // GRD-009: non-destructive — no connectedScopes clear; appends the capsule set.
@@ -1431,7 +1431,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     updateChatMock.mockRejectedValueOnce(new Error("knowledge store unavailable"));
     renderWindow(makeSession({ activeChat: makeChat(), replaceChat }));
 
-    await chooseComboboxOption(user, "Grounding mode", "Knowledge capsule: Release notes");
+    await chooseComboboxOption(user, "Grounding mode", "Knowledge Pod: Release notes");
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("knowledge store unavailable");
@@ -1456,14 +1456,14 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
-        "Knowledge capsule: cap-stale (unavailable)",
+        "Knowledge Pod: cap-stale (unavailable)",
       );
     });
     // uiux-fix F041 (C173) — "(unavailable)" is the single degraded suffix
     // (previously "(not ready)" for capsules vs "(unavailable)" for sets).
     await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
-      screen.getByRole("option", { name: "Knowledge capsule: cap-stale (unavailable)" }),
+      screen.getByRole("option", { name: "Knowledge Pod: cap-stale (unavailable)" }),
     ).toBeInTheDocument();
   });
 
@@ -1484,12 +1484,12 @@ describe("ChatWindow local knowledge scope disclosure", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "Grounding mode" })).toHaveTextContent(
-        "Capsule set: set-1 (unavailable)",
+        "Knowledge Pod Set: set-1 (unavailable)",
       );
     });
     await openCombobox(userEvent.setup(), "Grounding mode");
     expect(
-      screen.getByRole("option", { name: "Capsule set: set-1 (unavailable)" }),
+      screen.getByRole("option", { name: "Knowledge Pod Set: set-1 (unavailable)" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent("capsule sets offline");
   });

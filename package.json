@@ -71,6 +71,7 @@
     "release:plan": "node scripts/release-publish.mjs --plan-only",
     "release:publish": "node scripts/release-publish.mjs",
     "eval:prompt-enhancer": "npm run build:packages && vitest run packages/keiko-evaluations/src/promptEnhancer",
+    "eval:voice-acoustic": "npm run build:packages && node -e \"import('./packages/keiko-evaluations/dist/index.js').then(({ VoiceAcousticEval }) => { const scorecard = VoiceAcousticEval.runVoiceAcousticEvaluation(); console.log(VoiceAcousticEval.renderVoiceAcousticSummary(scorecard)); process.exitCode = scorecard.summary.goNoGo === 'GO' ? 0 : 1; })\"",
     "dev:start": "node scripts/dev-start.mjs",
     "dev:stop": "node scripts/dev-stop.mjs",
     "prepare:bin": "node scripts/ensure-bin-mode.mjs",

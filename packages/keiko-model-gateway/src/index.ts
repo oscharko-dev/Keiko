@@ -162,6 +162,8 @@ export {
 
 export {
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   DEFAULT_REALTIME_TURN_DETECTION,
   DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS,
   DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS,
@@ -173,6 +175,8 @@ export {
   resolveRealtimeVoice,
   requestRealtimeNegotiation,
   type RealtimeVoice,
+  type RealtimeSessionType,
+  type RealtimeTranscriptionDelay,
   type RealtimeNegotiationErrorKind,
   type RealtimeFunctionTool,
   type RealtimeNegotiationOutcome,

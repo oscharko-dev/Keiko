@@ -13,10 +13,13 @@ import type { Server } from "node:http";
 import { WebSocket } from "ws";
 import { createUiServer, UI_HOST } from "./server.js";
 import { MAX_VOICE_CONTROL_FRAME_BYTES } from "./voice-realtime.js";
+import { VOICE_LIVE_TRANSCRIBE_PATH } from "./voice-live-dictation.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { Chat } from "./store/index.js";
 import {
+  DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
   type GatewayConfig,
   type RealtimeNegotiationRequest,
@@ -254,6 +257,20 @@ function sessionCreate(chatId: string, extra: Record<string, unknown> = {}): str
   });
 }
 
+function liveSessionCreate(extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    protocolVersion: "1",
+    sessionId: "sess-live-1",
+    seq: 0,
+    direction: "client-to-host",
+    kind: "session.create",
+    idempotencyKey: "idem-live-1",
+    requestedProfile: "full-realtime",
+    negotiationMode: "proxied-sdp",
+    ...extra,
+  });
+}
+
 describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => {
   it("rejects the upgrade for a no-voice (chat-only) deployment", async () => {
     const port = await boot(depsWith({ config: CHAT_ONLY_CONFIG, configPresent: true }));
@@ -313,6 +330,123 @@ describe("WebSocket voice control upgrade — capability gate (AC1/AC3)", () => 
     const offer = await next();
     expect(offer.kind).toBe("capability.offer");
     ws.close();
+  });
+});
+
+describe("WebSocket live dictation upgrade — transcription-only control plane", () => {
+  it("rejects the live dictation upgrade for an STT-only deployment", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(false), configPresent: true }));
+    const result = await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH });
+    expect(result.opened).toBe(false);
+  });
+
+  it("negotiates a transcription-only realtime session without dialogue fields", async () => {
+    let seenRequest: RealtimeNegotiationRequest | undefined;
+    const egress = {
+      httpsProxy: "http://egress-proxy.internal:8080",
+      noProxy: ["127.0.0.1"],
+    };
+    const port = await boot(
+      depsWith({
+        config: voiceConfig(true, {
+          realtimeAuthMode: "ephemeral-session",
+          timeoutMs: 30_000,
+          egress,
+        }),
+        configPresent: true,
+        voiceRealtimeNegotiationRequest: (request) => {
+          seenRequest = request;
+          return Promise.resolve({
+            ok: true,
+            value: { answerSdp: ANSWER_SDP },
+          });
+        },
+      }),
+    );
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+    );
+    socket.send(liveSessionCreate({ transcriptionLanguage: "en" }));
+    expect(await next()).toMatchObject({
+      kind: "session.created",
+      profile: "full-realtime",
+      controlTransport: "loopback-websocket",
+      mediaTransport: "webrtc",
+      negotiationMode: "proxied-sdp",
+    });
+    expect(await next()).toMatchObject({
+      kind: "capability.offer",
+      capabilities: {
+        speechToText: true,
+        speechOutput: false,
+        realtimeVoice: true,
+      },
+    });
+    socket.send(
+      JSON.stringify({
+        protocolVersion: "1",
+        sessionId: "sess-live-1",
+        seq: 1,
+        direction: "client-to-host",
+        kind: "signal.sdp.offer",
+        sdp: OFFER_SDP,
+      }),
+    );
+
+    expect(await next()).toMatchObject({
+      kind: "media.track.state",
+      track: "audio-in",
+      state: "negotiating",
+    });
+    expect(await next()).toMatchObject({ kind: "signal.sdp.answer", sdp: ANSWER_SDP });
+    expect(seenRequest).toMatchObject({
+      endpoint: "https://realtime.example.com",
+      modelId: "keiko-realtime",
+      realtimeAuthMode: "ephemeral-session",
+      sessionType: "transcription",
+      transcriptionModel: DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+      transcriptionLanguage: "en",
+      transcriptionDelay: DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+      offerSdp: OFFER_SDP,
+      timeoutMs: 12_000,
+    });
+    expect(seenRequest?.instructions).toBeUndefined();
+    expect(seenRequest?.voiceId).toBeUndefined();
+    expect(seenRequest?.tools).toBeUndefined();
+    expect(seenRequest?.toolChoice).toBeUndefined();
+    expect(seenRequest?.safetyIdentifier).toBeUndefined();
+    expect(seenRequest?.egress).toEqual(egress);
+    socket.close();
+  });
+
+  it("rejects chat context and persona on the live dictation endpoint", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+    );
+    socket.send(
+      liveSessionCreate({
+        persona: "neutral",
+        chatContext: { chatId: "chat-int-1" },
+      }),
+    );
+    const message = await next();
+    expect(message).toMatchObject({ kind: "error", code: "not-allowed-for-profile" });
+    const code = await nextClose(socket);
+    expect(code).toBe(1008);
+  });
+
+  it("closes live dictation when a binary frame is sent on the control plane", async () => {
+    const port = await boot(depsWith({ config: voiceConfig(true), configPresent: true }));
+    const { ws: socket, next } = expectOpen(
+      await connect(port, { path: VOICE_LIVE_TRANSCRIBE_PATH }),
+    );
+    socket.send(liveSessionCreate());
+    await next(); // session.created
+    await next(); // capability.offer
+    socket.send(Buffer.from([0, 1, 2, 3]));
+    const code = await nextClose(socket);
+    expect(code).toBe(1003);
   });
 });
 

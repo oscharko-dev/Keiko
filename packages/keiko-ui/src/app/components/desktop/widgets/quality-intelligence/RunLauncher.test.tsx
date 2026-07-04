@@ -252,13 +252,13 @@ describe("RunLauncher — initial render", () => {
     expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "true");
     expect(sourceTypeRadio("Folder")).toBeInTheDocument();
     expect(sourceTypeRadio("File")).toBeInTheDocument();
-    expect(sourceTypeRadio("Capsule")).toBeInTheDocument();
-    expect(sourceTypeRadio("Capsule set")).toBeInTheDocument();
+    expect(sourceTypeRadio("Knowledge Pod")).toBeInTheDocument();
+    expect(sourceTypeRadio("Knowledge Pod Set")).toBeInTheDocument();
   });
 
   it("exposes source-type labels as icon tooltips for compact state", () => {
     render(<RunLauncher />);
-    for (const label of ["Requirements", "Folder", "File", "Capsule", "Capsule set"]) {
+    for (const label of ["Requirements", "Folder", "File", "Knowledge Pod", "Knowledge Pod Set"]) {
       expect(sourceTypeRadio(label)).toHaveAttribute("data-tip", label);
     }
   });
@@ -303,8 +303,8 @@ describe("RunLauncher — initial render", () => {
 
     fireEvent.keyDown(requirements, { key: "ArrowLeft" });
 
-    // ArrowLeft from the first option wraps to the last ("Capsule set").
-    const last = sourceTypeRadio("Capsule set");
+    // ArrowLeft from the first option wraps to the last ("Knowledge Pod Set").
+    const last = sourceTypeRadio("Knowledge Pod Set");
     expect(last).toHaveAttribute("aria-checked", "true");
     expect(document.activeElement).toBe(last);
   });
@@ -371,7 +371,7 @@ describe("RunLauncher — initial render", () => {
     expect(btn).toHaveAttribute("aria-disabled", "true");
     expect(btn).not.toBeDisabled();
     expect(btn).toHaveAccessibleDescription(
-      "Add requirements text, a folder path, a file path, select a capsule, select a capsule set, or connect a source to generate.",
+      "Add requirements text, a folder path, a file path, select a Knowledge Pod, select a Knowledge Pod Set, or connect a source to generate.",
     );
   });
 });
@@ -579,7 +579,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
         fetchCapsulesImpl={fakeFetchCapsules([
           {
             id: "cap-audit-1",
-            displayName: "Audit Capsule 01",
+            displayName: "Audit Knowledge Pod 01",
             lifecycleState: "ready",
             sourceCount: 3,
             updatedAt: 1,
@@ -589,8 +589,8 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       />,
     );
 
-    await chooseSourceType(user, "Capsule");
-    await screen.findByText("Audit Capsule 01");
+    await chooseSourceType(user, "Knowledge Pod");
+    await screen.findByText("Audit Knowledge Pod 01");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -603,7 +603,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     expect(calledRequest.sources[0]).toMatchObject({
       kind: "capsule",
       capsuleId: "cap-audit-1",
-      label: "Audit Capsule 01",
+      label: "Audit Knowledge Pod 01",
     });
   });
 
@@ -617,7 +617,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
         fetchCapsuleSetsImpl={fakeFetchCapsuleSets([
           {
             id: "set-audit-1",
-            displayName: "Audit Capsule Set",
+            displayName: "Audit Knowledge Pod Set",
             capsuleCount: 2,
             composedAt: 1,
           },
@@ -625,8 +625,8 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       />,
     );
 
-    await chooseSourceType(user, "Capsule set");
-    await screen.findByText("Audit Capsule Set (2 capsules)");
+    await chooseSourceType(user, "Knowledge Pod Set");
+    await screen.findByText("Audit Knowledge Pod Set (2 pods)");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
 
     await waitFor(() => {
@@ -639,7 +639,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     expect(calledRequest.sources[0]).toMatchObject({
       kind: "capsule-set",
       capsuleSetId: "set-audit-1",
-      label: "Audit Capsule Set",
+      label: "Audit Knowledge Pod Set",
     });
   });
 
@@ -1518,7 +1518,7 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
   });
 });
 
-describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
+describe("RunLauncher — Connected Knowledge Pod source (Epic #710 #718)", () => {
   const CAPSULE_ID = "cap-test-abc";
 
   it("enables Generate when a capsule is connected and no manual input is present", () => {
@@ -1528,10 +1528,10 @@ describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
     );
   });
 
-  it("renders the connected-source banner with 'Connected capsule' and the capsule id", () => {
+  it("renders the connected-source banner with 'Connected Knowledge Pod' and the capsule id", () => {
     render(<RunLauncher connectedCapsuleIds={[CAPSULE_ID]} />);
     const banner = screen.getByTestId("qi-connected-source");
-    expect(banner).toHaveTextContent("Connected capsule");
+    expect(banner).toHaveTextContent("Connected Knowledge Pod");
     expect(banner).toHaveTextContent(CAPSULE_ID);
   });
 
@@ -1596,7 +1596,7 @@ describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
     expect(req.sources[1]).toMatchObject({ kind: "capsule", capsuleId: CAPSULE_ID });
   });
 
-  it("manual requirements text overrides the connected capsule", async () => {
+  it("manual requirements text overrides the Connected Knowledge Pod", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);
     render(<RunLauncher startImpl={startImpl} connectedCapsuleIds={[CAPSULE_ID]} />);
@@ -1618,13 +1618,13 @@ describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
   });
 });
 
-describe("RunLauncher — connected capsule-set source (Epic #710 #718)", () => {
+describe("RunLauncher — Connected Knowledge Pod Set source (Epic #710 #718)", () => {
   const SET_ID = "set-test-xyz";
 
-  it("renders the connected-source banner with 'Connected capsule set' and the set id", () => {
+  it("renders the connected-source banner with 'Connected Knowledge Pod Set' and the set id", () => {
     render(<RunLauncher connectedCapsuleSetIds={[SET_ID]} />);
     const banner = screen.getByTestId("qi-connected-source");
-    expect(banner).toHaveTextContent("Connected capsule set");
+    expect(banner).toHaveTextContent("Connected Knowledge Pod Set");
     expect(banner).toHaveTextContent(SET_ID);
   });
 
@@ -1701,8 +1701,8 @@ describe("RunLauncher — multi-source connected-source list DOM (Issue #731 / E
     // Kind labels — each sourceKindLabel arm renders into the DOM.
     expect(within(list).getByText("File")).toBeInTheDocument();
     expect(within(list).getAllByText("Folder")).toHaveLength(2);
-    expect(within(list).getByText("Capsule")).toBeInTheDocument();
-    expect(within(list).getByText("Capsule set")).toBeInTheDocument();
+    expect(within(list).getByText("Knowledge Pod")).toBeInTheDocument();
+    expect(within(list).getByText("Knowledge Pod Set")).toBeInTheDocument();
 
     // Values — sourceValue returns path / capsuleId / capsuleSetId per source kind.
     expect(within(list).getByText("/work/fachkonzept/funds-transfer.md")).toBeInTheDocument();
@@ -1716,7 +1716,7 @@ describe("RunLauncher — multi-source connected-source list DOM (Issue #731 / E
 // ─── Connected figma-snapshot source (Epic #750 #756) ────────────────────────
 //
 // connectedFigmaSnapshotRunIds is wired RunLauncher → buildConnectedRunSources → the Generate
-// request, but had ZERO integration coverage. Mirrors the connected capsule-source suite: banner,
+// request, but had ZERO integration coverage. Mirrors the Connected Knowledge Pod-source suite: banner,
 // request shape, combined-count alongside a folder, and onRunCompleted recheckable propagation.
 describe("RunLauncher — connected figma-snapshot source (Epic #750 #756)", () => {
   const RUN_ID = "fig-run-test-abc";

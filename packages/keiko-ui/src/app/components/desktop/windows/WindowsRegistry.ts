@@ -577,7 +577,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     title: "Local Knowledge",
     icon: "localKnowledge",
     accent: true,
-    desc: "Manage knowledge capsules",
+    desc: "Manage Knowledge Pods",
     w: 720,
     h: 560,
     min: { w: 360, h: 320 },

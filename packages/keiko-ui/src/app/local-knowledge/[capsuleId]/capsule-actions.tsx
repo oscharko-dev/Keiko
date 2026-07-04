@@ -64,7 +64,7 @@ interface ProgressState {
 // ---------------------------------------------------------------------------
 
 function actionTitle(kind: ActionKind): string {
-  if (kind === "delete") return "Delete capsule";
+  if (kind === "delete") return "Delete Knowledge Pod";
   if (kind === "reembed") return "Full re-embed for current model";
   if (kind === "rebuild") return "Full rebuild / rechunk";
   if (kind === "refresh") return "Refresh changed files";
@@ -73,7 +73,7 @@ function actionTitle(kind: ActionKind): string {
 
 function actionDescription(kind: ActionKind, capsuleDisplayName: string): string {
   if (kind === "delete") {
-    return `This permanently deletes the capsule index. The source files on disk are NOT deleted. Type "${capsuleDisplayName}" to confirm.`;
+    return `This permanently deletes the pod index. The source files on disk are NOT deleted. Type "${capsuleDisplayName}" to confirm.`;
   }
   if (kind === "refresh") {
     return "This runs an incremental refresh. Unchanged files stay in place, changed files are re-indexed, and removed files are cleaned up.";
@@ -211,7 +211,7 @@ const SOURCE_KIND_OPTIONS = [
   {
     value: "repository",
     label: "Repository",
-    description: "Connect a repository root as a capsule source.",
+    description: "Connect a repository root as a pod source.",
   },
   {
     value: "files",
@@ -335,7 +335,7 @@ function ConnectSourceForm({
         <LocalFileBrowserDialog
           mode={pickerModeForScope(scopeKind)}
           title="Choose local source"
-          description={`Select a local ${scopeKind === "files" ? "file or files" : "folder"} for this capsule.`}
+          description={`Select a local ${scopeKind === "files" ? "file or files" : "folder"} for this pod.`}
           note={localKnowledgeLimitSummary()}
           initialRootPath={rootPath}
           initialFiles={parseFilesInput(filesInput)}
@@ -542,7 +542,7 @@ function ConfirmModal({
 
   // Auto-focus the confirmation input when the modal opens. Done via ref + effect (not
   // autoFocus) so the focus only fires when the dialog mounts and not on every re-render —
-  // satisfies jsx-a11y/no-autofocus while preserving the "type the capsule name" flow.
+  // satisfies jsx-a11y/no-autofocus while preserving the "type the pod name" flow.
   useEffect(() => {
     if (kind === "delete" && confirmInputRef.current !== null) {
       confirmInputRef.current.focus();
@@ -604,7 +604,7 @@ function ConfirmModal({
           <div className="dlg-body">
             <div className="dlg-field">
               <label htmlFor="lkd-confirm-name-input" className="dlg-label">
-                Type the capsule name to confirm
+                Type the pod name to confirm
               </label>
               <input
                 id="lkd-confirm-name-input"
@@ -833,7 +833,7 @@ export function CapsuleActions({
   // the multi-line connect form used to be squeezed into the header flex row
   // next to the H1 (uiux-fix F033, C104).
   return (
-    <section className="lkd-tools" aria-label="Capsule tools">
+    <section className="lkd-tools" aria-label="Knowledge Pod tools">
       <ConnectSourceForm
         capsuleId={capsuleId}
         onConnected={onActionComplete}
@@ -846,7 +846,7 @@ export function CapsuleActions({
           <button
             type="button"
             className="lk-btn lk-btn-ghost"
-            aria-label="Index this capsule now"
+            aria-label="Index this Knowledge Pod now"
             aria-busy={indexBusy}
             disabled={indexBusy}
             onClick={() => void handleIndex()}
@@ -866,7 +866,7 @@ export function CapsuleActions({
 
       <div
         role="group"
-        aria-label={`Actions for capsule ${capsuleDisplayName}`}
+        aria-label={`Actions for Knowledge Pod ${capsuleDisplayName}`}
         className="lkd-actions-group"
       >
         {showReembedButton ? (
@@ -874,7 +874,7 @@ export function CapsuleActions({
             type="button"
             className="lk-btn lk-btn-ghost"
             data-recommended={reembedRecommended ? "true" : "false"}
-            aria-label={`Full re-embed capsule ${capsuleDisplayName} for current embedding model`}
+            aria-label={`Full re-embed Knowledge Pod ${capsuleDisplayName} for current embedding model`}
             disabled={actionDisabled}
             onClick={() => openModal("reembed")}
           >
@@ -886,7 +886,7 @@ export function CapsuleActions({
             type="button"
             className="lk-btn lk-btn-ghost"
             data-recommended={contextualRebuildRequired ? "true" : "false"}
-            aria-label={`Full rebuild capsule ${capsuleDisplayName}`}
+            aria-label={`Full rebuild Knowledge Pod ${capsuleDisplayName}`}
             disabled={actionDisabled}
             onClick={() => openModal("rebuild")}
           >
@@ -896,7 +896,7 @@ export function CapsuleActions({
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          aria-label={`Refresh changed files for capsule ${capsuleDisplayName}`}
+          aria-label={`Refresh changed files for Knowledge Pod ${capsuleDisplayName}`}
           disabled={actionDisabled}
           onClick={() => openModal("refresh")}
         >
@@ -905,7 +905,7 @@ export function CapsuleActions({
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          aria-label={`Repair failed files for capsule ${capsuleDisplayName}`}
+          aria-label={`Repair failed files for Knowledge Pod ${capsuleDisplayName}`}
           disabled={actionDisabled}
           onClick={() => openModal("repair")}
         >
@@ -914,7 +914,7 @@ export function CapsuleActions({
         <button
           type="button"
           className="lk-btn lk-btn-danger"
-          aria-label={`Delete capsule ${capsuleDisplayName}`}
+          aria-label={`Delete Knowledge Pod ${capsuleDisplayName}`}
           onClick={() => openModal("delete")}
         >
           Delete

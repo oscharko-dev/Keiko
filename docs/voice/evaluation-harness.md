@@ -23,6 +23,19 @@ Run the voice-twin evaluation suite locally:
 npx vitest run packages/keiko-evaluations/src/voice-twin
 ```
 
+Run the offline acoustic-quality companion gate locally:
+
+```bash
+npm run eval:voice-acoustic
+```
+
+The companion gate lives in
+[`packages/keiko-evaluations/src/voice-acoustic/`](../../packages/keiko-evaluations/src/voice-acoustic/)
+(namespace `VoiceAcousticEval`). It is deterministic fixture scoring only: harness-authored reference
+and hypothesis transcripts, ordered enum/timestamp traces, acoustic-profile labels, required identifier
+terms, and numeric budgets. It stores no raw production audio, no provider credentials, no provider URLs,
+and no raw provider event bodies.
+
 All 32+ tests must pass and suite verdict must be `GO`. Coverage minimum for `keiko-evaluations` package is 90.94 lines / 90.54 statements / 77.36 branches / 95.05 functions.
 
 Run in CI (as part of the standard test pipeline):
@@ -196,7 +209,7 @@ This harness **does not** detect bugs in the timing engine, turn manager, transc
 
 If a reducer implements a transition that the contract table permits but the reducer incorrectly rejects (or vice versa), the keiko-ui suite catches it. This harness assumes the reducer respects the contract it imports.
 
-### Wall-clock latency measurement is out of scope (only latency posture is proved)
+### Wall-clock transport measurement remains out of scope; offline acoustic budgets are now covered
 
 Issue #505's Scope names "local control-plane latency, WebRTC setup timing". A numeric, wall-clock latency
 measurement requires a clock read and a live transport, both of which sit **outside** the pure, deterministic,
@@ -206,6 +219,15 @@ media transport fixes (`latency-class-metric`: `none`→`none`, `gateway-batch`�
 `webrtc`→`interactive-realtime`). The wall-clock timing behaviour itself — ring-drain timing, backpressure,
 catch-up — is measured by the keiko-ui `voice-timebase.ts` suite ([ADR-0103](../adr/ADR-0103-voice-timing-engine.md),
 32 deterministic tests with an injected clock).
+
+P10 adds the offline `VoiceAcousticEval` companion gate for acoustic-quality budgets that can be scored
+without a live provider. It covers exactly `first-word`, `trailing-word`, `noisy-room`, `laptop-echo`,
+`headset`, `fast-interrupt`, `long-pause`, `unfinished-utterance`, `exact-identifiers`, and
+`grounded-vs-casual`; scores WER/CER, first/last-token retention, exact identifier retention, first
+partial latency, final transcript latency, TTFA, local duck latency, interrupt ack latency, premature
+finalization, and grounded-tool-before-answer ordering; and includes adversarial negative fixtures that
+must be caught. It is still not a live WebRTC wall-clock transport measurement: it scores deterministic
+fixture traces and returns a CI-blocking GO/NO-GO verdict with no network, credentials, or raw audio.
 
 ### VOICE_TWIN_REPLAY_CAPACITY is a local constant
 
