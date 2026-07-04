@@ -63,6 +63,27 @@ describe("UpdateStartupNotice", () => {
     expect(screen.queryByText("Update available")).toBeNull();
   });
 
+  it("does not render a startup banner for a degraded checker result without an available update", async () => {
+    const fetchReport = vi.fn(async () =>
+      report({
+        updateAvailable: false,
+        status: "degraded",
+        availabilityState: "degraded",
+        severity: "low",
+        registryStatus: "unavailable",
+        releaseMetadataStatus: "unavailable",
+        warnings: ["The update registry could not be reached."],
+      }),
+    );
+
+    render(<UpdateStartupNotice ready openUpdates={vi.fn()} fetchReport={fetchReport} />);
+
+    await waitFor(() => {
+      expect(fetchReport).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Update available")).toBeNull();
+  });
+
   it("supports Not now dismissal for the launched session", async () => {
     render(
       <UpdateStartupNotice ready openUpdates={vi.fn()} fetchReport={vi.fn(async () => report())} />,
@@ -93,8 +114,9 @@ describe("UpdateStartupNotice", () => {
     expect(screen.queryByText("Update available")).toBeNull();
   });
 
-  it("shows again after a Keiko restart changes the cached startup report identity", async () => {
+  it("keeps a dismissed startup notice hidden when only the startup check timestamp changes", async () => {
     const firstFetch = vi.fn(async () => report());
+    const secondFetch = vi.fn(async () => report({ checkedAt: "2026-06-30T12:05:00.000Z" }));
     const first = render(
       <UpdateStartupNotice ready openUpdates={vi.fn()} fetchReport={firstFetch} />,
     );
@@ -102,15 +124,12 @@ describe("UpdateStartupNotice", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
     first.unmount();
 
-    render(
-      <UpdateStartupNotice
-        ready
-        openUpdates={vi.fn()}
-        fetchReport={vi.fn(async () => report({ checkedAt: "2026-06-30T12:05:00.000Z" }))}
-      />,
-    );
+    render(<UpdateStartupNotice ready openUpdates={vi.fn()} fetchReport={secondFetch} />);
 
-    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(secondFetch).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByText("Update available")).toBeNull();
   });
 
   it("shows again when the target version changes", async () => {

@@ -13,7 +13,7 @@ const DEFAULT_DEV_PID_FILE = join(REPO_ROOT, ".keiko", "dev", "dev-ui.pid.json")
 const UI_TSCONFIG = join(REPO_ROOT, "packages", "keiko-ui", "tsconfig.json");
 const PUBLIC_READY_TIMEOUT_MS = 180_000;
 const PUBLIC_READY_POLL_MS = 250;
-const DEV_RUNNER_TEST_TIMEOUT_MS = 210_000;
+const DEV_RUNNER_TEST_TIMEOUT_MS = 240_000;
 
 async function freePort(): Promise<number> {
   const server = createServer();

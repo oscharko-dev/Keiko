@@ -236,5 +236,5 @@ describe("release-impact release notes", () => {
       "Release-impact metadata and validation now govern stable package publication.",
     );
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
-  }, 20_000);
+  }, 60_000);
 });

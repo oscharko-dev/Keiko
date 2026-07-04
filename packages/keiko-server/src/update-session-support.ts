@@ -156,7 +156,7 @@ export function messageForFailure(reason: UpdateSessionFailureReason): string {
   if (reason === "timed-out") return "The package manager did not finish before the timeout.";
   if (reason === "cancelled") return "The update was cancelled.";
   if (reason === "restart-version-mismatch") {
-    return "Keiko is still running a different version after restart.";
+    return "Restart not detected yet. Run the restart command, then try Verify restart again.";
   }
   return "The package manager could not complete the update.";
 }
@@ -195,8 +195,9 @@ export function restartVerificationPatch(
 ): Partial<UpdateSession> {
   if (currentVersion !== session.targetVersion) {
     return {
-      phase: "failed",
+      phase: "restart-required",
       failureReason: "restart-version-mismatch",
+      cancelable: false,
       restartRequired: true,
       retryable: false,
       message: messageForFailure("restart-version-mismatch"),

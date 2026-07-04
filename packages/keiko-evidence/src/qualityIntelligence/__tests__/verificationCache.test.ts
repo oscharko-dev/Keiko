@@ -5,6 +5,7 @@
 //   - unchanged manifests perform ZERO additional parse+verify passes after write-cache priming;
 //   - modifying a manifest on disk (export append / tamper) forces a re-verify (cache miss);
 //   - cache hits preserve tamper-evidence while avoiding redundant parse+integrity work.
+//   - 100 manifests list + re-list stays bounded without reintroducing per-list verification work.
 // The verification counter (__qiVerificationStats) increments once per full parse+integrity pass,
 // so a delta of 0 across the second list proves the expensive re-hash was skipped.
 

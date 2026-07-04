@@ -43,6 +43,19 @@ function session(overrides: Partial<UpdateSession> = {}): UpdateSession {
     sessionId: "update-session-1",
     packageName: "@oscharko-dev/keiko",
     targetVersion: "0.2.10",
+    restartCommandPreview: {
+      executable: "keiko",
+      args: [
+        "restart",
+        "--port",
+        "1990",
+        "--host",
+        "127.0.0.1",
+        "--state-dir",
+        "/tmp/keiko update state",
+      ],
+      label: "keiko restart --port 1990 --host 127.0.0.1 --state-dir '/tmp/keiko update state'",
+    },
     phase: "running",
     failureReason: "none",
     startedAt: "2026-06-30T12:00:00.000Z",
@@ -114,6 +127,23 @@ function apiFor(
   };
 }
 
+function setClipboard(writeText: (text: string) => Promise<void>): PropertyDescriptor | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  return descriptor;
+}
+
+function restoreClipboard(descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor === undefined) {
+    Reflect.deleteProperty(navigator, "clipboard");
+    return;
+  }
+  Object.defineProperty(navigator, "clipboard", descriptor);
+}
+
 describe("UpdateWindow", () => {
   it("renders a normal available update with collapsed patch notes and details", async () => {
     const api = apiFor();
@@ -155,6 +185,99 @@ describe("UpdateWindow", () => {
       screen.getByText("No update is available. You can check again at any time."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+    const patchNotes = screen.getByText("Patch notes").closest("details");
+    expect(patchNotes).not.toHaveAttribute("open");
+
+    fireEvent.click(screen.getByText("Patch notes"));
+
+    expect(screen.getByText("Plain-language patch notes.")).toBeInTheDocument();
+    expect(screen.getByText("Improves update readiness.")).toBeInTheDocument();
+  });
+
+  it("renders grouped current-release patch notes without repeating the summary", async () => {
+    const summary = "Repository intelligence headline.";
+    const api = apiFor({
+      report: preflight({
+        targetVersion: "0.2.9",
+        updateAvailable: false,
+        status: "current",
+        availabilityState: "current",
+        severity: "none",
+        patchNotes: {
+          collapsed: true,
+          summary,
+          bullets: ["Security hardening.", "Stability fixes."],
+          sections: [
+            { title: "High · Improvements", bullets: [summary] },
+            { title: "Normal · Improvements", bullets: ["Security hardening."] },
+            { title: "Normal · Fixes", bullets: ["Stability fixes."] },
+          ],
+          details: [],
+        },
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Keiko is up to date" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Patch notes"));
+
+    expect(screen.getByRole("heading", { name: "High · Improvements" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Normal · Improvements" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Normal · Fixes" })).toBeInTheDocument();
+    expect(screen.getAllByText(summary)).toHaveLength(1);
+    expect(screen.getByText("Security hardening.")).toBeInTheDocument();
+    expect(screen.getByText("Stability fixes.")).toBeInTheDocument();
+  });
+
+  it("renders a targetless degraded check as unavailable instead of target unknown", async () => {
+    const {
+      targetVersion: omittedTargetVersion,
+      patchNotes: omittedPatchNotes,
+      release: omittedRelease,
+      ...degradedReport
+    } = preflight({
+      currentVersion: "0.2.12",
+      updateAvailable: false,
+      status: "degraded",
+      availabilityState: "degraded",
+      severity: "low",
+      registryStatus: "unavailable",
+      releaseMetadataStatus: "not-needed",
+      userActionRequired: false,
+      blockers: [
+        {
+          code: "registry-unavailable",
+          message: "The update registry could not be reached.",
+          severity: "low",
+          userActionRequired: false,
+        },
+      ],
+      manualUpdateRequired: false,
+      oneClickEligible: false,
+      warnings: ["The update registry could not be reached."],
+    });
+    expect(omittedTargetVersion).toBe("0.2.10");
+    expect(omittedPatchNotes).toBeDefined();
+    expect(omittedRelease).toBeUndefined();
+    const api = apiFor({ report: degradedReport });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Update status unavailable" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Current 0.2.12; latest version could not be verified."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Update availability could not be verified. Check again when the registry is reachable.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Current 0.2.12 -> target unknown")).toBeNull();
+    expect(screen.queryByText("Keiko is up to date")).toBeNull();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
   });
 
   it("surfaces load errors and recovers through a manual check", async () => {
@@ -174,6 +297,94 @@ describe("UpdateWindow", () => {
     expect(api.checkPreflight).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps technical details focused on installer output instead of command previews", async () => {
+    const installLog = "updated @oscharko-dev/keiko to 0.2.10";
+
+    render(
+      <UpdateWindow
+        api={apiFor({
+          status: sessionStatus({
+            activeSession: session({
+              phase: "restart-required",
+              restartRequired: true,
+              cancelable: false,
+              message: "Restart Keiko to complete the update.",
+              logs: {
+                collapsed: true,
+                stdoutPreview: installLog,
+                stderrPreview: "",
+                stdoutBytes: installLog.length,
+                stderrBytes: 0,
+                truncated: false,
+              },
+            }),
+          }),
+        })}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Restart required" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Technical details and logs"));
+
+    expect(screen.queryByText("Command preview")).toBeNull();
+    expect(screen.queryByText("npm install -g @oscharko-dev/keiko@0.2.10")).toBeNull();
+    expect(screen.getByText("Installer output")).toBeInTheDocument();
+    expect(screen.getByText(installLog).closest(".upd-log-preview")).toBeInTheDocument();
+  });
+
+  it("does not report a degraded manual check as no newer update available", async () => {
+    const {
+      targetVersion: omittedTargetVersion,
+      patchNotes: omittedPatchNotes,
+      release: omittedRelease,
+      ...degradedReport
+    } = preflight({
+      currentVersion: "0.2.12",
+      updateAvailable: false,
+      status: "degraded",
+      availabilityState: "degraded",
+      severity: "low",
+      registryStatus: "unavailable",
+      releaseMetadataStatus: "not-needed",
+      blockers: [
+        {
+          code: "registry-unavailable",
+          message: "The update registry could not be reached.",
+          severity: "low",
+          userActionRequired: false,
+        },
+      ],
+      oneClickEligible: false,
+      warnings: ["The update registry could not be reached."],
+    });
+    expect(omittedTargetVersion).toBe("0.2.10");
+    expect(omittedPatchNotes).toBeDefined();
+    expect(omittedRelease).toBeUndefined();
+    const api = {
+      ...apiFor({
+        report: preflight({
+          targetVersion: "0.2.12",
+          currentVersion: "0.2.12",
+          updateAvailable: false,
+          status: "current",
+          availabilityState: "current",
+          severity: "none",
+        }),
+      }),
+      checkPreflight: vi.fn(async () => degradedReport),
+    };
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Keiko is up to date" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+
+    expect(
+      await screen.findByText("Checked just now. Update status could not be verified."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Checked just now. No newer update is available.")).toBeNull();
+  });
+
   it("shows pre-install remediation as a notice instead of a runnable action", async () => {
     const api = apiFor({
       report: preflight({
@@ -181,6 +392,14 @@ describe("UpdateWindow", () => {
         manualUpdateRequired: true,
         oneClickEligible: false,
         userActionRequired: true,
+        release: {
+          source: "github-release",
+          tag: "v0.2.10",
+          title: "Keiko 0.2.10",
+          summary: "Critical packaging update.",
+          notes: ["Critical packaging update."],
+          url: "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
+        },
         impact: {
           entries: [],
           releaseNoteBullets: ["Critical packaging update."],
@@ -237,6 +456,8 @@ describe("UpdateWindow", () => {
         ],
       }),
     });
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = setClipboard(writeText);
 
     render(<UpdateWindow api={api} />);
 
@@ -248,7 +469,15 @@ describe("UpdateWindow", () => {
         "Automatic install is unavailable. Follow the approved manual instructions, restart Keiko, then check again.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Show instructions" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Show instructions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Hide instructions" })).toBeNull();
+    const releaseNotes = screen.getByRole("link", { name: "Open release notes" });
+    expect(releaseNotes).toHaveAttribute(
+      "href",
+      "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
+    );
+    expect(releaseNotes).toHaveAttribute("target", "_blank");
+    expect(releaseNotes).toHaveAttribute("rel", "noopener noreferrer");
     expect(screen.getByText("Manual update path")).toBeInTheDocument();
     expect(
       screen.getByText(
@@ -260,18 +489,45 @@ describe("UpdateWindow", () => {
     expect(commands).toBeInTheDocument();
     expect(commands).not.toHaveAttribute("open");
 
-    fireEvent.click(screen.getByRole("button", { name: "Show instructions" }));
+    fireEvent.click(screen.getByText("Manual update instructions"));
     await waitFor(() => {
       expect(commands).toHaveAttribute("open");
     });
     expect(screen.getByText("Run the approved package update outside Keiko.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Package-manager commands")).toBeInTheDocument();
     expect(
-      screen.queryByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10"),
-    ).toBeNull();
+      screen
+        .getByText("Run the approved package update outside Keiko.")
+        .closest(".upd-manual-commands-body"),
+    ).toBeInTheDocument();
+    const npmTargetCommand = "npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10";
+    const yarnTargetCommand = "yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.10";
+    expect(screen.getByText("npm")).toBeInTheDocument();
+    expect(screen.getByText("Yarn")).toBeInTheDocument();
     expect(
-      screen.queryByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.10"),
+      screen.queryByText("npm install --global --ignore-scripts @oscharko-dev/keiko@latest"),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: /Copy .* command/u })).toBeNull();
+    expect(screen.getByText(npmTargetCommand)).toBeInTheDocument();
+    expect(
+      screen.queryByText("yarn global add --ignore-scripts @oscharko-dev/keiko@latest"),
+    ).toBeNull();
+    expect(screen.getByText(yarnTargetCommand)).toBeInTheDocument();
+
+    const npmCopyButton = screen.getByRole("button", { name: "Copy npm command" });
+    fireEvent.click(npmCopyButton);
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(npmTargetCommand);
+    });
+    expect(npmCopyButton).toHaveAttribute("data-copied", "true");
+    expect(npmCopyButton).toHaveAttribute("title", "Copied");
+
+    const yarnCopyButton = screen.getByRole("button", { name: "Copy Yarn command" });
+    fireEvent.click(yarnCopyButton);
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(yarnTargetCommand);
+    });
+    expect(yarnCopyButton).toHaveAttribute("data-copied", "true");
+    expect(screen.queryByText("Copied")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await waitFor(() => {
@@ -292,6 +548,89 @@ describe("UpdateWindow", () => {
     expect(screen.getByText("Vectors need reindexing.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run action" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Defer" })).toBeNull();
+    restoreClipboard(clipboardDescriptor);
+  });
+
+  it("narrows manual package commands to the detected package manager", async () => {
+    const api = apiFor({
+      report: preflight({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+      }),
+      status: sessionStatus({
+        installMode: {
+          schemaVersion: "1",
+          status: "supported",
+          packageName: "@oscharko-dev/keiko",
+          packageManager: "npm",
+          installRoot: "/usr/local/lib/node_modules/@oscharko-dev/keiko",
+          commandPreview: {
+            executable: "npm",
+            args: [
+              "install",
+              "--global",
+              "--ignore-scripts",
+              "@oscharko-dev/keiko@<target-version>",
+            ],
+            label: "npm install --global --ignore-scripts @oscharko-dev/keiko@<target-version>",
+          },
+        },
+        policy: {
+          enabled: false,
+          source: "environment",
+          reason: "Update mutation is disabled in this environment.",
+        },
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Manual update instructions"));
+
+    expect(screen.getByText("npm")).toBeInTheDocument();
+    expect(
+      screen.getByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("yarn global add --ignore-scripts @oscharko-dev/keiko@latest"),
+    ).toBeNull();
+    expect(screen.queryByText("Yarn")).toBeNull();
+  });
+
+  it("shows immediate command-copy feedback while clipboard completion is pending", async () => {
+    const api = apiFor({
+      report: preflight({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+      }),
+    });
+    const writeText = vi
+      .fn<(text: string) => Promise<void>>()
+      .mockReturnValue(new Promise(() => {}));
+    const clipboardDescriptor = setClipboard(writeText);
+
+    try {
+      render(<UpdateWindow api={api} />);
+
+      expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+      fireEvent.click(screen.getByText("Manual update instructions"));
+
+      const npmCopyButton = screen.getByRole("button", { name: "Copy npm command" });
+      fireEvent.click(npmCopyButton);
+
+      expect(writeText).toHaveBeenCalledWith(
+        "npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.10",
+      );
+      expect(npmCopyButton).toHaveAttribute("data-pressed", "true");
+      expect(npmCopyButton).toHaveAttribute("data-copied", "false");
+      expect(npmCopyButton).toHaveAttribute("title", "Copy npm command");
+      expect(screen.queryByText("Copied")).toBeNull();
+    } finally {
+      restoreClipboard(clipboardDescriptor);
+    }
   });
 
   it("shows update installed when manual check verifies the target version is running", async () => {
@@ -613,7 +952,13 @@ describe("UpdateWindow", () => {
     await waitFor(() => {
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     });
-    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        phase === "restart-required"
+          ? "Keiko 0.2.10 is installed. Finish with one restart."
+          : message,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("clarifies restart verification does not restart Keiko", async () => {
@@ -631,15 +976,144 @@ describe("UpdateWindow", () => {
     render(<UpdateWindow api={api} />);
 
     const button = await screen.findByRole("button", { name: "Verify restart" });
-    const help = screen.getByText(
-      "This does not restart Keiko. Use your normal restart command first, then verify here.",
-    );
+    const help = screen.getByText("When Keiko opens again, click Verify restart.");
+    const restartDetails = screen
+      .getAllByText("Restart instructions")
+      .map((entry) => entry.closest("details"))
+      .find((entry): entry is HTMLDetailsElement => entry !== null);
+    if (restartDetails === undefined) throw new Error("restart details panel not found");
+    expect(
+      screen.getByText("Restart and verification are needed to finish the update."),
+    ).toBeInTheDocument();
+    expect(restartDetails).toHaveAttribute("open");
+    expect(screen.getByText("Restart instructions")).toBeInTheDocument();
+    expect(screen.queryByText("Open for instructions.")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Keiko 0.2.10 is installed. Finish with one restart."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Copy the command below, paste it into your terminal, and press Enter."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Restart Keiko")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Restart Keiko outside this window, then verify that the new version is running.",
+        "keiko restart --port 1990 --host 127.0.0.1 --state-dir '/tmp/keiko update state'",
       ),
     ).toBeInTheDocument();
+    expect(restartDetails).not.toContainElement(button);
+    expect(screen.queryByText("Foreground terminal")).not.toBeInTheDocument();
+    expect(screen.queryByText("keiko ui")).not.toBeInTheDocument();
     expect(button).toHaveAttribute("aria-describedby", help.id);
+  });
+
+  it("falls back to generic restart guidance when no targeted restart command is available", async () => {
+    const api = apiFor({
+      status: sessionStatus({
+        activeSession: session({
+          phase: "restart-required",
+          restartCommandPreview: undefined,
+          restartRequired: true,
+          cancelable: false,
+          message: "Restart Keiko to complete the update.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Restart required" })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Restart Keiko from the same launcher you used before, then return here and verify.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Restart Keiko")).not.toBeInTheDocument();
+    expect(screen.queryByText(/keiko restart/u)).not.toBeInTheDocument();
+  });
+
+  it("keeps restart mismatch in the restart instructions flow", async () => {
+    const api = apiFor({
+      status: sessionStatus({
+        activeSession: session({
+          phase: "restart-required",
+          failureReason: "restart-version-mismatch",
+          restartRequired: true,
+          cancelable: false,
+          message:
+            "Restart not detected yet. Run the restart command, then try Verify restart again.",
+        }),
+      }),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Restart required" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Verify restart" })).toBeInTheDocument();
+    const restartDetails = screen.getByText("Restart instructions").closest("details");
+    const mismatchNotice = screen.getByText(
+      "Restart not detected yet. Run the restart command, then try Verify restart again.",
+    );
+    expect(restartDetails).toBeInTheDocument();
+    expect(mismatchNotice.closest(".upd-restart-verification-feedback")).toBeInTheDocument();
+    expect(restartDetails).not.toContainElement(mismatchNotice);
+    expect(
+      screen.getByText("Keiko 0.2.10 is installed. Finish with one restart."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "keiko restart --port 1990 --host 127.0.0.1 --state-dir '/tmp/keiko update state'",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Update failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Install update")).not.toBeInTheDocument();
+  });
+
+  it("keeps restart verification mismatches out of the install flow after clicking verify", async () => {
+    const pending = session({
+      phase: "restart-required",
+      restartRequired: true,
+      cancelable: false,
+      message: "Restart Keiko to complete the update.",
+    });
+    const mismatch = session({
+      phase: "restart-required",
+      failureReason: "restart-version-mismatch",
+      restartRequired: true,
+      cancelable: false,
+      message: "Restart not detected yet. Run the restart command, then try Verify restart again.",
+    });
+    const pendingStatus = sessionStatus({ activeSession: pending });
+    const mismatchStatus = sessionStatus({ activeSession: mismatch });
+    const api = {
+      ...apiFor({ status: pendingStatus }),
+      fetchSessionStatus: vi.fn(async () => pendingStatus),
+      verifyRestart: vi.fn(async () => mismatch),
+    };
+    api.fetchSessionStatus.mockResolvedValueOnce(pendingStatus).mockResolvedValue(mismatchStatus);
+
+    render(<UpdateWindow api={api} />);
+
+    const button = await screen.findByRole("button", { name: "Verify restart" });
+    fireEvent.click(button);
+
+    await waitFor(() => {
+      expect(api.verifyRestart).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
+    });
+    expect(
+      await screen.findByText(
+        "Restart not detected yet. Run the restart command, then try Verify restart again.",
+      ),
+    ).toBeInTheDocument();
+    const restartDetails = screen.getByText("Restart instructions").closest("details");
+    const mismatchNotice = screen.getByText(
+      "Restart not detected yet. Run the restart command, then try Verify restart again.",
+    );
+    expect(restartDetails).toBeInTheDocument();
+    expect(mismatchNotice.closest(".upd-restart-verification-feedback")).toBeInTheDocument();
+    expect(restartDetails).not.toContainElement(mismatchNotice);
+    expect(screen.getByRole("button", { name: "Verify restart" })).toBeEnabled();
+    expect(screen.queryByText("Update failed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Install update")).not.toBeInTheDocument();
   });
 
   it("uses installed-state copy and preserves patch notes after a targetless current check", async () => {
