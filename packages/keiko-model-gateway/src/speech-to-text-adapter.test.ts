@@ -106,6 +106,26 @@ describe("requestSpeechToText", () => {
     expect(body).toContain("\r\n\r\nde\r\n");
   });
 
+  it("includes an optional domain-keyword prompt field in the multipart body", async () => {
+    let body = "";
+    const fetchImpl = mockFetch(async (_url, init) => {
+      body = await bodyToText(init);
+      return ok({ text: "hallo" });
+    });
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/ogg",
+      prompt: "Keiko, Repository",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(body).toContain('name="prompt"');
+    expect(body).toContain("\r\n\r\nKeiko, Repository\r\n");
+  });
+
   it("supports Azure OpenAI deployment endpoints with a separate api-version", async () => {
     let seenUrl = "";
     let seenHeader: string | null = null;

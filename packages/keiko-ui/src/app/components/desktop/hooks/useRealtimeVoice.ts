@@ -32,6 +32,11 @@ import {
   type VoiceTurnManagerEngine,
   type VoiceTurnSnapshot,
 } from "./voice-turn-manager";
+import {
+  createVoiceLatencyObserver,
+  type VoiceLatencyObserver,
+  type VoiceLatencyObserverSink,
+} from "./voice-latency-observer";
 
 // A transient WebRTC `disconnected` state is recoverable (a brief network blip, an ICE restart): the
 // connection often returns to `connected` on its own. Tearing the session down the instant it appears
@@ -42,7 +47,14 @@ const MAX_REALTIME_RECONNECT_ATTEMPTS = 2;
 // After re-enabling a disabled microphone track, browsers may need a short re-arm window before
 // capture/VAD is reliably live again. Keep the UI from presenting a stale listening state during it.
 const INPUT_UNMUTE_REARM_MS = 300;
-const SESSION_READY_WARMUP_MS = 300;
+// Minimal EC/NS/AGC settling floor before the session is presented as ready. It is armed at start()
+// and runs IN PARALLEL with the SDP/ICE/data-channel negotiation, so on a warm path (negotiation
+// takes longer than this floor, the common case) it adds zero latency to time-to-connected; it only
+// caps how early a super-fast reconnect can flip to "connected". Kept small because verbatim start-of-
+// utterance capture is already guaranteed server-side by the realtime turn_detection prefix_padding
+// (300ms of pre-onset audio). The VoiceLatencyObserver marks (rtc_connected/session_updated/warmup)
+// give the data to drive this to 0 if the floor proves unnecessary in the field.
+const SESSION_READY_WARMUP_MS = 150;
 const GROUNDING_TOOL_NAME = "search_keiko_grounding";
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
 const DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS = 300;
@@ -87,9 +99,54 @@ function realtimeGroundingToolDefinition(): Record<string, unknown> {
   };
 }
 
+// Turn-detection profiles (P6). Endpointing must adapt to the acoustic path: a close-mic headset can
+// end a turn far sooner than a laptop mic bleeding the assistant's own voice, and a noisy room needs a
+// longer tail so between-word pauses don't cut the speaker off. `semantic` switches to the provider's
+// semantic VAD, which decides end-of-turn from linguistic cues rather than raw silence and is markedly
+// less likely to truncate an unfinished utterance ("ähm…") — the exact "the end wasn't understood"
+// complaint — at the cost of requiring provider support. `balanced` reproduces the prior behavior
+// byte-for-byte, so it stays the safe default and no session changes endpointing without an explicit opt-in.
+export type RealtimeTurnDetectionProfile = "balanced" | "headset" | "laptop" | "noisy" | "semantic";
+
+export const DEFAULT_REALTIME_TURN_DETECTION_PROFILE: RealtimeTurnDetectionProfile = "balanced";
+
+// A total table: adding a profile without a builder is a compile error. Each builder returns a FRESH
+// object so the caller can safely layer interrupt_response / create_response onto it.
+const TURN_DETECTION_PROFILE_BUILDERS: Record<
+  RealtimeTurnDetectionProfile,
+  () => Record<string, unknown>
+> = {
+  balanced: () => ({
+    type: "server_vad",
+    threshold: DEFAULT_REALTIME_VAD_THRESHOLD,
+    prefix_padding_ms: DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS,
+    silence_duration_ms: DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS,
+  }),
+  headset: () => ({
+    type: "server_vad",
+    threshold: 0.4,
+    prefix_padding_ms: 200,
+    silence_duration_ms: 420,
+  }),
+  laptop: () => ({
+    type: "server_vad",
+    threshold: 0.55,
+    prefix_padding_ms: 300,
+    silence_duration_ms: 620,
+  }),
+  noisy: () => ({
+    type: "server_vad",
+    threshold: 0.66,
+    prefix_padding_ms: 300,
+    silence_duration_ms: 760,
+  }),
+  semantic: () => ({ type: "semantic_vad", eagerness: "auto" }),
+};
+
 function buildRealtimeSessionUpdate(
   groundingActive: boolean,
   groundingToolActive: boolean,
+  turnDetectionProfile: RealtimeTurnDetectionProfile = DEFAULT_REALTIME_TURN_DETECTION_PROFILE,
 ): Record<string, unknown> {
   const instructions = !groundingActive
     ? REALTIME_CLIENT_SPOKEN_INSTRUCTIONS
@@ -97,10 +154,7 @@ function buildRealtimeSessionUpdate(
       ? `${REALTIME_CLIENT_SPOKEN_INSTRUCTIONS}${REALTIME_CLIENT_GROUNDED_TOOL_INSTRUCTIONS}`
       : `${REALTIME_CLIENT_SPOKEN_INSTRUCTIONS}${REALTIME_CLIENT_GROUNDED_FALLBACK_INSTRUCTIONS}`;
   const turnDetection: Record<string, unknown> = {
-    type: "server_vad",
-    threshold: DEFAULT_REALTIME_VAD_THRESHOLD,
-    prefix_padding_ms: DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS,
-    silence_duration_ms: DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS,
+    ...TURN_DETECTION_PROFILE_BUILDERS[turnDetectionProfile](),
     interrupt_response: true,
   };
   if (groundingActive && !groundingToolActive) {
@@ -119,7 +173,7 @@ function buildRealtimeSessionUpdate(
   };
   if (groundingToolActive) {
     session.tools = [realtimeGroundingToolDefinition()];
-    session.tool_choice = { type: "function", function: { name: GROUNDING_TOOL_NAME } };
+    session.tool_choice = "auto";
   }
   return { type: "session.update", session };
 }
@@ -263,6 +317,13 @@ export interface UseRealtimeVoiceOptions {
   // sessions without provider tools still retrieve through the BFF from the committed user transcript.
   readonly groundingToolActive?: boolean | undefined;
   readonly memoryContextText?: string | undefined;
+  // Turn-detection endpointing profile applied via session.update (P6). Adapts end-of-turn detection to
+  // the acoustic path (headset/laptop/noisy) or switches to provider semantic VAD. Undefined keeps the
+  // safe `balanced` server_vad default, so an unset caller never changes endpointing behavior.
+  readonly turnDetectionProfile?: RealtimeTurnDetectionProfile | undefined;
+  // Optional content-free latency sink (Plan §1). Receives only mark enum literals and millisecond
+  // deltas across connect + turn-taking — never SDP, transcript, or audio.
+  readonly latencySink?: VoiceLatencyObserverSink | undefined;
   // Test seams: inject fake factories. Production uses the browser transport and the BFF client.
   readonly createTransport?: (() => VoiceRtcTransport) | undefined;
   readonly createControl?: (() => VoiceControlClient) | undefined;
@@ -344,6 +405,8 @@ export interface RealtimeVoiceController {
   readonly speaking: boolean;
   readonly canInterrupt: boolean;
   readonly muted: boolean;
+  // True while a grounded retrieval is in flight for the current turn (drives the 'checking-sources' aura).
+  readonly retrieving: boolean;
   readonly error:
     { readonly reason: RealtimeVoiceErrorReason; readonly message: string } | undefined;
   readonly start: () => void;
@@ -482,6 +545,10 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   );
   const [muted, setMuted] = useState(false);
   const [inputRearming, setInputRearming] = useState(false);
+  // True while a grounded retrieval is in flight for the current turn — drives the 'checking-sources'
+  // aura so the user knows Keiko is consulting connected sources (a real latency contributor), not stuck.
+  const [retrieving, setRetrieving] = useState(false);
+  const retrievalCountRef = useRef(0);
 
   const transportFactory = options.createTransport ?? createBrowserVoiceRtcTransport;
   // Read the latest persona at start() time without churning the control factory identity (which is a
@@ -507,6 +574,23 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   const groundingToolActiveRef = useRef(optionsGroundingToolActive(options));
   const sessionGroundingToolActiveRef = useRef(optionsGroundingToolActive(options));
   const memoryContextTextRef = useRef(options.memoryContextText);
+  // Latest requested profile, plus the value frozen for the current session at start() (so a mid-session
+  // option change never rewrites the live session's endpointing behind the user's back).
+  const turnDetectionProfileRef = useRef(options.turnDetectionProfile);
+  const sessionTurnDetectionProfileRef = useRef(options.turnDetectionProfile);
+  // Content-free latency instrumentation. Read via `latencyRef.current` at call sites so the many
+  // memoized callbacks below need no extra dependency; the sink proxy forwards the latest option.
+  const latencySinkRef = useRef(options.latencySink);
+  latencySinkRef.current = options.latencySink;
+  const latencyRef = useRef<VoiceLatencyObserver | undefined>(undefined);
+  if (latencyRef.current === undefined) {
+    latencyRef.current = createVoiceLatencyObserver({
+      sink: {
+        onMark: (sample) => latencySinkRef.current?.onMark?.(sample),
+        onLeg: (leg) => latencySinkRef.current?.onLeg?.(leg),
+      },
+    });
+  }
   onVoiceTurnCommittedRef.current = options.onVoiceTurnCommitted;
   onUserTranscriptCommittedRef.current = options.onUserTranscriptCommitted;
   onAssistantTranscriptCommittedRef.current = options.onAssistantTranscriptCommitted;
@@ -514,10 +598,14 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
   groundingActiveRef.current = options.groundingActive === true;
   groundingToolActiveRef.current = optionsGroundingToolActive(options);
   memoryContextTextRef.current = options.memoryContextText;
+  turnDetectionProfileRef.current = options.turnDetectionProfile;
 
   const sessionRef = useRef<VoiceRtcSession | undefined>(undefined);
   const controlRef = useRef<VoiceControlClient | undefined>(undefined);
   const audioSinkRef = useRef<RealtimeAudioSink | undefined>(undefined);
+  // True while the assistant output sink is ducked (muted) after a barge-in, so the next
+  // assistant-output-start lifts the duck exactly once and never fights a future output-mute control.
+  const outputDuckedRef = useRef(false);
   const startupAbortRef = useRef<AbortController | undefined>(undefined);
   const startRef = useRef<(() => void) | undefined>(undefined);
   const sessionReadyWarmupTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -557,6 +645,16 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         result.effects.includes("stop-playback") ||
         result.effects.includes("cancel-speech-generation")
       ) {
+        // Duck the assistant output the instant a barge-in is detected. The WebRTC jitter buffer holds
+        // ~150–400ms of already-decoded assistant audio that keeps playing until the provider honours
+        // response.cancel AND the buffer drains — long enough that the dialogue feels non-interruptible.
+        // Muting the local sink silences that tail immediately; the next assistant-output-start un-ducks
+        // it. response.cancel still tears down provider generation, so this only closes the perceptual gap.
+        if (result.effects.includes("stop-playback")) {
+          audioSinkRef.current?.setMuted?.(true);
+          outputDuckedRef.current = true;
+        }
+        latencyRef.current?.mark("interrupt_sent");
         sessionRef.current?.sendDataChannelEvent?.({ type: "response.cancel" });
       }
     },
@@ -568,6 +666,25 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       controller.abort();
     }
     groundedToolAbortControllersRef.current.clear();
+  }, []);
+
+  // Reference-counted grounded-retrieval indicator: overlapping calls keep 'checking-sources' lit until
+  // the last one settles. setState setters are stable, so these callbacks need no dependencies.
+  const beginRetrieval = useCallback((): void => {
+    retrievalCountRef.current += 1;
+    if (mountedRef.current) {
+      setRetrieving(true);
+    }
+  }, []);
+  const endRetrieval = useCallback((): void => {
+    retrievalCountRef.current = Math.max(0, retrievalCountRef.current - 1);
+    if (mountedRef.current && retrievalCountRef.current === 0) {
+      setRetrieving(false);
+    }
+  }, []);
+  const resetRetrieval = useCallback((): void => {
+    retrievalCountRef.current = 0;
+    setRetrieving(false);
   }, []);
 
   const sendMemoryContextUpdate = useCallback((text: string | undefined): void => {
@@ -605,6 +722,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     reconnectAttemptsRef.current = 0;
     applyTurnSignal({ kind: "recovered" });
     dispatch({ type: "connected" });
+    latencyRef.current?.mark("session_ready");
     sendMemoryContextUpdate(memoryContextTextRef.current);
   }, [applyTurnSignal, sendMemoryContextUpdate]);
 
@@ -617,6 +735,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       buildRealtimeSessionUpdate(
         sessionGroundingActiveRef.current,
         sessionGroundingToolActiveRef.current,
+        sessionTurnDetectionProfileRef.current ?? DEFAULT_REALTIME_TURN_DETECTION_PROFILE,
       ),
     );
     if (accepted === false) {
@@ -646,7 +765,8 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       controller.abort();
     }
     groundedToolAbortControllersRef.current.clear();
-  }, []);
+    resetRetrieval();
+  }, [resetRetrieval]);
 
   const resetSessionReadiness = useCallback((): void => {
     if (sessionReadyWarmupTimerRef.current !== undefined) {
@@ -799,6 +919,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         return;
       }
       turn.clientGroundingInFlight = true;
+      beginRetrieval();
       sessionRef.current?.sendDataChannelEvent?.({ type: "response.cancel" });
       applyTurnSignal({ kind: "user-end-of-turn" });
       const callId = `client-turn-${String(turn.seq)}`;
@@ -839,10 +960,11 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
         })
         .finally(() => {
           turn.clientGroundingInFlight = false;
+          endRetrieval();
           groundedToolAbortControllersRef.current.delete(executionKey);
         });
     },
-    [applyTurnSignal, sendClientGroundedResponse],
+    [applyTurnSignal, beginRetrieval, endRetrieval, sendClientGroundedResponse],
   );
 
   const commitUserTranscript = useCallback(
@@ -972,6 +1094,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       }
       const controller = new AbortController();
       groundedToolAbortControllersRef.current.set(executionKey, controller);
+      beginRetrieval();
       void tool(
         {
           callId: event.callId,
@@ -1008,11 +1131,14 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           });
         })
         .finally(() => {
+          endRetrieval();
           groundedToolAbortControllersRef.current.delete(executionKey);
         });
     },
     [
       applyTurnSignal,
+      beginRetrieval,
+      endRetrieval,
       ensureVoiceTurn,
       flushVoiceTurn,
       promoteUserTranscriptFallback,
@@ -1101,9 +1227,11 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
             ...sessionReadinessRef.current,
             sessionUpdated: true,
           };
+          latencyRef.current?.mark("session_updated");
           maybeDispatchConnected();
           return;
         case "user-speech-start":
+          latencyRef.current?.mark("user_speech_start");
           abortGroundedToolCalls();
           commitBufferedAssistantTranscript(undefined);
           flushVoiceTurn({ allowAssistantFallback: true });
@@ -1111,6 +1239,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           applyTurnSignal({ kind: "user-speech-start" });
           return;
         case "user-speech-stop":
+          latencyRef.current?.mark("vad_stop");
           applyTurnSignal({ kind: "user-end-of-turn" });
           return;
         case "user-transcript-committed":
@@ -1128,6 +1257,13 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           }
           return;
         case "assistant-output-start":
+          latencyRef.current?.mark("first_assistant_audio");
+          // A fresh assistant turn is producing audio — lift any barge-in duck so the new reply is
+          // audible again. Guarded so it only touches the sink when a duck is actually outstanding.
+          if (outputDuckedRef.current) {
+            audioSinkRef.current?.setMuted?.(false);
+            outputDuckedRef.current = false;
+          }
           applyTurnSignal({ kind: "assistant-speech-start" });
           return;
         case "assistant-output-stop":
@@ -1155,6 +1291,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
             }
           }
           if (event.status === "cancelled") {
+            latencyRef.current?.mark("interrupt_ack");
             commitBufferedAssistantTranscript(event.responseId);
             flushVoiceTurn({ allowAssistantFallback: true });
             applyTurnSignal({ kind: "assistant-speech-end", how: "stopped" });
@@ -1171,6 +1308,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           applyTurnSignal({ kind: "assistant-speech-end", how: "completed" });
           return;
         case "response-cancelled":
+          latencyRef.current?.mark("interrupt_ack");
           {
             const turn = promoteUserTranscriptFallback();
             if (turn !== undefined) {
@@ -1254,6 +1392,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
       setInputRearming(false);
       audioSinkRef.current?.release();
       audioSinkRef.current = undefined;
+      outputDuckedRef.current = false;
       sessionRef.current?.close();
       sessionRef.current = undefined;
       controlRef.current?.close();
@@ -1294,10 +1433,13 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     if (sessionRef.current !== undefined) {
       return;
     }
+    latencyRef.current?.reset();
+    latencyRef.current?.mark("mic_click");
     dispatch({ type: "requesting" });
     resetSessionReadiness();
     sessionGroundingActiveRef.current = groundingActiveRef.current;
     sessionGroundingToolActiveRef.current = groundingToolActiveRef.current;
+    sessionTurnDetectionProfileRef.current = turnDetectionProfileRef.current;
     const startup = new AbortController();
     startupAbortRef.current = startup;
     const transport = transportFactory();
@@ -1313,6 +1455,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           return;
         }
         sessionRef.current = session;
+        latencyRef.current?.mark("rtc_offer_created");
         session.setInputMuted?.(muted);
         dispatch({ type: "negotiating" });
 
@@ -1353,6 +1496,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
                 ...sessionReadinessRef.current,
                 dataChannelOpen: true,
               };
+              latencyRef.current?.mark("datachannel_open");
               sendSessionUpdate();
               maybeDispatchConnected();
               return;
@@ -1387,6 +1531,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
               ...sessionReadinessRef.current,
               rtcConnected: true,
             };
+            latencyRef.current?.mark("rtc_connected");
             applyTurnSignal({ kind: "recovered" });
             maybeDispatchConnected();
           } else if (rtcState === "failed" || rtcState === "closed") {
@@ -1430,6 +1575,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
           return;
         }
         await session.applyAnswer(answerSdp);
+        latencyRef.current?.mark("sdp_answer");
         if (!mountedRef.current) {
           session.close();
           return;
@@ -1519,6 +1665,7 @@ export function useRealtimeVoice(options: UseRealtimeVoiceOptions): RealtimeVoic
     speaking: state.phase === "connected" && turnSnapshot.state === "speaking",
     canInterrupt: state.phase === "connected" && turnSnapshot.floorHolder === "assistant",
     muted,
+    retrieving,
     start,
     stop,
     retry,

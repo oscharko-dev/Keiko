@@ -1,6 +1,6 @@
 {
   "issue": "#1405",
-  "harness": "playwright.issue-1405-human-loop.config.ts",
+  "harness": "tests/e2e/config/playwright.issue-1405-human-loop.config.ts",
   "productCss": "packages/keiko-ui/src/app/globals.css",
   "generatedAt": "2026-07-01T21:15:36.130Z",
   "artifacts": [

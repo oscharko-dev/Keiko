@@ -2974,6 +2974,30 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   position: relative;
   isolation: isolate;
 }
+.chatw:has(.cmp-box[data-voice-aura-state="listening"]) {
+  --voice-aura-core: oklch(0.76 0.12 156);
+}
+.chatw:has(.cmp-box[data-voice-aura-state="thinking"]) {
+  --voice-aura-core: oklch(0.78 0.13 82);
+}
+.chatw:has(.cmp-box[data-voice-aura-state="speaking"]) {
+  --voice-aura-core: oklch(0.73 0.14 230);
+}
+.chatw:has(.cmp-box[data-voice-aura-state="muted"]) {
+  --voice-aura-core: oklch(0.7 0.03 255);
+}
+.chatw:has(.cmp-box[data-voice-aura-state="interrupted"]),
+.chatw:has(.cmp-box[data-voice-aura-state="error"]) {
+  --voice-aura-core: oklch(0.68 0.18 28);
+}
+.chatw:has(.cmp-box[data-voice-aura-intensity="medium"]) {
+  --voice-aura-composer-opacity: 0.26;
+  --voice-aura-edge-mix: 34%;
+}
+.chatw:has(.cmp-box[data-voice-aura-intensity="high"]) {
+  --voice-aura-composer-opacity: 0.34;
+  --voice-aura-edge-mix: 42%;
+}
 .chatw:has(.cmp-box[data-voice-aura="on"])::before {
   display: none;
   content: none;
@@ -22529,6 +22553,38 @@ button.figma-view-preview {
   align-items: center;
   gap: 3px;
 }
+.cmp-voice-level {
+  display: inline-grid;
+  grid-auto-flow: column;
+  align-items: end;
+  gap: 2px;
+  height: 12px;
+}
+.cmp-voice-level-bar {
+  width: 3px;
+  min-height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.28;
+}
+.cmp-voice-level-bar:nth-child(1) {
+  height: 4px;
+}
+.cmp-voice-level-bar:nth-child(2) {
+  height: 7px;
+}
+.cmp-voice-level-bar:nth-child(3) {
+  height: 10px;
+}
+.cmp-voice-level-bar:nth-child(4) {
+  height: 8px;
+}
+.cmp-voice-level-bar:nth-child(5) {
+  height: 12px;
+}
+.cmp-voice-level-bar[data-active="true"] {
+  opacity: 1;
+}
 /* WCAG 2.3.3 — the recording dot is solid (non-animated) by default; it pulses only under
    prefers-reduced-motion: no-preference. The solid danger color carries the meaning either way. */
 .cmp-voice-dot {
@@ -22558,6 +22614,15 @@ button.figma-view-preview {
   background: var(--surface-secondary);
   color: var(--text-primary);
   font-size: 14px;
+}
+.cmp-voice-live {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+}
+.cmp-voice-live .cmp-voice-level {
+  color: var(--feedback-danger);
 }
 .cmp-voice-connected-line {
   display: flex;

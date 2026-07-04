@@ -59,13 +59,25 @@ function fakeMediaInit(mode: "grant" | "deny"): string {
         static isTypeSupported() { return true; }
         constructor() { this.state = "inactive"; this.mimeType = "audio/webm"; this._l = {}; }
         addEventListener(type, cb) { (this._l[type] ||= []).push(cb); }
-        start() { this.state = "recording"; }
+        emit(type, event = {}) {
+          for (const cb of this._l[type] || []) cb(event);
+        }
+        start() {
+          this.state = "recording";
+          queueMicrotask(() => this.emit("start"));
+        }
+        requestData() {
+          if (this.state !== "recording") return;
+          this.emit("dataavailable", {
+            data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
+          });
+        }
         stop() {
           this.state = "inactive";
-          for (const cb of this._l["dataavailable"] || []) {
-            cb({ data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }) });
-          }
-          for (const cb of this._l["stop"] || []) cb({});
+          this.emit("dataavailable", {
+            data: new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }),
+          });
+          this.emit("stop");
         }
       }
       window.MediaRecorder = FakeMediaRecorder;

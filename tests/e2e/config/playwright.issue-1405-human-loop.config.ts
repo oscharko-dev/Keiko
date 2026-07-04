@@ -1,7 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
+import { join } from "node:path";
+
+const root = process.cwd();
 
 export default defineConfig({
-  testDir: "tests/e2e",
+  testDir: join(root, "tests", "e2e"),
   testMatch: "human-loop-1405.spec.ts",
   fullyParallel: false,
   workers: 1,
