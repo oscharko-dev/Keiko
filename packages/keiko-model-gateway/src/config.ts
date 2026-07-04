@@ -18,6 +18,7 @@ import {
   modelSupportsSpeechOutput,
 } from "@oscharko-dev/keiko-contracts";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
+import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
 import type {
   CircuitBreakerConfig,
   CostClass,
@@ -103,7 +104,7 @@ export interface SafeRerankerConfig {
 export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
-  readonly capabilities?: readonly ModelCapability[] | undefined;
+  readonly capabilities?: readonly SafeModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
   readonly reranker?: SafeRerankerConfig | undefined;
 }
@@ -1546,12 +1547,12 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
       retryBaseDelayMs: provider.retryBaseDelayMs,
     })),
     circuitBreaker: config.circuitBreaker,
-    // INVARIANT (ADR-0019 / ADR-0094 D2): `ModelCapability` is the wire-tier, browser-serialisable
-    // shape and MUST NEVER carry a secret — all credential-/provider-sensitive data (apiKey, baseUrl,
-    // voiceProfiles voice ids) lives on `ModelProviderConfig`, which the allowlisted provider
-    // projection above drops. Capabilities are therefore passed through un-projected. Any future
-    // sensitive field must go on `ModelProviderConfig`, never here, or this projection must change.
-    ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
+    // INVARIANT (ADR-0019 / ADR-0094 D2): provider-sensitive data (apiKey, baseUrl, voiceProfiles
+    // voice ids, calibrated counter ids) stays on `ModelProviderConfig` or is projected out here.
+    // Browser-safe capabilities preserve content-free accounting fields but omit counterId.
+    ...(config.capabilities === undefined
+      ? {}
+      : { capabilities: projectSafeCapabilities(config.capabilities) }),
     ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
     ...(config.reranker === undefined
       ? {}

@@ -133,6 +133,12 @@ const SAMPLE_CONFIG: GatewayConfig = {
       throughputHint: "test fixture",
       preferredUseCases: ["UI tests"],
       knownLimitations: [],
+      tokenAccounting: {
+        source: "calibrated",
+        counterId: "ui-test-provider-counter-v1",
+        scaleMilli: 1_000,
+        offsetTokens: 0,
+      },
     },
   ],
 };
@@ -197,8 +203,16 @@ describe("GET /api/models", () => {
         configPresent: true,
       }),
     );
-    const body = result.body as { models: { id: string }[] };
+    const body = result.body as {
+      models: { id: string; tokenAccounting?: { source: string; scaleMilli?: number } }[];
+    };
     expect(body.models.map((model) => model.id)).toEqual(["example-chat-model"]);
+    expect(body.models[0]?.tokenAccounting).toEqual({
+      source: "calibrated",
+      scaleMilli: 1_000,
+      offsetTokens: 0,
+    });
+    expect(body.models[0]?.tokenAccounting).not.toHaveProperty("counterId");
   });
 
   it("returns runtime-declared configured models", () => {

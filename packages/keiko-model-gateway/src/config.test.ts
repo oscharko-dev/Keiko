@@ -1125,8 +1125,16 @@ describe("toSafeObject", () => {
         modelId: "example-private-chat",
         capability: {
           kind: "chat",
+          contextWindow: 64_000,
+          maxOutputTokens: 4_096,
           toolCalling: true,
           structuredOutput: true,
+          tokenAccounting: {
+            source: "calibrated",
+            counterId: "provider-calibrated-fixture-v1",
+            scaleMilli: 875,
+            offsetTokens: 3,
+          },
         },
       })),
     );
@@ -1137,6 +1145,12 @@ describe("toSafeObject", () => {
       toolCalling: true,
       structuredOutput: true,
     });
+    expect(safe.capabilities?.[0]?.tokenAccounting).toEqual({
+      source: "calibrated",
+      scaleMilli: 875,
+      offsetTokens: 3,
+    });
+    expect(JSON.stringify(safe)).not.toContain("provider-calibrated-fixture-v1");
     expect(JSON.stringify(safe)).not.toContain("example-test-token-1234567890");
     expect(JSON.stringify(safe)).not.toContain("https://host.example/v1");
   });
