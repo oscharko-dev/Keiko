@@ -19,6 +19,12 @@ export interface VoiceActivityThresholds {
   readonly onsetMs: number;
   // Trailing below-threshold duration after speech before `end-of-turn` fires.
   readonly trailingSilenceMs: number;
+  // When enabled, raise the effective speech gate above the learned stationary noise floor. The fixed
+  // rmsThreshold remains a lower bound, so callers can still pin deterministic behavior in tests.
+  readonly adaptiveNoiseFloor?: boolean | undefined;
+  readonly noiseFloorMultiplier?: number | undefined;
+  readonly noiseFloorMinRms?: number | undefined;
+  readonly noiseFloorMaxRms?: number | undefined;
 }
 
 // Conservative defaults tuned for headset / laptop dictation: ~0.014 RMS gate, a short onset debounce,
@@ -27,6 +33,10 @@ export const DEFAULT_VAD_THRESHOLDS: VoiceActivityThresholds = {
   rmsThreshold: 0.014,
   onsetMs: 150,
   trailingSilenceMs: 800,
+  adaptiveNoiseFloor: true,
+  noiseFloorMultiplier: 1.8,
+  noiseFloorMinRms: 0.004,
+  noiseFloorMaxRms: 0.05,
 };
 
 // A live VAD monitor over one stream. `stop()` releases the analysis resources only — the caller still
@@ -49,11 +59,33 @@ export class VoiceActivityState {
   private heardSpeech = false;
   private aboveMs = 0;
   private belowMs = 0;
+  private noiseFloor: number;
 
-  constructor(private readonly thresholds: VoiceActivityThresholds) {}
+  constructor(private readonly thresholds: VoiceActivityThresholds) {
+    this.noiseFloor = Math.max(thresholds.noiseFloorMinRms ?? 0, thresholds.rmsThreshold * 0.75);
+  }
+
+  private effectiveThreshold(): number {
+    if (this.thresholds.adaptiveNoiseFloor !== true) {
+      return this.thresholds.rmsThreshold;
+    }
+    const multiplier = this.thresholds.noiseFloorMultiplier ?? 1.8;
+    return Math.max(this.thresholds.rmsThreshold, this.noiseFloor * multiplier);
+  }
+
+  private observeNoise(rms: number): void {
+    if (this.thresholds.adaptiveNoiseFloor !== true || !Number.isFinite(rms)) {
+      return;
+    }
+    const min = this.thresholds.noiseFloorMinRms ?? 0;
+    const max = this.thresholds.noiseFloorMaxRms ?? Math.max(this.thresholds.rmsThreshold, min);
+    const bounded = Math.min(max, Math.max(min, rms));
+    this.noiseFloor = this.noiseFloor * 0.92 + bounded * 0.08;
+  }
 
   feed(rms: number, dtMs: number): VoiceActivityEvent | undefined {
-    if (rms >= this.thresholds.rmsThreshold) {
+    const speechThreshold = this.effectiveThreshold();
+    if (rms >= speechThreshold) {
       this.aboveMs += dtMs;
       this.belowMs = 0;
       if (!this.heardSpeech && this.aboveMs >= this.thresholds.onsetMs) {
@@ -62,6 +94,7 @@ export class VoiceActivityState {
       }
       return undefined;
     }
+    this.observeNoise(rms);
     this.aboveMs = 0;
     if (!this.heardSpeech) {
       return undefined;

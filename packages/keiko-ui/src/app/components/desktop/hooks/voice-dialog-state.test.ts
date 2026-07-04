@@ -9,6 +9,7 @@ import {
   deriveVoiceAuraState,
   deriveVoiceDialogState,
   playbackPhaseToTurnState,
+  voiceAuraStateHeadline,
   voiceDialogStateHeadline,
   voiceDialogStateIsLive,
   type VoiceAuraStateInputs,
@@ -157,32 +158,123 @@ describe("deriveVoiceAuraState", () => {
     });
   });
 
-  it("keeps the active aura visually reduced to the low-intensity ready state", () => {
-    const patches: readonly Partial<VoiceAuraStateInputs>[] = [
-      {},
+  it("maps unavailable or failed dialogue to a high-intensity error aura", () => {
+    for (const patch of [
       { voiceDialogAvailable: false },
       { hasSessionError: true },
       { voiceDialogState: "error" },
-      { voiceDialogState: "interrupted" },
-      { voiceDialogState: "muted" },
-      { voiceDialogState: "speaking" },
-      { voiceDialogState: "listening" },
-      { voiceDialogState: "thinking" },
-      { voiceDialogState: "connecting" },
-      { listening: true },
-      { speaking: true },
+    ] satisfies readonly Partial<VoiceAuraStateInputs>[]) {
+      expect(deriveVoiceAuraState({ ...AURA_BASE, ...patch })).toEqual({
+        active: true,
+        state: "error",
+        intensity: "high",
+      });
+    }
+  });
+
+  it("surfaces interruption, mute, speaking, thinking, and listening with distinct intensity", () => {
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "interrupted" })).toEqual({
+      active: true,
+      state: "interrupted",
+      intensity: "high",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "muted" })).toEqual({
+      active: true,
+      state: "muted",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "speaking" })).toEqual({
+      active: true,
+      state: "speaking",
+      intensity: "high",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "thinking" })).toEqual({
+      active: true,
+      state: "thinking",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "listening" })).toEqual({
+      active: true,
+      state: "listening",
+      intensity: "medium",
+    });
+  });
+
+  it("uses direct realtime booleans and send status when the collapsed dialog state is idle", () => {
+    expect(deriveVoiceAuraState({ ...AURA_BASE, listening: true })).toEqual({
+      active: true,
+      state: "listening",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState({ ...AURA_BASE, speaking: true })).toEqual({
+      active: true,
+      state: "speaking",
+      intensity: "high",
+    });
+    for (const patch of [
       { sending: true },
       { sendStatus: "queued" },
       { sendStatus: "contacting" },
       { sendStatus: "streaming" },
-    ];
-    for (const patch of patches) {
+    ] satisfies readonly Partial<VoiceAuraStateInputs>[]) {
       expect(deriveVoiceAuraState({ ...AURA_BASE, ...patch })).toEqual({
         active: true,
-        state: "ready",
-        intensity: "low",
+        state: "thinking",
+        intensity: "high",
       });
     }
+  });
+
+  it("maps the initial connect to preparing and idle to a low-intensity ready", () => {
+    expect(deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "connecting" })).toEqual({
+      active: true,
+      state: "preparing",
+      intensity: "medium",
+    });
+    expect(deriveVoiceAuraState(AURA_BASE)).toEqual({
+      active: true,
+      state: "ready",
+      intensity: "low",
+    });
+  });
+
+  it("surfaces a recovering session as reconnecting, ahead of the steady states", () => {
+    // Even while the collapsed state says 'connecting' and the send pipeline looks busy, an in-flight
+    // recovery wins so the user learns the link dropped rather than that the assistant is thinking.
+    expect(
+      deriveVoiceAuraState({
+        ...AURA_BASE,
+        voiceDialogState: "connecting",
+        reconnecting: true,
+        sending: true,
+      }),
+    ).toEqual({ active: true, state: "reconnecting", intensity: "high" });
+  });
+
+  it("surfaces grounded retrieval as checking-sources, ahead of generic thinking", () => {
+    expect(
+      deriveVoiceAuraState({ ...AURA_BASE, voiceDialogState: "thinking", retrieving: true }),
+    ).toEqual({ active: true, state: "checking-sources", intensity: "high" });
+  });
+
+  it("gives every aura state a professional headline", () => {
+    const states = [
+      "ready",
+      "preparing",
+      "reconnecting",
+      "listening",
+      "thinking",
+      "checking-sources",
+      "speaking",
+      "muted",
+      "interrupted",
+      "error",
+    ] as const;
+    for (const state of states) {
+      expect(voiceAuraStateHeadline(state)).toMatch(/\w/);
+    }
+    expect(voiceAuraStateHeadline("reconnecting")).toContain("Reconnecting");
+    expect(voiceAuraStateHeadline("checking-sources")).toContain("sources");
   });
 });
 

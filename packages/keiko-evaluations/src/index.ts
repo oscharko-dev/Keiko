@@ -22,6 +22,9 @@ export * as DiscussionEval from "./discussion/index.js";
 // Voice Digital Twin evaluation suite (Epic #491, Issue #505 — the capstone; ADR-0110). Exposed as a
 // single auditable namespace, mirroring the `DiscussionEval` convention above.
 export * as VoiceTwinEval from "./voice-twin/index.js";
+// Offline acoustic-quality companion gate for voice (P10). Exposed as a single auditable namespace
+// beside VoiceTwinEval; fixtures are deterministic transcript/trace data with no raw audio.
+export * as VoiceAcousticEval from "./voice-acoustic/index.js";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,

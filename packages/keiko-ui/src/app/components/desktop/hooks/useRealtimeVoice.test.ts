@@ -12,7 +12,9 @@ import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-cli
 // The hook's ICE_DISCONNECT_GRACE_MS is 5_000ms; probe just below and above it.
 const ICE_GRACE_BELOW = 4_000;
 const ICE_GRACE_ABOVE = 6_000;
-const SESSION_READY_WARMUP_MS = 300;
+// Mirrors the hook constant; the warm-up floor runs in parallel with negotiation and is intentionally
+// small (start-of-utterance capture is guaranteed by the server turn_detection prefix_padding).
+const SESSION_READY_WARMUP_MS = 150;
 
 // Fake WebRTC session with controllable callbacks.
 function makeFakeSession(
@@ -142,6 +144,48 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
     expect(result.current.error).toBeUndefined();
   });
 
+  it("emits content-free connect latency marks and the rtc_connected→session_ready leg", async () => {
+    const onMark = vi.fn();
+    const onLeg = vi.fn();
+    const { session, fireConnectionState } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        latencySink: { onMark, onLeg },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => fireConnectionState("connected"));
+    await waitFor(() => expect(result.current.phase).toBe("connected"));
+
+    const markNames = onMark.mock.calls.map((call) => call[0].mark);
+    expect(markNames).toEqual(
+      expect.arrayContaining([
+        "mic_click",
+        "rtc_offer_created",
+        "sdp_answer",
+        "rtc_connected",
+        "session_ready",
+      ]),
+    );
+    // The warm-up leg that Plan §5 needs to drive the warm-up floor toward 0 — content-free.
+    const readyLeg = onLeg.mock.calls
+      .map((call) => call[0])
+      .find((leg) => leg.from === "rtc_connected" && leg.to === "session_ready");
+    expect(readyLeg).toBeDefined();
+    expect(typeof readyLeg.ms).toBe("number");
+    // Every mark carries only the enum literal and an integer timestamp — no SDP, no transcript.
+    for (const call of onMark.mock.calls) {
+      expect(Object.keys(call[0]).sort()).toEqual(["atMs", "mark"]);
+    }
+  });
+
   it("gates connected on data-channel open, session.updated, and mic warm-up", async () => {
     vi.useFakeTimers();
     try {
@@ -191,10 +235,7 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
               }),
             }),
             tools: [expect.objectContaining({ name: "search_keiko_grounding" })],
-            tool_choice: {
-              type: "function",
-              function: { name: "search_keiko_grounding" },
-            },
+            tool_choice: "auto",
           }),
         }),
       );
@@ -204,6 +245,48 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
       await vi.waitFor(() => expect(result.current.phase).toBe("connected"));
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("applies the requested turn-detection profile to session.update", async () => {
+    const cases = [
+      { profile: "semantic", expected: { type: "semantic_vad", eagerness: "auto" } },
+      {
+        profile: "headset",
+        expected: { type: "server_vad", threshold: 0.4, prefix_padding_ms: 200 },
+      },
+    ] as const;
+    for (const { profile, expected } of cases) {
+      const { session, fireConnectionState, fireDataChannelState, sendDataChannelEvent } =
+        makeFakeSession("v=0\r\nfake-offer", { exposeDataChannelState: true });
+      const transport = makeFakeTransport({ session });
+      const { client } = makeFakeControl({ negotiateResult: "v=0\r\nfake-answer" });
+      const { result, unmount } = renderHook(() =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          turnDetectionProfile: profile,
+        }),
+      );
+
+      act(() => result.current.start());
+      await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+      act(() => fireConnectionState("connected"));
+      act(() => fireDataChannelState("open"));
+
+      expect(sendDataChannelEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "session.update",
+          session: expect.objectContaining({
+            audio: expect.objectContaining({
+              input: expect.objectContaining({
+                turn_detection: expect.objectContaining({ ...expected, interrupt_response: true }),
+              }),
+            }),
+          }),
+        }),
+      );
+      unmount();
     }
   });
 
@@ -741,6 +824,50 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     ]);
   });
 
+  it("reports retrieving while a client-side grounded retrieval is in flight (checking-sources)", async () => {
+    const { session, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    let resolveTool: (value: unknown) => void = () => {};
+    const onGroundedToolCall = vi.fn(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveTool = resolve;
+        }),
+    );
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        groundingActive: true,
+        groundingToolActive: false,
+        onGroundedToolCall,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    expect(result.current.retrieving).toBe(false);
+
+    // A committed user transcript kicks off client-side grounded retrieval.
+    act(() => {
+      fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "u-retrieve",
+        transcript: "Was steht im Projektplan?",
+      });
+    });
+    expect(onGroundedToolCall).toHaveBeenCalledTimes(1);
+    expect(result.current.retrieving).toBe(true);
+
+    await act(async () => {
+      resolveTool({ answer: "Ein gestaffelter Rollout." });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.retrieving).toBe(false));
+  });
+
   it("persists the latest interim user transcript when final transcription fails", async () => {
     const { session, fireDataChannelEvent } = makeFakeSession();
     const transport = makeFakeTransport({ session });
@@ -1259,6 +1386,41 @@ describe("useRealtimeVoice — Realtime data-channel transcripts", () => {
     act(() => result.current.interrupt());
     expect(sendDataChannelEvent).toHaveBeenCalledWith({ type: "response.cancel" });
     expect(result.current.turnSnapshot.state).toBe("interrupted");
+  });
+
+  it("ducks the assistant output sink on barge-in and un-ducks on the next assistant audio", async () => {
+    const { session, fireConnectionState, fireDataChannelEvent } = makeFakeSession();
+    const transport = makeFakeTransport({ session });
+    const { client } = makeFakeControl({});
+    const setMuted = vi.fn();
+    const sink: RealtimeAudioSink = { attach: vi.fn(), setMuted, release: vi.fn() };
+
+    const { result } = renderHook(() =>
+      useRealtimeVoice({
+        createTransport: () => transport,
+        createControl: () => client,
+        createAudioSink: () => sink,
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    act(() => fireConnectionState("connected"));
+    await waitFor(() => expect(result.current.phase).toBe("connected"));
+
+    // The assistant is producing audio; the user barges in.
+    act(() => fireDataChannelEvent({ type: "response.output_audio.delta", response_id: "r1" }));
+    expect(result.current.canInterrupt).toBe(true);
+    setMuted.mockClear();
+
+    act(() => result.current.interrupt());
+    // Ducked immediately, before the provider acknowledges response.cancel — closes the perceptual gap.
+    expect(setMuted).toHaveBeenCalledWith(true);
+
+    // The next assistant turn lifts the duck so the fresh reply is audible again.
+    setMuted.mockClear();
+    act(() => fireDataChannelEvent({ type: "response.output_audio.delta", response_id: "r2" }));
+    expect(setMuted).toHaveBeenCalledWith(false);
   });
 });
 

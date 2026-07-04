@@ -17,7 +17,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { WebSocketServer, type RawData, type WebSocket as WsSocket } from "ws";
 import {
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
@@ -552,6 +552,20 @@ function resolveRealtimeVoiceId(
   return resolveRealtimeVoice(selected ?? neutral ?? profiles[0]?.voiceId);
 }
 
+// Opt-in content-free abuse-monitoring identifier for the realtime session (OpenAI `safety_identifier`).
+// Enabled per deployment via KEIKO_VOICE_SAFETY_IDENTIFIER=1 once the operator has confirmed their
+// realtime provider accepts the field (some strict providers reject unknown session fields — hence
+// opt-in). The value is a salted SHA-256 of the chat id, truncated: stable per chat so the provider can
+// group a session's requests for rate limiting, but never the raw id and never PII. Returns undefined
+// (field omitted) when disabled or when there is no chat id, so the default request shape is unchanged.
+function realtimeSafetyIdentifier(chatId: string): string | undefined {
+  if (process.env.KEIKO_VOICE_SAFETY_IDENTIFIER !== "1" || chatId.length === 0) {
+    return undefined;
+  }
+  const digest = createHash("sha256").update(`keiko-voice:${chatId}`).digest("hex").slice(0, 32);
+  return `keiko-voice-${digest}`;
+}
+
 function buildNegotiationRequest(
   provider: ModelProviderConfig,
   offerSdp: string,
@@ -561,6 +575,7 @@ function buildNegotiationRequest(
   toolsSupported: boolean,
   deps: UiHandlerDeps,
   signal: AbortSignal,
+  safetyIdentifier?: string,
 ): RealtimeNegotiationRequest {
   const egress = provider.egress ?? currentGatewayEgressConfig(deps);
   return {
@@ -586,6 +601,7 @@ function buildNegotiationRequest(
         }
       : {}),
     ...(groundingEnabled && !toolsSupported ? { disableAutomaticResponse: true } : {}),
+    ...(safetyIdentifier !== undefined ? { safetyIdentifier } : {}),
     offerSdp,
     signal,
     timeoutMs: Math.min(provider.timeoutMs, REALTIME_NEGOTIATION_TIMEOUT_MS),
@@ -1075,6 +1091,8 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         chatContext,
         groundingEnabled && toolsSupported,
       );
+      const safetyIdentifier =
+        chatContext === undefined ? undefined : realtimeSafetyIdentifier(chatContext.chatId);
       return negotiate(
         buildNegotiationRequest(
           provider,
@@ -1085,6 +1103,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
           toolsSupported,
           deps,
           signal,
+          safetyIdentifier,
         ),
       );
     };
