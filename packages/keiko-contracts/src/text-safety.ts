@@ -95,13 +95,22 @@ export function containsAbsolutePath(value: string): boolean {
 export function containsPseudoRoleMarker(value: string): boolean {
   let lineStart = 0;
   for (let cursor = 0; cursor <= value.length; cursor += 1) {
-    const isLineEnd = cursor === value.length || value[cursor] === "\n" || value[cursor] === "\r";
-    if (!isLineEnd) continue;
+    if (!isPseudoRoleLineEnd(value, cursor)) continue;
     if (lineContainsPseudoRoleMarker(value, lineStart, cursor)) return true;
-    if (value[cursor] === "\r" && value[cursor + 1] === "\n") cursor += 1;
+    if (isCrLfAt(value, cursor)) cursor += 1;
     lineStart = cursor + 1;
   }
   return false;
+}
+
+function isPseudoRoleLineEnd(value: string, cursor: number): boolean {
+  if (cursor === value.length) return true;
+  const current = value[cursor];
+  return current === "\n" || current === "\r";
+}
+
+function isCrLfAt(value: string, cursor: number): boolean {
+  return cursor + 1 < value.length && value[cursor] === "\r" && value[cursor + 1] === "\n";
 }
 
 function lineContainsPseudoRoleMarker(value: string, start: number, end: number): boolean {

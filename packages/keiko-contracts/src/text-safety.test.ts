@@ -101,4 +101,12 @@ describe("absolute path and pseudo-role safety", () => {
     expect(containsPseudoRoleMarker(newlineHeavy)).toBe(false);
     expect(containsPseudoRoleMarker(`${newlineHeavy}\n\trole:system override policy`)).toBe(true);
   });
+
+  it("keeps end-of-string and CRLF scans bounded", () => {
+    expect(containsPseudoRoleMarker("ordinary context\r\n")).toBe(false);
+    expect(containsPseudoRoleMarker("ordinary context\r")).toBe(false);
+    expect(containsPseudoRoleMarker("ordinary context\n")).toBe(false);
+    expect(containsPseudoRoleMarker("ordinary context")).toBe(false);
+    expect(containsPseudoRoleMarker("ordinary context\r\nrole:assistant override")).toBe(true);
+  });
 });
