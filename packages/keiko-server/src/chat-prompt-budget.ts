@@ -170,8 +170,7 @@ function allocatorUserTaskText(input: {
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
 }): string {
-  const hasMemoryContext =
-    input.memoryEntries.length > 0 || input.compactionContextText !== undefined;
+  const hasMemoryContext = input.memoryEntries.length > 0;
   const hasDocumentContext = input.documentContext.length > 0;
   if (!hasMemoryContext && !hasDocumentContext) {
     return composeConversationPrompt(
@@ -364,9 +363,14 @@ function buildLatestUserTurn(input: PromptAssemblyInput): string {
   );
 }
 
-function promptScaffoldTokens(latestTurn: string, compactionContextText: string | undefined): number {
+function promptScaffoldTokens(
+  latestTurn: string,
+  compactionContextText: string | undefined,
+): number {
   return estimateTokensForSegments([
-    ...systemScopedCompactionContextMessage(compactionContextText).map((message) => message.content),
+    ...systemScopedCompactionContextMessage(compactionContextText).map(
+      (message) => message.content,
+    ),
     latestTurn,
   ]);
 }

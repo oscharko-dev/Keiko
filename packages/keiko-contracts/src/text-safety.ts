@@ -14,6 +14,15 @@
 // keiko-server can compose it; it mirrors the QI-domain `stripUnsafeFormatChars` without
 // creating a dependency on the QI package.
 
+const POSIX_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])\/(?!\/)(?=[^\n\r"'`<>]*\/)[^\n\r"'`<>]+/gu;
+const WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const WINDOWS_UNC_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const PSEUDO_ROLE_MARKER_PATTERN =
+  /(?:^|[\n\r])\s*(?:role\s*:\s*(?:user|assistant|system)\b|(?:user|assistant|system)\s*:)/iu;
+
 // True for an invisible / text-reordering code point: bidi override/embedding/isolate,
 // zero-width joiners, BOM, LRM/RLM, the Arabic letter mark, and the U+2060..U+206F block
 // (word joiner, invisible math operators, and the deprecated format characters). The last
@@ -61,4 +70,29 @@ export function stripUnsafeFormatChars(value: string): string {
     out += ch;
   }
   return out;
+}
+
+/**
+ * Redact filesystem-looking absolute paths, including paths whose directory names contain spaces.
+ * This intentionally favours over-redaction after an absolute path over leaking a private path tail.
+ */
+export function redactAbsolutePaths(value: string): string {
+  return value
+    .replace(POSIX_ABSOLUTE_PATH_PATTERN, (_match, prefix: string) => `${prefix}[REDACTED_PATH]`)
+    .replace(
+      WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN,
+      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
+    )
+    .replace(
+      WINDOWS_UNC_ABSOLUTE_PATH_PATTERN,
+      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
+    );
+}
+
+export function containsAbsolutePath(value: string): boolean {
+  return redactAbsolutePaths(value) !== value;
+}
+
+export function containsPseudoRoleMarker(value: string): boolean {
+  return PSEUDO_ROLE_MARKER_PATTERN.test(value);
 }

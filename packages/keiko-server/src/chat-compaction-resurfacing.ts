@@ -1,4 +1,6 @@
 import {
+  containsAbsolutePath,
+  containsPseudoRoleMarker,
   stripUnsafeFormatChars,
   validateContextCompactionRecord,
   type ContextCompactionRecord,
@@ -36,7 +38,6 @@ interface ResurfacingBuckets {
 const MAX_RECORDS = 3;
 const MAX_ITEMS_PER_SECTION = 8;
 const MAX_LINE_CHARS = 220;
-const ABSOLUTE_PATH_PATTERN = /(?:^|\s)(?:\/[\w.-]+(?:\/[\w.-]+)+|[A-Za-z]:\\[^\s]+)/u;
 
 export function buildChatCompactionResurfacingContext(
   store: EvidenceStore,
@@ -64,18 +65,65 @@ function listByPrefix(store: EvidenceStore, prefix: string): readonly string[] {
 function loadChatCompactionRecords(store: EvidenceStore, chatId: string): readonly TimedRecord[] {
   const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
   const records: TimedRecord[] = [];
-  for (const runId of listByPrefix(store, prefix)) {
+  for (const runId of newestRunIds(listByPrefix(store, prefix), prefix)) {
     const manifest = safeLoad(store, runId);
     if (manifest === undefined) {
       continue;
     }
     for (const record of manifest.compaction ?? []) {
-      if (validateContextCompactionRecord(record).ok) {
-        records.push({ startedAt: manifest.run.startedAt, record });
+      const validRecord = recordForResurfacing(record);
+      if (validRecord !== undefined) {
+        records.push({ startedAt: manifest.run.startedAt, record: validRecord });
       }
     }
   }
   return records.sort((a, b) => a.startedAt - b.startedAt).slice(-MAX_RECORDS);
+}
+
+function newestRunIds(runIds: readonly string[], prefix: string): readonly string[] {
+  return runIds
+    .map((runId, index) => ({ runId, index, turn: runIdTurn(runId, prefix) }))
+    .sort(compareRunIdRecency)
+    .slice(0, MAX_RECORDS)
+    .map((entry) => entry.runId);
+}
+
+function runIdTurn(runId: string, prefix: string): number | undefined {
+  const suffix = runId.slice(prefix.length);
+  if (!/^\d+$/u.test(suffix)) {
+    return undefined;
+  }
+  const value = Number(suffix);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+function compareRunIdRecency(
+  left: { readonly index: number; readonly turn: number | undefined },
+  right: { readonly index: number; readonly turn: number | undefined },
+): number {
+  if (left.turn !== undefined && right.turn !== undefined) {
+    return right.turn === left.turn ? right.index - left.index : right.turn - left.turn;
+  }
+  if (left.turn !== undefined) {
+    return -1;
+  }
+  if (right.turn !== undefined) {
+    return 1;
+  }
+  return right.index - left.index;
+}
+
+function recordForResurfacing(
+  record: ContextCompactionRecord,
+): ContextCompactionRecord | undefined {
+  if (validateContextCompactionRecord(record).ok) {
+    return record;
+  }
+  if (record.modelSummary === undefined) {
+    return undefined;
+  }
+  const withoutModelSummary: ContextCompactionRecord = { ...record, modelSummary: undefined };
+  return validateContextCompactionRecord(withoutModelSummary).ok ? withoutModelSummary : undefined;
 }
 
 function safeLoad(store: EvidenceStore, runId: string): EvidenceManifest | undefined {
@@ -153,7 +201,9 @@ function collectModelSummaryBuckets(
   collectModelSummaryArrayBuckets(buckets, summary);
 }
 
-function isRejectedModelSummary(summary: NonNullable<ContextCompactionRecord["modelSummary"]>): boolean {
+function isRejectedModelSummary(
+  summary: NonNullable<ContextCompactionRecord["modelSummary"]>,
+): boolean {
   return summary.status !== undefined && summary.status !== "valid";
 }
 
@@ -273,7 +323,11 @@ function pushSafe(values: string[], value: string | undefined): void {
 
 function safeLine(value: string): string | undefined {
   const stripped = stripUnsafeFormatChars(value).normalize("NFKC").replace(/\s+/gu, " ").trim();
-  if (stripped.length === 0 || ABSOLUTE_PATH_PATTERN.test(stripped)) {
+  if (
+    stripped.length === 0 ||
+    containsAbsolutePath(stripped) ||
+    containsPseudoRoleMarker(stripped)
+  ) {
     return undefined;
   }
   return stripped.length <= MAX_LINE_CHARS

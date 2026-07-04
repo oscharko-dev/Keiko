@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 
 import {
   HARNESS_VERSION,
+  redactAbsolutePaths,
   type ContextCommandOutcome,
   type ContextCompactionModelSummary,
   type ContextCompactionRecord,
@@ -35,13 +36,6 @@ import {
 } from "./types.js";
 
 type Redactor = (input: string) => string;
-
-const POSIX_ABSOLUTE_PATH_FRAGMENT =
-  /(^|[^A-Za-z0-9._~/-])\/(?!\/)(?:[A-Za-z0-9._~+@-]+\/)+[A-Za-z0-9._~+@-]+/gu;
-const WINDOWS_DRIVE_ABSOLUTE_PATH_FRAGMENT =
-  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?:[A-Za-z0-9._~+@ -]+[\\/])*[A-Za-z0-9._~+@ -]+/gu;
-const WINDOWS_UNC_ABSOLUTE_PATH_FRAGMENT =
-  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)[A-Za-z0-9._~+@-]+[\\/][^\s("'`<>]+/gu;
 
 export interface CompactionEvidenceInput {
   readonly runId: string;
@@ -79,17 +73,7 @@ function workspaceRootAuditId(workspaceRoot: string, redact: Redactor): string {
 }
 
 function redactedPathSafe(value: string, redact: Redactor): string {
-  const redacted = redact(value);
-  return redacted
-    .replace(POSIX_ABSOLUTE_PATH_FRAGMENT, (_match, prefix: string) => `${prefix}[REDACTED_PATH]`)
-    .replace(
-      WINDOWS_DRIVE_ABSOLUTE_PATH_FRAGMENT,
-      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
-    )
-    .replace(
-      WINDOWS_UNC_ABSOLUTE_PATH_FRAGMENT,
-      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
-    );
+  return redactAbsolutePaths(redact(value));
 }
 
 function redactProvenanceRef(ref: ContextProvenanceRef, redact: Redactor): ContextProvenanceRef {

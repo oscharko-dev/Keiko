@@ -70,11 +70,11 @@ interface StubStats {
 function stubStore(
   chatTurns: readonly number[],
   unrelatedCount: number,
-  opts: { withPrefix: boolean },
+  opts: { readonly withPrefix: boolean; readonly persistedTurns?: readonly number[] },
 ): { store: EvidenceStore; stats: StubStats } {
   const stats: StubStats = { listCalls: 0, listByPrefixCalls: 0, getRunIds: [] };
   const backing = createInMemoryEvidenceStore();
-  chatTurns.forEach((turn) => {
+  (opts.persistedTurns ?? chatTurns).forEach((turn) => {
     persistCompactionEvidence(
       {
         runId: chatRunId(turn),
@@ -133,6 +133,20 @@ describe("buildChatCompactionResurfacingContext prefix scoping (GEN-PERF-CHAT-00
     // Only the 3 matching-prefix manifests are loaded — never the 10k unrelated ones.
     expect(stats.getRunIds).toHaveLength(3);
     expect(stats.getRunIds.every((runId) => runId.startsWith("chat-"))).toBe(true);
+  });
+
+  it("loads only the newest matching chat manifests before parsing structured summaries", () => {
+    const chatTurns = Array.from({ length: 5_000 }, (_value, index) => index + 1);
+    const { store, stats } = stubStore(chatTurns, 0, {
+      withPrefix: true,
+      persistedTurns: [4_998, 4_999, 5_000],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
+
+    expect(context).toContain(CHAT_COMPACTION_CONTEXT_HEADER);
+    expect(context).toContain("Continue with the governed evidence manifest plan.");
+    expect(stats.getRunIds).toEqual([chatRunId(5_000), chatRunId(4_999), chatRunId(4_998)]);
   });
 
   it("falls back to list() with an identical result set when listByPrefix is absent", () => {

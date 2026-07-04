@@ -21,6 +21,7 @@ import {
 import type { ContextProvenanceRefKind } from "./context-engineering.js";
 import { isContextLaneId } from "./context-engineering-validation.js";
 import type { ContextValidationResult } from "./context-engineering-validation.js";
+import { containsAbsolutePath, containsPseudoRoleMarker } from "./text-safety.js";
 
 const PROVENANCE_REF_KINDS: readonly string[] = [
   "repo-file",
@@ -328,16 +329,13 @@ function collectModelSummary(value: unknown, prefix: string): string[] {
   pushIf(
     reasons,
     typeof value.content !== "string" ||
-      value.content.length > CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+      modelSummaryStringUnsafe(value.content, CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS),
     `${prefix}.modelSummary.content invalid`,
   );
   reasons.push(
     ...collectModelSummaryStrings(value.decisions, `${prefix}.modelSummary.decisions`),
     ...collectModelSummaryStrings(value.constraints, `${prefix}.modelSummary.constraints`),
-    ...collectModelSummaryStrings(
-      value.filesAndSymbols,
-      `${prefix}.modelSummary.filesAndSymbols`,
-    ),
+    ...collectModelSummaryStrings(value.filesAndSymbols, `${prefix}.modelSummary.filesAndSymbols`),
     ...collectModelSummaryStrings(
       value.debuggingContext,
       `${prefix}.modelSummary.debuggingContext`,
@@ -359,11 +357,16 @@ function collectModelSummaryStrings(value: unknown, prefix: string): string[] {
   value.forEach((entry, index) => {
     pushIf(
       reasons,
-      !isNonEmptyTrimmed(entry) || entry.length > CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
+      !isNonEmptyTrimmed(entry) ||
+        modelSummaryStringUnsafe(entry, CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS),
       `${prefix}[${String(index)}] invalid`,
     );
   });
   return reasons;
+}
+
+function modelSummaryStringUnsafe(value: string, maxChars: number): boolean {
+  return value.length > maxChars || containsAbsolutePath(value) || containsPseudoRoleMarker(value);
 }
 
 function collectModelSummaryStatusRules(value: Record<string, unknown>, prefix: string): string[] {
