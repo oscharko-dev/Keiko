@@ -565,7 +565,21 @@ function lifecycleCommandRunner(tmp, bin, port, stateDir) {
 function assertLifecycleStart(runLifecycle) {
   const startResult = runLifecycle("start");
   if (startResult.status !== 0) {
-    fail(`keiko start exited ${String(startResult.status)}: ${startResult.stderr}`);
+    // Surface the UI child's own log (keiko start reports its path as "Logs: <path>") so a startup
+    // crash is diagnosable from CI instead of hiding behind a bare non-zero exit.
+    const logMatch = /Logs:\s*(\S+)/u.exec(startResult.stderr);
+    let logTail = "";
+    if (logMatch) {
+      try {
+        logTail = `\n--- ${logMatch[1]} (tail) ---\n${readFileSync(logMatch[1], "utf8")
+          .split("\n")
+          .slice(-40)
+          .join("\n")}`;
+      } catch {
+        logTail = `\n--- ${logMatch[1]} unreadable ---`;
+      }
+    }
+    fail(`keiko start exited ${String(startResult.status)}: ${startResult.stderr}${logTail}`);
   }
   if (!startResult.stdout.includes("Keiko UI running on")) {
     fail(`keiko start did not report a running UI: ${startResult.stdout}`);

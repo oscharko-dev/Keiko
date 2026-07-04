@@ -711,7 +711,7 @@ describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
     // The cause IS captured for the operator (redactor here knows no secrets, so it passes through);
     // this is the whole point of RB-6 — the previously-dropped cause is now diagnosable.
     expect(record?.message).toContain(SECRET_MARKER);
-    expect(typeof record.timestamp).toBe("string");
+    expect(typeof record?.timestamp).toBe("string");
   });
 
   it("honours a well-formed client-supplied correlation id (UI → server continuity)", async () => {
