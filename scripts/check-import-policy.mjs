@@ -232,7 +232,8 @@ async function collectPolicyFiles(root, mode) {
 
 function matchingRules(relativePath, mode, specifier) {
   return IMPORT_POLICY_RULES.filter(
-    (rule) => rule.matchesFile(relativePath, mode) && rule.matchesSpecifier(specifier, relativePath),
+    (rule) =>
+      rule.matchesFile(relativePath, mode) && rule.matchesSpecifier(specifier, relativePath),
   );
 }
 
