@@ -36,7 +36,7 @@ Run from the repository root:
 npm run build:packages
 npm exec -- vitest run packages/keiko-server/src/desktop-chat-handlers.test.ts packages/keiko-server/src/store/messages.test.ts packages/keiko-server/src/routes.test.ts
 npm --workspace @oscharko-dev/keiko-ui run test -- src/lib/api.test.ts src/app/components/desktop/ChatWindow.test.tsx
-npm exec -- playwright test --config playwright.issue-1405-human-loop.config.ts --project=chromium
+npm exec -- playwright test --config tests/e2e/config/playwright.issue-1405-human-loop.config.ts --project=chromium
 ```
 
 The Playwright command writes:
