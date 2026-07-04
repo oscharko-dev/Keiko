@@ -157,12 +157,16 @@ describe("validateKnowledgePodSummary", () => {
   it("checks endpoint and token parameter text without regex backtracking", () => {
     const repeatedSafeText = `${"pod-reference ".repeat(200)}example`;
     const repeatedEndpoint = `${"http://".repeat(200)}example.test/path`;
+    const repeatedSchemeEndpoint = `${"A".repeat(1_000)}://example.test/path`;
+    const repeatedUserInfoEndpoint = `${"!".repeat(1_000)}@example.test/path`;
     const encodedTokenEndpoint = "gateway.internal/v1?%61ccess_token=secret-value";
     const encodedSecretEndpoint = "gateway.internal/v1?%63lient_secret=secret-value";
     const fragmentTokenText = "pod metadata #access_token=secret-value";
 
     expect(isKnowledgePodEvidenceSafeText(repeatedSafeText)).toBe(true);
     expect(isKnowledgePodEvidenceSafeText(repeatedEndpoint)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(repeatedSchemeEndpoint)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(repeatedUserInfoEndpoint)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(encodedTokenEndpoint)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(encodedSecretEndpoint)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(fragmentTokenText)).toBe(false);

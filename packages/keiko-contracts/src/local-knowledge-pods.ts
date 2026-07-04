@@ -212,11 +212,6 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
 ];
 
 const ABSOLUTE_PATH_RE = /(?:^|[[\s("'`<{}])(?:~[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^\s"'`<>)]*/u;
-const SCHEME_ENDPOINT_RE = /[A-Za-z][A-Za-z0-9+.-]*:\/\//u;
-const SCHEME_RELATIVE_ENDPOINT_RE = /(?:^|[\s("'`<{}])\/\/[^\s"'`<>)]/u;
-const HOST_ENDPOINT_RE =
-  /(?:^|[\s("'`<{}])(?:localhost|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}|(?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?(?:[/?#]|$)/iu;
-const USERINFO_ENDPOINT_RE = /[^\s"'`<>@]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?::\d{1,5})?(?:[/?#]|$)/iu;
 const SECRET_RE =
   /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
 const TOKEN_QUERY_KEYS = new Set([
@@ -257,6 +252,10 @@ function onlyKeys(
 
 function isUrlTerminator(char: string): boolean {
   return char.trim().length === 0 || "\"'`()<>".includes(char);
+}
+
+function isEndpointBoundary(char: string): boolean {
+  return char.trim().length === 0 || "\"'`(<{}".includes(char);
 }
 
 function findUrlEnd(value: string, start: number): number {
@@ -312,11 +311,157 @@ function safeDecodeUriComponent(value: string): string {
 
 function containsEndpointLikeText(value: string): boolean {
   return (
-    SCHEME_ENDPOINT_RE.test(value) ||
-    SCHEME_RELATIVE_ENDPOINT_RE.test(value) ||
-    HOST_ENDPOINT_RE.test(value) ||
-    USERINFO_ENDPOINT_RE.test(value)
+    containsSchemeEndpoint(value) ||
+    containsSchemeRelativeEndpoint(value) ||
+    containsHostEndpoint(value) ||
+    containsUserInfoEndpoint(value)
   );
+}
+
+function containsSchemeEndpoint(value: string): boolean {
+  let searchFrom = 0;
+  while (searchFrom < value.length) {
+    const delimiter = value.indexOf("://", searchFrom);
+    if (delimiter === -1) return false;
+    const start = findSchemeStart(value, delimiter);
+    if (start !== -1 && isScheme(value.slice(start, delimiter))) return true;
+    searchFrom = delimiter + 3;
+  }
+  return false;
+}
+
+function findSchemeStart(value: string, delimiter: number): number {
+  let start = delimiter - 1;
+  while (start >= 0 && isSchemeTailChar(value.charAt(start))) {
+    start -= 1;
+  }
+  return start + 1;
+}
+
+function isScheme(value: string): boolean {
+  if (value.length === 0 || !isAsciiLetter(value.charAt(0))) return false;
+  for (let index = 1; index < value.length; index += 1) {
+    if (!isSchemeTailChar(value.charAt(index))) return false;
+  }
+  return true;
+}
+
+function isSchemeTailChar(char: string): boolean {
+  return isAsciiLetter(char) || isAsciiDigit(char) || char === "+" || char === "." || char === "-";
+}
+
+function containsSchemeRelativeEndpoint(value: string): boolean {
+  let searchFrom = 0;
+  while (searchFrom < value.length) {
+    const delimiter = value.indexOf("//", searchFrom);
+    if (delimiter === -1) return false;
+    const previous = delimiter === 0 ? "" : value.charAt(delimiter - 1);
+    const next = value.charAt(delimiter + 2);
+    if (
+      (delimiter === 0 || isEndpointBoundary(previous)) &&
+      next !== "" &&
+      !isUrlTerminator(next)
+    ) {
+      return true;
+    }
+    searchFrom = delimiter + 2;
+  }
+  return false;
+}
+
+function containsHostEndpoint(value: string): boolean {
+  for (const token of endpointTokens(value)) {
+    if (tokenStartsWithHostEndpoint(token)) return true;
+  }
+  return false;
+}
+
+function containsUserInfoEndpoint(value: string): boolean {
+  for (const token of endpointTokens(value)) {
+    const at = token.indexOf("@");
+    if (at > 0 && tokenStartsWithHostEndpoint(token.slice(at + 1))) return true;
+  }
+  return false;
+}
+
+function endpointTokens(value: string): string[] {
+  const tokens: string[] = [];
+  let start = 0;
+  while (start < value.length) {
+    while (start < value.length && isEndpointBoundary(value.charAt(start))) start += 1;
+    const end = findUrlEnd(value, start);
+    if (end > start) tokens.push(value.slice(start, end));
+    start = Math.max(end + 1, start + 1);
+  }
+  return tokens;
+}
+
+function tokenStartsWithHostEndpoint(token: string): boolean {
+  const hostEnd = findHostEnd(token);
+  if (hostEnd === 0) return false;
+  const host = stripPort(token.slice(0, hostEnd));
+  return (
+    isRecognizedHost(host) && (hostEnd === token.length || "/?#".includes(token.charAt(hostEnd)))
+  );
+}
+
+function findHostEnd(token: string): number {
+  let end = token.length;
+  for (const separator of ["/", "?", "#"] as const) {
+    const index = token.indexOf(separator);
+    if (index !== -1 && index < end) end = index;
+  }
+  return end;
+}
+
+function stripPort(hostWithPort: string): string {
+  const colon = hostWithPort.lastIndexOf(":");
+  if (colon === -1) return hostWithPort;
+  const port = hostWithPort.slice(colon + 1);
+  return isPort(port) ? hostWithPort.slice(0, colon) : hostWithPort;
+}
+
+function isPort(value: string): boolean {
+  return value.length >= 1 && value.length <= 5 && everyChar(value, isAsciiDigit);
+}
+
+function isRecognizedHost(host: string): boolean {
+  return host.toLowerCase() === "localhost" || isIpv4Host(host) || isDomainHost(host);
+}
+
+function isIpv4Host(host: string): boolean {
+  const parts = host.split(".");
+  return (
+    parts.length === 4 && parts.every((part) => part.length > 0 && everyChar(part, isAsciiDigit))
+  );
+}
+
+function isDomainHost(host: string): boolean {
+  const labels = host.split(".");
+  if (labels.length < 2 || !everyChar(labels.at(-1) ?? "", isAsciiLetter)) return false;
+  return labels.every(isDomainLabel);
+}
+
+function isDomainLabel(label: string): boolean {
+  if (label.length === 0) return false;
+  return everyChar(label, (char) => isAsciiLetter(char) || isAsciiDigit(char) || char === "-");
+}
+
+function everyChar(value: string, predicate: (char: string) => boolean): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (!predicate(value.charAt(index))) return false;
+  }
+  return true;
+}
+
+function isAsciiLetter(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiDigit(char: string): boolean {
+  const code = char.charCodeAt(0);
+  return code >= 48 && code <= 57;
 }
 
 function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
