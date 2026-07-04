@@ -86,10 +86,7 @@ export function deleteLexicalRowsForDocument(
   db.prepare(DELETE_LEXICAL_FOR_DOCUMENT_SQL).run({ c: String(capsuleId), d: String(documentId) });
 }
 
-export function deleteLexicalRowsForCapsule(
-  db: DatabaseSync,
-  capsuleId: KnowledgeCapsuleId,
-): void {
+export function deleteLexicalRowsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): void {
   db.prepare(DELETE_LEXICAL_FOR_CAPSULE_SQL).run({ c: String(capsuleId) });
 }
 
@@ -136,10 +133,7 @@ export function replaceLexicalRowsForDocument(
   });
 }
 
-export function upsertLexicalRows(
-  db: DatabaseSync,
-  rows: readonly LexicalChunkIndexRow[],
-): void {
+export function upsertLexicalRows(db: DatabaseSync, rows: readonly LexicalChunkIndexRow[]): void {
   runInSavepoint(db, "upsert_chunk_lexical_rows", () => {
     for (const row of rows) {
       db.prepare(INSERT_LEXICAL_SQL).run({
@@ -160,10 +154,10 @@ function selectChunkLexicalSpans(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): readonly ChunkLexicalSpanRow[] {
-  return db
-    .prepare(SELECT_CHUNK_LEXICAL_SPANS_SQL)
-    .all({ c: String(capsuleId), d: String(documentId) }) as unknown as
-    readonly ChunkLexicalSpanRow[];
+  return db.prepare(SELECT_CHUNK_LEXICAL_SPANS_SQL).all({
+    c: String(capsuleId),
+    d: String(documentId),
+  }) as unknown as readonly ChunkLexicalSpanRow[];
 }
 
 export function replaceLexicalRowsFromStoredSpans(

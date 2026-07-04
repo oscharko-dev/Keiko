@@ -17,6 +17,7 @@
 // All caps are duplicated client-side in keiko-ui; the server is the trust boundary. UI changes
 // are out of scope for #149 — the existing gw-error surface from #146 renders these codes.
 
+import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
 import type {
   BffErrorCode,
   ConversationDocumentContextWire,
@@ -44,26 +45,10 @@ export type ConversationValidationResult =
 // to the on-disk extraction cap and the client preflight.
 export const MAX_AGGREGATE_DOCUMENT_BYTES = 262_144;
 
-// Per-attachment ceiling (8 MiB). Anything larger is rejected without ever touching disk or
-// the provider adapter.
-export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
-
-export const ALLOWED_IMAGE_MIME_PREFIXES: readonly string[] = ["image/"];
-
-export const ALLOWED_DOCUMENT_MIME_PREFIXES: readonly string[] = ["text/"];
-
-// Application/* document mimes admitted by the document path. `application/pdf` is included
-// because document-capable models accept structured PDFs; image-capable-only models with a
-// PDF attachment still fail rule 3 because their attachment kind would be "image".
-export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
-  "application/json",
-  "application/x-yaml",
-  "application/yaml",
-  "application/xml",
-  "application/javascript",
-  "application/typescript",
-  "application/pdf",
-]);
+// Per-attachment ceiling (8 MiB), the MIME allowlist (image/document prefixes + literals), and
+// the SVG deny are the canonical policy from keiko-contracts (GEN-DUP-SEMANTIC-013/-014). The
+// server previously re-declared them inline; it now consumes the shared source of truth so the
+// UI preflight and this trust boundary cannot drift. Server behaviour is unchanged.
 
 // Static error messages — NO interpolation. Every value the caller supplied stays out of the
 // response so the browser-rendered error cannot echo a model id, filename, or byte count.
@@ -80,22 +65,15 @@ function fail(code: BffErrorCode, message: string): ConversationValidationResult
   return { ok: false, code, message };
 }
 
-function mimeStartsWithAny(mimeType: string, prefixes: readonly string[]): boolean {
-  for (const prefix of prefixes) {
-    if (mimeType.startsWith(prefix)) return true;
-  }
-  return false;
-}
-
+// Route both image and document mime checks through the shared classifier. The classifier folds
+// in the SVG deny (image/svg+xml and image/svg classify as "unsupported"), so an image-kind SVG
+// still fails rule 3 here exactly as before.
 function isAllowedImageMime(mimeType: string): boolean {
-  // SVG can carry inline script — deny both registered variants before the prefix check.
-  if (mimeType === "image/svg+xml" || mimeType === "image/svg") return false;
-  return mimeStartsWithAny(mimeType, ALLOWED_IMAGE_MIME_PREFIXES);
+  return classifyAttachmentMime(mimeType) === "image";
 }
 
 function isAllowedDocumentMime(mimeType: string): boolean {
-  if (mimeStartsWithAny(mimeType, ALLOWED_DOCUMENT_MIME_PREFIXES)) return true;
-  return ALLOWED_DOCUMENT_MIME_LITERALS.has(mimeType);
+  return classifyAttachmentMime(mimeType) === "document";
 }
 
 function checkAttachment(

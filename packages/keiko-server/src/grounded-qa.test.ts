@@ -34,6 +34,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
@@ -361,7 +362,9 @@ function requirePackExcerpt(
   const file = pack.files[fileIndex];
   const excerpt = file?.excerpts[0];
   if (file === undefined || excerpt === undefined) {
-    throw new Error(`expected citation fixture to contain excerpt at file index ${String(fileIndex)}`);
+    throw new Error(
+      `expected citation fixture to contain excerpt at file index ${String(fileIndex)}`,
+    );
   }
   return { file, excerpt };
 }
@@ -617,10 +620,14 @@ describe("buildGroundedGatewayMessages", () => {
 
 describe("modelWindowAwareBudget", () => {
   it("uses the configured model context profile instead of a fixed grounded prompt ceiling", () => {
-    const longContextDeps = deps(undefined, {}, {
-      config: customModelConfig(CHAT_MODEL, { contextWindow: 200_000, maxOutputTokens: 12_000 }),
-      configPresent: true,
-    });
+    const longContextDeps = deps(
+      undefined,
+      {},
+      {
+        config: customModelConfig(CHAT_MODEL, { contextWindow: 200_000, maxOutputTokens: 12_000 }),
+        configPresent: true,
+      },
+    );
 
     const budget = modelWindowAwareBudget(longContextDeps, CHAT_MODEL);
 
@@ -1559,6 +1566,45 @@ describe("handleGroundedAsk", () => {
     expect(result.status).toBe(200);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     assertGroundedEvidenceManifest(evidenceStore, answer);
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-002/-003): does NOT persist grounded evidence when the folder path abstained", async () => {
+    const { chatId } = await setupChatWithScope();
+    const evidenceStore = createInMemoryEvidenceStore();
+    const noEvidencePack: ConnectedContextPack = {
+      ...emptyPack(),
+      uncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "No repository evidence matched the connected scope for this question.",
+          impactedAtomIds: [],
+          emittedAtMs: NOW,
+        },
+      ],
+    };
+    const abstainRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
+      void input;
+      return Promise.resolve({
+        pack: noEvidencePack,
+        assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
+        elapsedMs: 1,
+        noEvidence: true,
+      });
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "Where is the nonexistent thing?" })),
+      { ...deps(), evidenceStore },
+      abstainRunner,
+    );
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    // The abstention answer is surfaced, but with NO citations, NO evidence run id, and NO persisted
+    // grounded-evidence manifest — there is nothing to ground, so nothing may be recorded as grounded.
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(answer.citations).toEqual([]);
+    expect(answer.evidenceRunId).toBeUndefined();
+    expect(answer.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
+    expect(evidenceStore.list()).toEqual([]);
   });
 
   it("contextPack.fileCount mirrors scope.relativePaths.length (files-scope = 3)", async () => {

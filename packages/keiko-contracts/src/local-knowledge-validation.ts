@@ -372,10 +372,7 @@ function validateContextualRetrievalStrings(
   }
 }
 
-function validateContextualRetrievalLimits(
-  input: Record<string, unknown>,
-  errors: string[],
-): void {
+function validateContextualRetrievalLimits(input: Record<string, unknown>, errors: string[]): void {
   if (input.maxContextChars !== undefined) {
     validatePositiveIntegerMax(
       errors,

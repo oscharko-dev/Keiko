@@ -16,7 +16,5 @@ export function sanitizeMemoryTombstoneReason(
   if (reason === undefined) return undefined;
   const trimmed = reason.trim();
   if (trimmed.length === 0) return undefined;
-  return isMemoryTombstoneReasonCode(trimmed)
-    ? trimmed
-    : MEMORY_FORGET_REASON_USER_REQUEST;
+  return isMemoryTombstoneReasonCode(trimmed) ? trimmed : MEMORY_FORGET_REASON_USER_REQUEST;
 }

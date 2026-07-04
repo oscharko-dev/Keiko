@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL, URL } from "node:url";
 
 import rootManifest from "../package.json" with { type: "json" };
 
@@ -20,6 +21,20 @@ function assertTlsVerificationEnabled() {
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
     fail("NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for registry install smoke.");
   }
+  const url = new URL(registry);
+  if (url.protocol === "https:") return;
+  const loopback =
+    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  if (loopback && process.env.KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK === "1") {
+    console.log(
+      "registry-install-smoke: using explicit insecure loopback registry override for local test.",
+    );
+    return;
+  }
+  fail(
+    "registry install smoke requires an HTTPS registry URL. " +
+      "Only loopback HTTP is allowed with KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK=1.",
+  );
 }
 
 function run(cmd, args, options = {}) {
@@ -41,21 +56,50 @@ function run(cmd, args, options = {}) {
   return result;
 }
 
-function assertCliVersion(projectDir) {
-  const result = run(
-    process.execPath,
-    [
-      join(projectDir, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js"),
-      "--version",
-    ],
-    { cwd: projectDir },
-  );
-  if (!result.stdout.includes(rootManifest.version)) {
-    fail(`installed CLI version output did not include ${rootManifest.version}: ${result.stdout}`);
+function installedPackageRoot(projectDir) {
+  return join(projectDir, "node_modules", "@oscharko-dev", "keiko");
+}
+
+function assertBundledPayload(projectDir) {
+  const bundleRoot = join(installedPackageRoot(projectDir), "node_modules");
+  const bundled = Array.isArray(rootManifest.bundleDependencies)
+    ? rootManifest.bundleDependencies
+    : [];
+  for (const name of bundled) {
+    const shortName = name.replace(/^@oscharko-dev\//, "");
+    const dist = join(bundleRoot, "@oscharko-dev", shortName, "dist");
+    if (!existsSync(dist)) {
+      fail(`registry-installed package missing bundled dependency dist: ${dist}`);
+    }
+    if (readdirSync(dist).length === 0) {
+      fail(`registry-installed package has empty bundled dependency dist: ${dist}`);
+    }
   }
 }
 
-function npmSmoke() {
+async function assertRootImport(projectDir) {
+  const moduleUrl = pathToFileURL(join(installedPackageRoot(projectDir), "dist", "index.js")).href;
+  const mod = await import(moduleUrl);
+  if (mod.SDK_VERSION !== rootManifest.version) {
+    fail(
+      `registry-installed root import SDK_VERSION mismatch: ${String(mod.SDK_VERSION)} ` +
+        `!= ${rootManifest.version}`,
+    );
+  }
+}
+
+async function assertInstalledRuntime(projectDir) {
+  const bin = join(installedPackageRoot(projectDir), "dist", "cli", "index.js");
+  const result = run(process.execPath, [bin, "--version"], { cwd: projectDir });
+  if (!result.stdout.includes(rootManifest.version)) {
+    fail(`installed CLI version output did not include ${rootManifest.version}: ${result.stdout}`);
+  }
+  run(process.execPath, [bin, "--help"], { cwd: projectDir });
+  assertBundledPayload(projectDir);
+  await assertRootImport(projectDir);
+}
+
+async function npmSmoke() {
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-npm-"));
   try {
     writeFileSync(
@@ -75,13 +119,13 @@ function npmSmoke() {
       // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility for install smoke; argv is fixed.
       { cwd: projectDir, shell: process.platform === "win32" },
     );
-    assertCliVersion(projectDir);
+    await assertInstalledRuntime(projectDir);
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
   }
 }
 
-function yarnSmoke() {
+async function yarnSmoke() {
   if (skipYarn) {
     console.log(
       "registry-install-smoke: yarn check skipped by KEIKO_REGISTRY_INSTALL_SKIP_YARN=1.",
@@ -126,14 +170,14 @@ function yarnSmoke() {
         YARN_NPM_REGISTRY_SERVER: registry,
       },
     });
-    assertCliVersion(projectDir);
+    await assertInstalledRuntime(projectDir);
   } finally {
     rmSync(projectDir, { recursive: true, force: true });
   }
 }
 
 assertTlsVerificationEnabled();
-npmSmoke();
-yarnSmoke();
+await npmSmoke();
+await yarnSmoke();
 
 console.log(`registry-install-smoke: PASS - ${packageSpec} installs from ${registry}.`);

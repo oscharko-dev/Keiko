@@ -414,25 +414,14 @@ function GitDeliveryActionSheetView({
 }: GitDeliveryActionSheetViewProps): ReactNode {
   const titleId = useId();
   const stateId = useId();
-  const dialogRef = useRef<HTMLDivElement | null>(null);
-  const confirmRef = useRef<HTMLButtonElement | null>(null);
   const waiting = actionSheet.state === "waiting-for-approval";
   const blocked = actionSheet.state === "blocked";
   const ready = actionSheet.state === "ready-to-execute";
 
-  // Focus management (AC5): when the surface escalates to a waiting-for-approval decision the
-  // Approve affordance receives focus; otherwise the confirm/execute affordance does. Mirrors
-  // AgentGateCard's focus-on-mount.
-  const approveRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => {
-    if (waiting) {
-      approveRef.current?.focus();
-    } else if (blocked) {
-      dialogRef.current?.focus();
-    } else {
-      confirmRef.current?.focus();
-    }
-  }, [blocked, waiting]);
+  // GEN-UI-A11Y-006 — this is an inline embedded card, not a modal: it has no focus trap and no
+  // modality (its comment notes it never executes the mutation). Grabbing focus on mount would
+  // hijack the reading order of the surrounding surface, so we do NOT auto-focus. The container is
+  // a named role="group" (see below) and the Escape-to-reject shortcut remains for keyboard users.
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === "Escape" && onReject !== undefined) {
@@ -442,16 +431,17 @@ function GitDeliveryActionSheetView({
   };
 
   return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-reject on the alertdialog container mirrors the Reject button for keyboard users, exactly like AgentGateCard
+    // GEN-UI-A11Y-006 — non-modal embedded card: role="group" (an accessibly-named container),
+    // NOT role="alertdialog" (which would falsely promise a focus trap + modality this inline card
+    // does not provide). Escape-to-reject is retained for keyboard users.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-reject on the group container mirrors the Reject button for keyboard users
     <div
       className="arun-gate gdas-card"
       data-state={actionSheet.state}
-      role="alertdialog"
+      role="group"
       aria-labelledby={titleId}
       aria-describedby={stateId}
       onKeyDown={handleKeyDown}
-      ref={dialogRef}
-      tabIndex={-1}
     >
       <div className="arun-gate-h">
         <Icons.git size={13} /> Git delivery
@@ -491,7 +481,6 @@ function GitDeliveryActionSheetView({
             type="button"
             className="arun-btn primary"
             onClick={onApprove}
-            ref={approveRef}
             data-testid="gdas-approve"
           >
             Approve
@@ -501,7 +490,6 @@ function GitDeliveryActionSheetView({
             type="button"
             className="arun-btn primary"
             onClick={onConfirm}
-            ref={confirmRef}
             disabled={!ready}
             data-testid="gdas-confirm"
           >

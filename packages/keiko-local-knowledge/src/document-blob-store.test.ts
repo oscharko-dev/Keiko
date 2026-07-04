@@ -11,12 +11,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { createCapsule } from "./capsule-lifecycle.js";
-import { insertDocumentRow } from "./discovery/persist.js";
+import { deleteDocumentRow, insertDocumentRow } from "./discovery/persist.js";
 import { addSourceToCapsule } from "./source-lifecycle.js";
 import { freshStore, sampleCapsuleInput, sampleSourceInput } from "./_support.js";
 import { openKnowledgeStore, type KnowledgeStoreKeyProvider } from "./store.js";
 
 import {
+  __resetVerifiedBlobCacheForTests,
   MAX_PDF_DOCUMENT_BLOB_BYTES,
   PDF_DOCUMENT_BLOB_MEDIA_TYPE,
   readPdfDocumentBlob,
@@ -86,6 +87,9 @@ function seedPdfDocument(store: ReturnType<typeof openKnowledgeStore>): {
 let tmp: string | undefined;
 
 afterEach(() => {
+  // GEN-PERF-PERSISTENCE-011: clear the module-level verified-blob cache so decrypted bytes never
+  // leak across tests that reuse the same capsule id + content hash.
+  __resetVerifiedBlobCacheForTests();
   if (tmp !== undefined) {
     rmSync(tmp, { recursive: true, force: true });
     tmp = undefined;
@@ -213,6 +217,59 @@ describe("PDF document blob store", () => {
         kind: "unreadable",
         reason: "hash-mismatch",
       });
+    } finally {
+      fresh.cleanup();
+    }
+  });
+
+  it("keeps a deduplicated PDF blob when the creator document is deleted but another document still references it", () => {
+    const fresh = freshStore();
+    try {
+      const seeded = seedPdfDocument(fresh.store);
+      const survivorDocumentId = "doc-blob-copy" as DocumentId;
+      insertDocumentRow(fresh.store._internal.db, {
+        id: survivorDocumentId,
+        capsuleId: seeded.capsuleId,
+        sourceId: String(seeded.sourceId),
+        documentPath: "docs/policy-copy.pdf",
+        sizeBytes: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        contentHash: seeded.contentHash,
+        parserId: "pdf",
+        parserVersion: "1.0.0",
+        lastExtractedAt: 1000,
+        status: "extracted",
+        safeDisplayName: "policy-copy.pdf",
+      });
+      writePdfDocumentBlob(fresh.store, {
+        capsuleId: seeded.capsuleId,
+        sourceId: seeded.sourceId,
+        documentId: seeded.documentId,
+        contentHash: seeded.contentHash,
+        byteLength: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        bytes: PDF_BYTES,
+      });
+      writePdfDocumentBlob(fresh.store, {
+        capsuleId: seeded.capsuleId,
+        sourceId: seeded.sourceId,
+        documentId: survivorDocumentId,
+        contentHash: seeded.contentHash,
+        byteLength: PDF_BYTES.byteLength,
+        mediaType: PDF_DOCUMENT_BLOB_MEDIA_TYPE,
+        bytes: PDF_BYTES,
+      });
+
+      deleteDocumentRow(fresh.store._internal.db, seeded.capsuleId, seeded.documentId);
+
+      expect(readPdfDocumentBlob(fresh.store, seeded.capsuleId, seeded.documentId)).toEqual({
+        kind: "missing",
+      });
+      const survivor = readPdfDocumentBlob(fresh.store, seeded.capsuleId, survivorDocumentId);
+      expect(survivor.kind).toBe("ok");
+      if (survivor.kind !== "ok") return;
+      expect(Buffer.from(survivor.blob.bytes).equals(PDF_BYTES)).toBe(true);
+      expect(survivor.blob.contentHash).toBe(seeded.contentHash);
     } finally {
       fresh.cleanup();
     }

@@ -10,7 +10,15 @@ import {
   createNodeContainedJsonArtifactStore,
   type ContainedJsonArtifactStore,
 } from "@oscharko-dev/keiko-evidence";
-import { closeSync, mkdirSync, openSync, rmSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  rmSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { QualityIntelligenceReview } from "@oscharko-dev/keiko-quality-intelligence";
@@ -44,7 +52,7 @@ const REVIEW_STATES: ReadonlySet<string> = new Set(
   QualityIntelligence.QUALITY_INTELLIGENCE_REVIEW_STATES,
 );
 
-export type QiReviewAction = "approve" | "reject" | "request-changes" | "reopen" | "withdraw";
+export type QiReviewAction = QI.QualityIntelligenceReviewAction;
 
 // An inline edit (Epic #712, Issue #726) is an auditable candidate action. Non-terminal candidates
 // keep their review state; terminal candidates move to `changes-requested` with explicit
@@ -208,7 +216,11 @@ const chainAuditLog = (entries: readonly QiReviewAuditEntry[]): readonly QiRevie
 };
 
 export type QiReviewAuditIntegrityIssueCode =
-  "MISSING_CHAIN_FIELD" | "SEQUENCE_NOT_MONOTONE" | "PRIOR_HASH_MISMATCH" | "ENTRY_HASH_MISMATCH";
+  | "MISSING_CHAIN_FIELD"
+  | "SEQUENCE_NOT_MONOTONE"
+  | "PRIOR_HASH_MISMATCH"
+  | "ENTRY_HASH_MISMATCH"
+  | "STATE_AUDIT_MISMATCH";
 
 export interface QiReviewAuditIntegrityIssue {
   readonly index: number;
@@ -234,6 +246,62 @@ const addIntegrityIssue = (
 ): void => {
   issues.push({ index, code, message });
 };
+
+// Replays the audit log to derive the expected run + per-candidate review states. Extracted so
+// verifyMaterializedReviewState stays under the cyclomatic-complexity bound.
+function replayReviewAuditStates(artifact: QiReviewStateArtifact): {
+  readonly runState: ReviewState;
+  readonly candidateStates: ReturnType<typeof toNullProtoStates>;
+} {
+  let runState: ReviewState = "open";
+  const candidateStates = toNullProtoStates({});
+  for (const entry of artifact.auditLog) {
+    if (entry.scope === "run") {
+      runState = entry.toState;
+      continue;
+    }
+    if (entry.candidateId === undefined) {
+      continue;
+    }
+    candidateStates[entry.candidateId] = entry.toState;
+    if (entry.action === "edit" && QualityIntelligence.isTerminalReviewState(runState)) {
+      runState = entry.toState;
+    }
+  }
+  return { runState, candidateStates };
+}
+
+function verifyMaterializedReviewState(
+  artifact: QiReviewStateArtifact,
+  issues: QiReviewAuditIntegrityIssue[],
+): void {
+  const { runState, candidateStates } = replayReviewAuditStates(artifact);
+  if (artifact.runState !== runState) {
+    addIntegrityIssue(
+      issues,
+      -1,
+      "STATE_AUDIT_MISMATCH",
+      "Materialized run review state does not match the audit log.",
+    );
+  }
+  const allCandidateIds = new Set([
+    ...Object.keys(candidateStates),
+    ...Object.keys(artifact.candidateStates),
+  ]);
+  for (const candidateId of allCandidateIds) {
+    const expected = candidateStates[candidateId] ?? "open";
+    const actual = artifact.candidateStates[candidateId] ?? "open";
+    if (actual !== expected) {
+      addIntegrityIssue(
+        issues,
+        -1,
+        "STATE_AUDIT_MISMATCH",
+        "Materialized candidate review state does not match the audit log.",
+      );
+      return;
+    }
+  }
+}
 
 export const verifyQiReviewAuditIntegrity = (
   artifact: QiReviewStateArtifact,
@@ -289,16 +357,33 @@ export const verifyQiReviewAuditIntegrity = (
       );
     }
   }
+  verifyMaterializedReviewState(artifact, issues);
   return { ok: issues.length === 0, issues };
 };
 
 const storeFor = (evidenceDir: string): ContainedJsonArtifactStore<QiReviewStateArtifact> =>
   createNodeContainedJsonArtifactStore(evidenceDir, REVIEW_SUFFIX, { parse: parseArtifact });
 
+export class QualityIntelligenceReviewIntegrityError extends Error {
+  readonly issues: readonly QiReviewAuditIntegrityIssue[];
+
+  constructor(issues: readonly QiReviewAuditIntegrityIssue[]) {
+    super("Quality Intelligence review artifact failed integrity validation.");
+    this.name = "QualityIntelligenceReviewIntegrityError";
+    this.issues = issues;
+  }
+}
+
 export const loadRunReviewState = (
   runId: string,
   evidenceDir: string,
-): QiReviewStateArtifact | undefined => storeFor(evidenceDir).load(runId);
+): QiReviewStateArtifact | undefined => {
+  const artifact = storeFor(evidenceDir).load(runId);
+  if (artifact === undefined) return undefined;
+  const integrity = verifyQiReviewAuditIntegrity(artifact);
+  if (!integrity.ok) throw new QualityIntelligenceReviewIntegrityError(integrity.issues);
+  return artifact;
+};
 
 export const runReviewStateOf = (artifact: QiReviewStateArtifact | undefined): ReviewState =>
   artifact?.runState ?? "open";
@@ -312,14 +397,6 @@ export const candidateReviewStateOf = (
 };
 
 // ─── Mutation (used by the review-action route, Issue #282) ─────────────────────
-
-const ACTION_TARGET: Readonly<Record<QiReviewAction, ReviewState>> = {
-  approve: "approved",
-  reject: "rejected",
-  "request-changes": "changes-requested",
-  reopen: "open",
-  withdraw: "withdrawn",
-};
 
 const TRANSITION_EVENT: Readonly<
   Record<QiReviewAction, QualityIntelligenceReview.QualityIntelligenceReviewTransitionEvent>
@@ -466,6 +543,42 @@ const sleepSync = (ms: number): void => {
   Atomics.wait(view, 0, 0, ms);
 };
 
+// GEN-PERF-PERSISTENCE-007 — the review-artifact critical section is synchronous (its callers are
+// exported sync functions), so the poll cannot yield the event loop. Instead we make the wait
+// UNNECESSARY when the lock is ownerless/dead: record the holder PID and reclaim the lock
+// immediately when that PID is not alive (crashed writer, or a stale/test-created lock), rather than
+// exhausting all REVIEW_LOCK_ATTEMPTS busy-waits and then failing. A lock held by a LIVE process is
+// still honoured (we retry with the short sleep), preserving cross-writer serialisation.
+const readReviewLockPid = (lockPath: string): number | undefined => {
+  try {
+    const pid = Number.parseInt(readFileSync(lockPath, "utf8").trim(), 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const reviewLockOwnerIsDead = (lockPath: string): boolean => {
+  const pid = readReviewLockPid(lockPath);
+  if (pid === undefined) return true;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "EPERM";
+  }
+};
+
+const stampReviewLockOwner = (fd: number): void => {
+  try {
+    writeSync(fd, `${String(process.pid)}\n`);
+    fsyncSync(fd);
+  } catch {
+    // Best-effort ownership stamp; the lock still works without it.
+  }
+};
+
 const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation: () => T): T => {
   const lockDir = join(evidenceDir, "qi", REVIEW_LOCK_SUBDIR);
   const lockPath = join(lockDir, `${sha256Hex(runId).slice(0, 32)}.lock`);
@@ -474,6 +587,7 @@ const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation
     let fd: number | undefined;
     try {
       fd = openSync(lockPath, "wx", 0o600);
+      stampReviewLockOwner(fd);
       try {
         return operation();
       } finally {
@@ -490,6 +604,12 @@ const withReviewArtifactLock = <T>(evidenceDir: string, runId: string, operation
         rmSync(lockPath, { force: true });
       }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      // Reclaim a dead/ownerless lock immediately instead of busy-waiting; a live foreign holder
+      // still gets the short poll so real cross-writer contention stays serialised.
+      if (reviewLockOwnerIsDead(lockPath)) {
+        rmSync(lockPath, { force: true });
+        continue;
+      }
       sleepSync(REVIEW_LOCK_SLEEP_MS);
     }
   }
@@ -568,7 +688,7 @@ const applyPureTransition = (
       throw new QualityIntelligenceReviewTransitionRejected(
         fromState,
         action,
-        ACTION_TARGET[action],
+        QualityIntelligence.QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET[action],
       );
     }
     throw error;
@@ -608,7 +728,7 @@ const reviewRecordFromActor = (
   runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
   reviewerKind: "human-reviewer",
   reviewerLabel: actor.actorId,
-  state: ACTION_TARGET[action],
+  state: QualityIntelligence.QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET[action],
   createdAt: at,
   lastUpdatedAt: at,
 });
@@ -760,12 +880,6 @@ export interface AppendEditAuditInput {
   readonly redact: ReviewRedactor;
 }
 
-const TERMINAL_REVIEW_STATES: ReadonlySet<ReviewState> = new Set([
-  "approved",
-  "rejected",
-  "withdrawn",
-]);
-
 /**
  * Append an append-only `edit` audit entry for an inline candidate edit. Display labels are redacted
  * before persist (FIX M1). Edits to terminal candidates reopen review by moving the candidate to
@@ -780,12 +894,12 @@ export const appendEditAudit = (input: AppendEditAuditInput): QiReviewStateArtif
     const actor = resolvedActor(input);
     const candidateState = candidateReviewStateOf(current, input.candidateId);
     const runState = runReviewStateOf(current);
-    const state = TERMINAL_REVIEW_STATES.has(candidateState)
+    const state = QualityIntelligence.isTerminalReviewState(candidateState)
       ? candidateState
-      : TERMINAL_REVIEW_STATES.has(runState)
+      : QualityIntelligence.isTerminalReviewState(runState)
         ? runState
         : candidateState;
-    const terminalEdit = TERMINAL_REVIEW_STATES.has(state);
+    const terminalEdit = QualityIntelligence.isTerminalReviewState(state);
     const toState: ReviewState = terminalEdit ? "changes-requested" : state;
     const audit: QiReviewAuditEntry = {
       at: input.now,
@@ -806,7 +920,9 @@ export const appendEditAudit = (input: AppendEditAuditInput): QiReviewStateArtif
       ? Object.assign(toNullProtoStates(current.candidateStates), { [input.candidateId]: toState })
       : current.candidateStates;
     const runStateAfterEdit =
-      terminalEdit && TERMINAL_REVIEW_STATES.has(current.runState) ? toState : current.runState;
+      terminalEdit && QualityIntelligence.isTerminalReviewState(current.runState)
+        ? toState
+        : current.runState;
     const next: QiReviewStateArtifact = {
       ...current,
       runState: runStateAfterEdit,

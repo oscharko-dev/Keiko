@@ -168,6 +168,7 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
   const statusId = useId();
 
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
   // While the panel is open, Escape closes it and returns focus to the trigger (keyboard operability +
   // focus restoration). A document listener keeps the non-interactive panel free of event handlers.
   useEffect(() => {
@@ -181,6 +182,24 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  // GEN-UI-INTERACTION-006 — while the panel is open, a pointerdown outside the `.tw-switcher` root
+  // dismisses it (mirrors the Footer window-palette outside-click). Focus is intentionally NOT forced
+  // back to the trigger here: an outside click already moves focus to whatever was clicked, and the
+  // Escape path above owns focus restoration for keyboard dismissal.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target;
+      if (target instanceof Node && rootRef.current !== null && !rootRef.current.contains(target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
     };
   }, [open]);
 
@@ -203,7 +222,7 @@ function TaskWorkspaceSwitcherImpl(): ReactNode {
     api.switching || repositoryRoot === null || taskId.trim() === "" || baseBranch.trim() === "";
 
   return (
-    <div className="tw-switcher" style={{ position: "relative" }}>
+    <div ref={rootRef} className="tw-switcher" style={{ position: "relative" }}>
       <button
         ref={triggerRef}
         type="button"

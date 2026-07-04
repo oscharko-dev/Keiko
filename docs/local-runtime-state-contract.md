@@ -177,13 +177,15 @@ tree.
   covers the same proof plus crafted negative cases and a `keiko repair --dry-run`
   healthy/drifted comparison.
 
-The audit covers five classes: no plaintext credentials in the gateway config; owner-only file and
-directory modes for Keiko-owned artifacts; sealed Memory Vault content (`kv1.` text envelopes, binary
-embedding envelopes); sealed Local Knowledge content (the `content_encryption=aes-256-gcm/v1` marker
-plus a sealed key-verification probe, and any populated content columns); and protected Evidence/QI
-artifacts (owner-only modes, redaction checks on text-bearing artifacts, recomputed QI/Prompt
-Enhancement manifest hashes, Figma snapshot side-file hash checks, and symlink refusal before
-artifact reads).
+The audit covers seven classes: no plaintext credentials in the gateway config; sealed editor
+hot-exit recovery snapshots (`kv1.` envelopes with owner-only key material and symlink refusal on the
+recovery store); owner-only file and directory modes for Keiko-owned artifacts; sealed Memory Vault
+content (`kv1.` text envelopes, binary embedding envelopes); sealed Local Knowledge content (the
+`content_encryption=aes-256-gcm/v1` marker plus a sealed key-verification probe, and any populated
+content columns); protected Evidence/QI artifacts (owner-only modes, redaction checks on text-bearing
+artifacts, recomputed QI/Prompt Enhancement manifest hashes, Figma snapshot side-file hash checks, and
+symlink refusal before artifact reads); and runtime store integrity (no unresolved memory-vault or
+Evidence/QI quarantine residue left behind by a failed operation).
 
 Update recovery snapshots are not package archives or general downgrade backups. They retain one
 previous-version, local-only, content-free manifest with version pointers, affected store health,

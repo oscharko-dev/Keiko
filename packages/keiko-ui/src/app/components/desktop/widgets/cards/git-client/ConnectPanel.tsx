@@ -4,6 +4,7 @@
 // when no repository is connected: an icon medallion, a short prompt, the Connect / Clone actions,
 // a Recent-repositories list, and a calm agent hint. Repository selection here transitions the
 // window into the connected Changes view. Styles compose existing globals.css tokens (ADR-0051).
+// See ADR-0098 for the git-client window conventions.
 
 import type { ReactNode } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";

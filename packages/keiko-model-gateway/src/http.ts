@@ -6,7 +6,11 @@ import { request as httpsRequest } from "node:https";
 import { connect as netConnect, isIP } from "node:net";
 import type { Socket } from "node:net";
 import * as tls from "node:tls";
-import { outboundAddressBlockedReason, outboundTargetBlockedReason } from "./egress-policy.js";
+import {
+  normalizeHost,
+  outboundAddressBlockedReason,
+  outboundTargetBlockedReason,
+} from "./egress-policy.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
@@ -232,7 +236,7 @@ export function streamingResponseFromNode(
   res: import("node:http").IncomingMessage,
   onCancel: () => void,
   maxBytes: number = MAX_RESPONSE_BYTES,
-  onDone?: (() => void)  ,
+  onDone?: () => void,
 ): Response {
   let total = 0;
   let done = false;
@@ -317,10 +321,6 @@ async function fetchWithCaBundle(
     req.on("error", reject);
     req.end(body);
   });
-}
-
-function normalizeHost(hostname: string): string {
-  return hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
 }
 
 function tlsServerName(hostname: string): string | undefined {
@@ -962,7 +962,7 @@ export async function readJsonCapped(
 // cumulative size exactly like `readJsonCapped`. Used by the text-to-speech adapter (Issue #1558) to
 // pull synthesized audio off the provider response without buffering an unbounded payload: a provider
 // that streams more than `maxBytes` is aborted and rejected rather than exhausting memory (the same
-// bounded-egress guarantee every other gateway call inherits, ADR-0038/ADR-0058 D4). The returned
+// bounded-egress guarantee every other gateway call inherits, ADR-0038/ADR-0100 D4). The returned
 // array is `ArrayBuffer`-backed so it is a valid `BodyInit`/`BufferSource` for downstream consumers
 // without a type assertion.
 export async function readBytesCapped(

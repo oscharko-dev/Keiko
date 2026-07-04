@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -18,6 +18,7 @@ import {
   fetchProjects,
   renameFilesEntry,
 } from "../../../../../lib/api";
+import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
 import type {
   FilesMutationResponse,
   FilesTreeEntry,
@@ -126,6 +127,51 @@ interface TreeTooltipState {
 const TREE_TOOLTIP_DELAY_MS = 650;
 const TREE_TOOLTIP_MAX_WIDTH = 240;
 const DIRECTORY_RENDER_BATCH_SIZE = 200;
+// GEN-PERF-MEMORY-005 — cap the loaded-directory cache. Beyond this many cached directories
+// the least-recently-loaded ones are dropped (re-expanding simply re-fetches), except the
+// currently-expanded chain and its ancestors, which are always pinned so visible state never
+// evicts. Chosen well above a typical open tree depth/breadth so day-to-day nav never evicts.
+const DIRECTORY_CACHE_MAX = 50;
+
+// The set of directory paths that must never be evicted: every expanded directory plus all of
+// its ancestor directories (root "" included), so the visible tree is always fully cached.
+function pinnedDirectoryPaths(expanded: ReadonlySet<string>): Set<string> {
+  const pinned = new Set<string>([""]);
+  for (const path of expanded) {
+    pinned.add(path);
+    let parent = entryParent(path);
+    while (parent !== null) {
+      pinned.add(parent);
+      parent = entryParent(parent);
+    }
+    pinned.add("");
+  }
+  return pinned;
+}
+
+// Evict least-recently-accessed directories beyond the cap. `accessOrder` is oldest-first.
+// Pinned paths are retained regardless of age. Returns the pruned map (or the original when
+// nothing was evicted) so callers can no-op an unchanged state.
+function pruneDirectoryCache(
+  directories: Record<string, DirectoryState>,
+  accessOrder: readonly string[],
+  pinned: ReadonlySet<string>,
+): Record<string, DirectoryState> {
+  const keys = Object.keys(directories);
+  if (keys.length <= DIRECTORY_CACHE_MAX) return directories;
+  const evictable = accessOrder.filter(
+    (path) => directories[path] !== undefined && !pinned.has(path),
+  );
+  let toEvict = keys.length - DIRECTORY_CACHE_MAX;
+  if (toEvict <= 0 || evictable.length === 0) return directories;
+  const next = { ...directories };
+  for (const path of evictable) {
+    if (toEvict <= 0) break;
+    delete next[path];
+    toEvict -= 1;
+  }
+  return toEvict === keys.length - DIRECTORY_CACHE_MAX ? directories : next;
+}
 
 // Parent directory (root-relative) of a tree entry, for scoping a new sibling or a rename target.
 function entryParent(path: string): string | null {
@@ -220,17 +266,51 @@ function handleTreeNavKey(rows: readonly HTMLButtonElement[], index: number, key
   }
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let size = bytes;
-  let idx = 0;
-  while (size >= 1024 && idx < units.length - 1) {
-    size /= 1024;
-    idx += 1;
+// GEN-UI-FOCUS-002 — keep Tab focus cycling within a modal dialog (WCAG 2.1.2/2.4.3). Returns
+// true when it handled the key (caller should not do more). jsdom does not enforce inert, so an
+// explicit wrap is required for keyboard users to stay inside the dialog.
+function trapDialogTab(container: HTMLElement, event: ReactKeyboardEvent): boolean {
+  if (event.key !== "Tab") return false;
+  const focusables = Array.from(
+    container.querySelectorAll<HTMLElement>(
+      "button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])",
+    ),
+  );
+  if (focusables.length === 0) {
+    event.preventDefault();
+    return true;
   }
-  const value = idx === 0 ? size.toFixed(0) : size.toFixed(size >= 10 ? 1 : 2);
-  return `${value} ${units[idx]}`;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !container.contains(active))) {
+    event.preventDefault();
+    last?.focus();
+    return true;
+  }
+  if (!event.shiftKey && active === last) {
+    event.preventDefault();
+    first?.focus();
+    return true;
+  }
+  return false;
+}
+
+// GEN-UI-KEYBOARD-003 — arrow/Home/End roving among role="menuitem" buttons in the context menu
+// (APG menu pattern). Enter/Space activate natively on the focused button.
+function handleMenuNavKey(container: HTMLElement, event: ReactKeyboardEvent): void {
+  const keys = new Set(["ArrowDown", "ArrowUp", "Home", "End"]);
+  if (!keys.has(event.key)) return;
+  const items = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
+  );
+  if (items.length === 0) return;
+  const index = items.indexOf(document.activeElement as HTMLButtonElement);
+  event.preventDefault();
+  if (event.key === "ArrowDown") items[(index + 1 + items.length) % items.length]?.focus();
+  else if (event.key === "ArrowUp") items[(index - 1 + items.length) % items.length]?.focus();
+  else if (event.key === "Home") items[0]?.focus();
+  else if (event.key === "End") items[items.length - 1]?.focus();
 }
 
 function gitStatusSummary(state: GitStatusState): string | null {
@@ -309,6 +389,19 @@ export function FilesWidget({
   const restoreFocusPathRef = useRef<string | null>(null);
   const treeTooltipTimerRef = useRef<number | null>(null);
   const treeTooltipPointerRef = useRef({ x: 0, y: 0 });
+  const directoryLoadSeqRef = useRef(0);
+  // GEN-PERF-MEMORY-005 — LRU access order (oldest-first) for the directories cache, and a
+  // live mirror of `expanded` so the pruning step (run inside loadDirectory) can pin the
+  // visible chain without adding `expanded` to loadDirectory's dependency list.
+  const directoryAccessOrderRef = useRef<string[]>([]);
+  const expandedRef = useRef<ReadonlySet<string>>(new Set([""]));
+  expandedRef.current = expanded;
+  const touchDirectoryAccess = useCallback((path: string): void => {
+    const order = directoryAccessOrderRef.current;
+    const existing = order.indexOf(path);
+    if (existing >= 0) order.splice(existing, 1);
+    order.push(path);
+  }, []);
   // Shared ARIA description for unreadable symlink rows (audit C196): the rows stay focusable
   // via aria-disabled, and this single hidden span explains WHY they cannot be opened.
   const unreadableReasonId = useId();
@@ -328,6 +421,13 @@ export function FilesWidget({
   const [opError, setOpError] = useState<string | null>(null);
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<FilesTreeEntry | null>(null);
+  // GEN-UI-FOCUS-002 / GEN-UI-KEYBOARD-003 — the overlay menu and delete dialog render inside the
+  // still-mounted tree, so the row that opened them keeps existing; remember it and put focus back
+  // there on close (WCAG 2.4.3). `deleteDialogRef` / `menuRef` scope the focus trap and roving.
+  const deleteDialogRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const confirmDeleteReturnFocusRef = useRef<HTMLElement | null>(null);
+  const menuReturnFocusRef = useRef<HTMLElement | null>(null);
   // Root-relative path of the entry currently being dragged in the tree (null when not dragging).
   const [draggedPath, setDraggedPath] = useState<string | null>(null);
   const onFilesMutatedRef = useRef(onFilesMutated);
@@ -364,13 +464,18 @@ export function FilesWidget({
     [clearTreeTooltipTimer],
   );
 
+  // GEN-PERF-WIDGET-004 — while a tooltip is visible, pointer motion fired setTreeTooltip on
+  // every pointermove (60–120Hz), committing a full FilesWidget re-render (the whole tree,
+  // every windowed row). Instead, move the tooltip imperatively: write the portal element's
+  // left/top directly and only keep text/visibility in React state. No commit per move.
+  const treeTooltipElRef = useRef<HTMLDivElement | null>(null);
   const moveTreeTooltip = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
     treeTooltipPointerRef.current = { x: event.clientX, y: event.clientY };
-    setTreeTooltip((current) => {
-      if (current === null) return current;
-      const position = treeTooltipPosition(event.clientX, event.clientY);
-      return { ...current, ...position };
-    });
+    const el = treeTooltipElRef.current;
+    if (el === null) return;
+    const position = treeTooltipPosition(event.clientX, event.clientY);
+    el.style.left = `${String(position.x)}px`;
+    el.style.top = `${String(position.y)}px`;
   }, []);
 
   useEffect(() => {
@@ -410,6 +515,10 @@ export function FilesWidget({
 
   const loadDirectory = useCallback(
     async (path: string): Promise<void> => {
+      const requestSeq = directoryLoadSeqRef.current;
+      const requestRoot = apiRoot;
+      const isStale = (): boolean =>
+        requestSeq !== directoryLoadSeqRef.current || requestRoot !== apiRoot;
       if (apiRoot.length === 0) {
         setDirectories((current) => ({
           ...current,
@@ -435,22 +544,33 @@ export function FilesWidget({
       }));
       try {
         const response = await readSharedFilesTree(apiRoot, path);
+        if (isStale()) return;
         if (path === "") {
           setResolvedRoot(response.root);
           activeFileChangeRef.current?.(null, response.root, null);
           setCurrentDirectoryPath(null);
         }
-        setDirectories((current) => ({
-          ...current,
-          [path]: {
-            entries: response.entries,
-            truncated: response.truncated,
-            loading: false,
-            error: null,
-            notice: null,
-          },
-        }));
+        touchDirectoryAccess(path);
+        setDirectories((current) => {
+          const next = {
+            ...current,
+            [path]: {
+              entries: response.entries,
+              truncated: response.truncated,
+              loading: false,
+              error: null,
+              notice: null,
+            },
+          };
+          // GEN-PERF-MEMORY-005 — bound the cache, pinning the visible expanded chain.
+          return pruneDirectoryCache(
+            next,
+            directoryAccessOrderRef.current,
+            pinnedDirectoryPaths(expandedRef.current),
+          );
+        });
       } catch (error: unknown) {
+        if (isStale()) return;
         setDirectories((current) => ({
           ...current,
           [path]: {
@@ -463,10 +583,11 @@ export function FilesWidget({
         }));
       }
     },
-    [apiRoot],
+    [apiRoot, touchDirectoryAccess],
   );
 
   useEffect(() => {
+    directoryLoadSeqRef.current += 1;
     setSelectedPath(null);
     setGitDiffState(null);
     setCurrentDirectoryPath(null);
@@ -475,6 +596,7 @@ export function FilesWidget({
     setExpanded(new Set([""]));
     setDirectories({});
     setDirectoryRenderLimits({});
+    directoryAccessOrderRef.current = [];
     void loadDirectory("");
   }, [apiRoot, loadDirectory]);
 
@@ -714,6 +836,13 @@ export function FilesWidget({
       if (!mutationsEnabled) return;
       event.preventDefault();
       event.stopPropagation();
+      // Remember the row the menu opened on so focus returns there on close (GEN-UI-KEYBOARD-003).
+      const opener =
+        event.currentTarget instanceof HTMLElement
+          ? event.currentTarget.closest<HTMLElement>("button.tr-row")
+          : null;
+      menuReturnFocusRef.current =
+        opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
       setOpError(null);
       setMenu({ x: event.clientX, y: event.clientY, entry });
     },
@@ -737,6 +866,45 @@ export function FilesWidget({
     };
   }, [menu]);
 
+  // GEN-UI-KEYBOARD-003 — move focus into the menu (first menuitem) on open, and return it to the
+  // originating row on close so keyboard users are never stranded on document.body (WCAG 2.4.3).
+  useEffect(() => {
+    if (menu === null) {
+      const opener = menuReturnFocusRef.current;
+      // A menu action that opens the delete dialog owns the restore (it copied the opener into
+      // confirmDeleteReturnFocusRef); leave its ref intact and let the delete effect handle focus.
+      if (confirmDelete !== null) return;
+      menuReturnFocusRef.current = null;
+      // Only restore if focus is still on <body> — the menuitem unmounted and nothing else (an
+      // inline editor's autoFocus input, say) has since claimed focus.
+      if (opener !== null && document.activeElement === document.body) {
+        opener.focus({ preventScroll: true });
+      }
+      return;
+    }
+    menuRef.current
+      ?.querySelector<HTMLButtonElement>('button[role="menuitem"]')
+      ?.focus({ preventScroll: true });
+  }, [menu, confirmDelete]);
+
+  // GEN-UI-FOCUS-002 — focus the delete dialog on open (the Delete button) and restore focus to
+  // the originating tree row on close (WCAG 2.4.3). The Tab trap and Escape live on the dialog's
+  // onKeyDown handler below; here we only manage entering/leaving the dialog.
+  useEffect(() => {
+    if (confirmDelete === null) {
+      const opener = confirmDeleteReturnFocusRef.current;
+      confirmDeleteReturnFocusRef.current = null;
+      if (opener !== null && document.activeElement === document.body) {
+        opener.focus({ preventScroll: true });
+      }
+      return;
+    }
+    // Prefer the Delete (primary) button; fall back to the first focusable control.
+    const dialog = deleteDialogRef.current;
+    const primary = dialog?.querySelector<HTMLButtonElement>("button.ed-reload");
+    (primary ?? dialog?.querySelector<HTMLButtonElement>("button"))?.focus({ preventScroll: true });
+  }, [confirmDelete]);
+
   const goUp = useCallback((): void => {
     if (currentDirectoryPath !== null) {
       goToDirectory(parentRelativePath(currentDirectoryPath));
@@ -755,8 +923,13 @@ export function FilesWidget({
       else next.add(entry.path);
       return next;
     });
-    if (!wasOpen && directories[entry.path] === undefined) {
-      void loadDirectory(entry.path);
+    if (!wasOpen) {
+      // GEN-PERF-MEMORY-005 — mark re-expand as recent use so a still-cached directory is
+      // not the first to be evicted; a fetch only happens when its cache entry was evicted.
+      touchDirectoryAccess(entry.path);
+      if (directories[entry.path] === undefined) {
+        void loadDirectory(entry.path);
+      }
     }
   };
 
@@ -823,6 +996,7 @@ export function FilesWidget({
         if (event.key === "F2") startRename(entry);
         else {
           setOpError(null);
+          confirmDeleteReturnFocusRef.current = focusedRow;
           setConfirmDelete(entry);
         }
       }
@@ -842,10 +1016,20 @@ export function FilesWidget({
     handleTreeNavKey(rows, index, event.key);
   };
 
-  const gitChanges: readonly GitChangedFile[] =
-    gitStatusState.status?.available === true ? gitStatusState.status.changes : [];
-  const gitChangeByPath = new Map<string, GitChangedFile>(
-    gitChanges.map((change): [string, GitChangedFile] => [change.path, change]),
+  // Memoize the conditional so its identity is stable across renders (keeps the gitChangeByPath
+  // Map memo below from rebuilding every render), and satisfies react-hooks/exhaustive-deps.
+  const gitChanges: readonly GitChangedFile[] = useMemo(
+    () => (gitStatusState.status?.available === true ? gitStatusState.status.changes : []),
+    [gitStatusState.status],
+  );
+  // GEN-PERF-WIDGET-004 — memoize the path->change Map on [gitChanges] so it is not rebuilt
+  // over all (up to 500) git changes on every render (incl. every pointermove-driven one).
+  const gitChangeByPath = useMemo(
+    () =>
+      new Map<string, GitChangedFile>(
+        gitChanges.map((change): [string, GitChangedFile] => [change.path, change]),
+      ),
+    [gitChanges],
   );
   const gitSummary = gitStatusSummary(gitStatusState);
   const gitDeliveryRoot =
@@ -858,23 +1042,26 @@ export function FilesWidget({
     gitDeliveryRoot.length > 0;
   const activeTreePath = selectedPath ?? activeFilePath ?? null;
 
-  const renderLimitForDirectory = (
-    path: string,
-    entries: readonly FilesTreeEntry[],
-  ): number => {
+  // GEN-PERF-WIDGET-004 — a path->row-index lookup per loaded directory, memoized on
+  // [directories], so renderLimitForDirectory does O(1) Map lookups instead of up to two
+  // entries.findIndex scans (over as many as ~1000 entries) per expanded directory per render.
+  const directoryIndexByPath = useMemo(() => {
+    const byDir = new Map<string, Map<string, number>>();
+    for (const [dirPath, state] of Object.entries(directories)) {
+      const index = new Map<string, number>();
+      state.entries.forEach((entry, i) => index.set(entry.path, i));
+      byDir.set(dirPath, index);
+    }
+    return byDir;
+  }, [directories]);
+
+  const renderLimitForDirectory = (path: string, entries: readonly FilesTreeEntry[]): number => {
     const configuredLimit = directoryRenderLimits[path] ?? DIRECTORY_RENDER_BATCH_SIZE;
-    const activeIndex =
-      activeTreePath === null
-        ? -1
-        : entries.findIndex((entry) => entry.path === activeTreePath);
+    const index = directoryIndexByPath.get(path);
+    const activeIndex = activeTreePath === null ? -1 : (index?.get(activeTreePath) ?? -1);
     const pendingIndex =
-      pendingEntry?.kind === "rename"
-        ? entries.findIndex((entry) => entry.path === pendingEntry.path)
-        : -1;
-    return Math.min(
-      entries.length,
-      Math.max(configuredLimit, activeIndex + 1, pendingIndex + 1),
-    );
+      pendingEntry?.kind === "rename" ? (index?.get(pendingEntry.path) ?? -1) : -1;
+    return Math.min(entries.length, Math.max(configuredLimit, activeIndex + 1, pendingIndex + 1));
   };
 
   // One inline input reused for new file / new folder / rename, styled with the existing root-bar
@@ -1078,78 +1265,78 @@ export function FilesWidget({
     const hiddenCount = entries.length - visibleCount;
     const visibleEntries = hiddenCount > 0 ? entries.slice(0, visibleCount) : entries;
     return (
-    // Nested levels are role="group" so the treeitem hierarchy is exposed (audit C143);
-    // the root level sits directly under role="tree".
-    <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
-      {state?.loading === true ? (
-        <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
-          Loading…
-        </div>
-      ) : null}
-      {state?.notice === "no-root" ? (
-        <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
-          {onRootChange !== undefined
-            ? "No folder is open yet. Enter a folder path above and press Open."
-            : "No registered project is available."}
-        </div>
-      ) : null}
-      {state?.error !== null && state?.error !== undefined ? (
-        <div className="files-error" role="alert" style={{ marginLeft: treeIndent(depth) }}>
-          <span>{state.error}</span>
-          <button type="button" className="files-retry" onClick={() => retryDirectory(path)}>
-            Retry
-          </button>
-        </div>
-      ) : null}
-      {/* Truncation notice sits ABOVE the rows so it is visible as soon as the folder opens
+      // Nested levels are role="group" so the treeitem hierarchy is exposed (audit C143);
+      // the root level sits directly under role="tree".
+      <div className="tr-dir" role={depth === 0 ? undefined : "group"}>
+        {state?.loading === true ? (
+          <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
+            Loading…
+          </div>
+        ) : null}
+        {state?.notice === "no-root" ? (
+          <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
+            {onRootChange !== undefined
+              ? "No folder is open yet. Enter a folder path above and press Open."
+              : "No registered project is available."}
+          </div>
+        ) : null}
+        {state?.error !== null && state?.error !== undefined ? (
+          <div className="files-error" role="alert" style={{ marginLeft: treeIndent(depth) }}>
+            <span>{state.error}</span>
+            <button type="button" className="files-retry" onClick={() => retryDirectory(path)}>
+              Retry
+            </button>
+          </div>
+        ) : null}
+        {/* Truncation notice sits ABOVE the rows so it is visible as soon as the folder opens
           (audit C353 — below 1000 rows it sat ~24,000px outside the viewport). The count comes
           from the response instead of a hardcoded "1000": the server also truncates early when
           its ignored-entry scan cap is hit, i.e. with fewer visible entries (audit C350). */}
-      {state?.truncated === true ? (
-        <div
-          className="files-note files-warning"
-          role="status"
-          style={{ paddingLeft: treeIndent(depth) + 18 }}
-        >
-          Showing only the first {state.entries.length} entries — this folder contains more.
-        </div>
-      ) : null}
-      {pendingEntry !== null &&
-      pendingEntry.kind !== "rename" &&
-      (pendingEntry.parentPath ?? "") === path
-        ? renderInlineEditor(
-            depth,
-            pendingEntry.kind === "new-folder" ? (
-              <span className="fi-fallback" style={{ color: "var(--accent)" }}>
-                <Icons.folder size={14} />
-              </span>
-            ) : (
-              <FileIcon name={entryDraft.length > 0 ? entryDraft : "new-file"} />
-            ),
-            pendingEntry.kind === "new-folder" ? "New folder name" : "New file name",
-          )
-        : null}
-      {visibleEntries.map((entry) => renderEntry(entry, depth))}
-      {hiddenCount > 0 ? (
-        <button
-          type="button"
-          className="files-load-more"
-          style={{ marginLeft: treeIndent(depth) + 18 }}
-          onClick={() => showMoreDirectoryEntries(path, entries.length)}
-        >
-          Show {Math.min(DIRECTORY_RENDER_BATCH_SIZE, hiddenCount)} more entries
-        </button>
-      ) : null}
-      {state !== undefined &&
-      !state.loading &&
-      state.error === null &&
-      state.notice === null &&
-      state.entries.length === 0 ? (
-        <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
-          Empty folder.
-        </div>
-      ) : null}
-    </div>
+        {state?.truncated === true ? (
+          <div
+            className="files-note files-warning"
+            role="status"
+            style={{ paddingLeft: treeIndent(depth) + 18 }}
+          >
+            Showing only the first {state.entries.length} entries — this folder contains more.
+          </div>
+        ) : null}
+        {pendingEntry !== null &&
+        pendingEntry.kind !== "rename" &&
+        (pendingEntry.parentPath ?? "") === path
+          ? renderInlineEditor(
+              depth,
+              pendingEntry.kind === "new-folder" ? (
+                <span className="fi-fallback" style={{ color: "var(--accent)" }}>
+                  <Icons.folder size={14} />
+                </span>
+              ) : (
+                <FileIcon name={entryDraft.length > 0 ? entryDraft : "new-file"} />
+              ),
+              pendingEntry.kind === "new-folder" ? "New folder name" : "New file name",
+            )
+          : null}
+        {visibleEntries.map((entry) => renderEntry(entry, depth))}
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            className="files-load-more"
+            style={{ marginLeft: treeIndent(depth) + 18 }}
+            onClick={() => showMoreDirectoryEntries(path, entries.length)}
+          >
+            Show {Math.min(DIRECTORY_RENDER_BATCH_SIZE, hiddenCount)} more entries
+          </button>
+        ) : null}
+        {state !== undefined &&
+        !state.loading &&
+        state.error === null &&
+        state.notice === null &&
+        state.entries.length === 0 ? (
+          <div className="files-note" role="status" style={{ paddingLeft: treeIndent(depth) + 18 }}>
+            Empty folder.
+          </div>
+        ) : null}
+      </div>
     );
   };
 
@@ -1358,12 +1545,19 @@ export function FilesWidget({
       </div>
       {menu !== null ? (
         <div
+          ref={menuRef}
           role="menu"
           aria-label="File actions"
+          // tabIndex -1: the menu is a programmatic focus container; the menuitems are the tab
+          // stops. Satisfies role="menu" focusability without adding a Tab stop.
+          tabIndex={-1}
           // Positioned at the cursor and themed with the same popover tokens as `.edm-menu`, so the
           // context menu needs no globals.css rule. Stopping pointerdown keeps the window-level
           // outside-close listener from dismissing it before a menu item's click fires.
           onPointerDown={(event) => event.stopPropagation()}
+          // GEN-UI-KEYBOARD-003 — Arrow/Home/End roving among the menuitems (Enter/Space activate
+          // the focused button natively).
+          onKeyDown={(event) => handleMenuNavKey(event.currentTarget, event)}
           style={{
             position: "fixed",
             top: menu.y,
@@ -1415,6 +1609,9 @@ export function FilesWidget({
                       className="edm-item"
                       role="menuitem"
                       onClick={() => {
+                        // Hand the menu's originating row to the delete dialog so focus lands
+                        // back on the row (not lost) once the whole chain closes (WCAG 2.4.3).
+                        confirmDeleteReturnFocusRef.current = menuReturnFocusRef.current;
                         setMenu(null);
                         setOpError(null);
                         setConfirmDelete(target);
@@ -1450,17 +1647,33 @@ export function FilesWidget({
       ) : null}
       {confirmDelete !== null ? (
         <div className="ed-dialog-backdrop" role="presentation">
+          {/* GEN-UI-FOCUS-002 — Escape cancels; Tab/Shift+Tab stay trapped inside the dialog
+              (WCAG 2.1.2 — jsdom does not enforce inert, so the wrap is explicit). */}
+          {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.2 modal focus trap + Escape */}
           <div
+            ref={deleteDialogRef}
             className="ed-dirty-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="files-delete-title"
+            aria-describedby="files-delete-body"
             tabIndex={-1}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                if (!opBusy) {
+                  setConfirmDelete(null);
+                  setOpError(null);
+                }
+                return;
+              }
+              trapDialogTab(event.currentTarget, event);
+            }}
           >
             <h2 id="files-delete-title">
               Delete {confirmDelete.kind === "directory" ? "folder" : "file"}?
             </h2>
-            <p>
+            <p id="files-delete-body">
               "{confirmDelete.name}" will be permanently deleted
               {confirmDelete.kind === "directory" ? ", including everything inside it" : ""}. This
               cannot be undone.
@@ -1493,6 +1706,7 @@ export function FilesWidget({
       {treeTooltip !== null && typeof document !== "undefined"
         ? createPortal(
             <div
+              ref={treeTooltipElRef}
               className="files-tree-tooltip mono"
               role="tooltip"
               style={{ left: treeTooltip.x, top: treeTooltip.y }}

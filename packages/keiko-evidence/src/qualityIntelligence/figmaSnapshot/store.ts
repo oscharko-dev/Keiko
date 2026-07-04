@@ -30,21 +30,16 @@
 // dirs from a previously interrupted record() are cleaned up without a separate boot step.
 
 import { createHash, randomUUID } from "node:crypto";
-import {
-  type Dirent,
-  chmodSync,
-  linkSync,
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { type Dirent, linkSync, lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import {
+  fsyncDirectoryContaining,
+  replaceViaDurableTempFile,
+  writeDurableUtf8TempFile,
+} from "../../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../../errors.js";
 import {
   existingOwnedDirectory,
@@ -202,6 +197,29 @@ export interface FigmaSnapshotStoreOptions {
    * purged. A non-positive `maxRecords` disables retention entirely.
    */
   readonly retention?: { readonly maxRecords?: number } | undefined;
+  /** Injectable clock for the module-level re-sweep interval (GEN-PERF-PERSISTENCE-010). Tests only. */
+  readonly now?: () => number;
+}
+
+// GEN-PERF-PERSISTENCE-010 — the store is constructed per HTTP request, so a per-instance `swept`
+// flag meant every request re-ran sweepOrphanedSideDirs + enforceFigmaSnapshotRetention (each of
+// which reads every record). Track the last successful sweep per evidence dir at MODULE scope with a
+// time-based re-sweep interval, so sweep+retention runs at most once per interval across the many
+// short-lived stores for the same dir — not once per request. Correctness is preserved: the same
+// sweep + same maxRecords retention still run, just amortised; evidence side-file containment is
+// unchanged (the sweep/retention functions themselves are untouched).
+const FIGMA_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+const figmaSnapshotLastSweptAt = new Map<string, number>();
+
+// Test-observable counter of ACTUAL sweep+retention passes (incremented once per real sweep, not
+// per store instance). A regression test asserts many per-request stores for the same evidence dir
+// within the interval bump this at most once (GEN-PERF-PERSISTENCE-010).
+export const __figmaSnapshotSweepStats = { sweeps: 0 };
+
+// Test-only: clear the module-level re-sweep registry + counter so a suite starts from a cold state.
+export function __resetFigmaSnapshotSweepRegistryForTests(): void {
+  figmaSnapshotLastSweptAt.clear();
+  __figmaSnapshotSweepStats.sweeps = 0;
 }
 
 /**
@@ -492,14 +510,10 @@ function atomicWriteOnce(target: string, json: string, randomSuffix: () => strin
   assertSnapshotAbsent(target);
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
-    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
-    try {
-      chmodSync(temp, 0o600);
-    } catch {
-      // non-fatal: not every filesystem supports chmod (e.g. Windows)
-    }
+    writeDurableUtf8TempFile(temp, json);
     try {
       linkSync(temp, target);
+      fsyncDirectoryContaining(target);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
@@ -519,13 +533,7 @@ function atomicWriteOnce(target: string, json: string, randomSuffix: () => strin
 function atomicWriteMutable(target: string, json: string, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
-    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
-    try {
-      chmodSync(temp, 0o600);
-    } catch {
-      // non-fatal: not every filesystem supports chmod (e.g. Windows)
-    }
-    renameSync(temp, target);
+    replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
@@ -1118,6 +1126,7 @@ function listByScopeOp(
 
 // ─── Store factory ────────────────────────────────────────────────────────────────────────────
 
+// eslint-disable-next-line max-lines-per-function -- the store factory builds one shared StoreCtx (including the inline sweep/retention guard) and returns the full FigmaSnapshotStore operation surface; each line is a distinct wired-up operation, so splitting would only relocate the closure without reducing coupling.
 export function createNodeFigmaSnapshotStore(
   evidenceDir: string,
   options: FigmaSnapshotStoreOptions = {},
@@ -1125,6 +1134,7 @@ export function createNodeFigmaSnapshotStore(
   const qiDir = join(evidenceDir, QI_SUBDIR);
   const sideFileBase = join(qiDir, SIDE_FILE_SUBDIR);
   const maxRecords = options.retention?.maxRecords ?? DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS;
+  const now = options.now ?? Date.now;
   let swept = false;
   const ctx: StoreCtx = {
     qiDir,
@@ -1134,6 +1144,17 @@ export function createNodeFigmaSnapshotStore(
     ensureSwept(): void {
       if (swept) return;
       swept = true;
+      // GEN-PERF-PERSISTENCE-010 — skip sweep+retention when another (short-lived) store for the
+      // same evidence dir already swept within the interval. Stamped BEFORE the work runs so a
+      // concurrent request in the same tick does not double-sweep; a fault below simply lets the
+      // next interval retry (the sweep/retention are best-effort and idempotent).
+      const nowMs = now();
+      const lastSweptAt = figmaSnapshotLastSweptAt.get(qiDir);
+      if (lastSweptAt !== undefined && nowMs - lastSweptAt < FIGMA_SWEEP_INTERVAL_MS) {
+        return;
+      }
+      figmaSnapshotLastSweptAt.set(qiDir, nowMs);
+      __figmaSnapshotSweepStats.sweeps += 1;
       sweepOrphanedSideDirs(qiDir, sideFileBase);
       // Issue #1323 AC4 — make retention operational. Runs once per store instance (the sweep is
       // already guarded against concurrent re-entry by `swept`). A non-positive cap disables it so

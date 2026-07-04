@@ -2,6 +2,8 @@
 // message — messages are static strings that never leak filesystem paths or raw Chrome diagnostics
 // to the UI.
 
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+
 export const BROWSER_ERROR_CODES = {
   CHROME_UNREACHABLE: "CHROME_UNREACHABLE",
   CHROME_VERSION_MISMATCH: "CHROME_VERSION_MISMATCH",
@@ -56,14 +58,11 @@ const STATUS_MAP: Readonly<Record<BrowserErrorCode, number>> = {
   SIDE_FILE_WRITER_MISSING: 500,
 };
 
-export class BrowserToolError extends Error {
+export class BrowserToolError extends CodedHttpError {
   public readonly code: BrowserErrorCode;
-  public readonly status: number;
 
   public constructor(code: BrowserErrorCode, message: string) {
-    super(message);
-    this.name = "BrowserToolError";
+    super(message, httpStatusFor(STATUS_MAP, code));
     this.code = code;
-    this.status = STATUS_MAP[code];
   }
 }

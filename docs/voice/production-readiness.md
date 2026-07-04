@@ -5,7 +5,7 @@ optional Voice Digital Twin is safe to enable for regulated deployments.
 
 This document is the deliverable of Issue [#506](https://github.com/oscharko-dev/Keiko/issues/506) — the
 **formal production-readiness gate** for Epic #491. It is the authoritative companion to
-[ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md). It consolidates the closure evidence that the
+[ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md). It consolidates the closure evidence that the
 six epic invariants hold across the no-voice, STT-only, full-realtime, Azure Foundry, and customer-hosted
 deployment profiles, and it records — without softening — the limitations a conservative gate must keep
 visible.
@@ -15,7 +15,7 @@ test, evaluation dimension, CI job, dependency scan, or GitHub state). Where a p
 documentary rather than end-to-end, that is stated explicitly in [§8 Known limitations](#8-known-limitations).
 This issue ships **documentation only** — it adds no runtime code and no dependency; it consolidates and
 verifies evidence that already shipped across child issues #492–#505 (see
-[ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) for the decision rationale).
+[ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md) for the decision rationale).
 
 ## 1. Production-readiness checklist (Deliverable)
 
@@ -87,7 +87,7 @@ guarantee rests on the unit/handler tests above, not on the e2e smoke. See [§8]
 ## 3. AC2 — Voice features appear only when required capabilities exist
 
 Capability gating is enforced by the **union of five independent layers**; the evaluation harness proves only
-the contract-data layer (it does not import the server or UI predicates, per the ADR-0068 boundary), so AC2's
+the contract-data layer (it does not import the server or UI predicates, per the ADR-0110 boundary), so AC2's
 production proof is the layered enforcement, not the eval alone.
 
 1. **Contract data.** `VOICE_PROFILE_ALLOWED_MESSAGE_KINDS`
@@ -140,7 +140,7 @@ reusing existing seams — voice introduces no bespoke HTTP or signaling client 
   writer; transcripts, recap, session state, memory candidates, and audit metadata reuse the existing
   AES-256-GCM sealing, key ladder, redaction, and identifier-hashing stack
   ([privacy-contract.md](privacy-contract.md) §2–§3; ADR-0046/0047/0048). Voice audit records are
-  content-free (counts and enums only), as recorded in the child ADRs (ADR-0066/0067).
+  content-free (counts and enums only), as recorded in the child ADRs (ADR-0108/0109).
 
 **Two egress channels — stated explicitly.** Voice has two outbound paths: (a) the **proxied-SDP / STT model
 channel** through `gatewayFetch`, and (b) the **full-realtime WebRTC media plane**, which is a direct
@@ -182,7 +182,7 @@ nothing else ([supply-chain-policy.md](supply-chain-policy.md)).
   three manifests (root CLI, `keiko-tools`, and — added by #497 — `keiko-server`); the resolved version is
   unchanged and **no new package was added to `package-lock.json`**. This keiko-server declaration is the
   explicit, ADR-gated decision recorded in
-  [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md) (re-opening the loopback WebSocket control plane);
+  [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md) (re-opening the loopback WebSocket control plane);
   the dependency **count** is unchanged. `ws` is a WebSocket library (MIT), not a media/WebRTC package.
 - **No denied media package is present.** A scan of every `packages/**/package.json` and the root manifest
   for the denied runtime-media vendors (socket.io, simple-peer, peerjs, mediasoup, livekit, wrtc, janus,
@@ -278,8 +278,8 @@ all with no voice provider configured.
 
 ## 11. References
 
-- [ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) — production-readiness gate decision.
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — capability-gated architecture.
+- [ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md) — production-readiness gate decision.
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — capability-gated architecture.
 - [architecture.md](architecture.md), [privacy-contract.md](privacy-contract.md),
   [deployment-profile-matrix.md](deployment-profile-matrix.md),
   [supply-chain-policy.md](supply-chain-policy.md), [evaluation-harness.md](evaluation-harness.md).

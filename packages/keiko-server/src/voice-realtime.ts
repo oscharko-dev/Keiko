@@ -1,4 +1,4 @@
-// BFF realtime voice control plane (Issue #497, Epic #491, ADR-0058 D3/D6, ADR-0059). Re-opens the
+// BFF realtime voice control plane (Issue #497, Epic #491, ADR-0100 D3/D6, ADR-0101). Re-opens the
 // BFF WebSocket upgrade — deliberately hard-rejected for every other path (server.ts) — for the single
 // loopback control path `/api/voice/control`, and ONLY when the resolved voice capability is the
 // full-realtime profile and policy permits it (AC1). The WebSocket carries the #496 control/signaling
@@ -6,7 +6,7 @@
 // (DTLS-SRTP), negotiated by the preferred proxied-SDP mode so the long-lived provider credential
 // never reaches the browser (AC2).
 //
-// Security posture (ADR-0058 D6): the upgrade reuses the same loopback `isAllowedHost` Host/Origin
+// Security posture (ADR-0100 D6): the upgrade reuses the same loopback `isAllowedHost` Host/Origin
 // check as the HTTP path (host-check.ts) — a WebSocket handshake cannot carry the JSON+CSRF guard, so
 // the loopback-origin check (which rejects opaque `Origin: null` and any non-loopback origin) plus the
 // capability gate are the load-bearing cross-origin defenses. SDP/ICE payloads are opaque,
@@ -320,12 +320,9 @@ function cachedRealtimeInstructions(
   return undefined;
 }
 
-function storeRealtimeInstructions(
-  deps: UiHandlerDeps,
-  key: string,
-  value: Promise<string>,
-): void {
-  const byKey = realtimeInstructionsCache.get(deps) ?? new Map<string, CachedRealtimeInstructions>();
+function storeRealtimeInstructions(deps: UiHandlerDeps, key: string, value: Promise<string>): void {
+  const byKey =
+    realtimeInstructionsCache.get(deps) ?? new Map<string, CachedRealtimeInstructions>();
   byKey.set(key, { expiresAt: Date.now() + REALTIME_INSTRUCTIONS_CACHE_TTL_MS, value });
   realtimeInstructionsCache.set(deps, byKey);
 }

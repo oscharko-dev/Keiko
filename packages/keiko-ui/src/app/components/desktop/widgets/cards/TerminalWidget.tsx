@@ -397,8 +397,31 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
             {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
             {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
           </div>
-          {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
-          {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
+          {/* GEN-UI-KEYBOARD-005 — the stdout/stderr <pre> is an overflow:auto scroll
+              container (max-height 16rem); expose it as a focusable named region so
+              keyboard-only users can scroll it (WCAG 2.1.1). */}
+          {result.stdout.length > 0 ? (
+            <pre
+              className="tm-stdout"
+              role="region"
+              aria-label="Command stdout"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stdout}
+            </pre>
+          ) : null}
+          {result.stderr.length > 0 ? (
+            <pre
+              className="tm-stderr"
+              role="region"
+              aria-label="Command stderr"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stderr}
+            </pre>
+          ) : null}
         </div>
       ) : null}
 

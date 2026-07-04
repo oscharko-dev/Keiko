@@ -1,5 +1,37 @@
 import type { WindowType } from "./WindowsRegistry";
 
+// GEN-DUP-SEMANTIC-012 — the single owner of "which window types ingest a connected Files scope".
+// relLabel (this file) and WindowFrame.computeLinkedContext both consumed a hand-maintained copy of
+// this predicate; drift between them would draw a "uses <folder>" edge label the linked-context
+// resolver never honours (or vice-versa). Keep the set here and let WindowFrame import it downward —
+// connectionUtils must NOT import WindowFrame (module cycle).
+const FILES_CONTEXT_TYPES: ReadonlySet<WindowType> = new Set<WindowType>([
+  "chat",
+  "agents",
+  "quality",
+  "editor",
+  "promptEnhancer",
+]);
+
+// Types that additionally read the CONNECTED Files window's focused-file path (a subset of the
+// files-context receivers — chat binds only the folder root, not the focused file).
+const FOCUSED_FILE_CONTEXT_TYPES: ReadonlySet<WindowType> = new Set<WindowType>([
+  "agents",
+  "quality",
+  "editor",
+  "promptEnhancer",
+]);
+
+/** True when a window of `type` ingests a connected Files window's folder scope. */
+export function receivesFilesContext(type: WindowType): boolean {
+  return FILES_CONTEXT_TYPES.has(type);
+}
+
+/** True when a window of `type` ingests a connected Files window's focused-file path. */
+export function receivesFocusedFileContext(type: WindowType): boolean {
+  return FOCUSED_FILE_CONTEXT_TYPES.has(type);
+}
+
 export interface WinSnapshot {
   readonly id: string;
   readonly type: WindowType;
@@ -10,7 +42,7 @@ export interface WinSnapshot {
   readonly cfg?: Record<string, unknown>;
 }
 
-export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
+export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowType[]>>> = {
   agents: ["files", "terminal", "plugins", "review", "browser", "agents", "keiko"],
   // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
   chat: ["files", "browser", "plugins", "keiko", "connector"],
@@ -95,15 +127,7 @@ function filesScopeLabel(cfg: Record<string, unknown> | undefined, root: string)
 export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   const filesSide: WinSnapshot | null = a.type === "files" ? a : b.type === "files" ? b : null;
   const other = filesSide === null ? null : filesSide === a ? b : a;
-  if (
-    filesSide !== null &&
-    other !== null &&
-    (other.type === "chat" ||
-      other.type === "agents" ||
-      other.type === "quality" ||
-      other.type === "editor" ||
-      other.type === "promptEnhancer")
-  ) {
+  if (filesSide !== null && other !== null && receivesFilesContext(other.type)) {
     const root = configRoot(filesSide.cfg);
     // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
     if (root === null) return "no folder selected";
@@ -284,13 +308,6 @@ export function subText(type: WindowType, cfg: Record<string, unknown> | undefin
     case "commands":
     case "runtime":
       return cfgString("projectPath");
-    case "review": {
-      const base = cfgString("base");
-      const head = cfgString("head");
-      return base !== null && head !== null ? `${base} → ${head}` : null;
-    }
-    case "agents":
-      return cfgString("role");
     case "chat": {
       const title = cfgString("title");
       return title !== null && title !== "New chat" ? title : null;

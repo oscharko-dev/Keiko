@@ -104,7 +104,7 @@ Real browser, real packaged app, real `resolveBoundRoot` choke point:
 
 Required checks remain green:
 
-- **npm run ci** (required GitHub check on all PRs)
+- **ci** GitHub workflow (`.github/workflows/ci.yml`, required check on all PRs)
 - **npm run arch:check** (TS type contract validation across packages)
 - **npm run arch:check:negative** (forbidden patterns scan)
 - **npm run check:git-delivery-evidence** (Epic #470 governance proof gate, must stay green)

@@ -296,7 +296,8 @@ function detectLanguages(
     const workspace = discoveryWorkspace(root, meta, sourceDirs, testDirs, ignoreLines);
     const files = discoverFiles(workspace, LANGUAGE_DISCOVERY, fs);
     for (const file of files) {
-      const language = workspaceLanguageForPath(file.relativePath) ?? languageForFileName(file.relativePath);
+      const language =
+        workspaceLanguageForPath(file.relativePath) ?? languageForFileName(file.relativePath);
       if (language !== undefined) {
         addLanguage(languages, language);
       }

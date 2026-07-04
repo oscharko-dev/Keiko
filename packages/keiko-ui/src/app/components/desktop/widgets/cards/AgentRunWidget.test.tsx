@@ -127,6 +127,47 @@ describe("AgentRunWidget", () => {
     expect((await screen.findAllByText("Applied")).length).toBeGreaterThan(0);
   });
 
+  it("exposes the dry-run, diff, and run-input <pre> blocks as keyboard-focusable named regions", async () => {
+    // GEN-UI-KEYBOARD-005 (test-plan #31) — every overflow:auto output <pre> must be a
+    // focusable region with an accessible name so keyboard-only users can scroll it.
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "dry-run",
+        durationMs: 100,
+        dryRunPreview: "d".repeat(4000),
+        proposedDiff: "diff --git a/test.ts b/test.ts",
+      },
+    });
+
+    render(
+      <AgentRunWidget
+        cfg={{
+          workflow: "unit-test-generation",
+          model: "example-chat-model",
+          runId: "run-regions",
+          workspaceRoot: "/repo",
+          inputJson: '{"workspaceRoot":"/repo"}',
+        }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    const diff = await screen.findByRole("region", { name: /proposed diff/i });
+    expect(diff.tagName).toBe("PRE");
+    expect(diff).toHaveAttribute("tabindex", "0");
+
+    const dryRun = screen.getByRole("region", { name: /dry-run preview/i });
+    expect(dryRun.tagName).toBe("PRE");
+    expect(dryRun).toHaveAttribute("tabindex", "0");
+
+    const runInput = screen.getByRole("region", { name: /run input/i });
+    expect(runInput.tagName).toBe("PRE");
+    expect(runInput).toHaveAttribute("tabindex", "0");
+  });
+
   // uiux-fix F018 C026/C109: SSE disconnects must be visible and the log must be a live region
   it("renders the SSE disconnect notice inside the run-events log", async () => {
     vi.mocked(useSSE).mockReturnValue({

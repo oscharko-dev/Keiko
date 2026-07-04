@@ -1,4 +1,4 @@
-// Discussion Intelligence discussion-quality scorer (Epic #491, Issue #502; ADR-0065).
+// Discussion Intelligence discussion-quality scorer (Epic #491, Issue #502; ADR-0107).
 //
 // Pure per-dimension scoring + suite aggregation for the seven discussion-quality dimensions. Each
 // dimension is a pure function (observation, oracle) -> DiscussionDimensionResult. A dimension a fixture

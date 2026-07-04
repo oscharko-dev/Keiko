@@ -45,6 +45,7 @@ export function BranchSelector({
   const [query, setQuery] = useState("");
   const listboxId = useId();
   const searchId = useId();
+  const wrapRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -85,6 +86,14 @@ export function BranchSelector({
     } else if (event.key === "Escape") {
       event.preventDefault();
       close(true);
+    } else if (event.key === "Tab") {
+      // Tabbing out of either edge of the option list dismisses the popup (mirrors
+      // KeikoSelect). Shift+Tab off the first option and Tab off the last option both
+      // leave the listbox; close without stealing focus so the browser's own Tab order
+      // carries focus onward to the neighbouring toolbar control.
+      const first = index === 0 && event.shiftKey;
+      const last = index === filtered.length - 1 && !event.shiftKey;
+      if (first || last) close(false);
     }
   };
 
@@ -95,8 +104,32 @@ export function BranchSelector({
     if (open) searchRef.current?.focus();
   }, [open]);
 
+  // Dismiss the popup when the user clicks outside the selector or the window loses focus
+  // (mirrors KeikoSelect). These are pointer/blur paths, not keyboard, so focus is left where
+  // the user put it rather than yanked back to the trigger.
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target;
+      if (wrapRef.current !== null && target instanceof Node && wrapRef.current.contains(target)) {
+        return;
+      }
+      close(false);
+    };
+    const onWindowBlur = (): void => close(false);
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, [open]);
+
   return (
-    <div style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 6 }}>
+    <div
+      ref={wrapRef}
+      style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 6 }}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -151,6 +184,9 @@ export function BranchSelector({
                 event.preventDefault();
                 moveFocus(0);
               }
+              // Tab out of the search field dismisses the popup and lets the browser move focus
+              // to the next control in document order (pointer/keyboard-out path — no focus grab).
+              if (event.key === "Tab") close(false);
             }}
           />
           <div

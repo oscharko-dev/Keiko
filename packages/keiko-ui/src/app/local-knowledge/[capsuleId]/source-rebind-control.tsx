@@ -2,10 +2,7 @@
 
 import { useId, useState, type ChangeEvent, type ReactNode } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import {
-  rebindCapsuleSourceRoot,
-  type SourceIndexStats,
-} from "@/lib/local-knowledge-api";
+import { rebindCapsuleSourceRoot, type SourceIndexStats } from "@/lib/local-knowledge-api";
 import { LocalFileBrowserDialog } from "@/app/components/desktop/local-files/LocalFileBrowserDialog";
 import { formatError } from "../format-error";
 

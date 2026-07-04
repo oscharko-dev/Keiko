@@ -11,12 +11,12 @@
 // module does not need to chase it.
 
 import {
-  isSafeDisplaySummary,
   type CapsuleSet,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
 
+import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -48,18 +48,6 @@ const META_PREFIX = "capsule_set:";
 
 function metaKey(id: CapsuleSetId): string {
   return `${META_PREFIX}${String(id)}`;
-}
-
-function assertSafeDisplayField(field: string, value: string): void {
-  if (value.trim().length === 0 || !isSafeDisplaySummary(value)) {
-    throw new KnowledgeStoreError(`${field} must be a browser-safe non-empty string`);
-  }
-}
-
-function assertSafeOptionalDisplayField(field: string, value: string | undefined): void {
-  if (value !== undefined && !isSafeDisplaySummary(value)) {
-    throw new KnowledgeStoreError(`${field} must be browser-safe when set`);
-  }
 }
 
 function parseMeta(value: string, id: CapsuleSetId): SetMetaPayload {

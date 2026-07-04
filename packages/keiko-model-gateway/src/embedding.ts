@@ -342,10 +342,7 @@ function revisionDiffers(stored: EmbeddingModelIdentity, current: EmbeddingModel
 }
 
 export type EmbeddingIdentityHardeningStatus =
-  | "hardened"
-  | "legacy-unverified"
-  | "normalization-unknown"
-  | "fingerprint-unverified";
+  "hardened" | "legacy-unverified" | "normalization-unknown" | "fingerprint-unverified";
 
 export function embeddingIdentityHardeningStatus(
   identity: EmbeddingModelIdentity,
@@ -394,10 +391,7 @@ function hardeningFieldsIncompatible(
   return (
     bothDefinedAndDifferent(stored.normalization, current.normalization) ||
     bothDefinedAndDifferent(stored.instructionVersion, current.instructionVersion) ||
-    bothDefinedAndDifferent(
-      stored.embeddingSpaceFingerprint,
-      current.embeddingSpaceFingerprint,
-    ) ||
+    bothDefinedAndDifferent(stored.embeddingSpaceFingerprint, current.embeddingSpaceFingerprint) ||
     bothDefinedAndDifferent(stored.dimensionsParam, current.dimensionsParam)
   );
 }

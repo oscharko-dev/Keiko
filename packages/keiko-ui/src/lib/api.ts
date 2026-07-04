@@ -12,7 +12,6 @@ import type {
   ChatMessage,
   ChatResponse,
   ChatsResponse,
-  ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   ChatStatus,
@@ -109,7 +108,25 @@ import type {
   PdfCitationPreviewStatusRequest,
   PdfCitationPreviewStatusResponse,
   VoicePersona,
+  GitRepositoryValidation,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  validateGitHistoryResponse,
+  validateGitRemotesResponse,
+  validateGitRepositoryDiffResponse,
+  validateGitRepositoryStatusResponse,
+  validateGitRepositorySummary,
+  validateGitSyncExecuteResponse,
+  validateGitSyncPreview,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  DESKTOP_CHAT_STREAM_EVENT_TYPES,
+  isDesktopChatStreamEvent,
+  type DesktopChatSendRequestWire,
+  type DesktopChatStreamDoneEvent,
+  type DesktopChatStreamErrorEvent,
+  type DesktopChatStreamEventType,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
   EDITOR_COMPLETION_SCHEMA_VERSION,
@@ -124,6 +141,13 @@ import {
 // ---------------------------------------------------------------------------
 
 export class ApiError extends Error {
+  // RB-6 (GEN-OBS-CORRELATION-103/601): the server-issued request correlation id for this failure,
+  // when the response carried one (X-Keiko-Correlation-Id header or `error.correlationId`). Optional
+  // and set after construction so the many `new ApiError(code, message, status)` call sites are
+  // unchanged; error surfaces can show it as a copyable support id that ties the UI failure to exactly
+  // one server-side diagnostic record.
+  public correlationId?: string;
+
   constructor(
     public readonly code: string,
     message: string,
@@ -138,7 +162,24 @@ export class ApiError extends Error {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+type ResponseValidator = (value: unknown) => GitRepositoryValidation;
+
+function validateBffResponse<T>(path: string, value: unknown, validator: ResponseValidator): T {
+  const validation = validator(value);
+  if (validation.ok) return value as T;
+  const reason = validation.reasons[0] ?? "unknown validation failure";
+  throw new ApiError(
+    "CONTRACT_VALIDATION_FAILED",
+    `BFF response for ${path} failed contract validation: ${reason}`,
+    502,
+  );
+}
+
+async function fetchJson<T>(
+  path: string,
+  init?: RequestInit,
+  validator?: ResponseValidator,
+): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isStateChanging = method !== "GET" && method !== "HEAD";
   const res = await fetch(path, {
@@ -168,7 +209,8 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     return undefined as T;
   }
 
-  return res.json() as Promise<T>;
+  const value = (await res.json()) as unknown;
+  return validator === undefined ? (value as T) : validateBffResponse<T>(path, value, validator);
 }
 
 async function fetchBinary(path: string, init?: RequestInit): Promise<Uint8Array> {
@@ -908,16 +950,7 @@ export async function createDesktopChat(
   });
 }
 
-export interface SendDesktopChatInput {
-  chatId: string;
-  projectPath: string;
-  content: string;
-  modelId?: string;
-  memory?: ConversationMemoryRequestWire;
-  // Issue #148 — client-extracted, byte-bounded text from attached documents. The server
-  // re-validates the caps before any of this reaches a model prompt.
-  documentContext?: readonly ConversationDocumentContextWire[];
-}
+export type SendDesktopChatInput = DesktopChatSendRequestWire;
 
 export interface AppendDesktopChatVoiceTurnMessage {
   readonly role: "user" | "assistant";
@@ -931,6 +964,7 @@ export interface AppendDesktopChatVoiceTurnInput {
   readonly messages: readonly AppendDesktopChatVoiceTurnMessage[];
   readonly modelId?: string | undefined;
   readonly memory?: ConversationMemoryRequestWire;
+  readonly idempotencyKey?: string | undefined;
 }
 
 export interface AppendDesktopChatVoiceTurnResponse {
@@ -1045,54 +1079,8 @@ export class StreamingUnavailableError extends Error {
   }
 }
 
-// Typed SSE event payloads — no `any`.
-interface SseTokenPayload {
-  readonly text: string;
-}
-interface SseDonePayload {
-  readonly chat: import("./types").Chat;
-  readonly messages: readonly import("./types").ChatMessage[];
-  readonly usage?: import("@oscharko-dev/keiko-contracts/bff-wire").DesktopChatSendUsage;
-  readonly memory?: import("./types").ConversationMemoryResultWire;
-}
-interface SseErrorPayload {
-  readonly code: string;
-  readonly message: string;
-}
-
-// Narrow an unknown SSE data value to a specific payload shape.
-function asSseTokenPayload(value: unknown): SseTokenPayload | undefined {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "text" in value &&
-    typeof (value as Record<string, unknown>).text === "string"
-  ) {
-    return value as SseTokenPayload;
-  }
-  return undefined;
-}
-
-function asSseErrorPayload(value: unknown): SseErrorPayload | undefined {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "code" in value &&
-    "message" in value &&
-    typeof (value as Record<string, unknown>).code === "string" &&
-    typeof (value as Record<string, unknown>).message === "string"
-  ) {
-    return value as SseErrorPayload;
-  }
-  return undefined;
-}
-
-function asSseDonePayload(value: unknown): SseDonePayload | undefined {
-  if (typeof value === "object" && value !== null && "chat" in value && "messages" in value) {
-    return value as SseDonePayload;
-  }
-  return undefined;
-}
+export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
+type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
   readonly onToken: (text: string) => void;
@@ -1101,36 +1089,51 @@ export interface StreamHandlers {
   readonly onCancelled: () => void;
 }
 
-// Re-export so callers (useChatSession.ts) can type the done payload without
-// reaching into the private SSE types above.
-export type { SseDonePayload };
+function parseSseEventName(value: string): DesktopChatStreamEventType | undefined {
+  return DESKTOP_CHAT_STREAM_EVENT_TYPES.includes(value as DesktopChatStreamEventType)
+    ? (value as DesktopChatStreamEventType)
+    : undefined;
+}
+
+function assertNeverStreamEvent(event: never): never {
+  throw new Error(`Unhandled desktop chat stream event: ${JSON.stringify(event)}`);
+}
+
+function malformedDesktopChatStreamError(): ApiError {
+  return new ApiError(
+    "MALFORMED_DESKTOP_CHAT_STREAM_EVENT",
+    "The chat stream returned an invalid event. Retry the request.",
+    502,
+  );
+}
 
 // Dispatches a parsed SSE (event, data) pair to the appropriate handler.
 function dispatchSseEvent(
-  eventName: string | undefined,
+  eventName: DesktopChatStreamEventType | undefined,
   parsed: unknown,
   handlers: StreamHandlers,
 ): void {
-  switch (eventName) {
+  const candidate = { event: eventName, data: parsed };
+  if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
+  switch (candidate.event) {
     case "token": {
-      const token = asSseTokenPayload(parsed);
-      if (token !== undefined) handlers.onToken(token.text);
+      handlers.onToken(candidate.data.text);
       break;
     }
     case "done": {
-      const done = asSseDonePayload(parsed);
-      if (done !== undefined) handlers.onDone(done);
+      handlers.onDone(candidate.data);
       break;
     }
     case "error": {
-      const err = asSseErrorPayload(parsed);
-      if (err !== undefined) handlers.onError(err);
+      handlers.onError(candidate.data);
       break;
     }
     case "cancelled": {
       handlers.onCancelled();
       break;
     }
+    default:
+      assertNeverStreamEvent(candidate);
   }
 }
 
@@ -1138,21 +1141,21 @@ function dispatchSseEvent(
 // `pendingEvent` name (carries over across chunk boundaries).
 function processSseLines(
   lines: readonly string[],
-  pendingEvent: string | undefined,
+  pendingEvent: DesktopChatStreamEventType | undefined,
   handlers: StreamHandlers,
-): string | undefined {
+): DesktopChatStreamEventType | undefined {
   let current = pendingEvent;
   for (const rawLine of lines) {
     const line = rawLine.trimEnd();
     if (line.startsWith("event:")) {
-      current = line.slice("event:".length).trim();
+      current = parseSseEventName(line.slice("event:".length).trim());
     } else if (line.startsWith("data:")) {
       const dataText = line.slice("data:".length).trim();
       let parsed: unknown;
       try {
         parsed = JSON.parse(dataText) as unknown;
       } catch {
-        continue;
+        throw malformedDesktopChatStreamError();
       }
       dispatchSseEvent(current, parsed, handlers);
       current = undefined;
@@ -1174,7 +1177,7 @@ async function consumeSseStream(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let lineBuffer = "";
-  let pendingEvent: string | undefined;
+  let pendingEvent: DesktopChatStreamEventType | undefined;
   let reachedEof = false;
 
   try {
@@ -1397,7 +1400,11 @@ export async function copyFilesEntry(input: {
 export async function fetchGitStatus(root: string): Promise<GitRepositoryStatusResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
-  return fetchJson(`/api/git/status?${params.toString()}`);
+  return fetchJson(
+    `/api/git/status?${params.toString()}`,
+    undefined,
+    validateGitRepositoryStatusResponse,
+  );
 }
 
 export interface GitBranchListEntry {
@@ -1427,7 +1434,11 @@ export async function fetchGitBranches(root: string): Promise<GitBranchListRespo
 export async function fetchGitSummary(root: string): Promise<GitRepositorySummary> {
   const params = new URLSearchParams();
   params.set("root", root);
-  return fetchJson(`/api/git/summary?${params.toString()}`);
+  return fetchJson(
+    `/api/git/summary?${params.toString()}`,
+    undefined,
+    validateGitRepositorySummary,
+  );
 }
 
 export async function fetchGitHistory(input: {
@@ -1439,13 +1450,13 @@ export async function fetchGitHistory(input: {
   params.set("root", input.root);
   if (input.limit !== undefined) params.set("limit", input.limit.toString());
   if (input.skip !== undefined) params.set("skip", input.skip.toString());
-  return fetchJson(`/api/git/history?${params.toString()}`);
+  return fetchJson(`/api/git/history?${params.toString()}`, undefined, validateGitHistoryResponse);
 }
 
 export async function fetchGitRemotes(root: string): Promise<GitRemotesResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
-  return fetchJson(`/api/git/remotes?${params.toString()}`);
+  return fetchJson(`/api/git/remotes?${params.toString()}`, undefined, validateGitRemotesResponse);
 }
 
 export async function fetchGitDiff(input: {
@@ -1457,7 +1468,11 @@ export async function fetchGitDiff(input: {
   params.set("root", input.root);
   if (input.path !== undefined && input.path.length > 0) params.set("path", input.path);
   if (input.scope !== undefined) params.set("scope", input.scope);
-  return fetchJson(`/api/git/diff?${params.toString()}`);
+  return fetchJson(
+    `/api/git/diff?${params.toString()}`,
+    undefined,
+    validateGitRepositoryDiffResponse,
+  );
 }
 
 // Issue #1199 — governed editor completion gateway. Posts the overlay buffer + cursor to the BFF,
@@ -2154,22 +2169,30 @@ export async function fetchGitDeliverySyncPreview(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncPreview> {
-  return fetchJson(gitDeliverySyncPath(input.operation, "preview"), {
-    method: "POST",
-    body: gitDeliverySyncBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return fetchJson(
+    gitDeliverySyncPath(input.operation, "preview"),
+    {
+      method: "POST",
+      body: gitDeliverySyncBody(input),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitSyncPreview,
+  );
 }
 
 export async function fetchGitDeliverySyncExecute(
   input: GitDeliverySyncInput,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  return fetchJson(gitDeliverySyncPath(input.operation, "execute"), {
-    method: "POST",
-    body: gitDeliverySyncBody(input),
-    ...(signal === undefined ? {} : { signal }),
-  });
+  return fetchJson(
+    gitDeliverySyncPath(input.operation, "execute"),
+    {
+      method: "POST",
+      body: gitDeliverySyncBody(input),
+      ...(signal === undefined ? {} : { signal }),
+    },
+    validateGitSyncExecuteResponse,
+  );
 }
 
 // ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
@@ -2267,7 +2290,7 @@ export async function fetchGitDeliveryPrExecute(
   });
 }
 
-// ─── Governed merge command center (#478, ADR-0065) ──────────────────────────────────────────────────
+// ─── Governed merge command center (#478, ADR-0087) ──────────────────────────────────────────────────
 
 export type GitDeliveryMergeStrategy = "squash" | "rebase" | "merge-commit" | "provider-default";
 

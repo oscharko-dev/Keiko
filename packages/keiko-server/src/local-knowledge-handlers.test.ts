@@ -48,6 +48,7 @@ import {
 } from "./local-knowledge-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
+import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
 function jsonRequest(body: Record<string, unknown> | undefined, method: string): IncomingMessage {
@@ -1807,9 +1808,15 @@ describe("local-knowledge handlers", () => {
     });
     const doc = verify._internal.db
       .prepare("SELECT id, status, parser_id FROM documents WHERE capsule_id = :c")
-      .get({ c: capId }) as { readonly id: string; readonly status: string; readonly parser_id: string };
+      .get({ c: capId }) as {
+      readonly id: string;
+      readonly status: string;
+      readonly parser_id: string;
+    };
     const text = verify._internal.db
-      .prepare("SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d")
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
       .get({ c: capId, d: doc.id }) as { readonly normalized_text: string };
     verify.close();
 
@@ -1960,6 +1967,42 @@ describe("local-knowledge handlers", () => {
         },
       ],
     });
+  });
+
+  it("leaves a stranded running job untouched on the no-recover read path but flips it when recovering", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-stranded', :c, '[]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, NULL, 0)",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const statusOf = (env: { readonly store: ReturnType<typeof openKnowledgeStore> }): string =>
+      (
+        env.store._internal.db
+          .prepare("SELECT status FROM indexing_jobs WHERE id = 'job-stranded'")
+          .get() as { readonly status: string }
+      ).status;
+
+    // Read path (recover: false) must NOT finalize the orphan — an actively-running job in another
+    // process would otherwise be misread as abandoned and flipped to `failed` on every read.
+    const readEnv = openKnowledgeStoreForDeps(depsFor(tmp), { recover: false });
+    try {
+      expect(statusOf(readEnv)).toBe("running");
+    } finally {
+      readEnv.close();
+    }
+
+    // Management/remediation path (recover: true) DOES finalize the orphan to a terminal state.
+    const recoverEnv = openKnowledgeStoreForDeps(depsFor(tmp), { recover: true });
+    try {
+      expect(statusOf(recoverEnv)).toBe("failed");
+    } finally {
+      recoverEnv.close();
+    }
   });
 
   it("cancels an active indexing job instead of leaving it running", async () => {
@@ -2216,7 +2259,9 @@ describe("local-knowledge handlers", () => {
       pinnedModelId: "text-embedding-3-small",
     });
     expect(
-      body.health.staleReasons.some((reason) => /not available as an embedding model/i.test(reason)),
+      body.health.staleReasons.some((reason) =>
+        /not available as an embedding model/i.test(reason),
+      ),
     ).toBe(true);
   });
 

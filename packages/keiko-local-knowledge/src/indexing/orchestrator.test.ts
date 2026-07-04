@@ -145,7 +145,10 @@ function normalizedContextResponse(modelId: string, content: string): Normalized
 function contextGateway(
   responder: (request: GatewayRequest) => string | Promise<string>,
   calls: GatewayRequest[] = [],
-): { readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>; readonly calls: GatewayRequest[] } {
+): {
+  readonly chat: (request: GatewayRequest) => Promise<NormalizedResponse>;
+  readonly calls: GatewayRequest[];
+} {
   return {
     calls,
     chat: async (request): Promise<NormalizedResponse> => {
@@ -282,7 +285,10 @@ describe("runIndexingJob — contextual retrieval indexing", () => {
         };
       },
     });
-    const gateway = contextGateway(() => "Context: TS-999 rollout and retry handling.", contextCalls);
+    const gateway = contextGateway(
+      () => "Context: TS-999 rollout and retry handling.",
+      contextCalls,
+    );
 
     try {
       const events = await drain(
@@ -481,8 +487,7 @@ describe("runIndexingJob — happy path", () => {
         "SELECT chunking_strategy_version FROM chunks WHERE capsule_id = :capsule_id LIMIT 1",
       )
       .get({ capsule_id: String(fixture.capsuleId) }) as
-      | { readonly chunking_strategy_version: string | null }
-      | undefined;
+      { readonly chunking_strategy_version: string | null } | undefined;
     expect(row?.chunking_strategy_version).toContain(`lexical-analyzer=${LEXICAL_ANALYZER_KEY}`);
   });
 
@@ -842,7 +847,9 @@ describe("runIndexingJob — incremental", () => {
 
       expect(secondEvents.some((event) => event.kind === "document-embedded")).toBe(true);
       expect(
-        secondEvents.some((event) => event.kind === "document-skipped" && event.reason === "already-embedded"),
+        secondEvents.some(
+          (event) => event.kind === "document-skipped" && event.reason === "already-embedded",
+        ),
       ).toBe(false);
     } finally {
       single.cleanup();
@@ -1347,8 +1354,7 @@ describe("runIndexingJob — embedding capability preflight", () => {
       ...DEFAULT_EMBEDDING,
       normalization: "l2",
       instructionVersion: "keiko-embedding-input-v1",
-      embeddingSpaceFingerprint:
-        "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+      embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
     };
     fixture = buildFixture(
       {

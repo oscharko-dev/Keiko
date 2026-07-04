@@ -40,16 +40,48 @@ export function jsonTextByteLength(text: string): number {
   return text.length;
 }
 
+// GEN-PERF-WIDGET-002 — above this size the per-token syntax highlighting explodes into
+// 10^5–10^6 React spans in one synchronous commit (screen IR is bounded only by the
+// server-side node cap). Fall back to a single un-tokenized text node; the full content
+// is still shown and copy-to-clipboard (which operates on the raw string) is unaffected.
+export const MAX_HIGHLIGHT_JSON_BYTES = 256_000;
+
 export const JsonSyntaxBlock = memo(function JsonSyntaxBlock({
   text,
   className,
+  ariaLabel,
 }: {
   readonly text: string;
   readonly className: string;
+  // GEN-UI-KEYBOARD-005 — the rendered <pre> is an overflow:auto scroll container that can
+  // exceed its box. When an accessible name is threaded in, the block becomes a keyboard-
+  // focusable region (WCAG 2.1.1) so keyboard-only users can scroll the JSON. Callers that
+  // omit ariaLabel keep the plain, non-focusable <pre> (behaviour-preserving default).
+  readonly ariaLabel?: string;
 }): ReactNode {
-  const tokens = useMemo(() => tokenizeJson(text), [text]);
+  const highlightDisabled = useMemo(
+    () => jsonTextByteLength(text) > MAX_HIGHLIGHT_JSON_BYTES,
+    [text],
+  );
+  const tokens = useMemo(
+    () => (highlightDisabled ? null : tokenizeJson(text)),
+    [text, highlightDisabled],
+  );
+  // Only a named block is exposed as a focusable region; unnamed callers stay unchanged.
+  const regionProps =
+    ariaLabel !== undefined && ariaLabel.length > 0
+      ? // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+        ({ tabIndex: 0, role: "region", "aria-label": ariaLabel } as const)
+      : {};
+  if (highlightDisabled || tokens === null) {
+    return (
+      <pre className={className} data-highlight-disabled="true" {...regionProps}>
+        <code>{text}</code>
+      </pre>
+    );
+  }
   return (
-    <pre className={className}>
+    <pre className={className} {...regionProps}>
       <code>
         {tokens.map((part, index) =>
           typeof part === "string" ? (

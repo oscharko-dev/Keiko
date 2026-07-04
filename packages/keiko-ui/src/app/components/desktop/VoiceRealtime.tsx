@@ -136,7 +136,9 @@ type CandidateMemoryAction = Extract<ConversationMemoryActionWire, { readonly ki
 function candidateActions(
   actions: readonly ConversationMemoryActionWire[] | undefined,
 ): readonly CandidateMemoryAction[] {
-  return actions?.filter((action): action is CandidateMemoryAction => action.kind === "candidate") ?? [];
+  return (
+    actions?.filter((action): action is CandidateMemoryAction => action.kind === "candidate") ?? []
+  );
 }
 
 function memoryActivityLabel(count: number | undefined, hasMemoryContext: boolean): string | null {

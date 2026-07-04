@@ -18,14 +18,14 @@ regulated deployments may expose speech input/output without full-duplex realtim
 Notes). Three siblings already shipped the surface this issue consumes, and the Stop Conditions forbid
 building a parallel subsystem when reuse, extension, or generalization satisfies the outcome:
 
-- **Issue #499 (ADR-0062)** shipped `createVoiceTurnManager` — the pure, deterministic eight-state
+- **Issue #499 (ADR-0104)** shipped `createVoiceTurnManager` — the pure, deterministic eight-state
   floor reducer (`idle`/`listening`/`thinking`/`speaking`/`interrupted`/`yielding`/`recovering`/
   `disabled`) with capability gating derived from `voiceMessageAllowedForProfile`, an emitted-but-never-
   executed effect vocabulary (`stop-playback`, `cancel-speech-generation`, `preserve-user-turn`,
-  `emit-backchannel`, `begin-recovery`), and a content-free observer. ADR-0062 D11 explicitly deferred
+  `emit-backchannel`, `begin-recovery`), and a content-free observer. ADR-0104 D11 explicitly deferred
   the hook wiring: "hooks construct the manager with the resolved profile … call `apply(signal)` … and
   execute the `effects` list." This issue is that deferred wiring.
-- **Issue #494/#495 (ADR-0058 D4)** shipped `useDictation` — the controlled STT capture state machine
+- **Issue #494/#495 (ADR-0100 D4)** shipped `useDictation` — the controlled STT capture state machine
   (`request → record → transcribe → preview`) over the BFF `POST /api/voice/transcribe` route, with a
   reviewed transcript inserted into the composer draft. This is the **surfaced, deployed, testable**
   user-capture path.
@@ -128,7 +128,7 @@ dialogue surface), and the live `turnManager` is passed to `useAssistantSpeech` 
 interrupt signals reach the same instance.
 
 **Profile nuance (load-bearing).** In the STT+TTS fallback the deployment profile is still
-`full-realtime`, so the live manager has `floorControl = true`. Per ADR-0062 D6 the user end-of-turn
+`full-realtime`, so the live manager has `floorControl = true`. Per ADR-0104 D6 the user end-of-turn
 therefore takes the **floor-control** path (`listening → thinking`, `turnIndex++`), **not** the
 `speech-to-text`-profile `pendingCommit` / `dictation-commit` path. The controller maps the dictation
 `preview` (transcript ready) to `user-end-of-turn`; it must **not** synthesize `dictation-commit`, which
@@ -139,7 +139,7 @@ where the coordinator spec's step ordering is refined: the commit-vs-detect spli
 
 ### D5 — Map real component events onto the `VoiceTurnSignal` union; events carry no content
 
-The pure core maps observed events to signals (the consuming-hook responsibility ADR-0062 D4 assigned):
+The pure core maps observed events to signals (the consuming-hook responsibility ADR-0104 D4 assigned):
 
 - Dialogue mic activated (user gesture) → `dictation.start()` + `user-speech-start` → `listening`.
 - Dictation reaches `preview` (recording stopped, transcript settled) → `user-end-of-turn` → `thinking`
@@ -153,12 +153,12 @@ The pure core maps observed events to signals (the consuming-hook responsibility
 
 Only signal **kind** enums, integers, and millisecond deltas ever reach the turn manager and its
 observer. No transcript text, audio, or SDP/ICE string is passed into a turn-manager signal or observer
-(ADR-0062 D8; D10 below).
+(ADR-0104 D8; D10 below).
 
 ### D6 — Route emitted effects to typed sinks; execute them React-safely, never inside the reducer
 
 `apply(signal)` returns content-free `VoiceTurnEffect` directives; the manager never executes them
-(ADR-0062 D7). The pure core defines a typed **sink contract** (one function per effect), and the hook
+(ADR-0104 D7). The pure core defines a typed **sink contract** (one function per effect), and the hook
 binds the sinks to the live components:
 
 - `stop-playback` → `playback.interrupt(atMs)` (the #1558 teardown).
@@ -170,7 +170,7 @@ binds the sinks to the live components:
 
 Effects collected from each `apply` result are executed in a `useEffect` / callback, **not** synchronously
 inside a turn-manager observer, to avoid re-entrant `apply` calls — the React-safety requirement the
-synchronous reducer core (ADR-0062 D2) depends on.
+synchronous reducer core (ADR-0104 D2) depends on.
 
 ### D7 — One capture path; do not start the realtime media connection in the STT+TTS loop
 
@@ -215,13 +215,13 @@ rather than re-implementing resource release.
 ### D10 — Content-free and committed-only privacy invariants are preserved end to end
 
 Two invariants carry forward unchanged. **Content-free turn manager:** transcript text and audio never
-enter a turn-manager signal or observer — only enums, integers, and ms deltas (ADR-0062 D8). **Committed-
+enter a turn-manager signal or observer — only enums, integers, and ms deltas (ADR-0104 D8). **Committed-
 only chat send:** only the reviewed, committed dictation transcript reaches chat, via the existing
 lifecycle — `session.setDraft(text)` then `await session.sendMessage()` — and only when the trimmed text
 is non-empty; a partial or empty transcript is never sent. The committed transcript is sent as a normal
 chat **message** (a question); no spoken action auto-executes. Any proposed action still flows through the
 #503 spoken-action governance and the existing `WorkflowHandoff` chain, which this controller has no path
-to reach (ADR-0062 D7 / AC5). No raw audio, transcript, or secret is persisted.
+to reach (ADR-0104 D7 / AC5). No raw audio, transcript, or secret is persisted.
 
 ### D11 — Deterministic-first, Model-Gateway-only, and Orchestrator-authority invariants are unchanged
 
@@ -238,7 +238,7 @@ a normal chat message and a normal spoken playback of the normal assistant answe
 - The "STT+TTS fallback when realtime is unavailable" requirement (Scope, Engineering Notes) is satisfied
   by the **same** offered surface as the realtime case, with one predicate change (D2/D3), fixing a real
   defect where #1559 hid dialogue in exactly the regulated-deployment case.
-- No second state machine: the live ADR-0062 turn manager is the single conversational truth (D4),
+- No second state machine: the live ADR-0104 turn manager is the single conversational truth (D4),
   honoring the Stop Condition against a parallel subsystem.
 - No server change, no new dependency, no new egress path, no contract version bump (D1).
 - AC3 is structural: one idempotent teardown composes the sub-hook teardowns (D9).
@@ -270,11 +270,11 @@ a normal chat message and a normal spoken playback of the normal assistant answe
 
 ### Alternative 1: Build a dedicated dialogue state machine instead of driving the turn manager
 
-- **Pros**: a single module tailored to the dialogue UX; no need to reason about ADR-0062's profile gate.
+- **Pros**: a single module tailored to the dialogue UX; no need to reason about ADR-0104's profile gate.
 - **Cons**: duplicates the eight-state floor reducer, the barge-in synthesis, and the effect vocabulary;
   creates two sources of conversational truth that can diverge; directly violates the Stop Condition
   against a parallel subsystem when reuse satisfies the outcome.
-- **Why rejected**: ADR-0062 D11 explicitly deferred exactly this wiring to "the rendering issue"; the
+- **Why rejected**: ADR-0104 D11 explicitly deferred exactly this wiring to "the rendering issue"; the
   turn manager is the intended consumer seam. Driving it live is the reuse the issue mandates.
 
 ### Alternative 2: Drive the turn loop from the realtime WebSocket transcript plane (full-duplex)
@@ -308,14 +308,14 @@ a normal chat message and a normal spoken playback of the normal assistant answe
 
 ## Related
 
-- [ADR-0062](ADR-0062-voice-turn-manager.md): the deterministic turn manager this ADR drives live —
+- [ADR-0104](ADR-0104-voice-turn-manager.md): the deterministic turn manager this ADR drives live —
   states, signal union, effect vocabulary, capability gating, content-free observer, and the D11
   deferred-hook-wiring seam.
 - [ADR-0095](ADR-0095-voice-assistant-speech-synthesis.md): the `useAssistantSpeech` playback engine and
   its `turnManager` / `interrupt` seam consumed by the barge-in routing (D6).
-- [ADR-0064](ADR-0064-voice-assistant-speech-output-playback.md): the `useVoicePlayback` lifecycle the
+- [ADR-0106](ADR-0106-voice-assistant-speech-output-playback.md): the `useVoicePlayback` lifecycle the
   speech engine drives.
-- [ADR-0058](ADR-0058-voice-digital-twin-capability-architecture.md): capability gating, the single
+- [ADR-0100](ADR-0100-voice-digital-twin-capability-architecture.md): capability gating, the single
   egress seam, the no-raw-audio-persistence invariant, and the no-new-authority rule carried forward.
 - [ADR-0019](ADR-0019-modular-package-architecture.md): package trust direction (the UI reaches the
   provider only through the BFF; `keiko-ui` is tarball-excluded, so these modules have no surface impact).

@@ -145,9 +145,10 @@ function stripMarkers(value: string): string {
 
 function significantTokens(value: string): readonly string[] {
   const out: string[] = [];
-  for (const match of value.normalize("NFC").toLocaleLowerCase("und").matchAll(
-    SIGNIFICANT_TOKEN_PATTERN,
-  )) {
+  for (const match of value
+    .normalize("NFC")
+    .toLocaleLowerCase("und")
+    .matchAll(SIGNIFICANT_TOKEN_PATTERN)) {
     const token = match[0];
     if (CLAIM_STOPWORDS.has(token)) continue;
     out.push(token);

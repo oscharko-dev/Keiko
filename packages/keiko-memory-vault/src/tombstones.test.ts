@@ -15,9 +15,11 @@ import {
   deleteTombstonesByScopeBeforeRows,
   insertTombstoneRow,
   listTombstonesByScopeRows,
+  selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
 import { memoryBodySuppressionHash } from "./body-fingerprint.js";
 import { createMemoryVault } from "./index.js";
+import type { MemoryContentCipher } from "./cipher.js";
 import { openTestDb, TEST_CIPHER } from "./_support.js";
 
 const TEST_VAULT_KEY = Buffer.alloc(32, 7);
@@ -83,9 +85,7 @@ describe("tombstones", () => {
       }),
       TEST_CIPHER,
     );
-    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)[0]?.reason).toBe(
-      "user-request",
-    );
+    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)[0]?.reason).toBe("user-request");
     db.close();
   });
 
@@ -176,6 +176,120 @@ describe("tombstones", () => {
     expect(listTombstonesByScopeRows(db, workspaceScope, TEST_CIPHER).map((t) => t.id)).toEqual([
       "old-workspace",
     ]);
+    db.close();
+  });
+});
+
+// GEN-PERF-PERSISTENCE-014 — the forget-suppression check previously listed + DECRYPTED every
+// tombstone reason per candidate. The presence-only query selects just body_hash for the current OR
+// legacy suppression hash and never opens the sealed reason column. These tests prove the same
+// suppression decision with ZERO reason decrypts (spy on cipher.openString) and bounded cost.
+describe("GEN-PERF-PERSISTENCE-014: forget-suppression presence check performs no reason decrypts", () => {
+  // Wrap TEST_CIPHER so we can count openString calls without changing the ciphertext behaviour.
+  const countingCipher = (): { cipher: MemoryContentCipher; openStringCalls: () => number } => {
+    let calls = 0;
+    const cipher: MemoryContentCipher = {
+      ...TEST_CIPHER,
+      openString: (envelope: string): string => {
+        calls += 1;
+        return TEST_CIPHER.openString(envelope);
+      },
+    };
+    return { cipher, openStringCalls: (): number => calls };
+  };
+
+  const seed = (db: ReturnType<typeof openTestDb>, count: number): void => {
+    for (let i = 0; i < count; i += 1) {
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: `t-${String(i)}`,
+          memoryId: `m-${String(i)}` as MemoryId,
+          bodyHash: memoryBodySuppressionHash(`body-${String(i)}`),
+          // Every row carries a sealed reason so a full-scan path WOULD decrypt 2k times.
+          reason: "explicit-user-request",
+        }),
+        TEST_CIPHER,
+      );
+    }
+  };
+
+  it("performs ZERO reason decrypts and finds the current-hash match among 2k tombstones", () => {
+    const db = openTestDb();
+    seed(db, 2000);
+    const targetHash = memoryBodySuppressionHash("body-1234");
+    // Add a tombstone whose bodyHash is the target current hash.
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "t-target",
+        memoryId: "m-target" as MemoryId,
+        bodyHash: targetHash,
+        reason: "explicit-user-request",
+      }),
+      TEST_CIPHER,
+    );
+
+    const { cipher, openStringCalls } = countingCipher();
+    // Sanity: the OLD full-scan path DOES decrypt every reason (regression baseline).
+    listTombstonesByScopeRows(db, userScope, cipher);
+    expect(openStringCalls()).toBeGreaterThan(2000);
+
+    const { cipher: cipher2, openStringCalls: calls2 } = countingCipher();
+    // `cipher2` is unused by the presence query (it takes no cipher) — proving no decrypt is even
+    // possible on this path. We assert on the count staying at zero.
+    void cipher2;
+    const start = performance.now();
+    const presence = selectForgetSuppressionBodyHashPresence(
+      db,
+      userScope,
+      targetHash,
+      memoryBodySuppressionHash("body-1234-legacy-never-present"),
+    );
+    const elapsed = performance.now() - start;
+
+    expect(presence.current).toBe(true);
+    expect(presence.legacy).toBe(false);
+    expect(calls2()).toBe(0); // no reason decrypt on the suppression path
+    expect(elapsed).toBeLessThan(50);
+    db.close();
+  });
+
+  it("reports absence when neither the current nor legacy hash is present", () => {
+    const db = openTestDb();
+    seed(db, 100);
+    const presence = selectForgetSuppressionBodyHashPresence(
+      db,
+      userScope,
+      memoryBodySuppressionHash("not-present-current"),
+      memoryBodySuppressionHash("not-present-legacy"),
+    );
+    expect(presence.current).toBe(false);
+    expect(presence.legacy).toBe(false);
+    db.close();
+  });
+
+  it("detects the legacy hash independently of the current hash", () => {
+    const db = openTestDb();
+    const legacyHash = memoryBodySuppressionHash("legacy-body");
+    insertTombstoneRow(
+      db,
+      makeTombstone({
+        id: "t-legacy",
+        memoryId: "m-legacy" as MemoryId,
+        bodyHash: legacyHash,
+        reason: "explicit-user-request",
+      }),
+      TEST_CIPHER,
+    );
+    const presence = selectForgetSuppressionBodyHashPresence(
+      db,
+      userScope,
+      "current-hash-not-present",
+      legacyHash,
+    );
+    expect(presence.current).toBe(false);
+    expect(presence.legacy).toBe(true);
     db.close();
   });
 });

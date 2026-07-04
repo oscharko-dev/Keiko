@@ -82,9 +82,7 @@ export interface HarnessToolShaperOptions {
 
 // The injected production shaper. Dispatches run_command results to the command shaper; every other
 // tool type yields undefined (no shape).
-export function createHarnessToolShaper(
-  options: HarnessToolShaperOptions = {},
-): HarnessShaperPort {
+export function createHarnessToolShaper(options: HarnessToolShaperOptions = {}): HarnessShaperPort {
   return (input: HarnessShaperInput) => {
     if (input.toolName !== COMMAND_TOOL || input.result.metadata?.kind !== "command") {
       return undefined;

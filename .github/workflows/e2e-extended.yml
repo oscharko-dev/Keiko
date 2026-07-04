@@ -1,0 +1,42 @@
+# GEN-TEST-E2E-005 / GEN-TEST-RELEASE-GATE-004 — the editor, git-window, and Local-Knowledge browser
+# e2e suites exist and pass locally but were wired into NO workflow, so their selectors, routes, and
+# real-Monaco/real-BFF journeys could silently rot between releases (the only per-PR browser proof is
+# the @smoke journey). This scheduled workflow runs the orphaned suites nightly and on demand. It is
+# intentionally NOT a required check (a nightly red is a signal to fix, not a merge blocker); the
+# fail-fast:false matrix keeps every suite's result independent.
+name: E2E Extended
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  extended-e2e:
+    name: extended e2e (${{ matrix.suite }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - test:e2e:editor-baseline-1377
+          - test:e2e:editor-layout-1375
+          - test:e2e:git-changes-1575
+          - test:e2e:local-knowledge
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+      - name: Install workspaces
+        run: npm ci
+      - name: Build internal packages
+        run: npm run build:packages
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run ${{ matrix.suite }}
+        run: npm run ${{ matrix.suite }}

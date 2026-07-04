@@ -1005,6 +1005,101 @@ describe("ChatWindow repository file focus picker", () => {
     expect(screen.queryByRole("dialog", { name: "Reference repository file" })).toBeNull();
     expect(fetchFilesSearchMock).not.toHaveBeenCalled();
   });
+
+  // GEN-UI-A11Y-001 / GEN-UI-TEST-GAP-010 — the composer @-mention picker is an
+  // ARIA combobox. Because a multi-line <textarea> may not carry role="combobox"
+  // itself (ARIA 1.2), the WAI-ARIA 1.1 pattern is used: a wrapper exposes
+  // role="combobox" + aria-expanded + aria-controls (owning the results listbox)
+  // while the textbox keeps DOM focus and conveys the highlighted option via
+  // aria-autocomplete + aria-activedescendant.
+  it("exposes the @-mention picker as a combobox owning the results listbox", async () => {
+    const user = userEvent.setup();
+    fetchFilesSearchMock.mockResolvedValue({
+      root: "/repo",
+      query: "coding",
+      results: [
+        {
+          root: "/repo",
+          path: "src/context/coding-context.ts",
+          name: "coding-context.ts",
+          directory: "src/context",
+          extension: "ts",
+          sizeBytes: 42,
+          modifiedAt: 123,
+          fileRole: "source",
+          matchQuality: "exact",
+          rootKind: "selected-root",
+        },
+        {
+          root: "/repo",
+          path: "src/context/coding-notes.ts",
+          name: "coding-notes.ts",
+          directory: "src/context",
+          extension: "ts",
+          sizeBytes: 84,
+          modifiedAt: 456,
+          fileRole: "source",
+          matchQuality: "strong",
+          rootKind: "selected-root",
+        },
+      ],
+      truncated: false,
+      scannedFileCount: 10,
+    });
+
+    const existingScope = {
+      kind: "files" as const,
+      root: "/repo",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: 1,
+    };
+    renderStatefulWindow(
+      makeSession({
+        activeChat: makeChat({
+          projectPath: "/repo",
+          connectedScopes: [existingScope],
+          connectedScope: existingScope,
+        }),
+        draft: "",
+      }),
+    );
+
+    // Idle: plain textbox, no @-mention combobox exposed yet. (Model / grounding
+    // KeikoSelects are separate comboboxes with their own names.)
+    const textbox = screen.getByRole("textbox", { name: "Chat message" });
+    expect(textbox).not.toHaveAttribute("aria-expanded");
+    expect(textbox).not.toHaveAttribute("aria-activedescendant");
+    expect(screen.queryByRole("combobox", { name: "Chat message" })).toBeNull();
+
+    await user.type(textbox, "Explain this @coding");
+
+    // Once results load, the wrapper is a combobox owning the results listbox
+    // while the textbox stays the focused input carrying aria-activedescendant.
+    const combobox = await screen.findByRole("combobox", { name: "Chat message" });
+    expect(combobox).toHaveAttribute("aria-expanded", "true");
+    expect(combobox).toHaveAttribute("aria-haspopup", "listbox");
+    expect(textbox).toHaveAttribute("aria-autocomplete", "list");
+
+    const listbox = await screen.findByRole("listbox", { name: "Repository file results" });
+    expect(listbox).toHaveAttribute("id", "repo-file-picker-listbox");
+    expect(combobox).toHaveAttribute("aria-controls", "repo-file-picker-listbox");
+
+    // First option is highlighted; aria-activedescendant on the textbox tracks it.
+    const options = screen.getAllByRole("option");
+    expect(textbox).toHaveAttribute("aria-activedescendant", options[0]?.id);
+    expect(options[0]).toHaveAttribute("id", "repo-file-picker-option-0");
+
+    // ArrowDown moves the active option; DOM focus stays on the textarea.
+    textbox.focus();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => {
+      expect(textbox).toHaveAttribute("aria-activedescendant", "repo-file-picker-option-1");
+    });
+    expect(document.activeElement).toBe(textbox);
+    expect(
+      screen.getByRole("option", { name: "Reference src/context/coding-notes.ts" }),
+    ).toHaveAttribute("aria-selected", "true");
+  });
 });
 
 describe("ChatWindow local knowledge scope disclosure", () => {

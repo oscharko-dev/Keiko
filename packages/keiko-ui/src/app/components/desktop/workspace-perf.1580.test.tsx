@@ -186,6 +186,52 @@ describe("Issue #1580 — workspace re-render performance", () => {
     expect(bodyRenders).toContain("agents-1");
     expect(capturedRoots.filter((r) => r.id === "agents-1").pop()?.root).toBe("root-B");
   });
+
+  // GEN-PERF-BENCHMARK-009 — a no-op remote snapshot re-apply (multi-tab) that keeps
+  // the same wins/conns/api identities must NOT re-render any window body. This fails
+  // if the PERSISTENCE-001 equality guard is removed (the storage-sync path would swap
+  // in a fresh wins array with new identities, re-rendering every window body).
+  it("re-renders no window body when a no-op remote snapshot keeps identities (BENCHMARK-009)", () => {
+    const api = makeApi({ x: 0, y: 0, zoom: 1 });
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents" }),
+      appWindow({ id: "agents-2", type: "agents", x: 600 }),
+    ];
+    const ws = workspace(api, { wins });
+    const { rerender } = renderWorkspace(ws);
+    bodyRenders.length = 0;
+
+    // A polled/storage snapshot equal to the current state produces the SAME wins
+    // array (the equality guard skips the re-apply), so the Workspace re-renders with
+    // identical wins/api → zero window body rebuilds.
+    rerender({ ...ws, wins });
+    expect(bodyRenders).toEqual([]);
+  });
+
+  // GEN-PERF-BENCHMARK-009 — mounting 50 windows renders each body exactly once (no
+  // duplicate/cascading body rebuilds), and a subsequent no-op re-render rebuilds none.
+  it("mounts 50 windows with exactly one body render each and zero on a no-op re-render (BENCHMARK-009)", () => {
+    const api = makeApi({ x: 0, y: 0, zoom: 1 });
+    const wins = Array.from({ length: 50 }, (_, i) =>
+      appWindow({
+        id: `agents-${String(i)}`,
+        type: "agents",
+        x: (i % 10) * 60,
+        y: Math.floor(i / 10) * 60,
+      }),
+    );
+    const ws = workspace(api, { wins });
+    const { rerender } = renderWorkspace(ws);
+
+    // Exactly one body render per window at mount (no cascading rebuilds).
+    expect(bodyRenders.length).toBe(50);
+    expect(new Set(bodyRenders).size).toBe(50);
+    bodyRenders.length = 0;
+
+    // A no-op re-render (same wins/api identity) rebuilds no window body.
+    rerender({ ...ws, wins });
+    expect(bodyRenders).toEqual([]);
+  });
 });
 
 describe("Issue #1580 — stable api identity and currentView accessor", () => {
@@ -198,6 +244,27 @@ describe("Issue #1580 — stable api identity and currentView accessor", () => {
     const wsRef = createRef<HTMLElement>();
     const { result, rerender } = renderHook(() => useWorkspace(wsRef));
     const firstApi = result.current.api;
+    rerender();
+    expect(result.current.api).toBe(firstApi);
+  });
+
+  it("keeps api identity stable when a parent passes NEW opts callbacks each render (GEN-PERF-RENDER-001)", () => {
+    // AppShell's scope-bind callbacks depend on the whole chat `session`, so they get
+    // a fresh identity on every keystroke/SSE token. Passing NEW-identity opts every
+    // render must NOT rebind connectActions/api (the ref-routing contract) — otherwise
+    // api churn defeats React.memo(WindowFrame) for ALL windows on every keystroke.
+    const wsRef = createRef<HTMLElement>();
+    const { result, rerender } = renderHook(() =>
+      useWorkspace(wsRef, {
+        onScopeBind: () => true,
+        onScopeUnbind: () => undefined,
+        onConnectorBind: () => true,
+        onConnectorUnbind: () => undefined,
+      }),
+    );
+    const firstApi = result.current.api;
+    // Re-render with a brand-new set of callback identities (new closures each time).
+    rerender();
     rerender();
     expect(result.current.api).toBe(firstApi);
   });

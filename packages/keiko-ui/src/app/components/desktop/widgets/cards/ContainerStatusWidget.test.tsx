@@ -208,7 +208,34 @@ describe("ContainerStatusWidget", () => {
     fireEvent.click(runButton);
 
     expect(createContainerRun).toHaveBeenCalledTimes(1);
-    expect(runButton).toBeDisabled();
+    // GEN-UI-FOCUS-014: the button stays HTML-enabled while running (aria-disabled only)
+    // so a keyboard user who triggered it keeps focus; re-entry is guarded in onSubmit.
+    expect(runButton).not.toBeDisabled();
+    expect(runButton).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps the Run button in the tab order (aria-disabled, not HTML disabled) during a pending diagnostic", async () => {
+    // GEN-UI-FOCUS-014 (test-plan #33) — a keyboard user tabs to Run and presses Enter.
+    // Native `disabled` while running would eject focus to <body>; the button must instead
+    // stay focusable with aria-disabled while re-entry is guarded in onSubmit.
+    vi.mocked(fetchContainerCapability).mockResolvedValue(AVAILABLE);
+    vi.mocked(fetchContainerCatalog).mockResolvedValue(CATALOG);
+    vi.mocked(createContainerRun).mockImplementation(() => new Promise<never>(() => undefined));
+    const user = userEvent.setup();
+    render(<ContainerStatusWidget projectPath="/proj" />);
+
+    const runButton = await screen.findByRole("button", { name: /run diagnostic/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+
+    runButton.focus();
+    expect(document.activeElement).toBe(runButton);
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(createContainerRun).toHaveBeenCalledTimes(1));
+    // Still focusable and focused mid-run: HTML-enabled, aria-disabled communicates busy.
+    expect(runButton).not.toBeDisabled();
+    expect(runButton).toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(runButton);
   });
 
   it("renders a capability fetch error as a muted, code-tagged message that never leaks a URL", async () => {

@@ -94,6 +94,20 @@ type ChatRequestMessageContent =
       | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
     )[];
 
+// GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
+// misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
+// joinAzureDeploymentUrl. `apiVersion` is guaranteed present for the azure style by config-time
+// validation (assertProviderEndpointVersion enforces the biconditional).
+function chatCompletionsUrl(config: ModelProviderConfig): string {
+  if (config.endpointStyle === "azure-openai-deployment") {
+    const trimmed = config.baseUrl.endsWith("/") ? config.baseUrl.slice(0, -1) : config.baseUrl;
+    return `${trimmed}/openai/deployments/${encodeURIComponent(
+      config.modelId,
+    )}/chat/completions?api-version=${encodeURIComponent(config.apiVersion ?? "")}`;
+  }
+  return `${config.baseUrl}/chat/completions`;
+}
+
 function buildMessageContent(
   content: string,
   parts: readonly ChatMessageContentPart[] | undefined,
@@ -540,7 +554,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
     const cancel = request.cancellationSignal;
     const signal = cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal;
-    const url = `${config.baseUrl}/chat/completions`;
+    const url = chatCompletionsUrl(config);
     const body = JSON.stringify(stream ? buildStreamBody(request) : buildBody(request));
     const headers = {
       "content-type": "application/json",

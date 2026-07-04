@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "../../vitest.setup";
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { useRef, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -98,6 +98,78 @@ describe("KeikoDiffEditor — file list and selection", () => {
     expect(onSelectFile).toHaveBeenCalledWith("keiko://doc/mod.ts");
     expect(screen.getByTestId("mock-diff-original")).toHaveTextContent("const a = 1;");
     expect(screen.getByTestId("mock-diff-modified")).toHaveTextContent("const a = 2;");
+  });
+});
+
+describe("KeikoDiffEditor — file-list keyboard roving (GEN-UI-KEYBOARD-007)", () => {
+  function selectButtons(): HTMLElement[] {
+    const list = screen.getByTestId("keiko-diff-file-list");
+    return within(list).getAllByTestId("keiko-diff-file");
+  }
+
+  it("makes only the first row a tab stop and the rest -1 (roving tabindex)", () => {
+    render(<KeikoDiffEditor {...baseDiffProps()} />);
+    const buttons = selectButtons();
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0]).toHaveAttribute("tabindex", "0");
+    expect(buttons[1]).toHaveAttribute("tabindex", "-1");
+    expect(buttons[2]).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("moves focus down and up between rows with ArrowDown/ArrowUp", () => {
+    render(<KeikoDiffEditor {...baseDiffProps()} />);
+    const buttons = selectButtons();
+    buttons[0].focus();
+    expect(document.activeElement).toBe(buttons[0]);
+
+    fireEvent.keyDown(buttons[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(buttons[1]);
+    expect(buttons[1]).toHaveAttribute("tabindex", "0");
+    expect(buttons[0]).toHaveAttribute("tabindex", "-1");
+
+    fireEvent.keyDown(buttons[1], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(buttons[2]);
+
+    fireEvent.keyDown(buttons[2], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(buttons[1]);
+  });
+
+  it("clamps ArrowUp at the first row and ArrowDown at the last row (no wrap)", () => {
+    render(<KeikoDiffEditor {...baseDiffProps()} />);
+    const buttons = selectButtons();
+    buttons[0].focus();
+
+    fireEvent.keyDown(buttons[0], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(buttons[0]);
+
+    buttons[2].focus();
+    fireEvent.keyDown(buttons[2], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(buttons[2]);
+  });
+
+  it("jumps to the first row with Home and the last row with End", () => {
+    render(<KeikoDiffEditor {...baseDiffProps()} />);
+    const buttons = selectButtons();
+    buttons[0].focus();
+
+    fireEvent.keyDown(buttons[0], { key: "End" });
+    expect(document.activeElement).toBe(buttons[2]);
+    expect(buttons[2]).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(buttons[2], { key: "Home" });
+    expect(document.activeElement).toBe(buttons[0]);
+    expect(buttons[0]).toHaveAttribute("tabindex", "0");
+  });
+
+  it("still selects via keyboard Enter after roving to a row (behavior preserved)", async () => {
+    const onSelectFile = vi.fn();
+    render(<KeikoDiffEditor {...baseDiffProps({ onSelectFile })} />);
+    const buttons = selectButtons();
+    buttons[0].focus();
+    fireEvent.keyDown(buttons[0], { key: "ArrowDown" });
+    // Native <button> activates on Enter; the roving handler must not swallow it.
+    await userEvent.keyboard("{Enter}");
+    expect(onSelectFile).toHaveBeenCalledWith("keiko://doc/mod.ts");
   });
 });
 

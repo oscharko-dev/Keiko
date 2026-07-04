@@ -7,6 +7,7 @@
  */
 
 import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 import {
   isWorkspaceFailureClass,
   type WorkspaceBinding,
@@ -42,52 +43,21 @@ export interface WorkspaceMutationResult {
   readonly binding: WorkspaceBinding;
 }
 
-interface BffError {
-  readonly error: {
-    readonly code: string;
-    readonly message: string;
-    readonly failureClass?: string;
-  };
-}
-
+// Thin wrapper over the shared BFF scaffold (GEN-DUP-NEAR-004). Beyond the standard CSRF/JSON headers,
+// error-envelope parse, and 204 short-circuit, this route copies the caller-facing failure class off
+// the parsed envelope onto the thrown `ApiError` (#449, ADR-0093 D3) via the `enrichError` hook.
+// `ApiError` is referenced only in that hook (runtime throw path), never at module load, so a partial
+// `@/lib/api` mock in unrelated UI tests is unaffected.
 async function taskWorkspaceFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
+  return bffFetchJson<T>(path, init, {
+    enrichError: (error, envelope) => {
+      const raw = envelope?.error["failureClass"];
+      const failureClass: WorkspaceFailureClass | undefined = isWorkspaceFailureClass(raw)
+        ? raw
+        : undefined;
+      Object.assign(error, { failureClass });
     },
   });
-
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    let failureClass: WorkspaceFailureClass | undefined;
-    try {
-      const envelope = (await res.json()) as BffError;
-      code = envelope.error.code;
-      message = envelope.error.message;
-      failureClass = isWorkspaceFailureClass(envelope.error.failureClass)
-        ? envelope.error.failureClass
-        : undefined;
-    } catch {
-      // parse failure — keep generic, never log
-    }
-    // `ApiError` is referenced only here (runtime throw path), never at module load, so a partial
-    // `@/lib/api` mock in unrelated UI tests is unaffected. The thrown value is an ApiError carrying the
-    // optional caller-facing failure class.
-    const error: TaskWorkspaceApiError = Object.assign(new ApiError(code, message, res.status), {
-      failureClass,
-    });
-    throw error;
-  }
-
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
 }
 
 // Provision (create or idempotently resume) a managed task workspace from a repository root via the

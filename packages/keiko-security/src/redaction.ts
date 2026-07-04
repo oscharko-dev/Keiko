@@ -103,10 +103,7 @@ export function isCredentialKeyName(value: string): boolean {
   return NORMALIZED_SECRET_KEY_NAMES.has(normalized);
 }
 
-export function objectContainsCredentialKey(
-  value: unknown,
-  seen = new WeakSet(),
-): boolean {
+export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()): boolean {
   if (typeof value !== "object" || value === null) return false;
   if (seen.has(value)) return false;
   seen.add(value);

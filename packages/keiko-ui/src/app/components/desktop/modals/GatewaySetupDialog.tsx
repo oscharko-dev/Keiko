@@ -141,7 +141,23 @@ export function GatewaySetupDialog({
     const nodes = root.querySelectorAll<HTMLElement>(
       "button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex='-1'])",
     );
-    return Array.from(nodes);
+    const out: HTMLElement[] = [];
+    nodes.forEach((node) => {
+      // The "Replace model gateway settings" / "Update voice dictation
+      // credentials" fields live inside collapsed <details>. Those fields are
+      // not rendered, so the Tab trap must skip them — otherwise Tab parks focus
+      // on an invisible input and the user appears to lose focus
+      // (GEN-UI-FOCUS-015). This matches the visibility intent of
+      // NewWindowDialog.focusableInside (which filters offsetParent === null),
+      // but tests the <details open> ancestor directly because jsdom always
+      // reports offsetParent === null and cannot compute layout. The <summary>
+      // that toggles the details stays reachable so the collapsed section can be
+      // opened by keyboard.
+      const details = node.tagName === "SUMMARY" ? null : node.closest("details");
+      if (details !== null && !details.open) return;
+      out.push(node);
+    });
+    return out;
   };
 
   useEffect(() => {

@@ -263,6 +263,18 @@ describe("workspace-persistence", () => {
     expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-current" });
   });
 
+  it("normalizes every persisted singleton window by registry ownership", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "quality-old", type: "quality", z: 2, cfg: { stale: "old" } }),
+      win({ id: "quality-current", type: "quality", z: 6, cfg: { fresh: "current" } }),
+      win({ id: "chat-a", type: "chat", z: 1, cfg: { title: "A" } }),
+      win({ id: "chat-b", type: "chat", z: 3, cfg: { title: "B" } }),
+    ]);
+
+    expect(persisted.map((entry) => entry.id)).toEqual(["quality-current", "chat-b"]);
+    expect(persisted.find((entry) => entry.type === "chat")?.cfg).toEqual({ title: "B" });
+  });
+
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {
     const persisted = sanitizePersistedWindows([
       win({
@@ -422,6 +434,18 @@ describe("workspace-persistence", () => {
 
     expect(parsePersistedWindows(raw)).toEqual([
       win({ id: "review-1", type: "review", cfg: { runId: "run-123" } }),
+    ]);
+  });
+
+  it("clamps persisted window content zoom on restore", () => {
+    const raw = JSON.stringify([
+      win({ id: "files-low", type: "files", zoom: 0.01 }),
+      win({ id: "files-high", type: "files", zoom: 99 }),
+    ]);
+
+    expect((parsePersistedWindows(raw) ?? []).map((entry) => [entry.id, entry.zoom])).toEqual([
+      ["files-low", 0.5],
+      ["files-high", 2],
     ]);
   });
 

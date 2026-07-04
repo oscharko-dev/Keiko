@@ -253,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 22 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(22);
+  it("is the integer 23 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(23);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -482,8 +482,7 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
           ].join(" "),
         )
         .get('"Überweisung"', handles.capsuleId) as
-        | { readonly chunk_id?: string; readonly bm25_score?: number }
-        | undefined;
+        { readonly chunk_id?: string; readonly bm25_score?: number } | undefined;
       expect(ftsRow?.chunk_id).toBe(handles.chunkId);
       expect(typeof ftsRow?.bm25_score).toBe("number");
 
@@ -917,7 +916,11 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
           "SELECT id, augmented_text, context_prefix FROM chunks WHERE capsule_id = ? AND id = ?",
         )
         .get(handles.capsuleId, handles.chunkId) as
-        | { readonly id: string; readonly augmented_text: string | null; readonly context_prefix: string | null }
+        | {
+            readonly id: string;
+            readonly augmented_text: string | null;
+            readonly context_prefix: string | null;
+          }
         | undefined;
       expect(row?.id).toBe(handles.chunkId);
       expect(row?.augmented_text).toBeNull();

@@ -1,4 +1,4 @@
-// Governed merge orchestration contracts (Issue #478, Epic #470; ADR-0065). Ownership: the
+// Governed merge orchestration contracts (Issue #478, Epic #470; ADR-0087). Ownership: the
 // provider-neutral, content-free merge-governance leaf — the merge-readiness model, the strategy
 // eligibility derivation, the merge recommendation, and the provider-failure rejection taxonomy. It is
 // the merge counterpart of git-pull-request.ts (the PR-orchestration leaf) and sits on top of the
@@ -11,7 +11,7 @@
 // mapper, and the raw-error classifier are keiko-tools concerns; this leaf never imports a kernel type
 // and never carries raw provider content.
 //
-// Leaf-package rules (ADR-0019, ADR-0058, ADR-0065): pure types, frozen const tables, and pure
+// Leaf-package rules (ADR-0019, ADR-0058, ADR-0087): pure types, frozen const tables, and pure
 // functions only. No IO, no clock, no crypto, no randomness, no provider field names. Relative imports
 // end in ".js" and reference only sibling git-delivery*.ts leaves.
 //

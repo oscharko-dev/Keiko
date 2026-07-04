@@ -1,7 +1,7 @@
 # Voice Digital Twin — supply-chain policy
 
 Supply-chain policy for Epic #491, expanding
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) decision D8. This policy binds every
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) decision D8. This policy binds every
 voice child issue (#493–#506).
 
 ## 1. Policy: no new runtime media packages by default
@@ -11,7 +11,7 @@ The runtime dependency budget for the entire Voice Digital Twin is:
 - the **existing `ws` package** (resolved version **8.21.0**, MIT), declared in the root CLI
   [`package.json`](../../package.json),
   [`packages/keiko-tools/package.json`](../../packages/keiko-tools/package.json), and — added by Issue #497
-  under [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md) — also
+  under [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md) — also
   [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json); and
 - **browser-native WebRTC APIs** (`RTCPeerConnection`, `MediaDevices.getUserMedia`, `RTCDataChannel`,
   `RTCIceCandidate`, `RTCSessionDescription`, ICE/STUN/TURN), which are platform capabilities, not packages.
@@ -35,7 +35,7 @@ reviewed for license and size, and is a compatibility shim only — not a WebRTC
   ([`cdp-client.ts`](../../packages/keiko-tools/src/browser/cdp-client.ts)) with a hard-coded method permit
   list. Re-using `ws` in a package that did not previously declare it is an explicit, ADR-gated decision, not
   a free additive reuse. That decision was **taken for `keiko-server`** by Issue #497 under
-  [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md), which re-opened the single loopback
+  [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md), which re-opened the single loopback
   `/api/voice/control` WebSocket upgrade and declared `ws` in
   [`packages/keiko-server/package.json`](../../packages/keiko-server/package.json) for manifest correctness.
   This did **not** change the dependency count (`ws` was already resolved in the monorepo lockfile) and added
@@ -70,7 +70,7 @@ no license obligation because it ships with the browser, not with Keiko.
 
 ## 5. References
 
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) D8;
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) D8;
   [ADR-0043](../adr/ADR-0043-enforced-execution-isolation.md) (isolation backends are system binaries).
 - [architecture.md](architecture.md) §4 (transport), §7 (greenfield vs. reused).
 - Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491) non-goals (no `socket.io`/`simple-peer`/

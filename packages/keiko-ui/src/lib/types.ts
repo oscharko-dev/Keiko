@@ -302,6 +302,7 @@ export type {
   GroundedEvidenceCitation,
   GroundedUncertainty,
   GroundedAnswer,
+  GroundedRerankerDiagnostics,
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
   GroundedAnswerContextSummary,

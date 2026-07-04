@@ -73,7 +73,9 @@ const NEGATION_TOKENS = new Set([
 ]);
 
 export function hasNegation(body: string): boolean {
-  const tokens = normalizeBody(body).split(" ").filter((token) => token.length > 0);
+  const tokens = normalizeBody(body)
+    .split(" ")
+    .filter((token) => token.length > 0);
   return tokens.some((token) => NEGATION_TOKENS.has(token));
 }
 
@@ -109,7 +111,10 @@ function normalizeFactKey(raw: string): string {
 }
 
 function normalizeFactValue(raw: string): string {
-  const compact = raw.trim().toLowerCase().replace(/[^a-z0-9+#._-]/gu, "");
+  const compact = raw
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9+#._-]/gu, "");
   return VALUE_SYNONYMS.get(compact) ?? compact;
 }
 

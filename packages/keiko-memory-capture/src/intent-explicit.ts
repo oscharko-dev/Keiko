@@ -227,11 +227,7 @@ function extractCorrectionBody(text: string): string | null {
     return labelMatch[1];
   }
   const wrongMatch = THATS_WRONG_RE.exec(text);
-  if (
-    wrongMatch?.[1] !== undefined &&
-    wrongMatch[2] !== undefined &&
-    wrongMatch[3] !== undefined
-  ) {
+  if (wrongMatch?.[1] !== undefined && wrongMatch[2] !== undefined && wrongMatch[3] !== undefined) {
     return `${wrongMatch[1]} ${wrongMatch[2]} ${wrongMatch[3]}`;
   }
   return null;

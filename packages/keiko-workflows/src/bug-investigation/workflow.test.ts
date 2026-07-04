@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { investigateBug } from "./workflow.js";
 import type { BugInvestigationDeps, BugInvestigationInput } from "./types.js";
 import type { MemoryId, MemoryUsedEvent, MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
-import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
 
 const ROOT = "/repo";

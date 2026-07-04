@@ -1,10 +1,9 @@
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve, join, sep } from "node:path";
-import { PassThrough } from "node:stream";
-import type { ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { contentTypeFor, resolveContainedPath, serveFile } from "./static.js";
+import { mockResponse } from "./_support.js";
 
 const ROOT = resolve("/var/app/dist/ui/static");
 
@@ -58,21 +57,18 @@ describe("resolveContainedPath", () => {
   });
 });
 
-// A minimal ServerResponse stand-in: a writable stream with the header setters serveFile touches.
-// The PassThrough is returned alongside so a test can drain it before its temp dir is removed
-// (serveFile returns before the piped read finishes; draining avoids a late ENOENT on cleanup).
-function fakeRes(): { res: ServerResponse; stream: PassThrough } {
-  const stream = new PassThrough();
-  const res = stream as unknown as ServerResponse & { statusCode: number };
-  res.statusCode = 0;
-  res.setHeader = (): ServerResponse => res;
-  return { res, stream };
+// The shared mockResponse() is a genuine writable PassThrough with the header setters serveFile
+// touches, and it auto-resumes (drains) its writable side so the piped createReadStream finishes
+// before the temp dir is removed (serveFile returns before the piped read completes; draining avoids
+// a late ENOENT on cleanup). `res` is drained-and-ended via a "finish" listener where a test needs
+// to wait for the pipe to complete.
+function fakeRes(): ReturnType<typeof mockResponse> {
+  return mockResponse({ captureBody: true });
 }
 
-function drained(stream: PassThrough): Promise<void> {
+function drained(res: ReturnType<typeof mockResponse>["res"]): Promise<void> {
   return new Promise<void>((resolve) => {
-    stream.on("end", resolve);
-    stream.resume();
+    res.on("finish", resolve);
   });
 }
 
@@ -90,9 +86,9 @@ describe("serveFile (FIX 5 — symlink-safe static serving)", () => {
   it("serves a regular file", async () => {
     const file = join(dir, "asset.css");
     writeFileSync(file, "body{}");
-    const { res, stream } = fakeRes();
+    const { res } = fakeRes();
     expect(await serveFile(res, file)).toBe(true);
-    await drained(stream);
+    await drained(res);
   });
 
   it("refuses a symlink even when it points to a regular file inside the root", async () => {

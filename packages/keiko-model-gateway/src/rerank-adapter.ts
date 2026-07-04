@@ -247,9 +247,7 @@ async function decodeSuccess(
   };
 }
 
-export async function requestLiteLLMRerank(
-  request: LiteLLMRerankRequest,
-): Promise<RerankOutcome> {
+export async function requestLiteLLMRerank(request: LiteLLMRerankRequest): Promise<RerankOutcome> {
   if (request.documents.length === 0) {
     return { ok: true, value: { modelId: request.modelId, results: [] } };
   }

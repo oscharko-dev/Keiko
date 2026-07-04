@@ -42,6 +42,7 @@ import {
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import type {
   GitMutationLifecycleResult,
   GitMutationOutcome,
@@ -239,15 +240,13 @@ function recoveryFor(
 
 // Branch names are echoed raw into the audit record (they are git refs, not secrets). Strip
 // bidirectional/zero-width/BOM format characters so a crafted ref cannot visually spoof which branch
-// an audit row refers to when the export is rendered. Mirrors the action-sheet route's boundary
-// scanner; git ref rules already bar C0/C1 controls and spaces, so only the format-char set is removed.
-const UNSAFE_FORMAT_CHARS = new RegExp(
-  "[\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u206F\\uFEFF]",
-  "gu",
-);
-
+// an audit row refers to when the export is rendered. Delegates to the canonical keiko-contracts
+// `stripUnsafeFormatChars` (GEN-DUP-NEAR-003): a true SUPERSET of the former local regex — it keeps
+// the U+2060..U+206F stripping AND additionally removes U+061C (Arabic letter mark), a bidi-spoof
+// gap the old regex missed. Git ref rules already bar C0/C1 controls and spaces, so the extra
+// control-code removal the primitive performs is a no-op for valid refs.
 function sanitizeRef(value: string): string {
-  return value.replace(UNSAFE_FORMAT_CHARS, "");
+  return stripUnsafeFormatChars(value);
 }
 
 function approvalFor(approval: GitDeliveryApprovalRequirement): GitDeliveryEvidenceApproval {

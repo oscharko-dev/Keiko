@@ -6,9 +6,11 @@
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceReviewState,
+  QualityIntelligenceRunStatus,
   TestQualityRubricDimension,
   QualityIntelligenceUiWeakTestFlag,
 } from "@oscharko-dev/keiko-contracts";
+import { QUALITY_INTELLIGENCE_RUN_STATUSES } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
 
 // Human labels for review states — shared by the candidate review badges (CandidatesPane) and the
@@ -72,7 +74,7 @@ export function formatDate(iso: string): string {
   }
 }
 
-type RunStatus = "running" | "succeeded" | "failed" | "cancelled";
+type RunStatus = QualityIntelligenceRunStatus;
 
 const STATUS_LABEL: Readonly<Record<RunStatus, string>> = {
   running: "Running",
@@ -89,7 +91,7 @@ const STATUS_CLASS: Readonly<Record<RunStatus, string>> = {
 };
 
 function isRunStatus(s: string): s is RunStatus {
-  return s === "running" || s === "succeeded" || s === "failed" || s === "cancelled";
+  return (QUALITY_INTELLIGENCE_RUN_STATUSES as readonly string[]).includes(s);
 }
 
 /** Human label for a run status — falls back to the raw value for unknown statuses. */

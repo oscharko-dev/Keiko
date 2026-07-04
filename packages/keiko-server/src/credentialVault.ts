@@ -279,7 +279,8 @@ function planReferenceOnlyRerankerCredential(
   configuredRef: string | undefined,
   vaultedRefs: ReadonlySet<string>,
 ): PlannedRerankerCredential {
-  const ref = configuredRef ?? (vaultedRefs.has(RERANKER_SECRET_REF) ? RERANKER_SECRET_REF : undefined);
+  const ref =
+    configuredRef ?? (vaultedRefs.has(RERANKER_SECRET_REF) ? RERANKER_SECRET_REF : undefined);
   return ref === undefined ? { reranker: cleaned } : rerankerWithSecretRef(cleaned, ref);
 }
 

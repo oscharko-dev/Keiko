@@ -120,5 +120,18 @@ export default tseslint.config(
     languageOptions: { globals: { Buffer: "readonly", process: "readonly" } },
     rules: { "@typescript-eslint/explicit-function-return-type": "off" },
   },
+  // Standalone Node ESM helpers spawned directly by Playwright webServer (e.g. the deterministic
+  // model mock) live outside the TypeScript program: disable type-aware rules and permit console.
+  { files: ["tests/e2e/support/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ["tests/e2e/support/**/*.mjs"],
+    languageOptions: {
+      globals: { console: "readonly", process: "readonly", URL: "readonly", Buffer: "readonly" },
+    },
+    rules: {
+      "no-console": "off",
+      "@typescript-eslint/explicit-function-return-type": "off",
+    },
+  },
   prettier,
 );

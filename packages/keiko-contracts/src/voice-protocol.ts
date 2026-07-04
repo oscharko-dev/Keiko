@@ -1,5 +1,5 @@
 // Public type contracts for the optional Voice Digital Twin control / media protocol (Epic #491,
-// Issue #496, ADR-0059). This module DEFINES the wire protocol; it implements no transport. It is
+// Issue #496, ADR-0101). This module DEFINES the wire protocol; it implements no transport. It is
 // pure data + pure validators only — nothing performs IO, crypto, clock reads, randomness, or audio
 // processing, and no provider base URL, credential, or raw audio buffer is ever a field on these
 // types. The `VOICE_PROTOCOL_VERSION` discriminant follows the same evolution rule as
@@ -13,7 +13,7 @@
 // kind in this module) and the WebRTC media plane (raw audio frames). Raw audio is never a control
 // message and is never replayed or persisted by default (AC5). Today the control-plane role is
 // realized on the existing loopback HTTP + Server-Sent Events seam; a bidirectional WebSocket upgrade
-// is an explicit, ADR-gated transport decision owned by Issue #497 (ADR-0058 D3 / ADR-0059).
+// is an explicit, ADR-gated transport decision owned by Issue #497 (ADR-0100 D3 / ADR-0101).
 
 import type {
   VoicePersona,
@@ -344,7 +344,7 @@ export interface VoiceCapabilitySelectMessage extends VoiceControlEnvelope<"capa
 }
 
 // SDP / ICE payloads are opaque strings to this contract: the protocol never parses or stores them,
-// and they are `secret-bearing` / `ephemeral` (privacy-contract §2/§4, ADR-0058 D6).
+// and they are `secret-bearing` / `ephemeral` (privacy-contract §2/§4, ADR-0100 D6).
 export interface VoiceSdpOfferMessage extends VoiceControlEnvelope<"signal.sdp.offer"> {
   readonly sdp: string;
 }

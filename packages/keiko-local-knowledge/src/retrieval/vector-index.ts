@@ -101,9 +101,7 @@ interface SqliteTempTableRow {
   readonly n: number;
 }
 
-type SqliteVecLoadResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reason: string };
+type SqliteVecLoadResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
 const SQLITE_VEC_PROVIDER: VectorIndexProvider = "sqlite-vec";
 const SQLITE_VEC_TABLE_PREFIX = "keiko_lk_vec";
@@ -129,7 +127,9 @@ const SELECT_SQLITE_VEC_INDEX_ROWS_SQL = [
   "ORDER BY chunk_id ASC",
 ].join(" ");
 
-function resolvedVectorIndexOptions(options: VectorIndexOptions | undefined): ResolvedVectorIndexOptions {
+function resolvedVectorIndexOptions(
+  options: VectorIndexOptions | undefined,
+): ResolvedVectorIndexOptions {
   const mode = parseVectorIndexMode(
     options?.mode ?? process.env.KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX,
   );
@@ -299,10 +299,7 @@ function loadSqliteVecUncached(
   if (options.sqliteVecExtensionPath === undefined) {
     return { ok: false, reason: "sqlite-vec-runtime-not-configured" };
   }
-  if (
-    typeof db.enableLoadExtension !== "function" ||
-    typeof db.loadExtension !== "function"
-  ) {
+  if (typeof db.enableLoadExtension !== "function" || typeof db.loadExtension !== "function") {
     return { ok: false, reason: "sqlite-load-extension-unavailable" };
   }
   try {
@@ -549,23 +546,19 @@ function readSqliteVecIndexRows(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
 ): readonly SqliteVecIndexRow[] {
-  return store._internal.db
-    .prepare(SELECT_SQLITE_VEC_INDEX_ROWS_SQL)
-    .all({
-      capsule_id: String(capsule.id),
-      vector_dimensions: capsule.embeddingModelIdentity.vectorDimensions,
-      vector_metric: capsule.embeddingModelIdentity.vectorMetric,
-    }) as unknown as readonly SqliteVecIndexRow[];
+  return store._internal.db.prepare(SELECT_SQLITE_VEC_INDEX_ROWS_SQL).all({
+    capsule_id: String(capsule.id),
+    vector_dimensions: capsule.embeddingModelIdentity.vectorDimensions,
+    vector_metric: capsule.embeddingModelIdentity.vectorMetric,
+  }) as unknown as readonly SqliteVecIndexRow[];
 }
 
 function vectorIndexStamp(store: KnowledgeStore, capsule: KnowledgeCapsule): VectorIndexStampRow {
-  return store._internal.db
-    .prepare(SELECT_VECTOR_INDEX_STAMP_SQL)
-    .get({
-      capsule_id: String(capsule.id),
-      vector_dimensions: capsule.embeddingModelIdentity.vectorDimensions,
-      vector_metric: capsule.embeddingModelIdentity.vectorMetric,
-    }) as unknown as VectorIndexStampRow;
+  return store._internal.db.prepare(SELECT_VECTOR_INDEX_STAMP_SQL).get({
+    capsule_id: String(capsule.id),
+    vector_dimensions: capsule.embeddingModelIdentity.vectorDimensions,
+    vector_metric: capsule.embeddingModelIdentity.vectorMetric,
+  }) as unknown as VectorIndexStampRow;
 }
 
 function sqliteVecIndexName(identity: EmbeddingModelIdentity): string {
@@ -573,7 +566,9 @@ function sqliteVecIndexName(identity: EmbeddingModelIdentity): string {
 }
 
 function float32Bytes(vector: Float32Array): Uint8Array {
-  return new Uint8Array(vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength));
+  return new Uint8Array(
+    vector.buffer.slice(vector.byteOffset, vector.byteOffset + vector.byteLength),
+  );
 }
 
 function scoreDesc(

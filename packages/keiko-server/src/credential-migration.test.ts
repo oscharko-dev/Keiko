@@ -141,9 +141,7 @@ describe("local credential migration (#1320)", () => {
       });
       expect(vault.get(RERANKER_SECRET_REF)).toBe("legacy-rerank-secret");
       expect(currentGatewayConfig(deps)?.reranker?.apiKey).toBe("legacy-rerank-secret");
-      expect(currentGatewayConfig(deps)?.reranker?.baseUrl).toBe(
-        "https://rerank.example.com/v1",
-      );
+      expect(currentGatewayConfig(deps)?.reranker?.baseUrl).toBe("https://rerank.example.com/v1");
     } finally {
       deps.store.close();
     }

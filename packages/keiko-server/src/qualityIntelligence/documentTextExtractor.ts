@@ -12,8 +12,7 @@ import type {
   QiDocumentTextExtractionInput,
 } from "./runIngestion.js";
 
-const DOCX_MEDIA_TYPE =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const PDF_MEDIA_TYPE = "application/pdf";
 const QI_DOCUMENT_PARSE_TIMEOUT_MS = 5_000;
 const QI_DOCUMENT_PARSE_MAX_UNITS = 5_000;

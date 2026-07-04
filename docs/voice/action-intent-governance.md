@@ -2,7 +2,7 @@
 
 Specification for Epic #491, the deliverable of Issue
 [#503](https://github.com/oscharko-dev/Keiko/issues/503) and the authoritative companion to
-[ADR-0066](../adr/ADR-0066-voice-spoken-action-governance.md). It **defines** the five effect classes,
+[ADR-0108](../adr/ADR-0108-voice-spoken-action-governance.md). It **defines** the five effect classes,
 confirmation semantics, state machine, content-free audit requirements, and threat model. The contract
 lives in [`packages/keiko-contracts/src/voice-action-intent.ts`](../../packages/keiko-contracts/src/voice-action-intent.ts);
 the server governance lives in [`packages/keiko-server/src/voice-action-governance.ts`](../../packages/keiko-server/src/voice-action-governance.ts);
@@ -406,13 +406,13 @@ path are needed when the surface is added.
 
 ## Related
 
-- [ADR-0066](../adr/ADR-0066-voice-spoken-action-governance.md): the authoritative decision record.
-- [ADR-0065](../adr/ADR-0065-discussion-intelligence.md): discussion intelligence; decide-mode
+- [ADR-0108](../adr/ADR-0108-voice-spoken-action-governance.md): the authoritative decision record.
+- [ADR-0107](../adr/ADR-0107-discussion-intelligence.md): discussion intelligence; decide-mode
   recommendation sourcing.
-- [ADR-0062](../adr/ADR-0062-voice-turn-manager.md): turn manager; `VoiceTurnSnapshot`.
-- [ADR-0063](../adr/ADR-0063-voice-transcript-segment-semantics.md): committed-only transcript
+- [ADR-0104](../adr/ADR-0104-voice-turn-manager.md): turn manager; `VoiceTurnSnapshot`.
+- [ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md): committed-only transcript
   boundary; `selectCommittedVoiceTranscript`.
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md): voice architecture
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md): voice architecture
   baseline; text-first principle.
 - [ADR-0019](../adr/ADR-0019-modular-package-architecture.md): leaf-package rule.
 - [`packages/keiko-contracts/src/voice-action-intent.ts`](../../packages/keiko-contracts/src/voice-action-intent.ts):

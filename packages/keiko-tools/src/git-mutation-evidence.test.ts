@@ -393,3 +393,43 @@ describe("buildGitDeliveryEvidenceRecord — sections and determinism", () => {
     expect(record.repoContext.targetBranchName).toBe("feature/x");
   });
 });
+
+// \u2500\u2500\u2500 GEN-DUP-NEAR-003: ref sanitiser is the canonical superset primitive \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// sanitizeRef delegates to the keiko-contracts `stripUnsafeFormatChars`. Two properties matter:
+//   1. It STILL strips the U+2060..U+206F block (word joiner / invisible math / deprecated format)
+//      that the previous local regex covered \u2014 no regression.
+//   2. It NOW ALSO strips U+061C (Arabic letter mark), a bidi-spoofing gap the old regex MISSED.
+// Refs are echoed through preview.affectedBranchName and repoContext.targetBranchName, so both call
+// sites are exercised.
+describe("buildGitDeliveryEvidenceRecord \u2014 ref sanitiser is the canonical superset (GEN-DUP-NEAR-003)", () => {
+  function branchRecord(affectedBranchName: string): ReturnType<typeof build> {
+    const spoofed = lifecycle({ status: "succeeded", executionResult: SUCCEEDED_EXEC }, "result", {
+      executionResult: SUCCEEDED_EXEC,
+      preview: {
+        schemaVersion: "1",
+        affectedBranchName,
+        wouldCreateRemoteBranch: false,
+        wouldTriggerChecks: false,
+      },
+    });
+    return build(spoofed);
+  }
+
+  it("still strips the U+2060..U+206F block (word joiner / invisible plus / deprecated format)", () => {
+    for (const code of [0x2060, 0x2064, 0x206a, 0x206f]) {
+      const dirty = `feature/${String.fromCodePoint(code)}x`;
+      const record = branchRecord(dirty);
+      expect(
+        record.preview?.affectedBranchName,
+        `U+${code.toString(16)} must be stripped from the ref`,
+      ).toBe("feature/x");
+    }
+  });
+
+  it("NOW strips U+061C (Arabic letter mark) \u2014 the bidi-spoof gap the old regex missed", () => {
+    const alm = String.fromCodePoint(0x061c);
+    const record = branchRecord(`feature/${alm}evil`);
+    expect(record.preview?.affectedBranchName).toBe("feature/evil");
+    expect(record.preview?.affectedBranchName).not.toContain(alm);
+  });
+});

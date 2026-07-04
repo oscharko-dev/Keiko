@@ -165,7 +165,7 @@ describe("AC #1 — text-only model blocks image upload", () => {
       name: "photo.png",
       mimeType: "image/png",
       sizeBytes: 1024,
-      previewDataUrl: "data:image/png;base64,abc",
+      previewUrl: "blob:https://app/att-1",
     };
     const addPendingAttachment = vi.fn().mockResolvedValue({ ok: true });
     const session = makeSession({
@@ -271,7 +271,7 @@ describe("AC #3 — pending attachment removal", () => {
       name: "README.md",
       mimeType: "text/markdown",
       sizeBytes: 512,
-      previewDataUrl: undefined,
+      previewUrl: undefined,
     };
     const session = makeSession({ pendingAttachments: [attachment] });
 
@@ -288,7 +288,7 @@ describe("AC #3 — pending attachment removal", () => {
       name: "spec.txt",
       mimeType: "text/plain",
       sizeBytes: 256,
-      previewDataUrl: undefined,
+      previewUrl: undefined,
     };
     const session = makeSession({
       pendingAttachments: [attachment],
@@ -337,7 +337,7 @@ describe("AC #3 — pending attachment removal", () => {
       expect(view.result.current.activeChat).toBeDefined();
     });
 
-    // Queue a document attachment (document kind avoids the FileReader preview path).
+    // Queue a document attachment (document kind avoids the object-URL preview path).
     const file = new File(["report"], "report.txt", { type: "text/plain" });
     await act(async () => {
       const result = await view.result.current.addPendingAttachment(file);
@@ -354,8 +354,81 @@ describe("AC #3 — pending attachment removal", () => {
     expect(view.result.current.pendingAttachments).toHaveLength(0);
   });
 
+  // GEN-PERF-MEMORY-001 — image previews are object URLs; every removal path must revoke exactly
+  // once so no blob is retained. Drives the REAL hook so the createObjectURL/revokeObjectURL
+  // balance is asserted end to end.
+  it("balances createObjectURL/revokeObjectURL for an image attachment on remove (MEMORY-001)", async () => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    let counter = 0;
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => {
+        counter += 1;
+        const url = `blob:https://app/obj-${String(counter)}`;
+        created.push(url);
+        return url;
+      }),
+      revokeObjectURL: vi.fn((url: string) => {
+        revoked.push(url);
+      }),
+    });
+
+    const view = renderHook(() => useChatSession());
+    // No boot data needed — addPendingAttachment reads models from state (empty => permissive).
+    const image = new File([new Uint8Array([1, 2, 3])], "photo.png", { type: "image/png" });
+    await act(async () => {
+      const result = await view.result.current.addPendingAttachment(image);
+      expect(result.ok).toBe(true);
+    });
+    expect(created).toHaveLength(1);
+    expect(revoked).toHaveLength(0);
+    const attachmentId = view.result.current.pendingAttachments[0]?.id;
+    expect(view.result.current.pendingAttachments[0]?.previewUrl).toBe(created[0]);
+
+    act(() => {
+      view.result.current.removePendingAttachment(attachmentId ?? "");
+    });
+    // Exactly one revoke for the one created preview — no leak, no double-revoke.
+    expect(revoked).toEqual(created);
+  });
+
+  it("revokes image previews on clearPendingAttachments (MEMORY-001)", async () => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    let counter = 0;
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => {
+        counter += 1;
+        const url = `blob:https://app/clr-${String(counter)}`;
+        created.push(url);
+        return url;
+      }),
+      revokeObjectURL: vi.fn((url: string) => {
+        revoked.push(url);
+      }),
+    });
+
+    const view = renderHook(() => useChatSession());
+    const a = new File([new Uint8Array([1])], "a.png", { type: "image/png" });
+    const b = new File([new Uint8Array([2])], "b.png", { type: "image/png" });
+    await act(async () => {
+      await view.result.current.addPendingAttachment(a);
+      await view.result.current.addPendingAttachment(b);
+    });
+    expect(created).toHaveLength(2);
+
+    act(() => {
+      view.result.current.clearPendingAttachments();
+    });
+    expect(revoked.sort()).toEqual([...created].sort());
+    expect(view.result.current.pendingAttachments).toHaveLength(0);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   beforeEach(() => {
@@ -375,7 +448,7 @@ describe("AC #4 — no absolute paths leaked in chip display", () => {
       name: "secret.pdf", // basename — what the chip MUST show
       mimeType: "application/pdf",
       sizeBytes: 1024,
-      previewDataUrl: undefined, // document — no data URL
+      previewUrl: undefined, // document — no data URL
     };
     const session = makeSession({ pendingAttachments: [attachment] });
 
@@ -391,14 +464,14 @@ describe("AC #4 — no absolute paths leaked in chip display", () => {
     expect(domText).not.toContain("webkitRelativePath");
   });
 
-  it("image chip uses previewDataUrl as the img src — not a filesystem path", () => {
+  it("image chip uses previewUrl as the img src — not a filesystem path", () => {
     const attachment: PendingAttachment = {
       id: "att-img",
       kind: "image",
       name: "avatar.png",
       mimeType: "image/png",
       sizeBytes: 2048,
-      previewDataUrl: "data:image/png;base64,iVBORw0KGgo=",
+      previewUrl: "blob:https://app/att-img",
     };
     const session = makeSession({ pendingAttachments: [attachment] });
 
@@ -410,7 +483,9 @@ describe("AC #4 — no absolute paths leaked in chip display", () => {
     expect(img).not.toBeNull();
     expect(img).toHaveAttribute("alt", "");
     const src = img?.getAttribute("src") ?? "";
-    expect(src).toMatch(/^data:/);
+    // GEN-PERF-MEMORY-001 — the preview is now an object URL (blob:) instead of a base64 data URL;
+    // it still carries no filesystem path.
+    expect(src).toMatch(/^blob:/);
     expect(src).not.toContain("/Users/");
     expect(src).not.toContain("C:\\");
   });

@@ -184,13 +184,52 @@ describe("removeSourceFromCapsule", () => {
     addSourceToCapsule(store, capsuleId, sampleSourceInput("src-z"));
     store._internal.db
       .prepare(
-        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-1', :c, 'src-z', '/a.md', 1, 'text/markdown', 'h', 'p', '1', 1, 'ready', 'a.md')",
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name, blob_ref) VALUES ('doc-1', :c, 'src-z', '/a.pdf', 3, 'application/pdf', 'h', 'p', '1', 1, 'ready', 'a.pdf', 'h')",
       )
       .run({ c: capsuleId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_text_windows (capsule_id, document_id, window_index, character_start, character_end, normalized_text) VALUES (:c, 'doc-1', 0, 0, 5, 'hello')",
+      )
+      .run({ c: capsuleId });
+    store._internal.db
+      .prepare(
+        [
+          "INSERT INTO extraction_checkpoints (",
+          "  capsule_id, document_id, job_id, strategy, phase, page_cursor, section_cursor,",
+          "  object_cursor, extracted_text_bytes, chunk_cursor, embedded_chunk_cursor,",
+          "  last_embedded_chunk_id, retry_count, coverage, source_content_hash, parser_version,",
+          "  policy_fingerprint, chunking_strategy_version, embedding_identity_json,",
+          "  terminal_diagnostics_json, created_at, updated_at",
+          ") VALUES (",
+          "  :c, 'doc-1', 'job-1', 'progressive-pdf', 'completed', 1, 0,",
+          "  0, 5, 0, 0, NULL, 0, '{}', 'h', '1',",
+          "  'policy', 'chunk-v1', '{}', '[]', 1, 1",
+          ")",
+        ].join(" "),
+      )
+      .run({ c: capsuleId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO document_blobs (capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version, blob_bytes, created_at, created_source_id, created_document_id) VALUES (:c, 'h', 3, 'application/pdf', 'plaintext', NULL, :bytes, 1, 'src-z', 'doc-1')",
+      )
+      .run({ c: capsuleId, bytes: Buffer.from("pdf") });
     removeSourceFromCapsule(store, capsuleId, "src-z" as KnowledgeSourceId);
-    const row = store._internal.db
+    const documents = store._internal.db
       .prepare("SELECT COUNT(*) AS n FROM documents WHERE source_id = 'src-z'")
       .get() as unknown as CountRow;
-    expect(row.n).toBe(0);
+    const windows = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM document_text_windows WHERE document_id = 'doc-1'")
+      .get() as unknown as CountRow;
+    const checkpoints = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM extraction_checkpoints WHERE document_id = 'doc-1'")
+      .get() as unknown as CountRow;
+    const blobs = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM document_blobs WHERE content_hash = 'h'")
+      .get() as unknown as CountRow;
+    expect(documents.n).toBe(0);
+    expect(windows.n).toBe(0);
+    expect(checkpoints.n).toBe(0);
+    expect(blobs.n).toBe(0);
   });
 });

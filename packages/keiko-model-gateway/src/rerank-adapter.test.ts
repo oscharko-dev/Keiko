@@ -6,9 +6,7 @@ const SECRET_API_KEY = "sk-rerank-secret-1234567890";
 const QUERY = "Which policy mentions alpha?";
 const DOCUMENTS = ["alpha document", "beta document", "gamma document"];
 
-function baseRequest(
-  overrides: Partial<LiteLLMRerankRequest> = {},
-): LiteLLMRerankRequest {
+function baseRequest(overrides: Partial<LiteLLMRerankRequest> = {}): LiteLLMRerankRequest {
   return {
     endpoint: "https://litellm.local/v1",
     apiKey: SECRET_API_KEY,
@@ -107,7 +105,9 @@ describe("requestLiteLLMRerank", () => {
     const outcome = await requestLiteLLMRerank(
       baseRequest({
         fetchImpl: () =>
-          Promise.resolve(jsonResponse({ error: { message: "do not leak provider body" } }, status)),
+          Promise.resolve(
+            jsonResponse({ error: { message: "do not leak provider body" } }, status),
+          ),
       }),
     );
 
@@ -127,8 +127,7 @@ describe("requestLiteLLMRerank", () => {
   it("returns invalid-response for ambiguous response shapes without guessing", async () => {
     const outcome = await requestLiteLLMRerank(
       baseRequest({
-        fetchImpl: () =>
-          Promise.resolve(jsonResponse({ results: [{ relevance_score: 0.8 }] })),
+        fetchImpl: () => Promise.resolve(jsonResponse({ results: [{ relevance_score: 0.8 }] })),
       }),
     );
 

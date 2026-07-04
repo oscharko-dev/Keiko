@@ -3,10 +3,28 @@
 // same operational shape (audit, rotation, recovery).
 
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+// Shared fs-hardening owner [GEN-MAINT-COUPLING-005]. Re-exported below so cipher.ts and vault.ts
+// keep importing these from "./db.js" unchanged while the single hardening implementation lives in
+// keiko-security.
+import {
+  chmodIfPresent,
+  ensureDirHardened,
+  FILE_MODE,
+} from "@oscharko-dev/keiko-security/fs-hardening";
+// Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]. The pure classification vocabulary is
+// owned by keiko-security; the fs-bound recovery machinery (quarantine, quick_check, open) stays here.
+import {
+  SqliteQuickCheckError,
+  errorRecord,
+  isSqliteCorruptionError,
+} from "@oscharko-dev/keiko-security/sqlite-corruption";
 import { runMigrations } from "./schema.js";
 import type { MemoryContentCipher } from "./cipher.js";
+
+export { chmodIfPresent, ensureDirHardened };
 
 export function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
@@ -21,32 +39,18 @@ function configureWalDatabase(db: DatabaseSync): void {
   db.exec("PRAGMA wal_autocheckpoint = 1000");
 }
 
-export function ensureDirHardened(dir: string): void {
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  if (process.platform !== "win32") {
-    try {
-      chmodSync(dir, 0o700);
-    } catch {
-      // Best-effort: a parent-owned directory we cannot chmod is preferable to a hard failure
-      // that blocks the user from opening the vault.
-    }
-  }
-}
-
-export function chmodIfPresent(path: string, mode: number): void {
-  if (process.platform === "win32") return;
-  try {
-    chmodSync(path, mode);
-  } catch {
-    // The sidecar (-wal/-shm) may not exist yet; best-effort.
-  }
-}
-
 export interface SidecarSnapshot {
   readonly hadWal: boolean;
   readonly hadShm: boolean;
+}
+
+function assertQuickCheckOk(db: DatabaseSync): void {
+  const rows = db.prepare("PRAGMA quick_check").all() as readonly Record<string, unknown>[];
+  const values = rows
+    .map((row) => Object.values(row)[0])
+    .filter((value): value is string => typeof value === "string");
+  if (values.length === 1 && values[0] === "ok") return;
+  throw new SqliteQuickCheckError(values.length > 0 ? values : ["no quick_check rows returned"]);
 }
 
 // Rotate a single sidecar path to its .corrupt.<ts> form. If `hadAtSnapshot` is true, the
@@ -63,11 +67,36 @@ function rotateSidecar(sourcePath: string, stampedPath: string, hadAtSnapshot: b
   }
 }
 
-export function quarantineCorruptDb(target: string, snapshot?: SidecarSnapshot): void {
+export function quarantineCorruptDb(
+  target: string,
+  snapshot?: SidecarSnapshot,
+  cause?: unknown,
+): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  rotateSidecar(target, `${target}.corrupt.${ts}`, false);
-  rotateSidecar(`${target}-wal`, `${target}-wal.corrupt.${ts}`, snapshot?.hadWal === true);
-  rotateSidecar(`${target}-shm`, `${target}-shm.corrupt.${ts}`, snapshot?.hadShm === true);
+  const quarantinedPath = `${target}.corrupt.${ts}`;
+  const walPath = `${target}-wal.corrupt.${ts}`;
+  const shmPath = `${target}-shm.corrupt.${ts}`;
+  rotateSidecar(target, quarantinedPath, false);
+  rotateSidecar(`${target}-wal`, walPath, snapshot?.hadWal === true);
+  rotateSidecar(`${target}-shm`, shmPath, snapshot?.hadShm === true);
+  writeFileSync(
+    `${quarantinedPath}.diagnostic.json`,
+    `${JSON.stringify(
+      {
+        incidentId: randomUUID(),
+        store: "memory-vault",
+        timestamp: new Date().toISOString(),
+        dbPath: target,
+        quarantinedPath,
+        walQuarantinePath: snapshot?.hadWal === true ? walPath : undefined,
+        shmQuarantinePath: snapshot?.hadShm === true ? shmPath : undefined,
+        cause: errorRecord(cause ?? new Error("manual quarantine")),
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: FILE_MODE },
+  );
 }
 
 export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher): DatabaseSync {
@@ -75,8 +104,9 @@ export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher):
   let db = preparedDatabase(dbPath);
   try {
     configureWalDatabase(db);
+    assertQuickCheckOk(db);
     runMigrations(db, cipher);
-  } catch {
+  } catch (error) {
     // SQLite's close() on a WAL-enabled handle may checkpoint and unlink -wal/-shm,
     // so we must SNAPSHOT sidecar existence BEFORE close, then close, then rename
     // based on the snapshot. Without the snapshot, a pre-existing corrupt -wal
@@ -84,13 +114,17 @@ export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher):
     const hadWal = existsSync(`${dbPath}-wal`);
     const hadShm = existsSync(`${dbPath}-shm`);
     db.close();
-    quarantineCorruptDb(dbPath, { hadWal, hadShm });
+    if (!isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    quarantineCorruptDb(dbPath, { hadWal, hadShm }, error);
     db = preparedDatabase(dbPath);
     configureWalDatabase(db);
+    assertQuickCheckOk(db);
     runMigrations(db, cipher);
   }
-  chmodIfPresent(dbPath, 0o600);
-  chmodIfPresent(`${dbPath}-wal`, 0o600);
-  chmodIfPresent(`${dbPath}-shm`, 0o600);
+  chmodIfPresent(dbPath, FILE_MODE);
+  chmodIfPresent(`${dbPath}-wal`, FILE_MODE);
+  chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
   return db;
 }

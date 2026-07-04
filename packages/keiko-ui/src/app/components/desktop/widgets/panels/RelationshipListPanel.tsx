@@ -38,7 +38,7 @@ import {
   BACKEND_UNREACHABLE_MESSAGE,
 } from "../../../../relationships/api";
 import type { ApiRelationship } from "../../../../relationships/api";
-import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
+import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
 
@@ -512,7 +512,9 @@ export function RelationshipListPanel({
           value={typeFilter}
           onChange={handleTypeFilterChange}
           placeholder="e.g. reads-context"
-          aria-label="Filter relationships by type"
+          // No aria-label: the visible <label htmlFor="rel-type-filter"> is the accessible
+          // name. An aria-label here would override it and break Label-in-Name (WCAG 2.5.3,
+          // GEN-UI-A11Y-023).
           style={{
             width: "100%",
             background: "var(--inset)",
@@ -549,7 +551,8 @@ export function RelationshipListPanel({
           id="rel-lifecycle-filter"
           value={lifecycleValue}
           onChange={(e) => onFilterChange({ relLifecycle: e.target.value })}
-          aria-label="Filter relationships by lifecycle"
+          // No aria-label: the visible <label htmlFor="rel-lifecycle-filter"> ("Lifecycle")
+          // is the accessible name (Label-in-Name, WCAG 2.5.3, GEN-UI-A11Y-023).
           style={{
             width: "100%",
             background: "var(--inset)",
@@ -647,7 +650,10 @@ export function RelationshipListPanel({
                 <button
                   type="button"
                   aria-pressed={isSelected}
-                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}`}
+                  // The activity is folded into the row's own accessible name so the
+                  // nested badge can render presentational (no live region inside the
+                  // button — GEN-UI-A11Y-012).
+                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}, activity: ${ACTIVITY_VISUALS[activity].label}`}
                   title={`${item.source.id} → ${item.target.id}`}
                   onClick={() => onSelect(item.id)}
                   onKeyDown={(e) => onRowKeyDown(e, item.id)}
@@ -664,6 +670,7 @@ export function RelationshipListPanel({
                     throughputCount={throughputMap.get(item.id)}
                     animateOverride={animateBadges}
                     highContrast={highContrast}
+                    presentational
                   />
                   <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
                     <span

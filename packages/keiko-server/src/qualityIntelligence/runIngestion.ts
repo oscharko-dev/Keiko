@@ -1860,14 +1860,7 @@ async function ingestOneAsync(
   signal: AbortSignal | undefined,
 ): Promise<OneSource> {
   if (source.kind === "file") {
-    return ingestFileAsync(
-      source,
-      index,
-      registeredAt,
-      byteBudget,
-      documentTextExtractor,
-      signal,
-    );
+    return ingestFileAsync(source, index, registeredAt, byteBudget, documentTextExtractor, signal);
   }
   if (source.kind !== "figma-snapshot" && source.kind !== "image") {
     return ingestOne(

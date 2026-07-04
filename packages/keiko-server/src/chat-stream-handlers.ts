@@ -11,14 +11,18 @@
 import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
 import { writeOrDestroy } from "./sse-write.js";
 import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
   ConversationMemoryActionWire,
   ConversationMemoryResultWire,
+  DesktopChatSendResponse,
+  DesktopChatStreamEvent,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  abortDesktopChatOnDisconnect,
   buildChatPatch,
   buildGatewayAssembly,
   buildMemoryResult,
@@ -35,20 +39,8 @@ import {
 
 // One SSE message. JSON.stringify never emits a raw newline inside a string (newlines escape to
 // `\n`), so a single `data:` line is always valid framing — no manual escaping, mirroring sse.ts.
-function sseMessage(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-}
-
-// Wires the request/response lifecycle to the AbortController so a client disconnect cancels the
-// in-flight gateway stream (mirrors #152 AC#3 — no partial persistence on cancel). The req
-// "aborted" event is deprecated since Node 17 and fires unreliably; res "close" is the canonical
-// signal for a disconnected client and covers the same lifecycle.
-function abortOnDisconnect(ctx: RouteContext): AbortController {
-  const controller = new AbortController();
-  ctx.res.on("close", () => {
-    controller.abort();
-  });
-  return controller;
+function sseMessage(message: DesktopChatStreamEvent): string {
+  return `event: ${message.event}\ndata: ${JSON.stringify(message.data)}\n\n`;
 }
 
 interface StreamedTurn {
@@ -59,25 +51,46 @@ interface StreamedTurn {
 // response from the `done` chunk. Returns undefined if the signal aborted (no `done` arrived).
 // Backpressure (res.write → false) aborts the controller and destroys the socket via writeOrDestroy
 // so a slow client is detected immediately rather than buffering without bound.
+// Terminal reason for a stream that did not reach `done`: an intentional user cancel vs a backpressure
+// kill (slow client). Threaded out so the caller can emit a DISTINCT terminal signal and avoid
+// relabeling a backpressure termination as a user cancel (GEN-PERF-CHAT-006).
+interface StreamTermination {
+  backpressure: boolean;
+}
+
 async function streamConversation(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   stream: AsyncIterable<import("@oscharko-dev/keiko-model-gateway").GatewayStreamChunk>,
   controller: AbortController,
+  termination: StreamTermination,
 ): Promise<StreamedTurn | undefined> {
   for await (const chunk of stream) {
     if (controller.signal.aborted) return undefined;
     if (chunk.type === "delta") {
       writeOrDestroy(
         ctx.res,
-        sseMessage("token", { text: deps.redactor(chunk.token) }),
+        sseMessage({ event: "token", data: { text: deps.redactor(chunk.token) as string } }),
         controller,
+        () => {
+          // Distinct, observable signal: this termination is a slow-client backpressure kill, not a
+          // user cancel. Carries no body bytes. The subsequent abort() surfaces as a stream end.
+          termination.backpressure = true;
+        },
       );
     } else {
       return { response: chunk.response };
     }
   }
   return undefined;
+}
+
+// A backpressure kill destroys the socket; writing another SSE frame to it is a no-op at best and can
+// throw on some transports. Guard terminal writes so we never write-after-destroy nor relabel a
+// backpressure termination as a user cancel.
+function writeTerminalFrame(ctx: RouteContext, frame: string): void {
+  if (ctx.res.writableEnded || ctx.res.destroyed) return;
+  ctx.res.write(frame);
 }
 
 // Persists the streamed turn EXACTLY like persistModelChatTurn: redact content, create the
@@ -93,7 +106,7 @@ async function persistStreamedTurn(
   memoryContext: ConversationMemoryRuntimeContext | undefined,
   turn: StreamedTurn,
   userMessage: ChatMessage,
-): Promise<Record<string, unknown>> {
+): Promise<DesktopChatSendResponse> {
   const redactedContent = deps.redactor(turn.response.content) as string;
   const assistantMessage = createAssistantMessage(deps, request, redactedContent, modelId);
   recordConversationMemoryUse(deps, memory, redactedContent);
@@ -123,23 +136,49 @@ async function resolveMemory(
     : buildMemoryResult(request, deps, memoryContext);
 }
 
-// Maps a thrown gateway error to a REDACTED { code, message } SSE error payload, reusing the
-// buffered path's desktopChatErrorResult so a raw provider message can never leak (#154).
-// desktopChatErrorResult rethrows for unexpected (non-Gateway, non-store) errors; once SSE headers
-// are committed we can no longer return a JSON 500, so an unexpected error degrades to a generic
-// redacted code instead of crashing the stream and leaking a raw message.
-function errorEvent(error: unknown, deps: UiHandlerDeps): { code: string; message: string } {
+// Maps a thrown gateway error to a REDACTED { code, message, correlationId } SSE error payload,
+// reusing the buffered path's desktopChatErrorResult so a raw provider message can never leak (#154).
+//
+// RB-6 (GEN-OBS-DIAGNOSTICS-602, STATUS-403): before returning ANY frame, the real cause is routed —
+// redacted — to the operator diagnostic sink, keyed by the request correlation id, so a mid-stream
+// failure is no longer an untraceable black box. desktopChatErrorResult rethrows for unexpected
+// (non-Gateway, non-store) errors; once SSE headers are committed we can no longer return a JSON 500,
+// so an unexpected error now surfaces as an honest `INTERNAL` code (NOT a misleading `GATEWAY_ERROR`,
+// which falsely blamed the provider) carrying the correlation id.
+function errorEvent(
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): { code: string; message: string; correlationId?: string } {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId: correlationId ?? "unknown",
+      operation: "POST /api/desktop/chat/stream",
+      source: "chat.stream",
+      error,
+      redact: (message) => String(deps.redactor(message)),
+    }),
+  );
+  const withId = (payload: {
+    code: string;
+    message: string;
+  }): {
+    code: string;
+    message: string;
+    correlationId?: string;
+  } => (correlationId === undefined ? payload : { ...payload, correlationId });
   let result;
   try {
     result = desktopChatErrorResult(error, deps);
   } catch {
-    return { code: "GATEWAY_ERROR", message: "The model request failed." };
+    return withId({ code: "INTERNAL", message: "An unexpected error occurred." });
   }
   const body = result.body as { error?: { code?: string; message?: string } };
-  return {
+  return withId({
     code: body.error?.code ?? "GATEWAY_ERROR",
     message: body.error?.message ?? "The model request failed.",
-  };
+  });
 }
 
 // Streams the gateway response and writes the terminal SSE event. Persists the user turn BEFORE
@@ -170,9 +209,14 @@ async function streamAndPersist(
   const assembly = buildGatewayAssembly(deps, request, memory, modelId);
   const messages = assembly.messages;
   const stream = callStream({ modelId, messages }, controller.signal);
-  const turn = await streamConversation(ctx, deps, stream, controller);
+  const termination: StreamTermination = { backpressure: false };
+  const turn = await streamConversation(ctx, deps, stream, controller, termination);
   if (turn === undefined || controller.signal.aborted) {
-    ctx.res.write(sseMessage("cancelled", {}));
+    // A backpressure kill already destroyed the socket; do not write-after-destroy nor relabel it as
+    // a user cancel. Only an actual (non-backpressure) cancel emits the `cancelled` terminal event.
+    if (!termination.backpressure) {
+      writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
+    }
     return;
   }
   const payload = await persistStreamedTurn(
@@ -192,7 +236,7 @@ async function streamAndPersist(
     messageCount: messageCountBeforeTurn,
     startedAt,
   });
-  ctx.res.write(sseMessage("done", payload));
+  writeTerminalFrame(ctx, sseMessage({ event: "done", data: payload }));
 }
 
 export async function handleSendDesktopChatStream(
@@ -209,16 +253,19 @@ export async function handleSendDesktopChatStream(
     };
   }
   const callStream = model.callStream.bind(model);
-  const controller = abortOnDisconnect(ctx);
+  const controller = abortDesktopChatOnDisconnect(ctx);
   ctx.res.writeHead(200, SSE_HEADERS);
   const stopHeartbeat = startSseHeartbeat(ctx.res);
   try {
     await streamAndPersist(ctx, deps, prepared, callStream, controller);
   } catch (error) {
     if (controller.signal.aborted) {
-      ctx.res.write(sseMessage("cancelled", {}));
+      writeTerminalFrame(ctx, sseMessage({ event: "cancelled", data: {} }));
     } else {
-      ctx.res.write(sseMessage("error", errorEvent(error, deps)));
+      writeTerminalFrame(
+        ctx,
+        sseMessage({ event: "error", data: errorEvent(error, deps, ctx.correlationId) }),
+      );
     }
   } finally {
     stopHeartbeat();

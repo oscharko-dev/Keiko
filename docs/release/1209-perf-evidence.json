@@ -1,16 +1,17 @@
 {
-  "measuredAtIso": "2026-06-20T06:24:18.554Z",
+  "measuredAtIso": "2026-07-04T05:09:46.978Z",
+  "commit": "6c3d061ebfd937f427c093652124f42bed3e8836",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
   "b4ColdStartMs": {
     "budgetP50": 1500,
     "budgetP95": 2500,
     "samples": [
-      940,
-      845,
-      848
+      850,
+      362,
+      340
     ],
-    "p50": 848,
-    "p95": 940
+    "p50": 362,
+    "p95": 850
   },
   "b5KeystrokeMs": {
     "budgetMax": 50,
@@ -30,9 +31,9 @@
   },
   "b11Memory": {
     "supported": true,
-    "baselineBytes": 27600000,
-    "peakBytes": 27600000,
-    "residualBytes": 27600000,
+    "baselineBytes": 29400000,
+    "peakBytes": 29400000,
+    "residualBytes": 29400000,
     "cycles": 2
   },
   "workerLoadCapture": {
@@ -42,7 +43,7 @@
     "languageWorkerLoaded": false,
     "requests": [
       {
-        "url": "http://127.0.0.1:32183/_next/static/chunks/43ils02xq1hm1.js",
+        "url": "http://127.0.0.1:32183/_next/static/chunks/0n73dz2_v1il1.js",
         "resourceType": "script",
         "workerLabel": "editor",
         "captureReason": "classified-response"
@@ -54,7 +55,7 @@
         "captureReason": "request-resource-or-url"
       },
       {
-        "url": "http://127.0.0.1:32183/_next/static/chunks/0oj6iz8mnbx8s.js",
+        "url": "http://127.0.0.1:32183/_next/static/chunks/10oufba3tpp4h.js",
         "resourceType": "other",
         "workerLabel": "editor",
         "captureReason": "classified-response"

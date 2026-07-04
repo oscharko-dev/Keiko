@@ -2,7 +2,7 @@
 
 **Audience:** epic coordinators, planning leads, and governance stakeholders reviewing the end-to-end delivery and independent closure verification of Epic #491 ("Build the Capability-Gated Keiko Voice Digital Twin").
 
-Epic #491 is a planning and coordination container that delivered the optional, capability-gated Voice Digital Twin through 15 child issues (#492–#506) integrated on the branch `feat/keiko-voice-digital-twin`. This record consolidates the epic-level Definition of Done, the child delivery rollup, and the independent verification performed at closure. It is distinct from the regulated-deployment readiness gate recorded in [production-readiness.md](production-readiness.md) and [ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md), which addresses security reviewers and compliance officers.
+Epic #491 is a planning and coordination container that delivered the optional, capability-gated Voice Digital Twin through 15 child issues (#492–#506) integrated on the branch `feat/keiko-voice-digital-twin`. This record consolidates the epic-level Definition of Done, the child delivery rollup, and the independent verification performed at closure. It is distinct from the regulated-deployment readiness gate recorded in [production-readiness.md](production-readiness.md) and [ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md), which addresses security reviewers and compliance officers.
 
 The authoritative closure evidence is posted to Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491#issuecomment-4799317935).
 
@@ -23,7 +23,7 @@ The authoritative closure evidence is posted to Epic [#491](https://github.com/o
 | **DoD — All child issues closed**                                                                    | ✅ Verified | #492–#506 all `CLOSED` with state reason `COMPLETED` and per-issue closure comments                                                                                                                                                                                                                                                                           | All                                |
 | **DoD — Required `ci` green on implementation PRs**                                                  | ✅ Verified | 15 child PRs merged green; post-merge `ci` on feat HEAD `7cd20568` (run 28170574545) green                                                                                                                                                                                                                                                                    | All                                |
 | **DoD — Final closure evidence recorded**                                                            | ✅ Verified | Epic #491 closure comment + this document + [production-readiness.md](production-readiness.md)                                                                                                                                                                                                                                                                | #506                               |
-| **DoD — Known limitations documented**                                                               | ✅ Verified | [production-readiness.md](production-readiness.md) §8/§9; [ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) D3                                                                                                                                                                                                                                   | #506                               |
+| **DoD — Known limitations documented**                                                               | ✅ Verified | [production-readiness.md](production-readiness.md) §8/§9; [ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md) D3                                                                                                                                                                                                                                   | #506                               |
 | **Invariants — No new media deps; gateway not bypassed; orchestrator authority; gates not weakened** | ✅ Verified | Epic dependency delta vs `dev` = single line `ws@^8.21.0` in `keiko-server/package.json`; zero denied media packages in any manifest or `package-lock.json`; spoken intent only proposes (routes through existing permission/workflow gates); coverage baselines and arch:check unchanged                                                                     | #497, #503                         |
 
 ## Child Delivery Rollup
@@ -55,7 +55,7 @@ The following re-verification was performed by the coordinator at closure on fea
 - **Six-lens adversarial verification workflow** (AC1, AC2/AC3, AC4, AC5/AC6, architecture invariants, governance) plus three skeptic lenses attempting to refute the highest-risk claims:
   - No-voice fail-closed: skeptic confirmed every voice surface is gated and the resolved profile defaults to `none` in code, tests, and evaluation.
   - Hidden egress: adversarial egress sweep found zero direct-egress/telemetry/beacon paths outside `gatewayFetch` and CSP, and no raw-audio disk writes.
-  - Dependency budget: lockfile diff independently proved zero new packages; the `ws` declaration is the pre-documented, ADR-0060-gated decision.
+  - Dependency budget: lockfile diff independently proved zero new packages; the `ws` declaration is the pre-documented, ADR-0102-gated decision.
   - All adversarial attempts failed to refute any epic Target Outcome or acceptance criterion.
 
 - **Executable evidence:**
@@ -73,7 +73,7 @@ The following re-verification was performed by the coordinator at closure on fea
 
 **Named limitation (documented, non-blocking):**
 
-The evaluation egress auditor (`auditVoiceEgress`) is a deterministic design/CI-conformance gate, not a live runtime egress monitor. There is no positive destination host/IP allowlist; `validateBaseUrl` intentionally permits private/customer-hosted endpoints. Egress is bounded by `gatewayFetch` routing to configured provider endpoints plus CSP `connect-src 'self'`. This is the pre-documented limitation 1 in [production-readiness.md](production-readiness.md) §8 and [ADR-0069](../adr/ADR-0069-voice-production-readiness-gate.md) D3, deferred to a future child issue as non-blocking for the conservative gate.
+The evaluation egress auditor (`auditVoiceEgress`) is a deterministic design/CI-conformance gate, not a live runtime egress monitor. There is no positive destination host/IP allowlist; `validateBaseUrl` intentionally permits private/customer-hosted endpoints. Egress is bounded by `gatewayFetch` routing to configured provider endpoints plus CSP `connect-src 'self'`. This is the pre-documented limitation 1 in [production-readiness.md](production-readiness.md) §8 and [ADR-0111](../adr/ADR-0111-voice-production-readiness-gate.md) D3, deferred to a future child issue as non-blocking for the conservative gate.
 
 **Recommended, non-blocking follow-ups:**
 

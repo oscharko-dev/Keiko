@@ -203,10 +203,7 @@ describe("VoiceRealtimeStatus", () => {
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(onAccept).toHaveBeenCalledWith("proposal-1");
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Approve" })).toHaveAttribute(
-        "aria-busy",
-        "false",
-      ),
+      expect(screen.getByRole("button", { name: "Approve" })).toHaveAttribute("aria-busy", "false"),
     );
     await userEvent.click(screen.getByRole("button", { name: "Reject" }));
     expect(onReject).toHaveBeenCalledWith("proposal-1");

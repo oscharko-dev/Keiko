@@ -1,4 +1,4 @@
-// Public barrel for the Discussion Intelligence evaluation suite (Epic #491, Issue #502; ADR-0065).
+// Public barrel for the Discussion Intelligence evaluation suite (Epic #491, Issue #502; ADR-0107).
 // Exposes the deterministic observation derivation, the seven-dimension scorer, the suite runner, the
 // scorecard renderer, the fixture registry, and the result/fixture types. Re-exported from the package
 // barrel as a single auditable namespace (`DiscussionEval`), mirroring `PromptEnhancerEval`.

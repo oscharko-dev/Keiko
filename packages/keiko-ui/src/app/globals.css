@@ -296,6 +296,14 @@
   --card-shadow: var(--shadow-card);
   --card-shadow-raised: var(--shadow-pop);
 
+  /* WCAG 2.2 AA (RB-14) — the window zoom cluster (.win-zoom) rests at opacity:0.72,
+     which composites this badge's text toward the window surface. --text-tertiary then
+     measured only 3.45:1 in a real browser (jsdom axe cannot see it). A primary+secondary
+     mix clears 4.5:1 at that resting opacity in dark (6.15:1) and light (4.97:1) while
+     staying dimmer than the window title; it resolves per-theme through the referenced
+     tokens (dark/light/HC), and brightens to --text-primary on hover. */
+  --win-zoom-pct: color-mix(in oklch, var(--text-primary), var(--text-secondary));
+
   --modal-surface: var(--card);
   --modal-border: var(--line);
   --modal-backdrop: var(--overlay-scrim);
@@ -552,6 +560,14 @@ button {
 
 .ksel-trigger-disabled {
   cursor: not-allowed;
+}
+
+/* GEN-UI-A11Y-007 / GEN-UI-FOCUS-013 — base keyboard focus ring for the shared
+   KeikoSelect trigger so every consumer (incl. .repo-focus-source-select,
+   .qi-model-select, .lkd-source-kind-select) inherits a visible focus (WCAG 2.4.7). */
+:root[data-input-modality="keyboard"] .ksel-trigger:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .number-control {
@@ -1744,6 +1760,14 @@ button {
 .tw-switcher-create-submit:disabled {
   color: var(--text-tertiary);
   cursor: not-allowed;
+}
+/* GEN-UI-FOCUS-017 — task-workspace switcher trigger + row actions + create CTA
+   had no visible keyboard focus (WCAG 2.4.7). */
+.tw-switcher-trigger:focus-visible,
+.tw-switcher-action:focus-visible,
+.tw-switcher-create-submit:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .tb-btn {
   width: 30px;
@@ -5170,7 +5194,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 .win-zpct {
   font-family: var(--font-mono);
   font-size: 10.5px;
-  color: var(--text-tertiary);
+  color: var(--win-zoom-pct);
   padding: 0 3px;
   min-width: 36px;
   height: 24px; /* uiux-fix F021 C123: line-height-tall (~14px) target → 24px (WCAG 2.5.8) */
@@ -6850,6 +6874,14 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--ink-inverse);
   font-size: 12.5px;
   font-weight: 600;
+}
+/* GEN-UI-FOCUS-008 — Twin/plugins interactive controls had no visible keyboard
+   focus (WCAG 2.4.7). .plg-conn is intentionally omitted (covered by
+   .plg-row:focus-visible). */
+:root[data-input-modality="keyboard"]
+  :is(.twin-tab, .pol-dec, .evl-run, .brg-row, .prs-row, .plg-dot):focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 .evl-score {
   font-size: 12px;
@@ -10095,7 +10127,10 @@ select.dlg-input {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 2px 34px 8px 2px; /* right pad clears the absolute refresh button */
+  /* GEN-UI-LAYOUT-001 — reserve the right edge for all three absolute action
+     buttons (Refresh right:6, New folder right:34, New file right:62, each 24px
+     wide → New file spans to ~86px) so they never overlap the root input. */
+  padding: 2px 92px 8px 2px;
   border-bottom: 1px solid var(--line-soft);
   margin-bottom: 4px;
 }
@@ -14921,11 +14956,22 @@ html[data-keiko-gateway-setup-open="true"] {
 .lkd-source-segment-ok {
   background: var(--feedback-success);
 }
+/* GEN-UI-A11Y-019 — the coverage bar distinguished ok/fail/skip by hue alone
+   (WCAG 1.4.1 Use of Color). Keep the base fill but layer a subtle non-color
+   texture: diagonal stripes on -fail and a dotted wash on -skip so the three
+   segments stay distinguishable for colorblind users and in monochrome. */
 .lkd-source-segment-fail {
-  background: var(--feedback-danger);
+  background-color: var(--feedback-danger);
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgb(255 255 255 / 0.28) 0 2px,
+    transparent 2px 5px
+  );
 }
 .lkd-source-segment-skip {
-  background: var(--text-tertiary);
+  background-color: var(--text-tertiary);
+  background-image: radial-gradient(rgb(255 255 255 / 0.35) 0.9px, transparent 1px);
+  background-size: 4px 4px;
 }
 .lkd-source-counts {
   display: flex;
@@ -17602,6 +17648,13 @@ select.qi-select {
 }
 .qi-cand-accordion-summary:hover {
   background: var(--surface-secondary);
+}
+/* GEN-UI-VISUAL-005 — the <summary> disclosure is a native tab stop but rendered
+   its focus with the UA default ring (invisible against the card); inset ring so it
+   reads inside the full-width accordion row (WCAG 2.4.7). */
+:root[data-input-modality="keyboard"] .qi-cand-accordion-summary:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: -2px;
 }
 .qi-cand-accordion-body {
   display: flex;
@@ -20639,13 +20692,6 @@ button.figma-view-preview {
 .srch-box:focus-within {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 3px var(--accent-glow);
-}
-/* C017 — WCAG 2.4.7: .gpref-slider (Settings > Wallpaper opacity) sets
-   outline:none and had no :focus-visible rule; keyboard users could change the
-   opacity without seeing focus. Same ring pattern as .arun-btn:focus-visible. */
-.gpref-slider:focus-visible {
-  outline: var(--focus-width, 2px) solid var(--accent-text);
-  outline-offset: 3px;
 }
 
 /* ==== uiux-fix F036: input states, mc-dialog .dlg-parity, figma summary hover ==== */

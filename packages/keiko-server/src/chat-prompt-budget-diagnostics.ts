@@ -241,7 +241,7 @@ function buildHistorySummaryLane(input: {
             droppedTurns: droppedHistoryTurns,
             retainedTurns: retainedHistoryTurns,
           },
-    }),
+        }),
   });
 }
 
@@ -325,7 +325,10 @@ function buildPromptAssemblyLanes(input: BuildPromptAssemblyLanesInput): Context
   return [
     withAllocatorSignals(systemLane, allocatorLane(input.allocatorDiagnostics, "system-contract")),
     withAllocatorSignals(userTaskLane, allocatorLane(input.allocatorDiagnostics, "user-task")),
-    withAllocatorSignals(repoEvidenceLane, allocatorLane(input.allocatorDiagnostics, "repo-evidence")),
+    withAllocatorSignals(
+      repoEvidenceLane,
+      allocatorLane(input.allocatorDiagnostics, "repo-evidence"),
+    ),
     withAllocatorSignals(
       workingMemoryLane,
       allocatorLane(input.allocatorDiagnostics, "working-memory"),

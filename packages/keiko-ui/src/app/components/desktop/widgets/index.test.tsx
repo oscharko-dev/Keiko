@@ -415,7 +415,11 @@ vi.mock("../../../local-knowledge/connector-graph", () => ({
 }));
 
 import "./index";
-import { WIN_TYPES } from "../windows/WindowsRegistry";
+import {
+  assertWindowRenderRegistryComplete,
+  missingWindowRenderTypes,
+  WIN_TYPES,
+} from "../windows/WindowsRegistry";
 
 function makeCtx(): WindowRenderContext & {
   readonly updateCfg: ReturnType<typeof vi.fn<UpdateCfg>>;
@@ -452,6 +456,13 @@ function makeCtx(): WindowRenderContext & {
 }
 
 describe("workspace widget renderer registry", () => {
+  it("registers a renderer for every declared window type", () => {
+    expect(missingWindowRenderTypes()).toEqual([]);
+    expect(() => {
+      assertWindowRenderRegistryComplete();
+    }).not.toThrow();
+  });
+
   it("syncs an open chat window title when the active chat is renamed", async () => {
     const ctx = makeCtx();
     render(<>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Old title" }, ctx)}</>);

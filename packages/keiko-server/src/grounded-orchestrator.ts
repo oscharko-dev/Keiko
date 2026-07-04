@@ -80,6 +80,14 @@ import {
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { normalizeGroundedAnswerPayload, type GroundedAnswerPayload } from "./grounded-answer.js";
+import {
+  GROUNDED_NO_EVIDENCE_ANSWER,
+  buildPackCitationIndex,
+  incompleteAnswerMarker,
+  packHasUsableEvidence,
+  reconcileInlineCitations,
+  unsupportedCitationMarker,
+} from "./grounded-faithfulness.js";
 import { collectFollowSymbolTraceEvidence } from "./grounded-symbol-trace.js";
 import {
   defaultGitFileHistoryEvidenceProvider,
@@ -139,6 +147,10 @@ export interface OrchestratorOutput {
   readonly assistantContent: string;
   readonly elapsedMs: number;
   readonly plan?: ExplorationPlan;
+  // GEN-AI-GROUNDING-002/-003 (RB-4): true when the folder path ABSTAINED because the assembled
+  // pack carried no usable evidence. The model was NOT called; assistantContent is the deterministic
+  // no-evidence answer. Callers must suppress citations and skip persisting grounded evidence.
+  readonly noEvidence?: boolean;
 }
 
 // Epic #532 — retrieval-only output. The multi-source (1+N) path runs retrieval per connected
@@ -1789,7 +1801,7 @@ function cachedDirectoryEntries(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   scopePath: string,
-  existsCache?: FileExistenceCache  ,
+  existsCache?: FileExistenceCache,
 ): readonly WorkspaceDirEntry[] {
   const cached = existsCache?.directories.get(scopePath);
   if (cached !== undefined) return cached;
@@ -1803,7 +1815,7 @@ function selectedFileScopeAtoms(
   searchScope: SearchScope,
   fs: WorkspaceFs,
   nowMs: () => number,
-  existsCache?: FileExistenceCache  ,
+  existsCache?: FileExistenceCache,
 ): readonly EvidenceAtom[] {
   if (input.scope.explicitConnection !== true || input.scope.kind !== "files") {
     return [];
@@ -1882,7 +1894,7 @@ function projectMetadataAtoms(
   fs: WorkspaceFs,
   nowMs: () => number,
   queryFingerprint: string,
-  existsCache?: FileExistenceCache  ,
+  existsCache?: FileExistenceCache,
 ): readonly EvidenceAtom[] {
   if (!wantsProjectMetadata(input, intent)) {
     return [];
@@ -2005,7 +2017,14 @@ async function withDeterministicContextAtoms(
   nowMs: () => number,
   signal: AbortSignal | undefined,
 ): Promise<RingRunSummary> {
-  const deterministic = await deterministicContextEvidence(input, plan, searchScope, fs, nowMs, signal);
+  const deterministic = await deterministicContextEvidence(
+    input,
+    plan,
+    searchScope,
+    fs,
+    nowMs,
+    signal,
+  );
   if (deterministic.atoms.length === 0 && deterministic.uncertainty.length === 0) {
     return rings;
   }
@@ -2149,7 +2168,8 @@ function refineCandidateOrdering(
 
 const ROUTE_METHOD_QUERY_RE = /\b(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/iu;
 const ROUTE_PATH_QUERY_RE = /\/[A-Za-z0-9:_?&=./-]+/u;
-const ROUTE_INTENT_QUERY_RE = /\b(?:api|endpoint|handler|implement|implements|implemented|route)\b/iu;
+const ROUTE_INTENT_QUERY_RE =
+  /\b(?:api|endpoint|handler|implement|implements|implemented|route)\b/iu;
 
 function queryTargetsRouteImplementation(queryText: string): boolean {
   return (
@@ -2931,6 +2951,21 @@ export async function runGroundedExploration(
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
   const { pack, plan } = await retrieveConnectedContextPack(input, deps);
+  // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when the assembled pack carries
+  // no usable evidence. The local-knowledge and hybrid paths already short-circuit here; the folder
+  // path must too, so the model is never asked to answer confidently over zero evidence and no
+  // hallucinated answer is persisted as grounded. The `no-evidence` uncertainty marker is already on
+  // the pack (assemblePackFromReads adds it when excerpts are empty).
+  if (!packHasUsableEvidence(pack)) {
+    const elapsedMs = Math.max(0, nowMs() - start);
+    return {
+      pack,
+      assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
+      elapsedMs,
+      plan,
+      noEvidence: true,
+    };
+  }
   const answer = normalizeGroundedAnswerPayload(await deps.answerer.answer(input.query.text, pack));
   const elapsedMs = Math.max(0, nowMs() - start);
   const exhaustedAnswerDimensions = [
@@ -2940,6 +2975,13 @@ export async function runGroundedExploration(
       : []),
     ...(elapsedMs > pack.budget.elapsedMsMax ? ["elapsedMs"] : []),
   ];
+  // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline `[path:line]` citations against
+  // the evidence pack that was actually sent to it. References to files the model never received are
+  // surfaced as an unsupported-citation marker instead of being displayed as grounded claims.
+  const reconciliation = reconcileInlineCitations(answer.content, buildPackCitationIndex([pack]));
+  const unsupportedMarker = unsupportedCitationMarker(reconciliation.unsupported, nowMs());
+  // GEN-AI-GATEWAY-001 (RB-4): a truncated completion is surfaced, not consumed as complete.
+  const truncated = answer.finishReason === "length";
   const groundedPack: ConnectedContextPack = {
     ...pack,
     usage: {
@@ -2948,10 +2990,14 @@ export async function runGroundedExploration(
       modelOutputTokens: Math.min(answer.usage.completionTokens, pack.budget.modelOutputTokensMax),
       elapsedMs: Math.min(Math.max(pack.usage.elapsedMs, elapsedMs), pack.budget.elapsedMsMax),
     },
-    uncertainty:
-      exhaustedAnswerDimensions.length === 0
-        ? pack.uncertainty
-        : [...pack.uncertainty, answerBudgetClipped(exhaustedAnswerDimensions, nowMs())],
+    uncertainty: [
+      ...pack.uncertainty,
+      ...(exhaustedAnswerDimensions.length === 0
+        ? []
+        : [answerBudgetClipped(exhaustedAnswerDimensions, nowMs())]),
+      ...(unsupportedMarker === undefined ? [] : [unsupportedMarker]),
+      ...(truncated ? [incompleteAnswerMarker(nowMs())] : []),
+    ],
   };
   return { pack: groundedPack, assistantContent: answer.content, elapsedMs, plan };
 }

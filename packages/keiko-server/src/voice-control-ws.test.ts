@@ -2,7 +2,7 @@
 // real BFF (createUiServer) on a loopback ephemeral port and connects a real `ws` client, asserting
 // the upgrade is hard-rejected for every non-full-realtime deployment / bad origin / wrong path, and
 // accepted only for a full-realtime deployment on a loopback origin — then drives the proxied-SDP
-// handshake end to end. This is the security-critical gate (ADR-0058 D3/D6, AC1/AC3).
+// handshake end to end. This is the security-critical gate (ADR-0100 D3/D6, AC1/AC3).
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";

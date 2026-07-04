@@ -1,18 +1,18 @@
 // OpenAI / Azure-Foundry-compatible realtime-voice SDP-negotiation adapter (Epic #491, Issue #497,
-// ADR-0058 D3/D6). Implements the preferred proxied-SDP negotiation mode of the #496 protocol
+// ADR-0100 D3/D6). Implements the preferred proxied-SDP negotiation mode of the #496 protocol
 // (`VOICE_PROFILE_NEGOTIATION_MODE["full-realtime"] = "proxied-sdp"`): the Keiko host performs the
 // browser↔provider SDP exchange so the long-lived provider credential never reaches the browser
 // (AC2). The browser's opaque SDP offer is POSTed once to `${endpoint}/realtime/calls` as
 // `application/sdp` through the single `gatewayFetch` egress seam (ADR-0038), so realtime voice
 // traffic inherits the same corporate-proxy, custom-CA, timeout, and byte-cap behavior as every
-// other productive model call (ADR-0058 D4); the provider's SDP answer is returned to the caller.
+// other productive model call (ADR-0100 D4); the provider's SDP answer is returned to the caller.
 //
 // The endpoint contract is the OpenAI Realtime WebRTC SDP-exchange surface
 // (`POST /v1/realtime/calls`, `Content-Type: application/sdp`, `Authorization: Bearer <key>`), which
 // explicitly supports a server-side (proxied) request with the standard provider key. It is
 // provider-neutral exactly as the speech-to-text adapter's `/audio/transcriptions` surface is:
 // Azure Foundry and customer-hosted controlled-network deployments reach their own realtime endpoint
-// through the configured provider base URL (ADR-0058 D7), never a hardcoded host. Only the opaque SDP
+// through the configured provider base URL (ADR-0100 D7), never a hardcoded host. Only the opaque SDP
 // answer escapes this module — the SDP offer, the raw provider body, the provider URL, and the
 // credential never do. SDP payloads are opaque, `secret-bearing` strings to this module
 // (voice-protocol.ts redaction class): they are never logged or persisted here.
@@ -434,7 +434,7 @@ async function decodeSuccess(response: Response): Promise<RealtimeNegotiationOut
 
 // Single round-trip proxied SDP negotiation. Provider-neutral, no retry (a realtime session is
 // interactive; the caller decides whether to retry), and every failure is a coded, content-free
-// `kind` so the BFF can map it to a deterministic, secret-free protocol error (ADR-0058 D6, AC2/AC6).
+// `kind` so the BFF can map it to a deterministic, secret-free protocol error (ADR-0100 D6, AC2/AC6).
 export async function requestRealtimeNegotiation(
   request: RealtimeNegotiationRequest,
 ): Promise<RealtimeNegotiationOutcome> {

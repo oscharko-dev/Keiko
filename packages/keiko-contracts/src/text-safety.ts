@@ -15,13 +15,17 @@
 // creating a dependency on the QI package.
 
 // True for an invisible / text-reordering code point: bidi override/embedding/isolate,
-// zero-width joiners, BOM, LRM/RLM, and the Arabic letter mark. Numeric scan keeps the set
-// auditable and avoids embedding invisible literals in the source.
+// zero-width joiners, BOM, LRM/RLM, the Arabic letter mark, and the U+2060..U+206F block
+// (word joiner, invisible math operators, and the deprecated format characters). The last
+// range makes this canonical stripper a true superset of the keiko-tools git-ref sanitizer
+// (GEN-DUP-NEAR-003 case B); it is additive — it can only remove more. Numeric scan keeps the
+// set auditable and avoids embedding invisible literals in the source.
 function isBidiOrZeroWidthCodePoint(cp: number): boolean {
   return (
     cp === 0x061c ||
     (cp >= 0x200b && cp <= 0x200f) ||
     (cp >= 0x202a && cp <= 0x202e) ||
+    (cp >= 0x2060 && cp <= 0x206f) ||
     (cp >= 0x2066 && cp <= 0x2069) ||
     cp === 0xfeff
   );

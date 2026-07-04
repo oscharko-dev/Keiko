@@ -1,4 +1,4 @@
-// Server-side spoken-action governance (Epic #491, Issue #503, ADR-0066). Voice is an UNTRUSTED input
+// Server-side spoken-action governance (Epic #491, Issue #503, ADR-0108). Voice is an UNTRUSTED input
 // source: a committed spoken transcript may PROPOSE a governed workflow handoff, but it can never EXECUTE
 // one or weaken any existing gate. This module is the fail-closed enforcement layer that sits IN FRONT OF
 // the existing governance (`validateWorkflowHandoffRequest` + the `userApprovalToken` equality check +
@@ -186,7 +186,7 @@ function denyGovernance(
 }
 
 // Deterministic, fail-closed decision procedure. Denies on the first failing precondition; every branch
-// emits a content-free audit record. Order is normative (see ADR-0066 D4): capability → committed text →
+// emits a content-free audit record. Order is normative (see ADR-0108 D4): capability → committed text →
 // confirmation freshness → handoff validity → approval-token equality → allow.
 export function evaluateSpokenActionGovernance(
   params: SpokenActionGovernanceParams,

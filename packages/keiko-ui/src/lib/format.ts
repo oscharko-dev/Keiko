@@ -10,10 +10,27 @@ import type { CostClass, RunStatus, VerificationStatus } from "./types";
 // ---------------------------------------------------------------------------
 
 export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes.toString()} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+// A higher-precision byte presenter: two decimals below magnitude 10, one at or
+// above. Used by the file preview / files widget size chips (GEN-DUP-SEMANTIC-001)
+// where the extra precision distinguishes near-equal small files.
+export function formatBytesPrecise(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let idx = 0;
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024;
+    idx += 1;
+  }
+  const value = idx === 0 ? size.toFixed(0) : size.toFixed(size >= 10 ? 1 : 2);
+  return `${value} ${units[idx]}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -26,6 +43,18 @@ export function formatMs(ms: number): string {
   const minutes = Math.floor(ms / 60_000);
   const seconds = Math.floor((ms % 60_000) / 1000);
   return `${minutes.toString()}m ${seconds.toString()}s`;
+}
+
+// Compact whole-second duration presenter (GEN-DUP-SEMANTIC-005): rounds to whole
+// seconds, renders "Xs" under a minute and zero-padded "Xm YYs" at or above one.
+// Distinct from formatMs (which keeps sub-second/decimal precision) — do not merge.
+export function formatDurationCompact(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0s";
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds.toString()}s`;
+  return `${minutes.toString()}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
 // ---------------------------------------------------------------------------

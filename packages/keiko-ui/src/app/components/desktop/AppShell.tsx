@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
+import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
 import { TaskWorkspaceSwitcher } from "./TaskWorkspaceSwitcher";
 import { TwinProvider, useTwin } from "./context/TwinContext";
@@ -469,7 +470,20 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    [chatForWindow, session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
+    // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
+    // these scope callbacks touch) instead of the whole `session` object, whose identity changes on
+    // every session state change (draft/streaming/etc). useWorkspace rebinds `api` when these opts
+    // callbacks change, so narrowing here stops per-keystroke api churn from reaching the workspace.
+    // GEN-PERF-RENDER-001: intentionally depend on the stable session.replaceChat member rather than
+    // the whole session object (see comment above).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      chatForWindow,
+      session.replaceChat,
+      groundingLimits,
+      rejectForLimit,
+      rejectForConnectionFailure,
+    ],
   );
   const handleScopeBind = useCallback(
     async (chatWindowId: string, scope: ChatConnectedScope): Promise<boolean> =>
@@ -490,7 +504,8 @@ function AppShellInner(): ReactNode {
           console.warn("[keiko] connected-scope unbind failed", error);
         });
     },
-    [chatForWindow, session],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [chatForWindow, session.replaceChat],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -525,7 +540,14 @@ function AppShellInner(): ReactNode {
         );
       }
     },
-    [chatForWindow, session, groundingLimits, rejectForLimit, rejectForConnectionFailure],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      chatForWindow,
+      session.replaceChat,
+      groundingLimits,
+      rejectForLimit,
+      rejectForConnectionFailure,
+    ],
   );
   const handleConnectorUnbind = useCallback(
     (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
@@ -540,7 +562,8 @@ function AppShellInner(): ReactNode {
         })
         .catch(() => undefined);
     },
-    [chatForWindow, session],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [chatForWindow, session.replaceChat],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
@@ -591,10 +614,11 @@ function AppShellInner(): ReactNode {
   const winCount = ws.wins?.length ?? 0;
   const active = topWindow(ws.wins);
   const openTools = useMemo(() => deriveOpenTools(ws.wins), [ws.wins]);
-  const wsContextValue: WsContextValue = useMemo(
-    () => ({ active, winCount }),
-    [active, winCount],
-  );
+  const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
+  // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed <TaskWorkspaceSwitcher/>
+  // element inline defeated that memo (new element identity every AppShell render). Memoizing the
+  // element keeps Header's props referentially stable so it only re-renders on real input changes.
+  const contextControl = useMemo(() => <TaskWorkspaceSwitcher />, []);
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
@@ -770,90 +794,124 @@ function AppShellInner(): ReactNode {
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
   ) : null;
 
+  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the background window layer out of
+  // the accessibility tree and the tab order. These dialogs (NewWindowDialog / CommandPalette /
+  // GatewaySetupDialog) are each aria-modal and render as later siblings OUTSIDE `.stage`, so inerting
+  // `.stage` leaves them fully operable while nothing behind them can be tabbed to or read by AT. The
+  // non-modal `Palette` (palOpen) deliberately does NOT count here: it renders INSIDE `.stage` and is
+  // designed to keep the workspace behind it interactive, so inerting on `palOpen` would disable the
+  // Palette itself. `inert` implies aria-hidden in modern engines; the explicit aria-hidden is a
+  // fallback for older assistive tech that has not yet adopted inert.
+  const modalOpen = pending !== null || cmdkOpen || needsGatewaySetup;
+  // GEN-UI-A11Y-003 — React 18's DOM renderer does not whitelist `inert`, so a JSX `inert` prop is
+  // dropped (with a warning). Toggle the attribute imperatively on the `.stage` element instead: set
+  // it while a modal dialog is open, remove it otherwise. `aria-hidden` is a normal, typed JSX prop
+  // that pairs with `inert` for older assistive tech that has not yet adopted inert.
+  const stageRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (stage === null) return;
+    if (modalOpen) stage.setAttribute("inert", "");
+    else stage.removeAttribute("inert");
+  }, [modalOpen]);
+
   return (
     <ActiveWorkspaceProvider value={activeWorkspace}>
       <ChatSessionProvider value={session}>
         <WsContext.Provider value={wsContextValue}>
-          <div className="app">
-            {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
+          {/* GEN-UI-A11Y-004 — one always-mounted app-level live-region pair. The AnnouncerProvider
+            renders its role="status"/role="alert" regions as siblings of `.app`, OUTSIDE the window
+            layer, so they never unmount and any surface can post an outcome via useAnnouncer(). */}
+          <AnnouncerProvider>
+            <div className="app">
+              {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
-            <a className="skip-link" href="#main">
-              {t("app.skipToContent")}
-            </a>
-            {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
-            <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
-            <Header
-              openPalette={openPalette}
-              openCommandPalette={openCmdk}
-              onTileAll={ws.api.tileAll}
-              onSplitFront={ws.api.splitFront}
-              onCascade={ws.api.cascade}
-              contextControl={<TaskWorkspaceSwitcher />}
-            />
-            <div className="mid">
-              {needsGatewaySetup ? null : (
-                <LeftRail
-                  openTools={openTools}
-                  onTool={onTool}
-                  onNewChat={onNewChat}
-                  theme={theme}
-                  onToggleTheme={toggleTheme}
+              <a className="skip-link" href="#main">
+                {t("app.skipToContent")}
+              </a>
+              {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
+              <h1 className="visually-hidden">{t("app.workspaceHeading")}</h1>
+              <Header
+                openPalette={openPalette}
+                openCommandPalette={openCmdk}
+                onTileAll={ws.api.tileAll}
+                onSplitFront={ws.api.splitFront}
+                onCascade={ws.api.cascade}
+                contextControl={contextControl}
+              />
+              <div className="mid">
+                {needsGatewaySetup ? null : (
+                  <LeftRail
+                    openTools={openTools}
+                    onTool={onTool}
+                    onNewChat={onNewChat}
+                    theme={theme}
+                    onToggleTheme={toggleTheme}
+                  />
+                )}
+                <div
+                  ref={stageRef}
+                  className="stage"
+                  id="main"
+                  tabIndex={-1}
+                  // GEN-UI-A11Y-003 — `inert` is toggled imperatively via stageRef (see effect above);
+                  // aria-hidden pairs with it for older AT while a modal dialog is open.
+                  aria-hidden={modalOpen ? true : undefined}
+                >
+                  <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode}>
+                    <UpdateStartupNotice
+                      ready={updateStartupReady}
+                      openUpdates={openUpdatesFromStartup}
+                    />
+                  </Workspace>
+                  {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
+                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
+                  {sourceConnectionNotice !== null && (
+                    <div className="source-limit-alert" role="alert">
+                      <span>{sourceConnectionNotice}</span>
+                      <button
+                        type="button"
+                        className="source-limit-alert-dismiss"
+                        aria-label="Dismiss source connection notice"
+                        onClick={() => setSourceConnectionNotice(null)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  )}
+                </div>
+                {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
+              </div>
+              <Footer
+                winCount={winCount}
+                windows={ws.wins ?? []}
+                windowPaletteOpen={windowPaletteOpen}
+                onToggleWindowPalette={toggleWindowPalette}
+                onSelectWindow={selectFooterWindow}
+                onCloseWindowPalette={closeWindowPalette}
+                mode={twin.mode}
+                selectedModel={session.selectedModel}
+                projectName={projectName}
+                branchLabel={branchLabel}
+                shellStatusLabel={footerShellStatusLabel}
+                evidenceStatusLabel={footerEvidenceStatusLabel}
+                statusRef={setStatusRef}
+              />
+
+              {pending !== null && (
+                <NewWindowDialog
+                  type={pending}
+                  types={WIN_TYPES}
+                  filesContext={ws.api.currentFilesContext()}
+                  onConfirm={confirmNew}
+                  onClose={closeDialog}
                 />
               )}
-              <div className="stage" id="main" tabIndex={-1}>
-                <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode}>
-                  <UpdateStartupNotice
-                    ready={updateStartupReady}
-                    openUpdates={openUpdatesFromStartup}
-                  />
-                </Workspace>
-                {/* Release 0.2.0 — rejected connect gesture (source limit reached). Mirrors the
-                  AttachmentStrip rejection-alert pattern: local state + role="alert", inline. */}
-                {sourceConnectionNotice !== null && (
-                  <div className="source-limit-alert" role="alert">
-                    <span>{sourceConnectionNotice}</span>
-                    <button
-                      type="button"
-                      className="source-limit-alert-dismiss"
-                      aria-label="Dismiss source connection notice"
-                      onClick={() => setSourceConnectionNotice(null)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                )}
-              </div>
-              {needsGatewaySetup ? null : <RightRail openTools={openTools} onTool={onTool} />}
+              {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
+              {needsGatewaySetup ? <GatewaySetupDialog /> : null}
+              <InstallBanner />
             </div>
-            <Footer
-              winCount={winCount}
-              windows={ws.wins ?? []}
-              windowPaletteOpen={windowPaletteOpen}
-              onToggleWindowPalette={toggleWindowPalette}
-              onSelectWindow={selectFooterWindow}
-              onCloseWindowPalette={closeWindowPalette}
-              mode={twin.mode}
-              selectedModel={session.selectedModel}
-              projectName={projectName}
-              branchLabel={branchLabel}
-              shellStatusLabel={footerShellStatusLabel}
-              evidenceStatusLabel={footerEvidenceStatusLabel}
-              statusRef={setStatusRef}
-            />
-
-            {pending !== null && (
-              <NewWindowDialog
-                type={pending}
-                types={WIN_TYPES}
-                filesContext={ws.api.currentFilesContext()}
-                onConfirm={confirmNew}
-                onClose={closeDialog}
-              />
-            )}
-            {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
-            {needsGatewaySetup ? <GatewaySetupDialog /> : null}
-            <InstallBanner />
-          </div>
+          </AnnouncerProvider>
         </WsContext.Provider>
       </ChatSessionProvider>
     </ActiveWorkspaceProvider>

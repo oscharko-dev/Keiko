@@ -1,5 +1,5 @@
 // Regression tests for the Voice Digital Twin transcript segment lifecycle contract (Issue #500,
-// ADR-0063). These pin the acceptance criteria as executable, mutation-resistant invariants:
+// ADR-0105). These pin the acceptance criteria as executable, mutation-resistant invariants:
 //   AC4 — provider corrections replace prior text deterministically (a corrected segment supersedes the
 //         prior committed segment by id; the committed projection excludes the superseded id).
 //   AC5 — memory / workflow integrations consume ONLY committed content: `selectCommittedVoiceTranscript`

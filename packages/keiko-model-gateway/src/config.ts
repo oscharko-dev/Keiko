@@ -684,7 +684,7 @@ function resolveInfillingAlignment(
   };
 }
 
-// ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ─────────────────────
+// ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ─────────────────────
 // Shared by both the lenient inline parser and the strict top-level parser so the voice invariants
 // are enforced identically. Voice fields are preserved only when declared, so a non-voice capability
 // carries no voice fields at all and a record round-trips exactly (same discipline as the infilling
@@ -747,7 +747,7 @@ type ParsedVoiceFields = Partial<
 //   1. at least one of speech input / speech output / realtime must be advertised (a voice model
 //      with no advertised capability is meaningless — fail-closed);
 //   2. the provider locality must be declared (providers are represented explicitly, never inferred
-//      from an endpoint URL or environment name — ADR-0058 D7 / the epic invariant).
+//      from an endpoint URL or environment name — ADR-0100 D7 / the epic invariant).
 function resolveVoiceKindFields(
   raw: Record<string, unknown>,
   path: string,
@@ -1397,7 +1397,9 @@ function buildGatewayConfig(
   egress: OutboundHttpEgressConfig | undefined,
   options: ParseGatewayConfigOptions,
 ): GatewayConfig {
-  const parsed = providersRaw.map((item, index) => parseProvider(item, index, env, egress, options));
+  const parsed = providersRaw.map((item, index) =>
+    parseProvider(item, index, env, egress, options),
+  );
   const providers = providersWithEgress(parsed, egress);
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const capabilities = applyVoicePersonaDerivation(merged, providers);
@@ -1489,8 +1491,7 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
       : {
           reranker: {
             modelId: config.reranker.modelId,
-            credentialHeaderName:
-              config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+            credentialHeaderName: config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
             timeoutMs: config.reranker.timeoutMs,
           },
         }),

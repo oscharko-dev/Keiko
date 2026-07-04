@@ -1,5 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
+import { useState, type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { LocalFileBrowserDialog } from "./LocalFileBrowserDialog";
 
@@ -350,5 +352,108 @@ describe("LocalFileBrowserDialog", () => {
     // The bare ApiError.message is empty here; the alert must still be non-blank and carry the code.
     expect(alert.textContent?.trim().length ?? 0).toBeGreaterThan(0);
     expect(alert).toHaveTextContent(/FORBIDDEN/);
+  });
+
+  // GEN-UI-TEST-GAP-006 (#15) — opened from a real trigger button, closing the dialog (via Escape
+  // or Cancel) must return focus to that trigger (WCAG 2.4.3), not strand it on document.body.
+  function TriggeredDialog(props: {
+    readonly onApply?: () => void;
+    readonly onDidCancel?: () => void;
+  }): ReactElement {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Choose source
+        </button>
+        {open ? (
+          <LocalFileBrowserDialog
+            mode="folder"
+            title="Choose folder source"
+            description="Browse a registered local project or enter an absolute folder root."
+            initialRootPath="/repo"
+            fetchProjectsImpl={vi.fn().mockResolvedValue({ projects: [] })}
+            fetchFilesTreeImpl={vi.fn().mockResolvedValue({
+              root: "/repo",
+              path: "",
+              truncated: false,
+              entries: [],
+            })}
+            onApply={() => {
+              props.onApply?.();
+              setOpen(false);
+            }}
+            onCancel={() => {
+              setOpen(false);
+              props.onDidCancel?.();
+            }}
+          />
+        ) : null}
+      </>
+    );
+  }
+
+  it("returns focus to the trigger button when closed via Escape", async () => {
+    const user = userEvent.setup();
+    render(<TriggeredDialog />);
+
+    const trigger = screen.getByRole("button", { name: "Choose source" });
+    await user.click(trigger);
+    await screen.findByRole("dialog", { name: /choose folder source/i });
+
+    await user.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: /choose folder source/i }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("returns focus to the trigger button when closed via Cancel", async () => {
+    const user = userEvent.setup();
+    render(<TriggeredDialog />);
+
+    const trigger = screen.getByRole("button", { name: "Choose source" });
+    await user.click(trigger);
+    await screen.findByRole("dialog", { name: /choose folder source/i });
+
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: /choose folder source/i }),
+      ).not.toBeInTheDocument(),
+    );
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  // GEN-UI-TEST-GAP-006 (#16) — the browser dialog with a populated list is axe-clean.
+  it("has no axe violations with a populated file list", async () => {
+    const { container } = render(
+      <LocalFileBrowserDialog
+        mode="files"
+        title="Choose file sources"
+        description="Browse a registered local project or enter an absolute folder root."
+        initialRootPath="/repo"
+        fetchProjectsImpl={vi.fn().mockResolvedValue({
+          projects: [{ path: "/repo", name: "Repo", available: true, availabilityReason: null }],
+        })}
+        fetchFilesTreeImpl={vi.fn().mockResolvedValue({
+          root: "/repo",
+          path: "",
+          truncated: false,
+          entries: [
+            { ...treeEntryBase, name: "docs", path: "docs", kind: "directory" },
+            { ...treeEntryBase, name: "a.md", path: "a.md", kind: "file", extension: "md" },
+            { ...treeEntryBase, name: "b.md", path: "b.md", kind: "file", extension: "md" },
+          ],
+        })}
+        onApply={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole("checkbox", { name: /a\.md/i });
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

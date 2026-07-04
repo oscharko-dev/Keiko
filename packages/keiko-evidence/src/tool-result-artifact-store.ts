@@ -3,17 +3,11 @@
 // observations can be rehydrated without embedding raw output in model context.
 
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  lstatSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { replaceViaDurableTempFile } from "./durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
 import { existingOwnedDirectory, ownedChildPath, prepareOwnedDirectory } from "./fs-safety.js";
 
@@ -93,19 +87,11 @@ function assertWritableArtifact(target: string, fs: WorkspaceFs): void {
 function atomicWriteText(target: string, content: string, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
-    writeFileSync(temp, content, { encoding: "utf8", flag: "wx" });
-    try {
-      chmodSync(temp, 0o600);
-    } catch {
-      // ignore; not all filesystems support chmod
-    }
-    renameSync(temp, target);
+    replaceViaDurableTempFile(target, temp, content);
   } catch (error) {
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
-      `tool-result artifact write failed: ${
-        error instanceof Error ? error.message : "unknown"
-      }`,
+      `tool-result artifact write failed: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
 }

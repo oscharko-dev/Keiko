@@ -571,6 +571,14 @@ function CapsuleRow({
       emitDrop(event);
     }
   };
+  // GEN-PERF-MEMORY-004 — a single drag gesture previously registered BOTH the
+  // pointer* and mouse* event families (double per-move work on devices that fire
+  // both) and had NO pointercancel handler, so a gesture stolen by the browser
+  // (scroll/zoom/contextmenu) left document.body.style.cursor='grabbing' and the
+  // global listeners leaked. Use only the Pointer Events family — with an explicit
+  // pointercancel teardown — falling back to mouse* only when PointerEvent is
+  // unsupported.
+  const pointerEventsSupported = typeof window !== "undefined" && "PointerEvent" in window;
   const startDragOut = (startX: number, startY: number): void => {
     dragActiveRef.current = true;
     let dragging = false;
@@ -587,31 +595,53 @@ function CapsuleRow({
         state: capsule.lifecycleState,
       });
     };
-    const up = (upEvent: PointerEvent | MouseEvent): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
+    const teardown = (): void => {
+      if (pointerEventsSupported) {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        window.removeEventListener("pointercancel", cancel);
+      } else {
+        window.removeEventListener("mousemove", move);
+        window.removeEventListener("mouseup", up);
+      }
       dragActiveRef.current = false;
       document.body.style.cursor = "";
       setDragGhost(null);
-      if (dragging && isWorkspaceDropTarget(upEvent.clientX, upEvent.clientY)) {
-        emitDrop(upEvent);
+    };
+    const up = (upEvent: PointerEvent | MouseEvent): void => {
+      const wasDragging = dragging;
+      const clientX = upEvent.clientX;
+      const clientY = upEvent.clientY;
+      teardown();
+      if (wasDragging && isWorkspaceDropTarget(clientX, clientY)) {
+        emitDrop({ clientX, clientY });
       }
     };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+    // A cancelled gesture must run the same teardown (reset cursor + ghost + drop the
+    // global listeners) but never emit a drop.
+    const cancel = (): void => {
+      teardown();
+    };
+    if (pointerEventsSupported) {
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", cancel);
+    } else {
+      window.addEventListener("mousemove", move);
+      window.addEventListener("mouseup", up);
+    }
   };
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>): void => {
-    if (isRowActionDragTarget(event.target)) return;
+    if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
     if (!isPrimaryActivationPointer(event)) return;
     event.preventDefault();
     event.stopPropagation();
     startDragOut(event.clientX, event.clientY);
   };
   const onMouseDown = (event: ReactMouseEvent<HTMLElement>): void => {
+    // Only start from mouse* when Pointer Events are unavailable; otherwise the
+    // pointerdown path owns the gesture (avoids a synthetic mousedown double-start).
+    if (pointerEventsSupported) return;
     if (dragActiveRef.current || isRowActionDragTarget(event.target)) return;
     if (!isPrimaryActivationPointer(event)) return;
     event.preventDefault();
@@ -625,7 +655,12 @@ function CapsuleRow({
         <button
           type="button"
           className="lk-capsule-drag-handle"
-          aria-label={`Drag capsule ${capsule.displayName} to workspace`}
+          // Pointer-only affordance: keyboard users add the capsule via the
+          // "Add to workspace" button in CapsuleRowActions, so this drag handle
+          // is removed from the Tab order (tabIndex={-1}) to avoid a redundant,
+          // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
+          tabIndex={-1}
+          aria-label={`Drag ${capsule.displayName} to the workspace`}
           title="Drag to the workspace to create a connector card"
           onPointerDown={onPointerDown}
           onMouseDown={onMouseDown}

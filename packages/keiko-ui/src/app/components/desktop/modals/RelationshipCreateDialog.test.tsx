@@ -243,6 +243,62 @@ describe("RelationshipCreateDialog", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  // GEN-UI-INTERACTION-005 / test-plan #52 — a backdrop click must not discard a
+  // dirty form. While the user has typed data, pointer-down on the overlay is a
+  // no-op; Escape and the explicit Cancel/Close controls still close.
+  it("does not close on a backdrop pointer-down while the form is dirty", () => {
+    const onClose = vi.fn();
+    render(<RelationshipCreateDialog onClose={onClose} />);
+
+    // Empty form: a backdrop click still dismisses (nothing to lose).
+    fireEvent.pointerDown(screen.getByTestId("rel-create-overlay"));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    onClose.mockClear();
+
+    // Type into the ID fields — the form is now dirty.
+    setProposal("src-dirty", "tgt-dirty");
+
+    // A backdrop pointer-down must NOT discard the typed data.
+    fireEvent.pointerDown(screen.getByTestId("rel-create-overlay"));
+    expect(onClose).not.toHaveBeenCalled();
+
+    // The explicit Cancel control still closes unconditionally.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledWith(null);
+  });
+
+  // GEN-UI-FOCUS-010 / test-plan #51 — the type combobox portals its options to
+  // document.body, outside the dialog. Pressing Tab on a focused option must not
+  // let focus escape the modal: the menu closes and focus returns to the trigger,
+  // which lives inside the role=dialog container.
+  it("keeps focus inside the dialog when Tab is pressed on an open type-combobox option", () => {
+    render(<RelationshipCreateDialog onClose={vi.fn()} />);
+
+    const dialog = screen.getByTestId("rel-create-dialog");
+    const trigger = screen.getByRole("combobox", { name: /relationship type/i });
+
+    // Open the listbox from the trigger. openMenu sets state and the popup is
+    // positioned in a layout effect, both flushed synchronously by fireEvent's
+    // act wrapper (this file runs on fake timers, so async find* helpers would
+    // never resolve). Scope to the KeikoSelect popup — the native Source/Target
+    // kind <select>s also expose role=option, so a page-wide option query is
+    // ambiguous.
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+    const menu = document.querySelector(".ksel-menu");
+    expect(menu).not.toBeNull();
+    const options = Array.from(menu!.querySelectorAll<HTMLButtonElement>('[role="option"]'));
+    expect(options.length).toBeGreaterThan(0);
+    const focusedOption = options.find((el) => el === document.activeElement) ?? options[0]!;
+
+    // Tab on the option must close the menu and keep focus within the dialog.
+    fireEvent.keyDown(focusedOption, { key: "Tab" });
+
+    expect(document.querySelector(".ksel-menu")).toBeNull();
+    expect(document.activeElement).not.toBeNull();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    expect(trigger).toHaveFocus();
+  });
+
   it("clears a non-security submit denial on the next form edit so Create is not a dead end", async () => {
     mockValidateRelationshipProposal.mockResolvedValue({
       decision: { allowed: true, reasons: [] },

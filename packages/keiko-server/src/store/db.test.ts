@@ -3,7 +3,15 @@
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync, readdirSync } from "node:fs";
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  existsSync,
+  writeFileSync,
+  readdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
@@ -11,6 +19,7 @@ import {
   createInMemoryUiStore,
   createNodeUiStore,
   openNodeUiDatabase,
+  SCHEMA_VERSION,
   UI_DB_BUSY_TIMEOUT_MS,
   type GroundedAnswer,
 } from "./index.js";
@@ -96,7 +105,7 @@ describe("createNodeUiStore — on-disk file", () => {
     store.close();
   });
 
-  it("quarantines a corrupt DB file and opens a fresh store (M2)", () => {
+  it("quarantines a corrupt DB file, writes a diagnostic record, and opens a fresh store (M2)", () => {
     const dbPath = join(tmpDir, "corrupt.db");
     // Write non-SQLite garbage to the target path.
     writeFileSync(dbPath, Buffer.from("not a sqlite db"));
@@ -108,24 +117,73 @@ describe("createNodeUiStore — on-disk file", () => {
 
     // A .corrupt.<timestamp> sibling file must exist.
     const siblings = readdirSync(tmpDir);
-    const corruptFiles = siblings.filter((f) => f.startsWith("corrupt.db.corrupt."));
+    const corruptFiles = siblings.filter(
+      (f) => f.startsWith("corrupt.db.corrupt.") && !f.endsWith(".diagnostic.json"),
+    );
     expect(corruptFiles).toHaveLength(1);
+    const diagnostic = siblings.find(
+      (f) => f.startsWith("corrupt.db.corrupt.") && f.endsWith(".diagnostic.json"),
+    );
+    expect(diagnostic).toBeDefined();
+    const record = JSON.parse(readFileSync(join(tmpDir, diagnostic ?? ""), "utf8")) as {
+      readonly store?: string;
+      readonly cause?: { readonly errcode?: number };
+    };
+    expect(record.store).toBe("ui-db");
+    expect(record.cause?.errcode).toBe(26);
   });
 
-  it("quarantines a schema-tampered DB and opens a fresh store", () => {
+  it("does not quarantine a migration/schema logic error", () => {
     const dbPath = join(tmpDir, "schema-tampered.db");
     const db = new DatabaseSync(dbPath);
     db.exec("CREATE TABLE projects (id TEXT) STRICT; PRAGMA user_version = 0");
     db.close();
 
-    const store = createNodeUiStore(dbPath);
-    expect(store.listProjects()).toEqual([]);
-    store.close();
+    expect(() => createNodeUiStore(dbPath)).toThrow();
 
     const siblings = readdirSync(tmpDir);
     const corruptFiles = siblings.filter((f) => f.startsWith("schema-tampered.db.corrupt."));
-    expect(corruptFiles).toHaveLength(1);
+    expect(corruptFiles).toHaveLength(0);
+    expect(existsSync(dbPath)).toBe(true);
   });
+
+  it("does not quarantine a newer schema downgrade guard", () => {
+    const dbPath = join(tmpDir, "newer.db");
+    const store = createNodeUiStore(dbPath);
+    store.close();
+    const db = new DatabaseSync(dbPath);
+    try {
+      db.exec(`PRAGMA user_version = ${String(SCHEMA_VERSION + 1)}`);
+    } finally {
+      db.close();
+    }
+
+    expect(() => createNodeUiStore(dbPath)).toThrow(/newer than this binary/);
+    expect(readdirSync(tmpDir).some((f) => f.includes(".corrupt."))).toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
+  });
+
+  // The open path honours SQLite's busy_timeout before surfacing SQLITE_BUSY, so under an EXCLUSIVE
+  // lock this open blocks for ~that window and then throws. Give the test explicit headroom over the
+  // busy_timeout window so it never races vitest's 5s default (behaviour is correct; only the wait is
+  // long). Matches the flaky-timeout stabilisation pattern used by prior steps.
+  it("does not quarantine SQLITE_BUSY lock contention", () => {
+    const dbPath = join(tmpDir, "busy.db");
+    const store = createNodeUiStore(dbPath);
+    store.close();
+
+    const locker = new DatabaseSync(dbPath);
+    locker.exec("PRAGMA locking_mode = EXCLUSIVE");
+    locker.exec("BEGIN EXCLUSIVE");
+    try {
+      expect(() => createNodeUiStore(dbPath)).toThrow(/locked|busy/i);
+    } finally {
+      locker.exec("ROLLBACK");
+      locker.close();
+    }
+    expect(readdirSync(tmpDir).some((f) => f.includes(".corrupt."))).toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
+  }, 20000);
 
   // B.1 — AC#3: chat + messages survive close/reopen (on-disk round-trip).
   // This test complements the existing projects-only round-trip at line 64 by proving

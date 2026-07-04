@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { ReactNode } from "react";
 import { Icons, type IconName } from "../../Icons";
 import {
@@ -214,6 +214,13 @@ const TAB_LABELS: readonly (readonly [Tab, string])[] = [
 export function KeikoTwinPanel(): ReactNode {
   const twin = useTwin();
   const [tab, setTab] = useState<Tab>("policy");
+  // GEN-UI-A11Y-002: the active tab was exposed only via CSS (data-on). Adopt the
+  // ARIA tabs pattern (same as ChatHistoryPanel): the strip is a tablist, each
+  // button is a tab with aria-selected + id + aria-controls, and the body is a
+  // single tabpanel labelled by whichever tab is active.
+  const tabsBaseId = useId();
+  const panelId = useId();
+  const tabId = (id: Tab): string => `${tabsBaseId}-${id}`;
   return (
     <div className="twin">
       <div className="twin-hero">
@@ -227,11 +234,15 @@ export function KeikoTwinPanel(): ReactNode {
           {twin.mode === "autonomous" ? "Autonomous" : "Manual"}
         </span>
       </div>
-      <div className="twin-tabs">
+      <div className="twin-tabs" role="tablist" aria-label="Digital twin sections">
         {TAB_LABELS.map(([id, lbl]) => (
           <button
             type="button"
             key={id}
+            id={tabId(id)}
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls={panelId}
             className="twin-tab"
             data-on={tab === id}
             onClick={() => setTab(id)}
@@ -240,7 +251,7 @@ export function KeikoTwinPanel(): ReactNode {
           </button>
         ))}
       </div>
-      <div className="twin-body">
+      <div className="twin-body" id={panelId} role="tabpanel" aria-labelledby={tabId(tab)}>
         {tab === "policy" && <PolicyTab policy={twin.policy} setPolicy={twin.setPolicy} />}
         {tab === "eval" && <EvalTab decide={twin.decide} />}
         {tab === "bridges" && <BridgesTab bridges={twin.bridges} setBridges={twin.setBridges} />}

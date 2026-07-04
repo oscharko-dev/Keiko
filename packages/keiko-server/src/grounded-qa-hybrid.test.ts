@@ -5,12 +5,9 @@
 // missing `.source` tag, a dropped skip-uncertainty — must make at least one assertion fail.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { EventEmitter } from "node:events";
-import { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IncomingMessage } from "node:http";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -54,6 +51,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, RetrievalOnlyOutput } from "./grounded-orchestrator.js";
+import { mockRequest, mockResponse } from "./_support.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -84,14 +82,15 @@ function tempRoot(name: string): string {
 
 // ─── Request / route helpers ──────────────────────────────────────────────────
 
-function fakeReq(body: string): IncomingMessage {
-  return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
+function fakeReq(body: string): RouteContext["req"] {
+  return mockRequest({ body });
 }
 
+// mockResponse() is a genuine PassThrough: it is an EventEmitter (so `res.emit("close")` in the
+// disconnect test works) with a real `writableEnded` getter (false until end), which is exactly what
+// the disconnect guard `res.on("close", () => { if (!res.writableEnded) abort(); })` reads.
 function fakeRes(): RouteContext["res"] {
-  const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
-  res.writableEnded = false;
-  return res;
+  return mockResponse().res;
 }
 
 function routeCtx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {

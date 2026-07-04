@@ -69,6 +69,7 @@ function RunRow({
   onOpen,
   onDelete,
   deleting,
+  openButtonRef,
 }: {
   readonly run: QualityIntelligenceUiRunSummary;
   readonly onOpen: (
@@ -77,6 +78,9 @@ function RunRow({
   ) => void;
   readonly onDelete: (id: string) => void;
   readonly deleting: boolean;
+  // Registers this row's Open button with the panel so a delete can park keyboard focus on a
+  // surviving row's Open button after the deleted row unmounts (GEN-UI-FOCUS-003, WCAG 2.4.3).
+  readonly openButtonRef?: (id: string, el: HTMLButtonElement | null) => void;
 }): ReactNode {
   const cases = run.totals.candidates;
   const [confirming, setConfirming] = useState(false);
@@ -124,6 +128,9 @@ function RunRow({
       <button
         type="button"
         className="qi-run-item"
+        ref={(el) => {
+          openButtonRef?.(run.id, el);
+        }}
         style={{ flex: 1 }}
         onClick={() => {
           // Historical run-list rows do not know the original source handles; pass an explicit empty
@@ -266,6 +273,19 @@ export function QiHubPanel({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   // Polite announcement when a delete completes — read by the dedicated sr-only live region.
   const [deletedAnnounce, setDeletedAnnounce] = useState("");
+  // Focus management for delete (GEN-UI-FOCUS-003, WCAG 2.4.3): a successful delete unmounts the
+  // focused row, which would strand keyboard focus on <body>. We register each row's Open button by
+  // id and keep a ref to the (focusable) runs heading, then park focus on a surviving element after
+  // the post-delete refetch resolves — mirroring the DriftPanel reCheckBtnRef park-focus pattern.
+  const openButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const runsHeadingRef = useRef<HTMLHeadingElement>(null);
+  const registerOpenButton = useCallback((id: string, el: HTMLButtonElement | null): void => {
+    if (el === null) {
+      openButtonRefs.current.delete(id);
+    } else {
+      openButtonRefs.current.set(id, el);
+    }
+  }, []);
 
   const loadRuns = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -301,19 +321,37 @@ export function QiHubPanel({
   const handleDelete = useCallback(
     async (runId: string): Promise<void> => {
       if (deletingId !== null) return; // concurrent-delete guard
+      // Determine the surviving neighbour BEFORE the delete unmounts the focused row: prefer the
+      // next run's Open button, then the previous run's, so keyboard focus lands on the closest
+      // surviving row (GEN-UI-FOCUS-003, WCAG 2.4.3). If this is the last run, park focus on the
+      // runs heading instead (the empty-state container is not focusable).
+      const index = runs.findIndex((run) => run.id === runId);
+      const neighbour = index === -1 ? undefined : (runs[index + 1] ?? runs[index - 1]);
+      const neighbourId = neighbour?.id;
       setDeletingId(runId);
       setError(null);
       try {
         await deleteImpl(runId);
         setDeletedAnnounce("Run deleted.");
         await loadRuns();
+        // Park focus after the refetch commits the new list, so the target element exists in the
+        // DOM. requestAnimationFrame lets React flush the removal of the deleted row first.
+        requestAnimationFrame(() => {
+          const target =
+            neighbourId !== undefined ? openButtonRefs.current.get(neighbourId) : undefined;
+          if (target !== undefined) {
+            target.focus();
+          } else {
+            runsHeadingRef.current?.focus();
+          }
+        });
       } catch (err) {
         setError(formatError(err));
       } finally {
         setDeletingId(null);
       }
     },
-    [deletingId, deleteImpl, loadRuns],
+    [deletingId, deleteImpl, loadRuns, runs],
   );
 
   return (
@@ -331,7 +369,12 @@ export function QiHubPanel({
       />
       <section className="qi-hub-runs" aria-label="Quality Intelligence runs">
         <header className="qi-col-header">
-          <h2 className="qi-col-title">Runs</h2>
+          {/* tabIndex=-1 makes the heading programmatically focusable so a delete that removes the
+              last run can park keyboard focus here instead of stranding it on <body>
+              (GEN-UI-FOCUS-003, WCAG 2.4.3). It is not in the tab order. */}
+          <h2 className="qi-col-title" ref={runsHeadingRef} tabIndex={-1}>
+            Runs
+          </h2>
           {!loading && error === null ? (
             <span className="qi-col-count">{totalRunIds.toString()}</span>
           ) : null}
@@ -380,6 +423,7 @@ export function QiHubPanel({
                       void handleDelete(id);
                     }}
                     deleting={deletingId === run.id}
+                    openButtonRef={registerOpenButton}
                   />
                 ))}
               </ul>

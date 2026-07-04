@@ -87,6 +87,10 @@ export function PluginsPanel(): ReactNode {
             </span>
             <button
               className={`plg-dot${on ? " on" : ""}`}
+              // GEN-UI-A11Y-009: this dot switches the MCP server on/off — expose
+              // the on/off switch semantics + state, not just a bare button.
+              role="switch"
+              aria-checked={on}
               title={on ? "Running" : "Stopped"}
               aria-label={`${m.name}: ${on ? "running" : "stopped"}`}
               onClick={() => {
@@ -104,7 +108,11 @@ export function PluginsPanel(): ReactNode {
         <span className="plg-sec-t">Connectors</span>
       </div>
       {CONNECTORS.map((c) => (
-        <button className="plg-row plg-conn" key={c.name} data-on={c.on}>
+        // GEN-UI-INTERACTION-001: these connectors are placeholders (not wired to
+        // any action). Render them as non-interactive rows so they are NOT tab
+        // stops and do not advertise a button role — the "Connected/Not connected"
+        // copy carries the status. Visual look is preserved via the same classes.
+        <div className="plg-row plg-conn" key={c.name} data-on={c.on}>
           <span className="plg-ico">
             <PlugIcon img={c.img} />
           </span>
@@ -121,7 +129,7 @@ export function PluginsPanel(): ReactNode {
               <Icons.plus size={14} />
             </span>
           )}
-        </button>
+        </div>
       ))}
     </div>
   );

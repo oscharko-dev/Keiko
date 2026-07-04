@@ -35,7 +35,11 @@ describe("subscribeSharedEventSource", () => {
   it("opens same-origin API streams", () => {
     vi.stubGlobal("EventSource", FakeEventSource);
 
-    const unsubscribe = subscribeSharedEventSource("/api/commands/events", ["command:run"], () => {});
+    const unsubscribe = subscribeSharedEventSource(
+      "/api/commands/events",
+      ["command:run"],
+      () => {},
+    );
 
     expect(FakeEventSource.instances.map((source) => source.url)).toEqual(["/api/commands/events"]);
     unsubscribe();

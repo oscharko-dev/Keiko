@@ -23,23 +23,47 @@
 
 import { execFileSync } from "node:child_process";
 import {
-  chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
-  mkdirSync,
+  openSync,
   readFileSync,
   renameSync,
   rmSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { isSealed, openString, sealString } from "./secretbox.js";
+// Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
+// pair; import it from the sibling module (relative — we ARE keiko-security).
+import { chmodIfPresent, ensureDirHardened, FILE_MODE } from "./fs-hardening.js";
 
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
+
+export type SecretVaultStoreErrorCode =
+  "SECRET_VAULT_STORE_INVALID_JSON" | "SECRET_VAULT_STORE_INVALID_SCHEMA";
+
+export class SecretVaultStoreError extends Error {
+  readonly code: SecretVaultStoreErrorCode;
+  readonly storePath: string;
+
+  constructor(
+    code: SecretVaultStoreErrorCode,
+    storePath: string,
+    message: string,
+    cause?: unknown,
+  ) {
+    super(message, cause === undefined ? undefined : { cause });
+    this.name = "SecretVaultStoreError";
+    this.code = code;
+    this.storePath = storePath;
+  }
+}
 
 export type LocalVaultKeySource = "env" | "keychain" | "keyfile";
 
@@ -108,25 +132,6 @@ function keyFromEnv(
   return decodeKeyOrThrow(raw);
 }
 
-function ensureDirHardened(dir: string): void {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform === "win32") return;
-  try {
-    chmodSync(dir, 0o700);
-  } catch {
-    // Best-effort: a parent-owned directory we cannot chmod beats a hard failure.
-  }
-}
-
-function chmodIfPresent(path: string, mode: number): void {
-  if (process.platform === "win32") return;
-  try {
-    chmodSync(path, mode);
-  } catch {
-    // Best-effort hardening.
-  }
-}
-
 // The macOS `security` CLI invocation, isolated behind a one-line seam so the keychain reader logic
 // (read-hit, read-miss-then-generate, generate-failure) is unit-testable with a fake runner.
 export type KeychainCommandRunner = (args: readonly string[]) => string;
@@ -193,8 +198,8 @@ function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
     return decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
   }
   const key = randomBytes(KEY_BYTES);
-  writeFileSync(keyfile, key.toString("base64"), { mode: 0o600 });
-  chmodIfPresent(keyfile, 0o600);
+  writeDurableTextFile(keyfile, key.toString("base64"), FILE_MODE);
+  chmodIfPresent(keyfile, FILE_MODE);
   return key;
 }
 
@@ -243,6 +248,23 @@ function isStoreFile(value: unknown): value is StoreFile {
   return Object.values(entries).every((entry) => typeof entry === "string");
 }
 
+function storeUnreadableError(
+  code: SecretVaultStoreErrorCode,
+  storePath: string,
+  cause?: unknown,
+): SecretVaultStoreError {
+  const reason =
+    code === "SECRET_VAULT_STORE_INVALID_JSON"
+      ? "not valid JSON"
+      : "not a supported secret vault store";
+  return new SecretVaultStoreError(
+    code,
+    storePath,
+    `secret vault store is unreadable (${reason}); refusing to treat it as empty`,
+    cause,
+  );
+}
+
 function readStore(storePath: string): Record<string, string> {
   const resolvedPath = resolve(storePath);
   assertNoSymlinkedPathSegments(resolvedPath);
@@ -250,20 +272,55 @@ function readStore(storePath: string): Record<string, string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(resolvedPath, "utf8"));
-  } catch {
-    // A non-JSON store is treated as empty so a corrupt index never crashes resolution; the entries
-    // it would have held simply resolve to undefined and surface as an honest "missing credential".
-    return {};
+  } catch (error) {
+    throw storeUnreadableError("SECRET_VAULT_STORE_INVALID_JSON", resolvedPath, error);
   }
-  return isStoreFile(parsed) ? { ...parsed.entries } : {};
+  if (!isStoreFile(parsed)) {
+    throw storeUnreadableError("SECRET_VAULT_STORE_INVALID_SCHEMA", resolvedPath);
+  }
+  return { ...parsed.entries };
 }
 
 // Lists the references held in a sealed store WITHOUT resolving a vault key — a pure read over the
 // non-secret index. Used by callers that must reconcile config references against vaulted secrets
 // (e.g. preserve-existing persistence and `keiko repair`) without triggering key generation or
-// decryption. Returns an empty array for a missing or corrupt store.
+// decryption. Returns an empty array only when the store is missing; corrupt/unsupported stores fail
+// closed so callers cannot rewrite config from an empty reference set.
 export function readLocalVaultReferences(storePath: string): readonly string[] {
   return Object.keys(readStore(storePath));
+}
+
+function writeDurableTextFile(path: string, content: string, mode: number): void {
+  const fd = openSync(path, "wx", mode);
+  try {
+    writeSync(fd, content, 0, "utf8");
+    fsyncSync(fd);
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // Best-effort close after a write/fsync failure.
+    }
+  }
+}
+
+function fsyncDirectory(dir: string): void {
+  if (process.platform === "win32") return;
+  let fd: number | undefined;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    // Directory fsync is not available on every filesystem; temp-file fsync remains the key guard.
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close only.
+      }
+    }
+  }
 }
 
 // Atomic, crash-safe write: a fresh temp file in the same directory is written with 0600 and renamed
@@ -283,14 +340,11 @@ function writeStore(storePath: string, entries: Record<string, string>): void {
     `.secret-vault.${String(process.pid)}.${randomBytes(8).toString("hex")}.tmp`,
   );
   try {
-    writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
-    chmodIfPresent(tempPath, 0o600);
+    writeDurableTextFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, FILE_MODE);
+    chmodIfPresent(tempPath, FILE_MODE);
     renameSync(tempPath, resolvedPath);
-    chmodIfPresent(resolvedPath, 0o600);
+    chmodIfPresent(resolvedPath, FILE_MODE);
+    fsyncDirectory(dir);
   } finally {
     if (existsSync(tempPath)) {
       try {
@@ -319,6 +373,9 @@ export function createLocalSecretVault(deps: LocalSecretVaultDeps): LocalSecretV
   };
 
   const replaceAll = (next: ReadonlyMap<string, string>): void => {
+    if (existsSync(resolvedStorePath)) {
+      readStore(resolvedStorePath);
+    }
     const entries: Record<string, string> = {};
     for (const [reference, secret] of next) {
       entries[reference] = sealString(key, secret);

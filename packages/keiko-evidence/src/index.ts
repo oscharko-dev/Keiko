@@ -41,6 +41,7 @@ export {
   DEFAULT_EVIDENCE_DIR,
   resolveEvidenceDir,
   type EvidenceStore,
+  type NodeEvidenceStore,
 } from "./store.js";
 export {
   writeSideFile,

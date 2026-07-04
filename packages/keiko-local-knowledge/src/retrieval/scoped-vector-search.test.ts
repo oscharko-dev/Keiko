@@ -523,7 +523,12 @@ describe("searchVectorsForScope — minScore filtering", () => {
       text: "alpha beta gamma delta epsilon zeta eta theta",
     });
     seeded.chunkIds.forEach((chunkId, index) => {
-      setChunkVector(store, seeded.capsuleId, String(chunkId), index === 0 ? vectorBlob(1, 0) : vectorBlob(0, 1));
+      setChunkVector(
+        store,
+        seeded.capsuleId,
+        String(chunkId),
+        index === 0 ? vectorBlob(1, 0) : vectorBlob(0, 1),
+      );
     });
     const adapter = scriptedAdapter({
       responder: (): OpenAIEmbeddingOutcome => ({
@@ -1271,11 +1276,7 @@ describe("searchVectorsForScope — citation fields", () => {
       chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
     });
     setCapsuleVector(store, general.capsuleId, vectorBlob(1, 0));
-    setCapsuleVector(
-      store,
-      inflected.capsuleId,
-      vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)),
-    );
+    setCapsuleVector(store, inflected.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
       responder: (): OpenAIEmbeddingOutcome => ({
         ok: true,

@@ -11,6 +11,7 @@ import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
+import { reviewActionResultState } from "@oscharko-dev/keiko-contracts";
 import { editQiCandidate, fetchQiRunDetail, reviewQiRun } from "@/lib/quality-intelligence-api";
 import { CandidatesPane, type QiPendingReview, type QiReviewAction } from "./CandidatesPane";
 import { DriftPanel } from "./DriftPanel";
@@ -400,19 +401,11 @@ export function QiRunCard({
           await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
           await loadDetail();
           // Issue #282 A11y-1: announce the review outcome via a dedicated live region.
-          // The label map maps the action to the resulting visible state ("reopen" → "Open").
-          // A monotonic nonce guarantees the string differs on identical repeat actions so AT
+          // The shared contracts projection maps the action to the resulting review state
+          // ("reopen" → "open", "withdraw" → "withdrawn", …) and REVIEW_LABEL renders its human
+          // label. A monotonic nonce guarantees the string differs on identical repeat actions so AT
           // always re-reads it (AT suppresses byte-identical repeated announcements).
-          const resultLabel =
-            REVIEW_LABEL[
-              action === "approve"
-                ? "approved"
-                : action === "reject"
-                  ? "rejected"
-                  : action === "request-changes"
-                    ? "changes-requested"
-                    : "open" // reopen → open
-            ];
+          const resultLabel = REVIEW_LABEL[reviewActionResultState(action)];
           // Look up the candidate title from the last-loaded detail snapshot (best effort: the
           // reload above may have updated state but setDetail is async; use the snapshot we had
           // at the time of the call — the title is immutable so this is always correct).

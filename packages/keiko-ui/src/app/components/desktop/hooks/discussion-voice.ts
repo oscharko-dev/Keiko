@@ -1,4 +1,4 @@
-// Issue #502, Epic #491 (ADR-0065) — the Voice ↔ Discussion intelligence binding. It is the
+// Issue #502, Epic #491 (ADR-0107) — the Voice ↔ Discussion intelligence binding. It is the
 // deterministic, synchronous, content-free seam that lets a SPOKEN turn drive the SAME discussion
 // intelligence the text path uses (AC2: reuse, not a parallel stack). It owns no transport, no clock,
 // no audio, and no write path: it consumes the leaf contract `discussion-intelligence.ts` exactly as

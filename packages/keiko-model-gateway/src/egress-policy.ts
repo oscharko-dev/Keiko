@@ -3,14 +3,17 @@ import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type OutboundTargetClass = "public" | "loopback" | "private" | "link-local" | "metadata";
 
-function normalizeHost(hostname: string): string {
+export function normalizeHost(hostname: string): string {
   return hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
 }
 
 function parseIpv4(hostname: string): readonly [number, number, number, number] | undefined {
   if (isIP(hostname) !== 4) return undefined;
   const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
     return undefined;
   }
   return parts as [number, number, number, number];

@@ -258,8 +258,7 @@ const CASES: readonly BenchCase[] = [
     id: "same-candidates-api-client",
     category: "query-aware-ranking",
     files: {
-      "docs/auth-debugging.md":
-        "ApiClient and TokenValidator are both part of auth debugging.\n",
+      "docs/auth-debugging.md": "ApiClient and TokenValidator are both part of auth debugging.\n",
       "src/auth/ApiClient.ts":
         "export class ApiClient {\n  timeoutMs = 5000;\n  handleTimeout(): void {}\n}\n",
       "src/auth/TokenValidator.ts":
@@ -274,8 +273,7 @@ const CASES: readonly BenchCase[] = [
     id: "same-candidates-token-validator",
     category: "query-aware-ranking",
     files: {
-      "docs/auth-debugging.md":
-        "ApiClient and TokenValidator are both part of auth debugging.\n",
+      "docs/auth-debugging.md": "ApiClient and TokenValidator are both part of auth debugging.\n",
       "src/auth/ApiClient.ts":
         "export class ApiClient {\n  timeoutMs = 5000;\n  handleTimeout(): void {}\n}\n",
       "src/auth/TokenValidator.ts":

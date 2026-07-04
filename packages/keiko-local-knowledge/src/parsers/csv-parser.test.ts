@@ -171,9 +171,7 @@ describe("csvParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     const parsed = rows(normalizedText(result), result.units);
-    expect(parsed).toEqual([
-      { tableName: "csv", rowIndex: 0, span: "a=alpha,one | b=beta,two\n" },
-    ]);
+    expect(parsed).toEqual([{ tableName: "csv", rowIndex: 0, span: "a=alpha,one | b=beta,two\n" }]);
   });
 
   it("binds CSV values to header names in normalized text", () => {

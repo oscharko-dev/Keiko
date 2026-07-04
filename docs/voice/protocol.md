@@ -2,7 +2,7 @@
 
 Normative protocol specification for Epic #491, the deliverable of Issue
 [#496](https://github.com/oscharko-dev/Keiko/issues/496) and the authoritative companion to
-[ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md). It **defines** the
+[ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md). It **defines** the
 wire contract; the transport that implements it is Issue #497. This document is **design and contract
 only**: it adds no transport code, re-opens no WebSocket upgrade, and adds no runtime dependency.
 
@@ -43,7 +43,7 @@ code `unsupported-version`; emitting it is the transport's responsibility (#497)
 seam because the BFF binds `127.0.0.1` and hard-rejects WebSocket upgrades
 ([`server.ts`](../../packages/keiko-server/src/server.ts) lines 210–213). `VoiceControlTransport` is
 `loopback-http-sse | loopback-websocket`; re-opening a bidirectional WebSocket upgrade is an explicit,
-ADR-gated transport decision owned by Issue #497 (ADR-0058 D3, ADR-0059 D3), never an additive change.
+ADR-gated transport decision owned by Issue #497 (ADR-0100 D3, ADR-0101 D3), never an additive change.
 
 **Raw audio is never a control message.** It is modelled by the single `VOICE_MEDIA_PLANE` descriptor
 (`plane: "media"`, `transport: "webrtc"`, `replay: "never-persisted"`, `redaction: "raw-media"`). The
@@ -130,7 +130,7 @@ The protocol is gated by the already-resolved `VoiceProfile`. `VOICE_PROFILE_ALL
 | `full-realtime`  | **every** kind, including SDP/ICE signaling and media-track state                                                                                                            | `webrtc`        | `proxied-sdp` |
 
 - **`none`** permits no message; with no voice capability the protocol exposes nothing, mirroring "no
-  voice UI at all" (ADR-0058 D1). `voiceMessageAllowedForProfile(kind, "none")` is `false` for every
+  voice UI at all" (ADR-0100 D1). `voiceMessageAllowedForProfile(kind, "none")` is `false` for every
   kind.
 - **`speech-to-text`** is controlled dictation only: audio rides the existing JSON request envelope
   and is forwarded once through `gatewayFetch` (`gateway-batch`, as the #494 dictation route already
@@ -208,7 +208,7 @@ and **every browser-exposed credential** directly from the contract:
   and (b) configurable STUN/TURN hosts for NAT traversal
   ([deployment-profile-matrix §4](deployment-profile-matrix.md)); STUN/TURN host validation is a #497
   obligation and, like the model-endpoint class, no positive destination allowlist exists today
-  (ADR-0058 D4). No bespoke signaling/media client is introduced. SDP signaling stays under Keiko's loopback origin so auth, rate limiting, audit logging,
+  (ADR-0100 D4). No bespoke signaling/media client is introduced. SDP signaling stays under Keiko's loopback origin so auth, rate limiting, audit logging,
   and host allowlisting are controlled locally.
 - **Browser-exposed credentials.** Under the preferred `proxied-sdp` mode the browser holds **no**
   credential; under `direct-ephemeral` it holds only a **short-lived, scoped** ephemeral session token
@@ -223,11 +223,11 @@ and **every browser-exposed credential** directly from the contract:
   tests in the same change.
 - **Provider allowlisting & local-only state.** Reachability is bounded by configured providers +
   capability selection (privacy-contract §1); session state, policy decisions, and audit metadata stay
-  local. The honest limitation that no positive destination host allowlist exists yet (ADR-0058 D4) is
+  local. The honest limitation that no positive destination host allowlist exists yet (ADR-0100 D4) is
   unchanged by this protocol.
 - **Controls a transport (#497) must re-justify, not silently relax.** Re-opening the BFF WebSocket
   upgrade, and any CSP / `Permissions-Policy` relaxation for browser-direct media or STUN/TURN, are
-  explicit future decisions under the security gate (ADR-0058 D6, privacy-contract §4) — out of scope
+  explicit future decisions under the security gate (ADR-0100 D6, privacy-contract §4) — out of scope
   for this protocol definition.
 
 ## 11. No new runtime media packages (AC4)
@@ -242,9 +242,9 @@ keep this enforced.
 
 ## 12. References
 
-- [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md) — the authoritative
+- [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md) — the authoritative
   decision record for this protocol.
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — voice architecture
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — voice architecture
   baseline (D3 transport, D6 security).
 - [`packages/keiko-contracts/src/voice-protocol.ts`](../../packages/keiko-contracts/src/voice-protocol.ts)
   — the typed contract; [`gateway.ts`](../../packages/keiko-contracts/src/gateway.ts) — the reused

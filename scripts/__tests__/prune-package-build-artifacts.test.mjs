@@ -24,10 +24,13 @@ describe("prune-package-build-artifacts", () => {
   });
 
   it("removes build metadata and compiled test artifacts without deleting runtime dist files", () => {
+    write(join(root, "package.json"), JSON.stringify({ bundleDependencies: [] }));
     write(join(root, "packages", "keiko-server", "dist", "index.js"), "export {};\n");
     write(join(root, "packages", "keiko-server", "dist", ".tsbuildinfo"), "{}\n");
     write(join(root, "packages", "keiko-server", "dist", "routes.test.js"), "export {};\n");
     write(join(root, "packages", "keiko-server", "dist", "routes.test.d.ts"), "export {};\n");
+    write(join(root, "packages", "keiko-server", "dist", "index.js.map"), "{}\n");
+    write(join(root, "packages", "keiko-server", "dist", "index.d.ts.map"), "{}\n");
     write(
       join(root, "packages", "keiko-server", "dist", "__tests__", "fixture.js"),
       "export {};\n",
@@ -40,6 +43,7 @@ describe("prune-package-build-artifacts", () => {
         "<root>/packages/keiko-server/dist/.tsbuildinfo",
         "<root>/packages/keiko-server/dist/routes.test.js",
         "<root>/packages/keiko-server/dist/routes.test.d.ts",
+        "<root>/packages/keiko-server/dist/index.js.map",
         "<root>/packages/keiko-server/dist/__tests__",
       ]),
     );
@@ -49,9 +53,40 @@ describe("prune-package-build-artifacts", () => {
       existsSync(join(root, "packages", "keiko-server", "dist", "runtime", "testGeneration.js")),
     ).toBe(true);
     expect(existsSync(join(root, "packages", "keiko-server", "dist", ".tsbuildinfo"))).toBe(false);
+    expect(existsSync(join(root, "packages", "keiko-server", "dist", "index.js.map"))).toBe(false);
+    expect(existsSync(join(root, "packages", "keiko-server", "dist", "index.d.ts.map"))).toBe(true);
     expect(existsSync(join(root, "packages", "keiko-server", "dist", "routes.test.js"))).toBe(
       false,
     );
     expect(existsSync(join(root, "packages", "keiko-server", "dist", "__tests__"))).toBe(false);
+  });
+
+  it("removes forbidden third-party maps and nested node_modules from bundled workspaces", () => {
+    write(
+      join(root, "package.json"),
+      JSON.stringify({ bundleDependencies: ["@oscharko-dev/keiko-local-knowledge"] }),
+    );
+    write(join(root, "node_modules", "pdfjs-dist", "build", "pdf.mjs.map"), "{}\n");
+    write(join(root, "node_modules", "pdfjs-dist", "build", "pdf.mjs"), "export {};\n");
+    write(
+      join(
+        root,
+        "packages",
+        "keiko-local-knowledge",
+        "node_modules",
+        "@types",
+        "yauzl",
+        "index.d.ts",
+      ),
+      "export {};\n",
+    );
+
+    prunePackageBuildArtifacts(root);
+
+    expect(existsSync(join(root, "node_modules", "pdfjs-dist", "build", "pdf.mjs.map"))).toBe(
+      false,
+    );
+    expect(existsSync(join(root, "node_modules", "pdfjs-dist", "build", "pdf.mjs"))).toBe(true);
+    expect(existsSync(join(root, "packages", "keiko-local-knowledge", "node_modules"))).toBe(false);
   });
 });

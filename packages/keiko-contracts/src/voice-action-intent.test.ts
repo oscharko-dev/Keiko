@@ -1,4 +1,4 @@
-// Regression tests for the Spoken Action Intent governance contract (Issue #503, Epic #491, ADR-0066).
+// Regression tests for the Spoken Action Intent governance contract (Issue #503, Epic #491, ADR-0108).
 // These pin the acceptance criteria as executable, mutation-resistant invariants:
 //   AC1 — spoken actions are impossible without voice capture capability (none/speech-output dormant).
 //   AC2 — both STT and full-realtime require committed transcript text; empty projection → no proposal.

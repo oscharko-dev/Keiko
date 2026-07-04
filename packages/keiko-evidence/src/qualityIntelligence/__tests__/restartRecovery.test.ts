@@ -69,6 +69,17 @@ describe("restart recovery", () => {
     expect(snapshot.skippedRunIds).toEqual([]);
   });
 
+  it("snapshotQualityIntelligenceRunsForRecovery skips a corrupt manifest instead of throwing", async () => {
+    recordQualityIntelligenceRun(inputFor("run-rec-good"), { evidenceDir });
+    await writeFile(join(evidenceDir, QI_SUBDIR, "run-rec-bad.qi.json"), "{ not json", "utf8");
+
+    const store = createNodeQualityIntelligenceLocalStore(evidenceDir);
+    const snapshot = snapshotQualityIntelligenceRunsForRecovery(store);
+
+    expect(snapshot.loadedRunIds).toEqual(["run-rec-good"]);
+    expect(snapshot.skippedRunIds).toEqual(["run-rec-bad"]);
+  });
+
   it("a manifest with an invalid runId-shaped filename is skipped silently", async () => {
     // The .qi.json suffix is present but the runId portion is empty → assertValidRunId fails →
     // isQiManifestName returns false → entry is filtered out of list().

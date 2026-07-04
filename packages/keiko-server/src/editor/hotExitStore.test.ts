@@ -11,6 +11,7 @@ import { createEditorHotExitStore } from "./hotExitStore.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 const VAULT_KEY = Buffer.alloc(32, 0x71).toString("base64");
+const ROTATED_VAULT_KEY = Buffer.alloc(32, 0x72).toString("base64");
 const tmpDirs: string[] = [];
 
 afterEach(() => {
@@ -72,5 +73,45 @@ describe("editor hot-exit server store", () => {
 
     expect(store.read(result.snapshotRef, EDITOR_HOT_EXIT_TTL_MS + 2)).toBeNull();
     expect(store.read(result.snapshotRef, 1_001)).toBeNull();
+  });
+
+  it("treats an undecryptable snapshot entry as a miss and removes it", () => {
+    const stateDir = tempStateDir();
+    const original = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+    });
+    const result = original.write(snapshot());
+    const rotated = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: ROTATED_VAULT_KEY },
+    });
+
+    expect(rotated.read(result.snapshotRef, 1_001)).toBeNull();
+
+    expect(original.read(result.snapshotRef, 1_001)).toBeNull();
+  });
+
+  it("skips undecryptable old entries while writing a fresh snapshot", () => {
+    const stateDir = tempStateDir();
+    createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: VAULT_KEY },
+    }).write(snapshot());
+    const rotated = createEditorHotExitStore({
+      stateDir,
+      env: { KEIKO_EDITOR_HOT_EXIT_KEY: ROTATED_VAULT_KEY },
+    });
+    const next = snapshot({
+      relativePath: "src/next.ts",
+      content: "next edit\n",
+      updatedAt: 2_000,
+    });
+
+    const result = rotated.write(next);
+
+    expect(rotated.read(result.snapshotRef, 2_001)?.content).toBe("next edit\n");
+    const vaultBytes = readFileSync(join(stateDir, "editor-hot-exit", "snapshots.vault"), "utf8");
+    expect(vaultBytes).not.toContain("next edit");
   });
 });

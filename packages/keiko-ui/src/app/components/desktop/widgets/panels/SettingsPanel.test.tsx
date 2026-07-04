@@ -489,7 +489,9 @@ describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
     expect(modelsTab).toHaveAttribute("aria-pressed", "true");
     const generalTab = screen.getByRole("button", { name: "General" });
     expect(generalTab).toHaveAttribute("aria-pressed", "false");
-    fireEvent.pointerDown(generalTab);
+    // GEN-UI-A11Y-010: the redundant onPointerDown was removed; onClick drives the
+    // switch (and is what keyboard activation dispatches).
+    fireEvent.click(generalTab);
     expect(generalTab).toHaveAttribute("aria-pressed", "true");
     expect(modelsTab).toHaveAttribute("aria-pressed", "false");
     await waitFor(() => {

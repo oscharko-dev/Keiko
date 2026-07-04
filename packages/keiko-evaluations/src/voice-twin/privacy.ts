@@ -1,4 +1,4 @@
-// Voice Digital Twin privacy / supply-chain audit (Epic #491, Issue #505; ADR-0068; AC5).
+// Voice Digital Twin privacy / supply-chain audit (Epic #491, Issue #505; ADR-0110; AC5).
 //
 // Two pure auditors give AC5 its teeth:
 //   (a) `auditVoiceEgress` — an egress ledger is approved iff NO destination is `unapproved-external`. A

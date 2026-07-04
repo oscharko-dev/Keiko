@@ -1,7 +1,15 @@
 // store.test.ts — integration coverage for openKnowledgeStore: schema apply, restart
 // safety, corrupted-DB quarantine, migration runner, durability pragmas.
 
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -13,6 +21,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { KnowledgeStoreError } from "./errors.js";
 import { LK_STORE_BUSY_TIMEOUT_MS, openKnowledgeStore } from "./store.js";
 
 interface CountRow {
@@ -178,7 +187,7 @@ describe("openKnowledgeStore — restart safety", () => {
 });
 
 describe("openKnowledgeStore — corrupted-DB quarantine", () => {
-  it("moves a non-SQLite file aside to .corrupt.<iso> and re-initialises", () => {
+  it("moves a non-SQLite file aside to .corrupt.<iso>, writes diagnostics, and re-initialises", () => {
     const dbPath = join(tmp, "capsules.db");
     writeFileSync(dbPath, "not a sqlite database — partial write");
 
@@ -198,12 +207,23 @@ describe("openKnowledgeStore — corrupted-DB quarantine", () => {
       /capsules\.db\.corrupt\.\d{4}-\d{2}-\d{2}T/.test(name),
     );
     expect(quarantined).toBeDefined();
+    const diagnostic = entries.find(
+      (name) =>
+        /capsules\.db\.corrupt\.\d{4}-\d{2}-\d{2}T/.test(name) && name.endsWith(".diagnostic.json"),
+    );
+    expect(diagnostic).toBeDefined();
+    const record = JSON.parse(readFileSync(join(tmp, diagnostic ?? ""), "utf8")) as {
+      readonly store?: string;
+      readonly cause?: { readonly errcode?: number };
+    };
+    expect(record.store).toBe("local-knowledge");
+    expect(record.cause?.errcode).toBe(26);
   });
 
-  it("detects a structurally-valid SQLite file that is missing the capsules table", () => {
+  it("refuses but does not quarantine a structurally-valid SQLite file that is missing the capsules table", () => {
     const dbPath = join(tmp, "capsules.db");
     // Hand-roll a DB that opens cleanly but lacks the expected schema. The opener must
-    // detect partial state and quarantine, NOT silently coexist with foreign tables.
+    // detect partial state and refuse, NOT silently coexist with or quarantine foreign tables.
     const seed = new DatabaseSync(dbPath);
     try {
       seed.exec("CREATE TABLE foo (id INTEGER PRIMARY KEY)");
@@ -212,21 +232,66 @@ describe("openKnowledgeStore — corrupted-DB quarantine", () => {
       seed.close();
     }
 
-    const store = openKnowledgeStore({ dbPath });
+    let caught: unknown;
     try {
-      // Quarantined → fresh DB → capsules table present.
-      const ok = store._internal.db
-        .prepare("SELECT COUNT(*) AS n FROM capsules")
-        .get() as unknown as CountRow;
-      expect(ok.n).toBe(0);
-      // Quarantine file present alongside the new db.
-      const moved = readdirSync(tmp).find((n) =>
-        /capsules\.db\.corrupt\.\d{4}-\d{2}-\d{2}T/.test(n),
-      );
-      expect(moved).toBeDefined();
-    } finally {
-      store.close();
+      openKnowledgeStore({ dbPath });
+    } catch (error) {
+      caught = error;
     }
+    expect(caught).toBeInstanceOf(KnowledgeStoreError);
+    expect((caught as Error).cause).toBeInstanceOf(KnowledgeStoreError);
+    expect(((caught as Error).cause as Error).message).toMatch(/unexpected schema/);
+    expect(readdirSync(tmp).some((n) => n.includes(".corrupt."))).toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
+  });
+
+  it("does not quarantine a newer schema downgrade guard", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const first = openKnowledgeStore({ dbPath });
+    first.close();
+    const seed = new DatabaseSync(dbPath);
+    try {
+      seed.exec(`PRAGMA user_version = ${String(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION + 1)}`);
+    } finally {
+      seed.close();
+    }
+
+    let caught: unknown;
+    try {
+      openKnowledgeStore({ dbPath });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KnowledgeStoreError);
+    expect((caught as Error).cause).toBeInstanceOf(KnowledgeStoreError);
+    expect(((caught as Error).cause as Error).message).toMatch(/newer than this binary/);
+    expect(readdirSync(tmp).some((n) => n.includes(".corrupt."))).toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
+  });
+
+  it("does not quarantine SQLITE_BUSY lock contention", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const first = openKnowledgeStore({ dbPath });
+    first.close();
+
+    const locker = new DatabaseSync(dbPath);
+    locker.exec("PRAGMA locking_mode = EXCLUSIVE");
+    locker.exec("BEGIN EXCLUSIVE");
+    try {
+      let caught: unknown;
+      try {
+        openKnowledgeStore({ dbPath });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(KnowledgeStoreError);
+      expect(String((caught as Error).cause)).toMatch(/locked|busy/i);
+    } finally {
+      locker.exec("ROLLBACK");
+      locker.close();
+    }
+    expect(readdirSync(tmp).some((n) => n.includes(".corrupt."))).toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
   });
 });
 

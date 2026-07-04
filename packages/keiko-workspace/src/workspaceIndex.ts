@@ -288,7 +288,9 @@ function normalizeDiscoveredFile(
   };
 }
 
-function normalizeLexicalLine(line: WorkspaceIndexLexicalLine): WorkspaceIndexLexicalLine | undefined {
+function normalizeLexicalLine(
+  line: WorkspaceIndexLexicalLine,
+): WorkspaceIndexLexicalLine | undefined {
   const startLine = normalizeWholeNumber(line.startLine);
   const endLine = normalizeWholeNumber(line.endLine);
   if (
@@ -300,9 +302,9 @@ function normalizeLexicalLine(line: WorkspaceIndexLexicalLine): WorkspaceIndexLe
   ) {
     return undefined;
   }
-  const termHashes = [...new Set(line.termHashes.filter((term) => typeof term === "string" && term.length > 0))].sort(
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
+  const termHashes = [
+    ...new Set(line.termHashes.filter((term) => typeof term === "string" && term.length > 0)),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   return {
     startLine,
     endLine,
@@ -316,9 +318,9 @@ function normalizeLexicalRecord(
   const lines = lexical.lines
     .map((line) => normalizeLexicalLine(line))
     .filter((line): line is WorkspaceIndexLexicalLine => line !== undefined);
-  const termHashes = [...new Set(lexical.termHashes.filter((term) => typeof term === "string" && term.length > 0))].sort(
-    (a, b) => (a < b ? -1 : a > b ? 1 : 0),
-  );
+  const termHashes = [
+    ...new Set(lexical.termHashes.filter((term) => typeof term === "string" && term.length > 0)),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   if (termHashes.length === 0 && lines.length === 0) {
     return undefined;
   }
@@ -353,7 +355,9 @@ function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | u
     return undefined;
   }
   if (record.kind === "text") {
-    const lexical = normalizeLexicalRecord(record.lexical ?? { truncated: false, termHashes: [], lines: [] });
+    const lexical = normalizeLexicalRecord(
+      record.lexical ?? { truncated: false, termHashes: [], lines: [] },
+    );
     if (lexical === undefined) {
       return undefined;
     }
@@ -373,8 +377,12 @@ function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | u
   };
 }
 
-function sortByScopePath<T extends { readonly scopePath: string }>(values: readonly T[]): readonly T[] {
-  return [...values].sort((a, b) => (a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0));
+function sortByScopePath<T extends { readonly scopePath: string }>(
+  values: readonly T[],
+): readonly T[] {
+  return [...values].sort((a, b) =>
+    a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0,
+  );
 }
 
 function dedupeDiscoveredFiles(
@@ -599,7 +607,11 @@ function resolvedRuntimeDirIdentity(
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
       return undefined;
     }
-    const realPath = resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
+    const realPath = resolvedRuntimeDirRealPath(
+      runtimeDir,
+      workspaceRoot,
+      allowWorkspaceLocalRuntimeDir,
+    );
     return realPath === undefined ? undefined : runtimeDirIdentity(realPath, dirStat);
   } catch {
     return undefined;
@@ -637,7 +649,10 @@ function parseRuntimeDirMarker(raw: string): string | undefined {
 async function readRuntimeDirMarker(realPath: string): Promise<string | undefined> {
   let handle: FileHandle | undefined;
   try {
-    handle = await open(runtimeDirMarkerPath(realPath), fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await open(
+      runtimeDirMarkerPath(realPath),
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+    );
     const markerStat = await handle.stat();
     if (!markerStat.isFile() || markerStat.size > 128) {
       return undefined;
@@ -681,7 +696,11 @@ async function runtimeDirIdentityIfSafe(
     if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
       return undefined;
     }
-    const realPath = resolvedRuntimeDirRealPath(runtimeDir, workspaceRoot, allowWorkspaceLocalRuntimeDir);
+    const realPath = resolvedRuntimeDirRealPath(
+      runtimeDir,
+      workspaceRoot,
+      allowWorkspaceLocalRuntimeDir,
+    );
     if (realPath === undefined) {
       return undefined;
     }
@@ -746,7 +765,8 @@ function fileWorkspaceIndexStoreConfig(
     options.workspaceRoot,
     options.allowWorkspaceLocalRuntimeDir === true,
   );
-  const workspaceRoot = options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot);
+  const workspaceRoot =
+    options.workspaceRoot === undefined ? undefined : resolve(options.workspaceRoot);
   return {
     runtimeDir,
     runtimeDirIdentity: resolvedRuntimeDirIdentity(
@@ -760,10 +780,7 @@ function fileWorkspaceIndexStoreConfig(
       options.maxSnapshotBytes,
       DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES,
     ),
-    maxSnapshots: normalizeLimit(
-      options.maxSnapshots,
-      DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS,
-    ),
+    maxSnapshots: normalizeLimit(options.maxSnapshots, DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS),
     maxSnapshotEntries: normalizeLimit(
       options.maxSnapshotEntries,
       DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES,
@@ -835,10 +852,23 @@ function bestEffortChmod(path: string, mode: number): Promise<void> {
   return chmod(path, mode).catch(() => undefined);
 }
 
+// A content-freshness fingerprint for a snapshot file: mtime (ms) + byte size. Two reads
+// of the SAME file that agree on both fields observed the same bytes, so a parsed +
+// normalized snapshot may be reused without re-reading / re-parsing / re-normalizing.
+interface SnapshotFileFingerprint {
+  readonly mtimeMs: number;
+  readonly size: number;
+}
+
+interface SnapshotReadResult {
+  readonly raw: string;
+  readonly fingerprint: SnapshotFileFingerprint;
+}
+
 async function safeReadSnapshotFile(
   path: string,
   maxSnapshotBytes: number,
-): Promise<string | undefined> {
+): Promise<SnapshotReadResult | undefined> {
   let handle: FileHandle | undefined;
   try {
     handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
@@ -847,7 +877,12 @@ async function safeReadSnapshotFile(
       return undefined;
     }
     const raw = await readSnapshotHandleWithinLimit(handle, maxSnapshotBytes);
-    return raw === undefined ? undefined : raw.toString("utf8");
+    return raw === undefined
+      ? undefined
+      : {
+          raw: raw.toString("utf8"),
+          fingerprint: { mtimeMs: fileStat.mtimeMs, size: fileStat.size },
+        };
   } catch {
     return undefined;
   } finally {
@@ -893,6 +928,56 @@ function parseStoredSnapshot(
   }
 }
 
+// GEN-PERF-CHAT-003: the grounded-ask path reloads the same workspace snapshot per request
+// (createWorkspaceIndex is memoized per (root,runtimeDir) but holds no parsed snapshot), so
+// every ask re-read the file, re-ran JSON.parse and the O(records) normalizeSnapshot. We
+// memoize the parsed + normalized snapshot per resolved snapshot-file path, keyed by the
+// file's mtime+size fingerprint. Any write to the snapshot changes mtime (atomic rename
+// with fresh content) so the fingerprint diverges and the cache re-parses — conservative,
+// correctness-first invalidation. The cache holds already-parsed public snapshot objects
+// only (no secrets); it is bounded by an LRU over file paths.
+const MAX_PARSED_SNAPSHOT_CACHE_ENTRIES = 32;
+
+interface ParsedSnapshotCacheEntry {
+  readonly fingerprint: SnapshotFileFingerprint;
+  readonly maxSnapshotEntries: number;
+  readonly snapshot: WorkspaceIndexSnapshot | undefined;
+}
+
+const PARSED_SNAPSHOT_CACHE = new Map<string, ParsedSnapshotCacheEntry>();
+
+function sameSnapshotFingerprint(a: SnapshotFileFingerprint, b: SnapshotFileFingerprint): boolean {
+  return a.mtimeMs === b.mtimeMs && a.size === b.size;
+}
+
+function readParsedSnapshotCache(
+  path: string,
+  fingerprint: SnapshotFileFingerprint,
+  maxSnapshotEntries: number,
+): ParsedSnapshotCacheEntry | undefined {
+  const entry = PARSED_SNAPSHOT_CACHE.get(path);
+  if (
+    entry?.maxSnapshotEntries !== maxSnapshotEntries ||
+    !sameSnapshotFingerprint(entry.fingerprint, fingerprint)
+  ) {
+    return undefined;
+  }
+  // LRU touch.
+  PARSED_SNAPSHOT_CACHE.delete(path);
+  PARSED_SNAPSHOT_CACHE.set(path, entry);
+  return entry;
+}
+
+function writeParsedSnapshotCache(path: string, entry: ParsedSnapshotCacheEntry): void {
+  PARSED_SNAPSHOT_CACHE.delete(path);
+  PARSED_SNAPSHOT_CACHE.set(path, entry);
+  while (PARSED_SNAPSHOT_CACHE.size > MAX_PARSED_SNAPSHOT_CACHE_ENTRIES) {
+    const oldest = PARSED_SNAPSHOT_CACHE.keys().next().value;
+    if (oldest === undefined) break;
+    PARSED_SNAPSHOT_CACHE.delete(oldest);
+  }
+}
+
 async function pruneWorkspaceIndexSnapshots(
   runtimeDir: string,
   maxSnapshots: number,
@@ -911,13 +996,15 @@ async function pruneWorkspaceIndexSnapshots(
         stat: await stat(runtimeFilePath(runtimeDir, entry.name)),
       })),
   );
-  const excess = files
-    .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
-    .slice(maxSnapshots);
+  const excess = files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs).slice(maxSnapshots);
   await Promise.all(excess.map(async (entry) => rm(entry.path, { force: true })));
 }
 
-async function atomicWriteSnapshotFile(path: string, tempPath: string, content: string): Promise<void> {
+async function atomicWriteSnapshotFile(
+  path: string,
+  tempPath: string,
+  content: string,
+): Promise<void> {
   await writeFile(tempPath, content, { encoding: "utf8", mode: 0o600 });
   await bestEffortChmod(tempPath, 0o600);
   try {
@@ -954,8 +1041,25 @@ function createRuntimeDirGuard(config: FileWorkspaceIndexStoreConfig): RuntimeDi
       expectedRuntimeDirIdentity = current;
       return current.realPath;
     }
-    return sameRuntimeDirIdentity(expectedRuntimeDirIdentity, current) ? current.realPath : undefined;
+    return sameRuntimeDirIdentity(expectedRuntimeDirIdentity, current)
+      ? current.realPath
+      : undefined;
   };
+}
+
+async function statSnapshotFingerprint(
+  path: string,
+  maxSnapshotBytes: number,
+): Promise<SnapshotFileFingerprint | undefined> {
+  try {
+    const fileStat = await lstat(path);
+    if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
+      return undefined;
+    }
+    return { mtimeMs: fileStat.mtimeMs, size: fileStat.size };
+  } catch {
+    return undefined;
+  }
 }
 
 async function loadFileWorkspaceIndexSnapshot(
@@ -967,11 +1071,28 @@ async function loadFileWorkspaceIndexSnapshot(
   if (runtimeDir === undefined) {
     return undefined;
   }
-  const raw = await safeReadSnapshotFile(
-    snapshotPath(runtimeDir, storageKey),
-    config.maxSnapshotBytes,
-  );
-  return raw === undefined ? undefined : parseStoredSnapshot(raw, config.maxSnapshotEntries);
+  const path = snapshotPath(runtimeDir, storageKey);
+  // Cheap freshness probe first: if a prior parse for this exact file bytes (mtime+size) is
+  // cached we skip the read + JSON.parse + normalizeSnapshot entirely. lstat (no follow)
+  // mirrors the O_NOFOLLOW guard on the real read below.
+  const fingerprint = await statSnapshotFingerprint(path, config.maxSnapshotBytes);
+  if (fingerprint !== undefined) {
+    const cached = readParsedSnapshotCache(path, fingerprint, config.maxSnapshotEntries);
+    if (cached !== undefined) {
+      return cached.snapshot;
+    }
+  }
+  const read = await safeReadSnapshotFile(path, config.maxSnapshotBytes);
+  if (read === undefined) {
+    return undefined;
+  }
+  const snapshot = parseStoredSnapshot(read.raw, config.maxSnapshotEntries);
+  writeParsedSnapshotCache(path, {
+    fingerprint: read.fingerprint,
+    maxSnapshotEntries: config.maxSnapshotEntries,
+    snapshot,
+  });
+  return snapshot;
 }
 
 async function saveFileWorkspaceIndexSnapshot(
@@ -1022,7 +1143,10 @@ export interface InMemoryWorkspaceIndexStoreOptions {
 export function createInMemoryWorkspaceIndexStore(
   options: InMemoryWorkspaceIndexStoreOptions = {},
 ): WorkspaceIndexStore {
-  const maxSnapshots = normalizeLimit(options.maxSnapshots, DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS);
+  const maxSnapshots = normalizeLimit(
+    options.maxSnapshots,
+    DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOTS,
+  );
   const snapshots = new Map<string, WorkspaceIndexSnapshot>();
   return {
     loadSnapshot: (key: string): WorkspaceIndexSnapshot | undefined => {
@@ -1035,10 +1159,18 @@ export function createInMemoryWorkspaceIndexStore(
       return snapshot;
     },
     saveSnapshot: (key: string, snapshot: WorkspaceIndexSnapshot): void => {
+      // Normalize on write so the store's read side always returns a normalized snapshot —
+      // this is the invariant that lets the WorkspaceIndex wrapper (GEN-PERF-CHAT-003) skip
+      // a redundant re-normalize on every load. A snapshot that fails normalization is
+      // dropped rather than stored, matching the file store's parse-time rejection.
+      const normalized = normalizeSnapshot(snapshot);
+      if (normalized === undefined) {
+        return;
+      }
       if (snapshots.has(key)) {
         snapshots.delete(key);
       }
-      snapshots.set(key, snapshot);
+      snapshots.set(key, normalized);
       while (snapshots.size > maxSnapshots) {
         const oldestKey = snapshots.keys().next().value;
         if (oldestKey === undefined) {
@@ -1057,8 +1189,12 @@ export function createWorkspaceIndex(
     loadSnapshot: async (
       scopeKey: WorkspaceIndexScopeKey,
     ): Promise<WorkspaceIndexSnapshot | undefined> => {
-      const snapshot = await store.loadSnapshot(storageKey(scopeKey));
-      return snapshot === undefined ? undefined : normalizeSnapshot(snapshot);
+      // GEN-PERF-CHAT-003: both built-in stores return an already-normalized snapshot (the
+      // file store via parseStoredSnapshot, the in-memory store via its normalizing save),
+      // so a second normalizeSnapshot here would be a redundant O(records) pass on the
+      // grounded-ask hot path. normalizeSnapshot is idempotent, so returning the store's
+      // snapshot directly is behavior-preserving.
+      return store.loadSnapshot(storageKey(scopeKey));
     },
     saveSnapshot: async (
       scopeKey: WorkspaceIndexScopeKey,
@@ -1153,7 +1289,9 @@ function expandContentToken(token: string): readonly string[] {
   if (strippedTest !== undefined) {
     addTerm(out, seen, strippedTest.toLowerCase());
   }
-  for (const part of normalized.split(WORKSPACE_INDEX_TOKEN_SEPARATOR_RE).filter((part) => part.length > 0)) {
+  for (const part of normalized
+    .split(WORKSPACE_INDEX_TOKEN_SEPARATOR_RE)
+    .filter((part) => part.length > 0)) {
     addTerm(out, seen, part.toLowerCase());
     const derived = stripTestSuffix(part);
     if (derived !== undefined) {
@@ -1239,7 +1377,13 @@ export function buildWorkspaceIndexLexicalRecord(content: string): WorkspaceInde
   };
 }
 
-function dirFingerprint(entries: readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[]): string {
+function dirFingerprint(
+  entries: readonly {
+    readonly name: string;
+    readonly isDirectory: boolean;
+    readonly isFile: boolean;
+  }[],
+): string {
   return sha256Hex(
     JSON.stringify(
       entries
@@ -1290,9 +1434,8 @@ function immediateDirectoryChild(
   if (!isWithinDirectory(scopePath, directoryScopePath)) {
     return undefined;
   }
-  const rest = directoryScopePath.length === 0
-    ? scopePath
-    : scopePath.slice(directoryScopePath.length + 1);
+  const rest =
+    directoryScopePath.length === 0 ? scopePath : scopePath.slice(directoryScopePath.length + 1);
   if (rest.length === 0) {
     return undefined;
   }
@@ -1369,7 +1512,11 @@ function directoryDelta(
   const newChildren = new Map(entries.map((entry) => [entry.name, entry] as const));
   const addedPaths = addedDirectoryPaths(oldChildren, directory.scopePath, newChildren);
   const removedNames = removedDirectoryNames(oldChildren, newChildren);
-  const removedPaths = removedDirectoryFiles(normalized.discovery.files, directory.scopePath, removedNames);
+  const removedPaths = removedDirectoryFiles(
+    normalized.discovery.files,
+    directory.scopePath,
+    removedNames,
+  );
   const rescanDirectory = addedPaths.length === 0 && removedPaths.length === 0;
   return {
     scopePath: directory.scopePath,
@@ -1414,9 +1561,10 @@ export function inspectWorkspaceIndexDirectories(
   }
   const deltas: WorkspaceIndexDirectoryDelta[] = [];
   for (const directory of normalized.discovery.directories) {
-    const absolutePath = directory.scopePath.length === 0
-      ? workspace.root
-      : resolveWithinWorkspace(workspace.root, directory.scopePath);
+    const absolutePath =
+      directory.scopePath.length === 0
+        ? workspace.root
+        : resolveWithinWorkspace(workspace.root, directory.scopePath);
     const { changed, entries } = directoryChanged(directory, absolutePath, fs);
     if (!changed) {
       continue;
@@ -1450,9 +1598,10 @@ export function isWorkspaceIndexSnapshotFresh(
     return false;
   }
   for (const directory of normalized.discovery.directories) {
-    const absolutePath = directory.scopePath.length === 0
-      ? workspace.root
-      : resolveWithinWorkspace(workspace.root, directory.scopePath);
+    const absolutePath =
+      directory.scopePath.length === 0
+        ? workspace.root
+        : resolveWithinWorkspace(workspace.root, directory.scopePath);
     try {
       const entries = fs.readDir(absolutePath);
       if (dirFingerprint(entries) !== directory.fingerprint) {
@@ -1651,7 +1800,9 @@ function preparedDiscoverySnapshot(
   return {
     files,
     directories: normalized.discovery.directories,
-    filesDiscovered: normalized.discovery.truncated ? normalized.discovery.filesDiscovered : files.length,
+    filesDiscovered: normalized.discovery.truncated
+      ? normalized.discovery.filesDiscovered
+      : files.length,
     ignoredByDiscovery: normalized.discovery.ignoredByDiscovery,
     deniedByDiscovery: normalized.discovery.deniedByDiscovery,
     depthPrunedByDiscovery: normalized.discovery.depthPrunedByDiscovery,
@@ -1667,7 +1818,8 @@ function finalizePreparationReport(
   return {
     ...report,
     discoveredEntries: normalized.discovery.files.length,
-    droppedRecords: normalized.records.filter((record) => !usedRecordPaths.has(record.scopePath)).length,
+    droppedRecords: normalized.records.filter((record) => !usedRecordPaths.has(record.scopePath))
+      .length,
   };
 }
 
@@ -1682,7 +1834,9 @@ export function prepareWorkspaceIndexSnapshot(
   }
   const entries: PreparedWorkspaceIndexEntry[] = [];
   let report = emptyPreparationReport();
-  const recordByPath = new Map(normalized.records.map((record) => [record.scopePath, record] as const));
+  const recordByPath = new Map(
+    normalized.records.map((record) => [record.scopePath, record] as const),
+  );
   const seen = new Set<string>();
   const usedRecordPaths = new Set<string>();
   for (const discovered of normalized.discovery.files) {
@@ -1714,7 +1868,9 @@ export function prepareCachedWorkspaceIndexSnapshot(
   if (normalized === undefined) {
     return emptyPreparedWorkspaceIndexSnapshot();
   }
-  const recordByPath = new Map(normalized.records.map((record) => [record.scopePath, record] as const));
+  const recordByPath = new Map(
+    normalized.records.map((record) => [record.scopePath, record] as const),
+  );
   const entries: PreparedWorkspaceIndexEntry[] = [];
   const usedRecordPaths = new Set<string>();
   for (const file of normalized.discovery.files) {
@@ -1740,7 +1896,8 @@ export function prepareCachedWorkspaceIndexSnapshot(
     staleRecords: entries.length - indexedRecords,
     skippedEntries: 0,
     deletedEntries: 0,
-    droppedRecords: normalized.records.filter((record) => !usedRecordPaths.has(record.scopePath)).length,
+    droppedRecords: normalized.records.filter((record) => !usedRecordPaths.has(record.scopePath))
+      .length,
   };
   return {
     valid: true,

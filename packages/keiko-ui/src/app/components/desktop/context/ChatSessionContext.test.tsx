@@ -93,6 +93,102 @@ function Harness(props: {
   );
 }
 
+// GEN-PERF-CHAT-002 — a settled chat bubble subscribes only to `activeChat`, which lives in the
+// catalog context. This probe mirrors that exact subscription (memoized, reads only activeChat)
+// so we can pin that a settled bubble stays inert across draft + streaming updates.
+const SettledBubbleProbe = memo(function SettledBubbleProbe(props: {
+  readonly onRender: () => void;
+}): ReactNode {
+  const { activeChat } = useChatSessionCatalog();
+  props.onRender();
+  return <span>{activeChat?.id ?? "none"}</span>;
+});
+
+function BubbleHarness(props: {
+  readonly value: ChatSessionApi;
+  readonly onBubbleRender: () => void;
+}): ReactNode {
+  return (
+    <ChatSessionProvider value={props.value}>
+      <SettledBubbleProbe onRender={props.onBubbleRender} />
+    </ChatSessionProvider>
+  );
+}
+
+describe("GEN-PERF-CHAT-002 — settled bubble render insulation", () => {
+  it("does not re-render a catalog-only bubble across draft + streaming updates", () => {
+    const onBubbleRender = vi.fn();
+    const initial = session();
+    const { rerender } = render(<BubbleHarness value={initial} onBubbleRender={onBubbleRender} />);
+    expect(onBubbleRender).toHaveBeenCalledTimes(1);
+
+    // 10 draft updates (per-keystroke) + 10 streaming-message updates (per token). A bubble that
+    // read the full-state context would re-render on each; a catalog-only bubble must not.
+    for (let i = 0; i < 10; i += 1) {
+      rerender(
+        <BubbleHarness
+          value={{ ...initial, draft: `d${String(i)}` }}
+          onBubbleRender={onBubbleRender}
+        />,
+      );
+    }
+    for (let i = 0; i < 10; i += 1) {
+      rerender(
+        <BubbleHarness
+          value={{
+            ...initial,
+            streamingAssistantMessage: {
+              id: "live",
+              chatId: "c1",
+              role: "assistant",
+              content: "x".repeat(i + 1),
+              timestamp: 1,
+              runId: undefined,
+              workflowId: undefined,
+              workflowStatus: undefined,
+              shortResult: undefined,
+              taskType: undefined,
+            },
+          }}
+          onBubbleRender={onBubbleRender}
+        />,
+      );
+    }
+
+    // Still exactly the initial render: 20 draft/streaming updates produced ZERO extra bubble renders.
+    expect(onBubbleRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("does re-render the bubble when activeChat itself changes", () => {
+    const onBubbleRender = vi.fn();
+    const initial = session({ activeChat: undefined });
+    const { rerender } = render(<BubbleHarness value={initial} onBubbleRender={onBubbleRender} />);
+    expect(onBubbleRender).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <BubbleHarness
+        value={{
+          ...initial,
+          activeChat: {
+            id: "chat-A",
+            projectPath: "/p",
+            title: "t",
+            selectedModel: "m",
+            branchLabel: undefined,
+            status: undefined,
+            connectedScope: undefined,
+            localKnowledgeScope: undefined,
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        }}
+        onBubbleRender={onBubbleRender}
+      />,
+    );
+    expect(onBubbleRender).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("ChatSessionContext", () => {
   it("does not notify catalog/action consumers for transcript-only changes", () => {
     const onCatalogRender = vi.fn();

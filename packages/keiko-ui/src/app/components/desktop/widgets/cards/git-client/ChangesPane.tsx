@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef } from "react";
+import { useId, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type {
   GitChangedFile,
@@ -432,6 +432,22 @@ function ChangeRow({
   const statusLetter = gitChangeLabel(change);
   const toggleLabel = `${change.staged ? "Unstage" : "Stage"} ${change.path}`;
   const { dir, name } = splitPath(change.path);
+  // The native checkbox is a transparent overlay over an aria-hidden visual box, so the
+  // browser's focus ring lands on the invisible input. Mirror the input focus onto the box with
+  // an inline ring so keyboard users can see which stage toggle is focused (#GEN-UI-FOCUS-007).
+  const [stageFocused, setStageFocused] = useState(false);
+  const boxStyle = stageBoxStyle(change.staged);
+  // On focus, layer a 2px focus ring on top of the box's own outline/border (keeping the unchecked
+  // box's inset border) so the visible ring reads clearly without dropping the existing indicator.
+  const focusedBoxStyle: CSSProperties = stageFocused
+    ? {
+        ...boxStyle,
+        boxShadow:
+          boxStyle.boxShadow !== undefined && boxStyle.boxShadow !== "none"
+            ? `${boxStyle.boxShadow as string}, 0 0 0 2px var(--focus-ring)`
+            : "0 0 0 2px var(--focus-ring)",
+      }
+    : boxStyle;
   return (
     <li style={{ padding: "0 0 2px" }}>
       <div style={fileRowStyle(selected)}>
@@ -443,11 +459,17 @@ function ChangeRow({
             checked={change.staged}
             disabled={stagingBusy}
             onChange={onToggleStage}
+            onFocus={() => setStageFocused(true)}
+            onBlur={() => setStageFocused(false)}
             aria-label={toggleLabel}
             title={toggleLabel}
             style={STAGE_INPUT_STYLE}
           />
-          <span aria-hidden="true" style={stageBoxStyle(change.staged)}>
+          <span
+            aria-hidden="true"
+            data-focus-visible={stageFocused ? "true" : undefined}
+            style={focusedBoxStyle}
+          >
             {change.staged ? <Icons.check size={11} /> : null}
           </span>
         </label>
@@ -455,7 +477,7 @@ function ChangeRow({
           type="button"
           title={change.path}
           aria-label={`${change.path}, ${statusLabel}`}
-          aria-pressed={selected}
+          aria-current={selected ? "true" : undefined}
           onClick={onSelect}
           style={{
             display: "flex",

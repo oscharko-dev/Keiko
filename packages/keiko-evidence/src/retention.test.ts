@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyRetention } from "./retention.js";
-import { createInMemoryEvidenceStore, createNodeEvidenceStore, type EvidenceStore } from "./store.js";
+import {
+  createInMemoryEvidenceStore,
+  createNodeEvidenceStore,
+  type EvidenceStore,
+} from "./store.js";
 import type { EvidenceManifest } from "./types.js";
 
 function manifest(runId: string, startedAt: number, finishedAt: number): EvidenceManifest {

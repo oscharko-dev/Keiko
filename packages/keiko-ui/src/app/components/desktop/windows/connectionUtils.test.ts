@@ -5,15 +5,19 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  CONNECTABLE,
   canConnect,
   connPath,
   defaultLayout,
   hasConnectablePeer,
+  receivesFilesContext,
+  receivesFocusedFileContext,
   relLabel,
   snapMap,
   subText,
   type WinSnapshot,
 } from "./connectionUtils";
+import { TYPE_ORDER, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 
 function snap(type: WinSnapshot["type"], cfg: Record<string, unknown> = {}): WinSnapshot {
   return { id: `${type}-1`, type, x: 0, y: 0, w: 10, h: 10, cfg };
@@ -183,9 +187,11 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("editor", { file: "src/app.ts" })).toBe("src/app.ts");
     expect(subText("editor", { root: "/repo", file: "src/app.ts" })).toBe("src/app.ts — /repo");
     expect(subText("terminal", { cwd: "/repo" })).toBe("/repo");
-    expect(subText("review", { base: "main", head: "release/0.2.0" })).toBe("main → release/0.2.0");
-    expect(subText("review", { base: "main" })).toBeNull();
-    expect(subText("agents", { role: "reviewer" })).toBe("reviewer");
+    // GEN-DOC-DRIFT-001 — the 'review' (base/head) and 'agents' (role) subText branches were dead:
+    // those cfg keys are never persisted (review's config is {runId}, agents' config is []), so the
+    // cases only ever fell through to the default null. They are removed; both types now return null.
+    expect(subText("review", { base: "main", head: "release/0.2.0" })).toBeNull();
+    expect(subText("agents", { role: "reviewer" })).toBeNull();
     expect(subText("chat", { title: "Release QA" })).toBe("Release QA");
     expect(subText("chat", { title: "New chat" })).toBeNull();
     expect(subText("connector", { provider: "github" })).toBeNull();
@@ -194,5 +200,66 @@ describe("connectionUtils — general workspace contracts", () => {
     expect(subText("figmaView", { selectedScreenName: "Checkout" })).toBe("Checkout");
     expect(subText("figmaJson", { snapshotRunId: "fs-hidden", screenId: "12:34" })).toBe("12:34");
     expect(subText("files", undefined)).toBeNull();
+  });
+
+  // GEN-DOC-DRIFT-001 — subText must be a total function over every WindowType: it returns a
+  // string | null for each type (no throw, no undefined) so a window's badge never crashes the
+  // frame regardless of type. The removed dead review/agents branches are covered here too.
+  it("returns string | null for every WindowType", () => {
+    for (const type of Object.keys(WIN_TYPES) as WindowType[]) {
+      const value = subText(type, {});
+      expect(value === null || typeof value === "string").toBe(true);
+    }
+  });
+});
+
+// ─── GEN-DUP-SEMANTIC-011 — the parallel window tables must only reference real WindowTypes ──────
+describe("window-type table integrity", () => {
+  const WIN_TYPE_SET = new Set(Object.keys(WIN_TYPES) as WindowType[]);
+
+  it("keys every CONNECTABLE entry with a real WindowType", () => {
+    for (const key of Object.keys(CONNECTABLE)) {
+      expect(WIN_TYPE_SET.has(key as WindowType)).toBe(true);
+    }
+  });
+
+  it("references only real WindowTypes as CONNECTABLE peers", () => {
+    for (const peers of Object.values(CONNECTABLE)) {
+      for (const peer of peers ?? []) {
+        expect(WIN_TYPE_SET.has(peer)).toBe(true);
+      }
+    }
+  });
+
+  it("orders only real, unique WindowTypes in TYPE_ORDER", () => {
+    for (const type of TYPE_ORDER) {
+      expect(WIN_TYPE_SET.has(type)).toBe(true);
+    }
+    expect(new Set(TYPE_ORDER).size).toBe(TYPE_ORDER.length);
+  });
+});
+
+// ─── GEN-DUP-SEMANTIC-012 — files-context receiver predicate (single owner) ──────────────────────
+describe("receivesFilesContext / receivesFocusedFileContext", () => {
+  it("marks exactly the folder-scope receivers", () => {
+    for (const type of ["chat", "agents", "quality", "editor", "promptEnhancer"] as WindowType[]) {
+      expect(receivesFilesContext(type)).toBe(true);
+    }
+    for (const type of ["files", "connector", "terminal", "browser", "figma"] as WindowType[]) {
+      expect(receivesFilesContext(type)).toBe(false);
+    }
+  });
+
+  it("marks focused-file receivers as a strict subset (chat binds only the folder root)", () => {
+    for (const type of ["agents", "quality", "editor", "promptEnhancer"] as WindowType[]) {
+      expect(receivesFocusedFileContext(type)).toBe(true);
+    }
+    // chat receives the folder scope but NOT the focused-file path.
+    expect(receivesFilesContext("chat")).toBe(true);
+    expect(receivesFocusedFileContext("chat")).toBe(false);
+    // Every focused-file receiver is also a files-context receiver.
+    for (const type of Object.keys(WIN_TYPES) as WindowType[]) {
+      if (receivesFocusedFileContext(type)) expect(receivesFilesContext(type)).toBe(true);
+    }
   });
 });

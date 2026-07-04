@@ -144,7 +144,11 @@ export function FigmaJsonSourceWindow({
         </p>
       ) : null}
       {state === "done" && jsonText.length > 0 ? (
-        <JsonSyntaxBlock text={jsonText} className="figma-json-code" />
+        <JsonSyntaxBlock
+          text={jsonText}
+          className="figma-json-code"
+          ariaLabel="Figma export JSON"
+        />
       ) : null}
     </section>
   );

@@ -55,7 +55,7 @@ export type {
   CompletionModelSelection,
 } from "@oscharko-dev/keiko-contracts";
 
-// Issue #493 / ADR-0058: voice-capability predicates and the content-free resolution result. The
+// Issue #493 / ADR-0100: voice-capability predicates and the content-free resolution result. The
 // pure predicates live in `@oscharko-dev/keiko-contracts` (browser-importable, single source of
 // truth) and are re-exported here for server-tier consumers that already depend on the
 // model-gateway barrel, mirroring the conversation-eligibility and infilling helpers.
@@ -82,7 +82,7 @@ export type {
 
 export const CAPABILITY_REGISTRY: readonly ModelCapability[] = CAPABILITY_DATA;
 
-const COST_RANK: Readonly<Record<CostClass, number>> = { low: 0, medium: 1, high: 2 };
+export const COST_RANK: Readonly<Record<CostClass, number>> = { low: 0, medium: 1, high: 2 };
 
 export interface CapabilityQuery {
   readonly kind?: ModelKind | undefined;
@@ -284,10 +284,10 @@ export function selectCompletionModelFromCapabilities(
   return { mode: "deterministic", degradeReason: degradeReasonFor(capabilities, ceiling) };
 }
 
-// ─── Voice capability resolution (Issue #493, ADR-0058 D1/D2/D3) ───────────────
+// ─── Voice capability resolution (Issue #493, ADR-0100 D1/D2/D3) ───────────────
 // Resolves the effective voice profile from a set of capabilities. Pure, deterministic, and
 // content-free: it performs NO network probe (capability probing must not call external endpoints
-// during ordinary startup — ADR-0058 out-of-scope for #493) and returns only enum literals and
+// during ordinary startup — ADR-0100 out-of-scope for #493) and returns only enum literals and
 // booleans, so the result is safe to serialise to the browser and safe to log (AC4/AC5). This is
 // the pure core; `resolveVoiceCapability` (model-selection.ts) binds it to a GatewayConfig.
 
@@ -346,7 +346,7 @@ function singleVoiceLocality(
 }
 
 // Maps the advertised sub-capabilities to a profile on the degradation ladder. Full realtime
-// conversation requires realtime speech OR both speech input AND speech output (AC3, ADR-0058 D2).
+// conversation requires realtime speech OR both speech input AND speech output (AC3, ADR-0100 D2).
 function voiceProfileFor(
   speechToText: boolean,
   speechOutput: boolean,

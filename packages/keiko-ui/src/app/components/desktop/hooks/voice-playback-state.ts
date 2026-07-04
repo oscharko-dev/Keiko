@@ -1,8 +1,8 @@
-// Issue #501, Epic #491 (ADR-0064) — the assistant speech-output playback controller. It is the
+// Issue #501, Epic #491 (ADR-0106) — the assistant speech-output playback controller. It is the
 // deterministic, content-free reducer that drives the OPTIONAL spoken assistant response through the
 // eight-phase lifecycle defined by the contract (`voice-playback.ts`): unavailable, preparing, speaking,
 // paused, interrupted, canceled, failed, complete. It owns NO transport, NO clock, NO audio: time enters
-// through the injectable `VoiceClock` seam reused from `voice-timebase.ts` (the convention ADR-0061
+// through the injectable `VoiceClock` seam reused from `voice-timebase.ts` (the convention ADR-0103
 // established), audio is realised by the existing Model Gateway egress + WebRTC media plane seams
 // (#496/#497) which this module only ever *names* through content-free effects, and every command arrives
 // already mapped from a provider control message or a local UI control by the consuming hook.

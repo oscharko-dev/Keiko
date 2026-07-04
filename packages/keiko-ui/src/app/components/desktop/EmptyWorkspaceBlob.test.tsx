@@ -18,6 +18,22 @@ describe("EmptyWorkspaceBlob", () => {
     );
   });
 
+  // GEN-UI-A11Y-026 — the empty-state copy lives only inside the aria-hidden SVG mask, so it must be
+  // carried to AT via an accessible description associated with the button.
+  it("exposes the empty-state copy to assistive tech as the button's description", () => {
+    render(<EmptyWorkspaceBlob onNewWindow={vi.fn()} />);
+
+    const button = screen.getByRole("button", { name: "Open a new window" });
+    const describedBy = button.getAttribute("aria-describedby");
+    expect(describedBy).not.toBeNull();
+
+    const description = document.getElementById(describedBy ?? "");
+    expect(description).not.toBeNull();
+    expect(description?.textContent).toContain("Open a window to start working");
+    // The description must be an sr-only node so it is available to AT without altering the visual.
+    expect(description).toHaveClass("visually-hidden");
+  });
+
   it("uses the 25 percent larger logo knockout scale", () => {
     render(<EmptyWorkspaceBlob onNewWindow={vi.fn()} />);
 

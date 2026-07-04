@@ -124,10 +124,18 @@ function assertEmbeddingShape(row: VectorInsertRow): void {
   }
 }
 
+export interface InsertVectorRowOptions {
+  // When false, the caller is responsible for invalidating the capsule's vector-index state ONCE at
+  // the batch/transaction boundary (see invalidateVectorIndexStateForCapsules). This avoids an O(rows)
+  // sequence of DELETEs that is a no-op after the first row of a document/capsule (GEN-PERF-PERSISTENCE-013).
+  readonly invalidateIndexState?: boolean;
+}
+
 export function insertVectorRow(
   db: DatabaseSync,
   cipher: StoreContentCipher,
   row: VectorInsertRow,
+  options: InsertVectorRowOptions = {},
 ): void {
   // Validate the PLAINTEXT shape (dimensions * 4 bytes) before sealing, so the identity check stays
   // meaningful; the embedding is content (ADR-0047) and is sealed before it touches the BLOB column.
@@ -151,7 +159,26 @@ export function insertVectorRow(
     storage_reference: row.storageReference,
     created_at: row.createdAt,
   });
-  invalidateVectorIndexStateForCapsule(db, row.capsuleId);
+  // Default preserves the original per-row invalidation for any single-row caller; batch callers pass
+  // invalidateIndexState:false and invalidate once per distinct capsule after the loop.
+  if (options.invalidateIndexState !== false) {
+    invalidateVectorIndexStateForCapsule(db, row.capsuleId);
+  }
+}
+
+// Invalidates the vector-index state exactly once per distinct capsule. Use at a batch/transaction
+// boundary after inserting many rows with insertVectorRow(..., { invalidateIndexState: false }) so the
+// index state is equivalently invalidated (idempotent DELETE) without an O(rows) redundant sequence.
+export function invalidateVectorIndexStateForCapsules(
+  db: DatabaseSync,
+  capsuleIds: Iterable<KnowledgeCapsuleId>,
+): void {
+  const seen = new Set<KnowledgeCapsuleId>();
+  for (const capsuleId of capsuleIds) {
+    if (seen.has(capsuleId)) continue;
+    seen.add(capsuleId);
+    invalidateVectorIndexStateForCapsule(db, capsuleId);
+  }
 }
 
 export function deleteVectorsForDocument(

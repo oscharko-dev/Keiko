@@ -14,10 +14,9 @@ import {
 import {
   hashExcerptContent,
   type SearchScope,
-  type WorkspaceFs,
   type WorkspaceInfo,
-  type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 
 import {
   rehydrateHandle,
@@ -26,49 +25,6 @@ import {
 } from "./rehydration.js";
 
 const ROOT = "/ws";
-
-function toAbs(rel: string): string {
-  return `${ROOT}/${rel}`.replace(/\/+/gu, "/");
-}
-
-// Minimal in-memory WorkspaceFs over a flat path->content map (mirrors keiko-workspace/_memfs).
-function memFs(files: Readonly<Record<string, string>>): WorkspaceFs {
-  const findKey = (absolutePath: string): string | undefined =>
-    Object.keys(files).find((key) => toAbs(key) === absolutePath);
-  return {
-    readFileUtf8: (absolutePath: string): string => {
-      const key = findKey(absolutePath);
-      if (key === undefined) {
-        throw new Error(`ENOENT: ${absolutePath}`);
-      }
-      return files[key] ?? "";
-    },
-    stat: (absolutePath: string): WorkspaceStat => {
-      const key = findKey(absolutePath);
-      if (key === undefined) {
-        return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
-      }
-      return {
-        size: Buffer.byteLength(files[key] ?? "", "utf8"),
-        isFile: true,
-        isDirectory: false,
-        isSymbolicLink: false,
-      };
-    },
-    readDir: () => [],
-    realPath: (absolutePath: string): string => absolutePath,
-    exists: (absolutePath: string): boolean =>
-      findKey(absolutePath) !== undefined || absolutePath === ROOT,
-    readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
-      const key = findKey(absolutePath);
-      if (key === undefined) {
-        return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
-      }
-      const encoded = new TextEncoder().encode(files[key] ?? "");
-      return Promise.resolve(encoded.subarray(0, Math.max(0, Math.floor(maxBytes))));
-    },
-  };
-}
 
 function scopeOver(relativePaths: readonly string[]): SearchScope {
   const workspace: WorkspaceInfo = {
@@ -103,7 +59,7 @@ function repoRef(
 
 describe("rehydrateProvenanceRef — repo-file", () => {
   it("resolves a repo-file ref and returns the requested excerpt", async () => {
-    const fs = memFs({ "src/sample.ts": FILE_BODY });
+    const fs = memFs(ROOT, { "src/sample.ts": FILE_BODY });
     const result = await rehydrateProvenanceRef(
       repoRef("src/sample.ts", 2, 2),
       scopeOver(["src"]),
@@ -114,14 +70,14 @@ describe("rehydrateProvenanceRef — repo-file", () => {
   });
 
   it("flags invalidated:true after the file content changes under a recorded hash", async () => {
-    const original = memFs({ "src/sample.ts": FILE_BODY });
+    const original = memFs(ROOT, { "src/sample.ts": FILE_BODY });
     const baseline = await rehydrateProvenanceRef(
       repoRef("src/sample.ts", 2, 2),
       scopeOver(["src"]),
       original,
     );
     const recordedHash = hashExcerptContent(baseline.content ?? "");
-    const mutated = memFs({ "src/sample.ts": FILE_BODY.replace("SENTINEL", "CHANGED") });
+    const mutated = memFs(ROOT, { "src/sample.ts": FILE_BODY.replace("SENTINEL", "CHANGED") });
     const result = await rehydrateProvenanceRef(
       repoRef("src/sample.ts", 2, 2, recordedHash),
       scopeOver(["src"]),
@@ -132,7 +88,7 @@ describe("rehydrateProvenanceRef — repo-file", () => {
   });
 
   it("reports invalidated:false when the recorded hash still matches", async () => {
-    const fs = memFs({ "src/sample.ts": FILE_BODY });
+    const fs = memFs(ROOT, { "src/sample.ts": FILE_BODY });
     const baseline = await rehydrateProvenanceRef(
       repoRef("src/sample.ts", 2, 2),
       scopeOver(["src"]),
@@ -148,7 +104,7 @@ describe("rehydrateProvenanceRef — repo-file", () => {
   });
 
   it("degrades to {resolved:false} for a denied path without throwing", async () => {
-    const fs = memFs({ ".env": "API_KEY=secret-value" });
+    const fs = memFs(ROOT, { ".env": "API_KEY=secret-value" });
     const result = await rehydrateProvenanceRef(repoRef(".env", 1, 1), scopeOver([]), fs);
     expect(result.resolved).toBe(false);
     expect(result.reason).toBeDefined();
@@ -156,7 +112,7 @@ describe("rehydrateProvenanceRef — repo-file", () => {
   });
 
   it("degrades to {resolved:false} for a node_modules path without throwing", async () => {
-    const fs = memFs({ "node_modules/pkg/index.js": "module.exports = 1\n" });
+    const fs = memFs(ROOT, { "node_modules/pkg/index.js": "module.exports = 1\n" });
     const result = await rehydrateProvenanceRef(
       repoRef("node_modules/pkg/index.js", 1, 1),
       scopeOver([]),
@@ -168,7 +124,7 @@ describe("rehydrateProvenanceRef — repo-file", () => {
 
 describe("rehydrateProvenanceRef — non-repo-file", () => {
   it("reports a missing artifact reader for a tool-result ref with no IO", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const ref: ContextProvenanceRef = { kind: "tool-result", stableId: "t-1" };
     const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs);
     expect(result.resolved).toBe(false);
@@ -176,7 +132,7 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
   });
 
   it("resolves a tool-result ref through the injected artifact reader", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const ref: ContextProvenanceRef = { kind: "tool-result", stableId: "artifact-1" };
     const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs, undefined, {
       toolArtifacts: { read: (artifactId): string | undefined => `full output for ${artifactId}` },
@@ -186,7 +142,7 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
   });
 
   it("resolves a message ref through the injected message reader and clamps content", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const ref: ContextProvenanceRef = { kind: "message", stableId: "history-msg-1" };
     const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs, 7, {
       messages: { read: (messageId): string | undefined => `message ${messageId}` },
@@ -197,7 +153,7 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
   });
 
   it("reports a missing message reader without falling back to opaque deferred status", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const ref: ContextProvenanceRef = { kind: "message", stableId: "history-msg-2" };
     const result = await rehydrateProvenanceRef(ref, scopeOver([]), fs);
     expect(result.resolved).toBe(false);
@@ -205,7 +161,7 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
   });
 
   it("resolves an evidence-atom ref through the injected evidence atom reader", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const ref: ContextProvenanceRef = {
       kind: "evidence-atom",
       stableId: "source-span-1",
@@ -219,7 +175,7 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
   });
 
   it("returns notPersistedReason without reading", async () => {
-    const fs = memFs({ "src/sample.ts": FILE_BODY });
+    const fs = memFs(ROOT, { "src/sample.ts": FILE_BODY });
     const ref: ContextProvenanceRef = {
       kind: "repo-file",
       stableId: "a-ref",
@@ -236,7 +192,7 @@ describe("rehydrateProvenanceRef — non-repo-file", () => {
 
 describe("rehydrateHandle", () => {
   it("resolves a handle carrying kind + scopePath + lineRange", async () => {
-    const fs = memFs({ "src/sample.ts": FILE_BODY });
+    const fs = memFs(ROOT, { "src/sample.ts": FILE_BODY });
     const handle: ContextRehydrationHandle = {
       schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
       laneId: "repo-evidence",
@@ -253,7 +209,7 @@ describe("rehydrateHandle", () => {
   });
 
   it("reports a lane-level handle as not directly rehydratable", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const handle: ContextRehydrationHandle = {
       schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
       laneId: "repo-evidence",
@@ -267,7 +223,7 @@ describe("rehydrateHandle", () => {
   });
 
   it("resolves a tool-result handle through an injected artifact reader", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const handle: ContextRehydrationHandle = {
       schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
       laneId: "tool-observations",
@@ -285,7 +241,7 @@ describe("rehydrateHandle", () => {
   });
 
   it("resolves an evidence-atom handle through an injected evidence atom reader", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const handle: ContextRehydrationHandle = {
       schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
       laneId: "verification-evidence",
@@ -303,7 +259,7 @@ describe("rehydrateHandle", () => {
   });
 
   it("reports a tool-result handle without artifactId as unresolved", async () => {
-    const fs = memFs({});
+    const fs = memFs(ROOT, {});
     const handle: ContextRehydrationHandle = {
       schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
       laneId: "tool-observations",

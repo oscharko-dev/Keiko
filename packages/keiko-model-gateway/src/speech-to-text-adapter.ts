@@ -2,11 +2,11 @@
 // globalThis.fetch only (no SDK dependency), mirroring openai-embedding-adapter.ts. The audio
 // buffer is POSTed once as multipart/form-data to `${endpoint}/audio/transcriptions` through the
 // single `gatewayFetch` egress seam (ADR-0038), so voice traffic inherits the same corporate-proxy,
-// custom-CA, timeout, and byte-cap behavior as every other productive model call (ADR-0058 D4).
+// custom-CA, timeout, and byte-cap behavior as every other productive model call (ADR-0100 D4).
 //
 // This module is provider-neutral: the multipart `/audio/transcriptions` contract is the
 // OpenAI-compatible surface the gateway already speaks for chat and embeddings, and Azure Foundry's
-// `keiko-stt` deployment class is one valid provider locality among three (ADR-0058 D7). Only the
+// `keiko-stt` deployment class is one valid provider locality among three (ADR-0100 D7). Only the
 // transcript text and optional content-free metadata escape this module — the audio buffer, the raw
 // provider body, the provider URL, and the credential never do.
 
@@ -319,7 +319,7 @@ async function decodeSuccess(response: Response): Promise<SpeechToTextOutcome> {
 
 // Single round-trip speech-to-text transcription. Provider-neutral, no retry (a dictation request
 // is interactive; the caller decides whether to retry), and every failure is a coded, content-free
-// `kind` so the BFF can map it to a deterministic, secret-free HTTP response (ADR-0058 D6, AC5).
+// `kind` so the BFF can map it to a deterministic, secret-free HTTP response (ADR-0100 D6, AC5).
 export async function requestSpeechToText(
   request: SpeechToTextRequest,
 ): Promise<SpeechToTextOutcome> {

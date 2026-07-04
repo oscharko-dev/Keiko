@@ -320,8 +320,7 @@ describe("extractDocument — normalized binary text", () => {
           "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
         )
         .get({ c: capsuleId, d: result.outcome.document.id }) as
-        | { readonly normalized_text?: string }
-        | undefined;
+        { readonly normalized_text?: string } | undefined;
       expect(row?.normalized_text).toContain("Hello PDF");
       const blob = readPdfDocumentBlob(store, capsuleId, result.outcome.document.id);
       expect(blob.kind).toBe("ok");
@@ -427,8 +426,7 @@ describe("extractDocument — unsupported OCR and scanned inputs", () => {
         "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
       )
       .get({ c: capsuleId, d: result.outcome.document.id }) as
-      | { readonly normalized_text?: string }
-      | undefined;
+      { readonly normalized_text?: string } | undefined;
     expect(textRow?.normalized_text).toBe("OCR page 1");
     const units = store._internal.db
       .prepare(

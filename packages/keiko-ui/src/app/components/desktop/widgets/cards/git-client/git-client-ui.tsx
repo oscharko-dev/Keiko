@@ -6,7 +6,7 @@
 // mutation-outcome banner. Every primitive conveys state through text + icon, never colour alone
 // (WCAG 1.4.1), and styles compose existing globals.css tokens via inline styles (ADR-0051). The
 // "Git Window" redesign migrated the palette to the design-system tokens (--ok/--warn/--danger/
-// --info, --fg*, --inset, --line).
+// --info, --fg*, --inset, --line). See ADR-0098 for the git-client window conventions.
 
 import type { ReactNode } from "react";
 import { Icons } from "../../../Icons";

@@ -3,7 +3,7 @@
 Operator and developer reference for configuring, registering, and disabling Keiko's optional voice
 capability. This is the implementation contract delivered by Issue
 [#493](https://github.com/oscharko-dev/Keiko/issues/493) (Epic #491), realizing decisions **D1, D2, D5,
-and D7** of [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md).
+and D7** of [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md).
 
 Voice is **optional and capability-gated**. Keiko starts and remains fully usable when no voice model is
 configured, is unreachable, or is disabled by policy. Capability detection is **metadata-only**: it never
@@ -15,7 +15,7 @@ the browser or any log.
 
 Voice capability is advertised through the existing Model Gateway `ModelCapability` metadata
 (`packages/keiko-contracts/src/gateway.ts`). Issue #493 adopts the **new `ModelKind` literal** mechanism of
-ADR-0058 D5: a voice endpoint declares `kind: "voice"`, which keeps it structurally distinct from `chat`,
+ADR-0100 D5: a voice endpoint declares `kind: "voice"`, which keeps it structurally distinct from `chat`,
 `embedding`, and `ocr-vision`. A voice-kind model is therefore never conversation-eligible (it cannot appear
 in the chat model selector), never workflow-eligible, and never elected for chat completion.
 
@@ -194,7 +194,7 @@ configured, reachable voice providers to an effective profile:
 | Voice provider(s) configured but unreachable       | `none`            | `false`     | `provider-unreachable` |
 
 Full realtime conversation requires the provider to advertise realtime speech **or** both speech input and
-speech output (ADR-0058 D2 / Issue #493 AC3). STT-only is never reported as full conversation. Only
+speech output (ADR-0100 D2 / Issue #493 AC3). STT-only is never reported as full conversation. Only
 **configured** providers are eligible: a voice capability that names no configured provider can never be
 elected (the same fail-closed rule as model selection).
 
@@ -216,13 +216,13 @@ Issue #493 adds capability **metadata, resolution, and the read endpoint only**.
 microphone capture, WebRTC transport, UI controls, or any relaxation of the
 `Permissions-Policy: ... microphone=() ...` header or the CSP (`default-src 'none'` / `connect-src 'self'`).
 Those are owned by later child issues (#496/#497 transport, #503+ interaction) and remain gated behind a
-security review (ADR-0058 D6). Capability detection performs no network probe; runtime reachability signals
+security review (ADR-0100 D6). Capability detection performs no network probe; runtime reachability signals
 (e.g. an open circuit breaker) are supplied by the caller through `unreachableProviderIds` and are wired by
 the transport child issue.
 
 ## References
 
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — decisions D1, D2, D5, D7.
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — decisions D1, D2, D5, D7.
 - [ADR-0094](../adr/ADR-0094-voice-provider-capability-registry-extension.md) — product voice personas,
   server-side voice-id mapping, and kind-aware readiness (Issue #1557).
 - [architecture.md](architecture.md) §2–§5 — capability gating, profiles, degradation.

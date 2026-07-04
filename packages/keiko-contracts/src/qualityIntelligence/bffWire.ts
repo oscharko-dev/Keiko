@@ -31,6 +31,20 @@ import type { QualityIntelligenceReviewState } from "./reviewRecord.js";
 import type { TestQualityRubricDimension } from "./testQualityRubric.js";
 import type { ModelCapability } from "../gateway.js";
 
+// Canonical QI run-status union (GEN-DUP-SEMANTIC-010). The list-view and detail-view
+// projections had re-declared this four-member union inline and could drift apart. Mirrors the
+// IndexingJobStatus precedent in local-knowledge-records.ts (type + frozen const table). The
+// terminal-only frame (`QualityIntelligenceRunStreamDone.status`) stays as the "running"-excluded
+// subset `Exclude<QualityIntelligenceRunStatus, "running">`.
+export type QualityIntelligenceRunStatus = "running" | "succeeded" | "failed" | "cancelled";
+
+export const QUALITY_INTELLIGENCE_RUN_STATUSES = [
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+] as const;
+
 /** Counts-only totals carried on both the list-view and the detail view. */
 export interface QualityIntelligenceUiRunTotals {
   readonly candidates: number;
@@ -41,7 +55,7 @@ export interface QualityIntelligenceUiRunTotals {
 /** List-view projection — only what the run list needs. */
 export interface QualityIntelligenceUiRunSummary {
   readonly id: string;
-  readonly status: "running" | "succeeded" | "failed" | "cancelled";
+  readonly status: QualityIntelligenceRunStatus;
   /** ISO 8601 timestamp. */
   readonly requestedAt: string;
   /** ISO 8601 timestamp, or null when the run has not yet completed. */
@@ -143,7 +157,7 @@ export interface QualityIntelligenceUiDriftMetadata {
  */
 export interface QualityIntelligenceUiRunDetail {
   readonly id: string;
-  readonly status: "running" | "succeeded" | "failed" | "cancelled";
+  readonly status: QualityIntelligenceRunStatus;
   /** ISO 8601 timestamp. */
   readonly requestedAt: string;
   /** ISO 8601 timestamp, or null when the run has not yet completed. */
@@ -536,7 +550,7 @@ export interface QualityIntelligenceRunStreamEvent {
 export interface QualityIntelligenceRunStreamDone {
   readonly type: "done";
   readonly runId: string;
-  readonly status: "succeeded" | "failed" | "cancelled";
+  readonly status: Exclude<QualityIntelligenceRunStatus, "running">;
   readonly totals: QualityIntelligenceUiRunTotals;
   readonly modelRouting?: Pick<QualityIntelligenceModelRouting, "resolved" | "preflight">;
   /**

@@ -1,4 +1,4 @@
-// Governed merge execution core for the #478 merge routes (Epic #470, ADR-0065).
+// Governed merge execution core for the #478 merge routes (Epic #470, ADR-0087).
 //
 // The merge preview + execute routes share ONE path: resolve and authorize the project workspace, read
 // the provider's content-free merge-readiness facts, and (for execute) drive the #478 merge gateway

@@ -1,4 +1,4 @@
-// Regression tests for the Discussion Intelligence contract (Issue #502, Epic #491, ADR-0065). These pin
+// Regression tests for the Discussion Intelligence contract (Issue #502, Epic #491, ADR-0107). These pin
 // the acceptance criteria as executable, mutation-resistant invariants:
 //   AC1 — text-first: discussion modes resolve for every voice profile, including `none`.
 //   AC2 — voice reuses the SAME contract; gating derives from the voice transcript capability.

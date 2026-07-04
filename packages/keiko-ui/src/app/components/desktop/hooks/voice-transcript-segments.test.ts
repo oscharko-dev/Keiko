@@ -1,4 +1,4 @@
-// Issue #500 (ADR-0063) — the Voice transcript segment store. Drives the reducer with a deterministic
+// Issue #500 (ADR-0105) — the Voice transcript segment store. Drives the reducer with a deterministic
 // SCRIPTED clock (an injected `{ now }` — no fake timers, no performance.now) and the semantic input
 // union, pinning the acceptance criteria as executable, mutation-resistant invariants:
 //   AC1 — no-voice / speech-output dormancy: zero side effects, the clock is never read.

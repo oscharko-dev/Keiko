@@ -55,6 +55,11 @@ renders `KeikoDesktop → AppShell`, and the apparent "pages" are 31 tool-window
 names — there is no CSS-Modules, Tailwind, styled-components, or Storybook layer. See
 [fidelity-matrix.md](fidelity-matrix.md) for the full surface inventory.
 
+> **Snapshot note:** The figures in this document (16,191-line `globals.css`, 31 tool-window types, 32
+> `registerWindowRender` call sites, 77 `.lk-*` rules) are as of the **2026-06-21 audit snapshot
+> (release/0.2.0)**; current counts have grown (e.g. `globals.css` is now ~22,658 lines and
+> `registerWindowRender` call sites are 39). They are retained as a point-in-time architecture baseline.
+
 ### The central gap — tokens stop at the primitive tier
 
 The design-system defines a four-layer token architecture; the product implements only the first layer

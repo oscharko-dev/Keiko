@@ -493,6 +493,49 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(after).toBe(before + 1);
   });
 
+  it("RB-4 (GEN-AI-MEMORY-003): suppresses a PARAPHRASED re-capture of a forgotten memory (semantic, not exact-hash)", async () => {
+    // Keyed embedding: any "dark" text → V_DARK; anything else → an orthogonal V_OTHER. The original
+    // and its paraphrase both embed to V_DARK (cosine 1.0); the unrelated capture embeds to V_OTHER.
+    const vDark = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
+    const vOther = Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]);
+    const keyed = vi.fn((request: OpenAIEmbeddingRequest) =>
+      Promise.resolve({
+        ok: true as const,
+        value: {
+          vector: request.input.toLowerCase().includes("dark") ? vDark : vOther,
+          modelId: EMBEDDING_MODEL,
+        },
+      }),
+    );
+    const deps = makeDeps({ embeddingRequest: keyed });
+    const vault = makeVault();
+
+    // 1. Capture + store the original (embedding V_DARK), then FORGET it (tombstone keeps V_DARK).
+    const original = makeRecord("the user prefers dark mode", "id-original");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, original);
+    expect(vault.getEmbedding(original.id)).toBeDefined();
+    vault.deleteMemory(original.id, {
+      tombstone: true,
+      forgetterSurface: "test",
+      reason: "user-request",
+      nowMs: Date.now(),
+    });
+
+    // 2. A PARAPHRASE (different body ⇒ different body_hash) must be suppressed by SEMANTIC match.
+    const paraphrase = makeRecord("a dark interface is what the user likes", "id-paraphrase");
+    // Prove the exact-hash forget check does NOT catch it (different normalized body).
+    expect(vault.hasForgetTombstoneForBody(paraphrase.scope, paraphrase.body)).toBe(false);
+    const suppressed = await insertSalienceMemoryWithNoveltyGate(deps, vault, paraphrase);
+    expect(suppressed.inserted).toBeNull();
+    expect(suppressed.mergedInto).toBeNull();
+    expect(vault.getMemory(paraphrase.id)).toBeUndefined();
+
+    // 3. An UNRELATED capture (orthogonal embedding) is NOT suppressed.
+    const unrelated = makeRecord("the build uses webpack", "id-unrelated");
+    const kept = await insertSalienceMemoryWithNoveltyGate(deps, vault, unrelated);
+    expect(kept.inserted?.id).toBe(unrelated.id);
+  });
+
   it("does not merge into superseded memories during the semantic novelty check", async () => {
     const deps = makeDeps();
     const vault = makeVault();

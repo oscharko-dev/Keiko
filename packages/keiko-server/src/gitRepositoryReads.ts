@@ -262,13 +262,7 @@ async function computeGitSummary(
     return { status: 200, body: redacted(deps, body) };
   }
   const [status, remotesResult, lastSync] = await Promise.all([
-    runGit(repo, options, [
-      "status",
-      "--porcelain=v2",
-      "--branch",
-      "-z",
-      "--untracked-files=all",
-    ]),
+    runGit(repo, options, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
     runGit(repo, options, ["remote", "-v"]),
     readLastSync(repo, options),
   ]);

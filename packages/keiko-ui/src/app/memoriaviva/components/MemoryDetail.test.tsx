@@ -270,9 +270,7 @@ describe("MemoryDetail — success state with full record", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
-        "Praeferenz-Erinnerung",
-      );
+      expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Praeferenz-Erinnerung");
     });
     expect(screen.getByRole("button", { name: "Zurueck" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Herkunft" })).toBeInTheDocument();

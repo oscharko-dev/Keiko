@@ -14,6 +14,8 @@
 // Determinism: pure. No IO, clock, or randomness. Identical inputs always yield an identical scorecard.
 
 import {
+  clampUnit,
+  estimateTokens,
   PROMPT_CRITIC_DIMENSIONS,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   type EnhancedPrompt,
@@ -26,11 +28,6 @@ import {
 import type { PromptEnhancementPlan } from "./planner.js";
 import { renderEnhancedPromptText } from "./rendering.js";
 
-// Heuristic characters-per-token ratio for the deterministic token estimate. This is a coarse, model
-// independent approximation (not a provider tokenizer); it is used consistently for every candidate so
-// the comparison between candidates is fair, and it feeds the optimization-loop token budget.
-const CHARS_PER_TOKEN = 4;
-
 // Global normalization references for the absolute-thoroughness dimensions. Chosen as the largest cap
 // any execution profile applies (see `profiles.ts`), so a maximally thorough prompt approaches 1.0.
 const REFERENCE_DECOMPOSITION_STEPS = 6;
@@ -39,7 +36,12 @@ const REFERENCE_CONSTRAINTS = 6;
 const REFERENCE_UNCERTAINTY_RULES = 3;
 // A generous instruction-token reference: a lean prompt sits well under this and scores high token
 // efficiency; a rich one approaches it and scores lower, expressing the genuine breadth/cost trade-off.
-const REFERENCE_INSTRUCTION_TOKENS = 600;
+// Calibrated to the estimator scale (GEN-DUP-SEMANTIC-002, Step 10): `instructionTokens` now uses the
+// canonical UTF-8-byte `estimateTokens` currency instead of the former private `chars / 4` heuristic,
+// which counts ~34% higher for structured multi-line instruction sections. The reference was re-scaled
+// 600 → 800 by that same factor so the score distribution (and the "lean prompt scores high") grading
+// is preserved under the new currency rather than every candidate collapsing toward the floor.
+const REFERENCE_INSTRUCTION_TOKENS = 800;
 // Token-efficiency never collapses fully to zero for a well-formed prompt; this floor keeps the
 // dimension a graded signal rather than a cliff for the most verbose profile.
 const TOKEN_EFFICIENCY_FLOOR = 0.2;
@@ -72,11 +74,10 @@ interface DimensionAssessment {
 }
 
 // ─── Deterministic numeric helpers ─────────────────────────────────────────────────
-function clampUnit(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  if (value >= 1) return 1;
-  return value;
-}
+// `clampUnit` (unit-interval clamp) and `estimateTokens` (the canonical, byte-based token currency
+// shared with context-engineering and the token budget) are imported from `@oscharko-dev/keiko-contracts`
+// so every candidate is estimated with the same currency the optimizer budgets against. Estimates are
+// larger than the old chars/4 heuristic but rank candidates identically, which is all the critic needs.
 
 // Round to 4 decimals so scores are stable, readable values rather than IEEE-754 tails. Deterministic.
 function round4(value: number): number {
@@ -88,13 +89,9 @@ function mean(values: readonly number[]): number {
   return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / CHARS_PER_TOKEN);
-}
-
 /**
- * Deterministic token estimate for the full rendered prompt (instructions + input). Heuristic, not a
- * provider tokenizer. This is the candidate's real dispatch-cost estimate and feeds the budget.
+ * Deterministic token estimate for the full rendered prompt (instructions + input). Uses the canonical
+ * contracts estimator, so it is the candidate's real dispatch-cost estimate and feeds the budget.
  */
 export function estimatePromptTokens(prompt: EnhancedPrompt): number {
   return estimateTokens(renderEnhancedPromptText(prompt));

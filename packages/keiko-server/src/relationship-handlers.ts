@@ -2061,7 +2061,7 @@ function portUpdateLifecycle(
   // the previous-state value honest for the validator + history row.
   const current = sqlGetRelationship(db, args.id, args.workspaceId);
   if (current === undefined) {
-    throw new UiStoreError("not_found", "Relationship not found.", 404);
+    throw new UiStoreError("NOT_FOUND", "Relationship not found.", 404);
   }
   const at = now();
   const etag = defaultEtag(at);

@@ -14,6 +14,10 @@ const BOM = String.fromCodePoint(0xfeff);
 const LRM = String.fromCodePoint(0x200e);
 const RLM = String.fromCodePoint(0x200f);
 const BEL = String.fromCodePoint(0x0007); // C0 control
+const WJ = String.fromCodePoint(0x2060); // word joiner
+const INVISIBLE_PLUS = String.fromCodePoint(0x2064); // invisible plus (invisible math operator)
+const DEPRECATED_FMT = String.fromCodePoint(0x206a); // inhibit symmetric swapping (deprecated fmt)
+const NOMINAL_DIGIT_SHAPES = String.fromCodePoint(0x206f); // nominal digit shapes (deprecated fmt)
 
 describe("stripUnsafeFormatChars (GRD-001)", () => {
   it("returns clean text byte-identical (no-op)", () => {
@@ -33,6 +37,15 @@ describe("stripUnsafeFormatChars (GRD-001)", () => {
   it("removes zero-width chars, BOM, and LRM/RLM", () => {
     const value = `a${ZWSP}b${ZWNJ}${ZWJ}c${BOM}d${LRM}e${RLM}f`;
     expect(stripUnsafeFormatChars(value)).toBe("abcdef");
+  });
+
+  it("removes the U+2060..U+206F block (word joiner / invisible math / deprecated format)", () => {
+    const value = `a${WJ}b${INVISIBLE_PLUS}c${DEPRECATED_FMT}d${NOMINAL_DIGIT_SHAPES}e`;
+    const out = stripUnsafeFormatChars(value);
+    expect(out).toBe("abcde");
+    for (const ch of [WJ, INVISIBLE_PLUS, DEPRECATED_FMT, NOMINAL_DIGIT_SHAPES]) {
+      expect(out).not.toContain(ch);
+    }
   });
 
   it("removes C0 / C1 / DEL control chars but preserves TAB, LF, CR", () => {

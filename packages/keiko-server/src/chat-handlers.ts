@@ -24,7 +24,10 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationMemoryActionWire,
+  ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
+  DesktopChatSendRequestWire,
+  DesktopChatSendResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   MemoryAuditEvent,
@@ -314,11 +317,11 @@ export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): Rou
   throw error;
 }
 
-export interface SendDesktopChatRequest {
-  readonly chatId: string;
-  readonly projectPath: string;
-  readonly content: string;
-  readonly modelId: string | undefined;
+export type SendDesktopChatRequest = Omit<
+  DesktopChatSendRequestWire,
+  "modelId" | "memory" | "documentContext" | "attachments" | "discussionMode"
+> & {
+  readonly modelId: DesktopChatSendRequestWire["modelId"];
   // Issue #148 — client-extracted document text. Already redacted by keiko-workspace at the
   // extraction boundary; the server passes these into a structured prompt block but does NOT
   // re-extract from disk (server-side modality enforcement is owned by issue #149).
@@ -331,8 +334,8 @@ export interface SendDesktopChatRequest {
   // Issue #502 — optional colleague-discussion mode selected for THIS turn only. Turn-local: it
   // shapes the additive directive block on the latest user turn and is NEVER replayed into
   // compacted history. An unknown value is dropped to `undefined` (backward-compatible default).
-  readonly discussionMode: DiscussionMode | undefined;
-}
+  readonly discussionMode: DesktopChatSendRequestWire["discussionMode"];
+};
 
 interface RegenerateDesktopChatRequest {
   readonly chatId: string;
@@ -342,11 +345,13 @@ interface RegenerateDesktopChatRequest {
   readonly memory: ParsedConversationMemoryRequest | undefined;
 }
 
-export interface ParsedConversationMemoryRequest {
+export type ParsedConversationMemoryRequest = Omit<
+  ConversationMemoryRequestWire,
+  "enabled" | "context"
+> & {
   readonly enabled: boolean;
-  readonly budgetTokens?: number;
   readonly context: Record<string, unknown>;
-}
+};
 
 function scopeLabel(scope: MemoryScope): string {
   switch (scope.kind) {
@@ -1140,7 +1145,7 @@ function buildRegenerateGatewayAssembly(
   return selected;
 }
 
-function abortOnDisconnect(ctx: RouteContext): AbortController {
+export function abortDesktopChatOnDisconnect(ctx: RouteContext): AbortController {
   const controller = new AbortController();
   ctx.res.on("close", () => {
     controller.abort();
@@ -1222,6 +1227,7 @@ async function persistModelChatTurn(
   chat: Chat,
   modelId: string,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
+  abortSignal: AbortSignal,
 ): Promise<RouteResult> {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
@@ -1239,10 +1245,7 @@ async function persistModelChatTurn(
     const userMessage = createUserMessage(deps, request);
     const assembly = buildGatewayAssembly(deps, request, memory, modelId);
     const messages = assembly.messages;
-    const response = await model.call(
-      { modelId, messages, stream: false },
-      new AbortController().signal,
-    );
+    const response = await model.call({ modelId, messages, stream: false }, abortSignal);
     recordChatCompaction(deps, {
       compaction: assembly.compaction,
       request,
@@ -1287,14 +1290,15 @@ async function finalizeBufferedTurn(
     redactedContent,
   );
   const chatPatch = buildChatPatch(chat, request, modelId);
+  const body: DesktopChatSendResponse = {
+    chat: deps.store.updateChat(request.chatId, chatPatch),
+    messages: [result.userMessage, assistantMessage],
+    usage: result.response.usage,
+    memory: { ...memory, actions: memoryActions },
+  };
   return {
     status: 200,
-    body: {
-      chat: deps.store.updateChat(request.chatId, chatPatch),
-      messages: [result.userMessage, assistantMessage],
-      usage: result.response.usage,
-      memory: { ...memory, actions: memoryActions },
-    },
+    body,
   };
 }
 
@@ -1421,7 +1425,8 @@ export async function handleSendDesktopChat(
   const prepared = await prepareDesktopChatSend(ctx, deps);
   if (isRouteResult(prepared)) return prepared;
   const { request, chat, modelId, memoryContext } = prepared;
-  return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
+  const controller = abortDesktopChatOnDisconnect(ctx);
+  return persistModelChatTurn(deps, request, chat, modelId, memoryContext, controller.signal);
 }
 
 type VoiceTurnMessageRole = "user" | "assistant";
@@ -1438,9 +1443,11 @@ export interface VoiceTurnAppendRequest {
   readonly messages: readonly VoiceTurnAppendMessage[];
   readonly modelId: string | undefined;
   readonly memory: ParsedConversationMemoryRequest | undefined;
+  readonly idempotencyKey?: string | undefined;
 }
 
 const MAX_VOICE_TURN_MESSAGES = 8;
+const MAX_VOICE_TURN_IDEMPOTENCY_KEY_LENGTH = 128;
 
 function parseVoiceTurnAppendMessage(value: unknown): VoiceTurnAppendMessage | undefined {
   if (!isRecord(value)) return undefined;
@@ -1478,6 +1485,23 @@ function parseOptionalVoiceTurnModelId(
   return modelId;
 }
 
+function parseVoiceTurnIdempotencyKey(value: unknown): string | RouteResult | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "idempotencyKey must be a non-empty string."),
+    };
+  }
+  if (value.length > MAX_VOICE_TURN_IDEMPOTENCY_KEY_LENGTH || !/^[A-Za-z0-9._-]+$/u.test(value)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "idempotencyKey has an invalid shape."),
+    };
+  }
+  return value;
+}
+
 function parseVoiceTurnAppendMessages(
   value: unknown,
 ): readonly VoiceTurnAppendMessage[] | RouteResult {
@@ -1512,12 +1536,15 @@ function voiceTurnAppendRequestFromBody(
   if (isRouteResult(modelId)) return modelId;
   const memory = parseMemoryRequest(body.memory);
   if (isRouteResult(memory)) return memory;
+  const idempotencyKey = parseVoiceTurnIdempotencyKey(body.idempotencyKey);
+  if (isRouteResult(idempotencyKey)) return idempotencyKey;
   return {
     chatId,
     projectPath,
     messages,
     modelId,
     memory,
+    idempotencyKey,
   };
 }
 
@@ -1682,6 +1709,55 @@ function persistVoiceTurnMessages(
   );
 }
 
+function voiceTurnReplayConflict(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "VOICE_TURN_IDEMPOTENCY_CONFLICT",
+      "The voice turn idempotency key was already used for a different message batch.",
+    ),
+  };
+}
+
+function voiceTurnReplayMessages(
+  deps: UiHandlerDeps,
+  request: VoiceTurnAppendRequest,
+): readonly ChatMessage[] | RouteResult | undefined {
+  if (request.idempotencyKey === undefined) return undefined;
+  const persisted = deps.store.listMessages(request.chatId);
+  const expected: {
+    readonly role: ChatMessage["role"];
+    readonly content: string;
+    readonly timestamp: number;
+  }[] = [];
+  for (const message of request.messages) {
+    // A voice-turn batch without timestamps is not replay-comparable; bail exactly as before.
+    if (message.timestamp === undefined) return undefined;
+    expected.push({
+      role: message.role,
+      content: sanitizeVoiceTurnText(message.content, deps),
+      timestamp: message.timestamp,
+    });
+  }
+  for (let start = 0; start <= persisted.length - expected.length; start += 1) {
+    const slice = persisted.slice(start, start + expected.length);
+    const sameTimestamps = slice.every(
+      (message, index) => message.timestamp === expected[index]?.timestamp,
+    );
+    if (!sameTimestamps) continue;
+    const sameMessages = slice.every((message, index) => {
+      const expectedMessage = expected[index];
+      if (expectedMessage === undefined) return false;
+      return message.role === expectedMessage.role && message.content === expectedMessage.content;
+    });
+    return sameMessages ? slice : voiceTurnReplayConflict();
+  }
+  const expectedTimestamps = new Set(expected.map((message) => message.timestamp));
+  return persisted.some((message) => expectedTimestamps.has(message.timestamp))
+    ? voiceTurnReplayConflict()
+    : undefined;
+}
+
 function updateChatAfterVoiceTurn(
   deps: UiHandlerDeps,
   request: VoiceTurnAppendRequest,
@@ -1696,10 +1772,19 @@ function updateChatAfterVoiceTurn(
   return deps.store.updateChat(request.chatId, chatPatch);
 }
 
-export async function handleAppendDesktopVoiceTurn(
+interface ResolvedVoiceTurnContext {
+  readonly request: VoiceTurnAppendRequest;
+  readonly chat: Chat;
+  readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
+}
+
+// Parses the body, resolves the project path, chat, and memory context for a voice-turn append.
+// Returns a RouteResult to short-circuit on any validation/lookup failure so
+// handleAppendDesktopVoiceTurn stays under the cyclomatic-complexity bound.
+async function resolveVoiceTurnContext(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
+): Promise<ResolvedVoiceTurnContext | RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
   const request = voiceTurnAppendRequestFromBody(body, deps);
@@ -1715,7 +1800,28 @@ export async function handleAppendDesktopVoiceTurn(
       ? undefined
       : resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
   if (isRouteResult(memoryContext)) return memoryContext;
+  return { request, chat, memoryContext };
+}
+
+export async function handleAppendDesktopVoiceTurn(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const resolved = await resolveVoiceTurnContext(ctx, deps);
+  if (isRouteResult(resolved)) return resolved;
+  const { request, chat, memoryContext } = resolved;
   try {
+    const replay = voiceTurnReplayMessages(deps, request);
+    if (isRouteResult(replay)) return replay;
+    if (replay !== undefined) {
+      return {
+        status: 200,
+        body: {
+          chat: deps.store.findChatById(request.chatId) ?? chat,
+          messages: replay,
+        },
+      };
+    }
     const created = persistVoiceTurnMessages(deps, request);
     const updatedChat = updateChatAfterVoiceTurn(deps, request, chat, created);
     const memory = await buildVoiceTurnMemoryResult(deps, request, updatedChat, memoryContext);
@@ -1788,7 +1894,7 @@ async function persistRegeneratedChatTurn(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const controller = abortOnDisconnect(ctx);
+  const controller = abortDesktopChatOnDisconnect(ctx);
   try {
     const { memory, messages } = await buildRegenerateMemoryAndMessages(deps, prepared);
     const response = await model.call({ modelId, messages, stream: false }, controller.signal);

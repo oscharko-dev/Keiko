@@ -62,6 +62,13 @@ export interface EditorHandlers {
   readonly revealDiagnosticMarker: (marker: DiagnosticOverviewMarker) => void;
 }
 
+// A single module-scope UTF-8 encoder shared across every change event. `TextEncoder` is stateless
+// between `encode` calls, so one instance is safe to reuse; constructing a fresh encoder per
+// keystroke (as the previous code did) allocated a throwaway object on every hot-path change. The
+// host owns its own `UTF8_ENCODER`; this is the package-side equivalent so the controlled editor
+// never allocates an encoder per change.
+const CHANGE_UTF8_ENCODER = new TextEncoder();
+
 type OverviewMarkersHandler = (markers: readonly DiagnosticOverviewMarker[]) => void;
 
 interface EditorRefs {
@@ -191,7 +198,10 @@ function useSaveEmitter(
   }, [editorRef]);
 }
 
-function useChangeHandler(
+// Exported for the per-keystroke allocation regression test (GEN-PERF-EDITOR-005): the hot-path
+// change handler must reuse the module-scope encoder and never construct a fresh `TextEncoder` per
+// change. Not part of the public package surface.
+export function useChangeHandler(
   onContentChange: KeikoCodeEditorProps["onContentChange"],
   readOnly: boolean,
 ): OnChange {
@@ -200,7 +210,10 @@ function useChangeHandler(
       if (value === undefined || readOnly) {
         return;
       }
-      onContentChange({ text: value, sizeBytes: new TextEncoder().encode(value).length }, "human");
+      onContentChange(
+        { text: value, sizeBytes: CHANGE_UTF8_ENCODER.encode(value).length },
+        "human",
+      );
     },
     [readOnly, onContentChange],
   );

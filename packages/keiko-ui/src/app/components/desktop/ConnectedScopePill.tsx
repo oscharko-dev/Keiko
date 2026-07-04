@@ -10,7 +10,7 @@
 // it removes, with a 24×24 minimum target. Color contrast uses --ink-inverse on --accent
 // (ink-inverse #1a1e23 on accent #4EBA87 = 6.94:1, ≥4.5:1).
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { updateChatConnectedScopes } from "@/lib/api";
 import { formatUserError } from "./format-error";
 import type { GroundedAnswerContextPackSummary } from "@/lib/types";
@@ -191,13 +191,17 @@ function ScopePillItem({
     }
   }
 
-  // The status/live region is text-only (Copilot PR #254 finding: interactive controls inside a
-  // status region produce inconsistent screen-reader announcements). The × button is a SIBLING.
+  // GEN-UI-STATE-001 (WCAG 4.1.3): the visible label is a PLAIN span — it must NOT be a live region.
+  // A per-pill `role="status" aria-live="polite"` re-announced the (unchanged) label on every routine
+  // re-render / chat switch, producing announcement bursts. The genuine binding-change announcement
+  // lives in a single always-mounted sr-only polite region at the group level (ConnectedScopePill),
+  // which fires only when the connected-scope set actually changes. The aria-label still carries the
+  // disambiguated accessible name and the title still carries the full path for the tooltip.
   return (
     <span className="scope-pill-wrap">
       <span className="scope-pill">
         <span aria-hidden="true">●</span>
-        <span role="status" aria-live="polite" aria-label={accessibleLabel} title={fullPath}>
+        <span aria-label={accessibleLabel} title={fullPath}>
           {label}
         </span>
         {/* aria-disabled (not native disabled) while busy: native disabled drops keyboard
@@ -231,6 +235,13 @@ function ScopePillItem({
   );
 }
 
+// Content-free signature of the connected-scope set: the ordered visible pill labels. Two chats that
+// bind the same-shaped scopes produce the same signature, so switching between them is a routine
+// re-render and does not re-announce; a connect/disconnect changes the label set and does.
+function scopesSignature(scopes: readonly ChatConnectedScope[]): string {
+  return scopes.map((scope) => pillLabel(scope)).join(" ");
+}
+
 export function ConnectedScopePill({
   chat,
   onDisconnect,
@@ -238,9 +249,46 @@ export function ConnectedScopePill({
   updateScopes = updateChatConnectedScopes,
 }: ConnectedScopePillProps): ReactNode {
   const scopes = effectiveScopes(chat);
-  if (scopes.length === 0) return null;
+  const signature = scopesSignature(scopes);
+
+  // GEN-UI-STATE-001 (WCAG 4.1.3): ONE always-mounted sr-only polite region announces a genuine
+  // binding change (connect / disconnect). It stays empty until the scope signature actually changes
+  // after mount, so switching to a chat with the same-shaped scopes — or any other routine re-render —
+  // never fires a stale announcement burst. Mirrors WorkflowHandoff's prevRef/useEffect guard.
+  const [announcement, setAnnouncement] = useState("");
+  const prevSignatureRef = useRef(signature);
+  useEffect(() => {
+    if (prevSignatureRef.current !== signature) {
+      prevSignatureRef.current = signature;
+      setAnnouncement(
+        scopes.length === 0
+          ? "Connected scope removed."
+          : `Connected scope updated: ${String(scopes.length)} ${scopes.length === 1 ? "source" : "sources"}.`,
+      );
+    }
+  }, [signature, scopes.length]);
+
+  const announcer = (
+    <span
+      className="sr-only"
+      role="status"
+      aria-live="polite"
+      data-testid="connected-scope-announcer"
+    >
+      {announcement}
+    </span>
+  );
+
+  // Keep the header clean when the chat never had a binding: with no scopes AND no pending
+  // announcement, render nothing (preserves the documented "renders nothing" contract). After the
+  // last source is disconnected the effect populates `announcement`, so the polite region re-mounts
+  // with content and the removal is still announced.
+  if (scopes.length === 0) {
+    return announcement === "" ? null : announcer;
+  }
   return (
     <span className="scope-pill-group">
+      {announcer}
       {scopes.map((scope, index) => (
         <ScopePillItem
           key={`${scope.root ?? scope.kind}-${String(scope.connectedAtMs)}-${String(index)}`}

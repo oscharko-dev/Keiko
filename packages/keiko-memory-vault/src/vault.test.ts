@@ -17,6 +17,7 @@ import type {
 import {
   createMemoryVault,
   memoryBodySuppressionHash,
+  MEMORY_DB_FILENAME,
   MemoryStorageError,
   MemoryStorageValidationError,
   type MemoryEvent,
@@ -491,9 +492,7 @@ describe("deterministic now/newTombstoneId", () => {
 
     const legacyHash = memoryBodySuppressionHash("prefers dark mode");
     const raw = new DatabaseSync(join(dir, "keiko-memory.db"));
-    raw
-      .prepare("UPDATE memory_tombstones SET body_hash = ? WHERE id = ?")
-      .run(legacyHash, "t-1");
+    raw.prepare("UPDATE memory_tombstones SET body_hash = ? WHERE id = ?").run(legacyHash, "t-1");
     raw.close();
 
     const reopened = openVault(dir);
@@ -602,6 +601,36 @@ describe("list filters", () => {
     expect(JSON.stringify(metadata)).not.toContain("sensitive remembered body");
     expect(JSON.stringify(metadata)).not.toContain("private-tag");
     v.close();
+  });
+
+  it("names the unreadable row id when a corrupt memory row breaks scoped listing", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    const userScope = { kind: "user" as const, userId: "u-1" as UserId };
+    v.insertMemory(makeMemory({ id: "ok-row" as MemoryId, body: "healthy body" }));
+    v.insertMemory(makeMemory({ id: "bad-row" as MemoryId, body: "private body marker" }));
+    v.close();
+
+    const db = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    try {
+      db.prepare("UPDATE memories SET body = ? WHERE id = ?").run("kv1.not-valid", "bad-row");
+    } finally {
+      db.close();
+    }
+
+    const reopened = openVault(dir);
+    try {
+      expect(() => reopened.listMemoriesByScope(userScope)).toThrow(/bad-row is unreadable/u);
+      try {
+        reopened.listMemoriesByScope(userScope);
+      } catch (error) {
+        expect(error).toBeInstanceOf(MemoryStorageError);
+        expect(String(error)).not.toContain("private body marker");
+        expect(String(error)).not.toContain("kv1.not-valid");
+      }
+    } finally {
+      reopened.close();
+    }
   });
 
   it("lists metadata for every supported scope kind", () => {

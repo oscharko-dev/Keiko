@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   aggregatePackageCoverage,
   buildCoverageBaseline,
+  buildFileFloors,
+  collectFileLinePercents,
+  evaluateFileFloors,
   evaluatePackageCoverage,
+  listPackages,
 } from "../check-package-coverage.mjs";
 
 function makeRoot() {
@@ -254,14 +258,121 @@ describe("check-package-coverage", () => {
   });
 
   it("enrolls keiko-editor in the committed coverage baseline", () => {
+    // GEN-TEST-COVERAGE-002: assert ENROLLMENT + well-formed metrics rather than a hardcoded
+    // files/percent snapshot. The old pin (files:4, lines:100) went stale the moment the package grew
+    // — pinning exact regenerated numbers is exactly the staleness this step is closing. The reality
+    // guard below proves no package is silently dropped; this proves keiko-editor carries real floors.
     const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const editor = baseline.packages["keiko-editor"];
 
-    expect(baseline.packages["keiko-editor"]).toMatchObject({
-      files: 4,
-      coverage: {
-        lines: 100,
-        branches: 100,
+    expect(editor).toBeDefined();
+    expect(editor.files).toBeGreaterThan(0);
+    expect(typeof editor.coverage.lines).toBe("number");
+    expect(typeof editor.coverage.branches).toBe("number");
+  });
+});
+
+// GEN-TEST-COVERAGE-002 / GEN-SYNTH-COVERAGE-003: the committed baseline was frozen since v0.2.0 and
+// silently dropped keiko-sandbox — a measured package protected by no floor. This reality guard fails
+// the instant the baseline and the real workspace drift, so exclusions must be explicit and reviewed
+// rather than accreting silently behind a green gate.
+describe("coverage baseline reality guard", () => {
+  // Packages intentionally NOT gated by the package-coverage baseline, each with a recorded reason.
+  // A package may be added here ONLY with a justification — never to hide a coverage gap.
+  const INTENTIONALLY_UNGATED = new Map([
+    // (empty) — keiko-sandbox is now enrolled in the baseline; add future exclusions here WITH a reason.
+  ]);
+
+  it("has no stale entries (every baseline package still exists in packages/)", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const realPackages = new Set(listPackages(process.cwd()));
+    const stale = Object.keys(baseline.packages).filter((name) => !realPackages.has(name));
+    expect(stale).toEqual([]);
+  });
+
+  it("covers every workspace package (no silent omissions)", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const baselineNames = new Set(Object.keys(baseline.packages));
+    const missing = listPackages(process.cwd()).filter(
+      (name) => !baselineNames.has(name) && !INTENTIONALLY_UNGATED.has(name),
+    );
+    expect(missing).toEqual([]);
+  });
+
+  it("enrolls keiko-sandbox (regression guard for the historically-dropped package)", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    expect(baseline.packages["keiko-sandbox"]).toBeDefined();
+    expect(typeof baseline.packages["keiko-sandbox"].coverage.lines).toBe("number");
+  });
+});
+
+// GEN-TEST-COVERAGE-003: per-file line floors surface critical files (0-8% requirements-ingestion,
+// verification monitor, workspace fs, governed-handoff, memory-handlers) that hide behind green
+// PACKAGE averages. The floors ratchet those files so they cannot regress further.
+describe("per-file coverage floors", () => {
+  it("collects normalized per-file line percentages from raw v8 summaries", () => {
+    const root = "/repo";
+    const percents = collectFileLinePercents(root, [
+      {
+        total: file(0, 0),
+        [join(root, "packages/keiko-a/src/hot.ts")]: file(3, 100),
+        [join(root, "packages/keiko-a/src/covered.ts")]: file(95, 100),
       },
+    ]);
+    expect(percents["packages/keiko-a/src/hot.ts"]).toBe(3);
+    expect(percents["packages/keiko-a/src/covered.ts"]).toBe(95);
+    expect(percents.total).toBeUndefined();
+  });
+
+  it("records floors only for files at or below the threshold, with headroom", () => {
+    const floors = buildFileFloors(
+      {
+        "packages/keiko-a/src/hot.ts": 40,
+        "packages/keiko-a/src/ok.ts": 90,
+        "packages/keiko-a/src/zero.ts": 0,
+      },
+      50,
+    );
+    expect(floors).toEqual({
+      "packages/keiko-a/src/hot.ts": 39.5,
+      "packages/keiko-a/src/zero.ts": 0,
     });
+    expect(floors["packages/keiko-a/src/ok.ts"]).toBeUndefined();
+  });
+
+  it("passes when a floored file holds or improves and tolerates platform noise", () => {
+    const evaluations = evaluateFileFloors({
+      fileLinePercents: { "packages/keiko-a/src/hot.ts": 40.1 },
+      fileFloors: { "packages/keiko-a/src/hot.ts": 40 },
+    });
+    expect(evaluations).toEqual([
+      { file: "packages/keiko-a/src/hot.ts", floor: 40, current: 40.1, passes: true, reason: "ok" },
+    ]);
+  });
+
+  it("fails a floored file that regresses beyond the epsilon", () => {
+    const evaluations = evaluateFileFloors({
+      fileLinePercents: { "packages/keiko-a/src/hot.ts": 30 },
+      fileFloors: { "packages/keiko-a/src/hot.ts": 40 },
+    });
+    expect(evaluations[0]).toMatchObject({ passes: false, reason: "regressed", current: 30 });
+  });
+
+  it("fails a floored file that vanished from the summary (rename/delete without floor update)", () => {
+    const evaluations = evaluateFileFloors({
+      fileLinePercents: {},
+      fileFloors: { "packages/keiko-a/src/gone.ts": 40 },
+    });
+    expect(evaluations[0]).toMatchObject({ passes: false, reason: "missing", current: null });
+  });
+
+  it("embeds recorded file floors in a regenerated baseline", () => {
+    const baseline = buildCoverageBaseline({
+      target: 85,
+      metric: "lines",
+      packages: [],
+      fileFloors: { "packages/keiko-a/src/hot.ts": 39.5 },
+    });
+    expect(baseline.fileFloors).toEqual({ "packages/keiko-a/src/hot.ts": 39.5 });
   });
 });

@@ -376,6 +376,36 @@ describe("VoiceDialogControls", () => {
     const wrapper = document.querySelector(".cmp-model-compact");
     expect(wrapper).not.toBeNull();
   });
+
+  // GEN-UI-A11Y-013 (WCAG 4.1.2): the session-cluster Interrupt (rendered only when onInterrupt is
+  // supplied) is inert via aria-disabled + a guarded onClick, keeping focus and naming its availability
+  // condition via aria-describedby — never the native `disabled` attribute (which would blur/hide it).
+  it("Interrupt is aria-disabled with a described availability condition when a barge-in is not meaningful", () => {
+    renderControls({ canInterrupt: false, onInterrupt: vi.fn() });
+    const interrupt = screen.getByRole("button", { name: "Interrupt the assistant" });
+    expect(interrupt).not.toBeDisabled();
+    expect(interrupt).toHaveAttribute("aria-disabled", "true");
+    const describedBy = interrupt.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const hint = document.getElementById(describedBy!);
+    expect(hint).toHaveTextContent(/while the assistant is speaking/i);
+  });
+
+  it("does not call onInterrupt when the session-cluster Interrupt is aria-disabled", async () => {
+    const user = userEvent.setup();
+    const onInterrupt = vi.fn();
+    renderControls({ canInterrupt: false, onInterrupt });
+    await user.click(screen.getByRole("button", { name: "Interrupt the assistant" }));
+    expect(onInterrupt).not.toHaveBeenCalled();
+  });
+
+  it("calls onInterrupt when the session-cluster Interrupt is available", async () => {
+    const user = userEvent.setup();
+    const onInterrupt = vi.fn();
+    renderControls({ state: "speaking", canInterrupt: true, onInterrupt });
+    await user.click(screen.getByRole("button", { name: "Interrupt the assistant" }));
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ─── VoiceDialogTurnControls (Issue #1560) ──────────────────────────────────────────
@@ -424,9 +454,24 @@ describe("VoiceDialogTurnControls (#1560)", () => {
     expect(onListen).toHaveBeenCalledTimes(1);
   });
 
-  it("Interrupt is disabled unless a barge-in is meaningful (canInterrupt)", () => {
+  // GEN-UI-A11Y-013 (WCAG 4.1.2): the Interrupt button is inert via aria-disabled (NOT native
+  // `disabled`) so it keeps keyboard focus and screen-reader discoverability while unavailable, and an
+  // aria-describedby hint names the availability condition. It must therefore stay queryable as a plain
+  // (non-native-disabled) button whose aria-disabled reflects canInterrupt.
+  it("Interrupt is aria-disabled (not native-disabled) unless a barge-in is meaningful", () => {
     const { rerender } = renderTurnControls({ canInterrupt: false });
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+    const interrupt = screen.getByRole("button", { name: "Interrupt the assistant" });
+    // Still in the accessibility tree and NOT native-disabled — a native `disabled` would blur/hide it.
+    expect(interrupt).not.toBeDisabled();
+    expect(interrupt).toHaveAttribute("aria-disabled", "true");
+
+    // The button names WHY it is unavailable via aria-describedby → an sr-only hint.
+    const describedBy = interrupt.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const hint = document.getElementById(describedBy!);
+    expect(hint).not.toBeNull();
+    expect(hint).toHaveTextContent(/while the assistant is speaking/i);
+
     rerender(
       <VoiceDialogTurnControls
         listening={false}
@@ -436,7 +481,10 @@ describe("VoiceDialogTurnControls (#1560)", () => {
         onInterrupt={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
   });
 
   it("clicking Interrupt calls onInterrupt when enabled", async () => {

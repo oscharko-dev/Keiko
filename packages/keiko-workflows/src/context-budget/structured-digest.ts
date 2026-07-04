@@ -34,13 +34,7 @@ interface DigestBuckets {
 
 interface Classification {
   readonly kind:
-    | "fact"
-    | "assumption"
-    | "constraint"
-    | "decision"
-    | "question"
-    | "resolved-question"
-    | "other";
+    "fact" | "assumption" | "constraint" | "decision" | "question" | "resolved-question" | "other";
   readonly text: string;
 }
 

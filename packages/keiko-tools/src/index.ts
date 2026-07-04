@@ -242,7 +242,7 @@ export {
   type GitPullRequestRequest,
 } from "./git-pr-gateway.js";
 
-// The SEPARATE governed merge authority (Issue #478, ADR-0065). A THIRD parallel gateway to the publish
+// The SEPARATE governed merge authority (Issue #478, ADR-0087). A THIRD parallel gateway to the publish
 // and PR gateways — never an extension of either. The pure surface — merge command, narrow two-method
 // adapter port (readiness read + merge execute), dedicated `gh api` allowlist, argv builders, GitHub
 // merge-error classifier, mergeable-state mapper, effective-policy evaluator, and the runGitMerge

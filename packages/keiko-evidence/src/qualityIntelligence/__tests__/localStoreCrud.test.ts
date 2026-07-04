@@ -170,8 +170,9 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     const outside = await mkdtemp(join(tmpdir(), "keiko-qi-substore-victim-"));
     try {
       await symlink(outside, join(evidenceDir, QI_SUBDIR), "dir");
-      expect(() => recordQualityIntelligenceRun(baseInput("run-substore-link"), { evidenceDir }))
-        .toThrow(EvidenceWriteError);
+      expect(() =>
+        recordQualityIntelligenceRun(baseInput("run-substore-link"), { evidenceDir }),
+      ).toThrow(EvidenceWriteError);
       await expect(readFile(join(outside, "run-substore-link.qi.json"), "utf8")).rejects.toThrow();
     } finally {
       await rm(outside, { recursive: true, force: true });

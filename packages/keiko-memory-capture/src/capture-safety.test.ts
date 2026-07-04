@@ -30,7 +30,9 @@ describe("memoryTextEgressRejectionReason", () => {
   });
 
   it("exposes a secret-only guard that leaves reviewable PII to candidate policy", () => {
-    expect(memoryTextSecretEgressRejectionReason("my private support email is dev@example.com")).toBeNull();
+    expect(
+      memoryTextSecretEgressRejectionReason("my private support email is dev@example.com"),
+    ).toBeNull();
     const apiKey = ["sk-", "abcdefghijklmnopqrstuvwxyz12345"].join("");
     expect(memoryTextSecretEgressRejectionReason(`remember api_key=${apiKey}`)).toBe(
       "credential-shape",

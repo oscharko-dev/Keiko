@@ -2,7 +2,7 @@
 
 **Audience:** engineers implementing issue #505, verification leads, security reviewers evaluating the Epic #491 Voice Digital Twin scope and closure.
 
-Specification for Epic #491, the deliverable of Issue [#505](https://github.com/oscharko-dev/Keiko/issues/505) and the authoritative companion to [ADR-0068](../adr/ADR-0068-voice-evaluation-harness.md). It **defines** the capstone evaluation harness: what it proves, how to run it, its architecture, the dimension→acceptance-criterion mapping, the CI-safe mock and fixture strategy, and an explicit closure checklist. The harness lives in [`packages/keiko-evaluations/src/voice-twin/`](../../packages/keiko-evaluations/src/voice-twin/).
+Specification for Epic #491, the deliverable of Issue [#505](https://github.com/oscharko-dev/Keiko/issues/505) and the authoritative companion to [ADR-0110](../adr/ADR-0110-voice-evaluation-harness.md). It **defines** the capstone evaluation harness: what it proves, how to run it, its architecture, the dimension→acceptance-criterion mapping, the CI-safe mock and fixture strategy, and an explicit closure checklist. The harness lives in [`packages/keiko-evaluations/src/voice-twin/`](../../packages/keiko-evaluations/src/voice-twin/).
 
 ## 0. What the harness proves
 
@@ -13,7 +13,7 @@ The harness proves two critical invariants for the **entire** Voice Digital Twin
 
 **Why this matters.** Each child issue (#493–#504) shipped its own self-contained feature suite (dictation-ui, discussion-intelligence, spoken-action-governance, session-recap). Those suites test feature-level behavior. The harness tests the **foundation every feature depends on** — the capability contract itself. A bug in the capability table affects all six child features at once; a single failing test in the harness is therefore a blocker for Epic #491 closure.
 
-**The harness is not a transport test.** Transport-level behavior (WebSocket handshake, WebRTC media plane, reconnect recovery) is tested in `keiko-server/src/voice-realtime.ts` and `keiko-ui/src/app/components/desktop/hooks/voice-*.test.ts` suites. **The harness is not a reducer behavior test.** Runtime mechanics (timing engine state transitions, turn-manager overlap synthesis, transcript reducer partial-text churn) are tested in their own keiko-ui suites (ADR-0061 §32 tests, ADR-0062 §44 tests, ADR-0063 §33 tests, ADR-0064 §28 tests). The harness proves that the **contract surface** those reducers and transports consume is correct.
+**The harness is not a transport test.** Transport-level behavior (WebSocket handshake, WebRTC media plane, reconnect recovery) is tested in `keiko-server/src/voice-realtime.ts` and `keiko-ui/src/app/components/desktop/hooks/voice-*.test.ts` suites. **The harness is not a reducer behavior test.** Runtime mechanics (timing engine state transitions, turn-manager overlap synthesis, transcript reducer partial-text churn) are tested in their own keiko-ui suites (ADR-0103 §32 tests, ADR-0104 §44 tests, ADR-0105 §33 tests, ADR-0106 §28 tests). The harness proves that the **contract surface** those reducers and transports consume is correct.
 
 ## 1. How to run it
 
@@ -179,7 +179,7 @@ The Deliverable column quotes Issue #505's verbatim Deliverables.
 | STT-only and full-voice fixture suite                              | `stt-only.ts`, `speech-output.ts`, `full-realtime.ts` fixtures across both provider environments                                                                      | Proved |
 | Latency, interruption, buffer, transcript, and privacy metrics     | `latency-class-metric` (posture, §6), `interruption-metric`, `buffer-boundedness-metric`, `end-of-turn-/transcript-correction-metric`, `external-destination-privacy` | Proved |
 | CI-safe mock or fixture strategy                                   | Every production file is pure; sub-second run; no network/clock/credentials; determinism assertion; fs only in test files                                             | Proved |
-| Evaluation documentation and closure checklist                     | This document (`evaluation-harness.md`) + [ADR-0068](../adr/ADR-0068-voice-evaluation-harness.md) + §5 closure checklist                                              | Proved |
+| Evaluation documentation and closure checklist                     | This document (`evaluation-harness.md`) + [ADR-0110](../adr/ADR-0110-voice-evaluation-harness.md) + §5 closure checklist                                              | Proved |
 
 Coverage floor (`docs/qa/package-coverage-baseline.json`: lines 90.94 / statements 90.54 / branches 77.36 / functions 95.05) is **maintained and raised** — the new files run at ~99% statements / 100% functions, lifting the package aggregate.
 
@@ -189,10 +189,10 @@ Coverage floor (`docs/qa/package-coverage-baseline.json`: lines 90.94 / statemen
 
 This harness **does not** detect bugs in the timing engine, turn manager, transcript reducer, or playback controller. Those are tested in their own keiko-ui suites:
 
-- ADR-0061 voice-timebase.ts: 32 tests, 100% coverage
-- ADR-0062 voice-turn-manager.ts: 44 tests, 100% coverage
-- ADR-0063 voice-transcript-segments.ts: 33 tests, 100% coverage
-- ADR-0064 voice-playback-state.ts: 28 tests, 100% coverage
+- ADR-0103 voice-timebase.ts: 32 tests, 100% coverage
+- ADR-0104 voice-turn-manager.ts: 44 tests, 100% coverage
+- ADR-0105 voice-transcript-segments.ts: 33 tests, 100% coverage
+- ADR-0106 voice-playback-state.ts: 28 tests, 100% coverage
 
 If a reducer implements a transition that the contract table permits but the reducer incorrectly rejects (or vice versa), the keiko-ui suite catches it. This harness assumes the reducer respects the contract it imports.
 
@@ -204,7 +204,7 @@ import-bounded harness (ADR-0019 rule 3l forbids importing the keiko-ui timing e
 break determinism). The harness therefore proves the deterministic **latency posture class** each profile's
 media transport fixes (`latency-class-metric`: `none`→`none`, `gateway-batch`→`batch`,
 `webrtc`→`interactive-realtime`). The wall-clock timing behaviour itself — ring-drain timing, backpressure,
-catch-up — is measured by the keiko-ui `voice-timebase.ts` suite ([ADR-0061](../adr/ADR-0061-voice-timing-engine.md),
+catch-up — is measured by the keiko-ui `voice-timebase.ts` suite ([ADR-0103](../adr/ADR-0103-voice-timing-engine.md),
 32 deterministic tests with an injected clock).
 
 ### VOICE_TWIN_REPLAY_CAPACITY is a local constant
@@ -271,8 +271,8 @@ If any dimension fails, the output names it:
 
 ## 8. Related documentation
 
-- [ADR-0068](../adr/ADR-0068-voice-evaluation-harness.md) — the authoritative decision record and detailed rationale.
-- [ADR-0058–0067](../adr/) — the nine prior voice architecture decisions that this harness proves.
+- [ADR-0110](../adr/ADR-0110-voice-evaluation-harness.md) — the authoritative decision record and detailed rationale.
+- [ADR-0100–0109](../adr/) — the nine prior voice architecture decisions that this harness proves.
 - [deployment-profile-matrix.md](deployment-profile-matrix.md) — the 3×4 matrix this harness encodes as executable assertions.
 - [privacy-contract.md](privacy-contract.md) — the privacy boundaries and honest limitations on egress allowlisting.
 - [supply-chain-policy.md](supply-chain-policy.md) — the denied media packages list that `privacy.ts` implements.

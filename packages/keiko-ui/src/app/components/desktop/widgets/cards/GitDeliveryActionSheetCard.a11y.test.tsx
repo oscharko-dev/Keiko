@@ -118,10 +118,28 @@ describe("GitDeliveryActionSheetCard — a11y (WCAG 2.2 AA)", () => {
     expect(live).toHaveTextContent("waiting for approval");
   });
 
-  it("renders the alertdialog with an accessible name and description", () => {
+  it("is a non-modal named group, NOT an alertdialog (GEN-UI-A11Y-006)", () => {
+    // This inline embedded card has no focus trap and no modality, so promising role=alertdialog
+    // would misrepresent it. It must be an accessibly-named role=group instead.
     render(<GitDeliveryActionSheetCard actionSheet={makeSheet("ready-to-execute")} />);
-    const dialog = screen.getByRole("alertdialog");
-    expect(dialog).toHaveAttribute("aria-labelledby");
-    expect(dialog).toHaveAttribute("aria-describedby");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const group = screen.getByRole("group");
+    expect(group).toHaveAttribute("aria-labelledby");
+    expect(group).toHaveAttribute("aria-describedby");
+    // The accessible name resolves to the action title (actionKind · actionId).
+    expect(group).toHaveAccessibleName(/push · act-a11y/i);
+  });
+
+  it("does NOT grab focus on mount (GEN-UI-A11Y-006)", () => {
+    // A non-modal inline card must not hijack the reading order of the surrounding surface.
+    render(
+      <GitDeliveryActionSheetCard
+        actionSheet={makeSheet("waiting-for-approval")}
+        onApprove={() => {}}
+      />,
+    );
+    // Focus stays on the document body; neither the group nor the Approve button steals it.
+    expect(document.activeElement).toBe(document.body);
+    expect(screen.getByTestId("gdas-approve")).not.toBe(document.activeElement);
   });
 });

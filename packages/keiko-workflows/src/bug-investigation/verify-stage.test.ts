@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runBugVerification, SKIP_UNRESOLVED } from "./verify-stage.js";
 import { buildBugRunState, type BugRunState } from "./internal.js";
 import { computeBugFingerprint } from "./emit.js";
-import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import {
   detectWorkspace,
   type WorkspaceFs,

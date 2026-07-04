@@ -5,9 +5,11 @@
 //      root package.json's "version" field (the 0.2.0 baseline finalised in #427).
 //   2. The KEIKO_PRODUCT_VERSION constant in @oscharko-dev/keiko-contracts/src/index.ts
 //      matches that same root version.
-//   3. Issue #426's removed shim/duplicate paths stay removed: src/sdk/** and the local
+//   3. Every exported KEIKO_*_VERSION package/product constant under packages/*/src matches that
+//      package's package.json version. Schema/event versions use non-KEIKO names and stay separate.
+//   4. Issue #426's removed shim/duplicate paths stay removed: src/sdk/** and the local
 //      _sdk-version.ts mirrors under packages/keiko-cli/src and packages/keiko-server/src.
-//   4. packages/keiko-sdk/src/index.ts directly re-exports KEIKO_PRODUCT_VERSION as SDK_VERSION.
+//   5. packages/keiko-sdk/src/index.ts directly re-exports KEIKO_PRODUCT_VERSION as SDK_VERSION.
 //
 // Runs in the prepack chain after the build steps. This validates the source/build inputs the
 // publish path depends on; tarball contents are separately enforced by check:package-surface and
@@ -49,6 +51,38 @@ function listFilesRecursively(rootDir, prefix = "") {
   return files;
 }
 
+function shouldSkipSourceDir(name) {
+  return name === "dist" || name === "node_modules" || name === "__tests__";
+}
+
+function isCheckableSourceFile(relativePath) {
+  return (
+    relativePath.endsWith(".ts") &&
+    !relativePath.endsWith(".test.ts") &&
+    !relativePath.endsWith(".spec.ts")
+  );
+}
+
+function listSourceFilesRecursively(rootDir, prefix = "") {
+  const dirPath = join(rootDir, prefix);
+  const entries = readdirSync(dirPath, { withFileTypes: true }).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+  const files = [];
+  for (const entry of entries) {
+    const relativePath = prefix === "" ? entry.name : join(prefix, entry.name);
+    if (entry.isDirectory()) {
+      if (shouldSkipSourceDir(entry.name)) continue;
+      files.push(...listSourceFilesRecursively(rootDir, relativePath));
+      continue;
+    }
+    if (entry.isFile() && isCheckableSourceFile(relativePath)) {
+      files.push(relativePath.replaceAll("\\", "/"));
+    }
+  }
+  return files;
+}
+
 function sha256(relativePath) {
   return createHash("sha256")
     .update(readFileSync(join(repoRoot, relativePath)))
@@ -79,6 +113,23 @@ for (const name of readdirSync(packagesDir)) {
   }
   if (manifest.version !== expected) {
     fail(`${name}: version ${manifest.version} does not match root ${expected}`);
+  }
+  const packageSourceDir = join(pkgDir, "src");
+  if (!existsSync(packageSourceDir)) continue;
+  for (const relativePath of listSourceFilesRecursively(packageSourceDir)) {
+    const sourcePath = join(packageSourceDir, relativePath);
+    const source = readFileSync(sourcePath, "utf8");
+    const versionConstantRegex =
+      /export\s+const\s+(KEIKO_PRODUCT_VERSION|KEIKO_[A-Z0-9_]*_VERSION)\s*=\s*"([^"]+)"\s+as\s+const/g;
+    for (const match of source.matchAll(versionConstantRegex)) {
+      const [, constantName, actualVersion] = match;
+      if (actualVersion !== manifest.version) {
+        fail(
+          `${name}: ${constantName} in src/${relativePath} is ${actualVersion}, ` +
+            `but package.json is ${manifest.version}`,
+        );
+      }
+    }
   }
 }
 
@@ -151,5 +202,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `version-consistency: PASS — every workspace package and KEIKO_PRODUCT_VERSION reports ${expected}.`,
+  `version-consistency: PASS — every workspace package and exported KEIKO_*_VERSION constant reports ${expected}.`,
 );

@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `22`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `23`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 22 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 23 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -190,14 +190,44 @@ CREATE TABLE document_blobs (
   created_source_id TEXT NOT NULL,
   created_document_id TEXT NOT NULL,
   PRIMARY KEY (capsule_id, content_hash),
-  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
-  FOREIGN KEY (capsule_id, created_source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
-  FOREIGN KEY (capsule_id, created_document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
 const CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX =
   "CREATE INDEX idx_document_blobs_created_document ON document_blobs(capsule_id, created_document_id);";
+
+const CREATE_DOCUMENT_BLOBS_V23 = CREATE_DOCUMENT_BLOBS.replace(
+  "CREATE TABLE document_blobs",
+  "CREATE TABLE document_blobs_v23",
+);
+
+const COPY_DOCUMENT_BLOBS_TO_V23 = `
+INSERT INTO document_blobs_v23 (
+  capsule_id,
+  content_hash,
+  byte_length,
+  media_type,
+  storage_kind,
+  seal_version,
+  blob_bytes,
+  created_at,
+  created_source_id,
+  created_document_id
+)
+SELECT
+  capsule_id,
+  content_hash,
+  byte_length,
+  media_type,
+  storage_kind,
+  seal_version,
+  blob_bytes,
+  created_at,
+  created_source_id,
+  created_document_id
+FROM document_blobs;
+`.trim();
 
 const CREATE_DOCUMENT_TEXTS = `
 CREATE TABLE document_texts (
@@ -1093,8 +1123,7 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
   },
   {
     version: 19,
-    reason:
-      "Persist metadata-only source rebind audit events for local-knowledge root repair.",
+    reason: "Persist metadata-only source rebind audit events for local-knowledge root repair.",
     up: [
       CREATE_CAPSULE_AUDIT_EVENTS_V19,
       COPY_CAPSULE_AUDIT_EVENTS_TO_V19,
@@ -1124,9 +1153,20 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
   },
   {
     version: 22,
-    reason:
-      "Add a covering page-span index for citation page hops during scoped vector retrieval.",
+    reason: "Add a covering page-span index for citation page hops during scoped vector retrieval.",
     up: [CREATE_PAGES_CAPSULE_DOC_SPAN_INDEX],
+  },
+  {
+    version: 23,
+    reason:
+      "Make content-addressed PDF preview blobs capsule-owned so deleting the first source/document does not destroy bytes still referenced by duplicate documents.",
+    up: [
+      CREATE_DOCUMENT_BLOBS_V23,
+      COPY_DOCUMENT_BLOBS_TO_V23,
+      "DROP TABLE document_blobs;",
+      "ALTER TABLE document_blobs_v23 RENAME TO document_blobs;",
+      CREATE_DOCUMENT_BLOBS_DOCUMENT_INDEX,
+    ],
   },
 ] as const;
 

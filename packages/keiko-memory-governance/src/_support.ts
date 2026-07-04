@@ -13,6 +13,7 @@ import type {
   ProjectId,
   UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { makeMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
 
 import type { GovernanceContext } from "./types.js";
 
@@ -106,15 +107,19 @@ function buildCoreFields(overrides: RecordOverrides): CoreFields {
   };
 }
 
+// Wraps the sanctioned contracts fixture builder (`makeMemoryRecord`, GEN-DX-001) while
+// preserving this suite's flat override API (including `sensitivity` and
+// `sourceConversationId`), its `createdAt`-derived defaults, and its historical body default
+// ("prefers dark mode"), which the shared builder spells more verbosely. The `ctx()`
+// GovernanceContext builder stays local because that type is owned by this package.
 export function makeRecord(overrides: RecordOverrides = {}): MemoryRecord {
   const createdAt = overrides.createdAt ?? FIXED_NOW_MS;
   const core = buildCoreFields(overrides);
-  return {
+  return makeMemoryRecord({
     ...core,
-    schemaVersion: "1",
     provenance: buildProvenance(overrides, createdAt),
     validity: buildValidity(overrides, createdAt),
     createdAt,
     updatedAt: overrides.updatedAt ?? createdAt,
-  };
+  });
 }

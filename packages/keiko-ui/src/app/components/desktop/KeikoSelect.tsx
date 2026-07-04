@@ -420,7 +420,13 @@ export default function KeikoSelect({
       return;
     }
     if (event.key === "Tab") {
+      // The options portal to document.body, outside any containing dialog. On
+      // Tab we must both close the menu AND return focus to the trigger (which
+      // lives inside the dialog) and preventDefault, otherwise focus escapes the
+      // modal's focus trap into the page behind it (mirrors Escape/commit).
+      event.preventDefault();
       closeMenu();
+      triggerRef.current?.focus();
       return;
     }
     if (event.key === "ArrowDown") {
@@ -535,38 +541,55 @@ export default function KeikoSelect({
               aria-label={menuLabel}
               style={{ maxHeight: `${position.maxHeight.toString()}px` }}
             >
-              {sections.map((section, sectionIndex) => (
-                <div
-                  className="ksel-section"
-                  key={`${section.label ?? "section"}-${sectionIndex.toString()}`}
-                >
-                  {section.label !== undefined ? (
-                    <div className="ksel-section-label">{section.label}</div>
-                  ) : null}
-                  {section.options.map((option) => {
-                    const index = flatOptions.findIndex(
-                      (entry) =>
-                        entry.value === option.value && entry.sectionLabel === section.label,
-                    );
-                    const active = index === selectedIndex;
-                    const flatOption = flatOptions[index];
-                    if (flatOption === undefined) return null;
-                    return (
-                      <OverflowOptionButton
-                        active={active}
-                        index={index}
-                        key={`${section.label ?? "section"}-${option.value}`}
-                        onCommit={commit}
-                        onOptionKeyDown={onOptionKeyDown}
-                        option={flatOption}
-                        setOptionRef={(optionIndex, element) => {
-                          optionRefs.current[optionIndex] = element;
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-              ))}
+              {sections.map((section, sectionIndex) => {
+                // A labelled section is a real listbox group so its options stay
+                // owned by the listbox and screen readers announce the group name;
+                // an unlabelled wrapper is role="presentation" so its options are
+                // treated as direct listbox children (WAI-ARIA listbox pattern).
+                const sectionLabelId =
+                  section.label !== undefined
+                    ? `${menuId}-section-${sectionIndex.toString()}`
+                    : undefined;
+                return (
+                  <div
+                    className="ksel-section"
+                    key={`${section.label ?? "section"}-${sectionIndex.toString()}`}
+                    role={section.label !== undefined ? "group" : "presentation"}
+                    aria-labelledby={sectionLabelId}
+                  >
+                    {section.label !== undefined ? (
+                      <div className="ksel-section-label" id={sectionLabelId}>
+                        {section.label}
+                      </div>
+                    ) : null}
+                    {section.options.map((option) => {
+                      const index = flatOptions.findIndex(
+                        (entry) =>
+                          entry.value === option.value && entry.sectionLabel === section.label,
+                      );
+                      // aria-selected tracks the roving focus (activeIndex) so
+                      // assistive tech reports the option keyboard focus is on,
+                      // not the last committed value.
+                      const active = index === activeIndex;
+                      const flatOption = flatOptions[index];
+                      if (flatOption === undefined) return null;
+                      return (
+                        <OverflowOptionButton
+                          active={active}
+                          index={index}
+                          key={`${section.label ?? "section"}-${option.value}`}
+                          onCommit={commit}
+                          onOptionKeyDown={onOptionKeyDown}
+                          option={flatOption}
+                          setOptionRef={(optionIndex, element) => {
+                            optionRefs.current[optionIndex] = element;
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </div>
           </div>,
           document.body,

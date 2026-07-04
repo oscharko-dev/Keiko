@@ -317,7 +317,9 @@ describe("openSession", () => {
     const fixture = await withFixture();
     const meta = await fixture.manager.openSession(9222);
     const manifest = loadEvidence(fixture.evidenceStore, runIdFromSession(meta.sessionId));
-    const opened = manifest?.browser?.events.find((event) => event.type === "browser:session-opened");
+    const opened = manifest?.browser?.events.find(
+      (event) => event.type === "browser:session-opened",
+    );
     expect(opened?.profileEphemeral).toBe(true);
   });
 

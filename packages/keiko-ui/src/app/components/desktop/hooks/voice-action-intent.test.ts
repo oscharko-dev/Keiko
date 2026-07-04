@@ -1,4 +1,4 @@
-// Issue #503 (ADR-0066) — the Voice ↔ Spoken-action-governance binding. Proves the four ACs the hook is
+// Issue #503 (ADR-0108) — the Voice ↔ Spoken-action-governance binding. Proves the four ACs the hook is
 // responsible for: text-first dormancy for `none` / `speech-output` (AC1), committed-only proposals
 // (AC2), confirmation discipline for mutating effects (AC3), and stale-intent prevention via correction
 // supersession / barge-in interruption / turn-advance expiry (AC4). It also pins the content-free

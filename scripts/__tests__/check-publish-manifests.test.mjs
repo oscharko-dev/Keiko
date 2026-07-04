@@ -120,7 +120,10 @@ describe("validatePublishManifests", () => {
           "@oscharko-dev/keiko-contracts": VERSION,
           "@oscharko-dev/keiko-local-knowledge": VERSION,
         },
-        bundleDependencies: ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-local-knowledge"],
+        bundleDependencies: [
+          "@oscharko-dev/keiko-contracts",
+          "@oscharko-dev/keiko-local-knowledge",
+        ],
       }),
       [
         workspace("@oscharko-dev/keiko-contracts"),
