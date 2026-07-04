@@ -153,11 +153,127 @@ const POD_COUNT_KEYS = [
 ] as const;
 const POD_KINDS = ["pod", "pod-set"] as const;
 
-const PII_LIKE_RE =
-  /(?:[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|\b\d{3}[- ]?\d{2}[- ]?\d{4}\b|\b(?:\+?\d[\d .()-]{7,}\d)\b)/iu;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAsciiLetterCode(code: number): boolean {
+  return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isAsciiDigitCode(code: number): boolean {
+  return code >= 48 && code <= 57;
+}
+
+function isAsciiAlphaNumericCode(code: number): boolean {
+  return isAsciiLetterCode(code) || isAsciiDigitCode(code);
+}
+
+function isEmailLocalCode(code: number): boolean {
+  return (
+    isAsciiAlphaNumericCode(code) ||
+    code === 37 ||
+    code === 43 ||
+    code === 45 ||
+    code === 46 ||
+    code === 95
+  );
+}
+
+function isEmailDomainCode(code: number): boolean {
+  return isAsciiAlphaNumericCode(code) || code === 45 || code === 46;
+}
+
+function hasEmailDomainSuffix(value: string, start: number, end: number): boolean {
+  let finalDot = -1;
+  for (let i = start; i < end; i += 1) {
+    if (value.charCodeAt(i) === 46) finalDot = i;
+  }
+  if (finalDot <= start || end - finalDot - 1 < 2) return false;
+  for (let i = finalDot + 1; i < end; i += 1) {
+    if (!isAsciiLetterCode(value.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function containsEmailLikeText(value: string): boolean {
+  for (let at = 1; at < value.length - 3; at += 1) {
+    if (value.charCodeAt(at) !== 64) continue;
+    let localStart = at;
+    while (localStart > 0 && isEmailLocalCode(value.charCodeAt(localStart - 1))) localStart -= 1;
+    if (localStart === at) continue;
+    let domainEnd = at + 1;
+    while (domainEnd < value.length && isEmailDomainCode(value.charCodeAt(domainEnd))) {
+      domainEnd += 1;
+    }
+    if (hasEmailDomainSuffix(value, at + 1, domainEnd)) return true;
+  }
+  return false;
+}
+
+function skipOptionalSsnSeparator(value: string, index: number): number {
+  const code = value.charCodeAt(index);
+  return code === 32 || code === 45 ? index + 1 : index;
+}
+
+function hasDigitsAt(value: string, start: number, count: number): boolean {
+  if (start + count > value.length) return false;
+  for (let i = start; i < start + count; i += 1) {
+    if (!isAsciiDigitCode(value.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function isDigitBoundary(value: string, index: number): boolean {
+  return index < 0 || index >= value.length || !isAsciiDigitCode(value.charCodeAt(index));
+}
+
+function containsSsnLikeText(value: string): boolean {
+  for (let start = 0; start <= value.length - 9; start += 1) {
+    if (!isDigitBoundary(value, start - 1) || !hasDigitsAt(value, start, 3)) continue;
+    let index = skipOptionalSsnSeparator(value, start + 3);
+    if (!hasDigitsAt(value, index, 2)) continue;
+    index = skipOptionalSsnSeparator(value, index + 2);
+    if (hasDigitsAt(value, index, 4) && isDigitBoundary(value, index + 4)) return true;
+  }
+  return false;
+}
+
+function isPhoneBodyCode(code: number): boolean {
+  return (
+    isAsciiDigitCode(code) ||
+    code === 32 ||
+    code === 40 ||
+    code === 41 ||
+    code === 45 ||
+    code === 46
+  );
+}
+
+function scanPhoneLikeText(value: string, start: number): boolean {
+  let digits = 0;
+  let lastWasDigit = false;
+  const first = value.charCodeAt(start);
+  let index = first === 43 ? start + 1 : start;
+  for (; index < value.length && isPhoneBodyCode(value.charCodeAt(index)); index += 1) {
+    lastWasDigit = isAsciiDigitCode(value.charCodeAt(index));
+    if (lastWasDigit) digits += 1;
+  }
+  return digits >= 8 && lastWasDigit && isDigitBoundary(value, index);
+}
+
+function containsPhoneLikeText(value: string): boolean {
+  for (let start = 0; start < value.length; start += 1) {
+    const code = value.charCodeAt(start);
+    if ((code === 43 || isAsciiDigitCode(code)) && isDigitBoundary(value, start - 1)) {
+      if (scanPhoneLikeText(value, start)) return true;
+    }
+  }
+  return false;
+}
+
+function containsPiiLikeText(value: string): boolean {
+  return containsEmailLikeText(value) || containsSsnLikeText(value) || containsPhoneLikeText(value);
 }
 
 function onlyKeys(
@@ -176,7 +292,7 @@ function onlyKeys(
 }
 
 function isSafeActivityText(value: unknown): value is string {
-  return isKnowledgePodEvidenceSafeText(value) && !PII_LIKE_RE.test(value);
+  return isKnowledgePodEvidenceSafeText(value) && !containsPiiLikeText(value);
 }
 
 export function isKnowledgePodRetrievalActivitySafeText(value: unknown): value is string {
