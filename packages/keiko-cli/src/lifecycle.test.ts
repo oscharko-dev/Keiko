@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import { runLifecycleCli } from "./lifecycle.js";
+import { runLifecycleCli, safeKillProcess } from "./lifecycle.js";
 import type { CliIo } from "./runner.js";
 
 interface Captured {
@@ -749,5 +749,37 @@ describe("runLifecycleCli", () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+});
+
+describe("safeKillProcess (ESRCH-safe default killer)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockKillThrowing(code: string): void {
+    vi.spyOn(process, "kill").mockImplementation((): never => {
+      throw Object.assign(new Error(`kill ${code}`), { code });
+    });
+  }
+
+  it("swallows ESRCH — the target already exited, which is the intended end state", () => {
+    mockKillThrowing("ESRCH");
+    expect(() => {
+      safeKillProcess(4242, "SIGTERM");
+    }).not.toThrow();
+  });
+
+  it("rethrows a non-ESRCH error (e.g. EPERM) so real kill failures still surface", () => {
+    mockKillThrowing("EPERM");
+    expect(() => {
+      safeKillProcess(4242, "SIGKILL");
+    }).toThrow(/EPERM/u);
+  });
+
+  it("delivers the signal when the process exists", () => {
+    const spy = vi.spyOn(process, "kill").mockImplementation((): true => true);
+    safeKillProcess(4242, "SIGTERM");
+    expect(spy).toHaveBeenCalledWith(4242, "SIGTERM");
   });
 });

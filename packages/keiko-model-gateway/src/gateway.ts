@@ -4,7 +4,11 @@
 // the audit ledger (issue #10) has a reliable typed target on every response.
 
 import { randomUUID } from "node:crypto";
-import { CancelledError, UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  CancelledError,
+  GatewayError,
+  UnknownModelError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { findConfiguredCapability } from "./model-selection.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
@@ -24,6 +28,16 @@ import type {
 export interface GatewayDeps {
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
+}
+
+// RB-6 (GEN-OBS-CORRELATION-503): tag a thrown GatewayError with the gateway's per-call request id
+// so a failed model call is traceable to the gateway record (mirrors the id already carried by a
+// successful call's `usage.requestId`). Only the first (innermost) tag wins so a retry does not
+// overwrite the id of the attempt that actually failed. No-op for non-GatewayError throws.
+function attachGatewayRequestId(error: unknown, requestId: string): void {
+  if (error instanceof GatewayError && error.requestId === undefined) {
+    error.requestId = requestId;
+  }
 }
 
 interface RoutedCall {
@@ -53,16 +67,24 @@ export class Gateway {
     const requestId = randomUUID();
     const start = this.clock.now();
     const adapter = this.adapterFor(requestId, route.capability);
-    const result = await executeWithRetry(
-      (attemptTimeoutMs) =>
-        this.invoke(breaker, adapter, request, {
-          ...route.provider,
-          ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
-        }),
-      route.provider,
-      this.clock,
-      request.cancellationSignal,
-    );
+    let result;
+    try {
+      result = await executeWithRetry(
+        (attemptTimeoutMs) =>
+          this.invoke(breaker, adapter, request, {
+            ...route.provider,
+            ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
+          }),
+        route.provider,
+        this.clock,
+        request.cancellationSignal,
+      );
+    } catch (error) {
+      // RB-6: stamp the gateway request id onto the thrown error so a FAILED buffered call is
+      // traceable to the gateway record (previously requestId was attached only on success/usage).
+      attachGatewayRequestId(error, requestId);
+      throw error;
+    }
     return {
       ...result,
       usage: {
@@ -98,6 +120,8 @@ export class Gateway {
       if (!(error instanceof CancelledError)) {
         breaker.recordFailure();
       }
+      // RB-6: stamp the gateway request id onto the thrown error (mid-stream failure traceability).
+      attachGatewayRequestId(error, requestId);
       throw error;
     }
   }

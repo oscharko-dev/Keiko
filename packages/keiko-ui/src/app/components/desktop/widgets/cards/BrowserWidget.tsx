@@ -18,6 +18,7 @@ import {
   deleteBrowserSession,
   fetchBrowserStatus,
 } from "../../../../../lib/browser-api";
+import { createSameOriginApiEventSource } from "../../../../../lib/safe-event-source";
 import type {
   BrowserEventEnvelope,
   BrowserScreenshotResult,
@@ -137,7 +138,8 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       eventSourceRef.current = null;
       return;
     }
-    const source = new EventSource(browserEventsUrl(session.sessionId));
+    const source = createSameOriginApiEventSource(browserEventsUrl(session.sessionId));
+    if (source === null) return;
     const kinds: BrowserEventEnvelope["kind"][] = [
       "session-opened",
       "navigated",
@@ -269,6 +271,14 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
       setWorking(false);
     }
   }, [session, clearError]);
+
+  // GEN-PERF-WIDGET-007 — the screenshot base64 can be ~13 MB; building the data: URL
+  // inline in JSX reallocated the whole string on every unrelated re-render (SSE event,
+  // busyLabel, error). Memoize on the pending shot so unrelated renders reuse it.
+  const pendingShotSrc = useMemo(
+    () => (pendingShot === null ? null : `data:image/png;base64,${pendingShot.dataBase64}`),
+    [pendingShot],
+  );
 
   const openDisabled = useMemo(() => working || session !== null, [working, session]);
   const sessionRequiredDisabled = useMemo(() => working || session === null, [working, session]);
@@ -460,7 +470,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           // eslint-disable-next-line @next/next/no-img-element
           <img
             className="bw-screenshot"
-            src={`data:image/png;base64,${pendingShot.dataBase64}`}
+            src={pendingShotSrc ?? undefined}
             alt="Pending screenshot preview"
           />
         ) : (

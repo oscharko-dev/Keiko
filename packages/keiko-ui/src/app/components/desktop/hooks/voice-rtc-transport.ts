@@ -173,6 +173,14 @@ async function acquireMicrophone(signal?: AbortSignal | undefined): Promise<Medi
 const ICE_GATHER_TIMEOUT_MS = 2_000;
 const MAX_QUEUED_DATA_CHANNEL_EVENTS = 50;
 const INPUT_MUTE_RAMP_SECONDS = 0.035;
+const APPROVED_VOICE_RTC_ICE_SERVERS: RTCIceServer[] = [];
+Object.freeze(APPROVED_VOICE_RTC_ICE_SERVERS);
+
+// docs/voice/protocol.md §10 is the policy link: the browser must not introduce STUN/TURN or
+// browser-direct media egress by configuration drift. SDP negotiation remains proxied through the BFF.
+export const APPROVED_VOICE_RTC_CONFIGURATION: RTCConfiguration = Object.freeze({
+  iceServers: APPROVED_VOICE_RTC_ICE_SERVERS,
+});
 
 type BrowserAudioContextConstructor = new (contextOptions?: AudioContextOptions) => AudioContext;
 
@@ -458,7 +466,7 @@ export function createBrowserVoiceRtcTransport(): VoiceRtcTransport {
       try {
         throwIfAborted(signal);
         inputPipeline = createInputPipeline(stream);
-        pc = new RTCPeerConnection();
+        pc = new RTCPeerConnection(APPROVED_VOICE_RTC_CONFIGURATION);
         for (const track of inputPipeline.senderStream.getTracks()) {
           pc.addTrack(track, inputPipeline.senderStream);
         }

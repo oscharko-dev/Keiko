@@ -47,23 +47,26 @@ describe("ConnectorScopePill", () => {
   it("renders one pill for a single capsule scope (legacy singular field)", () => {
     const chat = makeChat({ localKnowledgeScope: makeCapsule("cap-abc") });
     render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getAllByRole("status")).toHaveLength(1);
+    // GEN-UI-STATE-001: the visible label is a plain span (no longer role="status"), so it is
+    // queried by text; each pill carries one disconnect button.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
     // uiux-fix F041 (C173) — the entity is a "capsule" product-wide, not a "connector".
-    expect(screen.getByRole("status")).toHaveTextContent("Capsule: cap-abc");
+    expect(screen.getByText("Capsule: cap-abc")).toBeInTheDocument();
   });
 
   it("renders resolved label from the labels map when provided", () => {
     const chat = makeChat({ localKnowledgeScope: makeCapsule("cap-abc") });
     const labels = new Map([["capsule:cap-abc", "My Docs"]]);
     render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} labels={labels} />);
-    expect(screen.getByRole("status")).toHaveTextContent("My Docs");
+    expect(screen.getByText("My Docs")).toBeInTheDocument();
   });
 
   it("renders one pill per scope for a plural list (M4 mixed N)", () => {
     const scopes: ChatLocalKnowledgeScope[] = [makeCapsule("c1"), makeSet("s1")];
     const chat = makeChat({ localKnowledgeScopes: scopes });
     render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getAllByRole("status")).toHaveLength(2);
+    // GEN-UI-STATE-001: one disconnect button per pill (labels are no longer status regions).
+    expect(screen.getAllByRole("button")).toHaveLength(2);
   });
 
   it("uses stable keys — each pill has a distinct aria-label (no index collision)", () => {

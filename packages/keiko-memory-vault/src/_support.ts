@@ -3,7 +3,8 @@
 // stubbed, so a regression in the cipher surfaces in these tests, not just the dedicated ones.
 
 import { DatabaseSync } from "node:sqlite";
-import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import { makeMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
 import { createMemoryContentCipher } from "./cipher.js";
 import { runMigrations } from "./schema.js";
 
@@ -16,31 +17,14 @@ export function openTestDb(): DatabaseSync {
   return db;
 }
 
-// Minimal valid MemoryRecord fixture for row-layer suites. Mirrors the inline `makeMemory` in
-// vault.test.ts so access/maintenance suites do not duplicate the provenance shape.
+// Minimal valid MemoryRecord fixture for row-layer suites. Wraps the sanctioned contracts
+// fixture builder (`makeMemoryRecord`, GEN-DX-001) and preserves this suite's historical body
+// default ("prefers dark mode"), which the shared builder spells more verbosely. Caller
+// overrides win over that body default because they are applied last.
 export function makeRecord(
   overrides: Partial<MemoryRecord> & Pick<MemoryRecord, "id">,
 ): MemoryRecord {
-  const t = 1_700_000_000_000;
-  return {
-    schemaVersion: "1",
-    scope: { kind: "user", userId: "u-1" as UserId },
-    type: "preference",
-    body: "prefers dark mode",
-    provenance: {
-      sourceKind: "explicit-user-instruction",
-      capturedAt: t,
-      confidence: 0.9,
-      sensitivity: "confidential",
-    },
-    validity: { validFrom: t },
-    status: "accepted",
-    pinned: false,
-    tags: [],
-    createdAt: t,
-    updatedAt: t,
-    ...overrides,
-  };
+  return makeMemoryRecord({ body: "prefers dark mode", ...overrides });
 }
 
 export function memId(value: string): MemoryId {

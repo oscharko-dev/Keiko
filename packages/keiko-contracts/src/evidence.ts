@@ -170,6 +170,7 @@ export interface EvidenceBrowserEvent {
   readonly warning?: string | undefined;
   readonly code?: string | undefined;
   readonly message?: string | undefined;
+  readonly profileEphemeral?: boolean | undefined;
 }
 
 export interface EvidenceBrowserScreenshot {

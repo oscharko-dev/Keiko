@@ -177,7 +177,7 @@ describe("ConnectorGraph — with capsules", () => {
     const capsule = makeCapsule({ id: makeCapsuleId("drag"), displayName: "First KC" });
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag capsule First KC to workspace" });
+    const row = await screen.findByRole("button", { name: "Drag First KC to the workspace" });
     const dataTransfer = {
       effectAllowed: "none",
       setData: vi.fn(),
@@ -211,7 +211,7 @@ describe("ConnectorGraph — with capsules", () => {
     window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag capsule First KC to workspace" });
+    const row = await screen.findByRole("button", { name: "Drag First KC to the workspace" });
     fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
     fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
     fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
@@ -246,7 +246,7 @@ describe("ConnectorGraph — with capsules", () => {
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
     const row = await screen.findByRole("button", {
-      name: "Drag capsule Blocked KC to workspace",
+      name: "Drag Blocked KC to the workspace",
     });
     fireEvent.pointerDown(row, { button: 2, clientX: 10, clientY: 10 });
     fireEvent.pointerMove(window, { clientX: 40, clientY: 44 });
@@ -256,6 +256,44 @@ describe("ConnectorGraph — with capsules", () => {
     fireEvent.pointerUp(window, { clientX: 120, clientY: 140 });
 
     expect(dropListener).not.toHaveBeenCalled();
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    document.elementFromPoint = originalElementFromPoint;
+    workspace.remove();
+  });
+
+  it("resets the grabbing cursor and drops window listeners on pointercancel (GEN-PERF-MEMORY-004)", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("cancel"), displayName: "Cancel KC" });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    document.body.appendChild(workspace);
+    const originalElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => workspace);
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const row = await screen.findByRole("button", { name: "Drag Cancel KC to the workspace" });
+    fireEvent.pointerDown(row, { button: 0, clientX: 10, clientY: 10 });
+    // Move far enough to enter the dragging state (sets body cursor to grabbing).
+    fireEvent.pointerMove(window, { clientX: 60, clientY: 64 });
+    expect(document.body.style.cursor).toBe("grabbing");
+
+    // The browser steals the gesture (scroll/zoom/contextmenu): pointercancel must
+    // run the same teardown — reset cursor, clear ghost, drop the window listeners —
+    // and must NOT emit a drop.
+    fireEvent.pointerCancel(window, { clientX: 60, clientY: 64 });
+    expect(document.body.style.cursor).toBe("");
+    expect(dropListener).not.toHaveBeenCalled();
+    expect(removeSpy).toHaveBeenCalledWith("pointermove", expect.any(Function));
+    expect(removeSpy).toHaveBeenCalledWith("pointerup", expect.any(Function));
+    expect(removeSpy).toHaveBeenCalledWith("pointercancel", expect.any(Function));
+
+    // A stray pointermove after cancel must not resurrect the grabbing cursor
+    // (listener was removed).
+    fireEvent.pointerMove(window, { clientX: 200, clientY: 200 });
+    expect(document.body.style.cursor).toBe("");
 
     window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     document.elementFromPoint = originalElementFromPoint;
@@ -273,7 +311,7 @@ describe("ConnectorGraph — with capsules", () => {
     window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
-    const row = await screen.findByRole("button", { name: "Drag capsule First KC to workspace" });
+    const row = await screen.findByRole("button", { name: "Drag First KC to the workspace" });
     const dragEnd = createEvent.dragEnd(row);
     Object.defineProperties(dragEnd, {
       clientX: { value: 240 },
@@ -703,6 +741,145 @@ describe("ConnectorGraph — a11y", () => {
       expect(screen.getByText("A Doc")).toBeInTheDocument();
     });
     const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});
+
+describe("ConnectorGraph — drag handle keyboard semantics (GEN-UI-KEYBOARD-004 / -INTERACTION-004)", () => {
+  it("keeps the pointer-only drag handle out of the Tab order and off the keyboard path", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("dh"), displayName: "Handle Cap" });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const handle = await screen.findByRole("button", { name: "Drag Handle Cap to the workspace" });
+    // Removed from the Tab order so it is not a redundant / keyboard-inert stop;
+    // the "Add to workspace" button is the keyboard equivalent.
+    expect(handle).toHaveAttribute("tabindex", "-1");
+    // The keyboard control that actually performs the action is a real button.
+    expect(
+      screen.getByRole("button", { name: /add capsule Handle Cap to workspace/i }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26)", () => {
+  async function openCreateDialog(): Promise<{
+    user: ReturnType<typeof userEvent.setup>;
+    trigger: HTMLElement;
+  }> {
+    const user = userEvent.setup();
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /create a new knowledge capsule/i }),
+      ).toBeInTheDocument();
+    });
+    const trigger = screen.getByRole("button", { name: /create a new knowledge capsule/i });
+    trigger.focus();
+    await user.click(trigger);
+    await screen.findByRole("dialog", { name: /create capsule/i });
+    return { user, trigger };
+  }
+
+  it("moves focus into the dialog (the name input) on open", async () => {
+    await openCreateDialog();
+    expect(document.activeElement).toBe(screen.getByLabelText(/capsule display name/i));
+  });
+
+  it("traps Tab within the dialog, wrapping last -> first", async () => {
+    await openCreateDialog();
+    const dialog = screen.getByRole("dialog", { name: /create capsule/i });
+    const submitBtn = within(dialog).getByRole("button", { name: /^create capsule$/i });
+    submitBtn.focus();
+    // Tab off the last focusable wraps back to the first (the input).
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(within(dialog).getByLabelText(/capsule display name/i));
+  });
+
+  it("traps Shift+Tab within the dialog, wrapping first -> last", async () => {
+    await openCreateDialog();
+    const dialog = screen.getByRole("dialog", { name: /create capsule/i });
+    const input = within(dialog).getByLabelText(/capsule display name/i);
+    input.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole("button", { name: /^create capsule$/i }),
+    );
+  });
+
+  it("closes on Escape and restores focus to the trigger", async () => {
+    const { trigger } = await openCreateDialog();
+    const dialog = screen.getByRole("dialog", { name: /create capsule/i });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: /create capsule/i })).toBeNull();
+    });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("jest-axe: the create dialog has no violations", async () => {
+    await openCreateDialog();
+    const results = await axe(document.body);
+    expect(results).toHaveNoViolations();
+  });
+});
+
+describe("ConnectorGraph — DisconnectConfirmDialog focus management (test-plan #27)", () => {
+  async function openDisconnectDialog(): Promise<{
+    user: ReturnType<typeof userEvent.setup>;
+    trigger: HTMLElement;
+  }> {
+    const capsule = makeCapsule({ id: makeCapsuleId("dc"), displayName: "Ready Cap" });
+    const user = userEvent.setup();
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+    await waitFor(() => {
+      expect(screen.getByText("Ready Cap")).toBeInTheDocument();
+    });
+    const trigger = screen.getByRole("button", { name: /disconnect capsule ready cap/i });
+    trigger.focus();
+    await user.click(trigger);
+    await screen.findByRole("dialog", { name: /disconnect capsule/i });
+    return { user, trigger };
+  }
+
+  it("moves focus into the dialog (first focusable) on open", async () => {
+    await openDisconnectDialog();
+    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: /cancel/i }));
+  });
+
+  it("traps Tab within the dialog, wrapping last -> first", async () => {
+    await openDisconnectDialog();
+    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const confirmBtn = within(dialog).getByRole("button", { name: /^disconnect$/i });
+    confirmBtn.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: /cancel/i }));
+  });
+
+  it("traps Shift+Tab within the dialog, wrapping first -> last", async () => {
+    await openDisconnectDialog();
+    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    const cancelBtn = within(dialog).getByRole("button", { name: /cancel/i });
+    cancelBtn.focus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(
+      within(dialog).getByRole("button", { name: /^disconnect$/i }),
+    );
+  });
+
+  it("closes on Escape and restores focus to the trigger", async () => {
+    const { trigger } = await openDisconnectDialog();
+    const dialog = screen.getByRole("dialog", { name: /disconnect capsule/i });
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: /disconnect capsule/i })).toBeNull();
+    });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("jest-axe: the disconnect dialog has no violations", async () => {
+    await openDisconnectDialog();
+    const results = await axe(document.body);
     expect(results).toHaveNoViolations();
   });
 });

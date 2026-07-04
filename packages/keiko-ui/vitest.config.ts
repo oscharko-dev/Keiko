@@ -18,6 +18,10 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
+    // GEN-TEST-FLAKE-001: the required UI test job runs this config; align its per-test timeout with
+    // the root and coverage suites (15s) so jsdom scheduler load does not false-RED it. Parity
+    // enforced by scripts/__tests__/vitest-config-parity.test.mjs.
+    testTimeout: 15_000,
     include: [
       "src/app/**/*.test.ts",
       "src/app/**/*.test.tsx",

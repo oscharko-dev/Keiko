@@ -56,7 +56,11 @@ describe("Qwen3/SentencePiece tokenizer adapter", () => {
   it("counts tokens through a provided Qwen3-compatible encode implementation", async () => {
     const tokenizer = await createQwen3SentencePieceTokenizerFromModule({
       tokenizerIdentity: QWEN3_SENTENCEPIECE_TOKENIZER_ID,
-      encode: (text: string) => text.split(/\s+/u).filter(Boolean).map((_part, i) => i),
+      encode: (text: string) =>
+        text
+          .split(/\s+/u)
+          .filter(Boolean)
+          .map((_part, i) => i),
     });
 
     expect(tokenizer.identity).toBe(QWEN3_SENTENCEPIECE_TOKENIZER_ID);

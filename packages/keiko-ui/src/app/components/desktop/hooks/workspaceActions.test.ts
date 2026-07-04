@@ -1461,6 +1461,91 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
   });
 });
 
+// GEN-DUP-NEAR-007 — a scoped Figma-view card (a "figma" add carrying selectedScreenIdsJson) must
+// take its geometry from the registry's figmaView entry, not from hardcoded literals. This pins the
+// spawned card's w/h/min* to WIN_TYPES.figmaView (clamped against the figma-manager minimums) so a
+// future WIN_TYPES.figmaView geometry change cannot silently diverge from the spawn path.
+describe("makeMutations.add — scoped Figma-view card geometry (#GEN-DUP-NEAR-007)", () => {
+  it("sources the spawned figma-view card geometry from WIN_TYPES.figmaView", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 2000, h: 2000 }),
+    });
+
+    const id = add("figma", { selectedScreenIdsJson: JSON.stringify(["screen-1"]) });
+    const card = (wins ?? []).find((w) => w.id === id);
+    if (card === undefined) throw new Error("Expected a spawned figma-view card.");
+
+    const fv = WIN_TYPES.figmaView;
+    const figma = WIN_TYPES.figma;
+    expect(card.w).toBe(Math.max(fv.w, Math.max(figma.min.w, fv.min.w)));
+    expect(card.h).toBe(Math.max(fv.h, Math.max(figma.min.h, fv.min.h)));
+    // The registry values are the source of truth: w/h come straight from figmaView, and the
+    // minimums are the figma-manager minimums clamped up to at least the figmaView minimums.
+    expect(card.w).toBe(fv.w);
+    expect(card.h).toBe(fv.h);
+  });
+});
+
+describe("makeMutations.add — Chat singleton", () => {
+  it("reuses the existing chat window and switches its target conversation", () => {
+    let wins: AppWindow[] | null = [win("chat", { chatId: "chat-1", title: "Chat 1" }, "chat")];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 4 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    const id = add("chat", { chatId: "chat-2", title: "Chat 2" });
+
+    expect(id).toBe("chat");
+    expect(wins).toHaveLength(1);
+    expect(wins?.[0]).toMatchObject({
+      id: "chat",
+      type: "chat",
+      cfg: { chatId: "chat-2", title: "Chat 2" },
+      minimized: false,
+      z: 5,
+    });
+  });
+
+  // GEN-PERF-CHAT-001 — pin the load-bearing singleton invariant. The original Critical was N chat
+  // hosts (one per window) fighting over a single global session's active pointer, producing an
+  // openChat ping-pong storm. Step 03 made `chat` a singleton window; adding a second chat from an
+  // empty workspace must yield exactly ONE 'chat' window (focus + cfg-merge), never a second host.
+  it("add('chat', A) then add('chat', B) yields exactly ONE chat window (singleton pin)", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 1 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    const firstId = add("chat", { chatId: "A", title: "Chat A" });
+    const secondId = add("chat", { chatId: "B", title: "Chat B" });
+
+    // Both adds resolve to the same singleton window id.
+    expect(firstId).toBe("chat");
+    expect(secondId).toBe("chat");
+    // Exactly one 'chat' window exists — no second host was spawned.
+    const chatWindows = (wins ?? []).filter((w) => w.type === "chat");
+    expect(chatWindows).toHaveLength(1);
+    // The singleton now targets the most-recently-added conversation (cfg merged, not duplicated).
+    expect(chatWindows[0]?.cfg).toMatchObject({ chatId: "B", title: "Chat B" });
+  });
+});
+
 describe("makeMutations.openEditorFile", () => {
   function harness(
     initial: readonly AppWindow[] = [],

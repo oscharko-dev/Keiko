@@ -1,7 +1,7 @@
 # Voice Digital Twin — implementation sequencing
 
 Sequencing notes for Epic #491 child issues, expanding
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) decision D9. This gives later issues
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) decision D9. This gives later issues
 a stable dependency order and write-ownership boundaries so no two parallel issues own overlapping file scope.
 
 ## 1. Required order (from Epic #491)
@@ -42,7 +42,7 @@ To honor the Stop Condition "two parallel agents must not edit the same file sco
 
 - **Contracts (#493, #496)** own `packages/keiko-contracts/src/*` voice additions (capability flags/kind;
   control/replay protocol types). They are additive and must not bump
-  `CONVERSATION_CAPABILITY_CONTRACT_VERSION` unless a new `ModelKind` is chosen (ADR-0058 D5).
+  `CONVERSATION_CAPABILITY_CONTRACT_VERSION` unless a new `ModelKind` is chosen (ADR-0100 D5).
 - **Model Gateway (#493)** owns capability advertisement/selection wiring in
   `packages/keiko-model-gateway/src/*`.
 - **BFF / server (#494, #497, #503)** own `packages/keiko-server/src/routes.ts` handlers and transport
@@ -52,12 +52,12 @@ To honor the Stop Condition "two parallel agents must not edit the same file sco
 - **Runtime mechanics (#498–#500, #502)** own their dedicated runtime modules; they must not edit transport or
   contracts owned by earlier issues.
 - **Evidence / memory (#504)** own `packages/keiko-evidence/src/*` and `packages/keiko-memory-capture/src/*`
-  voice helpers, reusing the redaction/hashing/sealing seams (ADR-0058 D6, privacy contract §3).
+  voice helpers, reusing the redaction/hashing/sealing seams (ADR-0100 D6, privacy contract §3).
 - **Evaluation (#505)** owns `packages/keiko-evaluations/*` harness fixtures.
 
 ## 4. Cross-cutting invariants every child issue must preserve
 
-- Keiko remains fully usable with no voice model (ADR-0058 D1).
+- Keiko remains fully usable with no voice model (ADR-0100 D1).
 - Voice adds **no new authority**: spoken intent is untrusted input producing the existing governed
   `WorkflowHandoffRequest`; the single write path and scoped writer are reused, never bypassed
   ([architecture.md](architecture.md) §6).
@@ -70,18 +70,18 @@ To honor the Stop Condition "two parallel agents must not edit the same file sco
 ## 5. Decisions explicitly deferred to later issues
 
 - Whether voice capability is advertised via additive optional flags or a new `ModelKind` literal — **#493**
-  (ADR-0058 D5).
+  (ADR-0100 D5).
 - Whether to re-open a bidirectional WebSocket upgrade on the BFF (currently hard-rejected) — **#496/#497**
-  (ADR-0058 D3).
+  (ADR-0100 D3).
 - Whether to add an opt-in outbound destination host allowlist at the `gatewayFetch` boundary — a later
-  hardening issue (ADR-0058 D4; [privacy-contract.md](privacy-contract.md) §1).
+  hardening issue (ADR-0100 D4; [privacy-contract.md](privacy-contract.md) §1).
 - Lifting the ADR-0048 D3 deferral of encryption-at-rest for customer-reconstructive artifacts, as it applies
   to voice reconstructive artifacts — **#504/#506**.
 
 ## 6. References
 
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md);
-  [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md) (the #496 protocol
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md);
+  [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md) (the #496 protocol
   contract); [architecture.md](architecture.md); [privacy-contract.md](privacy-contract.md);
   [deployment-profile-matrix.md](deployment-profile-matrix.md);
   [supply-chain-policy.md](supply-chain-policy.md); [protocol.md](protocol.md) (the #496 protocol

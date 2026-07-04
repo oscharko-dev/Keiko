@@ -36,6 +36,7 @@ export interface Connection {
   readonly boundRoot?: string;
   readonly boundScopeKind?: SelectedScopeKind;
   readonly boundRelativePath?: string;
+  readonly boundScopeElided?: true;
   readonly boundConnectorKind?: "capsule" | "capsule-set";
   readonly boundConnectorId?: string;
 }

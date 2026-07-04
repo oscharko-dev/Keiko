@@ -139,7 +139,9 @@ describe("ReviewQueue — populated state", () => {
     expect(screen.getByText("Confidence: 83%")).toBeInTheDocument();
     expect(screen.getByText("Sensitivity: Confidential")).toBeInTheDocument();
     expect(screen.getByText("Source kind: system-default")).toBeInTheDocument();
-    expect(screen.getByText("Rationale: User stated this during a voice turn.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Rationale: User stated this during a voice turn."),
+    ).toBeInTheDocument();
   });
 
   it("renders review queue labels in German when the locale is German", async () => {
@@ -158,7 +160,9 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Deutscher Review-Vorschlag")).toBeInTheDocument();
     });
-    expect(await screen.findByRole("heading", { name: "Review-Warteschlange" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Review-Warteschlange" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Akzeptieren" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ablehnen" })).toBeInTheDocument();
     expect(screen.getByText("Sensitivitaet: Oeffentlich")).toBeInTheDocument();

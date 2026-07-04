@@ -64,6 +64,14 @@ function writeConfigWithRef(stateDir, ref = "cred:m") {
   );
 }
 
+function writeRerankerConfigWithRef(stateDir, ref = "model-gateway:reranker") {
+  writeFileSync(
+    join(stateDir, "keiko.config.json"),
+    JSON.stringify({ reranker: { apiKeySecretRef: ref } }),
+    { mode: 0o600 },
+  );
+}
+
 function writeProviderVault(stateDir, content) {
   const dir = join(stateDir, "credentials");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -131,9 +139,16 @@ describe("auditLocalState — genuinely-encrypted fixture (#1325 AC3)", () => {
     }
     expect(classById(result, "memory-encryption").status).toBe("pass");
     expect(classById(result, "local-knowledge-encryption").status).toBe("pass");
+    expect(classById(result, "local-knowledge-encryption").findings.join(" ")).toContain(
+      "plaintext lexical FTS projection remains reconstructive residual data",
+    );
     expect(classById(result, "evidence-qi").status).toBe("pass");
     expect(classById(result, "credentials").status).toBe("pass");
     expect(classById(result, "file-modes").status).toBe("pass");
+    expect(classById(result, "editor-hot-exit").status).toBe("pass");
+    expect(classById(result, "editor-hot-exit").findings.join(" ")).toContain(
+      "1 editor recovery snapshot",
+    );
     expect(classById(result, "evidence-qi").findings.join(" ")).toContain(
       "1 Figma snapshot record(s)",
     );
@@ -163,6 +178,7 @@ describe("auditLocalState — focused class behaviour", () => {
     expect(classById(result, "memory-encryption").status).toBe("skip");
     expect(classById(result, "local-knowledge-encryption").status).toBe("skip");
     expect(classById(result, "evidence-qi").status).toBe("skip");
+    expect(classById(result, "editor-hot-exit").status).toBe("skip");
   });
 
   it("fails when the gateway config carries a plaintext apiKey", () => {
@@ -178,6 +194,32 @@ describe("auditLocalState — focused class behaviour", () => {
     expect(classById(result, "credentials").status).toBe("fail");
   });
 
+  it("fails when the gateway config carries a plaintext reranker apiKey", () => {
+    const stateDir = join(root, "plain-reranker", ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(stateDir, "keiko.config.json"),
+      JSON.stringify({
+        providers: [],
+        reranker: { apiKey: "sk-reranker-leak-0123456789" },
+      }),
+      { mode: 0o600 },
+    );
+    const result = auditLocalState(stateDir);
+    expect(result.ok).toBe(false);
+    expect(classById(result, "credentials").status).toBe("fail");
+  });
+
+  it("fails when keiko.config.json is present but corrupt", () => {
+    const stateDir = join(root, "corrupt-config", ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "keiko.config.json"), "{not-json", { mode: 0o600 });
+    const result = auditLocalState(stateDir);
+    expect(result.ok).toBe(false);
+    expect(classById(result, "credentials").status).toBe("fail");
+    expect(classById(result, "credentials").findings.join(" ")).toContain("not valid JSON");
+  });
+
   it("fails when a sensitive artifact is group/world-readable", () => {
     if (process.platform === "win32") return;
     const stateDir = join(root, "loose", ".keiko");
@@ -188,6 +230,46 @@ describe("auditLocalState — focused class behaviour", () => {
     const result = auditLocalState(stateDir);
     expect(result.ok).toBe(false);
     expect(classById(result, "file-modes").status).toBe("fail");
+  });
+
+  it("fails when the editor hot-exit vault stores plaintext snapshot content", () => {
+    const stateDir = freshStateDir("plain-hot-exit");
+    const dir = join(stateDir, "editor-hot-exit");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(dir, "snapshots.vault"),
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [`hot-exit:${"a".repeat(64)}`]: JSON.stringify({
+            content: "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            relativePath: "src/app.ts",
+          }),
+        },
+      }),
+      { mode: 0o600 },
+    );
+    const cls = classById(auditLocalState(stateDir), "editor-hot-exit");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("not sealed");
+    expect(cls.findings.join(" ")).toContain("plaintext hot-exit snapshot fields");
+  });
+
+  it("fails when the editor hot-exit vault contains a non-hot-exit reference", () => {
+    const stateDir = freshStateDir("bad-hot-exit-ref");
+    const dir = join(stateDir, "editor-hot-exit");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(dir, "snapshots.vault"),
+      JSON.stringify({
+        version: 1,
+        entries: { "cred:fixture-model": SEALED_SECRET },
+      }),
+      { mode: 0o600 },
+    );
+    const cls = classById(auditLocalState(stateDir), "editor-hot-exit");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("non-hot-exit snapshot reference");
   });
 });
 
@@ -226,6 +308,14 @@ describe("auditLocalState — per-class failure detection", () => {
   it("credentials: detects a referenced secret with no vault", () => {
     const stateDir = freshStateDir("orphan-ref");
     writeConfigWithRef(stateDir);
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("missing");
+  });
+
+  it("credentials: detects a referenced reranker secret with no vault", () => {
+    const stateDir = freshStateDir("orphan-reranker-ref");
+    writeRerankerConfigWithRef(stateDir);
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain("missing");
@@ -287,6 +377,17 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).toContain("not sealed");
   });
 
+  it("credentials: detects an unsealed referenced reranker credential", () => {
+    const stateDir = freshStateDir("unsealed-reranker-ref");
+    writeRerankerConfigWithRef(stateDir);
+    writeProviderVault(stateDir, {
+      entries: { "model-gateway:reranker": "plaintext-provider-value" },
+    });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "credentials");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("not sealed");
+  });
+
   it("credentials: rejects an empty provider credential reference", () => {
     const stateDir = freshStateDir("empty-ref");
     writeConfigWithRef(stateDir, "");
@@ -299,6 +400,15 @@ describe("auditLocalState — per-class failure detection", () => {
     const stateDir = freshStateDir("sealed-ref");
     writeConfigWithRef(stateDir);
     writeProviderVault(stateDir, { entries: { "cred:m": SEALED_SECRET } });
+    expect(auditLocalState(stateDir).classes.find((c) => c.id === "credentials").status).toBe(
+      "pass",
+    );
+  });
+
+  it("credentials: accepts a referenced sealed reranker credential", () => {
+    const stateDir = freshStateDir("sealed-reranker-ref");
+    writeRerankerConfigWithRef(stateDir);
+    writeProviderVault(stateDir, { entries: { "model-gateway:reranker": SEALED_SECRET } });
     expect(auditLocalState(stateDir).classes.find((c) => c.id === "credentials").status).toBe(
       "pass",
     );
@@ -409,6 +519,7 @@ describe("auditLocalState — per-class failure detection", () => {
       "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)",
       "INSERT INTO schema_meta VALUES ('content_encryption', 'aes-256-gcm/v1')",
       `INSERT INTO schema_meta VALUES ('content_encryption_probe', '${SEALED_PROBE}')`,
+      "INSERT INTO schema_meta VALUES ('content_encryption_scope', 'reconstructive-columns/v3')",
       "CREATE TABLE document_texts (normalized_text TEXT)",
       "INSERT INTO document_texts VALUES ('leaked plaintext document content')",
     ]);
@@ -430,6 +541,7 @@ describe("auditLocalState — per-class failure detection", () => {
       "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)",
       "INSERT INTO schema_meta VALUES ('content_encryption', 'aes-256-gcm/v1')",
       `INSERT INTO schema_meta VALUES ('content_encryption_probe', '${SEALED_PROBE}')`,
+      "INSERT INTO schema_meta VALUES ('content_encryption_scope', 'reconstructive-columns/v3')",
       `CREATE TABLE ${table} (${column} TEXT)`,
       `INSERT INTO ${table} (${column}) VALUES ('plaintext-new-lk-target')`,
     ]);
@@ -438,6 +550,42 @@ describe("auditLocalState — per-class failure detection", () => {
     );
     expect(cls.status).toBe("fail");
     expect(cls.findings.join(" ")).toContain(`${table}.${column}`);
+  });
+
+  it("local-knowledge-encryption: detects a missing encryption scope marker", () => {
+    const stateDir = freshStateDir("lk-missing-scope");
+    craftDb(join(stateDir, "local-knowledge", "default", "capsules.db"), [
+      "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)",
+      "INSERT INTO schema_meta VALUES ('content_encryption', 'aes-256-gcm/v1')",
+      `INSERT INTO schema_meta VALUES ('content_encryption_probe', '${SEALED_PROBE}')`,
+      "CREATE TABLE document_texts (normalized_text TEXT)",
+    ]);
+    const cls = auditLocalState(stateDir).classes.find(
+      (c) => c.id === "local-knowledge-encryption",
+    );
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("encryption scope marker");
+  });
+
+  it("local-knowledge-encryption: detects secret-shaped text in the plaintext lexical projection", () => {
+    const stateDir = freshStateDir("lk-lexical-secret");
+    craftDb(join(stateDir, "local-knowledge", "default", "capsules.db"), [
+      "CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)",
+      "INSERT INTO schema_meta VALUES ('content_encryption', 'aes-256-gcm/v1')",
+      `INSERT INTO schema_meta VALUES ('content_encryption_probe', '${SEALED_PROBE}')`,
+      "INSERT INTO schema_meta VALUES ('content_encryption_scope', 'reconstructive-columns/v3')",
+      "CREATE TABLE chunk_lexical_index (text TEXT, exact_text TEXT)",
+      `INSERT INTO chunk_lexical_index VALUES ('ordinary terms', 'token=${fake(
+        "ghp_",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      )}')`,
+    ]);
+    const cls = auditLocalState(stateDir).classes.find(
+      (c) => c.id === "local-knowledge-encryption",
+    );
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("chunk_lexical_index.exact_text");
+    expect(cls.findings.join(" ")).toContain("unredacted secret material");
   });
 
   it("evidence-qi: detects an unredacted secret in an evidence manifest", () => {
@@ -452,6 +600,84 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi").status).toBe(
       "fail",
     );
+  });
+
+  it("evidence-qi: detects an unredacted secret in a tool-result artifact", () => {
+    const stateDir = freshStateDir("tool-result-leak");
+    const toolDir = join(stateDir, "evidence", "tool-results");
+    mkdirSync(toolDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(toolDir, `${"a".repeat(64)}.tool-result.txt`),
+      `stdout\nAuthorization: Bearer ${fake("tok.", "abcdefghijklmnop0123456789")}\n`,
+      { mode: 0o600 },
+    );
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("tool-results");
+    expect(cls.findings.join(" ")).toContain("unredacted secret material");
+  });
+
+  it("evidence-qi: includes the QI retention deletion audit JSONL as protected state", () => {
+    const stateDir = freshStateDir("qi-retention-audit");
+    const qiDir = join(stateDir, "evidence", "qi");
+    mkdirSync(qiDir, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(qiDir, "retention-deletion-audit.jsonl"),
+      `${JSON.stringify({ type: "qi:run:deleted", runId: "run-1", status: "deleted" })}\n`,
+      { mode: 0o600 },
+    );
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("pass");
+    expect(cls.findings.join(" ")).toContain("QI retention audit file");
+  });
+
+  it("runtime-integrity: reports quarantined QI manifests as unresolved integrity residue", () => {
+    const stateDir = freshStateDir("qi-quarantined-manifest");
+    const qiDir = join(stateDir, "evidence", "qi");
+    mkdirSync(qiDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(qiDir, "run-corrupt.qi.json.corrupt.2026-07-02T00:00:00.000Z"), "{", {
+      mode: 0o600,
+    });
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("pass");
+    expect(cls.findings.join(" ")).toContain("1 quarantined QI manifest");
+    const integrity = classById(auditLocalState(stateDir), "runtime-integrity");
+    expect(integrity.status).toBe("fail");
+    expect(integrity.findings.join(" ")).toContain("unresolved quarantined QI manifest");
+  });
+
+  it("runtime-integrity: reports quarantined SQLite artifacts and diagnostics", () => {
+    const stateDir = freshStateDir("sqlite-quarantine-marker");
+    const memoryDir = join(stateDir, "memory");
+    mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(memoryDir, "keiko-memory.db.corrupt.2026-07-02T00-00-00-000Z"), "", {
+      mode: 0o600,
+    });
+    writeFileSync(
+      join(memoryDir, "keiko-memory.db.corrupt.2026-07-02T00-00-00-000Z.diagnostic.json"),
+      JSON.stringify({ store: "memory-vault" }),
+      { mode: 0o600 },
+    );
+    const result = auditLocalState(stateDir);
+    const integrity = classById(result, "runtime-integrity");
+    expect(result.ok).toBe(false);
+    expect(integrity.status).toBe("fail");
+    expect(integrity.findings.join(" ")).toContain("unresolved quarantined SQLite artifact");
+    expect(integrity.findings.join(" ")).toContain("SQLite quarantine diagnostic record");
+  });
+
+  it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", () => {
+    if (process.platform === "win32") return;
+    const stateDir = freshStateDir("tool-result-symlink");
+    const evidenceDir = join(stateDir, "evidence");
+    const outsideDir = join(root, "outside-tool-results");
+    mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+    mkdirSync(outsideDir, { recursive: true, mode: 0o700 });
+    symlinkSync(outsideDir, join(evidenceDir, "tool-results"), "dir");
+    const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
+    expect(cls.status).toBe("fail");
+    expect(cls.findings.join(" ")).toContain("symbolic link");
+    expect(cls.findings.join(" ")).not.toContain(outsideDir);
   });
 
   it("evidence-qi: detects a QI manifest without integrity hashes", () => {

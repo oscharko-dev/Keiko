@@ -2,7 +2,7 @@
 // Errors carry a stable `code` discriminant; callers switch on `code`, never parse
 // `message`. Every message is redacted at construction so errors are always safe to log.
 
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export const WORKSPACE_CODES = {
   PATH_ESCAPE: "WORKSPACE_PATH_ESCAPE",
@@ -17,13 +17,8 @@ export const WORKSPACE_CODES = {
 
 export type WorkspaceCode = (typeof WORKSPACE_CODES)[keyof typeof WORKSPACE_CODES];
 
-export abstract class WorkspaceError extends Error {
-  abstract readonly code: WorkspaceCode;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+export abstract class WorkspaceError extends RedactingError {
+  abstract override readonly code: WorkspaceCode;
 }
 
 // Raised when a candidate path escapes the workspace root (NUL, `..`, or absolute escape).

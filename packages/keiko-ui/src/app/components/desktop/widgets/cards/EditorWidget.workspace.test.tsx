@@ -7,6 +7,10 @@ import { EditorWidget } from "./EditorWidget";
 const probeState = vi.hoisted(() => ({
   runtimeProps: null as EditorRuntimeWidgetProps | null,
   dragModeStarts: [] as Array<{ readonly paneId: string; readonly path: string }>,
+  // GEN-PERF-EDITOR-003 — the latest props each pane received, keyed by paneId, so a test
+  // can compare a non-dragged pane's prop bundle (esp. renderTabHandle identity) across a
+  // hold-state change on a different pane and prove React.memo would bail it out.
+  propsByPane: new Map<string, EditorRuntimeWidgetProps>(),
 }));
 
 vi.mock("next/dynamic", () => ({
@@ -14,6 +18,7 @@ vi.mock("next/dynamic", () => ({
     function RuntimeProbe(props: EditorRuntimeWidgetProps): ReactNode {
       const externalSaveRequest = props.externalSaveRequest;
       probeState.runtimeProps = props;
+      probeState.propsByPane.set(props.paneId ?? "pane", props);
       return (
         <div data-testid="runtime-probe">
           <span data-testid="runtime-pane">{props.paneId ?? ""}</span>
@@ -155,6 +160,7 @@ vi.mock("./editorHotExitStore", async (importOriginal) => {
 afterEach(() => {
   probeState.runtimeProps = null;
   probeState.dragModeStarts = [];
+  probeState.propsByPane.clear();
   vi.clearAllMocks();
 });
 
@@ -325,6 +331,63 @@ describe("EditorWidget workspace session", () => {
         }),
       }),
     );
+  });
+
+  // GEN-PERF-EDITOR-003 — arming a tab hold on one pane must not change the prop bundle the
+  // OTHER pane's editor host receives; specifically renderTabHandle must stay referentially
+  // stable so React.memo(EditorRuntimeWidget) bails the non-dragged pane out. Before the fix
+  // the inline renderTabHandle closure was rebuilt on every EditorWidget render, so any
+  // hold-state change churned every pane's renderTabHandle identity.
+  it("keeps the non-dragged pane's props (incl. renderTabHandle) stable when a hold arms on another pane", () => {
+    render(
+      <EditorWidget
+        root="/repo"
+        file="src/a.ts"
+        openFiles={["src/a.ts", "src/b.ts", ".editorconfig"]}
+        onWorkspaceChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Split src/a.ts right" }));
+    expect(screen.getAllByTestId("runtime-probe")).toHaveLength(2);
+
+    const beforePane2 = probeState.propsByPane.get("pane-2");
+    expect(beforePane2).toBeDefined();
+    const renderTabHandleBefore = beforePane2?.renderTabHandle;
+    const onSelectBefore = beforePane2?.onSelectOpenFile;
+    const onMoveTabBefore = beforePane2?.onMoveTab;
+    // pane-2 holds no tab, so its held-tab scalar is undefined before AND after.
+    expect(beforePane2?.heldTabFile).toBeUndefined();
+
+    // Arm a pointer-drag hold on pane-1's tab (state-only change on pane-1).
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Tab handle pane-1 src/a.ts" }), {
+      button: 0,
+      pointerType: "mouse",
+      clientX: 10,
+      clientY: 10,
+    });
+
+    const afterPane2 = probeState.propsByPane.get("pane-2");
+    // renderTabHandle and the other bound callbacks are referentially identical (memoized
+    // per pane), and the held-tab scalar for pane-2 is still undefined — so a real
+    // React.memo shallow compare would bail pane-2 out entirely.
+    expect(afterPane2?.renderTabHandle).toBe(renderTabHandleBefore);
+    expect(afterPane2?.onSelectOpenFile).toBe(onSelectBefore);
+    expect(afterPane2?.onMoveTab).toBe(onMoveTabBefore);
+    expect(afterPane2?.heldTabFile).toBeUndefined();
+
+    // Release the pointer so the window-level drag listeners installed by the hold are torn
+    // down and do not leak into sibling tests. jsdom lacks elementFromPoint, which the
+    // pointer-up path calls for drop hit-testing, so stub it for this teardown.
+    const originalElementFromPoint = document.elementFromPoint;
+    (document as unknown as { elementFromPoint: () => Element | null }).elementFromPoint = () =>
+      null;
+    try {
+      fireEvent.pointerUp(window, { button: 0, pointerType: "mouse", clientX: 10, clientY: 10 });
+    } finally {
+      (
+        document as unknown as { elementFromPoint: typeof originalElementFromPoint }
+      ).elementFromPoint = originalElementFromPoint;
+    }
   });
 
   it("activates an inactive pane when selecting its current file", () => {
@@ -918,7 +981,7 @@ describe("EditorWidget workspace session", () => {
     expect(onWorkspaceChange).not.toHaveBeenCalled();
   });
 
-  it("ignores keyboard tab movement when the Alt modifier is absent", () => {
+  it("activates the next tab (not reorder) on a plain ArrowRight without the Alt modifier (GEN-UI-KEYBOARD-001)", () => {
     const onWorkspaceChange = vi.fn();
     render(
       <EditorWidget
@@ -934,8 +997,17 @@ describe("EditorWidget workspace session", () => {
       key: "ArrowRight",
     });
 
+    // A plain (Alt-less) ArrowRight now roves the tab-stop to the next tab and activates it
+    // (automatic activation, WCAG APG tablist) — it must NOT reorder the tabs.
     expect(screen.getByTestId("runtime-open-files")).toHaveTextContent("src/a.ts|src/b.ts");
-    expect(onWorkspaceChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId("runtime-file")).toHaveTextContent("src/b.ts");
+    const lastPatch = onWorkspaceChange.mock.calls.at(-1)?.[0];
+    expect(lastPatch?.file).toBe("src/b.ts");
+    // Order preserved (activation, not reorder).
+    expect(JSON.parse(String(lastPatch?.layoutJson)).panes["pane-1"].tabOrder).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+    ]);
   });
 
   it("creates a split when a tab is dropped on a pane split zone", () => {

@@ -440,3 +440,47 @@ describe("ContainerRunnerManager — governance", () => {
     expect(empty.tasks).toEqual([]);
   });
 });
+
+// ── Evidence ──────────────────────────────────────────────────────────────────────
+
+describe("ContainerRunnerManager — evidence", () => {
+  it("persists a content-free run manifest (no argv, image ref, or output)", async () => {
+    const manager = makeManager(
+      makeSpawn({ stdout: "super-secret-container-output-1234", exitCode: 0 }),
+    );
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID });
+    const raw = evidenceStore.get(result.runId);
+    expect(raw).toBeDefined();
+    expect(raw).toContain('"container-run"');
+    expect(raw).toContain('"executable": "docker"');
+    expect(raw).not.toContain("super-secret-container-output-1234");
+    expect(raw).not.toContain("docker.io/library/alpine");
+    expect(raw).not.toContain(":/workspace:ro");
+  });
+
+  it("fails closed when evidence persistence is unavailable", async () => {
+    const failing: EvidenceStore = {
+      ...createInMemoryEvidenceStore(),
+      put: (): string => {
+        throw new Error("evidence write failed");
+      },
+    };
+    const manager = makeManager(makeSpawn({ stdout: "ok", exitCode: 0 }), {
+      evidenceStore: failing,
+    });
+    const events = collect(manager);
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED", status: 500 });
+    expect(events.map((event) => event.kind)).toEqual(["run-started"]);
+  });
+
+  it("fails closed when no evidence store is configured", async () => {
+    const manager = makeManager(makeSpawn({ stdout: "ok", exitCode: 0 }), {
+      evidenceStore: undefined,
+    });
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: PILOT_ID }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED", status: 500 });
+  });
+});

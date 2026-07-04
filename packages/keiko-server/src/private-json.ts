@@ -8,15 +8,47 @@
 
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   renameSync,
   unlinkSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+
+function writeDurableTextFile(path: string, content: string, mode: number): void {
+  const fd = openSync(path, "wx", mode);
+  try {
+    writeSync(fd, content, 0, "utf8");
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function fsyncDirectory(dir: string): void {
+  if (process.platform === "win32") return;
+  let fd: number | undefined;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    // Some filesystems reject directory fsync. The temp file itself has still been flushed.
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close only.
+      }
+    }
+  }
+}
 
 export function savePrivateJson(path: string, raw: Record<string, unknown>): void {
   const resolvedPath = resolve(path);
@@ -32,15 +64,12 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
     `.keiko-config.${String(process.pid)}.${Date.now().toString(36)}.${randomUUID()}.tmp`,
   );
   try {
-    writeFileSync(tempPath, `${JSON.stringify(raw, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-      mode: 0o600,
-    });
+    writeDurableTextFile(tempPath, `${JSON.stringify(raw, null, 2)}\n`, 0o600);
     if (process.platform !== "win32") {
       chmodSync(tempPath, 0o600);
     }
     renameSync(tempPath, resolvedPath);
+    fsyncDirectory(dir);
   } finally {
     if (existsSync(tempPath)) {
       try {

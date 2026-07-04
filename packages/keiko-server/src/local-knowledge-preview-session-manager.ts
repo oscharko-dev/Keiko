@@ -357,7 +357,9 @@ export function createPdfCitationPreviewSessionManager(
       state.byDocumentKey.clear();
       state.byHandle.clear();
     },
-    endSessionUse: (handle): void => { endSessionUseRecord(state, handle); },
+    endSessionUse: (handle): void => {
+      endSessionUseRecord(state, handle);
+    },
     lookupOpenSession: (authority): OpenPdfCitationPreviewSessionResult | undefined =>
       lookupOpenSessionRecord(state, authority),
     lookupSession: (handle): PdfCitationPreviewSessionLookup => lookupSessionResult(state, handle),

@@ -70,7 +70,7 @@ export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
   return { status: 200, body: { models } };
 }
 
-// Voice-capability disable kill-switch (Issue #493, ADR-0058 D1). A regulated deployment can
+// Voice-capability disable kill-switch (Issue #493, ADR-0100 D1). A regulated deployment can
 // disable voice entirely via `KEIKO_VOICE_DISABLED`; the resolver then reports a clean
 // `unavailable` (reason "policy-disabled") and Keiko stays fully usable. Exported so the voice
 // dictation route (Issue #494) gates on the identical kill-switch, keeping one source of truth.
@@ -86,7 +86,7 @@ export function isVoiceDisabledByPolicy(env: EnvSource): boolean {
 // into UI logs (AC5), by construction. When no config is resolved, voice is disabled by policy, or
 // no voice provider is configured, the endpoint returns a clean `unavailable` resolution rather
 // than failing — Keiko stays fully usable in no-voice environments (AC1). Capability detection is
-// metadata-only and performs NO network probe (ADR-0058 out-of-scope for #493).
+// metadata-only and performs NO network probe (ADR-0100 out-of-scope for #493).
 export function handleVoiceCapability(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
   const policyDisabled = isVoiceDisabledByPolicy(deps.env);
@@ -111,7 +111,7 @@ export function isVoiceDictationCapable(deps: UiHandlerDeps): boolean {
   return voice.available && voice.capabilities.speechToText;
 }
 
-// Issue #497, Epic #491 (ADR-0058 D3, ADR-0059) — whether the running deployment may open the
+// Issue #497, Epic #491 (ADR-0100 D3, ADR-0101) — whether the running deployment may open the
 // realtime voice WebSocket control plane and the browser-native WebRTC media plane. True only when
 // the resolved voice capability is the full-realtime profile (`transport.webrtcMedia`) and voice is
 // not disabled by policy. It is the single source of truth for two gates: the capability-gated

@@ -18,6 +18,7 @@
 // rather than driving a real synthesized-audio round trip.
 
 import { expect, test, type Page } from "@playwright/test";
+import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const SPEECH_OUTPUT_CAPABILITY = {
   voice: {
@@ -99,7 +100,7 @@ async function speechOutputFlow(page: Page): Promise<void> {
   await expect(mute).toBeVisible();
   await expect(mute).toHaveAttribute("aria-pressed", "false");
   await page.screenshot({
-    path: "docs/voice/evidence/501-speech-output-controls.png",
+    path: evidenceScreenshotPath("docs/voice/evidence/501-speech-output-controls.png"),
     fullPage: true,
   });
 

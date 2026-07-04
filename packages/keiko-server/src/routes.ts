@@ -167,6 +167,11 @@ import {
 import { handleEditorTestGeneration } from "./editor/testGenerationRoutes.js";
 import { handleEditorPatchApply } from "./editor/patchApplyRoutes.js";
 import {
+  handleEditorHotExitDelete,
+  handleEditorHotExitRead,
+  handleEditorHotExitWrite,
+} from "./editor/hotExitRoutes.js";
+import {
   handleEditorAgentActions,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
@@ -261,7 +266,15 @@ import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
 
 export interface ApiError {
-  readonly error: { readonly code: string; readonly message: string };
+  readonly error: {
+    readonly code: string;
+    readonly message: string;
+    // RB-6 (GEN-OBS-CORRELATION-103/402): a request-scoped correlation id an operator can grep for.
+    // Optional and additive — when absent the body is byte-identical to the pre-RB-6 shape, so the
+    // hundreds of routes/tests that assert `{ error: { code, message } }` are unaffected. Only the
+    // paths that mint an id (the top-level 500 and any handler that opts in) surface it.
+    readonly correlationId?: string;
+  };
 }
 
 // A route handler returns the HTTP status and the JSON body to serialize, or STREAMING when it has
@@ -281,6 +294,10 @@ export interface RouteContext {
   readonly params: Readonly<Record<string, string>>;
   // Parsed request URL (loopback-authority base); handlers read the query without re-parsing.
   readonly url: URL;
+  // RB-6: the request-scoped correlation id minted at request entry (server.ts). Handlers that build
+  // error responses or SSE error frames thread it through so a failure is traceable end-to-end.
+  // Optional so the many existing RouteContext literals in tests compile unchanged.
+  readonly correlationId?: string;
 }
 
 export type RouteHandler = (
@@ -308,7 +325,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
   { method: "GET", pattern: "/api/voice/capability", handler: handleVoiceCapability },
-  // Issue #494 (Epic #491) — optional, capability-gated STT composer dictation (ADR-0058 D1/D2/D4).
+  // Issue #494 (Epic #491) — optional, capability-gated STT composer dictation (ADR-0100 D1/D2/D4).
   // POST a short audio clip (base64 inside the JSON + CSRF envelope) and receive its transcript;
   // answers VOICE_UNAVAILABLE when no speech-to-text capability is configured/enabled.
   { method: "POST", pattern: "/api/voice/transcribe", handler: handleVoiceTranscribe },
@@ -603,6 +620,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // retrieval references). No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
   { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
+  // Editor hot-exit recovery: content is persisted only in the server-owned encrypted local store.
+  // Browser IndexedDB keeps metadata and an opaque ref, never raw file contents or workspace paths.
+  { method: "POST", pattern: "/api/editor/hot-exit/write", handler: handleEditorHotExitWrite },
+  { method: "POST", pattern: "/api/editor/hot-exit/read", handler: handleEditorHotExitRead },
+  { method: "POST", pattern: "/api/editor/hot-exit/delete", handler: handleEditorHotExitDelete },
   // Issue #1199 — governed completion gateway (ADR-0042 D4/D5/D6). Deterministic language-service
   // completion (#1198) always, plus gated model-assisted completion (#1210) over coding context
   // (#1211). Content-free response apart from reviewable insertText; the browser never reaches a model.
@@ -1008,8 +1030,10 @@ function prepareRoute(definition: RouteDefinition): PreparedRoute {
 }
 
 const PREPARED_API_ROUTES: readonly PreparedRoute[] = API_ROUTES.map(prepareRoute);
-const PREPARED_ROUTES_BY_METHOD: ReadonlyMap<string, readonly PreparedRoute[]> = (():
-  ReadonlyMap<string, readonly PreparedRoute[]> => {
+const PREPARED_ROUTES_BY_METHOD: ReadonlyMap<string, readonly PreparedRoute[]> = ((): ReadonlyMap<
+  string,
+  readonly PreparedRoute[]
+> => {
   const routesByMethod = new Map<string, PreparedRoute[]>();
   for (const route of PREPARED_API_ROUTES) {
     const routes = routesByMethod.get(route.definition.method) ?? [];
@@ -1093,8 +1117,8 @@ export function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
 }
 
-export function errorBody(code: string, message: string): ApiError {
-  return { error: { code, message } };
+export function errorBody(code: string, message: string, correlationId?: string): ApiError {
+  return { error: { code, message, ...(correlationId === undefined ? {} : { correlationId }) } };
 }
 
 export function notFoundBody(): ApiError {

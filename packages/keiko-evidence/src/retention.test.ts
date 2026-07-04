@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { applyRetention } from "./retention.js";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "./store.js";
+import {
+  createInMemoryEvidenceStore,
+  createNodeEvidenceStore,
+  type EvidenceStore,
+} from "./store.js";
 import type { EvidenceManifest } from "./types.js";
 
 function manifest(runId: string, startedAt: number, finishedAt: number): EvidenceManifest {
@@ -43,6 +50,25 @@ describe("applyRetention — maxRuns", () => {
     ]);
     applyRetention(store, { maxRuns: 2 });
     expect([...store.list()].sort()).toEqual(["run-mid", "run-new"]);
+  });
+
+  it("deletes node-store side-file directories for expired manifests", () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-evidence-retention-side-files-"));
+    try {
+      const store = createNodeEvidenceStore(dir);
+      store.put("run-old", JSON.stringify(manifest("run-old", 90, 100)));
+      store.put("run-new", JSON.stringify(manifest("run-new", 190, 200)));
+      const sideDir = join(dir, "run-old");
+      mkdirSync(sideDir);
+      writeFileSync(join(sideDir, "browser-1.png"), "png");
+
+      applyRetention(store, { maxRuns: 1 });
+
+      expect(store.list()).toEqual(["run-new"]);
+      expect(existsSync(sideDir)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("is a no-op when the count is within the cap", () => {

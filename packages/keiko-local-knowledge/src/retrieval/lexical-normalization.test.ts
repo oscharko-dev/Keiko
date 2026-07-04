@@ -46,9 +46,7 @@ describe("lexical analyzer", () => {
     expect(indexed).toContain("straße");
     expect(indexed).toContain("strasse");
 
-    expect(lexicalQueryTerms(["Strasse"])).toEqual(
-      expect.arrayContaining(["strasse", "straße"]),
-    );
+    expect(lexicalQueryTerms(["Strasse"])).toEqual(expect.arrayContaining(["strasse", "straße"]));
     expect(lexicalQueryTerms(["Straße"])).toEqual(expect.arrayContaining(["straße", "strasse"]));
   });
 

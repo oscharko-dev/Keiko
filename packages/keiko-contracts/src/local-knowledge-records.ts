@@ -222,11 +222,7 @@ export const INDEXING_JOB_STATUSES: readonly IndexingJobStatus[] = [
 // compatible; incompatible checkpoints are refused and that document restarts cleanly
 // (Epic #1160, Issue #1286).
 export type CapsuleReindexMode =
-  | "changed-files"
-  | "repair-failed"
-  | "resume"
-  | "full-reembed"
-  | "full-rebuild";
+  "changed-files" | "repair-failed" | "resume" | "full-reembed" | "full-rebuild";
 
 export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
   "changed-files",
@@ -293,11 +289,7 @@ export interface CapsuleEmbeddingCompatibility {
 export type CapsuleContextualRetrievalHealthSource = "capsule" | "env" | "default";
 
 export type CapsuleContextualRetrievalHealthStatus =
-  | "disabled"
-  | "ready"
-  | "rebuild-required"
-  | "degraded"
-  | "unavailable";
+  "disabled" | "ready" | "rebuild-required" | "degraded" | "unavailable";
 
 export interface CapsuleContextualRetrievalHealth {
   readonly enabled: boolean;

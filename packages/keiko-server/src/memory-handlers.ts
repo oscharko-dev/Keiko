@@ -37,6 +37,7 @@ import {
 } from "@oscharko-dev/keiko-memory-governance";
 import {
   checkStatusTransition,
+  MEMORY_FORGET_REASON_USER_REQUEST,
   MEMORY_SCOPE_KINDS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
@@ -46,6 +47,7 @@ import {
   type MemoryAuditEvent,
   type MemoryEdge,
   type MemoryEdgeId,
+  type MemoryForgetReason,
   type MemoryId,
   type MemoryProposal,
   type MemoryProposalId,
@@ -710,17 +712,14 @@ export async function handleArchiveMemory(
 //   3. delete with an audit tombstone.
 
 interface DestructiveInput {
-  readonly reason: string;
+  readonly reason: MemoryForgetReason;
 }
 
 interface ForgetSelectionInput extends DestructiveInput {
   readonly selector: ForgetSelector;
 }
 
-function parseDestructiveInput(
-  raw: Record<string, unknown>,
-  defaultReason: string,
-): DestructiveInput | RouteResult {
+function parseDestructiveInput(raw: Record<string, unknown>): DestructiveInput | RouteResult {
   if (raw.acknowledged !== true) {
     return {
       status: 400,
@@ -730,11 +729,7 @@ function parseDestructiveInput(
       ),
     };
   }
-  const reason =
-    typeof raw.reason === "string" && raw.reason.trim().length > 0
-      ? raw.reason.trim()
-      : defaultReason;
-  return { reason };
+  return { reason: MEMORY_FORGET_REASON_USER_REQUEST };
 }
 
 function parseByIdForgetSelector(raw: Record<string, unknown>): ForgetSelector | RouteResult {
@@ -830,10 +825,7 @@ function parseForgetSelector(raw: unknown): ForgetSelector | RouteResult {
 function parseForgetSelectionInput(
   raw: Record<string, unknown>,
 ): ForgetSelectionInput | RouteResult {
-  const destructive = parseDestructiveInput(
-    raw,
-    "user-initiated selective forget from MemoriaViva",
-  );
+  const destructive = parseDestructiveInput(raw);
   if (isRouteResult(destructive)) return destructive;
   const selector = parseForgetSelector(raw.selector);
   if (isRouteResult(selector)) return selector;
@@ -896,7 +888,7 @@ function executeForgetSelection(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   selector: ForgetSelector,
-  reason: string,
+  reason: MemoryForgetReason,
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
   const nowMs = Date.now();
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
@@ -988,7 +980,7 @@ export async function handleForgetMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const input = parseDestructiveInput(body, "user-initiated forget from MemoriaViva");
+  const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
   const auditReady = preflightPrivacyCriticalAudit(deps);
   if (auditReady !== undefined) return auditReady;
@@ -1049,7 +1041,7 @@ export async function handleDeleteMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const input = parseDestructiveInput(body, "user-initiated delete from MemoriaViva");
+  const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
   const auditReady = preflightPrivacyCriticalAudit(deps);
   if (auditReady !== undefined) return auditReady;

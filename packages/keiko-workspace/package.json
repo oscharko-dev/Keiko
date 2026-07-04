@@ -14,6 +14,10 @@
     "./internal/fs": {
       "types": "./dist/fs.d.ts",
       "import": "./dist/fs.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js"
     }
   },
   "scripts": {
@@ -32,5 +36,6 @@
     "@oscharko-dev/keiko-contracts": "0.2.11",
     "@oscharko-dev/keiko-security": "0.2.11",
     "typescript": "^6.0.3"
-  }
+  },
+  "private": true
 }

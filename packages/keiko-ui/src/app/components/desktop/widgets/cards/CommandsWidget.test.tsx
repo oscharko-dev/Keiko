@@ -63,6 +63,8 @@ const CATALOG: CommandTaskCatalog = {
       executable: "npm",
       args: ["run", "test"],
       source: "package-json-script",
+      trustState: "trusted",
+      trustReason: "repository-authored-script",
     },
     {
       id: "npm-script:build",
@@ -71,6 +73,8 @@ const CATALOG: CommandTaskCatalog = {
       executable: "npm",
       args: ["run", "build"],
       source: "package-json-script",
+      trustState: "trusted",
+      trustReason: "repository-authored-script",
     },
   ],
 };
@@ -153,6 +157,26 @@ describe("CommandsWidget", () => {
     });
   });
 
+  it("disables run for scripts that require server-side workspace trust", async () => {
+    vi.mocked(fetchCommandCatalog).mockResolvedValue({
+      ...CATALOG,
+      tasks: [
+        {
+          ...CATALOG.tasks[0]!,
+          trustState: "approval-required",
+          trustReason: "repository-authored-script",
+        },
+      ],
+    });
+    render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    const runButton = screen.getByRole("button", { name: /run task/i });
+    await waitFor(() => expect(runButton).toBeDisabled());
+    expect(screen.getByText(/server-side workspace trust is required/i)).toBeInTheDocument();
+    await userEvent.click(runButton);
+    expect(createCommandRun).not.toHaveBeenCalled();
+  });
+
   it("guards against duplicate submissions before React rerenders the running state", async () => {
     vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
     render(<CommandsWidget projectPath="/proj" />);
@@ -164,7 +188,52 @@ describe("CommandsWidget", () => {
     fireEvent.click(runButton);
 
     expect(createCommandRun).toHaveBeenCalledTimes(1);
-    expect(runButton).toBeDisabled();
+    // GEN-UI-FOCUS-014: the button stays HTML-enabled while running (aria-disabled only)
+    // so a keyboard user who triggered it keeps focus; re-entry is guarded in onSubmit.
+    expect(runButton).not.toBeDisabled();
+    expect(runButton).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("keeps the Run button in the tab order (aria-disabled, not HTML disabled) during a pending run", async () => {
+    // GEN-UI-FOCUS-014 (test-plan #33) — a keyboard user tabs to Run and presses Enter.
+    // Native `disabled` while running would eject focus to <body>; the button must instead
+    // stay focusable with aria-disabled while re-entry is guarded in onSubmit.
+    vi.mocked(createCommandRun).mockImplementation(() => new Promise<never>(() => undefined));
+    const user = userEvent.setup();
+    render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    const runButton = screen.getByRole("button", { name: /run task/i });
+    await waitFor(() => expect(runButton).toHaveAttribute("aria-disabled", "false"));
+
+    runButton.focus();
+    expect(document.activeElement).toBe(runButton);
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => expect(createCommandRun).toHaveBeenCalledTimes(1));
+    // Still focusable and focused mid-run: HTML-enabled, aria-disabled communicates busy.
+    expect(runButton).not.toBeDisabled();
+    expect(runButton).toHaveAttribute("aria-disabled", "true");
+    expect(document.activeElement).toBe(runButton);
+  });
+
+  it("exposes the task stdout/stderr as keyboard-focusable named regions", async () => {
+    // GEN-UI-KEYBOARD-005 (test-plan #31) — the overflow:auto output <pre> must be a
+    // focusable region with an accessible name so keyboard-only users can scroll it.
+    vi.mocked(createCommandRun).mockResolvedValue({
+      ...RESULT,
+      stdout: "x".repeat(4000),
+      stderr: "e".repeat(4000),
+    });
+    render(<CommandsWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /task/i });
+    await userEvent.click(screen.getByRole("button", { name: /run task/i }));
+
+    const stdout = await screen.findByRole("region", { name: /task stdout/i });
+    expect(stdout.tagName).toBe("PRE");
+    expect(stdout).toHaveAttribute("tabindex", "0");
+    const stderr = screen.getByRole("region", { name: /task stderr/i });
+    expect(stderr.tagName).toBe("PRE");
+    expect(stderr).toHaveAttribute("tabindex", "0");
   });
 
   it("surfaces a failure reason badge for a non-zero exit", async () => {

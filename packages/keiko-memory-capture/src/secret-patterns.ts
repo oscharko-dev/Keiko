@@ -69,8 +69,7 @@ const STACK_TRACE_MARKER_RE = /\b(stack trace|traceback|exception stack)\b/i;
 const STACK_FRAME_RE = /\bat\s+[A-Za-z_$][\w.$<>]*(?:\s+\[[^\]]+\])?\([^)\n]*\)/g;
 const GERMAN_IBAN_RE = /\bDE\d{2}(?:[ ]?\d{4}){4}[ ]?\d{2}\b/i;
 const GERMAN_TAX_ID_CANDIDATE_RE = /\b\d(?:[ -]?\d){10}\b/;
-const GERMAN_PHONE_RE =
-  /(?:\+49|0049)(?:[ -]?\d){7,13}\b|\b0\d{1,4}(?:[ -]?\d){5,12}\b/;
+const GERMAN_PHONE_RE = /(?:\+49|0049)(?:[ -]?\d){7,13}\b|\b0\d{1,4}(?:[ -]?\d){5,12}\b/;
 
 function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
   for (const pattern of patterns) {

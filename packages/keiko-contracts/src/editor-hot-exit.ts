@@ -1,7 +1,8 @@
 import type { EditorDocumentVersion } from "./editor-session.js";
 
 export const EDITOR_HOT_EXIT_SCHEMA_VERSION = 1 as const;
-export const EDITOR_HOT_EXIT_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+export const EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION = 2 as const;
+export const EDITOR_HOT_EXIT_TTL_MS = 24 * 60 * 60 * 1_000;
 
 export interface EditorHotExitSnapshotV1 {
   readonly schemaVersion: typeof EDITOR_HOT_EXIT_SCHEMA_VERSION;
@@ -11,6 +12,19 @@ export interface EditorHotExitSnapshotV1 {
   readonly baseVersion: EditorDocumentVersion | null;
   readonly contentHash: string;
   readonly savedContentHash: string | null;
+  readonly updatedAt: number;
+  readonly paneId: string;
+  readonly windowId: string;
+}
+
+export interface EditorHotExitIndexRecordV2 {
+  readonly schemaVersion: typeof EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION;
+  readonly locatorHash: string;
+  readonly snapshotRef: string;
+  readonly baseVersion: EditorDocumentVersion | null;
+  readonly contentHash: string;
+  readonly savedContentHash: string | null;
+  readonly contentSizeBytes: number;
   readonly updatedAt: number;
   readonly paneId: string;
   readonly windowId: string;
@@ -55,6 +69,22 @@ export function isEditorHotExitSnapshotV1(value: unknown): value is EditorHotExi
     isNullOr(value.baseVersion, isDocumentVersion),
     isSha256Hex(value.contentHash),
     isNullOr(value.savedContentHash, isSha256Hex),
+    isNonNegativeFiniteNumber(value.updatedAt),
+    isNonEmptyString(value.paneId),
+    isNonEmptyString(value.windowId),
+  ].every(Boolean);
+}
+
+export function isEditorHotExitIndexRecordV2(value: unknown): value is EditorHotExitIndexRecordV2 {
+  if (!isRecord(value)) return false;
+  return [
+    value.schemaVersion === EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
+    isSha256Hex(value.locatorHash),
+    isNonEmptyString(value.snapshotRef),
+    isNullOr(value.baseVersion, isDocumentVersion),
+    isSha256Hex(value.contentHash),
+    isNullOr(value.savedContentHash, isSha256Hex),
+    isNonNegativeFiniteNumber(value.contentSizeBytes),
     isNonNegativeFiniteNumber(value.updatedAt),
     isNonEmptyString(value.paneId),
     isNonEmptyString(value.windowId),

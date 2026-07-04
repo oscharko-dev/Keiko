@@ -2,7 +2,7 @@
 
 Provider-neutral specification for Epic #491, the deliverable of Issue
 [#501](https://github.com/oscharko-dev/Keiko/issues/501) and the authoritative companion to
-[ADR-0064](../adr/ADR-0064-voice-assistant-speech-output-playback.md). It **defines** the assistant
+[ADR-0106](../adr/ADR-0106-voice-assistant-speech-output-playback.md). It **defines** the assistant
 speech-output playback lifecycle and its integration boundary; the controller that drives state changes
 lives in
 [`packages/keiko-ui/src/app/components/desktop/hooks/voice-playback-state.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-playback-state.ts),
@@ -98,7 +98,7 @@ no-voice deployment renders no playback affordance and the assistant answers in 
 
 A barge-in calls `interrupt`, which stops output and emits the content-free `notify-turn-interrupt`
 effect. `voicePlaybackEffectToTurnSignal` maps the `notify-turn-*` effects onto the
-[turn manager](../adr/ADR-0062-voice-turn-manager.md) signal union, and `forwardVoicePlaybackToTurnManager`
+[turn manager](../adr/ADR-0104-voice-turn-manager.md) signal union, and `forwardVoicePlaybackToTurnManager`
 applies them — so **the turn manager receives the state change**: it transitions to `interrupted` and
 counts the barge-in. The `notify-turn-speech-start` / `-completed` / `-stopped` effects similarly inform
 the turn manager that the assistant began, finished, or was stopped. Media effects (`start-output`,

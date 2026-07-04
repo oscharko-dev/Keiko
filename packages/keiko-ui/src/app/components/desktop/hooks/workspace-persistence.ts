@@ -18,6 +18,8 @@ const MAX_PDF_PREVIEW_MESSAGE_LENGTH = 360;
 const MAX_PDF_PREVIEW_PAGE = 100_000;
 const MAX_PDF_PREVIEW_ZOOM = 2;
 const MIN_PDF_PREVIEW_ZOOM = 0.5;
+const MIN_WINDOW_CONTENT_ZOOM = 0.5;
+const MAX_WINDOW_CONTENT_ZOOM = 2;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -76,6 +78,10 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampWindowContentZoom(value: number): number {
+  return Math.max(MIN_WINDOW_CONTENT_ZOOM, Math.min(MAX_WINDOW_CONTENT_ZOOM, value));
 }
 
 function isJsonScalar(value: unknown): value is JsonScalar {
@@ -166,6 +172,13 @@ function looksLikeLocalPath(value: string): boolean {
     normalized.includes("/Volumes/") ||
     normalized.includes("../")
   );
+}
+
+function containsTraversalSegment(value: string): boolean {
+  return value
+    .replace(/\\/gu, "/")
+    .split("/")
+    .some((segment) => segment === "..");
 }
 
 function isAllowedReferenceChar(char: string): boolean {
@@ -310,6 +323,7 @@ function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined 
     if (
       path.length === 0 ||
       path.length > MAX_EDITOR_OPEN_FILE_LENGTH ||
+      containsTraversalSegment(path) ||
       isSecretShapedString(path) ||
       out.includes(path)
     ) {
@@ -319,6 +333,13 @@ function sanitizeEditorOpenFiles(value: unknown): readonly string[] | undefined 
     if (out.length >= MAX_EDITOR_OPEN_FILES) break;
   }
   return out.length > 0 ? out : undefined;
+}
+
+function sanitizeEditorLayoutRoot(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const root = value.trim();
+  if (root.length === 0 || root.length > MAX_EDITOR_OPEN_FILE_LENGTH) return "";
+  return isSecretShapedString(root) ? "" : root;
 }
 
 function sanitizeEditorLayoutJson(value: unknown): string | undefined {
@@ -339,16 +360,21 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
     > = {};
     for (const [paneId, pane] of Object.entries(rawPanes)) {
       if (!isRecord(pane)) continue;
-      const activeFile = typeof pane["activeFile"] === "string" ? pane["activeFile"].trim() : "";
+      const activeFiles =
+        typeof pane["activeFile"] === "string"
+          ? sanitizeEditorOpenFiles([pane["activeFile"]])
+          : undefined;
+      const activeFile = activeFiles?.[0];
       const openFiles = sanitizeEditorOpenFiles(pane["openFiles"]);
       const tabOrder = sanitizeEditorOpenFiles(pane["tabOrder"]) ?? openFiles;
-      if (openFiles === undefined && activeFile.length === 0) continue;
-      const files = openFiles ?? sanitizeEditorOpenFiles([activeFile]);
+      if (openFiles === undefined && activeFile === undefined) continue;
+      const files = openFiles ?? activeFiles;
       if (files === undefined) continue;
+      const resolvedActiveFile =
+        activeFile !== undefined && files.includes(activeFile) ? activeFile : files[0]!;
       panes[paneId.slice(0, 48)] = {
         id: paneId.slice(0, 48),
-        activeFile:
-          activeFile.length > 0 ? activeFile.replace(/\\/gu, "/").replace(/^\/+/u, "") : files[0]!,
+        activeFile: resolvedActiveFile,
         openFiles: files,
         tabOrder: tabOrder ?? files,
       };
@@ -395,7 +421,7 @@ function sanitizeEditorLayoutJson(value: unknown): string | undefined {
         : 260;
     return JSON.stringify({
       schemaVersion: 2,
-      root: typeof record["root"] === "string" ? record["root"] : "",
+      root: sanitizeEditorLayoutRoot(record["root"]),
       activePaneId,
       tree,
       panes,
@@ -538,7 +564,7 @@ function sanitizeWindow(win: unknown): AppWindow | null {
     ...next,
     ...(win["minimized"] === true ? { minimized: true } : {}),
     ...(prev !== undefined ? { prev } : {}),
-    ...(isFiniteNumber(win["zoom"]) ? { zoom: win["zoom"] } : {}),
+    ...(isFiniteNumber(win["zoom"]) ? { zoom: clampWindowContentZoom(win["zoom"]) } : {}),
   };
 }
 
@@ -567,16 +593,25 @@ function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
   };
 }
 
+function dedupeSingletonWindows(wins: readonly AppWindow[]): AppWindow[] {
+  const keepers = new Map<WindowType, AppWindow>();
+  for (const win of wins) {
+    if (WIN_TYPES[win.type].singleton !== true) continue;
+    const current = keepers.get(win.type);
+    if (current === undefined || win.z > current.z) keepers.set(win.type, win);
+  }
+  return wins.filter(
+    (win) => WIN_TYPES[win.type].singleton !== true || keepers.get(win.type) === win,
+  );
+}
+
 export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
   const out: AppWindow[] = [];
   for (const win of wins) {
     const next = sanitizeWindow(win);
     if (next !== null) out.push(migrateLegacyFigmaWindow(next));
   }
-  const figmaManagers = out.filter((win) => win.type === "figma");
-  if (figmaManagers.length <= 1) return out;
-  const keeper = figmaManagers.reduce((best, next) => (next.z > best.z ? next : best));
-  return out.filter((win) => win.type !== "figma" || win.id === keeper.id);
+  return dedupeSingletonWindows(out);
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {
@@ -607,15 +642,11 @@ export function sanitizePersistedConnections(
     ) {
       continue;
     }
-    // Release 0.2.0 — carry the bind-time snapshot fields through persistence (typed-checked,
-    // never trusted blindly) so unbind-after-reload still removes the source the edge bound.
-    const boundRoot = typeof conn.boundRoot === "string" && conn.boundRoot.length > 0;
-    const boundScopeKind =
-      conn.boundScopeKind === "workspace-root" ||
-      conn.boundScopeKind === "directory" ||
-      conn.boundScopeKind === "files";
-    const boundRelativePath =
-      typeof conn.boundRelativePath === "string" && conn.boundRelativePath.length > 0;
+    const scopeSnapshotElided =
+      conn.boundScopeElided === true ||
+      typeof conn.boundRoot === "string" ||
+      typeof conn.boundScopeKind === "string" ||
+      typeof conn.boundRelativePath === "string";
     const boundChatWindowId =
       typeof conn.boundChatWindowId === "string" &&
       conn.boundChatWindowId.length > 0 &&
@@ -629,9 +660,7 @@ export function sanitizePersistedConnections(
       a: conn.a,
       b: conn.b,
       ...(boundChatWindowId ? { boundChatWindowId: conn.boundChatWindowId } : {}),
-      ...(boundRoot ? { boundRoot: conn.boundRoot } : {}),
-      ...(boundScopeKind ? { boundScopeKind: conn.boundScopeKind } : {}),
-      ...(boundRelativePath ? { boundRelativePath: conn.boundRelativePath } : {}),
+      ...(scopeSnapshotElided ? { boundScopeElided: true } : {}),
       ...(boundConnector
         ? { boundConnectorKind: conn.boundConnectorKind, boundConnectorId: conn.boundConnectorId }
         : {}),

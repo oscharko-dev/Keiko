@@ -9,7 +9,7 @@
 // URL encoding: URLSearchParams.set already encodes; useSearchParams.get already decodes
 // — no double encode/decode (#64 lesson).
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -263,17 +263,24 @@ export function MemoryListContent({
     filters.status.length > 0 ||
     filters.sensitivity.length > 0;
 
+  // Monotonic request guard (GEN-PERF-WIDGET-003): the debounced filter (MemoryFilters) still lets a
+  // slower earlier request resolve after a newer one; drop any response that is not the latest so a
+  // stale, out-of-order result can never clobber the current list.
+  const requestSeqRef = useRef(0);
   const load = useCallback(
     async (f: MemoryListFilters): Promise<void> => {
+      const seq = (requestSeqRef.current += 1);
       setLoading(true);
       setError(null);
       try {
         const res: MemoryListResponse = await fetchMemoriesImpl(f);
+        if (seq !== requestSeqRef.current) return;
         setMemories(res.memories);
       } catch (err) {
+        if (seq !== requestSeqRef.current) return;
         setError(formatError(err));
       } finally {
-        setLoading(false);
+        if (seq === requestSeqRef.current) setLoading(false);
       }
     },
     [fetchMemoriesImpl],
@@ -347,9 +354,7 @@ export function MemoryListContent({
           announcing every inserted row flooded screen readers after each
           filter change (uiux-fix F035). */}
       <p role="status" className="visually-hidden">
-        {!loading && error === null
-          ? t("memoria.memoriesFound", { count: memories.length })
-          : null}
+        {!loading && error === null ? t("memoria.memoriesFound", { count: memories.length }) : null}
       </p>
 
       <section

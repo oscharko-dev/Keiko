@@ -62,6 +62,35 @@ function binaryFs(absPath: string, bytes: Uint8Array): WorkspaceFs {
   };
 }
 
+function utf8OnlyFs(files: Readonly<Record<string, string>>): WorkspaceFs {
+  const base = memFs(ROOT, files);
+  return {
+    readFileUtf8: base.readFileUtf8,
+    stat: base.stat,
+    readDir: base.readDir,
+    realPath: base.realPath,
+    exists: base.exists,
+  };
+}
+
+function openReaderOnlyFs(files: Readonly<Record<string, string>>): WorkspaceFs {
+  const base = memFs(ROOT, files);
+  const fs: WorkspaceFs = {
+    readFileUtf8: base.readFileUtf8,
+    stat: base.stat,
+    readDir: base.readDir,
+    realPath: base.realPath,
+    exists: base.exists,
+  };
+  if (base.readFileBytes !== undefined) {
+    Object.assign(fs, { readFileBytes: base.readFileBytes });
+  }
+  if (base.openFileReader !== undefined) {
+    Object.assign(fs, { openFileReader: base.openFileReader });
+  }
+  return fs;
+}
+
 function utf16Bytes(value: string, endian: "le" | "be", bom = true): Uint8Array {
   const bytes = new Uint8Array((bom ? 2 : 0) + value.length * 2);
   let offset = 0;
@@ -139,6 +168,22 @@ describe("extractDocumentContext — happy path", () => {
     expect(r1.ok && r1.context.mimeType).toBe("application/json");
     expect(r2.ok && r2.context.mimeType).toBe("application/yaml");
     expect(r3.ok && r3.context.mimeType).toBe("application/typescript");
+  });
+
+  it("extracts UTF-16LE text documents instead of classifying them as binary", async () => {
+    const absPath = `${ROOT}/windows-source.ts`;
+    const bytes = Buffer.from("\ufeffexport const documentNeedle = 1;\n", "utf16le");
+    const result = await extractDocumentContext(
+      binaryFs(absPath, bytes),
+      ROOT,
+      "windows-source.ts",
+      fullBudget(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.mimeType).toBe("application/typescript");
+    expect(result.context.text).toContain("documentNeedle");
+    expect(result.context.truncated).toBe(false);
   });
 
   it("extracts UTF-16LE text when a BOM is present", async () => {
@@ -290,6 +335,77 @@ describe("extractDocumentContext — truncation", () => {
     expect(result.context.truncated).toBe(true);
     expect(result.context.text).toBe("");
   });
+
+  it("falls back to UTF-8 reads when byte ports are unavailable", async () => {
+    const result = await extractDocumentContext(
+      utf8OnlyFs({ "fallback.txt": "fallback text\n" }),
+      ROOT,
+      "fallback.txt",
+      fullBudget(),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe("fallback text");
+    expect(result.context.truncated).toBe(false);
+  });
+
+  it("uses openFileReader for focused extraction when direct range reads are unavailable", async () => {
+    const result = await extractDocumentContext(
+      openReaderOnlyFs({ "reader.txt": "one\ntwo\nthree\n" }),
+      ROOT,
+      "reader.txt",
+      fullBudget(),
+      { focus: { kind: "line-range", startLine: 2, contextLines: 0 } },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.context.text).toBe("two");
+  });
+
+  it("falls back to a full extraction when the requested focused line range is invalid or absent", async () => {
+    const fs = utf8OnlyFs({ "focus.txt": "one\ntwo\n" });
+    const invalid = await extractDocumentContext(fs, ROOT, "focus.txt", fullBudget(), {
+      focus: { kind: "line-range", startLine: Number.NaN, endLine: 2 },
+    });
+    expect(invalid.ok).toBe(true);
+    if (!invalid.ok) return;
+    expect(invalid.context.text).toBe("one\ntwo");
+
+    const absent = await extractDocumentContext(fs, ROOT, "focus.txt", fullBudget(), {
+      focus: { kind: "line-range", startLine: 99, contextLines: 0 },
+    });
+    expect(absent.ok).toBe(true);
+    if (!absent.ok) return;
+    expect(absent.context.text).toBe("one\ntwo");
+  });
+
+  it("reports focused truncation and zero-budget focused reads", async () => {
+    const fs = memFs(ROOT, { "focus.txt": "alpha\n0123456789\nomega\n" });
+    const truncated = await extractDocumentContext(
+      fs,
+      ROOT,
+      "focus.txt",
+      { perDocBytes: 4, totalBudgetUsedBytes: 0, totalBudgetBytes: 4 },
+      { focus: { kind: "line-range", startLine: 2, contextLines: 0 } },
+    );
+    expect(truncated.ok).toBe(true);
+    if (!truncated.ok) return;
+    expect(truncated.context.text).toBe("0123");
+    expect(truncated.context.truncated).toBe(true);
+    expect(truncated.context.truncationMarker).toContain("selected span truncated");
+
+    const exhausted = await extractDocumentContext(
+      fs,
+      ROOT,
+      "focus.txt",
+      { perDocBytes: 0, totalBudgetUsedBytes: 0, totalBudgetBytes: 0 },
+      { focus: { kind: "line-range", startLine: 2, contextLines: 0 } },
+    );
+    expect(exhausted.ok).toBe(true);
+    if (!exhausted.ok) return;
+    expect(exhausted.context.extractedBytes).toBe(0);
+    expect(exhausted.context.text).toBe("");
+  });
 });
 
 describe("extractDocumentContext — path-safe failures", () => {
@@ -331,6 +447,22 @@ describe("extractDocumentContext — path-safe failures", () => {
     if (result.ok) return;
     expect(result.failure.kind).toBe("unsupported-type");
     expect(failureHasNoPath(result.failure)).toBe(true);
+  });
+
+  it("returns unsupported-type without a mime hint for files with no extension", async () => {
+    const fs = memFs(ROOT, { LICENSE: "license text" });
+    const result = await extractDocumentContext(fs, ROOT, "LICENSE", fullBudget());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toEqual({ kind: "unsupported-type" });
+  });
+
+  it("returns binary-file when supported text has invalid UTF-8 bytes", async () => {
+    const fs = binaryFs(`${ROOT}/invalid.txt`, new Uint8Array([0xc3, 0x28]));
+    const result = await extractDocumentContext(fs, ROOT, "invalid.txt", fullBudget());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toEqual({ kind: "binary-file" });
   });
 
   it("returns binary-file when control bytes exceed the binary ratio threshold", async () => {

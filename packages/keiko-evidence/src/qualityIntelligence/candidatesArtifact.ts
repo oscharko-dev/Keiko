@@ -7,6 +7,7 @@
 // (Issue #284). Stored as plain rows (branded IDs collapse to strings on the wire).
 
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   createNodeContainedJsonArtifactStore,
   type ContainedJsonArtifactStore,
@@ -40,6 +41,13 @@ export interface QualityIntelligenceCandidateQualityVerdict {
   readonly overallRationale: string;
 }
 
+export const QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION = 1 as const;
+
+export interface QualityIntelligenceCandidatesArtifactIntegrity {
+  readonly schemaVersion: typeof QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION;
+  readonly contentHashSha256Hex: string;
+}
+
 export interface QualityIntelligenceCandidatesArtifact {
   readonly qiCandidatesSchemaVersion: typeof QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION;
   readonly runId: string;
@@ -48,6 +56,7 @@ export interface QualityIntelligenceCandidatesArtifact {
   // Append-only provenance for inline edits (Epic #712, Issue #725). Optional → the schema literal
   // stays at 1 and a pre-#712 artifact (no edits) parses unchanged.
   readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+  readonly artifactIntegrity?: QualityIntelligenceCandidatesArtifactIntegrity;
 }
 
 type CandidateWithQualityVerdict = QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
@@ -126,6 +135,9 @@ const isQualityVerdictValue = (
 
 const isScore = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100;
+
+const isSha256Hex = (value: unknown): value is string =>
+  typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 
 const isDimensionScore = (value: unknown): value is number =>
   isScore(value) && Number.isInteger(value);
@@ -263,6 +275,88 @@ function readArtifactEditedRevisions(
   return editedRevisions;
 }
 
+function readArtifactIntegrity(
+  record: Record<string, unknown>,
+): QualityIntelligenceCandidatesArtifactIntegrity | undefined {
+  const { artifactIntegrity } = record;
+  if (artifactIntegrity === undefined) return undefined;
+  if (!isObjectRecord(artifactIntegrity)) {
+    invalidArtifact("QI candidates companion schema invalid: artifactIntegrity must be an object");
+  }
+  if (
+    artifactIntegrity.schemaVersion !== QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION
+  ) {
+    invalidArtifact(
+      "QI candidates companion schema invalid: unsupported artifact integrity version",
+    );
+  }
+  if (!isSha256Hex(artifactIntegrity.contentHashSha256Hex)) {
+    invalidArtifact("QI candidates companion schema invalid: content hash must be sha256 hex");
+  }
+  return {
+    schemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
+    contentHashSha256Hex: artifactIntegrity.contentHashSha256Hex,
+  };
+}
+
+function artifactIntegrityPayload(artifact: {
+  readonly runId: string;
+  readonly generatedAt: string;
+  readonly candidates: readonly QualityIntelligenceCandidateRow[];
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+}): unknown {
+  return {
+    runId: artifact.runId,
+    generatedAt: artifact.generatedAt,
+    candidates: artifact.candidates,
+    ...(artifact.editedRevisions !== undefined
+      ? { editedRevisions: artifact.editedRevisions }
+      : {}),
+  };
+}
+
+export function qualityIntelligenceCandidatesArtifactContentHash(artifact: {
+  readonly runId: string;
+  readonly generatedAt: string;
+  readonly candidates: readonly QualityIntelligenceCandidateRow[];
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+}): string {
+  return sha256Hex(canonicalise(artifactIntegrityPayload(artifact)));
+}
+
+function buildArtifactIntegrity(artifact: {
+  readonly runId: string;
+  readonly generatedAt: string;
+  readonly candidates: readonly QualityIntelligenceCandidateRow[];
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+}): QualityIntelligenceCandidatesArtifactIntegrity {
+  return {
+    schemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
+    contentHashSha256Hex: qualityIntelligenceCandidatesArtifactContentHash(artifact),
+  };
+}
+
+function withArtifactIntegrity(artifact: {
+  readonly qiCandidatesSchemaVersion: typeof QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION;
+  readonly runId: string;
+  readonly generatedAt: string;
+  readonly candidates: readonly QualityIntelligenceCandidateRow[];
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+}): QualityIntelligenceCandidatesArtifact {
+  return {
+    ...artifact,
+    artifactIntegrity: buildArtifactIntegrity(artifact),
+  };
+}
+
+function assertArtifactIntegrity(artifact: QualityIntelligenceCandidatesArtifact): void {
+  if (artifact.artifactIntegrity === undefined) return;
+  const actual = qualityIntelligenceCandidatesArtifactContentHash(artifact);
+  if (actual !== artifact.artifactIntegrity.contentHashSha256Hex) {
+    invalidArtifact("QI candidates companion integrity hash mismatch");
+  }
+}
+
 // Strict-schema gate on read: reject any artifact whose version literal drifts so a stale or
 // tampered file fails closed instead of surfacing a wrong shape to the BFF.
 const parseArtifact = (value: unknown): QualityIntelligenceCandidatesArtifact | undefined => {
@@ -285,13 +379,17 @@ const parseArtifact = (value: unknown): QualityIntelligenceCandidatesArtifact | 
   );
   const candidates = readArtifactCandidates(record);
   const editedRevisions = readArtifactEditedRevisions(record);
-  return {
+  const artifactIntegrity = readArtifactIntegrity(record);
+  const artifact = {
     qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
     runId,
     generatedAt,
     candidates,
     ...(editedRevisions !== undefined ? { editedRevisions } : {}),
+    ...(artifactIntegrity !== undefined ? { artifactIntegrity } : {}),
   };
+  assertArtifactIntegrity(artifact);
+  return artifact;
 };
 
 export interface QualityIntelligenceCandidatesStoreOptions {
@@ -333,13 +431,13 @@ export const recordQualityIntelligenceCandidates = (
       : (input.redact(
           input.editedRevisions,
         ) as readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]);
-  const artifact: QualityIntelligenceCandidatesArtifact = {
+  const artifact = withArtifactIntegrity({
     qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
     runId: input.runId,
     generatedAt: input.generatedAt,
     candidates: redactedRows,
     ...(redactedEditedRevisions !== undefined ? { editedRevisions: redactedEditedRevisions } : {}),
-  };
+  });
   return storeFor(input.evidenceDir).record(input.runId, artifact);
 };
 
@@ -462,10 +560,15 @@ export const applyQualityIntelligenceCandidateEdit = (
     provenance: redactedProvenance,
     editedFields: redactedFields,
   };
-  store.record(input.runId, {
-    ...artifact,
-    candidates,
-    editedRevisions: [...(artifact.editedRevisions ?? []), revision],
-  });
+  store.record(
+    input.runId,
+    withArtifactIntegrity({
+      qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
+      runId: artifact.runId,
+      generatedAt: artifact.generatedAt,
+      candidates,
+      editedRevisions: [...(artifact.editedRevisions ?? []), revision],
+    }),
+  );
   return { ok: true, candidate: updatedRow, changed: true };
 };

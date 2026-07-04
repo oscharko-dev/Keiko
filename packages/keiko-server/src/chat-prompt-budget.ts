@@ -57,7 +57,7 @@ interface PromptAssemblyInput {
   readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
 }
 
-interface PromptLaneSelection {
+export interface PromptLaneSelection {
   readonly memoryEntries: readonly ConversationMemoryContextEntryWire[];
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
@@ -276,51 +276,64 @@ function selectPromptLanes(input: {
   };
 }
 
-function promptLaneSelectionVariants(selection: PromptLaneSelection): readonly PromptLaneSelection[] {
-  const variants: PromptLaneSelection[] = [];
-  const seen = new Set<string>();
-  const pushVariant = (
+interface VariantCollector {
+  readonly push: (
     memoryEntries: readonly ConversationMemoryContextEntryWire[],
     compactionContextText: string | undefined,
     documentContext: readonly ConversationDocumentContextWire[],
-  ): void => {
-    const key = [
-      memoryEntries.length,
-      compactionContextText === undefined ? "0" : "1",
-      documentContext.length,
-    ].join(":");
-    if (seen.has(key)) {
-      return;
-    }
-    seen.add(key);
-    variants.push({
-      memoryEntries,
-      compactionContextText,
-      documentContext,
-      diagnostics: selection.diagnostics,
-    });
-  };
+  ) => void;
+  readonly variants: PromptLaneSelection[];
+}
 
-  pushVariant(
-    selection.memoryEntries,
-    selection.compactionContextText,
-    selection.documentContext,
-  );
-  for (let documentCount = selection.documentContext.length - 1; documentCount >= 0; documentCount -= 1) {
-    pushVariant(
-      selection.memoryEntries,
-      selection.compactionContextText,
-      selection.documentContext.slice(0, documentCount),
-    );
+function createVariantCollector(selection: PromptLaneSelection): VariantCollector {
+  const variants: PromptLaneSelection[] = [];
+  const seen = new Set<string>();
+  return {
+    variants,
+    push: (memoryEntries, compactionContextText, documentContext): void => {
+      const key = [
+        memoryEntries.length,
+        compactionContextText === undefined ? "0" : "1",
+        documentContext.length,
+      ].join(":");
+      if (seen.has(key)) return;
+      seen.add(key);
+      variants.push({
+        memoryEntries,
+        compactionContextText,
+        documentContext,
+        diagnostics: selection.diagnostics,
+      });
+    },
+  };
+}
+
+// GEN-AI-CONTEXT-001 (RB-4): under budget pressure, drop resurfaced memory/compaction BEFORE
+// user-attached documents. Documents are an explicit this-turn user intent, so at least one attached
+// document must survive whenever dropping all memory + compaction makes room — this fill order only
+// reduces documents as a LAST resort, after memory and compaction are exhausted.
+export function promptLaneSelectionVariants(
+  selection: PromptLaneSelection,
+): readonly PromptLaneSelection[] {
+  const collector = createVariantCollector(selection);
+  const { push } = collector;
+  const { memoryEntries, compactionContextText, documentContext } = selection;
+  push(memoryEntries, compactionContextText, documentContext);
+  // 1. Reduce memory entries, keeping ALL documents (and compaction).
+  for (let memoryCount = memoryEntries.length - 1; memoryCount >= 0; memoryCount -= 1) {
+    push(memoryEntries.slice(0, memoryCount), compactionContextText, documentContext);
   }
-  for (let memoryCount = selection.memoryEntries.length; memoryCount >= 0; memoryCount -= 1) {
-    const memoryEntries = selection.memoryEntries.slice(0, memoryCount);
-    pushVariant(memoryEntries, selection.compactionContextText, []);
-    if (selection.compactionContextText !== undefined) {
-      pushVariant(memoryEntries, undefined, []);
+  // 2. Also drop resurfaced compaction, still keeping ALL documents.
+  if (compactionContextText !== undefined) {
+    for (let memoryCount = memoryEntries.length; memoryCount >= 0; memoryCount -= 1) {
+      push(memoryEntries.slice(0, memoryCount), undefined, documentContext);
     }
   }
-  return variants;
+  // 3. LAST resort: reduce documents (with memory + compaction already dropped).
+  for (let documentCount = documentContext.length - 1; documentCount >= 0; documentCount -= 1) {
+    push([], undefined, documentContext.slice(0, documentCount));
+  }
+  return collector.variants;
 }
 
 function compactHistoryForBudget(

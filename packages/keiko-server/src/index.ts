@@ -282,3 +282,27 @@ export {
   PromptEnhancementInputError,
   type RunPromptEnhancementDeps,
 } from "./promptEnhancer/index.js";
+
+// RB-5 / GEN-AI-RELEASE-GATE-001 — production semantic + RRF + model-reranker retrieval-quality eval.
+// Exposed so scripts/check-grounded-retrieval-quality.mjs can gate the REAL retrieval path (not the
+// lexical toy corpus) with non-tautological floors and injected-regression proofs.
+export {
+  runGroundedRetrievalQualityEval,
+  evaluateGroundedRetrievalBudget,
+  DEFAULT_GROUNDED_RETRIEVAL_BUDGET,
+  GROUNDED_RETRIEVAL_REGRESSION_MODES,
+  type GroundedRetrievalEvalMode,
+  type GroundedRetrievalScorecard,
+  type GroundedRetrievalBudget,
+} from "./grounded-retrieval-eval.js";
+
+// RB-4 / GEN-AI-EVAL-003 — grounded-answer faithfulness + citation-support eval. Exposed so
+// scripts/check-grounded-faithfulness.mjs can gate that fabricated citations are flagged and empty
+// evidence abstains.
+export {
+  runGroundedFaithfulnessEval,
+  evaluateGroundedFaithfulnessBudget,
+  DEFAULT_GROUNDED_FAITHFULNESS_BUDGET,
+  type GroundedFaithfulnessScorecard,
+  type GroundedFaithfulnessBudget,
+} from "./grounded-faithfulness-eval.js";

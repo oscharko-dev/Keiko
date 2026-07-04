@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { createAuditRedactor, deepRedactStrings, redact } from "./redaction.js";
+import {
+  createAuditRedactor,
+  deepRedactStrings,
+  isCredentialKeyName,
+  objectContainsCredentialKey,
+  redact,
+} from "./redaction.js";
 
 describe("redact", () => {
   it("redacts a bearer token while keeping the scheme", () => {
@@ -335,6 +341,27 @@ describe("createAuditRedactor — builtin secret shapes", () => {
     expect(out).toContain("api_key=[REDACTED]");
     expect(out).toContain("api-key: [REDACTED]");
     expect(out).not.toContain(API_KEY_VALUE);
+  });
+});
+
+describe("credential key-name scanner", () => {
+  it.each([
+    "password",
+    "client_secret",
+    "clientSecret",
+    "refresh_token",
+    "connection_string",
+    "aws_secret_access_key",
+  ])("recognizes credential key %s", (key) => {
+    expect(isCredentialKeyName(key)).toBe(true);
+  });
+
+  it("finds credential keys in nested payload objects", () => {
+    expect(objectContainsCredentialKey({ nested: [{ client_secret: "opaque" }] })).toBe(true);
+  });
+
+  it("does not flag adjacent non-secret metadata keys", () => {
+    expect(objectContainsCredentialKey({ tokenCount: 42, secretariat: "team" })).toBe(false);
   });
 });
 

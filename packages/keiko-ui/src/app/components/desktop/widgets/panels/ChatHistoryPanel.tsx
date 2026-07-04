@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from "react";
 import type { Chat } from "@/lib/types";
 import { updateChat } from "@/lib/api";
 import { Icons } from "../../Icons";
@@ -48,6 +56,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const [error, setError] = useState<string | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const tablistRef = useRef<HTMLDivElement | null>(null);
+  const confirmDeleteRef = useRef<HTMLButtonElement | null>(null);
   const tabActiveId = useId();
   const tabDeletedId = useId();
   const panelId = useId();
@@ -72,6 +82,35 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   useEffect(() => {
     if (editingId !== null) renameInputRef.current?.focus({ preventScroll: true });
   }, [editingId]);
+
+  // GEN-UI-FOCUS-016: when a row enters inline delete-confirm mode, move focus onto
+  // the destructive Delete button so keyboard users land on the confirmation.
+  useEffect(() => {
+    if (deleteConfirmId !== null) confirmDeleteRef.current?.focus({ preventScroll: true });
+  }, [deleteConfirmId]);
+
+  // GEN-UI-KEYBOARD-008: roving tablist keyboard nav (WAI-ARIA APG tabs pattern).
+  // ArrowLeft/Right wrap between the two tabs; Home/End jump to first/last. Focus and
+  // selection move together (automatic activation), mirroring ProjectPanel's roving nav.
+  const handleTablistKey = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    const key = event.key;
+    if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") return;
+    const container = tablistRef.current;
+    if (container === null) return;
+    const tabs = Array.from(container.querySelectorAll<HTMLButtonElement>("button[role='tab']"));
+    if (tabs.length === 0) return;
+    const current = tabs.findIndex((tab) => tab === document.activeElement);
+    const from = current < 0 ? (view === "active" ? 0 : 1) : current;
+    event.preventDefault();
+    let next = from;
+    if (key === "ArrowRight") next = (from + 1) % tabs.length;
+    else if (key === "ArrowLeft") next = (from - 1 + tabs.length) % tabs.length;
+    else if (key === "Home") next = 0;
+    else if (key === "End") next = tabs.length - 1;
+    setView(next === 0 ? "active" : "deleted");
+    setDeleteConfirmId(null);
+    tabs[next]?.focus();
+  };
 
   const createNew = async (): Promise<void> => {
     setError(null);
@@ -166,13 +205,24 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           aria-label="Search chat history"
         />
       </label>
-      <div className="chat-history-tabs" role="tablist" aria-label="Conversation state">
+      <div
+        ref={tablistRef}
+        className="chat-history-tabs"
+        role="tablist"
+        aria-label="Conversation state"
+        // Programmatic focus target only (mirrors ProjectPanel's role=tree pattern); the tabs carry
+        // the roving tabIndex (0/-1) per the WAI-ARIA APG tabs pattern.
+        tabIndex={-1}
+        onKeyDown={handleTablistKey}
+      >
         <button
           type="button"
           id={tabActiveId}
           role="tab"
           aria-selected={view === "active"}
           aria-controls={panelId}
+          // Roving tabindex: only the selected tab is a Tab stop; arrows move the rest.
+          tabIndex={view === "active" ? 0 : -1}
           className="chat-history-tab"
           onClick={() => {
             setView("active");
@@ -187,6 +237,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           role="tab"
           aria-selected={view === "deleted"}
           aria-controls={panelId}
+          tabIndex={view === "deleted" ? 0 : -1}
           className="chat-history-tab"
           onClick={() => {
             setView("deleted");
@@ -291,12 +342,18 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                       </button>
                     </>
                   ) : confirmingDelete ? (
+                    // GEN-UI-FOCUS-016: Escape on either confirm button cancels the
+                    // destructive confirmation and returns to the row's default actions.
                     <>
                       <button
+                        ref={confirmDeleteRef}
                         type="button"
                         className="lk-btn lk-btn-danger"
                         disabled={busy}
                         onClick={() => void moveToTrash(chat)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") setDeleteConfirmId(null);
+                        }}
                       >
                         Delete
                       </button>
@@ -305,6 +362,9 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
                         className="lk-btn lk-btn-ghost"
                         disabled={busy}
                         onClick={() => setDeleteConfirmId(null)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") setDeleteConfirmId(null);
+                        }}
                       >
                         Cancel
                       </button>

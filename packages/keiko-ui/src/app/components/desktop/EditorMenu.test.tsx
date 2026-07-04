@@ -59,6 +59,20 @@ describe("EditorMenu", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("releases focus containment on Tab by closing the menu (GEN-UI-FOCUS-004)", async () => {
+    const user = userEvent.setup();
+
+    render(<EditorMenu project="projSem" />);
+
+    await user.click(screen.getByRole("button", { name: /Preferred editor for projSem/ }));
+    // The menu is open with focus inside it.
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+
+    // Tab must not leave the menu open and orphaned behind the page — it closes so focus can proceed.
+    await user.keyboard("{Tab}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+
   it("returns focus to the trigger after choosing an editor (C168)", async () => {
     const user = userEvent.setup();
 

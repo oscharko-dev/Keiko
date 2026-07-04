@@ -82,16 +82,17 @@ describe("findStaleMemories - aged-out", () => {
       id: "m-1",
       updatedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
     });
-    const flags = findStaleMemories([
-      r,
-    ], options({
-      accessStatsFor: () => ({
-        accessCount: 3,
-        lastAccessedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
-        outcomeCount: 0,
-        utilitySum: 0,
+    const flags = findStaleMemories(
+      [r],
+      options({
+        accessStatsFor: () => ({
+          accessCount: 3,
+          lastAccessedAt: FIXED_NOW_MS - MAX_AGE_MS_DEFAULT - 1,
+          outcomeCount: 0,
+          utilitySum: 0,
+        }),
       }),
-    }));
+    );
     expect(flags.filter((f) => f.reason === "aged-out")).toEqual([]);
   });
 

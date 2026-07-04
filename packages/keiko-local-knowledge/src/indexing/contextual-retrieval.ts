@@ -106,7 +106,10 @@ export function boundedDocumentContext(
   chunkEnd: number,
   options: ContextualRetrievalOptions | undefined,
 ): string {
-  const maxChars = clampPositiveInteger(options?.documentContextMaxChars, DEFAULT_DOCUMENT_CONTEXT_CHARS);
+  const maxChars = clampPositiveInteger(
+    options?.documentContextMaxChars,
+    DEFAULT_DOCUMENT_CONTEXT_CHARS,
+  );
   if (sourceText.length <= maxChars) return sourceText;
   const chunkLength = Math.max(0, chunkEnd - chunkStart);
   const sideBudget = Math.max(0, Math.floor((maxChars - Math.min(chunkLength, maxChars)) / 2));
@@ -146,7 +149,9 @@ async function callContextModel(
   options: ContextualRetrievalOptions,
 ): Promise<string> {
   if (options.chatGateway === undefined || options.modelId === undefined) {
-    throw new ContextualRetrievalError("contextual retrieval is enabled but no chat model is configured");
+    throw new ContextualRetrievalError(
+      "contextual retrieval is enabled but no chat model is configured",
+    );
   }
   const request: GatewayRequest = {
     modelId: options.modelId,
@@ -172,12 +177,16 @@ export async function contextualizeChunk(
     };
   }
   try {
-    const maxContextChars = clampPositiveInteger(options.maxContextChars, DEFAULT_MAX_CONTEXT_CHARS);
+    const maxContextChars = clampPositiveInteger(
+      options.maxContextChars,
+      DEFAULT_MAX_CONTEXT_CHARS,
+    );
     const prefix = sanitizeContext(await callContextModel(input, options), maxContextChars);
     return {
       contextualRetrievalKey,
       contextPrefix: prefix.length === 0 ? null : prefix,
-      augmentedText: prefix.length === 0 ? input.originalText : `${prefix}\n\n${input.originalText}`,
+      augmentedText:
+        prefix.length === 0 ? input.originalText : `${prefix}\n\n${input.originalText}`,
       status: "generated",
     };
   } catch (cause) {

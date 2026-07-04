@@ -44,10 +44,14 @@ import {
   type StateRootInspection,
 } from "./state-paths.js";
 import {
+  RERANKER_SECRET_REF,
   credentialStorePath,
   hasPlaintextGatewayCredentials,
 } from "@oscharko-dev/keiko-server/credential-vault";
-import { readLocalVaultReferences } from "@oscharko-dev/keiko-security/secret-vault";
+import {
+  SecretVaultStoreError,
+  readLocalVaultReferences,
+} from "@oscharko-dev/keiko-security/secret-vault";
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -179,6 +183,7 @@ const RUNTIME_STATE_LABEL: Readonly<Record<RuntimeStateCategory, string>> = {
   "ui-database": "UI database",
   "gateway-config": "gateway config",
   "credential-vault": "credential vault",
+  "editor-hot-exit": "editor recovery store",
   "memory-vault": "memory vault",
   "local-knowledge": "Local Knowledge store",
   evidence: "Evidence store",
@@ -421,7 +426,18 @@ function checkCredentialStorage(
       "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
     );
   }
-  const orphaned = orphanedSecretRefs(raw, configPath);
+  let orphaned: number;
+  try {
+    orphaned = orphanedSecretRefs(raw, configPath);
+  } catch (error) {
+    if (error instanceof SecretVaultStoreError) {
+      return action(
+        "Credential storage",
+        "encrypted credential vault is unreadable — refusing to treat it as empty; restore the vault file or move it aside intentionally",
+      );
+    }
+    throw error;
+  }
   if (orphaned > 0) {
     return action(
       "Credential storage",
@@ -431,20 +447,29 @@ function checkCredentialStorage(
   return ok("Credential storage", "no plaintext credentials in config");
 }
 
-// Counts provider `apiKeySecretRef` values in the config that have no matching entry in the encrypted
-// credential vault — the signature of an interrupted migration or a deleted/corrupt vault store.
+// Counts provider/reranker `apiKeySecretRef` values in the config that have no matching entry in the
+// encrypted credential vault — the signature of an interrupted migration or a deleted/corrupt vault
+// store.
 // Reads only the non-secret reference index (no vault key resolution, no decryption).
 function orphanedSecretRefs(raw: unknown, configPath: string): number {
   if (typeof raw !== "object" || raw === null) return 0;
   const providers = (raw as { readonly providers?: unknown }).providers;
-  if (!Array.isArray(providers)) return 0;
-  const refs = providers
-    .map((provider) =>
-      typeof provider === "object" && provider !== null
-        ? (provider as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef
-        : undefined,
-    )
-    .filter((ref): ref is string => typeof ref === "string" && ref.length > 0);
+  const refs = Array.isArray(providers)
+    ? providers
+        .map((provider) =>
+          typeof provider === "object" && provider !== null
+            ? (provider as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef
+            : undefined,
+        )
+        .filter((ref): ref is string => typeof ref === "string" && ref.length > 0)
+    : [];
+  const reranker = (raw as { readonly reranker?: unknown }).reranker;
+  if (typeof reranker === "object" && reranker !== null) {
+    const ref = (reranker as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef;
+    if (typeof ref === "string" && ref.length > 0) {
+      refs.push(ref === RERANKER_SECRET_REF ? ref : "__invalid-reranker-secret-ref__");
+    }
+  }
   if (refs.length === 0) return 0;
   const vaulted = new Set(readLocalVaultReferences(credentialStorePath(configPath)));
   return refs.filter((ref) => !vaulted.has(ref)).length;

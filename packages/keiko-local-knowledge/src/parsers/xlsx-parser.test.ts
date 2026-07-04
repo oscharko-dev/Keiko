@@ -152,7 +152,8 @@ describe("xlsxParser", () => {
         workbookZip([
           {
             name: "xl/styles.xml",
-            content: '<styleSheet><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
+            content:
+              '<styleSheet><cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs></styleSheet>',
           },
           {
             name: "xl/sharedStrings.xml",

@@ -106,7 +106,7 @@ maybe("investigateBug — apply + verify integration (AC #6/#8)", () => {
         apply: true,
         modelId: "test-model",
       },
-      { model: model(MODEL_CONTENT) },
+      { model: model(MODEL_CONTENT), verificationNetworkEnforcement: "enforce-or-degrade" },
     );
 
     // AC #6 — the patch was applied and the source file is fixed on disk.

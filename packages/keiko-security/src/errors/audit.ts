@@ -3,7 +3,7 @@
 // redacted at construction (D11: typed errors with redacted messages) so errors are always safe to
 // log or surface.
 
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export const AUDIT_CODES = {
   INVALID_RUN_ID: "AUDIT_INVALID_RUN_ID",
@@ -14,13 +14,8 @@ export const AUDIT_CODES = {
 
 export type AuditCode = (typeof AUDIT_CODES)[keyof typeof AUDIT_CODES];
 
-export abstract class AuditError extends Error {
-  abstract readonly code: AuditCode;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+export abstract class AuditError extends RedactingError {
+  abstract override readonly code: AuditCode;
 }
 
 // A runId failed the bounded character-class / length validation (D4 iii). Nothing was written.

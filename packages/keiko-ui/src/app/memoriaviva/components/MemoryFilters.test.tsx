@@ -1,9 +1,9 @@
 // Issue #211 — tests for MemoryFilters: chip rendering, toggle behaviour, axis independence.
 
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import { EMPTY_FILTERS, MemoryFilters } from "./MemoryFilters";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { EMPTY_FILTERS, MemoryFilters, MEMORY_QUERY_DEBOUNCE_MS } from "./MemoryFilters";
 import type { MemoryFilterState } from "./MemoryFilters";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 
@@ -67,17 +67,80 @@ describe("MemoryFilters — landmark groups", () => {
 });
 
 describe("MemoryFilters — search", () => {
-  it("updates query text without changing chip axes", async () => {
+  it("updates query text (debounced) without changing chip axes", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     renderFilters({ ...EMPTY_FILTERS, scope: ["project"] }, onChange);
 
     await user.type(screen.getByRole("searchbox", { name: "Search" }), "a");
 
-    expect(onChange).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalled();
+    });
     const [next] = onChange.mock.calls.at(-1) as [MemoryFilterState];
     expect(next.query).toBe("a");
     expect(next.scope).toEqual(["project"]);
+  });
+});
+
+// GEN-PERF-WIDGET-003 — the free-text query must be debounced so a burst of keystrokes
+// fires a single downstream onChange (one list fetch), and chip toggles stay immediate.
+describe("MemoryFilters — query debounce (GEN-PERF-WIDGET-003)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("collapses a burst of keystrokes into a single onChange with the final query", () => {
+    vi.useFakeTimers();
+    const onChange = vi.fn();
+    render(<MemoryFilters filters={EMPTY_FILTERS} onChange={onChange} />);
+    const input = screen.getByRole("searchbox", { name: "Search" });
+
+    // Five distinct input events within one debounce window.
+    for (const value of ["h", "he", "hel", "hell", "hello"]) {
+      act(() => {
+        fireEvent.change(input, { target: { value } });
+      });
+    }
+
+    // Before the debounce elapses, nothing has been committed downstream.
+    expect(onChange).not.toHaveBeenCalled();
+
+    act(() => {
+      vi.advanceTimersByTime(MEMORY_QUERY_DEBOUNCE_MS);
+    });
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const [next] = onChange.mock.calls[0] as [MemoryFilterState];
+    expect(next.query).toBe("hello");
+  });
+
+  it("commits a chip toggle immediately and folds in the pending typed query", () => {
+    vi.useFakeTimers();
+    const onChange = vi.fn();
+    render(<MemoryFilters filters={EMPTY_FILTERS} onChange={onChange} />);
+    const input = screen.getByRole("searchbox", { name: "Search" });
+
+    act(() => {
+      fireEvent.change(input, { target: { value: "draft" } });
+    });
+    // Debounce still pending.
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Toggling a chip flushes immediately, carrying the typed-but-uncommitted query.
+    act(() => {
+      screen.getByRole("button", { name: "Global" }).click();
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const [next] = onChange.mock.calls[0] as [MemoryFilterState];
+    expect(next.scope).toContain("global");
+    expect(next.query).toBe("draft");
+
+    // The pending debounce was cancelled, so advancing timers fires nothing more.
+    act(() => {
+      vi.advanceTimersByTime(MEMORY_QUERY_DEBOUNCE_MS);
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 });
 

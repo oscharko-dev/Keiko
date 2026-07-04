@@ -272,6 +272,73 @@ describe("RunLauncher — initial render", () => {
     expect(sourceTypeRadio("Folder")).toHaveAttribute("aria-checked", "true");
   });
 
+  // ── APG radiogroup roving (GEN-UI-TEST-GAP-003 / test-plan #45, WCAG 2.1.1) ────
+  // Arrow keys move both the checked state AND roving focus across the source-type radios; the
+  // selection wraps at both ends. Only the checked radio is a tab stop (roving tabindex).
+
+  it("roves the source-type radiogroup with ArrowRight and moves both selection and focus (#45)", () => {
+    render(<RunLauncher />);
+    const requirements = sourceTypeRadio("Requirements");
+    // Only the checked radio is in the tab order (roving tabindex).
+    expect(requirements).toHaveAttribute("tabindex", "0");
+    expect(sourceTypeRadio("Folder")).toHaveAttribute("tabindex", "-1");
+
+    requirements.focus();
+    expect(document.activeElement).toBe(requirements);
+
+    fireEvent.keyDown(requirements, { key: "ArrowRight" });
+
+    const folder = sourceTypeRadio("Folder");
+    // The adjacent radio becomes checked AND receives roving focus; the old one is deselected.
+    expect(folder).toHaveAttribute("aria-checked", "true");
+    expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "false");
+    expect(document.activeElement).toBe(folder);
+    expect(folder).toHaveAttribute("tabindex", "0");
+  });
+
+  it("wraps to the last radio with ArrowLeft from the first (#45)", () => {
+    render(<RunLauncher />);
+    const requirements = sourceTypeRadio("Requirements");
+    requirements.focus();
+
+    fireEvent.keyDown(requirements, { key: "ArrowLeft" });
+
+    // ArrowLeft from the first option wraps to the last ("Capsule set").
+    const last = sourceTypeRadio("Capsule set");
+    expect(last).toHaveAttribute("aria-checked", "true");
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("is a no-op for arrow keys while a run is in progress (#45)", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeAcceptedStallingFake("run-roving-lock");
+    render(<RunLauncher startImpl={startImpl} />);
+
+    // Start a run so `running` is true — the radiogroup arrow handler must be inert.
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Lock the radios");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await screen.findByRole("button", { name: /^cancel$/i });
+
+    const requirements = sourceTypeRadio("Requirements");
+    fireEvent.keyDown(requirements, { key: "ArrowRight" });
+
+    // Selection did not move while running.
+    expect(sourceTypeRadio("Requirements")).toHaveAttribute("aria-checked", "true");
+    expect(sourceTypeRadio("Folder")).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("does not expose the folder/file path display as an editable textbox (#47)", async () => {
+    const user = userEvent.setup();
+    render(<RunLauncher />);
+
+    await chooseSourceType(user, "Folder");
+    // The path value is a display, not an editor: it must not be an interactive textbox (a
+    // role="textbox" without a tabIndex is an invalid, non-focusable widget — GEN-UI-A11Y-011).
+    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
+    // The empty-state placeholder is still shown, associated with its "Folder path" label.
+    expect(screen.getByText(/choose a local folder/i)).toBeInTheDocument();
+  });
+
   it("renders a requirements textarea (default source type)", () => {
     render(<RunLauncher />);
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
@@ -314,15 +381,19 @@ describe("RunLauncher — source-type switching", () => {
     const user = userEvent.setup();
     render(<RunLauncher />);
 
-    // Initial state: textarea present, folder input absent.
+    // Initial state: textarea present, folder path label absent.
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^folder path$/i)).not.toBeInTheDocument();
 
     await chooseSourceType(user, "Folder");
 
-    // After switch: folder input present, textarea gone.
-    expect(screen.getByRole("textbox", { name: /folder path/i })).toBeInTheDocument();
+    // After switch: folder path picker present (a labelled Browse button + display value, NOT an
+    // editable textbox — the value is chosen via the dialog, GEN-UI-A11Y-011), textarea gone.
+    expect(screen.getByText(/^folder path$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
+    // The path display is a plain labelled value, not an interactive textbox widget.
+    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
   });
 
   it("swaps the requirements textarea for a file-path browser when 'File' is selected", async () => {
@@ -331,8 +402,10 @@ describe("RunLauncher — source-type switching", () => {
 
     await chooseSourceType(user, "File");
 
-    expect(screen.getByRole("textbox", { name: /file path/i })).toBeInTheDocument();
+    expect(screen.getByText(/^file path$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /browse/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /file path/i })).not.toBeInTheDocument();
   });
 
   it("re-shows the requirements textarea when switching back to 'Requirements text'", async () => {
@@ -343,7 +416,7 @@ describe("RunLauncher — source-type switching", () => {
     await chooseSourceType(user, "Requirements");
 
     expect(screen.getByRole("textbox", { name: /requirements/i })).toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /folder path/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^folder path$/i)).not.toBeInTheDocument();
   });
 });
 

@@ -78,8 +78,12 @@ jobs:
           npm --workspace @oscharko-dev/keiko-editor test
       - run: npm run typecheck
       - run: npm run check:version-consistency
+      - run: npm run check:dependency-hygiene
+      - run: npm run check:release-required-workflows
       - run: npm run check:git-client-evidence
       - run: npm run lint
+      - run: npm run format:check
+      - run: npm run check:adr-index
       - run: npm run arch:check
       - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
@@ -92,6 +96,24 @@ jobs:
         # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level
         # evidence, and generated-artifact leakage over fixed synthetic enterprise fixtures.
         run: npm run check:retrieval-quality
+      - name: Grounded retrieval quality gate (RB-5, GEN-AI-RELEASE-GATE-001)
+        # Drives the REAL production semantic-retrieval + RRF fusion + model-reranker path (not the
+        # lexical toy corpus) over distractor-dense fixtures with non-tautological (<1) floors, and
+        # PROVES the gate is non-vacuous by asserting an injected ranking/reranker regression drops
+        # below the floors. Uses the compiled keiko-server dist built by `npm run typecheck` above.
+        run: npm run check:grounded-retrieval-quality
+      - name: Grounded faithfulness gate (RB-4, GEN-AI-EVAL-003)
+        # Scores the real citation-reconciliation + abstention logic over scripted answerer variants
+        # (faithful / hallucinated-citation / confident-over-empty / refusal). Fails closed if a
+        # fabricated citation stops being flagged or empty evidence stops abstaining.
+        run: npm run check:grounded-faithfulness
+      - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
+        # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
+        # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the
+        # redacted cause to the operator diagnostic sink keyed by that id, never leaks the raw cause,
+        # and honours a UI-supplied id. Goes RED against a bare `.catch(() => {})` that drops the id or
+        # the diagnostic. Uses the compiled keiko-server dist built by `npm run typecheck` above.
+        run: npm run check:error-observability
       - name: Context quality gate (ADR-0052, context-engineering PR1)
         # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-contracts,
         # keiko-workflows, keiko-workspace, and keiko-security dist the gate imports are present —
@@ -102,10 +124,12 @@ jobs:
         run: |
           npm run build:ui
           npm run check:editor-bundle-size -- --require-static-export
+          npm run check:editor-release-evidence
       - name: Package surface and installable smoke
         run: |
           npm run build
           npm run prepare:bin
+          npm run prune:package-build-artifacts
           npm run prune:package-native-optionals
           npm run check:package-surface
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS=1 npm run smoke:install
@@ -171,8 +195,11 @@ jobs:
         run: |
           npm run prepare:bin
           npm run build:ui
+          npm run check:editor-release-evidence
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
+      - name: Installable-package smoke with optional dependencies
+        run: npm run smoke:install:optional
       - name: Installable memory smoke (Issue #216)
         run: npm run smoke:install:memory
       - name: Smoke - offline evaluate exits 0
@@ -282,16 +309,30 @@ jobs:
         run: npm run check:coverage:ui
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # chromium is the reference browser for the smoke + perf-evidence suites. The
+        # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
+        # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
+        # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
         run: npx playwright install --with-deps chromium
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
+      - name: Release performance E2E evidence
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: |
+          npm run test:e2e:editor-perf
+          npm run test:e2e:workspace-perf
+      - name: Performance evidence freshness + budget gate
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        run: npm run check:perf-evidence
       - name: Build package and UI assets
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: |
           npm run build
           npm run prepare:bin
           npm run build:ui
+          npm run check:editor-release-evidence
+          npm run prune:package-build-artifacts
           npm run prune:package-native-optionals
       - name: Verify package surface
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}

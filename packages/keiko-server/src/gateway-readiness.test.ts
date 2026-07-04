@@ -1,4 +1,7 @@
+import { readFileSync } from "node:fs";
 import { Readable } from "node:stream";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
@@ -7,6 +10,8 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import { createInMemoryUiStore } from "./store/index.js";
 import { handleGatewayReadiness, runGatewayReadiness } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
+
+const CURRENT_DIR = dirname(fileURLToPath(import.meta.url));
 
 function gatewayConfig(modelId = "test-chat-model"): GatewayConfig {
   return {
@@ -150,6 +155,15 @@ afterEach(() => {
 });
 
 describe("gateway readiness route", () => {
+  it("keeps credentialed chat completion transport inside the model gateway package", () => {
+    const source = readFileSync(join(CURRENT_DIR, "gateway-readiness.ts"), "utf8");
+
+    expect(source).not.toContain("gatewayFetch(");
+    expect(source).not.toContain("/chat/completions");
+    expect(source).not.toContain("apiKeyHeaderValue");
+    expect(source).toContain("requestGatewayReadinessChatCompletion");
+  });
+
   it("returns a clean NO_MODEL problem when no runtime gateway config exists", async () => {
     const deps = depsWith(undefined);
     const result = await handleGatewayReadiness(ctx({}), deps);
@@ -273,8 +287,9 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
-      .mockResolvedValueOnce(jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] })) as
-      typeof fetch;
+      .mockResolvedValueOnce(
+        jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] }),
+      ) as typeof fetch;
     const config: GatewayConfig = {
       ...gatewayConfig(),
       reranker: {
@@ -479,8 +494,7 @@ describe("gateway readiness route", () => {
     ]);
     const longContextRequest = requestBodyAt(fetchImpl, 3);
     const longContextMessages = longContextRequest.messages as
-      | readonly { readonly content?: unknown }[]
-      | undefined;
+      readonly { readonly content?: unknown }[] | undefined;
     const longContextUserContent = longContextMessages?.[1]?.content;
     expect(typeof longContextUserContent).toBe("string");
     if (typeof longContextUserContent === "string") {

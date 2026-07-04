@@ -23,11 +23,14 @@ export const WORKSPACE_STYLE: CSSProperties = {
 };
 
 // Connected toolbar: a row of left-aligned cells separated by hairlines, a spacer, then the right
-// action group. Fixed 66px tall to match the redesign.
+// action group. 66px tall at comfortable widths; the cells wrap to additional rows when the window
+// is narrowed (e.g. 360px) so every control stays reachable instead of overflowing off-screen
+// (#GEN-UI-LAYOUT-003). minHeight (not a fixed height) lets the wrapped rows grow.
 export const TOOLBAR_STYLE: CSSProperties = {
-  height: 66,
+  minHeight: 66,
   flex: "none",
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "stretch",
   borderBottom: "1px solid var(--line-soft)",
   background: "var(--surface)",
@@ -92,8 +95,10 @@ export const BODY_STYLE: CSSProperties = {
   minHeight: 0,
 };
 
+// Left column: 384px at comfortable widths, but capped at 45% of the body so the diff pane keeps a
+// usable floor when the window is narrowed to ~360px (#GEN-UI-LAYOUT-003).
 export const SIDEBAR_STYLE: CSSProperties = {
-  width: 384,
+  width: "min(384px, 45%)",
   flex: "none",
   display: "flex",
   flexDirection: "column",

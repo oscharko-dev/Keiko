@@ -14,22 +14,15 @@
 // tampered or corrupt manifest fails closed.
 
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { lstatSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GroundingDirective } from "@oscharko-dev/keiko-contracts";
+import { replaceViaDurableTempFile } from "../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
+import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
   validatePromptEnhancementEvidenceManifest,
@@ -370,27 +363,11 @@ function parseAndValidateManifest(json: string): PromptEnhancementEvidenceManife
 
 // ─── Node adapter ──────────────────────────────────────────────────────────────────
 function prepareBaseDir(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    mkdirSync(baseDir, { recursive: true, mode: PE_DIR_MODE });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create PE evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "PE evidence directory", { mode: PE_DIR_MODE });
 }
 
 function existingBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) {
-    return undefined;
-  }
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read PE evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "PE evidence directory");
 }
 
 function lexicalManifestPath(runId: string, realBase: string): string {
@@ -455,13 +432,7 @@ function listRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
 function atomicWriteManifest(target: string, json: string, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
-    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
-    try {
-      chmodSync(temp, 0o600);
-    } catch {
-      // ignore; not all filesystems support chmod (e.g. Windows)
-    }
-    renameSync(temp, target);
+    replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(

@@ -17,13 +17,19 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.12.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.2.11" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
 export const KEIKO_PRODUCT_VERSION = "0.2.11" as const;
+
+// ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
+export { clampUnit } from "./numeric.js";
+
+// ─── Shared coded-HTTP-error mechanism (GEN-DUP-NEAR-008) ───────────────────────
+export { CodedHttpError, httpStatusFor } from "./http-error.js";
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -240,6 +246,7 @@ export {
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
   DEFAULT_CONTEXT_REQUEST,
+  WORKSPACE_LANGUAGES,
 } from "./workspace.js";
 
 // ─── Editor session (Issue #1197) ─────────────────────────────────────────────────
@@ -305,11 +312,13 @@ export {
   resolveWorkspaceFileIdentifier,
   selectWorkspaceFileTarget,
 } from "./editor-workspace-path.js";
-export type { EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
+export type { EditorHotExitIndexRecordV2, EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
 export {
+  EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
   editorHotExitSnapshotExpired,
+  isEditorHotExitIndexRecordV2,
   isEditorHotExitSnapshotV1,
 } from "./editor-hot-exit.js";
 
@@ -625,6 +634,8 @@ export {
 export type {
   CommandTaskKind,
   CommandTaskSource,
+  CommandTaskTrustState,
+  CommandTaskTrustReason,
   CommandTask,
   CommandTaskCatalog,
   CommandFailureReason,
@@ -646,6 +657,8 @@ export {
   COMMAND_RUNNER_SCHEMA_VERSION,
   COMMAND_TASK_KINDS,
   COMMAND_TASK_SOURCES,
+  COMMAND_TASK_TRUST_STATES,
+  COMMAND_TASK_TRUST_REASONS,
   COMMAND_FAILURE_REASONS,
   COMMAND_RUNNER_EVENT_KINDS,
   COMMAND_TASK_RULES,
@@ -888,7 +901,7 @@ export {
   listVoicePersonas,
 } from "./gateway.js";
 
-// ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0059) ──────────
+// ─── Voice control / media protocol (Issue #496 / Epic #491; ADR-0101) ──────────
 // Versioned, content-free wire-protocol contract for the optional Voice Digital Twin: the WebSocket
 // control / signaling message catalog, the WebRTC media-plane descriptor, the capability-gating and
 // fallback state table, and the replay / reconnect / redaction classification. Pure types + frozen
@@ -977,7 +990,7 @@ export {
   validateVoiceControlMessage,
 } from "./voice-protocol.js";
 
-// ─── Voice transcript segment lifecycle (Issue #500 / Epic #491; ADR-0063) ───────
+// ─── Voice transcript segment lifecycle (Issue #500 / Epic #491; ADR-0105) ───────
 export type {
   VoiceTranscriptSegmentState,
   VoiceTranscriptProviderErrorKind,
@@ -1011,7 +1024,7 @@ export {
   summarizeVoiceTranscript,
 } from "./voice-transcript.js";
 
-// ─── Voice assistant speech-output playback lifecycle (Issue #501 / Epic #491; ADR-0064) ──
+// ─── Voice assistant speech-output playback lifecycle (Issue #501 / Epic #491; ADR-0106) ──
 export type {
   VoicePlaybackPhase,
   VoicePlaybackFailureKind,
@@ -1211,7 +1224,19 @@ export type {
   GroundedAnswerRankingSummary,
   ConversationDocumentContextWire,
   ConversationAttachmentDescriptorWire,
+  ConversationMemoryRequestWire,
+  ConversationMemoryResultWire,
   DesktopChatSendRequestWire,
+  DesktopChatSendResponse,
+  DesktopChatStreamEventType,
+  DesktopChatStreamTerminalEventType,
+  DesktopChatStreamTokenEvent,
+  DesktopChatStreamDoneEvent,
+  DesktopChatStreamErrorEvent,
+  DesktopChatStreamCancelledEvent,
+  DesktopChatStreamEvent,
+  DesktopChatStreamTerminalEvent,
+  DesktopChatSendAbortContract,
   BffErrorCode,
   BffError,
   GroundingLimits,
@@ -1220,7 +1245,18 @@ export {
   buildGroundedAnswerContextPackSummary,
   DEFAULT_GROUNDING_LIMITS,
   GROUNDING_LIMIT_CEILINGS,
+  DESKTOP_CHAT_STREAM_EVENT_TYPES,
+  DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
+  DESKTOP_CHAT_SEND_ABORT_CONTRACT,
+  isDesktopChatStreamEvent,
+  isDesktopChatStreamTerminalEvent,
+  eventIsDesktopChatStreamTerminal,
   resolveGroundingLimits,
+  MAX_ATTACHMENT_BYTES,
+  ALLOWED_IMAGE_MIME_PREFIXES,
+  ALLOWED_DOCUMENT_MIME_PREFIXES,
+  ALLOWED_DOCUMENT_MIME_LITERALS,
+  classifyAttachmentMime,
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
@@ -1656,6 +1692,7 @@ export type {
   MemoryEdgeId,
   MemoryEdgeKind,
   MemoryForget,
+  MemoryForgetReason,
   MemoryId,
   MemoryModelIdentity,
   MemoryPin,
@@ -1698,6 +1735,14 @@ export {
   MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
   MEMORY_AUDIT_INITIATOR_SURFACES,
   MEMORY_EDGE_KINDS,
+  MEMORY_FORGET_REASON_EVICT_OVERFLOW,
+  MEMORY_FORGET_REASON_EXPIRE_AGE,
+  MEMORY_FORGET_REASON_EXPIRE_PROPOSAL,
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+  MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT,
+  MEMORY_FORGET_REASON_USER_REQUEST,
+  MEMORY_FORGET_REASON_VALIDITY_EXPIRED,
+  MEMORY_FORGET_REASONS,
   MEMORY_SCHEMA_VERSION,
   MEMORY_SCOPE_KINDS,
   MEMORY_SENSITIVITIES,
@@ -1732,6 +1777,24 @@ export {
   validateMemoryUpdate,
   validateMemoryValidityInterval,
 } from "./memory-barrel.js";
+
+export type {
+  MemoryConsolidationJobStateWire,
+  MemoryConsolidationStaleReasonWire,
+  MemoryConsolidationStaleFlagWire,
+  MemoryConsolidationReviewReasonWire,
+  MemoryConsolidationProposedActionWire,
+  MemoryConsolidationEvidenceKindWire,
+  MemoryConsolidationEvidenceWire,
+  MemoryConsolidationReviewItemWire,
+  MemoryConsolidationSummaryStatusWire,
+  MemoryConsolidationResultWire,
+  MemoryConsolidationJobWire,
+  MemoryConsolidationJobSelectionWire,
+  MemoryConsolidationJobSettingsWire,
+  MemoryConsolidationJobEnvelopeWire,
+  MemoryConsolidationJobResponseWire,
+} from "./memory-consolidation-wire.js";
 
 // ─── Workflow memory port (Issue #213 / Epic #204) ──────────────────────────────
 // Optional read-only port that workflow packages compose with to inject scoped memory
@@ -1810,9 +1873,19 @@ export type {
   QualityIntelligenceExportBundleEntry,
   QualityIntelligenceTestCaseCandidate,
   QualityIntelligenceReviewState,
+  QualityIntelligenceReviewAction,
+  QualityIntelligenceRunStatus,
   QualityIntelligencePriority,
   QualityIntelligenceRiskClass,
   QualityIntelligenceTestCaseStatus,
+} from "./qualityIntelligence/index.js";
+// Shared QI status/terminal/projection helpers (GEN-DUP-SEMANTIC-008/-009/-010).
+export {
+  QUALITY_INTELLIGENCE_RUN_STATUSES,
+  QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES,
+  QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET,
+  isTerminalReviewState,
+  reviewActionResultState,
 } from "./qualityIntelligence/index.js";
 // Epic #736 (Issue #746) added the test-quality rubric judge contracts as flat re-exports.
 export type {
@@ -2145,6 +2218,8 @@ export type {
   GitDeliveryApprovalNotRequired,
   GitDeliveryApprovalGranted,
   GitDeliveryApprovalRequirement,
+  GitDeliveryApprovalClaim,
+  GitDeliveryApprovalRequest,
   GitDeliveryPolicyDecision,
   GitDeliveryActionPreview,
   GitDeliveryExecutionResult,
@@ -2182,6 +2257,7 @@ export {
   isGitDeliveryExecutionOutcome,
   isGitDeliveryExecutionErrorCode,
   isGitDeliveryApprovalRequirement,
+  isGitDeliveryApprovalClaim,
   isGitDeliveryPolicyDecision,
   isGitDeliveryEvidenceRef,
   isGitDeliveryExecutionResult,
@@ -2430,7 +2506,7 @@ export {
   parseGitPullRequestReadinessSummary,
 } from "./git-pull-request.js";
 
-// git-merge.ts (Issue #478, Epic #470; ADR-0065)
+// git-merge.ts (Issue #478, Epic #470; ADR-0087)
 // The provider-neutral, content-free merge-governance leaf: the merge-readiness model (the severity-
 // ranked blocker taxonomy reusing GitDeliveryMergeBlockReason plus the lifecycle/preview states), the
 // strategy-eligibility derivation (policy ∩ provider capability, never a UI default), the merge
@@ -2476,7 +2552,7 @@ export {
   parseGitMergeReadinessSummary,
 } from "./git-merge.js";
 
-// ─── Discussion intelligence (Issue #502 / Epic #491; ADR-0065) ──────────────────
+// ─── Discussion intelligence (Issue #502 / Epic #491; ADR-0107) ──────────────────
 // Text-first colleague-like discussion contract (5 modes, disagreement structure, confidence bridge,
 // interruption-recovery turn model). Reuses the prompt-enhancer citation/contradiction/grounding vocab
 // and the voice transcript capability gate (no parallel stack). Pure, content-free leaf module.
@@ -2524,7 +2600,7 @@ export {
   validateDiscussionModePlan,
 } from "./discussion-intelligence.js";
 
-// ─── Spoken action intent governance (Issue #503 / Epic #491; ADR-0066) ──────────
+// ─── Spoken action intent governance (Issue #503 / Epic #491; ADR-0108) ──────────
 // Deterministic, fail-closed normalization + confirmation layer that sits IN FRONT OF the existing
 // governed-handoff governance for UNTRUSTED spoken transcripts. Adds preconditions, removes none. Pure,
 // content-free leaf module: the audit record carries no raw text/audio, only enums/counts/digest.

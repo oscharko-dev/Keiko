@@ -27,6 +27,7 @@ const EXPORT_READY_TIMEOUT_MS = 10_000;
 const EXPORT_READY_POLL_MS = 100;
 
 function run(command, args) {
+  // SECURITY-SHELL-OK: hardcoded npm argv only; Windows .cmd compatibility, no user input.
   // `npm` resolves to `npm.cmd` on Windows, and modern Node refuses to spawn a `.cmd`/`.bat` without
   // a shell (CVE-2024-27980 hardening) — without `shell: true` the spawn fails immediately with a
   // null status, which is exactly the Windows-only failure the #284 cross-platform CI surfaced. The

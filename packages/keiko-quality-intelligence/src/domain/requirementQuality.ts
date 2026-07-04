@@ -152,24 +152,24 @@ function signalsForText(text: string): readonly RequirementQualitySignal[] {
   return Object.freeze(signals);
 }
 
+interface NegationComparableAtom {
+  readonly atom: QualityIntelligence.QualityIntelligenceEvidenceAtom;
+  readonly text: string;
+  readonly core: string;
+  readonly negated: boolean;
+}
+
 export function analyzeRequirementQuality(
   input: AnalyzeRequirementQualityInput,
 ): readonly QualityIntelligence.QualityIntelligenceRequirementQualityFinding[] {
   const findings: QualityIntelligence.QualityIntelligenceRequirementQualityFinding[] = [];
-  
-  interface NegationComparableAtom {
-    readonly atom: QualityIntelligence.QualityIntelligenceEvidenceAtom;
-    readonly text: string;
-    readonly core: string;
-    readonly negated: boolean;
-  }
-  
+
   const comparables: NegationComparableAtom[] = [];
-  
+
   for (const entry of input.atoms) {
     const text = collapsedText(entry.canonicalText);
     if (text.length === 0) continue;
-    
+
     const core = text.replace(NEGATION_PATTERN, " ").replace(/\s+/gu, " ").trim();
     if (core.length > 0) {
       comparables.push({
@@ -195,12 +195,18 @@ export function analyzeRequirementQuality(
     const existing = seenCores.get(comp.core);
     if (existing !== undefined && existing.negated !== comp.negated) {
       findings.push(
-        toFinding(input.runId, comp.atom, comp.text, {
-          category: "cross-atom-contradiction",
-          severity: "high",
-          confidence: 0.95,
-          reason: `widerspricht einem anderen Requirement (Atom ${existing.atom.id}) auf Basis der Negation (XOR-Kontradiktion)`,
-        }, crossOrdinal++),
+        toFinding(
+          input.runId,
+          comp.atom,
+          comp.text,
+          {
+            category: "cross-atom-contradiction",
+            severity: "high",
+            confidence: 0.95,
+            reason: `widerspricht einem anderen Requirement (Atom ${existing.atom.id}) auf Basis der Negation (XOR-Kontradiktion)`,
+          },
+          crossOrdinal++,
+        ),
       );
     } else {
       seenCores.set(comp.core, comp);

@@ -32,6 +32,7 @@ import {
   QualityIntelligenceReviewCandidateNotFound,
   QualityIntelligenceReviewRunApprovalRejected,
   QualityIntelligenceReviewGovernanceRejected,
+  QualityIntelligenceReviewIntegrityError,
 } from "../reviewStore.js";
 import type { QualityIntelligenceEvidenceManifest } from "@oscharko-dev/keiko-evidence";
 
@@ -396,6 +397,26 @@ describe("handleQiReview — candidate-scope approve", () => {
     const report = verifyQiReviewAuditIntegrity(tampered);
     expect(report.ok).toBe(false);
     expect(report.issues.map((issue) => issue.code)).toContain("ENTRY_HASH_MISMATCH");
+  });
+
+  it("fails closed when materialized candidate state is forged without an audit entry", () => {
+    mkdirSync(join(evidenceDir, "qi"), { recursive: true });
+    writeFileSync(
+      join(evidenceDir, "qi", "run-review-001.review.json"),
+      JSON.stringify({
+        qiReviewSchemaVersion: 1,
+        runId: "run-review-001",
+        runState: "open",
+        candidateStates: { "cand-1": "approved" },
+        auditLog: [],
+        lastUpdatedAt: "2026-06-01T10:30:00.000Z",
+      }),
+      "utf8",
+    );
+
+    expect(() => loadRunReviewState("run-review-001", evidenceDir)).toThrow(
+      QualityIntelligenceReviewIntegrityError,
+    );
   });
 
   it("keeps both audit entries when candidate decisions arrive concurrently", async () => {

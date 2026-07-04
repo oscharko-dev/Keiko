@@ -16,15 +16,22 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   appendQualityIntelligenceExportRow,
+  EvidenceReadError,
   loadQualityIntelligenceRun,
   loadQualityIntelligenceCandidates,
+  qualityIntelligenceCandidatesArtifactContentHash,
   type QualityIntelligenceCandidateRow,
   type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceExportRow,
 } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { loadRunReviewState, candidateReviewStateOf, runReviewStateOf } from "./reviewStore.js";
+import {
+  QualityIntelligenceReviewIntegrityError,
+  loadRunReviewState,
+  candidateReviewStateOf,
+  runReviewStateOf,
+} from "./reviewStore.js";
 import { assemblePdf, assembleZipBundle } from "./exportAssembly.js";
 
 type Adapter = QI.QualityIntelligenceExportAdapter;
@@ -268,6 +275,7 @@ function buildBundle(
   candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
   createdAt: string,
   manifest: QualityIntelligenceEvidenceManifest,
+  candidateArtifactHashSha256Hex: string,
 ): QI.QualityIntelligenceExportBundle {
   const diagnostics = new Set<string>();
   const candidateIds = new Set<string>(candidates.map((candidate) => candidate.id));
@@ -304,6 +312,7 @@ function buildBundle(
       runId,
       targetAdapter: adapter,
       redactionAttested,
+      candidateArtifactHashSha256Hex,
       diagnostics: diagnosticsList,
       modelProvenance,
       contents: contents
@@ -498,6 +507,37 @@ async function readExportRequest(req: IncomingMessage): Promise<ExportOutcome> {
   return { ok: true, request };
 }
 
+// Loads and integrity-validates the candidate artifact for export. Returns a typed error result on
+// tamper/empty so handleQiExport stays under the LOC bound.
+function loadExportableArtifact(
+  id: string,
+  evidenceDir: string,
+):
+  | { readonly artifact: NonNullable<ReturnType<typeof loadQualityIntelligenceCandidates>> }
+  | { readonly error: RouteResult } {
+  let artifact: ReturnType<typeof loadQualityIntelligenceCandidates>;
+  try {
+    artifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
+  } catch (error) {
+    if (error instanceof EvidenceReadError) {
+      return {
+        error: errorResult(
+          409,
+          "QI_CANDIDATES_TAMPERED",
+          "The candidate artifact failed integrity validation.",
+        ),
+      };
+    }
+    throw error;
+  }
+  if (artifact === undefined || artifact.candidates.length === 0) {
+    return {
+      error: errorResult(409, "QI_NO_CANDIDATES", "This run has no candidates to export."),
+    };
+  }
+  return { artifact };
+}
+
 export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const { id } = ctx.params;
   if (id === undefined || id.trim().length === 0) {
@@ -514,16 +554,29 @@ export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Pr
     if (manifest === undefined) {
       return errorResult(404, "QI_NOT_FOUND", "Quality Intelligence run not found.");
     }
-    const artifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
-    if (artifact === undefined || artifact.candidates.length === 0) {
-      return errorResult(409, "QI_NO_CANDIDATES", "This run has no candidates to export.");
-    }
-    const outcome = serialiseExport(id, parsed.request, artifact.candidates, manifest, evidenceDir);
+    const loaded = loadExportableArtifact(id, evidenceDir);
+    if ("error" in loaded) return loaded.error;
+    const artifact = loaded.artifact;
+    const outcome = serialiseExport(
+      id,
+      parsed.request,
+      artifact.candidates,
+      manifest,
+      evidenceDir,
+      qualityIntelligenceCandidatesArtifactContentHash(artifact),
+    );
     // Emit audit evidence for every materialised export or dry-run preview (Issue #283, AC4). The
     // append is best-effort and must not turn a successful export into a 500 — see recordExportEvidence.
     const evidenceWarnings = recordExportEvidence(id, outcome, evidenceDir);
     return resultWithWarnings(outcome.result, evidenceWarnings);
-  } catch {
+  } catch (error) {
+    if (error instanceof QualityIntelligenceReviewIntegrityError) {
+      return errorResult(
+        409,
+        "QI_REVIEW_TAMPERED",
+        "The review artifact failed integrity validation.",
+      );
+    }
     return errorResult(500, "QI_EXPORT_FAILED", "Failed to build the export.");
   }
 }
@@ -534,6 +587,7 @@ function binaryResponse(
   mode: BinaryMode,
   rows: readonly QualityIntelligenceCandidateRow[],
   manifest: QualityIntelligenceEvidenceManifest,
+  candidateArtifactHashSha256Hex: string,
 ): ExportResponse {
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
@@ -542,7 +596,14 @@ function binaryResponse(
   const warnings = new Set<string>();
   let bytes: Uint8Array;
   if (mode === "pdf") {
-    const bundle = buildBundle(runId, "plain-text", candidates, createdAt, manifest);
+    const bundle = buildBundle(
+      runId,
+      "plain-text",
+      candidates,
+      createdAt,
+      manifest,
+      candidateArtifactHashSha256Hex,
+    );
     for (const warning of bundle.diagnostics ?? []) warnings.add(warning);
     const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
     bytes = assemblePdf(serialized.body, runId);
@@ -554,7 +615,14 @@ function binaryResponse(
     // available as a standalone export.
     const formats: readonly Adapter[] = ["csv", "markdown", "plain-text"];
     const entries = formats.map((fmt) => {
-      const bundle = buildBundle(runId, fmt, candidates, createdAt, manifest);
+      const bundle = buildBundle(
+        runId,
+        fmt,
+        candidates,
+        createdAt,
+        manifest,
+        candidateArtifactHashSha256Hex,
+      );
       for (const warning of bundle.diagnostics ?? []) warnings.add(warning);
       const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
       const ext = LOCAL_META[fmt]?.ext ?? "txt";
@@ -597,15 +665,23 @@ function serialisedResponse(
   request: ExportRequest,
   rows: readonly QualityIntelligenceCandidateRow[],
   manifest: QualityIntelligenceEvidenceManifest,
+  candidateArtifactHashSha256Hex: string,
 ): ExportResponse {
   const adapter = request.adapter;
   if (adapter === "pdf" || adapter === "zip-bundle") {
-    return binaryResponse(runId, adapter, rows, manifest);
+    return binaryResponse(runId, adapter, rows, manifest, candidateArtifactHashSha256Hex);
   }
   const brandedRunId = QualityIntelligence.asQualityIntelligenceRunId(runId);
   const candidates = rows.map((r) => rowToCandidate(r, brandedRunId));
   const createdAt = new Date().toISOString();
-  const bundle = buildBundle(runId, adapter, candidates, createdAt, manifest);
+  const bundle = buildBundle(
+    runId,
+    adapter,
+    candidates,
+    createdAt,
+    manifest,
+    candidateArtifactHashSha256Hex,
+  );
   const serialized = QualityIntelligenceExport.serializeExportBundle(bundle, candidates);
   const warnings = bundle.diagnostics ?? [];
   if (request.dryRun) {
@@ -668,6 +744,7 @@ function serialiseExport(
   allRows: readonly QualityIntelligenceCandidateRow[],
   manifest: QualityIntelligenceEvidenceManifest,
   evidenceDir: string,
+  candidateArtifactHashSha256Hex: string,
 ): ExportResponse {
   const adapter = request.adapter;
   const isBinary = adapter === "pdf" || adapter === "zip-bundle";
@@ -698,7 +775,7 @@ function serialiseExport(
       ),
     };
   }
-  return serialisedResponse(runId, request, rows, manifest);
+  return serialisedResponse(runId, request, rows, manifest, candidateArtifactHashSha256Hex);
 }
 
 export const QI_EXPORT_ROUTE_GROUP: readonly RouteDefinition[] = [

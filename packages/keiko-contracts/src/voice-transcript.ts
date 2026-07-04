@@ -1,5 +1,5 @@
 // Public type contract for the optional Voice Digital Twin transcript segment lifecycle (Epic #491,
-// Issue #500, ADR-0063). This module DEFINES the provider-neutral semantics that let Keiko distinguish
+// Issue #500, ADR-0105). This module DEFINES the provider-neutral semantics that let Keiko distinguish
 // uncertain partial text, provider-stabilised text, user/turn-committed text, provider corrections, and
 // discarded / redacted / failed text. It is pure data + pure functions only — nothing performs IO,
 // crypto, clock reads, randomness, or audio processing, and no provider base URL, credential, or raw
@@ -10,7 +10,7 @@
 // lifecycle here has seven segment STATES. Only the three states that have a wire kind round-trip on the
 // wire (`mapWireKindToVoiceTranscriptSegmentState`); `stable`, `corrected`, `redacted`, and
 // `provider-error` are derived/internal states with no wire kind, exactly as the #499 turn manager maps
-// a richer semantic signal set onto the same wire catalog (ADR-0062). The stateful reducer that drives
+// a richer semantic signal set onto the same wire catalog (ADR-0104). The stateful reducer that drives
 // these states lives in keiko-ui (`voice-transcript-segments.ts`) as a synchronous deterministic engine;
 // this leaf contract holds the state catalog, the classification tables, the legal-transition table, the
 // validators, and the AC5 committed-only integration boundary so server-side consumers (#503 governed
@@ -238,7 +238,7 @@ export function assertNeverVoiceTranscriptSegmentState(state: never): never {
 // The initial segment state a wire transcript kind establishes. Only the three transcript wire kinds
 // map; every other control kind (and the derived states `stable`/`corrected`/`redacted`/
 // `provider-error`, which have no wire kind) returns `undefined`. A strict 1:1 wire↔state map is
-// impossible by design, the same lesson the #499 turn manager records (ADR-0062).
+// impossible by design, the same lesson the #499 turn manager records (ADR-0104).
 export function mapWireKindToVoiceTranscriptSegmentState(
   kind: VoiceControlMessageKind,
 ): VoiceTranscriptSegmentState | undefined {

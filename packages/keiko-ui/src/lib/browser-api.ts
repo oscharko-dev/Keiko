@@ -4,7 +4,7 @@
  * header on state-changing methods, no response-body logging.
  */
 
-import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 import type {
   BrowserContentResult,
   BrowserNavigateResult,
@@ -13,40 +13,12 @@ import type {
   CdpReachability,
 } from "./types";
 
-interface BffError {
-  readonly error: { readonly code: string; readonly message: string };
-}
-
+// Thin wrapper over the shared BFF scaffold (GEN-DUP-NEAR-004). State-changing requests always carry
+// Content-Type: application/json so the server's rejectIfInvalidStateChange gate passes — even DELETE
+// which carries no body; the shared helper applies that plus the CSRF header and the 204 → undefined
+// short-circuit.
 async function browserFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      // State-changing requests always need Content-Type: application/json so the server's
-      // rejectIfInvalidStateChange gate passes — even DELETE which carries no body.
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as BffError;
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic, never log
-    }
-    throw new ApiError(code, message, res.status);
-  }
-
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return bffFetchJson<T>(path, init);
 }
 
 export async function fetchBrowserStatus(port: number): Promise<CdpReachability> {

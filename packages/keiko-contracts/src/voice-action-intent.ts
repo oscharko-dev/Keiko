@@ -1,4 +1,4 @@
-// Spoken Action Intent governance contract (Epic #491, Issue #503, ADR-0066). Voice is an UNTRUSTED
+// Spoken Action Intent governance contract (Epic #491, Issue #503, ADR-0108). Voice is an UNTRUSTED
 // input source: a committed spoken transcript may PROPOSE an action but can never EXECUTE one or bypass
 // any existing gate. This leaf module DEFINES the deterministic, fail-closed normalization +
 // confirmation layer that sits IN FRONT OF the existing governance (the workflow-handoff request, its

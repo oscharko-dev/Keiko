@@ -15,6 +15,7 @@
 // `packages/keiko-cli/src/state-paths.ts` ON PURPOSE: a script takes no package-graph edge, and
 // each constant cites its source of truth so drift stays auditable.
 
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -24,19 +25,28 @@ import { DatabaseSync } from "node:sqlite";
 const GATEWAY_CONFIG = "keiko.config.json";
 const CREDENTIALS_SUBDIR = "credentials";
 const PROVIDER_VAULT = "provider-credentials.vault";
-const PROVIDER_VAULT_VERSION = 1;
 const PROVIDER_SECRET_REF_PREFIX = "cred:";
+const RERANKER_SECRET_REF = "model-gateway:reranker";
 const MEMORY_SUBDIR = "memory";
 const MEMORY_DB = "keiko-memory.db";
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge";
 const CAPSULES_DB = "capsules.db";
 const EVIDENCE_SUBDIR = "evidence";
+const TOOL_RESULTS_SUBDIR = "tool-results";
+const TOOL_RESULT_ARTIFACT_SUFFIX = ".tool-result.txt";
 const UPDATE_SUBDIR = "updates";
 const QI_SUBDIR = "qi";
+const QI_RETENTION_AUDIT_FILE = "retention-deletion-audit.jsonl";
+const QI_QUARANTINED_MANIFEST_MARKER = ".qi.json.corrupt.";
 const FIGMA_SUBDIR = "figma";
 const FIGMA_VAULT = "figma-token.vault";
 const PE_SUBDIR = "pe";
 const FIGMA_SNAPSHOT_SUBDIR = "figma-snapshots";
+const EDITOR_HOT_EXIT_SUBDIR = "editor-hot-exit";
+const EDITOR_HOT_EXIT_VAULT = "snapshots.vault";
+const EDITOR_HOT_EXIT_KEYFILE = "editor-hot-exit-vault.key";
+const LOCAL_SECRET_VAULT_VERSION = 1;
+const HOT_EXIT_REF_PATTERN = /^hot-exit:[a-f0-9]{64}$/u;
 
 // ── Sealed-envelope markers (source of truth: packages/keiko-security/src/secretbox.ts) ─────
 const SEALED_STRING_PREFIX = "kv1."; // AES-256-GCM string envelope
@@ -47,6 +57,8 @@ const SEALED_BINARY_VERSION = 0x01; // AES-256-GCM binary (BLOB) envelope first 
 const LK_ENC_MARKER_KEY = "content_encryption";
 const LK_ENC_MARKER_VALUE = "aes-256-gcm/v1";
 const LK_ENC_PROBE_KEY = "content_encryption_probe";
+const LK_ENC_SCOPE_KEY = "content_encryption_scope";
+const LK_ENC_SCOPE_VALUE = "reconstructive-columns/v3";
 
 // Secret SHAPES and key/value assignments that must never appear in cleartext in a redacted
 // artifact. These mirror packages/keiko-security/src/redaction.ts. Value-assignment checks explicitly
@@ -87,6 +99,7 @@ const SENSITIVE_TOP_DIRS = new Set([
   LOCAL_KNOWLEDGE_SUBDIR,
   EVIDENCE_SUBDIR,
   UPDATE_SUBDIR,
+  EDITOR_HOT_EXIT_SUBDIR,
 ]);
 
 function isSensitiveFile(relPath, name) {
@@ -179,8 +192,9 @@ function readJsonFile(path) {
   }
 }
 
-// Mirrors keiko-server's hasPlaintextGatewayCredentials: any provider carrying a plaintext apiKey,
-// or a figma block carrying a plaintext accessToken, is an unmigrated/leaked credential.
+// Mirrors keiko-server's hasPlaintextGatewayCredentials: any provider/reranker carrying a plaintext
+// apiKey, or a figma block carrying a plaintext accessToken, is an unmigrated/leaked credential.
+// eslint-disable-next-line complexity -- mirrors the product credential leak predicate across provider, figma, and reranker config.
 function hasPlaintextCredentials(config) {
   if (typeof config !== "object" || config === null) return false;
   const providers = Array.isArray(config.providers) ? config.providers : [];
@@ -194,7 +208,13 @@ function hasPlaintextCredentials(config) {
     figma !== null &&
     typeof figma.accessToken === "string" &&
     figma.accessToken.trim().length > 0;
-  return providerLeak || figmaLeak;
+  const reranker = config.reranker;
+  const rerankerLeak =
+    typeof reranker === "object" &&
+    reranker !== null &&
+    typeof reranker.apiKey === "string" &&
+    reranker.apiKey.length > 0;
+  return providerLeak || figmaLeak || rerankerLeak;
 }
 
 function auditCredentials(stateDir) {
@@ -203,14 +223,14 @@ function auditCredentials(stateDir) {
   const configPath = join(stateDir, GATEWAY_CONFIG);
   if (!existsSync(configPath)) return skip(id, title, "no keiko.config.json present");
   const config = readJsonFile(configPath);
-  if (config === undefined) return skip(id, title, "keiko.config.json is not valid JSON");
+  if (config === undefined) return fail(id, title, ["keiko.config.json is not valid JSON"]);
   const findings = [];
   if (hasPlaintextCredentials(config)) {
     findings.push(
       "keiko.config.json contains a plaintext apiKey/accessToken (must be a secret reference)",
     );
   }
-  const { refs, findings: refFindings } = collectProviderCredentialRefs(config);
+  const { refs, findings: refFindings } = collectCredentialRefs(config);
   findings.push(...refFindings);
   const vaultPath = join(stateDir, CREDENTIALS_SUBDIR, PROVIDER_VAULT);
   const credentialsSymlink = firstSymlinkInPath(stateDir, CREDENTIALS_SUBDIR);
@@ -227,7 +247,7 @@ function auditCredentials(stateDir) {
   ]);
 }
 
-function collectProviderCredentialRefs(config) {
+function collectCredentialRefs(config) {
   const refs = [];
   const findings = [];
   const providers = Array.isArray(config.providers) ? config.providers : [];
@@ -236,6 +256,7 @@ function collectProviderCredentialRefs(config) {
     if (!Object.hasOwn(provider, "apiKeySecretRef")) return;
     collectOneProviderCredentialRef(provider, index, refs, findings);
   });
+  collectRerankerCredentialRef(config, refs, findings);
   return { refs, findings };
 }
 
@@ -253,6 +274,22 @@ function collectOneProviderCredentialRef(provider, index, refs, findings) {
   }
   if (ref !== `${PROVIDER_SECRET_REF_PREFIX}${modelId}`) {
     findings.push(`${label} does not match the provider credential reference scheme`);
+    return;
+  }
+  refs.push(ref);
+}
+
+function collectRerankerCredentialRef(config, refs, findings) {
+  const reranker = config.reranker;
+  if (typeof reranker !== "object" || reranker === null) return;
+  if (!Object.hasOwn(reranker, "apiKeySecretRef")) return;
+  const ref = reranker.apiKeySecretRef;
+  if (typeof ref !== "string" || ref.length === 0) {
+    findings.push("reranker credential reference is not a non-empty string");
+    return;
+  }
+  if (ref !== RERANKER_SECRET_REF) {
+    findings.push("reranker credential reference does not match the reranker reference scheme");
     return;
   }
   refs.push(ref);
@@ -283,7 +320,7 @@ function validateProviderVault(vaultPath, refs) {
   if (typeof vault !== "object" || vault === null || Array.isArray(vault)) {
     return [`${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} is not an object`];
   }
-  if (vault.version !== PROVIDER_VAULT_VERSION) {
+  if (vault.version !== LOCAL_SECRET_VAULT_VERSION) {
     return [`${CREDENTIALS_SUBDIR}/${PROVIDER_VAULT} has an unsupported schema version`];
   }
   const entries = vault.entries;
@@ -317,7 +354,116 @@ function validateProviderVaultEntries(entries, refs) {
   return findings;
 }
 
-// ── Class 2: private file modes ──────────────────────────────────────────────────────────────
+// ── Class 2: encrypted editor hot-exit recovery snapshots ───────────────────────────────────
+function isBase64Key(value) {
+  try {
+    return Buffer.from(value.trim(), "base64").length === 32;
+  } catch {
+    return false;
+  }
+}
+
+// eslint-disable-next-line complexity -- hot-exit vault audit keeps schema, sealed-entry, and plaintext-field checks together.
+function validateHotExitVault(stateDir, vaultPath) {
+  const rel = relative(stateDir, vaultPath);
+  const raw = readFileSync(vaultPath, "utf8");
+  const vault = readJsonFile(vaultPath);
+  if (vault === undefined) return [`${rel} is not valid JSON`];
+  if (typeof vault !== "object" || vault === null || Array.isArray(vault)) {
+    return [`${rel} is not an object`];
+  }
+  if (vault.version !== LOCAL_SECRET_VAULT_VERSION) {
+    return [`${rel} has an unsupported schema version`];
+  }
+  const entries = vault.entries;
+  if (typeof entries !== "object" || entries === null || Array.isArray(entries)) {
+    return [`${rel} is missing an entries object`];
+  }
+  const findings = [];
+  for (const [ref, value] of Object.entries(entries)) {
+    if (!HOT_EXIT_REF_PATTERN.test(ref)) {
+      findings.push(`${rel} contains a non-hot-exit snapshot reference`);
+    }
+    const sealedFinding = sealedEntryFinding(`${rel} entry ${ref}`, value);
+    if (sealedFinding !== undefined) findings.push(sealedFinding);
+  }
+  if (
+    /\b(?:workspaceRoot|relativePath|contentHash|savedContentHash|paneId|windowId)\b/u.test(raw)
+  ) {
+    findings.push(`${rel} contains plaintext hot-exit snapshot fields`);
+  }
+  return findings;
+}
+
+function checkHotExitKeyfile(stateDir, findings) {
+  const rel = `${EDITOR_HOT_EXIT_SUBDIR}/${EDITOR_HOT_EXIT_KEYFILE}`;
+  const keyfile = join(stateDir, rel);
+  if (!existsSync(keyfile)) return;
+  const symlink = firstSymlinkInPath(stateDir, rel);
+  if (symlink !== undefined) {
+    findings.push(symlinkFinding(stateDir, symlink));
+    return;
+  }
+  const stat = lstatSync(keyfile);
+  if (!stat.isFile()) {
+    findings.push(`${rel} is not a regular file`);
+    return;
+  }
+  if (process.platform !== "win32" && looseModeFromStat(stat)) {
+    findings.push(`${rel} is ${octalFromStat(stat)} (expected 0o600)`);
+  }
+  if (!isBase64Key(readFileSync(keyfile, "utf8"))) {
+    findings.push(`${rel} is not a base64-encoded 32-byte hot-exit vault key`);
+  }
+}
+
+// eslint-disable-next-line complexity -- hot-exit audit must handle absent, partial, symlinked, and sealed vault states distinctly.
+function auditEditorHotExit(stateDir) {
+  const id = "editor-hot-exit";
+  const title = "Encrypted editor hot-exit recovery snapshots";
+  const dirRel = EDITOR_HOT_EXIT_SUBDIR;
+  const vaultRel = `${EDITOR_HOT_EXIT_SUBDIR}/${EDITOR_HOT_EXIT_VAULT}`;
+  const dir = join(stateDir, dirRel);
+  const vaultPath = join(stateDir, vaultRel);
+  if (!existsSync(dir)) return skip(id, title, "no editor hot-exit recovery store present");
+  const dirSymlink = firstSymlinkInPath(stateDir, dirRel);
+  if (dirSymlink !== undefined) return fail(id, title, [symlinkFinding(stateDir, dirSymlink)]);
+  if (
+    !existsSync(vaultPath) &&
+    !existsSync(join(stateDir, EDITOR_HOT_EXIT_SUBDIR, EDITOR_HOT_EXIT_KEYFILE))
+  ) {
+    return skip(id, title, "editor hot-exit directory is present but has no recovery vault");
+  }
+  const findings = [];
+  const vaultSymlink = firstSymlinkInPath(stateDir, vaultRel);
+  if (vaultSymlink !== undefined) {
+    findings.push(symlinkFinding(stateDir, vaultSymlink));
+  } else if (existsSync(vaultPath)) {
+    if (!checkArtifactProtection(stateDir, vaultPath, findings)) {
+      // Protection errors are already recorded; avoid parsing non-regular files.
+    } else {
+      findings.push(...validateHotExitVault(stateDir, vaultPath));
+    }
+  }
+  checkHotExitKeyfile(stateDir, findings);
+  if (findings.length > 0) return fail(id, title, findings);
+  if (!existsSync(vaultPath)) {
+    return pass(id, title, ["hot-exit key material is owner-only; no recovery snapshots present"]);
+  }
+  const vault = readJsonFile(vaultPath);
+  const entries =
+    typeof vault === "object" &&
+    vault !== null &&
+    typeof vault.entries === "object" &&
+    vault.entries !== null
+      ? Object.keys(vault.entries).length
+      : 0;
+  return pass(id, title, [
+    `${entries} editor recovery snapshot(s) are stored only as sealed hot-exit vault entries`,
+  ]);
+}
+
+// ── Class 3: private file modes ──────────────────────────────────────────────────────────────
 function walk(absDir, relDir, onFile, onDir) {
   for (const name of readdirSync(absDir)) {
     const abs = join(absDir, name);
@@ -361,7 +507,7 @@ function auditFileModes(stateDir) {
   ]);
 }
 
-// ── Class 3: encrypted Memory Vault content ──────────────────────────────────────────────────
+// ── Class 4: encrypted Memory Vault content ──────────────────────────────────────────────────
 const MEMORY_TEXT_TARGETS = [
   { table: "memories", column: "body" },
   { table: "memories", column: "payload_json" },
@@ -433,7 +579,7 @@ function auditMemoryEncryption(stateDir) {
   }
 }
 
-// ── Class 4: encrypted Local Knowledge content ───────────────────────────────────────────────
+// ── Class 5: encrypted Local Knowledge content ───────────────────────────────────────────────
 const LOCAL_KNOWLEDGE_TEXT_TARGETS = [
   { table: "document_texts", column: "normalized_text" },
   { table: "document_text_windows", column: "normalized_text" },
@@ -475,16 +621,52 @@ function auditOneKnowledgeStore(namespace, dbPath) {
     if (typeof probe !== "string" || !probe.startsWith(SEALED_STRING_PREFIX)) {
       findings.push(`${namespace}: key-verification probe is missing or not sealed`);
     }
+    if (readSchemaMeta(db, LK_ENC_SCOPE_KEY) !== LK_ENC_SCOPE_VALUE) {
+      findings.push(
+        `${namespace}: encryption scope marker is missing or unsupported (expected ${LK_ENC_SCOPE_KEY}=${LK_ENC_SCOPE_VALUE})`,
+      );
+    }
     for (const { table, column } of LOCAL_KNOWLEDGE_TEXT_TARGETS) {
       const text = sampleColumnSealed(db, table, column);
       if (!text.sealed) findings.push(`${namespace}: ${table}.${column} contains cleartext`);
     }
     const vec = blobColumnSealed(db, "vectors", "embedding");
     if (!vec.sealed) findings.push(`${namespace}: vectors.embedding contains a cleartext vector`);
+    findings.push(...auditKnowledgeLexicalProjection(db, namespace));
     return findings;
   } finally {
     db.close();
   }
+}
+
+function auditKnowledgeLexicalProjection(db, namespace) {
+  if (!tableExists(db, "chunk_lexical_index")) return [];
+  const findings = [];
+  const columns = ["text", "exact_text"].filter((column) =>
+    columnExists(db, "chunk_lexical_index", column),
+  );
+  if (columns.length === 0) return findings;
+  const rows = db
+    .prepare(
+      `SELECT ${columns.map((column) => quoteIdent(column)).join(", ")} FROM chunk_lexical_index`,
+    )
+    .all();
+  for (const column of columns) {
+    const secretLabels = new Set();
+    for (const row of rows) {
+      const value = row[column];
+      if (typeof value !== "string" || value.length === 0) continue;
+      for (const label of scanForSecretFindings(value)) secretLabels.add(label);
+    }
+    if (secretLabels.size > 0) {
+      findings.push(
+        `${namespace}: chunk_lexical_index.${column} contains unredacted secret material (${[
+          ...secretLabels,
+        ].join(", ")})`,
+      );
+    }
+  }
+  return findings;
 }
 
 function auditKnowledgeEncryption(stateDir) {
@@ -495,11 +677,11 @@ function auditKnowledgeEncryption(stateDir) {
   const findings = stores.flatMap((s) => auditOneKnowledgeStore(s.namespace, s.dbPath));
   if (findings.length > 0) return fail(id, title, findings);
   return pass(id, title, [
-    `${stores.length} Local Knowledge store(s) seal reconstructive content at rest (marker + sealed key probe verified; populated audited columns checked)`,
+    `${stores.length} Local Knowledge store(s) seal configured content columns at rest (marker + sealed key probe + scope verified); plaintext lexical FTS projection remains reconstructive residual data and was scanned for secret-shaped material`,
   ]);
 }
 
-// ── Class 5: protected Evidence / Quality-Intelligence artifacts ──────────────────────────────
+// ── Class 6: protected Evidence / Quality-Intelligence artifacts ──────────────────────────────
 function isPlaceholderSafe(value) {
   const trimmed = value.trim().replace(/[.,;)}]+$/g, "");
   return trimmed === REDACTED_PLACEHOLDER || /^(?:true|false|null|[0-9]+)$/iu.test(trimmed);
@@ -522,7 +704,7 @@ function scanForSecretFindings(text) {
 }
 
 function isTextArtifact(path) {
-  return /\.(?:json|vault)$/u.test(path);
+  return /\.(?:json|jsonl|txt|vault)$/u.test(path) || path.includes(QI_QUARANTINED_MANIFEST_MARKER);
 }
 
 function scanForSecrets(path) {
@@ -534,7 +716,10 @@ function collectArtifacts(stateDir) {
   const evidenceDir = join(stateDir, EVIDENCE_SUBDIR);
   const artifacts = {
     evidence: [],
+    toolResults: [],
     qi: [],
+    qiQuarantined: [],
+    qiRetentionAudit: [],
     candidates: [],
     qiCompanions: [],
     pe: [],
@@ -551,6 +736,12 @@ function collectArtifacts(stateDir) {
     return artifacts;
   }
   collectEvidenceTree(evidenceDir, EVIDENCE_SUBDIR, artifacts);
+  collectKnownSubtree(
+    join(evidenceDir, TOOL_RESULTS_SUBDIR),
+    `${EVIDENCE_SUBDIR}/${TOOL_RESULTS_SUBDIR}`,
+    artifacts,
+    collectToolResultTree,
+  );
   collectKnownSubtree(
     join(evidenceDir, PE_SUBDIR),
     `${EVIDENCE_SUBDIR}/${PE_SUBDIR}`,
@@ -621,6 +812,21 @@ function collectPeTree(dir, relDir, artifacts) {
   }
 }
 
+function collectToolResultTree(dir, relDir, artifacts) {
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    const stat = lstatSync(abs);
+    if (stat.isSymbolicLink()) {
+      artifacts.symlinks.push(abs);
+      continue;
+    }
+    if (stat.isDirectory()) collectToolResultTree(abs, `${relDir}/${name}`, artifacts);
+    else if (stat.isFile() && name.endsWith(TOOL_RESULT_ARTIFACT_SUFFIX)) {
+      artifacts.toolResults.push(abs);
+    }
+  }
+}
+
 function collectQiTree(dir, relDir, artifacts) {
   for (const name of readdirSync(dir)) {
     const abs = join(dir, name);
@@ -643,6 +849,8 @@ function collectQiDirectory(name, abs, relDir, artifacts) {
 function collectQiFile(name, abs, artifacts) {
   if (name.endsWith(".figma-snapshot.management.json")) artifacts.figmaManagement.push(abs);
   else if (name.endsWith(".figma-snapshot.json")) artifacts.figmaSnapshots.push(abs);
+  else if (name.includes(QI_QUARANTINED_MANIFEST_MARKER)) artifacts.qiQuarantined.push(abs);
+  else if (name === QI_RETENTION_AUDIT_FILE) artifacts.qiRetentionAudit.push(abs);
   else if (name.endsWith(".qi.json")) artifacts.qi.push(abs);
   else if (name.endsWith(".candidates.json")) artifacts.candidates.push(abs);
   else if (name.endsWith(".json")) artifacts.qiCompanions.push(abs);
@@ -902,7 +1110,10 @@ function auditEvidence(stateDir) {
   const a = collectArtifacts(stateDir);
   const total =
     a.evidence.length +
+    a.toolResults.length +
     a.qi.length +
+    a.qiQuarantined.length +
+    a.qiRetentionAudit.length +
     a.candidates.length +
     a.qiCompanions.length +
     a.pe.length +
@@ -920,7 +1131,10 @@ function auditEvidence(stateDir) {
   }
   for (const path of [
     ...a.evidence,
+    ...a.toolResults,
     ...a.qi,
+    ...a.qiQuarantined,
+    ...a.qiRetentionAudit,
     ...a.candidates,
     ...a.qiCompanions,
     ...a.pe,
@@ -936,9 +1150,38 @@ function auditEvidence(stateDir) {
   if (a.figmaVault) checkFigmaVault(stateDir, a.figmaVault, findings);
   if (findings.length > 0) return fail(id, title, findings);
   return pass(id, title, [
-    `${a.evidence.length} evidence manifest(s), ${a.qi.length} QI manifest(s), ${a.candidates.length} candidate artifact(s), ${a.pe.length} PE manifest(s), ${a.figmaSnapshots.length} Figma snapshot record(s), ${a.figmaSideFiles.length} Figma side-file(s)` +
+    `${a.evidence.length} evidence manifest(s), ${a.toolResults.length} tool-result artifact(s), ${a.qi.length} QI manifest(s), ${a.qiQuarantined.length} quarantined QI manifest(s), ${a.qiRetentionAudit.length} QI retention audit file(s), ${a.candidates.length} candidate artifact(s), ${a.pe.length} PE manifest(s), ${a.figmaSnapshots.length} Figma snapshot record(s), ${a.figmaSideFiles.length} Figma side-file(s)` +
       `${a.figmaVault ? ", 1 sealed Figma token vault" : ""} are owner-only and redacted where text-bearing; QI/PE hashes and Figma image side-file hashes were verified`,
   ]);
+}
+
+function collectRuntimeIntegrityResidue(stateDir) {
+  const findings = [];
+  walk(
+    stateDir,
+    "",
+    (_abs, rel, name) => {
+      if (/\.db(?:-wal|-shm)?\.corrupt\./u.test(name)) {
+        findings.push(`${rel} is an unresolved quarantined SQLite artifact`);
+      }
+      if (name.endsWith(".diagnostic.json") && /\.db(?:-wal|-shm)?\.corrupt\./u.test(name)) {
+        findings.push(`${rel} is a SQLite quarantine diagnostic record`);
+      }
+      if (name.includes(QI_QUARANTINED_MANIFEST_MARKER)) {
+        findings.push(`${rel} is an unresolved quarantined QI manifest`);
+      }
+    },
+    () => undefined,
+  );
+  return findings;
+}
+
+function auditRuntimeIntegrity(stateDir) {
+  const id = "runtime-integrity";
+  const title = "Runtime store integrity residue";
+  const findings = collectRuntimeIntegrityResidue(stateDir);
+  if (findings.length > 0) return fail(id, title, findings);
+  return pass(id, title, ["no unresolved DB or QI quarantine artifacts were found"]);
 }
 
 // Runs every confidentiality-class check over `stateDir`. The overall result is ok unless a class
@@ -954,9 +1197,11 @@ export function auditLocalState(stateDir) {
   const classes = [
     auditCredentials(stateDir),
     auditFileModes(stateDir),
+    auditEditorHotExit(stateDir),
     auditMemoryEncryption(stateDir),
     auditKnowledgeEncryption(stateDir),
     auditEvidence(stateDir),
+    auditRuntimeIntegrity(stateDir),
   ];
   return { ok: classes.every((c) => c.status !== "fail"), stateDir, classes };
 }
@@ -966,4 +1211,6 @@ export const AUDIT_MARKERS = Object.freeze({
   SEALED_BINARY_VERSION,
   LK_ENC_MARKER_KEY,
   LK_ENC_MARKER_VALUE,
+  LK_ENC_SCOPE_KEY,
+  LK_ENC_SCOPE_VALUE,
 });

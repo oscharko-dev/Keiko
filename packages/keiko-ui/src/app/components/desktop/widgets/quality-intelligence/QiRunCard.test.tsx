@@ -12,7 +12,11 @@ import type {
   QualityIntelligenceUiAtomCoverage,
 } from "@oscharko-dev/keiko-contracts";
 
-function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidate {
+function makeCandidate(
+  id: string,
+  title: string,
+  reviewState: QualityIntelligenceUiCandidate["reviewState"] = "open",
+): QualityIntelligenceUiCandidate {
   return {
     id,
     title,
@@ -23,7 +27,7 @@ function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidat
     riskClass: "regression",
     tags: ["smoke"],
     status: "proposed",
-    reviewState: "open",
+    reviewState,
     derivedFromAtomIds: [],
   };
 }
@@ -71,6 +75,7 @@ const fetchOk = (
 
 beforeEach(() => {
   window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 describe("QiRunCard", () => {
@@ -94,7 +99,7 @@ describe("QiRunCard", () => {
 
   it("routes an Approve decision through the review seam and reloads", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-aaaa1111", [makeCandidate("tc-1", "Successful login")]);
     const fetchImpl = fetchOk(detail);
     const reviewImpl = vi.fn().mockResolvedValue({
@@ -120,7 +125,7 @@ describe("QiRunCard", () => {
 
   it("locks the review controls and labels the clicked button Saving… while a review is in flight (F029 C275)", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-pending", [makeCandidate("tc-1", "Successful login")]);
     let resolveReview: (() => void) | undefined;
     const reviewImpl = vi.fn().mockImplementation(
@@ -162,7 +167,7 @@ describe("QiRunCard", () => {
 
   it("keeps the run content rendered and shows a dismissible alert when a review action fails (F030 C113)", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-rev-fail", [makeCandidate("tc-1", "Successful login")]);
     const reviewImpl = vi
       .fn()
@@ -200,7 +205,7 @@ describe("QiRunCard", () => {
   // all review actions and therefore suppressed by AT de-duplication).
   it("updates the review-announce live region after a successful Approve (A11y-1 / Issue #282)", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-rev-announce", [
       makeCandidate("tc-announce-1", "Verify checkout flow"),
     ]);
@@ -243,7 +248,7 @@ describe("QiRunCard", () => {
 
   it("routes an inline edit through the edit seam and reloads the detail (Epic #712)", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-aaaa1111", [makeCandidate("tc-1", "Login")]);
     const fetchImpl = fetchOk(detail);
     const editImpl = vi
@@ -277,7 +282,7 @@ describe("QiRunCard", () => {
 
   it("reflects the edited text in the card after the post-save reload (AC1 round-trip, Epic #712)", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     // The post-save reload is the ONLY source of truth for the rendered text: handleEdit discards
     // the edit response (a partial projection) and re-fetches the run detail. So the first GET
     // returns the pre-edit title and the post-edit reload returns the updated detail. Asserting the
@@ -353,9 +358,27 @@ describe("QiRunCard", () => {
     expect(screen.getByRole("button", { name: /^edit$/i })).not.toHaveAttribute("aria-disabled");
   });
 
-  it("keeps the edit form open and surfaces the save error when the edit request fails", async () => {
+  it("keeps the audit display label tab-scoped and clears legacy durable storage", async () => {
     const user = userEvent.setup();
     window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    const detail = makeDetail("qi-run-label-storage", [makeCandidate("tc-1", "Login")]);
+    render(<QiRunCard runId="qi-run-label-storage" fetchDetailImpl={fetchOk(detail)} />);
+
+    await screen.findByText("Login");
+    const labelInput = screen.getByLabelText(/audit display label/i);
+    expect(labelInput).toHaveValue("");
+    expect(window.localStorage.getItem("keiko.qi.reviewerLabel")).toBeNull();
+
+    await user.type(labelInput, "Bob");
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem("keiko.qi.reviewerLabel")).toBe("Bob");
+    });
+    expect(window.localStorage.getItem("keiko.qi.reviewerLabel")).toBeNull();
+  });
+
+  it("keeps the edit form open and surfaces the save error when the edit request fails", async () => {
+    const user = userEvent.setup();
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-edit-fail", [makeCandidate("tc-1", "Login")]);
     const fetchImpl = fetchOk(detail);
     const editImpl = vi
@@ -384,7 +407,7 @@ describe("QiRunCard", () => {
 
   it("keeps an open edit form intact when a review reloads the detail for another candidate", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-coedit", [
       makeCandidate("tc-1", "First case"),
       makeCandidate("tc-2", "Second case"),
@@ -565,6 +588,69 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-d3" fetchDetailImpl={fetchOk(detail)} connectedSources={[]} />);
     await screen.findByText("A test");
     expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
+  });
+
+  // GEN-DUP-SEMANTIC-009: the review-announce string is derived from the shared contracts
+  // action→state projection (reviewActionResultState) mapped through REVIEW_LABEL, replacing an
+  // ad-hoc ternary. This matrix pins the announced label for every reviewer action. The four
+  // actions the old ternary handled (approve/reject/request-changes/reopen) keep byte-identical
+  // labels; "withdraw" — which the old ternary mislabelled "Open" — now correctly announces
+  // "Withdrawn" (the else-branch defect that motivated the shared projection).
+  describe("announces the resulting state label for each reviewer action (SEMANTIC-009)", () => {
+    const cases = [
+      { action: "approve", buttonName: /^approve$/i, initial: "open", label: "Approved" },
+      { action: "reject", buttonName: /^reject$/i, initial: "open", label: "Rejected" },
+      {
+        action: "request-changes",
+        buttonName: /^request changes$/i,
+        initial: "open",
+        label: "Changes requested",
+      },
+      { action: "withdraw", buttonName: /^withdraw$/i, initial: "open", label: "Withdrawn" },
+      { action: "reopen", buttonName: /^reopen$/i, initial: "approved", label: "Open" },
+    ] as const;
+
+    for (const { action, buttonName, initial, label } of cases) {
+      it(`announces "${label}" after ${action}`, async () => {
+        const user = userEvent.setup();
+        window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+        const detail = makeDetail(`qi-run-announce-${action}`, [
+          makeCandidate("tc-a1", "Verify checkout flow", initial),
+        ]);
+        const reviewImpl = vi.fn().mockResolvedValue({
+          runState: "open",
+          candidateStates: { "tc-a1": initial },
+          auditCount: 1,
+        }) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+        render(
+          <QiRunCard
+            runId={`qi-run-announce-${action}`}
+            fetchDetailImpl={fetchOk(detail)}
+            reviewImpl={reviewImpl}
+          />,
+        );
+        const button = await screen.findByRole("button", { name: buttonName });
+        await waitFor(() => {
+          expect(button).toBeEnabled();
+        });
+        await user.click(button);
+
+        await waitFor(() => {
+          expect(reviewImpl).toHaveBeenCalledWith(
+            `qi-run-announce-${action}`,
+            action,
+            "tc-a1",
+            "Alice",
+          );
+        });
+        await waitFor(() => {
+          const region = screen.getByTestId("qi-review-announce");
+          expect(region).toHaveTextContent(`marked ${label}.`);
+          expect(region).toHaveTextContent(/Verify checkout flow/i);
+        });
+      });
+    }
   });
 });
 

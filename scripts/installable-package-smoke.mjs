@@ -30,6 +30,7 @@ const NPM_INSTALL_TIMEOUT_MS =
   process.platform === "win32" ? WINDOWS_NPM_INSTALL_TIMEOUT_MS : DEFAULT_NPM_INSTALL_TIMEOUT_MS;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
+const LIFECYCLE_COMMAND_TIMEOUT_MS = 90_000;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const rootPackageSurfaceContract = JSON.parse(
@@ -38,12 +39,19 @@ const rootPackageSurfaceContract = JSON.parse(
 const rootVersion = rootPackageJson.version;
 const bundled = rootPackageJson.bundleDependencies ?? [];
 
+function parseArgs(argv) {
+  return {
+    includeOptional: argv.includes("--include-optional"),
+  };
+}
+
 function fail(message) {
   console.error(`installable-smoke failed: ${message}`);
   process.exit(1);
 }
 
 function run(cmd, args, options = {}) {
+  // SECURITY-SHELL-OK: npm-only Windows .cmd compatibility; node/bin paths stay shell:false.
   // `npm` resolves to `npm.cmd` on Windows, which modern Node refuses to spawn without a shell
   // (CVE-2024-27980 hardening); route npm — and only npm — through the shell so the packaged-artifact
   // smoke is cross-platform (the #284 OS matrix surfaced this). `node` is a real executable and is
@@ -177,7 +185,7 @@ function packRoot() {
   return tarballPath;
 }
 
-function installInto(tmp, tarballPath) {
+function installInto(tmp, tarballPath, options) {
   const initResult = run("npm", ["init", "-y"], { cwd: tmp });
   if (initResult.status !== 0) {
     fail(`npm init -y exited ${String(initResult.status)}: ${initResult.stderr}`);
@@ -187,7 +195,14 @@ function installInto(tmp, tarballPath) {
   // every CI build and developer machine before review (issue #169 security-triage finding L1).
   const installResult = run(
     "npm",
-    ["install", tarballPath, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
+    [
+      "install",
+      tarballPath,
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      ...(options.includeOptional ? [] : ["--omit=optional"]),
+    ],
     { cwd: tmp, timeout: NPM_INSTALL_TIMEOUT_MS },
   );
   if (installResult.status !== 0) {
@@ -527,19 +542,131 @@ async function assertPackagedUi(tmp) {
   }
 }
 
+function lifecycleCommandRunner(tmp, bin, port, stateDir) {
+  const commonArgs = [
+    "--host",
+    "127.0.0.1",
+    "--port",
+    String(port),
+    "--state-dir",
+    stateDir,
+    "--start-timeout",
+    "30",
+    "--stop-timeout",
+    "10",
+  ];
+  return (command, extra = []) =>
+    run("node", [bin, command, ...commonArgs, ...extra], {
+      cwd: tmp,
+      timeout: LIFECYCLE_COMMAND_TIMEOUT_MS,
+    });
+}
+
+function assertLifecycleStart(runLifecycle) {
+  const startResult = runLifecycle("start");
+  if (startResult.status !== 0) {
+    // Surface the UI child's own log (keiko start reports its path as "Logs: <path>") so a startup
+    // crash is diagnosable from CI instead of hiding behind a bare non-zero exit.
+    const logMatch = /Logs:\s*(\S+)/u.exec(startResult.stderr);
+    let logTail = "";
+    if (logMatch) {
+      try {
+        logTail = `\n--- ${logMatch[1]} (tail) ---\n${readFileSync(logMatch[1], "utf8")
+          .split("\n")
+          .slice(-40)
+          .join("\n")}`;
+      } catch {
+        logTail = `\n--- ${logMatch[1]} unreadable ---`;
+      }
+    }
+    fail(`keiko start exited ${String(startResult.status)}: ${startResult.stderr}${logTail}`);
+  }
+  if (!startResult.stdout.includes("Keiko UI running on")) {
+    fail(`keiko start did not report a running UI: ${startResult.stdout}`);
+  }
+}
+
+function assertLifecycleStatusRunning(runLifecycle) {
+  const statusResult = runLifecycle("status");
+  if (statusResult.status !== 0 || !statusResult.stdout.includes("Keiko UI is running on")) {
+    fail(
+      `keiko status did not report the packaged UI as running ` +
+        `(status=${String(statusResult.status)}): ${statusResult.stdout}${statusResult.stderr}`,
+    );
+  }
+}
+
+function assertLifecycleRestart(runLifecycle) {
+  const restartResult = runLifecycle("restart");
+  if (restartResult.status !== 0) {
+    fail(`keiko restart exited ${String(restartResult.status)}: ${restartResult.stderr}`);
+  }
+  if (!restartResult.stdout.includes("Keiko UI running on")) {
+    fail(`keiko restart did not report a running UI after restart: ${restartResult.stdout}`);
+  }
+}
+
+function assertLifecycleStop(runLifecycle) {
+  const stopResult = runLifecycle("stop");
+  if (stopResult.status !== 0 || !stopResult.stdout.includes("Keiko UI stopped")) {
+    fail(
+      `keiko stop did not stop the packaged UI ` +
+        `(status=${String(stopResult.status)}): ${stopResult.stdout}${stopResult.stderr}`,
+    );
+  }
+}
+
+function assertLifecycleStatusStopped(runLifecycle) {
+  const stoppedStatus = runLifecycle("status");
+  if (stoppedStatus.status !== 0 || !stoppedStatus.stdout.includes("not running")) {
+    fail(`keiko status after stop did not report not running: ${stoppedStatus.stdout}`);
+  }
+}
+
+async function assertPackagedLifecycleCommands(tmp) {
+  const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
+  const bin = join(packageRoot, "dist", "cli", "index.js");
+  const port = await reserveUiPort();
+  // The runtime state / UI data dir MUST live outside the workspace (the lifecycle cwd = tmp): keiko
+  // rejects a state dir inside the current workspace so the UI DB can never overlap a selected
+  // repository (packages/keiko-server/src/store/paths.ts). A dir under tmp failed on Linux/Windows;
+  // macOS masked it because /var realpath resolution made the containment check miss. A sibling temp
+  // dir is outside the workspace on every platform.
+  const stateDir = mkdtempSync(join(tmpdir(), "keiko-smoke-state-"));
+  const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir);
+
+  let started = false;
+  try {
+    assertLifecycleStart(lifecycleRun);
+    started = true;
+    assertLifecycleStatusRunning(lifecycleRun);
+    assertLifecycleRestart(lifecycleRun);
+    assertLifecycleStop(lifecycleRun);
+    started = false;
+    assertLifecycleStatusStopped(lifecycleRun);
+  } finally {
+    if (started) {
+      lifecycleRun("stop");
+    }
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
 async function main() {
+  const options = parseArgs(process.argv.slice(2));
   const tarballPath = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   try {
-    installInto(tmp, tarballPath);
+    installInto(tmp, tarballPath, options);
     assertCliExecutable(tmp);
     assertBundledPayload(tmp);
     assertCliVersionAndHelp(tmp);
     await assertInstalledRootRuntimeSurface(tmp);
     assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
+    await assertPackagedLifecycleCommands(tmp);
     console.log(
-      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI reachable.`,
+      `installable-smoke ok: tarball installed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

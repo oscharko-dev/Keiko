@@ -300,10 +300,15 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
       type === "figma" &&
       typeof cfg?.["selectedScreenIdsJson"] === "string" &&
       cfg["selectedScreenIdsJson"].length > 0;
-    const defaultW = isFigmaView ? 360 : t.w;
-    const defaultH = isFigmaView ? 360 : t.h;
-    const defaultMinW = isFigmaView ? Math.max(t.min.w, 300) : t.min.w;
-    const defaultMinH = isFigmaView ? Math.max(t.min.h, 260) : t.min.h;
+    // GEN-DUP-NEAR-007 — source the scoped Figma-view card geometry from its registry entry
+    // (WIN_TYPES.figmaView) instead of duplicating the literals here. The Math.max clamp against
+    // the figma-manager type's minimums (`t`) is preserved, so the effective defaults are
+    // unchanged (fv.min.w=300 → Math.max(320,300)=320; fv.min.h=260 → Math.max(360,260)=360).
+    const fv = WIN_TYPES.figmaView;
+    const defaultW = isFigmaView ? fv.w : t.w;
+    const defaultH = isFigmaView ? fv.h : t.h;
+    const defaultMinW = isFigmaView ? Math.max(t.min.w, fv.min.w) : t.min.w;
+    const defaultMinH = isFigmaView ? Math.max(t.min.h, fv.min.h) : t.min.h;
     let createdId: string | null = null;
     setWins((ws) => {
       const vp = worldVP();
@@ -961,7 +966,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const bothLive = a !== undefined && b !== undefined;
     const chatWindowId = conn.boundChatWindowId ?? (bothLive ? chatWindowIdInPair(a, b) : null);
     const boundScope =
-      boundScopeOf(conn) ?? (bothLive ? filesChatBindScope(a, b, Date.now()) : null);
+      boundScopeOf(conn) ??
+      (conn.boundScopeElided === true || !bothLive ? null : filesChatBindScope(a, b, Date.now()));
     if (boundScope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, boundScope);
     const connectorScope =
       boundConnectorScopeOf(conn) ?? (bothLive ? connectorChatBind(a, b) : null);

@@ -282,6 +282,17 @@ function uniqueStrings(values: readonly string[]): readonly string[] {
   return [...new Set(values)];
 }
 
+export function naturalLanguageContentTerms(
+  queryText: string,
+  caseSensitive: boolean,
+): readonly string[] {
+  const rawTokens = expandedQueryTerms(queryText, caseSensitive);
+  return uniqueStrings([
+    ...naturalLanguageContentGroups([rawTokens], caseSensitive).flat(),
+    ...technicalPhraseTerms(queryText, caseSensitive),
+  ]);
+}
+
 function isDefinitionIntentToken(token: string): boolean {
   return DEFINITION_INTENT_TOKENS.has(token.toLowerCase());
 }
@@ -320,6 +331,12 @@ function escapeRegExp(text: string): string {
 
 function lineLooksLikeImport(line: string): boolean {
   return /^\s*import\b/u.test(line) || /^\s*export\s*\{/u.test(line);
+}
+
+function lineLooksLikeDeclaration(line: string): boolean {
+  return /^\s*(?:export\s+)?(?:(?:async|default|declare|public|private|protected|readonly|static)\s+)*(?:const|let|var|function|class|interface|type|enum)\b/u.test(
+    line,
+  );
 }
 
 function lineLooksLikeSymbolDefinition(
@@ -396,6 +413,8 @@ function adjustedDefinitionIntentScore(
     }
     if (lineLooksLikeSymbolDefinition(line, symbolToken, caseSensitive)) {
       bonus = Math.max(bonus, 0.75);
+    } else if (lineLooksLikeDeclaration(line)) {
+      bonus = Math.max(bonus, 0.55);
     } else if (lineLooksLikeImport(line)) {
       penalty = Math.max(penalty, 0.2);
     }

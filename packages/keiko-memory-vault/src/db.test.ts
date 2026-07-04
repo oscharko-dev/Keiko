@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
@@ -22,7 +30,7 @@ function freshDir(): string {
 }
 
 describe("openMemoryDatabase", () => {
-  it("brings a fresh DB up with WAL mode + FK on + migrated to the schema head", () => {
+  it("brings a fresh DB up with WAL mode + FK on + contention-friendly pragmas", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     const db = openMemoryDatabase(dbPath, TEST_CIPHER);
@@ -89,7 +97,7 @@ describe("quarantineCorruptDb", () => {
 });
 
 describe("openMemoryDatabase corruption path", () => {
-  it("quarantines a garbage DB on open and re-creates fresh", () => {
+  it("quarantines a garbage DB on open, writes a diagnostic record, and re-creates fresh", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     writeFileSync(dbPath, "garbage that is not a sqlite header");
@@ -98,7 +106,60 @@ describe("openMemoryDatabase corruption path", () => {
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
     expect(v.user_version).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
-    expect(readdirSync(dir).some((e) => e.startsWith("keiko-memory.db.corrupt."))).toBe(true);
+    const entries = readdirSync(dir);
+    const corrupt = entries.find((e) => e.startsWith("keiko-memory.db.corrupt."));
+    expect(corrupt).toBeDefined();
+    const diagnostic = entries.find(
+      (e) => e.startsWith("keiko-memory.db.corrupt.") && e.endsWith(".diagnostic.json"),
+    );
+    expect(diagnostic).toBeDefined();
+    const record = JSON.parse(readFileSync(join(dir, diagnostic ?? ""), "utf8")) as {
+      readonly store?: string;
+      readonly cause?: { readonly errcode?: number };
+    };
+    expect(record.store).toBe("memory-vault");
+    expect(record.cause?.errcode).toBe(26);
+  });
+
+  it("does not quarantine a newer schema downgrade guard and leaves existing rows intact", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
+    db.exec("INSERT INTO memory_vault_secrets (name, value) VALUES ('sentinel', 'kv1.sentinel')");
+    db.exec(`PRAGMA user_version = ${String(MEMORY_VAULT_SCHEMA_VERSION + 1)}`);
+    db.close();
+
+    expect(() => openMemoryDatabase(dbPath, TEST_CIPHER)).toThrow(/newer than this binary/);
+    const entries = readdirSync(dir);
+    expect(entries.some((e) => e.includes(".corrupt."))).toBe(false);
+
+    const raw = new DatabaseSync(dbPath);
+    try {
+      const count = raw
+        .prepare("SELECT COUNT(*) AS n FROM memory_vault_secrets WHERE name = 'sentinel'")
+        .get() as { n: number };
+      expect(count.n).toBe(1);
+    } finally {
+      raw.close();
+    }
+  });
+
+  it("does not quarantine SQLITE_BUSY lock contention", () => {
+    const dir = freshDir();
+    const dbPath = join(dir, "keiko-memory.db");
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
+    db.close();
+
+    const locker = new DatabaseSync(dbPath);
+    locker.exec("PRAGMA locking_mode = EXCLUSIVE");
+    locker.exec("BEGIN EXCLUSIVE");
+    try {
+      expect(() => openMemoryDatabase(dbPath, TEST_CIPHER)).toThrow(/locked|busy/i);
+    } finally {
+      locker.exec("ROLLBACK");
+      locker.close();
+    }
+    expect(readdirSync(dir).some((e) => e.includes(".corrupt."))).toBe(false);
   });
 });
 

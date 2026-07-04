@@ -281,10 +281,7 @@ function singleToolResultFields(
 function directRehydrationFields(
   spans: readonly ContextProvenanceRef[],
 ): Partial<
-  Pick<
-    ContextRehydrationHandle,
-    "kind" | "scopePath" | "lineRange" | "contentHash" | "artifactId"
-  >
+  Pick<ContextRehydrationHandle, "kind" | "scopePath" | "lineRange" | "contentHash" | "artifactId">
 > {
   const repoFile = singleRepoFileFields(spans);
   if (repoFile.kind !== undefined) {

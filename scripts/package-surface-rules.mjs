@@ -5,14 +5,27 @@
 // consumes these to fail the published tarball if it contains anything it must not ship.
 
 export const FORBIDDEN_TARBALL_PATH_RULES = [
-  // `.js.map` is the runtime source-map artifact (can leak absolute paths from the original
-  // sources). `.d.ts.map` is a declaration map — relative-only and used by editors to resolve
-  // "go to definition" across bundled workspace packages, so it stays.
-  { test: (p) => p.endsWith(".js.map"), label: "a JS source map" },
+  // Runtime source maps can leak original paths and source layout. `.d.ts.map` is a declaration
+  // map — relative-only and used by editors to resolve "go to definition" across bundled workspace
+  // packages, so it stays. Every other source-map artifact is publish-forbidden.
+  { test: (p) => p.endsWith(".map") && !p.endsWith(".d.ts.map"), label: "a runtime source map" },
+  { test: (p) => p.endsWith(".tsbuildinfo"), label: "TypeScript incremental build metadata" },
+  {
+    test: (p) =>
+      p.includes("/__tests__/") ||
+      p.startsWith("__tests__/") ||
+      /\.(test|spec)\.[cm]?[jt]sx?$/.test(p) ||
+      /\.(test|spec)\.d\.ts$/.test(p),
+    label: "compiled test or spec artifact",
+  },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
   {
     test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),
     label: "keiko-ui workspace source",
+  },
+  {
+    test: (p) => p.startsWith("packages/") && p.includes("/node_modules/"),
+    label: "a nested workspace node_modules dependency",
   },
   // Generic native-addon guard (Issue #287 AC4 "native addons"): no compiled `.node` binary may ship
   // in the published artifact. Keiko's published product is platform-agnostic pure-JS; the only

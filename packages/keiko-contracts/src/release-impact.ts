@@ -32,6 +32,7 @@ export const RELEASE_IMPACT_PUBLISH_GATES = [
   "version-consistency",
   "publish-manifests",
   "release-impact",
+  "workspace-supply-chain",
   "package-surface",
   "qi-supply-chain",
   "install-smoke",
@@ -40,11 +41,7 @@ export const RELEASE_IMPACT_PUBLISH_GATES = [
 export type ReleaseImpactPublishGate = (typeof RELEASE_IMPACT_PUBLISH_GATES)[number];
 
 export type ReleaseImpactUserVisibleChange =
-  | "none"
-  | "observable"
-  | "behavioral"
-  | "security"
-  | "compatibility";
+  "none" | "observable" | "behavioral" | "security" | "compatibility";
 
 export interface ReleaseImpactStateImpact {
   readonly store: string;

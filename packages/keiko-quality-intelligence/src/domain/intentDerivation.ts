@@ -239,7 +239,7 @@ function intentTextSource(
 ): IntentTextSource {
   const bodyTexts = meaningfulNormalisedTexts(evidenceTexts);
   const labelTexts = meaningfulNormalisedTexts(envelopes.map((envelope) => envelope.displayLabel));
-  
+
   if (bodyTexts.length > 0 && labelTexts.length > 0) {
     return Object.freeze({
       sourceTexts: Object.freeze([...labelTexts, ...bodyTexts]),

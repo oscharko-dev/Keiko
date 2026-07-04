@@ -20,16 +20,16 @@ const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
 describe("monacoWorkerEntryForLabel", () => {
-  it("routes each Monaco language label to its worker bundle", () => {
-    expect(monacoWorkerEntryForLabel("typescript")).toBe("ts");
-    expect(monacoWorkerEntryForLabel("javascript")).toBe("ts");
-    expect(monacoWorkerEntryForLabel("json")).toBe("json");
-    expect(monacoWorkerEntryForLabel("css")).toBe("css");
-    expect(monacoWorkerEntryForLabel("scss")).toBe("css");
-    expect(monacoWorkerEntryForLabel("less")).toBe("css");
-    expect(monacoWorkerEntryForLabel("html")).toBe("html");
-    expect(monacoWorkerEntryForLabel("handlebars")).toBe("html");
-    expect(monacoWorkerEntryForLabel("razor")).toBe("html");
+  it("routes Monaco language labels to the governed editor-only worker", () => {
+    expect(monacoWorkerEntryForLabel("typescript")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("javascript")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("json")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("css")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("scss")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("less")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("html")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("handlebars")).toBe("editor");
+    expect(monacoWorkerEntryForLabel("razor")).toBe("editor");
   });
 
   it("falls back to the editor worker for the base service and unknown labels", () => {
@@ -79,25 +79,23 @@ describe("createMonacoEnvironment", () => {
       calls,
       factories: {
         editor: make("editor"),
-        ts: make("ts"),
-        json: make("json"),
-        css: make("css"),
-        html: make("html"),
       },
     };
   }
 
-  it("dispatches getWorker to the factory selected by label", () => {
+  it("dispatches getWorker to the editor-only factory for every label", () => {
     const { factories, calls } = taggedFactories();
     const environment = createMonacoEnvironment(factories);
-    expect((environment.getWorker("1", "typescript") as unknown as { tag: string }).tag).toBe("ts");
-    expect((environment.getWorker("2", "json") as unknown as { tag: string }).tag).toBe("json");
-    expect((environment.getWorker("3", "scss") as unknown as { tag: string }).tag).toBe("css");
-    expect((environment.getWorker("4", "razor") as unknown as { tag: string }).tag).toBe("html");
+    expect((environment.getWorker("1", "typescript") as unknown as { tag: string }).tag).toBe(
+      "editor",
+    );
+    expect((environment.getWorker("2", "json") as unknown as { tag: string }).tag).toBe("editor");
+    expect((environment.getWorker("3", "scss") as unknown as { tag: string }).tag).toBe("editor");
+    expect((environment.getWorker("4", "razor") as unknown as { tag: string }).tag).toBe("editor");
     expect(
       (environment.getWorker("5", "editorWorkerService") as unknown as { tag: string }).tag,
     ).toBe("editor");
-    expect(calls).toEqual(["ts", "json", "css", "html", "editor"]);
+    expect(calls).toEqual(["editor", "editor", "editor", "editor", "editor"]);
   });
 });
 
@@ -120,10 +118,18 @@ describe("defaultMonacoWorkerFactories", () => {
     }
   });
 
-  it("ships every local worker used by the default factory, never a CDN", () => {
+  it("ships the local editor worker used by the default factory, never a CDN", () => {
     const source = readFileSync(resolve(here, "worker-entries.ts"), "utf8");
     for (const specifier of Object.values(MONACO_WORKER_MODULES)) {
       expect(source).toContain(specifier);
+    }
+    for (const disallowed of [
+      "monaco-editor/esm/vs/language/typescript/ts.worker.js",
+      "monaco-editor/esm/vs/language/json/json.worker.js",
+      "monaco-editor/esm/vs/language/css/css.worker.js",
+      "monaco-editor/esm/vs/language/html/html.worker.js",
+    ]) {
+      expect(source).not.toContain(disallowed);
     }
     expect(source).not.toMatch(/jsdelivr|unpkg|cdnjs|cdn\./);
     expect(source).toContain("import.meta.url");

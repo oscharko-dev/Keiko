@@ -7,6 +7,10 @@
 // the eventual `keiko index --resume` CLI) decide whether to re-run, abandon, or alert.
 // The returned `IndexingJobRecord` carries `resume_token` (the lexicographically-greatest
 // embedded `chunk_id` from the prior run) so a resumed run can elect to skip past it.
+//
+// `findResumableJob` is a package-public SQLite resume primitive with no in-repo consumer
+// yet (Epic #189 / Issue #196): it is intentionally retained ahead of the resume surface
+// that will wire it — do not delete it as "dead export".
 
 import type { IndexingJobRecord, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 

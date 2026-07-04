@@ -95,7 +95,7 @@ implementation, start with these clusters:
   ADR-0097.
 - Prompt Enhancer: ADR-0044.
 - Git delivery and Git client: ADR-0080 through ADR-0087, ADR-0098.
-- Voice and dialogue mode: voice-specific ADR-0058 through ADR-0069, ADR-0094
+- Voice and dialogue mode: voice-specific ADR-0100 through ADR-0111, ADR-0094
   through ADR-0096.
 
 ADR statuses matter. Proposed ADRs are design intent; Accepted ADRs are constraints

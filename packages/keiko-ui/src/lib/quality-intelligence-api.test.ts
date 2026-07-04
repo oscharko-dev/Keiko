@@ -429,4 +429,11 @@ describe("quality intelligence JSON BFF helpers", () => {
       status: 500,
     });
   });
+
+  // The former qi-local fetchJson had no 204 short-circuit and would call res.json() on an empty
+  // body (throwing). Routing through the shared bffFetchJson folds in 204 → undefined (safe-forward).
+  it("resolves undefined when a route returns 204 No Content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(deleteQiRun("qi-204")).resolves.toBeUndefined();
+  });
 });

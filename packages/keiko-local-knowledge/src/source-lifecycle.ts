@@ -6,7 +6,6 @@
 // single-writer semantics).
 
 import {
-  isSafeDisplaySummary,
   validateKnowledgeSourceScope,
   type KnowledgeCapsuleId,
   type KnowledgeSource,
@@ -14,7 +13,9 @@ import {
   type KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 
+import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
+import { deleteDocumentRow, listPersistedDocumentsForSource } from "./discovery/persist.js";
 import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -72,18 +73,6 @@ function parseTags(json: string): readonly string[] {
   const parsed = JSON.parse(json) as unknown;
   if (!Array.isArray(parsed)) return [];
   return parsed.filter((entry): entry is string => typeof entry === "string");
-}
-
-function assertSafeDisplayField(field: string, value: string): void {
-  if (value.trim().length === 0 || !isSafeDisplaySummary(value)) {
-    throw new KnowledgeStoreError(`${field} must be a browser-safe non-empty string`);
-  }
-}
-
-function assertSafeOptionalDisplayField(field: string, value: string | undefined): void {
-  if (value !== undefined && !isSafeDisplaySummary(value)) {
-    throw new KnowledgeStoreError(`${field} must be browser-safe when set`);
-  }
 }
 
 function assertSafeScope(scope: KnowledgeSourceScope): void {
@@ -281,6 +270,9 @@ export function removeSourceFromCapsule(
       throw new KnowledgeNotFoundError(
         `Source not found for tuple capsule=${String(capsuleId)} source=${String(sourceId)}`,
       );
+    }
+    for (const document of listPersistedDocumentsForSource(db, capsuleId, sourceId)) {
+      deleteDocumentRow(db, capsuleId, document.id);
     }
     db.prepare(DELETE_BY_TUPLE_SQL).run({ c: capsuleId, s: sourceId });
     db.exec("COMMIT");

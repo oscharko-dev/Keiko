@@ -1,4 +1,4 @@
-// Issue #502 (ADR-0065) — the Voice ↔ Discussion intelligence binding. Proves the four issue ACs the
+// Issue #502 (ADR-0107) — the Voice ↔ Discussion intelligence binding. Proves the four issue ACs the
 // binding is responsible for: text-first dormancy for `none` / `speech-output` (AC1), committed-only
 // spoken input (AC5), mode reuse through the SAME contract plan (AC2), and interruption → recovery
 // without losing the active mode / topicId / turnIndex (AC4). It also pins the content-free observer:

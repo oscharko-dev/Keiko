@@ -2026,7 +2026,11 @@ export function FigmaSnapshotWindow({
                 {screenJsonCopyStatus}
               </p>
             ) : null}
-            <JsonSyntaxBlock text={screenJsonText} className="figma-view-json-code" />
+            <JsonSyntaxBlock
+              text={screenJsonText}
+              className="figma-view-json-code"
+              ariaLabel={`Screen-IR JSON for ${screenJson.screen.screenId}`}
+            />
           </section>
         ) : null}
       </section>

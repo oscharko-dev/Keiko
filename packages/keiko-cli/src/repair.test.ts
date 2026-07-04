@@ -393,6 +393,26 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("plaintext credentials present");
   });
 
+  it("reports action-required when reranker.apiKey is a non-empty string", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "reranker-token.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [],
+        reranker: { modelId: "rerank", baseUrl: "https://rerank.example/v1", apiKey: "secret" },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("plaintext credentials present");
+  });
+
   it("reports ok when providers use apiKeySecretRef backed by a vault entry and there is no figma block", () => {
     const root = makeRoot();
     seedInstalledLayout(root);
@@ -432,6 +452,70 @@ describe("runRepairCli — credential storage", () => {
     expect(code).toBe(1);
     expect(c.out()).toContain("[action] Credential storage");
     expect(c.out()).toContain("no encrypted entry");
+  });
+
+  it("reports action-required when the credential vault index is unreadable", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "corrupt-vault.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "claude-3", apiKeySecretRef: "cred:claude-3" }],
+      }),
+      "utf8",
+    );
+    mkdirSync(join(root, "credentials"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(root, "credentials", "provider-credentials.vault"), "not-json", "utf8");
+
+    const c = makeIo();
+    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("encrypted credential vault is unreadable");
+  });
+
+  it("reports action-required when a reranker secret reference has no matching vault entry", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "reranker-orphaned.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [],
+        reranker: { apiKeySecretRef: "model-gateway:reranker" },
+      }),
+      "utf8",
+    );
+
+    const c = makeIo();
+    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("no encrypted entry");
+  });
+
+  it("reports ok when reranker apiKeySecretRef is backed by a vault entry", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "reranker-migrated.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [],
+        reranker: { apiKeySecretRef: "model-gateway:reranker" },
+      }),
+      "utf8",
+    );
+    seedVault(root, ["model-gateway:reranker"]);
+
+    const c = makeIo();
+    runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(c.out()).toContain("[ok] Credential storage");
+    expect(c.out()).toContain("no plaintext credentials");
   });
 
   it("reports ok when no --config flag and no KEIKO_CONFIG_FILE env variable are set", () => {

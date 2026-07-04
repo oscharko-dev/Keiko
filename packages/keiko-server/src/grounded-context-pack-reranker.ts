@@ -1,8 +1,5 @@
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts";
-import type {
-  CandidateFile,
-  EvidenceAtom,
-} from "@oscharko-dev/keiko-contracts/connected-context";
+import type { CandidateFile, EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { RerankResult } from "@oscharko-dev/keiko-model-gateway";
 import type { RerankerSeam } from "@oscharko-dev/keiko-workflows";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -56,10 +53,7 @@ function candidateDocument(
   return redactText(deps, lines.join("\n")).slice(0, MAX_CANDIDATE_DOCUMENT_CHARS);
 }
 
-function withRerankerSignal(
-  candidate: CandidateFile,
-  result: RerankResult,
-): CandidateFile {
+function withRerankerSignal(candidate: CandidateFile, result: RerankResult): CandidateFile {
   if (result.relevanceScore === undefined) {
     return candidate;
   }

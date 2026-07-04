@@ -17,7 +17,7 @@ adds, the threats it introduces, and the code that mitigates each. Every claim c
 The authoritative decision records for the surface under review are
 [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md) (dialogue orchestration),
 [ADR-0095](../adr/ADR-0095-voice-assistant-speech-synthesis.md) (assistant speech synthesis), and
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) (capability-gated architecture).
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) (capability-gated architecture).
 
 ## 1. Scope and the complete dialogue-mode data path
 
@@ -33,7 +33,7 @@ realtime media connection:
   **not** started" ([dialogue-session.md](dialogue-session.md) §"The STT+TTS production turn loop", step 1).
 
 Consequently the realtime transport, its re-opened loopback WebSocket control plane, and its browser-direct
-DTLS-SRTP / SDP / ICE handling (Issue #497, [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md),
+DTLS-SRTP / SDP / ICE handling (Issue #497, [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md),
 [realtime-transport.md](realtime-transport.md)) are **not in the dialogue-mode path** and are out of scope for
 this review. They are governed by their own ADR and the closure gate's two-egress-channel discussion
 ([production-readiness.md](production-readiness.md) §4). No SDP, ICE candidate, ephemeral browser token, or
@@ -231,5 +231,5 @@ epic-#491 limitation, not a regression introduced by this surface). This satisfi
 - [dialogue-session.md](dialogue-session.md) — the dialogue session controller behavior under review.
 - [deployment-profile-matrix.md](deployment-profile-matrix.md) — provider × environment profiles and credential posture.
 - [action-intent-governance.md](action-intent-governance.md) (#503), [session-recap.md](session-recap.md) (#504) — spoken-action and memory governance the dialogue path defers to.
-- [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md), [ADR-0095](../adr/ADR-0095-voice-assistant-speech-synthesis.md), [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — decision records.
+- [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md), [ADR-0095](../adr/ADR-0095-voice-assistant-speech-synthesis.md), [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — decision records.
 - Epic [#1556](https://github.com/oscharko-dev/Keiko/issues/1556); Issue [#1562](https://github.com/oscharko-dev/Keiko/issues/1562).

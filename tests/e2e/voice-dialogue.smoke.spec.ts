@@ -15,6 +15,7 @@
 // user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
 import { expect, test, type Page } from "@playwright/test";
+import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const FULL_REALTIME_WEBRTC_CAPABILITY = {
   voice: {
@@ -314,7 +315,7 @@ async function dialogueTurnFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Start speaking" })).toHaveCount(0);
 
   await page.screenshot({
-    path: "docs/voice/evidence/1560-dialogue-session.png",
+    path: evidenceScreenshotPath("docs/voice/evidence/1560-dialogue-session.png"),
     fullPage: true,
   });
 
@@ -362,7 +363,7 @@ async function micLifecycleFlow(page: Page): Promise<void> {
   await expect(page.getByText("Voice dialogue is ready.")).toBeVisible();
 
   await page.screenshot({
-    path: "docs/voice/evidence/1562-dialogue-mic-lifecycle.png",
+    path: evidenceScreenshotPath("docs/voice/evidence/1562-dialogue-mic-lifecycle.png"),
     fullPage: true,
   });
 
@@ -418,7 +419,7 @@ async function activeComposerControlsFlow(page: Page): Promise<void> {
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
   await page.screenshot({
-    path: "docs/voice/evidence/1563-dialogue-evaluation.png",
+    path: evidenceScreenshotPath("docs/voice/evidence/1563-dialogue-evaluation.png"),
     fullPage: true,
   });
 
@@ -476,7 +477,7 @@ async function personaStorageFlow(page: Page): Promise<void> {
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
 
   await page.screenshot({
-    path: "docs/voice/evidence/1564-persona-storage.png",
+    path: evidenceScreenshotPath("docs/voice/evidence/1564-persona-storage.png"),
     fullPage: true,
   });
 

@@ -48,7 +48,14 @@ export interface CitationPreviewController {
   ) => Promise<string | null>;
 }
 
-const PDF_STATUS_CACHE_TTL_MS = 2000;
+// GEN-PERF-CHAT-009 — every settled grounded bubble instantiates its own preview controller and
+// each one fetches this per-message status, so a transcript of N grounded answers produced an N+1
+// status fetch storm on every re-render burst that outlived the old 2 s window. Preview status is
+// effectively immutable once a message has settled (it changes only when the underlying PDF's
+// availability changes, which the interactive openCitation path re-fetches fresh on demand), so a
+// much longer TTL collapses those repeated passive reads to a single fetch per message per session
+// window without weakening the per-message authorization the endpoint enforces on every call.
+const PDF_STATUS_CACHE_TTL_MS = 300_000; // 5 minutes
 type PdfStatusResponse = Awaited<ReturnType<typeof fetchPdfCitationPreviewStatus>>;
 const pdfStatusCache = new Map<
   string,

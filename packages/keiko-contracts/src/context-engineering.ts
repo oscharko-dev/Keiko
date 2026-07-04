@@ -382,12 +382,7 @@ const TOKEN_EMOJI_LIKE_CODE_POINT_RANGES: readonly (readonly [number, number])[]
   [0x2600, 0x27bf],
 ] as const;
 const TOKEN_WHITESPACE_CODE_POINTS: readonly number[] = [
-  0x09,
-  0x0a,
-  0x0b,
-  0x0c,
-  0x0d,
-  0x20,
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20,
 ] as const;
 const TOKEN_ESTIMATE_CACHE_MAX_ENTRIES = 4_096;
 const tokenEstimateCache = new Map<string, number>();
@@ -530,7 +525,9 @@ export function deriveContextProfileFromCapability(
   capability: Pick<ModelCapability, "id" | "contextWindow" | "maxOutputTokens">,
 ): ContextProfile {
   const maxInputTokens =
-    capability.contextWindow > 0 ? capability.contextWindow : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
+    capability.contextWindow > 0
+      ? capability.contextWindow
+      : DEFAULT_CONTEXT_PROFILE.maxInputTokens;
   const reservedOutputTokens =
     capability.maxOutputTokens > 0
       ? Math.min(maxInputTokens, capability.maxOutputTokens)

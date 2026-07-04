@@ -69,7 +69,10 @@ describe("findDuplicateClusters - semantic embedding signal", () => {
     });
     expect(findDuplicateClusters([a, b], 0.99)).toEqual([]);
     const embeddings = new Map([
-      ["m-1", { vector: [1, 0], modelId: "mem-embed", provider: "test", metric: "cosine" as const }],
+      [
+        "m-1",
+        { vector: [1, 0], modelId: "mem-embed", provider: "test", metric: "cosine" as const },
+      ],
       [
         "m-2",
         { vector: [0.96, 0.28], modelId: "mem-embed", provider: "test", metric: "cosine" as const },

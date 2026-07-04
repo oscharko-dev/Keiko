@@ -4,7 +4,7 @@
 
 Specification for Epic #491, the deliverable of Issue
 [#504](https://github.com/oscharko-dev/Keiko/issues/504) and the authoritative companion to
-[ADR-0067](../adr/ADR-0067-voice-session-recap.md). It **defines** the recap feature, the data-retention contract, the memory capture integration, the capability gating, and the content-free audit model. The contract lives in
+[ADR-0109](../adr/ADR-0109-voice-session-recap.md). It **defines** the recap feature, the data-retention contract, the memory capture integration, the capability gating, and the content-free audit model. The contract lives in
 [`packages/keiko-contracts/src/voice-session-recap.ts`](../../packages/keiko-contracts/src/voice-session-recap.ts);
 the server handler lives in
 [`packages/keiko-server/src/voice-recap.ts`](../../packages/keiko-server/src/voice-recap.ts);
@@ -261,8 +261,8 @@ decision is load-bearing:
 ## 10. Deferred: visible session transcript summary
 
 The render path that displays the committed transcript text to the user before they decide to trigger
-recap is **deferred**. This mirrors the deferral posture of ADR-0061 D10, ADR-0062 D10, ADR-0065 D10,
-and ADR-0066 D9.
+recap is **deferred**. This mirrors the deferral posture of ADR-0103 D10, ADR-0104 D10, ADR-0107 D10,
+and ADR-0108 D9.
 
 The `VoiceRecap.tsx` component and the hook seam provide sufficient structure for this future
 addition:
@@ -284,7 +284,7 @@ the client or BFF:
 - No provider is queried for summarization, sentiment, or filtering; recap uses the local
   extraction engine only.
 
-This preserves the privacy-first principle (ADR-0058).
+This preserves the privacy-first principle (ADR-0100).
 
 ## 12. Server route specification
 
@@ -368,15 +368,15 @@ store when it becomes available.
 
 ## Related
 
-- [ADR-0067](../adr/ADR-0067-voice-session-recap.md) — the authoritative decision record; threat
+- [ADR-0109](../adr/ADR-0109-voice-session-recap.md) — the authoritative decision record; threat
   model; integration with existing memory governance.
-- [ADR-0063](../adr/ADR-0063-voice-transcript-segment-semantics.md) — committed-only transcript
+- [ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md) — committed-only transcript
   boundary; `selectCommittedVoiceTranscript()`; `summarizeVoiceTranscript()`.
-- [ADR-0066](../adr/ADR-0066-voice-spoken-action-governance.md) — voice is untrusted; governance
+- [ADR-0108](../adr/ADR-0108-voice-spoken-action-governance.md) — voice is untrusted; governance
   layers; proposal vs. authorization distinction.
-- [ADR-0065](../adr/ADR-0065-discussion-intelligence.md) — assistant claims are informational only;
+- [ADR-0107](../adr/ADR-0107-discussion-intelligence.md) — assistant claims are informational only;
   no extraction from assistant text; same invariant preserved in recap.
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — privacy contract;
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — privacy contract;
   no external destinations; capability-gating principle.
 - [ADR-0019](../adr/ADR-0019-modular-package-architecture.md) — leaf-package rule.
 - [transcript-semantics.md](transcript-semantics.md) — committed segment definition and projection.

@@ -17,7 +17,8 @@
 // unknown/unsupported buffers, never a known source language, and has no built-in formatter.
 
 // How a language's "Format Document" is served in the browser:
-//  - "monaco-builtin":         Monaco's bundled json/css/html worker provides the formatter.
+//  - "monaco-builtin":         Reserved for a future ADR-approved browser formatter that does not
+//                              ship extra Monaco language workers.
 //  - "keiko-language-service": the Keiko formatting bridge (#1201) calls the deterministic server
 //                              language service; no Monaco TS worker is loaded for ts/js.
 //  - "none":                   no in-browser document formatter is reachable for this language. The
@@ -38,11 +39,11 @@ export interface EditorBuiltinCapability {
 }
 
 // The canonical table, covering exactly the 15 `EDITOR_LANGUAGE_MODE_IDS` languages. The
-// `documentFormatting` split (ADR-0068 D1): ts/js → the Keiko language-service bridge; the
-// json/css/scss/less/html set → Monaco's bundled workers ("JSON/CSS/HTML … where safe"); everything
-// else → "none" (no reachable in-browser formatter). `as const` makes every entry deeply readonly at
-// compile time; each entry and the outer array are `Object.freeze`d below so the registry is deeply
-// immutable at runtime too — no consumer holding a reference can mutate it.
+// `documentFormatting` split: ts/js → the Keiko language-service bridge; every other language →
+// "none" (no reachable browser formatter) because ADR-0042 D3.6 keeps rich Monaco language workers
+// out of the release artifact. `as const` makes every entry deeply readonly at compile time; each
+// entry and the outer array are `Object.freeze`d below so the registry is deeply immutable at runtime
+// too — no consumer holding a reference can mutate it.
 const RAW_EDITOR_BUILTIN_CAPABILITIES = [
   {
     languageId: "typescript",
@@ -60,31 +61,31 @@ const RAW_EDITOR_BUILTIN_CAPABILITIES = [
     languageId: "json",
     syntaxHighlighting: true,
     bracketMatching: true,
-    documentFormatting: "monaco-builtin",
+    documentFormatting: "none",
   },
   {
     languageId: "css",
     syntaxHighlighting: true,
     bracketMatching: true,
-    documentFormatting: "monaco-builtin",
+    documentFormatting: "none",
   },
   {
     languageId: "scss",
     syntaxHighlighting: true,
     bracketMatching: true,
-    documentFormatting: "monaco-builtin",
+    documentFormatting: "none",
   },
   {
     languageId: "less",
     syntaxHighlighting: true,
     bracketMatching: true,
-    documentFormatting: "monaco-builtin",
+    documentFormatting: "none",
   },
   {
     languageId: "html",
     syntaxHighlighting: true,
     bracketMatching: true,
-    documentFormatting: "monaco-builtin",
+    documentFormatting: "none",
   },
   {
     languageId: "markdown",

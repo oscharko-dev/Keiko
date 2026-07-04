@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   GIT_DELIVERY_SCHEMA_VERSION,
+  type GitDeliveryApprovalClaim,
   type GitDeliveryExecutionResult,
   type GitDeliveryRepoPolicyPack,
   type WorkspaceInstance,
@@ -32,6 +33,7 @@ import {
   createHandleCommitPreview,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 import {
   deriveManagedWorktreePath,
@@ -210,6 +212,23 @@ function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryE
     policyPacks: { repoPack: ALLOW_LOCAL_PACK },
     ...overrides,
   };
+}
+
+function issueCommitApproval(
+  approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
+  message: string,
+  allowEmpty = false,
+): GitDeliveryApprovalClaim {
+  return approvalStore.issue({
+    binding: {
+      projectId,
+      operation: "commit",
+      command: { kind: "commit", message, allowEmpty },
+    },
+    approvedByUserId: "u-1",
+    nowMs: 1_700_000_000_000,
+    ttlMs: 60_000,
+  }).approval;
 }
 
 async function closeServer(): Promise<void> {
@@ -468,6 +487,59 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("approval-required");
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("executes an approval-gated commit only with a matching server-issued claim", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approvalGated: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["lead"] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const message = "feat(ui): add flow";
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        policyPacks: { repoPack: approvalGated },
+        approvalStore,
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  it("rejects a forged browser-supplied approval object before commit execution", async () => {
+    const adapter = recordingAdapter();
+    const handler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message: "feat(ui): add flow",
+        approval: {
+          required: true,
+          approvalTokenHash: "a".repeat(64),
+          approvedByUserId: "u-1",
+          approvedAtMs: 1_700_000_000_000,
+        },
+      }),
+      deps(),
+    );
+    expect(res.status).toBe(400);
     expect(adapter.calls()).toEqual([]);
   });
 

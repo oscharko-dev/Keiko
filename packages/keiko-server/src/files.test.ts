@@ -1,4 +1,5 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { rmSync, symlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -542,6 +543,34 @@ describe("desktop files browser", () => {
     expect(roundTrip.content).toBe('export const value = "changed";\n');
   });
 
+  it("rejects a symlink swap between save validation and the write effect", async () => {
+    extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-outside-")));
+    const victim = join(extraRoot, "victim.ts");
+    await writeFile(victim, "outside\n", "utf8");
+    let seenTargetMetadata = 0;
+    const redactor: UiHandlerDeps["redactor"] = (value: unknown): unknown => {
+      if (value === "src/app.ts") {
+        seenTargetMetadata += 1;
+        if (seenTargetMetadata === 2) {
+          rmSync(join(root, "src", "app.ts"), { force: true });
+          symlinkSync(victim, join(root, "src", "app.ts"));
+        }
+      }
+      return value;
+    };
+
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "src/app.ts",
+        content: 'export const value = "swapped";\n',
+        redactor,
+      }),
+    ).rejects.toMatchObject({ status: 409, code: "STALE_PATH" });
+    expect(await readFile(victim, "utf8")).toBe("outside\n");
+  });
+
   it("rejects saving when the file changed after the editor loaded it", async () => {
     const initial = await readFilesContent(store, root, "src/app.ts");
     await writeFile(join(root, "src", "app.ts"), 'export const value = "other";\n', "utf8");
@@ -880,6 +909,29 @@ describe("desktop files browser", () => {
       reason: "unsupported",
       extension: "bin",
     });
+  });
+
+  it("refuses invalid UTF-8 even for known text extensions and preserves bytes on save", async () => {
+    const badBytes = Buffer.from([0xff, 0xfe, 0x61, 0x0a]);
+    await writeFile(join(root, "bad.txt"), badBytes);
+
+    const preview = await readFilesPreview(store, root, "bad.txt", buildRedactor({}));
+    expect(preview).toMatchObject({ kind: "binary", reason: "unsupported", extension: "txt" });
+
+    await expect(readFilesContent(store, root, "bad.txt")).rejects.toMatchObject({
+      status: 400,
+      code: "UNSUPPORTED_FILE",
+    });
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "bad.txt",
+        content: "replacement\n",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED_FILE" });
+
+    expect(await readFile(join(root, "bad.txt"))).toEqual(badBytes);
   });
 
   it("caps large text previews", async () => {
@@ -1328,6 +1380,25 @@ describe("desktop files mutations (create / rename / delete)", () => {
         destPathInput: "src/inner",
       }),
     ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
+  });
+
+  it("removes a copied directory if the post-copy audit finds a nested symlink", async () => {
+    const outside = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-copy-outside-")));
+    try {
+      await symlink(outside, join(root, "src", "outside-link"), "dir");
+
+      await expect(
+        copyFilesEntry({
+          store,
+          rootInput: root,
+          sourcePathInput: "src",
+          destPathInput: "src-copy",
+        }),
+      ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
+      await expect(stat(join(root, "src-copy"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("enforces baseVersion on a file rename/delete (optimistic concurrency)", async () => {

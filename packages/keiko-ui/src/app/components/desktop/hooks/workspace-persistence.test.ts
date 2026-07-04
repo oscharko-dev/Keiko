@@ -160,6 +160,72 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it("sanitizes editor layout v2 active files through the same secret/path filter as open files", () => {
+    const layoutJson = JSON.stringify({
+      schemaVersion: 2,
+      root: `token=${"t".repeat(20)}`,
+      activePaneId: "pane-env",
+      tree: {
+        type: "split",
+        id: "root",
+        direction: "row",
+        ratio: 50,
+        first: { type: "pane", paneId: "pane-env" },
+        second: {
+          type: "split",
+          id: "right",
+          direction: "column",
+          ratio: 50,
+          first: { type: "pane", paneId: "pane-token" },
+          second: { type: "pane", paneId: "pane-traversal" },
+        },
+      },
+      panes: {
+        "pane-env": {
+          id: "pane-env",
+          activeFile: ".env",
+          openFiles: ["src/app.ts", ".env"],
+          tabOrder: [".env", "src/app.ts"],
+        },
+        "pane-token": {
+          id: "pane-token",
+          activeFile: `token=${"z".repeat(20)}`,
+          openFiles: ["docs/readme.md"],
+          tabOrder: [`token=${"z".repeat(20)}`, "docs/readme.md"],
+        },
+        "pane-traversal": {
+          id: "pane-traversal",
+          activeFile: "../.ssh",
+          openFiles: ["src/safe.ts"],
+          tabOrder: ["../.ssh", "src/safe.ts"],
+        },
+      },
+    });
+
+    const persisted = sanitizePersistedWindows([
+      win({
+        id: "editor-1",
+        type: "editor",
+        cfg: { root: "/repo", file: "src/app.ts", layoutJson },
+      }),
+    ]);
+
+    const savedLayout = JSON.parse(String(persisted[0]?.cfg.layoutJson));
+    expect(savedLayout.root).toBe("");
+    expect(savedLayout.panes["pane-env"]).toEqual(
+      expect.objectContaining({ activeFile: "src/app.ts", openFiles: ["src/app.ts"] }),
+    );
+    expect(savedLayout.panes["pane-token"]).toEqual(
+      expect.objectContaining({ activeFile: "docs/readme.md", openFiles: ["docs/readme.md"] }),
+    );
+    expect(savedLayout.panes["pane-traversal"]).toEqual(
+      expect.objectContaining({ activeFile: "src/safe.ts", openFiles: ["src/safe.ts"] }),
+    );
+    expect(JSON.stringify(savedLayout)).not.toContain(".env");
+    expect(JSON.stringify(savedLayout)).not.toContain("token=");
+    expect(JSON.stringify(savedLayout)).not.toContain("../.ssh");
+  });
+
   it("migrates legacy scoped Figma windows to repeatable Figma View cards", () => {
     const persisted = sanitizePersistedWindows([
       win({
@@ -195,6 +261,18 @@ describe("workspace-persistence", () => {
 
     expect(persisted.map((entry) => entry.id)).toEqual(["figma-current", "chat-1"]);
     expect(persisted[0]?.cfg).toEqual({ snapshotRunId: "fs-current" });
+  });
+
+  it("normalizes every persisted singleton window by registry ownership", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "quality-old", type: "quality", z: 2, cfg: { stale: "old" } }),
+      win({ id: "quality-current", type: "quality", z: 6, cfg: { fresh: "current" } }),
+      win({ id: "chat-a", type: "chat", z: 1, cfg: { title: "A" } }),
+      win({ id: "chat-b", type: "chat", z: 3, cfg: { title: "B" } }),
+    ]);
+
+    expect(persisted.map((entry) => entry.id)).toEqual(["quality-current", "chat-b"]);
+    expect(persisted.find((entry) => entry.type === "chat")?.cfg).toEqual({ title: "B" });
   });
 
   it("preserves standalone Figma JSON references without persisting raw JSON payloads", () => {
@@ -359,6 +437,18 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  it("clamps persisted window content zoom on restore", () => {
+    const raw = JSON.stringify([
+      win({ id: "files-low", type: "files", zoom: 0.01 }),
+      win({ id: "files-high", type: "files", zoom: 99 }),
+    ]);
+
+    expect((parsePersistedWindows(raw) ?? []).map((entry) => [entry.id, entry.zoom])).toEqual([
+      ["files-low", 0.5],
+      ["files-high", 2],
+    ]);
+  });
+
   it("drops stale persisted connections whose endpoints were removed by boundary enforcement", () => {
     const wins = sanitizePersistedWindows([
       win({ id: "review-1", type: "review", cfg: { runId: "run-123" } }),
@@ -390,9 +480,7 @@ describe("workspace-persistence", () => {
     ]);
   });
 
-  // Release 0.2.0 — bind-time snapshot fields must survive persistence so unbind-after-reload
-  // still removes the source the edge actually bound (not whatever the window cfg says then).
-  it("carries valid bind-time snapshot fields through sanitization", () => {
+  it("omits raw path bind snapshots from browser-local connection persistence", () => {
     const wins = [
       win({ id: "files-1", type: "files", cfg: { root: "/repo" } }),
       win({ id: "chat-1", type: "chat", cfg: {} }),
@@ -407,7 +495,16 @@ describe("workspace-persistence", () => {
         boundConnectorId: "cap-a",
       },
     ];
-    expect(sanitizePersistedConnections(conns, wins)).toEqual(conns);
+    expect(sanitizePersistedConnections(conns, wins)).toEqual([
+      { id: "c-1", a: "files-1", b: "chat-1", boundScopeElided: true },
+      {
+        id: "c-2",
+        a: "files-1",
+        b: "chat-1",
+        boundConnectorKind: "capsule",
+        boundConnectorId: "cap-a",
+      },
+    ]);
   });
 
   it("strips malformed snapshot fields instead of trusting the persisted blob", () => {

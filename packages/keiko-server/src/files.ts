@@ -4,8 +4,9 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
-import { createReadStream } from "node:fs";
-import { createHash } from "node:crypto";
+import { constants, createReadStream } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { TextDecoder } from "node:util";
 import {
   cp,
   lstat,
@@ -59,6 +60,7 @@ const STABLE_CONTENT_READ_ATTEMPTS = 3;
 const TREE_CLASSIFY_CONCURRENCY = 32;
 const FILE_SEARCH_CANDIDATE_CONCURRENCY = 32;
 const STABLE_CONTENT_RETRY_DELAY_MS = 25;
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
@@ -325,7 +327,7 @@ function parentPath(pathValue: string, projectRoot: string): string | null {
   return pathValue === parsed.root ? null : dirname(pathValue);
 }
 
-function normalizeRelativePath(pathInput: string | null): string {
+export function normalizeRelativePath(pathInput: string | null): string {
   const raw = pathInput ?? "";
   if (raw.includes("\0") || isAbsolute(raw)) {
     throw new FilesError(400, "BAD_PATH", "The path must be relative to the selected root.");
@@ -353,6 +355,18 @@ function isContained(root: string, target: string): boolean {
 function rootRelativePosixPath(root: string, target: string): string {
   const rel = relative(root, target);
   return rel.replaceAll("\\", "/");
+}
+
+function sameNativePath(a: string, b: string): boolean {
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function sameFileIdentity(a: Stats, b: Stats): boolean {
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+function stalePathError(): FilesError {
+  return new FilesError(409, "STALE_PATH", "The file changed before the operation could complete.");
 }
 
 function normalizeDirectoryPath(
@@ -1262,17 +1276,34 @@ function isKnownTextExtension(extension: string | null): boolean {
   return extension !== null && TEXT_EXTENSIONS.has(extension);
 }
 
-function isLikelyUtf8Text(buffer: Buffer): boolean {
-  if (buffer.length === 0) return true;
-  if (buffer.includes(0)) return false;
-  const decoded = buffer.toString("utf8");
-  if (decoded.includes("\uFFFD")) return false;
+function decodeUtf8(buffer: Buffer): string | null {
+  try {
+    return UTF8_DECODER.decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
+function decodedTextLooksPrintable(decoded: string): boolean {
+  if (decoded.length === 0) return true;
   let printable = 0;
   for (const char of decoded) {
     const code = char.charCodeAt(0);
     if (code === 9 || code === 10 || code === 13 || code >= 32) printable += 1;
   }
   return printable / decoded.length > 0.85;
+}
+
+function isLikelyUtf8Text(buffer: Buffer): boolean {
+  if (buffer.includes(0)) return false;
+  const decoded = decodeUtf8(buffer);
+  return decoded !== null && decodedTextLooksPrintable(decoded);
+}
+
+function isEditableUtf8File(extension: string | null, buffer: Buffer): boolean {
+  const decoded = decodeUtf8(buffer);
+  if (decoded === null || buffer.includes(0)) return false;
+  return isKnownTextExtension(extension) || isLikelyUtf8Text(buffer);
 }
 
 async function readPrefix(
@@ -1390,7 +1421,10 @@ async function textPreview(
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
   const prefix = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
-  const content = prefix.buffer.toString("utf8");
+  const content = decodeUtf8(prefix.buffer);
+  if (content === null || prefix.buffer.includes(0)) {
+    return { ...base, kind: "binary", reason: "unsupported" };
+  }
   const redacted = redactor(content);
   return {
     ...base,
@@ -1437,7 +1471,11 @@ async function readStableEditableContent(
         `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
       );
     }
-    const content = await readFile(target.path, "utf8");
+    const buffer = await readFile(target.path);
+    const content = decodeUtf8(buffer);
+    if (content === null || buffer.includes(0)) {
+      throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
+    }
     const after = await stat(target.path);
     if (statsMatch(before, after)) return { content, stats: after };
     before = after;
@@ -1466,8 +1504,12 @@ async function assertSessionNotStale(
     // Bounded re-read (mirrors the content-classification read): if the file grew past the editable
     // limit between the stat and this read, treat the truncated result as a mismatch.
     const current = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
+    const currentContent = decodeUtf8(current.buffer);
     hashMatches =
-      !current.truncated && sha256Hex(current.buffer.toString("utf8")) === baseVersion.contentHash;
+      !current.truncated &&
+      currentContent !== null &&
+      !current.buffer.includes(0) &&
+      sha256Hex(currentContent) === baseVersion.contentHash;
   }
   if (!sizeMatches || !mtimeMatches || !hashMatches) {
     throw new FilesError(
@@ -1522,7 +1564,7 @@ export async function readFilesContent(
   }
   const base = basePreview(target);
   const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
-  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   return editableTextContent(target);
@@ -1539,7 +1581,7 @@ async function writeResolvedFilesContent(args: {
   }
   const base = basePreview(args.target);
   const prefix = await readPrefix(args.target.path, Math.min(args.target.stats.size, 4096));
-  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
@@ -1550,8 +1592,7 @@ async function writeResolvedFilesContent(args: {
       `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
     );
   }
-  await writeFile(args.target.path, args.content, "utf8");
-  const updatedStats = await stat(args.target.path);
+  const updatedStats = await writeExistingResolvedFile(args.target, args.content);
   return {
     ...base,
     sizeBytes: updatedStats.size,
@@ -1738,6 +1779,154 @@ async function resolveCreationTarget(
   return { root: root.root, realRoot: root.realRoot, relativePath: targetRel, path: targetNative };
 }
 
+async function assertCreationParentStillContained(target: ResolvedCreationTarget): Promise<void> {
+  const parent = dirname(target.path);
+  let realParent: string;
+  try {
+    realParent = await realpath(parent);
+  } catch {
+    throw stalePathError();
+  }
+  if (!sameNativePath(realParent, parent) || !isContained(target.realRoot, realParent)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The destination is outside the selected root.");
+  }
+  const relativeParent = rootRelativePosixPath(target.realRoot, realParent);
+  if (relativeParent.length > 0 && pathIsDenied(relativeParent)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
+async function assertResolvedTargetStillCurrent(target: ResolvedTarget): Promise<Stats> {
+  let current: Stats;
+  try {
+    current = await lstat(target.path);
+  } catch {
+    throw stalePathError();
+  }
+  if (current.isSymbolicLink() || !sameFileIdentity(target.stats, current)) {
+    throw stalePathError();
+  }
+  if (!isContained(target.realRoot, target.path)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The requested path is outside the selected root.");
+  }
+  return current;
+}
+
+function assertCreatedEntryKind(current: Stats, kind: FilesEntryKind): void {
+  if (current.isSymbolicLink()) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be created here.");
+  }
+  if (kind === "file" && !current.isFile()) {
+    throw new FilesError(400, "BAD_REQUEST", "The mutation did not create a file.");
+  }
+  if (kind === "directory" && !current.isDirectory()) {
+    throw new FilesError(400, "BAD_REQUEST", "The mutation did not create a directory.");
+  }
+}
+
+async function realpathOrStale(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    throw stalePathError();
+  }
+}
+
+function assertMutationRealPathContained(target: ResolvedCreationTarget, realTarget: string): void {
+  if (!isContained(target.realRoot, realTarget)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The mutation escaped the selected root.");
+  }
+  const relativeReal = rootRelativePosixPath(target.realRoot, realTarget);
+  if (relativeReal.length > 0 && pathIsDenied(relativeReal)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+}
+
+async function assertMutationEffectContained(
+  target: ResolvedCreationTarget,
+  kind: FilesEntryKind,
+): Promise<void> {
+  let current: Stats;
+  try {
+    current = await lstat(target.path);
+  } catch {
+    throw stalePathError();
+  }
+  assertCreatedEntryKind(current, kind);
+  assertMutationRealPathContained(target, await realpathOrStale(target.path));
+}
+
+async function assertCopiedTreeContainsNoSymlinks(
+  realRoot: string,
+  absolutePath: string,
+): Promise<void> {
+  const current = await lstat(absolutePath);
+  if (current.isSymbolicLink()) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
+  }
+  const realCurrent = await realpath(absolutePath);
+  if (!isContained(realRoot, realCurrent)) {
+    throw new FilesError(403, "PATH_ESCAPE", "The copied entry escaped the selected root.");
+  }
+  const relativeReal = rootRelativePosixPath(realRoot, realCurrent);
+  if (relativeReal.length > 0 && pathIsDenied(relativeReal)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  if (!current.isDirectory()) return;
+  const dir = await opendir(absolutePath);
+  for await (const entry of dir) {
+    await assertCopiedTreeContainsNoSymlinks(realRoot, join(absolutePath, entry.name));
+  }
+}
+
+const NOFOLLOW_WRITE_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+
+async function writeExistingResolvedFile(target: ResolvedTarget, content: string): Promise<Stats> {
+  const tempPath = join(
+    dirname(target.path),
+    `.${basename(target.path)}.keiko-save.${String(process.pid)}.${randomUUID()}.tmp`,
+  );
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    await assertResolvedTargetStillCurrent(target);
+    const mode = target.stats.mode & 0o777 || 0o666;
+    handle = await open(
+      tempPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW_WRITE_FLAG,
+      mode,
+    );
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await assertResolvedTargetStillCurrent(target);
+    await rename(tempPath, target.path);
+    await fsyncDirectory(dirname(target.path));
+    const updated = await stat(target.path);
+    if (!updated.isFile()) throw stalePathError();
+    return updated;
+  } catch (error) {
+    if (error instanceof FilesError) throw error;
+    throw mapNodeFsError(error);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await rm(tempPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function fsyncDirectory(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(dir, constants.O_RDONLY);
+    await handle.sync();
+  } catch {
+    // Directory fsync is not supported by every filesystem. The temp file is still fsynced.
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
 export async function createFilesEntry(args: {
   readonly store: UiStore;
   readonly rootInput: string | null;
@@ -1754,6 +1943,7 @@ export async function createFilesEntry(args: {
     args.pathInput,
     args.redactor ?? staticFilesMetadataRedactor,
   );
+  await assertCreationParentStillContained(target);
   try {
     if (args.kind === "directory") {
       // Non-recursive: the parent was already verified, and EEXIST surfaces as a clean 409.
@@ -1792,7 +1982,7 @@ async function assertRenameDestinationFree(targetPath: string, sourcePath: strin
   }
 }
 
-export async function renameFilesEntry(args: {
+interface RenameFilesEntryArgs {
   readonly store: UiStore;
   readonly rootInput: string | null;
   readonly pathInput: string | null;
@@ -1802,7 +1992,24 @@ export async function renameFilesEntry(args: {
   // the on-disk file changed since that revision — so a move never races a concurrent edit.
   readonly baseVersion?: EditorDocumentVersion | undefined;
   readonly redactor?: FilesMetadataRedactor | undefined;
-}): Promise<FilesMutationResponse> {
+}
+
+interface RenameFilesPlan {
+  readonly source: ResolvedTarget;
+  readonly target: ResolvedCreationTarget;
+  readonly kind: FilesEntryKind;
+}
+
+function assertRenameRelativePathAllowed(sourcePath: string, targetPath: string): void {
+  if (targetPath === sourcePath) {
+    throw new FilesError(409, "ALREADY_EXISTS", "The new name matches the current name.");
+  }
+  if (targetPath.startsWith(`${sourcePath}/`)) {
+    throw new FilesError(400, "BAD_PATH", "A folder cannot be moved into itself.");
+  }
+}
+
+async function resolveRenameFilesPlan(args: RenameFilesEntryArgs): Promise<RenameFilesPlan> {
   const redactor = args.redactor ?? staticFilesMetadataRedactor;
   const source = await resolveInsideRoot(args.store, args.rootInput, args.pathInput, redactor);
   if (source.relativePath.length === 0) {
@@ -1821,19 +2028,35 @@ export async function renameFilesEntry(args: {
     args.newPathInput,
     redactor,
   );
-  if (target.relativePath === source.relativePath) {
-    throw new FilesError(409, "ALREADY_EXISTS", "The new name matches the current name.");
-  }
-  // A folder cannot be moved into itself or one of its own descendants (it would orphan the subtree).
-  if (target.relativePath.startsWith(`${source.relativePath}/`)) {
-    throw new FilesError(400, "BAD_PATH", "A folder cannot be moved into itself.");
-  }
+  assertRenameRelativePathAllowed(source.relativePath, target.relativePath);
   await assertRenameDestinationFree(target.path, source.path);
+  await assertResolvedTargetStillCurrent(source);
+  await assertCreationParentStillContained(target);
+  return { source, target, kind };
+}
+
+async function executeContainedRename(
+  source: ResolvedTarget,
+  target: ResolvedCreationTarget,
+  kind: FilesEntryKind,
+): Promise<void> {
   try {
     await rename(source.path, target.path);
+    try {
+      await assertMutationEffectContained(target, kind);
+    } catch (error) {
+      await rename(target.path, source.path).catch(() => undefined);
+      throw error;
+    }
   } catch (error) {
+    if (error instanceof FilesError) throw error;
     throw mapNodeFsError(error);
   }
+}
+
+export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
+  const { source, target, kind } = await resolveRenameFilesPlan(args);
+  await executeContainedRename(source, target, kind);
   return {
     root: target.root,
     path: target.relativePath,
@@ -1867,6 +2090,7 @@ export async function deleteFilesEntry(args: {
     await assertSessionNotStale(target, args.baseVersion);
   }
   const kind: FilesEntryKind = target.stats.isDirectory() ? "directory" : "file";
+  await assertResolvedTargetStillCurrent(target);
   // `recursive` removes a non-empty folder, matching editor expectations. Containment + the deny-list
   // bound the blast radius to inside the selected root and away from .git/node_modules/secrets, and
   // symlinks are rejected above so `rm` never recurses THROUGH a link out of the root.
@@ -1878,6 +2102,7 @@ export async function deleteFilesEntry(args: {
   return { root: target.root, path: target.relativePath, kind };
 }
 
+// eslint-disable-next-line max-lines-per-function -- copy containment checks are kept adjacent to the filesystem mutation.
 export async function copyFilesEntry(args: {
   readonly store: UiStore;
   readonly rootInput: string | null;
@@ -1913,6 +2138,8 @@ export async function copyFilesEntry(args: {
   ) {
     throw new FilesError(400, "BAD_PATH", "A folder cannot be copied into itself.");
   }
+  await assertResolvedTargetStillCurrent(source);
+  await assertCreationParentStillContained(target);
   try {
     // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
     // links (never follows one out of the root). Contents stay inside the root throughout.
@@ -1922,7 +2149,15 @@ export async function copyFilesEntry(args: {
       errorOnExist: true,
       dereference: false,
     });
+    try {
+      await assertMutationEffectContained(target, kind);
+      await assertCopiedTreeContainsNoSymlinks(target.realRoot, target.path);
+    } catch (error) {
+      await rm(target.path, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
   } catch (error) {
+    if (error instanceof FilesError) throw error;
     throw mapNodeFsError(error);
   }
   return {
@@ -1946,7 +2181,7 @@ export async function readFilesPreview(
   const base = basePreview(target);
   if (isImageExtension(base.extension)) return imagePreview(target, base);
   const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
-  if (isKnownTextExtension(base.extension) || isLikelyUtf8Text(prefix.buffer)) {
+  if (isEditableUtf8File(base.extension, prefix.buffer)) {
     return textPreview(target, base, redactor);
   }
   return { ...base, kind: "binary", reason: "unsupported" };

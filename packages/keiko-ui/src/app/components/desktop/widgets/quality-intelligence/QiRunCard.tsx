@@ -11,6 +11,7 @@ import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
+import { reviewActionResultState } from "@oscharko-dev/keiko-contracts";
 import { editQiCandidate, fetchQiRunDetail, reviewQiRun } from "@/lib/quality-intelligence-api";
 import { CandidatesPane, type QiPendingReview, type QiReviewAction } from "./CandidatesPane";
 import { DriftPanel } from "./DriftPanel";
@@ -31,12 +32,32 @@ const REVIEWER_LABEL_STORAGE_KEY = "keiko.qi.reviewerLabel";
 const GOVERNANCE_REQUIRED_MESSAGE =
   "Add a display label for audit notes; review identity is resolved by the server.";
 
+function clearLegacyDurableReviewerLabel(): void {
+  try {
+    window.localStorage.removeItem(REVIEWER_LABEL_STORAGE_KEY);
+  } catch {
+    // Hardened browser contexts may make localStorage unavailable.
+  }
+}
+
 function readStoredReviewerLabel(): string {
   if (typeof window === "undefined") return "";
+  clearLegacyDurableReviewerLabel();
   try {
-    return window.localStorage.getItem(REVIEWER_LABEL_STORAGE_KEY) ?? "";
+    return window.sessionStorage.getItem(REVIEWER_LABEL_STORAGE_KEY) ?? "";
   } catch {
     return "";
+  }
+}
+
+function writeStoredReviewerLabel(value: string): void {
+  if (typeof window === "undefined") return;
+  clearLegacyDurableReviewerLabel();
+  try {
+    if (value.length > 0) window.sessionStorage.setItem(REVIEWER_LABEL_STORAGE_KEY, value);
+    else window.sessionStorage.removeItem(REVIEWER_LABEL_STORAGE_KEY);
+  } catch {
+    // sessionStorage may be unavailable in hardened browser contexts.
   }
 }
 
@@ -364,11 +385,7 @@ export function QiRunCard({
 
   useEffect(() => {
     if (!reviewerLabelLoaded || typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(REVIEWER_LABEL_STORAGE_KEY, reviewerLabel);
-    } catch {
-      // localStorage may be unavailable in hardened browser contexts.
-    }
+    writeStoredReviewerLabel(reviewerLabel);
   }, [reviewerLabel, reviewerLabelLoaded]);
 
   const trimmedReviewerLabel = reviewerLabel.trim();
@@ -384,19 +401,11 @@ export function QiRunCard({
           await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
           await loadDetail();
           // Issue #282 A11y-1: announce the review outcome via a dedicated live region.
-          // The label map maps the action to the resulting visible state ("reopen" → "Open").
-          // A monotonic nonce guarantees the string differs on identical repeat actions so AT
+          // The shared contracts projection maps the action to the resulting review state
+          // ("reopen" → "open", "withdraw" → "withdrawn", …) and REVIEW_LABEL renders its human
+          // label. A monotonic nonce guarantees the string differs on identical repeat actions so AT
           // always re-reads it (AT suppresses byte-identical repeated announcements).
-          const resultLabel =
-            REVIEW_LABEL[
-              action === "approve"
-                ? "approved"
-                : action === "reject"
-                  ? "rejected"
-                  : action === "request-changes"
-                    ? "changes-requested"
-                    : "open" // reopen → open
-            ];
+          const resultLabel = REVIEW_LABEL[reviewActionResultState(action)];
           // Look up the candidate title from the last-loaded detail snapshot (best effort: the
           // reload above may have updated state but setDetail is async; use the snapshot we had
           // at the time of the call — the title is immutable so this is always correct).

@@ -391,7 +391,9 @@ function preflightStatusLabel(status: QiPreflightUiStatus): string {
   if (status === "checking") return "checking";
   if (status === "failed") return "failed";
   if (status === "unavailable") return "unavailable";
-  if (status === "passed") return "working";
+  // A passed preflight must NOT read as "working" (indistinguishable from the idle/checking pill) —
+  // give it a distinct terminal label so a resolved good state is announced clearly (GEN-UI-A11Y-022).
+  if (status === "passed") return "Ready";
   return "working";
 }
 
@@ -883,8 +885,14 @@ export function RunLauncher({
             <span className="qi-workflow-stage-badge">deterministic</span>
           </div>
         ))}
-        <span className="qi-preflight-status" data-status={preflightStatus}>
+        {/* The visible pill is aria-hidden and the announcement is owned by the sibling sr-only
+            live region below (GEN-UI-A11Y-022): a bare pill whose text changes is not reliably
+            re-announced, so a persistent role="status" region carries "Preflight: <state>". */}
+        <span className="qi-preflight-status" data-status={preflightStatus} aria-hidden="true">
           {preflightStatusLabel(preflightStatus)}
+        </span>
+        <span className="sr-only" role="status" aria-live="polite">
+          {`Model preflight: ${preflightStatusLabel(preflightStatus)}`}
         </span>
       </div>
     );
@@ -916,10 +924,11 @@ export function RunLauncher({
             {isFile ? "File path" : "Folder path"}
           </span>
           <div className="qi-path-picker">
+            {/* Display-only value, NOT an editor: the path is chosen via the Browse dialog, so this
+                must not masquerade as an interactive textbox (GEN-UI-A11Y-011). It stays associated
+                with its label (aria-labelledby) so AT reads "File path: <value>" as plain text. */}
             <div
               className="qi-path-value qi-monospace"
-              role="textbox"
-              aria-readonly="true"
               aria-labelledby={sourcePathLabelId}
               title={path}
               data-empty={path.trim().length === 0 ? "true" : undefined}

@@ -2,8 +2,8 @@
 
 Implementation notes for Epic #491, the deliverable of Issue
 [#497](https://github.com/oscharko-dev/Keiko/issues/497) and the transport that realizes the #496
-protocol ([protocol.md](protocol.md), [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md)).
-The load-bearing decisions are in [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md); this document
+protocol ([protocol.md](protocol.md), [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md)).
+The load-bearing decisions are in [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md); this document
 describes the realized transport. It is **optional and capability-gated**: a no-voice or STT-only
 deployment runs none of it.
 
@@ -29,7 +29,7 @@ path `/api/voice/control`, and only when the deployment is full-realtime capable
    `socket.destroy()` default.
 
 A WebSocket handshake cannot carry the JSON + `X-Keiko-Csrf` guard, so the loopback `Host`/`Origin`
-check plus the capability gate are the load-bearing cross-origin defenses (ADR-0060 D3).
+check plus the capability gate are the load-bearing cross-origin defenses (ADR-0102 D3).
 
 ## 3. Session lifecycle and proxied-SDP handshake
 
@@ -73,7 +73,7 @@ client                                   BFF (/api/voice/control)            pro
   `realtimeVoiceTransportSupported()` (the browser exposes `getUserMedia` + `RTCPeerConnection`) are
   true; a no-voice / STT-only / STT+TTS-without-WebRTC deployment renders no dialogue switch.
 
-## 5. Security and privacy (ADR-0060 D3/D4, privacy-contract §2/§4)
+## 5. Security and privacy (ADR-0102 D3/D4, privacy-contract §2/§4)
 
 - **No long-lived credential reaches the browser** (proxied-SDP).
 - **SDP / ICE are opaque `secret-bearing` strings** — forwarded verbatim, never logged or persisted.
@@ -93,8 +93,8 @@ second chat model call or create a parallel memory/evidence path.
 
 ## 7. References
 
-- [ADR-0060](../adr/ADR-0060-realtime-voice-transport.md) — the transport decision record.
-- [protocol.md](protocol.md), [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md)
+- [ADR-0102](../adr/ADR-0102-realtime-voice-transport.md) — the transport decision record.
+- [protocol.md](protocol.md), [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md)
   — the protocol contract; [privacy-contract.md](privacy-contract.md) — privacy/security;
   [deployment-profile-matrix.md](deployment-profile-matrix.md) — provider/environment profiles.
 - Transport code: `packages/keiko-server/src/voice-realtime.ts`,

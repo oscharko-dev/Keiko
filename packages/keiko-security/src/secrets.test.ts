@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { isKeikoApiKeyEnvName, keikoApiKeySecretValues } from "./secrets.js";
 
 describe("isKeikoApiKeyEnvName", () => {
-  it.each(["KEIKO_DEFAULT_API_KEY", "KEIKO_MODEL_opus_API_KEY", "KEIKO_MODEL_a_API_KEY"])(
-    "accepts %s",
-    (name) => {
-      expect(isKeikoApiKeyEnvName(name)).toBe(true);
-    },
-  );
+  it.each([
+    "KEIKO_DEFAULT_API_KEY",
+    "KEIKO_MODEL_opus_API_KEY",
+    "KEIKO_MODEL_a_API_KEY",
+    "KEIKO_RERANKER_API_KEY",
+  ])("accepts %s", (name) => {
+    expect(isKeikoApiKeyEnvName(name)).toBe(true);
+  });
 
   it.each(["", "DEFAULT_API_KEY", "KEIKO_API_KEY_NOTE", "KEIKO_DEFAULT_API_KEY_EXTRA", "PATH"])(
     "rejects %s",
@@ -28,11 +30,12 @@ describe("keikoApiKeySecretValues", () => {
     const env = {
       KEIKO_DEFAULT_API_KEY: "default-secret",
       KEIKO_MODEL_a_API_KEY: "model-a-secret",
+      KEIKO_RERANKER_API_KEY: "reranker-secret",
       KEIKO_MODEL_a_BASE_URL: "https://example/v1",
       OTHER: "unrelated",
     };
     const values = keikoApiKeySecretValues(env);
-    expect([...values].sort()).toEqual(["default-secret", "model-a-secret"]);
+    expect([...values].sort()).toEqual(["default-secret", "model-a-secret", "reranker-secret"]);
   });
 
   it("never returns the env-var name, only the value", () => {

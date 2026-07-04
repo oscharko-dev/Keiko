@@ -102,8 +102,8 @@ export function buildContainerRunEvidenceEntry(
 
 // Defense in depth: applies the live redactor to every string leaf before serializing. All known
 // leaves (engine, projectId, runId, taskId) are structurally safe today; a future schema addition
-// inherits the redaction automatically. Mirrors appendCommandRunEvidence. Best-effort at the call
-// site: a write hiccup must never corrupt a real run result.
+// inherits the redaction automatically. Mirrors appendCommandRunEvidence. Callers fail closed if this
+// append fails, so a governed container run is never reported successful without durable evidence.
 export function appendContainerRunEvidence(
   store: EvidenceStore,
   entry: ContainerRunEvidenceEntry,

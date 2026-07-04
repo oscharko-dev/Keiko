@@ -7,7 +7,7 @@
 // WCAG: aria-pressed on every toggle (not role="radio" — avoids roving-tabindex trap
 // from issue #65). focus-visible ring. min 24×24 target per WCAG 2.5.8.
 
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type {
   MemoryScopeKind,
   MemorySensitivity,
@@ -42,6 +42,13 @@ interface MemoryFiltersProps {
   readonly filters: MemoryFilterState;
   readonly onChange: (next: MemoryFilterState) => void;
 }
+
+// GEN-PERF-WIDGET-003 — the free-text query field drives a full-list fetch (server-side
+// list assembly + per-item vault decrypt) per keystroke. Debounce the query trailing edge
+// so a burst of keystrokes collapses to a single downstream onChange. Chip toggles stay
+// immediate. The pending query is flushed on unmount and before any chip toggle so the
+// committed filter state never loses the last-typed characters.
+export const MEMORY_QUERY_DEBOUNCE_MS = 250;
 
 // ---------------------------------------------------------------------------
 // Label maps
@@ -174,16 +181,78 @@ export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactN
   const typeText = t("memoria.type");
   const statusText = t("memoria.status");
   const sensitivityText = t("memoria.sensitivity");
+
+  // Local, immediate text state so typing stays responsive while the downstream
+  // onChange (which triggers the fetch) is debounced.
+  const [queryDraft, setQueryDraft] = useState(filters.query);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Keep the latest committed filters/onChange reachable from the timer without
+  // re-arming the debounce on every parent render.
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // Reflect external filter resets (e.g. "clear filters") into the draft, but only
+  // when the query genuinely diverges from what we last committed, so an in-flight
+  // debounce is not clobbered by the parent echoing our own value back.
+  const lastCommittedQueryRef = useRef(filters.query);
+  useEffect(() => {
+    if (filters.query !== lastCommittedQueryRef.current) {
+      lastCommittedQueryRef.current = filters.query;
+      setQueryDraft(filters.query);
+    }
+  }, [filters.query]);
+
+  const clearTimer = useCallback((): void => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  // Immediately commit a filter change, cancelling any pending query debounce and
+  // folding the current query draft in so chip toggles never drop typed characters.
+  const commitImmediate = useCallback(
+    (patch: Partial<MemoryFilterState>): void => {
+      clearTimer();
+      lastCommittedQueryRef.current = queryDraft;
+      onChangeRef.current({ ...filtersRef.current, query: queryDraft, ...patch });
+    },
+    [clearTimer, queryDraft],
+  );
+
+  const handleQueryChange = useCallback(
+    (value: string): void => {
+      setQueryDraft(value);
+      clearTimer();
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        lastCommittedQueryRef.current = value;
+        onChangeRef.current({ ...filtersRef.current, query: value });
+      }, MEMORY_QUERY_DEBOUNCE_MS);
+    },
+    [clearTimer],
+  );
+
+  // Flush any pending debounced query on unmount so the final keystroke is not lost.
+  useEffect(
+    () => (): void => {
+      clearTimer();
+    },
+    [clearTimer],
+  );
+
   return (
     <section className="mc-filters" aria-label={t("memoria.filters")}>
       <label className="mc-filter-search">
         <span className="mc-filter-label">{t("memoria.search")}</span>
         <input
           type="search"
-          value={filters.query}
+          value={queryDraft}
           placeholder={t("memoria.searchPlaceholder")}
           onChange={(event) => {
-            onChange({ ...filters, query: event.currentTarget.value });
+            handleQueryChange(event.currentTarget.value);
           }}
         />
       </label>
@@ -194,7 +263,7 @@ export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactN
         labelFor={(item) => scopeLabel(item, t)}
         active={filters.scope}
         onToggle={(item) => {
-          onChange({ ...filters, scope: toggle(filters.scope, item) });
+          commitImmediate({ scope: toggle(filters.scope, item) });
         }}
       />
       <ChipGroup
@@ -204,7 +273,7 @@ export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactN
         labelFor={(item) => typeLabel(item, t)}
         active={filters.type}
         onToggle={(item) => {
-          onChange({ ...filters, type: toggle(filters.type, item) });
+          commitImmediate({ type: toggle(filters.type, item) });
         }}
       />
       <ChipGroup
@@ -214,7 +283,7 @@ export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactN
         labelFor={(item) => statusLabel(item, t)}
         active={filters.status}
         onToggle={(item) => {
-          onChange({ ...filters, status: toggle(filters.status, item) });
+          commitImmediate({ status: toggle(filters.status, item) });
         }}
       />
       <ChipGroup
@@ -224,7 +293,7 @@ export function MemoryFilters({ filters, onChange }: MemoryFiltersProps): ReactN
         labelFor={(item) => sensitivityLabel(item, t)}
         active={filters.sensitivity}
         onToggle={(item) => {
-          onChange({ ...filters, sensitivity: toggle(filters.sensitivity, item) });
+          commitImmediate({ sensitivity: toggle(filters.sensitivity, item) });
         }}
       />
     </section>

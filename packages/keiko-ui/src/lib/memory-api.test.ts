@@ -132,7 +132,6 @@ describe("memory governance API helpers", () => {
         body: JSON.stringify({
           acknowledged: true,
           selector: { kind: "by-type", scope: { kind: "global" }, type: "preference" },
-          reason: "remove global stale preferences",
         }),
         headers: expect.objectContaining({
           Accept: "application/json",
@@ -157,7 +156,7 @@ describe("memory governance API helpers", () => {
       "/api/memory/mem%201",
       expect.objectContaining({
         method: "DELETE",
-        body: JSON.stringify({ acknowledged: true, reason: "stale" }),
+        body: JSON.stringify({ acknowledged: true }),
         headers: expect.objectContaining({
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -326,5 +325,12 @@ describe("memory BFF boundary helpers", () => {
       message: "HTTP 500",
       status: 500,
     });
+  });
+
+  // The former memory-local fetchJson had no 204 short-circuit and would call res.json() on an empty
+  // body (throwing). Routing through the shared bffFetchJson folds in 204 → undefined (safe-forward).
+  it("resolves undefined when a mutation route returns 204 No Content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(deleteMemory("mem 1" as MemoryId)).resolves.toBeUndefined();
   });
 });

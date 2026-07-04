@@ -23,21 +23,14 @@
 //   atomic temp inherits the umask; the rename preserves it).
 
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  lstatSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { readdirSync, readFileSync, lstatSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
+import { replaceViaDurableTempFile } from "../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
+import { existingOwnedDirectory, prepareOwnedDirectory } from "../fs-safety.js";
 import {
   QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
   validateQualityIntelligenceEvidenceManifest,
@@ -100,27 +93,11 @@ export function createInMemoryQualityIntelligenceLocalStore(): QualityIntelligen
 // ─── Node adapter ──────────────────────────────────────────────────────────────────
 
 function prepareQiBaseDir(baseDir: string, fs: WorkspaceFs): string {
-  try {
-    mkdirSync(baseDir, { recursive: true, mode: QI_DIR_MODE });
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot create QI evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return prepareOwnedDirectory(baseDir, fs, "QI evidence directory", { mode: QI_DIR_MODE });
 }
 
 function existingQiBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
-  if (!fs.exists(baseDir)) {
-    return undefined;
-  }
-  try {
-    return fs.realPath(baseDir);
-  } catch (error) {
-    throw new EvidenceReadError(
-      `cannot read QI evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  return existingOwnedDirectory(baseDir, fs, "QI evidence directory");
 }
 
 function lexicalQiManifestPath(runId: string, realBase: string): string {
@@ -185,16 +162,7 @@ function listQiRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
 function atomicWriteQiManifest(target: string, json: string, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
-    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
-    // Best-effort 0o600 on the temp file (the rename preserves the mode). Failure is non-fatal:
-    // POSIX-default umask handles the common case; the assertion is realpath containment, not
-    // permission bits.
-    try {
-      chmodSync(temp, 0o600);
-    } catch {
-      // ignore; not all filesystems support chmod (e.g. Windows)
-    }
-    renameSync(temp, target);
+    replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
@@ -211,7 +179,13 @@ function reportQiLocation(baseDir: string, fs: WorkspaceFs, runId: string): stri
     : lexicalQiManifestPath(runId, realBase);
 }
 
+// Test-observable counter of full manifest parse+verify passes. Incremented once per manifest that
+// is actually parsed and integrity-verified (i.e. per cache MISS). A regression test asserts that a
+// second list of unchanged manifests adds zero to this counter (GEN-PERF-PERSISTENCE-009).
+export const __qiVerificationStats = { verifications: 0 };
+
 function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceManifest {
+  __qiVerificationStats.verifications += 1;
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -233,6 +207,60 @@ function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceMani
   // controlled error path.
   assertManifestIntegrity(manifest);
   return manifest;
+}
+
+// GEN-PERF-PERSISTENCE-009 — the QI list endpoint parses + SHA-256-re-hashes up to 100 manifests
+// per request, and callers often re-list within seconds. QI manifests are write-once by contract
+// (only an export append rewrites the file, which bumps mtime+size), so a positive verification
+// result is safe to memoise keyed by absolute path + mtimeMs + size: any at-rest tamper changes the
+// content (and therefore, on a real filesystem, the size and/or mtime), forcing a cache miss and a
+// full re-verify on the next read. Tamper-evidence is preserved — we cache ONLY verified manifests.
+//
+// Correctness guards: (1) if the filesystem cannot report mtimeMs (e.g. the in-memory test fs) we
+// never cache, so those callers always re-verify; (2) the cache is bounded (LRU) and in-process
+// only — no plaintext or verification state is ever persisted.
+interface QiVerificationCacheEntry {
+  readonly mtimeMs: number;
+  readonly size: number;
+  readonly manifest: QualityIntelligenceEvidenceManifest;
+}
+
+const QI_VERIFICATION_CACHE_MAX_ENTRIES = 256;
+const qiVerificationCache = new Map<string, QiVerificationCacheEntry>();
+
+function qiVerificationCacheGet(
+  absolutePath: string,
+  mtimeMs: number,
+  size: number,
+): QualityIntelligenceEvidenceManifest | undefined {
+  const entry = qiVerificationCache.get(absolutePath);
+  if (entry?.mtimeMs !== mtimeMs || entry.size !== size) {
+    return undefined;
+  }
+  // Refresh LRU recency: re-insert so the most-recently-used key is last.
+  qiVerificationCache.delete(absolutePath);
+  qiVerificationCache.set(absolutePath, entry);
+  return entry.manifest;
+}
+
+function qiVerificationCacheSet(
+  absolutePath: string,
+  mtimeMs: number,
+  size: number,
+  manifest: QualityIntelligenceEvidenceManifest,
+): void {
+  qiVerificationCache.delete(absolutePath);
+  qiVerificationCache.set(absolutePath, { mtimeMs, size, manifest });
+  while (qiVerificationCache.size > QI_VERIFICATION_CACHE_MAX_ENTRIES) {
+    const oldest = qiVerificationCache.keys().next().value;
+    if (oldest === undefined) break;
+    qiVerificationCache.delete(oldest);
+  }
+}
+
+// Test-only: reset the module-level verification cache so a suite gets a clean slate.
+export function __resetQiVerificationCacheForTests(): void {
+  qiVerificationCache.clear();
 }
 
 function assertHashMatches(
@@ -304,6 +332,7 @@ function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest):
   assertIntegrityHashesMatch(manifest);
 }
 
+// eslint-disable-next-line complexity -- the mtime+size verification-cache fast path (GEN-PERF-PERSISTENCE-009) is interleaved with the symlink/regular-file safety guards; splitting it would separate the cache-hit branch from the guards it depends on.
 function loadQiManifest(
   baseDir: string,
   fs: WorkspaceFs,
@@ -322,8 +351,23 @@ function loadQiManifest(
     if (!isSingleLinkRegularFile(target, fs)) {
       return undefined;
     }
+    // GEN-PERF-PERSISTENCE-009 — reuse a previously verified manifest when the file's mtime+size is
+    // unchanged, so a repeated list does not re-parse + re-hash unmodified write-once manifests.
+    // Only cache when the fs reports mtimeMs (real node fs does; the in-memory test fs does not).
+    const stat = fs.stat(target);
+    const mtimeMs = stat.mtimeMs;
+    if (mtimeMs !== undefined) {
+      const cached = qiVerificationCacheGet(target, mtimeMs, stat.size);
+      if (cached !== undefined) {
+        return cached;
+      }
+    }
     const json = readFileSync(target, "utf8");
-    return parseAndValidateManifest(json);
+    const manifest = parseAndValidateManifest(json);
+    if (mtimeMs !== undefined) {
+      qiVerificationCacheSet(target, mtimeMs, stat.size, manifest);
+    }
+    return manifest;
   } catch (error) {
     if (error instanceof EvidenceReadError) {
       throw error;

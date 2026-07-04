@@ -175,6 +175,31 @@ describe("TaskWorkspaceSwitcher", () => {
     expect(trigger).toHaveFocus();
   });
 
+  // GEN-UI-INTERACTION-006 — a pointerdown outside the switcher root dismisses the open panel.
+  it("closes the panel when a pointerdown lands outside the switcher root", () => {
+    renderSwitcher(api({ activeInstance: instance() }));
+    const trigger = screen.getByRole("button", { name: /task-446/i });
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.pointerDown(document.body);
+
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("group", { name: /task workspace context/i })).toBeNull();
+  });
+
+  it("keeps the panel open when a pointerdown lands inside the switcher root", () => {
+    renderSwitcher(api({ activeInstance: instance() }));
+    const trigger = screen.getByRole("button", { name: /task-446/i });
+    fireEvent.click(trigger);
+    const panel = screen.getByRole("group", { name: /task workspace context/i });
+
+    fireEvent.pointerDown(panel);
+
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: /task workspace context/i })).toBeInTheDocument();
+  });
+
   it("renders an error in an alert region", () => {
     renderSwitcher(api({ error: "Workspace is locked by another actor" }));
     openPanel();

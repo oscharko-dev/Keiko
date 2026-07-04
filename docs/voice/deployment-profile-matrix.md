@@ -1,7 +1,7 @@
 # Voice Digital Twin — deployment profile matrix
 
 Deployment profile matrix for Epic #491, expanding
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) decision D7. The provider profile is
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) decision D7. The provider profile is
 **not** assumed constant across environments; each environment selects whichever provider profile its
 configured capabilities support. Azure Foundry is **one** valid provider, never a required destination.
 
@@ -28,7 +28,7 @@ See [architecture.md](architecture.md) §3 for full definitions.
 
 Each cell states the **expected effective voice profile** and the **data-egress destination** for that
 combination. "Configured endpoint" always means an endpoint declared as a Model Gateway provider with a
-`ModelCapability` record and selected through runtime capability metadata (ADR-0058 D4/D5).
+`ModelCapability` record and selected through runtime capability metadata (ADR-0100 D4/D5).
 
 | Environment \ Capability       | `none`                 | `speech-to-text only`                                 | `speech output only`                            | `full realtime voice`                                      |
 | ------------------------------ | ---------------------- | ----------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
@@ -39,7 +39,7 @@ combination. "Configured endpoint" always means an endpoint declared as a Model 
 **Reading the matrix:**
 
 - Every non-`none` cell egresses **only** to the configured model endpoint for the active capability — no
-  other destination (ADR-0058 D4).
+  other destination (ADR-0100 D4).
 - When a capability is not advertised in an environment, the effective profile **degrades** down the ladder in
   [architecture.md](architecture.md) §5; it never produces a broken affordance.
 - The same Keiko build serves all cells; only configuration and runtime capability metadata differ.

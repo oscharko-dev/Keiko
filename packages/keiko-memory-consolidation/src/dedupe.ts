@@ -251,13 +251,27 @@ function scanPartitionPairs(
   jaccardThreshold: number,
   options: DuplicateClusterScanOptions,
   uf: UnionFind,
-): { readonly canceled: boolean; readonly pairEvidence: readonly { readonly left: number; readonly evidence: ConsolidationEvidence }[] } {
+): {
+  readonly canceled: boolean;
+  readonly pairEvidence: readonly {
+    readonly left: number;
+    readonly evidence: ConsolidationEvidence;
+  }[];
+} {
   const pairEvidence: { left: number; evidence: ConsolidationEvidence }[] = [];
   for (let i = 0; i < ordered.length; i += 1) {
     if (cancellationRequested(options)) return { canceled: true, pairEvidence };
     for (let j = i + 1; j < ordered.length; j += 1) {
       if (cancellationRequested(options)) return { canceled: true, pairEvidence };
-      const evidence = matchIndexedPair(ordered, prepared, embeddings, jaccardThreshold, options, i, j);
+      const evidence = matchIndexedPair(
+        ordered,
+        prepared,
+        embeddings,
+        jaccardThreshold,
+        options,
+        i,
+        j,
+      );
       if (evidence === null) continue;
       union(uf, i, j);
       pairEvidence.push({ left: i, evidence });

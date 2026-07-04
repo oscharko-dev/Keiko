@@ -13,6 +13,7 @@
 
 import {
   Component,
+  memo,
   useCallback,
   useMemo,
   useState,
@@ -148,7 +149,13 @@ function HighlightedCodeBlock({
   readonly codeClass: string | undefined;
   readonly long: boolean;
 }): ReactNode {
-  const lines = highlightLines(text, codeLangFromMarkdown(language));
+  // GEN-PERF-CHAT-010 — highlightLines tokenises the whole code block; keying the memo on the
+  // immutable [text, language] source keeps it a once-per-block cost instead of re-running on every
+  // parent re-render (mirrors FilePreview.tsx which already memoizes highlightLines).
+  const lines = useMemo(
+    () => highlightLines(text, codeLangFromMarkdown(language)),
+    [text, language],
+  );
   const lineCountWidth = Math.max(2, String(lines.length).length);
   return (
     <pre
@@ -537,9 +544,14 @@ function renderNode(node: SafeMarkdownNode, key: string, options: RenderOptions)
 // Public component
 // ---------------------------------------------------------------------------
 
-export function SafeMarkdown({
+// GEN-PERF-CHAT-010 — a module-level frozen empty array so the `repositoryRoots = []` default does
+// not mint a fresh identity per render (which would defeat the options useMemo and the React.memo
+// prop compare below).
+const EMPTY_ROOTS: readonly RepositoryReferenceRoot[] = Object.freeze([]);
+
+function SafeMarkdownImpl({
   source,
-  repositoryRoots = [],
+  repositoryRoots = EMPTY_ROOTS,
   openRepositoryReference,
   citationPreview,
 }: SafeMarkdownProps): ReactNode {
@@ -552,6 +564,13 @@ export function SafeMarkdown({
     <div className="sm-root">{tree.map((node, i) => renderNode(node, String(i), options))}</div>
   );
 }
+
+// GEN-PERF-CHAT-010 — memoized so a settled assistant bubble does not re-parse/re-highlight its
+// Markdown when an unrelated parent (draft/streaming) re-renders. Keying is a shallow prop compare;
+// `source` is immutable per message and repositoryRoots/openRepositoryReference/citationPreview are
+// caller-memoized, so the compare is cheap and the security invariants (AST-only parse keyed on the
+// source text) are unchanged.
+export const SafeMarkdown = memo(SafeMarkdownImpl);
 
 // ---------------------------------------------------------------------------
 // SM-1: per-message error boundary. A parser/render defect in one assistant

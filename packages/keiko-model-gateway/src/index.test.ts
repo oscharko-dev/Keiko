@@ -26,6 +26,7 @@ import {
   loadEgressConfigFromFile,
   normalizeApiKeyHeaderName,
   parseGatewayConfig,
+  requestGatewayReadinessChatCompletion,
   resolveOutboundHttpEgressConfig,
   toSafeObject,
   validateBaseUrl,
@@ -92,7 +93,7 @@ import type {
 
 describe("keiko-model-gateway package surface", () => {
   it("exposes the version constant pinned at 0.1.0", () => {
-    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe("0.1.0");
+    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe("0.2.11");
   });
 
   it("exposes the capability registry as a frozen-shaped readonly array", () => {
@@ -130,6 +131,10 @@ describe("keiko-model-gateway package surface", () => {
 
   it("exposes Gateway as a constructor", () => {
     expect(typeof Gateway).toBe("function");
+  });
+
+  it("exposes the gateway-owned readiness probe helper as a callable function", () => {
+    expect(typeof requestGatewayReadinessChatCompletion).toBe("function");
   });
 
   it("does not expose the low-level provider adapter or transport helpers on the package barrel", () => {

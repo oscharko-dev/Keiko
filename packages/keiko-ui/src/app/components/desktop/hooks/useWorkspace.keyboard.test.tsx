@@ -66,11 +66,13 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
 
   return (
     <main ref={wsRef} data-testid="workspace" className="workspace">
-      <section className="window" data-window-id="chat-1">
+      <section className="window" data-window-id="chat-1" tabIndex={-1}>
         chat
+        <button type="button">focus inside chat</button>
       </section>
-      <section className="window" data-window-id="files-1">
+      <section className="window" data-window-id="files-1" tabIndex={-1}>
         files
+        <button type="button">focus inside files</button>
       </section>
       <input aria-label="focused field" />
       {/* Stands in for Monaco's hidden editing <textarea>, to assert the form-field guard (#1205 AC2). */}
@@ -162,7 +164,10 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     expect(readConns()).toEqual([{ id: "files-1~chat-1", a: "files-1", b: "chat-1" }]);
   });
 
-  it("moves and resizes only the frontmost visible window with keyboard chords", async () => {
+  it("moves and resizes the focused window with keyboard chords", async () => {
+    // GEN-UI-KEYBOARD-006 — the move/resize chords act on the window that holds
+    // focus. Focus inside chat-1 (also the frontmost window here) so the chord
+    // scopes to it and leaves the background files-1 window untouched.
     persistWorkspace([
       filesWindow({ z: 1 }),
       appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120, w: 500, h: 360 }),
@@ -171,6 +176,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     mockWorkspaceRect();
     await waitFor(() => expect(readWins()).toHaveLength(2));
 
+    screen.getByRole("button", { name: "focus inside chat" }).focus();
     fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", metaKey: true });
     await waitFor(() => {
       const chat = readWins().find((w) => w.id === "chat-1");
@@ -183,6 +189,127 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
       expect(chat).toMatchObject({ x: 116, y: 120, w: 500, h: 376, max: false });
     });
     expect(readWins().find((w) => w.id === "files-1")).toMatchObject({ x: 40, y: 40 });
+  });
+
+  it("moves and resizes the focused NON-topmost window, not the topZ window (GEN-UI-KEYBOARD-006)", async () => {
+    // files-1 is the LOWER window (z=1); chat-1 is topmost (z=10). Focus inside
+    // files-1 and the chord must scope to files-1 — NOT the topZ chat-1.
+    persistWorkspace([
+      filesWindow({ z: 1, x: 40, y: 40, w: 500, h: 360 }),
+      appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120, w: 500, h: 360 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    screen.getByRole("button", { name: "focus inside files" }).focus();
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    await waitFor(() => {
+      const files = readWins().find((w) => w.id === "files-1");
+      expect(files).toMatchObject({ x: 56, y: 40, w: 500, h: 360, max: false });
+    });
+
+    fireEvent.keyDown(window, { key: "ArrowDown", code: "ArrowDown", altKey: true });
+    await waitFor(() => {
+      const files = readWins().find((w) => w.id === "files-1");
+      expect(files).toMatchObject({ x: 56, y: 40, w: 500, h: 376, max: false });
+    });
+    // The topmost chat-1 window must not have moved at all.
+    expect(readWins().find((w) => w.id === "chat-1")).toMatchObject({
+      x: 100,
+      y: 120,
+      w: 500,
+      h: 360,
+    });
+  });
+
+  it("moves NO window when a keyboard chord fires with focus outside any window (GEN-UI-KEYBOARD-006)", async () => {
+    persistWorkspace([
+      filesWindow({ z: 1, x: 40, y: 40 }),
+      appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120, w: 500, h: 360 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    // A non-window control (outside every .window[data-window-id]) holds focus.
+    screen.getByRole("button", { name: "start connect" }).focus();
+    fireEvent.keyDown(window, { key: "ArrowRight", code: "ArrowRight", metaKey: true });
+    fireEvent.keyDown(window, { key: "ArrowDown", code: "ArrowDown", altKey: true });
+
+    // Neither window moved or resized — the chord no-ops when focus is outside.
+    expect(readWins().find((w) => w.id === "chat-1")).toMatchObject({
+      x: 100,
+      y: 120,
+      w: 500,
+      h: 360,
+    });
+    expect(readWins().find((w) => w.id === "files-1")).toMatchObject({
+      x: 40,
+      y: 40,
+      w: 500,
+      h: 360,
+    });
+  });
+
+  it("snaps the focused window left/right/maximize with Cmd+Alt+Arrow (GEN-UI-KEYBOARD-009)", async () => {
+    // Workspace rect is 1000×800 at zoom 1, so left snap = {x:0,y:0,w:500,h:800}.
+    persistWorkspace([
+      appWindow({ id: "chat-1", type: "chat", z: 10, x: 100, y: 120, w: 500, h: 360 }),
+    ]);
+    render(<Harness />);
+    mockWorkspaceRect();
+    await waitFor(() => expect(readWins()).toHaveLength(1));
+
+    screen.getByRole("button", { name: "focus inside chat" }).focus();
+
+    fireEvent.keyDown(window, {
+      key: "ArrowLeft",
+      code: "ArrowLeft",
+      metaKey: true,
+      altKey: true,
+    });
+    await waitFor(() => {
+      expect(readWins().find((w) => w.id === "chat-1")).toMatchObject({
+        x: 0,
+        y: 0,
+        w: 500,
+        h: 800,
+        max: false,
+      });
+    });
+
+    fireEvent.keyDown(window, {
+      key: "ArrowRight",
+      code: "ArrowRight",
+      metaKey: true,
+      altKey: true,
+    });
+    await waitFor(() => {
+      expect(readWins().find((w) => w.id === "chat-1")).toMatchObject({
+        x: 500,
+        y: 0,
+        w: 500,
+        h: 800,
+        max: false,
+      });
+    });
+
+    fireEvent.keyDown(window, {
+      key: "ArrowUp",
+      code: "ArrowUp",
+      metaKey: true,
+      altKey: true,
+    });
+    await waitFor(() => {
+      expect(readWins().find((w) => w.id === "chat-1")).toMatchObject({
+        x: 0,
+        y: 0,
+        w: 1000,
+        h: 800,
+        max: true,
+      });
+    });
   });
 
   it("does not move or resize the frontmost window while the editor text input is focused", async () => {
@@ -216,6 +343,9 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     mockWorkspaceRect();
     await waitFor(() => expect(readWins()[0]?.zoom).toBe(1));
 
+    // GEN-UI-KEYBOARD-006 — content zoom now scopes to the focused window.
+    screen.getByRole("button", { name: "focus inside files" }).focus();
+
     fireEvent.keyDown(window, { key: "=", code: "Equal", metaKey: true });
     expect(readWins()[0]?.zoom).toBe(1);
 
@@ -238,7 +368,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     await waitFor(() => expect(screen.getByTestId("connecting")).toHaveTextContent("null"));
   });
 
-  it("unbinds bind-time Files scopes before closing a connected window", async () => {
+  it("does not unbind the current Files scope when a persisted bind snapshot was elided", async () => {
     const onScopeUnbind = vi.fn();
     persistWorkspace(
       [filesWindow({ cfg: { resolvedRoot: "/repo-now" } }), appWindow()],
@@ -260,14 +390,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     fireEvent.click(screen.getByRole("button", { name: "close files" }));
 
     await waitFor(() => expect(readWins().some((w) => w.id === "files-1")).toBe(false));
-    expect(onScopeUnbind).toHaveBeenCalledWith(
-      "chat-1",
-      expect.objectContaining({
-        kind: "files",
-        root: "/repo-bound",
-        relativePaths: ["old/path.ts"],
-      }),
-    );
+    expect(onScopeUnbind).not.toHaveBeenCalled();
   });
 
   it("updates the persisted connection snapshot when a Files window changes visible scope", async () => {

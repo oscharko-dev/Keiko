@@ -38,5 +38,6 @@
     "@oscharko-dev/keiko-workflows": "0.2.11",
     "@oscharko-dev/keiko-server": "0.2.11",
     "@oscharko-dev/keiko-memory-vault": "0.2.11"
-  }
+  },
+  "private": true
 }

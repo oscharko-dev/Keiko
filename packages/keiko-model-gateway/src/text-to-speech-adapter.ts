@@ -2,14 +2,14 @@
 // globalThis.fetch only (no SDK dependency), mirroring speech-to-text-adapter.ts. The assistant
 // answer text is POSTed once as JSON to `${endpoint}/audio/speech` through the single `gatewayFetch`
 // egress seam (ADR-0038), so synthesis traffic inherits the same corporate-proxy, custom-CA, timeout,
-// and byte-cap behavior as every other productive model call (ADR-0058 D4). The synthesized audio is
+// and byte-cap behavior as every other productive model call (ADR-0100 D4). The synthesized audio is
 // the mirror image of the dictation flow: dictation sends audio and receives text, synthesis sends
 // text and receives audio.
 //
 // This module is provider-neutral: the JSON `/audio/speech` contract is the OpenAI-compatible surface
 // the gateway already speaks for chat, embeddings, and transcription, and Azure Foundry's
 // `keiko-tts` / `keiko-audio-output` deployment class is one valid provider locality among three
-// (ADR-0058 D7, ADR-0095). Only the synthesized audio bytes and their content-type escape this
+// (ADR-0100 D7, ADR-0095). Only the synthesized audio bytes and their content-type escape this
 // module — the answer text leaves only as the synthesis request, and the raw provider body beyond the
 // audio, the provider URL, and the credential never escape. Every failure is a coded, content-free
 // `kind` so the BFF can map it to a deterministic, secret-free HTTP response.

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MemoryId } from "@oscharko-dev/keiko-contracts";
+import { classifyAttachmentMime, MAX_ATTACHMENT_BYTES } from "@oscharko-dev/keiko-contracts";
+import type { ConversationAttachmentDescriptorWire, MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   StreamingUnavailableError,
@@ -65,8 +66,12 @@ export interface PendingAttachment {
   readonly name: string;
   readonly mimeType: string;
   readonly sizeBytes: number;
-  // Defined for image kind; undefined for document kind (AC #4 — no path leaked)
-  readonly previewDataUrl?: string | undefined;
+  // Defined for image kind; undefined for document kind (AC #4 — no path leaked).
+  // GEN-PERF-MEMORY-001 — this is an object URL (URL.createObjectURL) rather than a base64 data
+  // URL: it gives the same path-safety guarantee (it carries no filesystem path) without the
+  // synchronous main-thread base64 encode + full-file in-memory copy. It MUST be revoked on every
+  // removal path (remove/clear/model-switch-drop/unmount) so no blob is retained.
+  readonly previewUrl?: string | undefined;
   // Issue #148 — the underlying File, retained so the send path can extract a
   // document's text into bounded conversation context. Never serialized to the
   // chip UI (no path/bytes are surfaced from it). Undefined only in synthetic
@@ -83,25 +88,19 @@ export interface SentDocumentDisclosure {
   readonly truncated: boolean;
 }
 
-// Hard 8 MiB byte limit. Server enforces its own limit in #149; this client-side
-// gate provides immediate feedback without a round-trip.
-export const MAX_ATTACHMENT_BYTES = 8_388_608; // 8 MiB
+// Hard 8 MiB byte limit + the MIME allowlist/classifier are the canonical policy from
+// keiko-contracts (GEN-DUP-SEMANTIC-013/-014). This client-side gate provides immediate feedback
+// without a round-trip; the server re-enforces the identical policy as the trust boundary. Re-
+// exported so existing importers of this constant keep resolving it from here.
+export { MAX_ATTACHMENT_BYTES };
 
-// Document MIME allowlist. `text/*` covers plain text, markdown, CSV, etc.
-// Specific application/* types are whitelisted individually.
-const DOCUMENT_MIME_PREFIXES = ["text/"] as const;
-const DOCUMENT_MIME_ALLOWLIST = new Set([
-  "application/pdf",
-  "application/json",
-  "application/x-yaml",
-  "application/yaml",
-]);
-
+// Map the shared 'image'|'document'|'unsupported' classification onto this hook's attachment
+// union. Adopting the contracts classifier widens the client document allowlist to match the
+// server it previously under-approximated (application/xml, application/javascript,
+// application/typescript now classify as documents); image/svg+xml stays rejected.
 function classifyMime(mimeType: string): PendingAttachmentKind | "unsupported-type" {
-  if (mimeType.startsWith("image/")) return "image";
-  if (DOCUMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix))) return "document";
-  if (DOCUMENT_MIME_ALLOWLIST.has(mimeType)) return "document";
-  return "unsupported-type";
+  const classification = classifyAttachmentMime(mimeType);
+  return classification === "unsupported" ? "unsupported-type" : classification;
 }
 
 // COMP-5: true when the model identified by `modelId` accepts the attachment's
@@ -118,13 +117,12 @@ function isAttachmentSupported(
   return capability.supportsDocumentInput;
 }
 
-function readDataUrl(file: File): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("FileReader error"));
-    reader.readAsDataURL(file);
-  });
+// GEN-PERF-MEMORY-001 — revoke a pending attachment's object-URL preview if it carries one. Safe to
+// call on any attachment (documents have no previewUrl) and idempotent enough for the removal paths.
+function revokeAttachmentPreview(attachment: PendingAttachment): void {
+  if (attachment.previewUrl !== undefined && typeof URL.revokeObjectURL === "function") {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
 }
 
 export const DEFAULT_CHAT_TITLE = "New chat";
@@ -148,13 +146,7 @@ const VOICE_TURN_APPEND_MAX_ATTEMPTS = 2;
 // Engineering note: NO fake progress percentage. The status string is the
 // only progress signal — UI copy must reflect that.
 export type SendStatus =
-  | "idle"
-  | "queued"
-  | "contacting"
-  | "streaming"
-  | "completed"
-  | "failed"
-  | "cancelled";
+  "idle" | "queued" | "contacting" | "streaming" | "completed" | "failed" | "cancelled";
 
 const TERMINAL_SEND_STATUSES: readonly SendStatus[] = ["completed", "failed", "cancelled"] as const;
 
@@ -223,13 +215,29 @@ function shouldRetryVoiceTurnAppend(error: unknown): boolean {
   return !(error instanceof ApiError) || error.status >= 500;
 }
 
+function makeVoiceTurnIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 async function appendDesktopChatVoiceTurnWithRetry(
   input: Parameters<typeof appendDesktopChatVoiceTurn>[0],
 ): ReturnType<typeof appendDesktopChatVoiceTurn> {
   let lastError: unknown;
+  const baseTimestamp = Date.now();
+  const durableInput: Parameters<typeof appendDesktopChatVoiceTurn>[0] = {
+    ...input,
+    idempotencyKey: input.idempotencyKey ?? makeVoiceTurnIdempotencyKey(),
+    messages: input.messages.map((message, index) => ({
+      ...message,
+      timestamp: message.timestamp ?? baseTimestamp + index,
+    })),
+  };
   for (let attempt = 0; attempt < VOICE_TURN_APPEND_MAX_ATTEMPTS; attempt += 1) {
     try {
-      return await appendDesktopChatVoiceTurn(input);
+      return await appendDesktopChatVoiceTurn(durableInput);
     } catch (caught) {
       lastError = caught;
       if (!shouldRetryVoiceTurnAppend(caught)) {
@@ -597,6 +605,31 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+// GEN-PERF-CHAT-011 — an abort-aware sleep: resolves after `ms`, or rejects immediately if the
+// signal aborts (or is already aborted), so a parked poll loop stops at the sleep edge instead of
+// burning the full delay before its next abort check.
+class PollAbortError extends Error {
+  public constructor() {
+    super("run-summary poll aborted");
+    this.name = "PollAbortError";
+  }
+}
+
+function abortableSleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) return Promise.reject(new PollAbortError());
+  return new Promise<void>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      globalThis.clearTimeout(timer);
+      reject(new PollAbortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function runSummarySyncDelayMs(attempt: number): number {
   return Math.min(
     RUN_SUMMARY_SYNC_INTERVAL_MS * 2 ** Math.min(attempt, 4),
@@ -620,12 +653,16 @@ async function pollRunSummaryPatch(
   chat: Chat,
   projectPath: string,
   message: ChatMessage,
+  signal?: AbortSignal,
 ): Promise<RunSummarySyncResult | undefined> {
   const runId = message.runId;
   if (runId === undefined) return undefined;
   const fallbackKind = runSummaryFallbackKind(message);
 
   for (let attempt = 0; attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS; attempt += 1) {
+    // GEN-PERF-CHAT-011 — abort at the fetch edge: once the owning hook unmounts, stop issuing
+    // network requests instead of running out the remaining attempts.
+    if (signal?.aborted === true) return undefined;
     let summary:
       | {
           readonly workflowStatus: "completed" | "failed" | "cancelled";
@@ -664,7 +701,12 @@ async function pollRunSummaryPatch(
     }
 
     if (attempt < RUN_SUMMARY_SYNC_MAX_ATTEMPTS - 1) {
-      await sleep(runSummarySyncDelayMs(attempt));
+      try {
+        await abortableSleep(runSummarySyncDelayMs(attempt), signal);
+      } catch {
+        // GEN-PERF-CHAT-011 — aborted mid-wait: park the loop instead of spinning to max attempts.
+        return undefined;
+      }
     }
   }
 
@@ -675,11 +717,15 @@ function sharedRunSummaryPatch(
   chat: Chat,
   projectPath: string,
   message: ChatMessage,
+  signal?: AbortSignal,
 ): Promise<RunSummarySyncResult | undefined> {
   const key = runSummarySharedSyncKey(chat, projectPath, message);
   const existing = sharedRunSummarySyncs.get(key);
   if (existing !== undefined) return existing;
-  const pending = pollRunSummaryPatch(chat, projectPath, message).finally(() => {
+  // GEN-PERF-CHAT-011 — the poll is aborted when the owning hook unmounts (signal from the hook's
+  // AbortController). The shared cache is keyed per (chat, project, message, runId); chat is a
+  // singleton window (Step 03) so a single hook owns the poll for a given run.
+  const pending = pollRunSummaryPatch(chat, projectPath, message, signal).finally(() => {
     if (sharedRunSummarySyncs.get(key) === pending) {
       sharedRunSummarySyncs.delete(key);
     }
@@ -811,13 +857,33 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     useConversationMemorySettings();
   const mountedRef = useRef(true);
   const activeChatIdRef = useRef<string | undefined>(undefined);
+  // GEN-DUP-SEMANTIC-016 — two named predicates for the two repeated stale-landing guards so the
+  // intent reads at the call site. `activeChatIdRef.current` is read at CALL time (not captured),
+  // preserving the existing ref-based guard behaviour exactly.
+  const isStillActiveChat = (id: string): boolean => activeChatIdRef.current === id;
+  const isSupersededOrAborted = (id: string, signal: AbortSignal): boolean =>
+    signal.aborted || activeChatIdRef.current !== id;
+  const activeProjectPathRef = useRef<string | undefined>(undefined);
   const runSummarySyncingRef = useRef<Set<string>>(new Set());
+  // GEN-PERF-CHAT-011 — a per-hook AbortController for the run-summary pollers, aborted on unmount
+  // so the poll loop stops at its fetch/sleep edges instead of running out its remaining attempts.
+  // Re-created in the mount effect (below) so a StrictMode mount→unmount→remount cycle gets a fresh,
+  // un-aborted controller rather than reusing the one aborted by the simulated unmount.
+  const runSummaryControllerRef = useRef<AbortController>(new AbortController());
+  // GEN-PERF-CHAT-011 — syncKeys whose poll cycle finished without a terminal patch. A completed
+  // non-terminal cycle parks here so an unrelated state.messages change does not re-arm the same
+  // never-settling run over and over. Cleared per key when a genuinely new run message id appears.
+  const runSummaryParkedRef = useRef<Set<string>>(new Set());
   const selectedModelPersistRef = useRef(0);
   // COMP-5 — synchronous read of the current model list inside setSelectedModel
   // (which is intentionally `useCallback(..., [])`) without recreating the callback.
   const modelsRef = useRef<readonly ModelCapability[]>([]);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
+  // GEN-PERF-MEMORY-001 — live mirror of pendingAttachments so the unmount cleanup can revoke any
+  // outstanding object-URL previews without re-subscribing the mount effect to attachment changes.
+  const pendingAttachmentsRef = useRef<readonly PendingAttachment[]>([]);
+  pendingAttachmentsRef.current = pendingAttachments;
   // Issue #148 — documents that contributed extracted context to the most recent send. Drives
   // the post-send disclosure note (which docs were included + whether any was truncated).
   const [lastSentDocuments, setLastSentDocuments] = useState<readonly SentDocumentDisclosure[]>([]);
@@ -848,13 +914,14 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }
       }
 
-      // AC #4: generate previewDataUrl for images only; never store file.path.
-      // ATT-F2: readDataUrl rejects on FileReader.onerror — the addPendingAttachment
-      // contract is "never throws", so a failed read becomes a typed rejection.
-      let previewDataUrl: string | undefined;
+      // AC #4: generate a preview for images only; never store file.path.
+      // GEN-PERF-MEMORY-001 — an object URL replaces the old base64 data-URL. It is synchronous
+      // (no FileReader, no main-thread base64 encode / full-file copy) and carries no path, so the
+      // path-safety guarantee is unchanged. It is revoked on every removal path (below + unmount).
+      let previewUrl: string | undefined;
       if (kind === "image") {
         try {
-          previewDataUrl = await readDataUrl(file);
+          previewUrl = URL.createObjectURL(file);
         } catch {
           return { ok: false, reason: "unsupported-type" };
         }
@@ -866,7 +933,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         name: file.name, // file.name is basename only — no path component (AC #4)
         mimeType: file.type,
         sizeBytes: file.size,
-        previewDataUrl,
+        previewUrl,
         // Issue #148 — retain the File so the send path can extract document text.
         file,
       };
@@ -877,13 +944,22 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   );
 
   // AC #3: remove a single pending attachment by id.
+  // GEN-PERF-MEMORY-001 — revoke the removed attachment's object-URL preview so no blob is retained.
   const removePendingAttachment = useCallback((id: string) => {
-    setPendingAttachments((previous) => previous.filter((a) => a.id !== id));
+    setPendingAttachments((previous) => {
+      const removed = previous.find((a) => a.id === id);
+      if (removed !== undefined) revokeAttachmentPreview(removed);
+      return previous.filter((a) => a.id !== id);
+    });
   }, []);
 
   // Clears all pending attachments (called after successful sendMessage).
+  // GEN-PERF-MEMORY-001 — revoke every removed attachment's object-URL preview.
   const clearPendingAttachments = useCallback(() => {
-    setPendingAttachments([]);
+    setPendingAttachments((previous) => {
+      for (const attachment of previous) revokeAttachmentPreview(attachment);
+      return previous.length === 0 ? previous : [];
+    });
   }, []);
 
   // Issue #148 — extract bounded text from the pending DOCUMENT attachments for the send body.
@@ -913,6 +989,18 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     }));
     return { entries, disclosures };
   }, [pendingAttachments]);
+
+  const buildAttachmentDescriptors = useCallback(
+    (): readonly ConversationAttachmentDescriptorWire[] =>
+      pendingAttachments.map((attachment) => ({
+        id: attachment.id,
+        kind: attachment.kind,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+      })),
+    [pendingAttachments],
+  );
 
   const clearLatestMemory = useCallback(() => {
     setLatestMemory(undefined);
@@ -961,7 +1049,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   }, []);
 
   const forgetMemoryAction = useCallback(async (memoryId: string): Promise<void> => {
-    await forgetMemory(memoryId as MemoryId, "user-initiated forget from Conversation Center");
+    await forgetMemory(memoryId as MemoryId);
     setLatestMemory((previous) =>
       previous === undefined
         ? previous
@@ -984,9 +1072,23 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   const syncRunSummaryMessage = useCallback(
     async (chat: Chat, projectPath: string, message: ChatMessage, syncKey: string) => {
       try {
-        const patched = await sharedRunSummaryPatch(chat, projectPath, message);
-        if (patched === undefined) return;
+        const patched = await sharedRunSummaryPatch(
+          chat,
+          projectPath,
+          message,
+          runSummaryControllerRef.current?.signal,
+        );
+        if (patched === undefined) {
+          // GEN-PERF-CHAT-011 — the cycle finished without a terminal patch (exhausted attempts or
+          // aborted). Park this syncKey so an unrelated state.messages change does not immediately
+          // re-arm the same never-settling run. A genuinely new run message clears its own key
+          // below (its syncKey — message.id:runId — differs), so fresh runs still poll.
+          if (mountedRef.current) runSummaryParkedRef.current.add(syncKey);
+          return;
+        }
         if (!mountedRef.current || activeChatIdRef.current !== chat.id) return;
+        // Not isStillActiveChat: this reads the setState updater's `previous` snapshot, not the
+        // activeChatIdRef, so the predicate does not apply here.
         setState((previous) =>
           previous.activeChat?.id !== chat.id
             ? previous
@@ -1007,6 +1109,10 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   useEffect(() => {
     activeChatIdRef.current = state.activeChat?.id;
   }, [state.activeChat?.id]);
+
+  useEffect(() => {
+    activeProjectPathRef.current = state.activeProject?.path;
+  }, [state.activeProject?.path]);
 
   useEffect(() => {
     modelsRef.current = state.models;
@@ -1058,9 +1164,20 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   useEffect(() => {
     mountedRef.current = true;
+    // GEN-PERF-CHAT-011 — install a fresh controller for this mount so a StrictMode remount (which
+    // re-runs this effect after the cleanup aborted the previous one) polls with a live signal.
+    if (runSummaryControllerRef.current.signal.aborted) {
+      runSummaryControllerRef.current = new AbortController();
+    }
     return () => {
       mountedRef.current = false;
       sendControllerRef.current?.abort();
+      // GEN-PERF-CHAT-011 — abort the run-summary pollers so their loops stop at the next fetch/
+      // sleep edge instead of running out their remaining (up to 120) attempts after unmount.
+      runSummaryControllerRef.current.abort();
+      // GEN-PERF-MEMORY-001 — revoke any outstanding object-URL previews so no blob leaks when the
+      // hook unmounts with pending image attachments still queued.
+      for (const attachment of pendingAttachmentsRef.current) revokeAttachmentPreview(attachment);
     };
   }, []);
 
@@ -1075,6 +1192,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       if (runId === undefined) continue;
       const syncKey = `${message.id}:${runId}`;
       if (runSummarySyncingRef.current.has(syncKey)) continue;
+      // GEN-PERF-CHAT-011 — do not re-arm a poll cycle that already completed without settling.
+      if (runSummaryParkedRef.current.has(syncKey)) continue;
       runSummarySyncingRef.current.add(syncKey);
       void syncRunSummaryMessage(chat, project.path, message, syncKey);
     }
@@ -1110,9 +1229,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     // COMP-5: drop pending attachments the newly selected model can no longer
     // accept so an image chip queued under an image-capable model doesn't persist
     // after switching to a text-only model (the "blocked" invariant).
-    setPendingAttachments((previous) =>
-      previous.filter((a) => isAttachmentSupported(a, id, modelsRef.current)),
-    );
+    setPendingAttachments((previous) => {
+      const kept = previous.filter((a) => isAttachmentSupported(a, id, modelsRef.current));
+      if (kept.length === previous.length) return previous;
+      // GEN-PERF-MEMORY-001 — revoke the object-URL preview of every dropped attachment.
+      const keptIds = new Set(kept.map((a) => a.id));
+      for (const attachment of previous) {
+        if (!keptIds.has(attachment.id)) revokeAttachmentPreview(attachment);
+      }
+      return kept;
+    });
     const activeChatId = activeChatIdRef.current;
     if (activeChatId === undefined) return;
     const requestId = selectedModelPersistRef.current + 1;
@@ -1120,6 +1246,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     void updateChat(activeChatId, { selectedModel: id })
       .then((result) => {
         if (selectedModelPersistRef.current !== requestId) return;
+        // Not isStillActiveChat: this compares the active ref against the PATCH RESPONSE's chat
+        // id (result.chat.id), not a stable captured chat id, so the shared predicate is a
+        // different check.
         if (activeChatIdRef.current !== result.chat.id) return;
         notifyChatUpsert(result.chat);
         setState((previous) => ({
@@ -1134,7 +1263,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         if (selectedModelPersistRef.current !== requestId) return;
         // MS-F1: skip the rollback when the user has navigated to a different
         // chat since this PATCH was issued — restoring this chat's old model
-        // would clobber the now-active chat's selection.
+        // would clobber the now-active chat's selection. Not isStillActiveChat: this compares
+        // against the captured-at-send-time local `activeChatId`, not a per-call chat.id.
         if (activeChatIdRef.current !== activeChatId) return;
         setError(errorMessage(caught));
         // Roll back optimistic update so UI stays consistent with the server.
@@ -1187,7 +1317,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
         if (targetPath !== undefined) input.projectPath = targetPath;
         const created = await createDesktopChat(input);
+        if (targetPath !== undefined && activeProjectPathRef.current !== targetPath) {
+          return undefined;
+        }
         activeChatIdRef.current = created.chat.id;
+        activeProjectPathRef.current = created.project.path;
         notifyChatUpsert(created.chat);
         setState({
           projects: Array.from(created.projects),
@@ -1211,16 +1345,20 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
     async (project: ProjectWithAvailability): Promise<void> => {
       setError(undefined);
       setStreamingAssistantMessage(undefined);
+      activeProjectPathRef.current = project.path;
       setState((previous) => ({ ...previous, activeProject: project }));
       try {
         const chatPayload = await sharedFetchChats(project.path);
+        if (activeProjectPathRef.current !== project.path) return;
         const sorted = sortChats(chatPayload.chats);
         const latest = sorted[0];
         if (latest === undefined) {
+          if (activeProjectPathRef.current !== project.path) return;
           await openNewChat(project);
           return;
         }
         const messagePayload = await sharedFetchChatMessages(latest.id, project.path);
+        if (activeProjectPathRef.current !== project.path) return;
         activeChatIdRef.current = latest.id;
         const selectedModel = resolveSelectedModelId(latest.selectedModel, state.models);
         setState((previous) => ({
@@ -1232,6 +1370,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         }));
         setLatestMemory(undefined);
       } catch (caught) {
+        if (activeProjectPathRef.current !== project.path) return;
         setError(errorMessage(caught));
       }
     },
@@ -1240,6 +1379,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
 
   const openChat = useCallback(
     async (chat: Chat): Promise<void> => {
+      if (activeChatIdRef.current === chat.id && state.activeChat?.id === chat.id) return;
       setError(undefined);
       setStreamingAssistantMessage(undefined);
       // Issue #152 — opening a different chat must abort any in-flight send so
@@ -1255,6 +1395,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       setLastSentDocuments([]);
       try {
         const messagePayload = await sharedFetchChatMessages(chat.id, chat.projectPath);
+        if (!isStillActiveChat(chat.id)) return;
         const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
         setState((previous) => {
           const project = previous.projects.find((item) => item.path === chat.projectPath);
@@ -1267,10 +1408,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           };
         });
       } catch (caught) {
+        if (!isStillActiveChat(chat.id)) return;
         setError(errorMessage(caught));
       }
     },
-    [state.models],
+    [state.activeChat?.id, state.models],
   );
 
   const addProject = useCallback(
@@ -1303,24 +1445,65 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
   // streamUngrounded within the 50-line function limit.
   const buildStreamHandlers = useCallback(
     (
+      chatId: string,
       tempAssistantId: string,
       optimisticId: string,
+      signal: AbortSignal,
       resolve: (status: SendStatus) => void,
     ): import("@/lib/api").StreamHandlers => {
       let statusFlippedToStreaming = false;
+      // GEN-PERF-CHAT-007 — coalesce streamed token deltas. Each onToken appends to a buffer and
+      // schedules (at most) one requestAnimationFrame; the frame applies the whole accumulated
+      // buffer in ONE setStreamingAssistantMessage. This collapses a burst of N tokens landing in
+      // one frame into a single state commit while preserving order (appends are synchronous into
+      // the ref). Every terminal handler flushes any residual buffer and cancels the pending frame
+      // so no final token is dropped.
+      let pendingText = "";
+      let rafHandle: number | null = null;
+      const canRaf = typeof requestAnimationFrame === "function";
+      const flush = (): void => {
+        rafHandle = null;
+        if (pendingText.length === 0) return;
+        const buffered = pendingText;
+        pendingText = "";
+        setStreamingAssistantMessage((current) =>
+          current?.id === tempAssistantId
+            ? { ...current, content: current.content + buffered }
+            : current,
+        );
+      };
+      const cancelFlush = (): void => {
+        if (rafHandle !== null && typeof cancelAnimationFrame === "function") {
+          cancelAnimationFrame(rafHandle);
+        }
+        rafHandle = null;
+      };
       return {
         onToken: (text: string): void => {
+          if (isSupersededOrAborted(chatId, signal)) return;
           if (!statusFlippedToStreaming) {
             updateSendStatus("streaming");
             statusFlippedToStreaming = true;
           }
-          setStreamingAssistantMessage((current) =>
-            current?.id === tempAssistantId
-              ? { ...current, content: current.content + text }
-              : current,
-          );
+          pendingText += text;
+          if (!canRaf) {
+            flush();
+            return;
+          }
+          if (rafHandle === null) {
+            rafHandle = requestAnimationFrame(flush);
+          }
         },
         onDone: (payload: SseDonePayload): void => {
+          cancelFlush();
+          flush();
+          if (isSupersededOrAborted(chatId, signal)) {
+            setStreamingAssistantMessage((current) =>
+              current?.id === tempAssistantId ? undefined : current,
+            );
+            resolve("cancelled");
+            return;
+          }
           setStreamingAssistantMessage((current) =>
             current?.id === tempAssistantId ? undefined : current,
           );
@@ -1341,11 +1524,22 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           resolve("completed");
         },
         onError: ({ code, message }: { code: string; message: string }): void => {
+          // GEN-PERF-CHAT-007 — cancel any pending frame; onError/onCancelled remove the temp
+          // bubble entirely (AC#3, no partial kept), so the buffered text must NOT be flushed.
+          cancelFlush();
+          pendingText = "";
+          if (isSupersededOrAborted(chatId, signal)) {
+            removeTempMessage(tempAssistantId);
+            resolve("cancelled");
+            return;
+          }
           setError(errorMessage(new ApiError(code, message, 0)));
           removeTempMessage(tempAssistantId);
           resolve("failed");
         },
         onCancelled: (): void => {
+          cancelFlush();
+          pendingText = "";
           removeTempMessage(tempAssistantId);
           resolve("cancelled");
         },
@@ -1367,6 +1561,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       modelId: string,
       signal: AbortSignal,
       documentContext: readonly ConversationDocumentContextWire[],
+      attachments: readonly ConversationAttachmentDescriptorWire[],
     ): Promise<SendStatus> => {
       const tempAssistantId = `stream-${String(Date.now())}`;
       setStreamingAssistantMessage({
@@ -1388,9 +1583,16 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         modelId,
         memory: buildMemoryRequest(chat, project),
         ...(documentContext.length > 0 ? { documentContext } : {}),
+        ...(attachments.length > 0 ? { attachments } : {}),
       };
       return new Promise<SendStatus>((resolve, reject) => {
-        const handlers = buildStreamHandlers(tempAssistantId, optimisticId, resolve);
+        const handlers = buildStreamHandlers(
+          chat.id,
+          tempAssistantId,
+          optimisticId,
+          signal,
+          resolve,
+        );
         sendDesktopChatStream(requestBody, signal, handlers).catch((caught: unknown) => {
           removeTempMessage(tempAssistantId);
           if (caught instanceof StreamingUnavailableError) {
@@ -1399,6 +1601,8 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             // surfacing a hard failure to the user.
             reject(caught);
           } else if (caught instanceof DOMException && caught.name === "AbortError") {
+            resolve("cancelled");
+          } else if (isSupersededOrAborted(chat.id, signal)) {
             resolve("cancelled");
           } else {
             // Mid-stream client error (e.g. network drop, reader TypeError). Surface it so the
@@ -1430,6 +1634,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       modelId: string,
       signal: AbortSignal,
       documentContext: readonly ConversationDocumentContextWire[],
+      attachments: readonly ConversationAttachmentDescriptorWire[],
     ): Promise<SendStatus> => {
       try {
         updateSendStatus("contacting");
@@ -1442,10 +1647,11 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
             modelId,
             memory: buildMemoryRequest(chat, project),
             ...(documentContext.length > 0 ? { documentContext } : {}),
+            ...(attachments.length > 0 ? { attachments } : {}),
           },
           signal,
         );
-        if (signal.aborted) return "cancelled";
+        if (isSupersededOrAborted(chat.id, signal)) return "cancelled";
         setState((previous) => ({
           ...previous,
           activeChat: result.chat,
@@ -1465,6 +1671,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         if (caught instanceof DOMException && caught.name === "AbortError") {
           return "cancelled";
         }
+        if (isSupersededOrAborted(chat.id, signal)) return "cancelled";
         setError(errorMessage(caught));
         try {
           const messagePayload = await fetchChatMessages(chat.id, project.path);
@@ -1490,6 +1697,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       modelId: string,
       signal: AbortSignal,
       documentContext: readonly ConversationDocumentContextWire[],
+      attachments: readonly ConversationAttachmentDescriptorWire[],
     ): Promise<SendStatus> => {
       const canStream = state.models.find((m) => m.id === modelId)?.streaming === true;
       if (!canStream) {
@@ -1501,6 +1709,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           modelId,
           signal,
           documentContext,
+          attachments,
         );
       }
       updateSendStatus("contacting");
@@ -1513,6 +1722,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           modelId,
           signal,
           documentContext,
+          attachments,
         );
       } catch (caught) {
         // StreamingUnavailableError before SSE headers — fall back to buffered.
@@ -1526,6 +1736,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         modelId,
         signal,
         documentContext,
+        attachments,
       );
     },
     [state.models, sendUngroundedBuffered, streamUngrounded, updateSendStatus],
@@ -1551,7 +1762,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       try {
         updateSendStatus("contacting");
         const result = await askGrounded({ chatId: chat.id, content, modelId }, signal);
-        if (activeChatIdRef.current !== chat.id) {
+        if (!isStillActiveChat(chat.id)) {
           return "completed";
         }
         if (signal.aborted) return "cancelled";
@@ -1675,6 +1886,9 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         const { entries: documentContext, disclosures } = isGrounded
           ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
           : await buildDocumentContext();
+        const attachmentDescriptors: readonly ConversationAttachmentDescriptorWire[] = isGrounded
+          ? []
+          : buildAttachmentDescriptors();
         const terminal = isGrounded
           ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
           : await sendUngrounded(
@@ -1685,6 +1899,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
               modelId,
               controller.signal,
               documentContext,
+              attachmentDescriptors,
             );
         // If cancelSend already flipped the status to "cancelled", do not
         // override it with a stale "completed" — cancellation wins.
@@ -1718,6 +1933,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
       sendGrounded,
       sendUngrounded,
       buildDocumentContext,
+      buildAttachmentDescriptors,
       clearPendingAttachments,
       updateSendStatus,
     ],
@@ -1813,7 +2029,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           return;
         }
         notifyChatUpsert(result.chat);
-        if (activeChatIdRef.current === chat.id && result.memory !== undefined) {
+        if (isStillActiveChat(chat.id) && result.memory !== undefined) {
           setLatestMemory(result.memory);
         }
         setState((previous) => {
@@ -1863,7 +2079,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
         },
         signal,
       );
-      if (!mountedRef.current || activeChatIdRef.current !== chat.id) {
+      if (!mountedRef.current || !isStillActiveChat(chat.id)) {
         return result.toolOutput;
       }
       notifyChatUpsert(result.chat);

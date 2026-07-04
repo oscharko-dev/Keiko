@@ -2,6 +2,8 @@
 // message — messages are static strings that never leak filesystem paths or raw Chrome diagnostics
 // to the UI.
 
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+
 export const BROWSER_ERROR_CODES = {
   CHROME_UNREACHABLE: "CHROME_UNREACHABLE",
   CHROME_VERSION_MISMATCH: "CHROME_VERSION_MISMATCH",
@@ -15,6 +17,7 @@ export const BROWSER_ERROR_CODES = {
   CONTENT_TOO_LARGE: "CONTENT_TOO_LARGE",
   CDP_METHOD_FORBIDDEN: "CDP_METHOD_FORBIDDEN",
   CDP_TRANSPORT_REFUSED: "CDP_TRANSPORT_REFUSED",
+  BROWSER_PROFILE_NOT_EPHEMERAL: "BROWSER_PROFILE_NOT_EPHEMERAL",
   BAD_PORT: "BAD_PORT",
   BAD_URL: "BAD_URL",
   BAD_REQUEST: "BAD_REQUEST",
@@ -44,6 +47,7 @@ const STATUS_MAP: Readonly<Record<BrowserErrorCode, number>> = {
   CONTENT_TOO_LARGE: 413,
   CDP_METHOD_FORBIDDEN: 500,
   CDP_TRANSPORT_REFUSED: 503,
+  BROWSER_PROFILE_NOT_EPHEMERAL: 403,
   BAD_PORT: 400,
   BAD_URL: 400,
   BAD_REQUEST: 400,
@@ -54,14 +58,11 @@ const STATUS_MAP: Readonly<Record<BrowserErrorCode, number>> = {
   SIDE_FILE_WRITER_MISSING: 500,
 };
 
-export class BrowserToolError extends Error {
+export class BrowserToolError extends CodedHttpError {
   public readonly code: BrowserErrorCode;
-  public readonly status: number;
 
   public constructor(code: BrowserErrorCode, message: string) {
-    super(message);
-    this.name = "BrowserToolError";
+    super(message, httpStatusFor(STATUS_MAP, code));
     this.code = code;
-    this.status = STATUS_MAP[code];
   }
 }

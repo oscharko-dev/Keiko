@@ -4,8 +4,9 @@
  * Proves the single registry-derived `formattingAvailable` value drives, in agreement:
  *   - the Format button's `aria-disabled`, and
  *   - the status bar's `formatting` field ("Format ready" / "Format unavailable"),
- * for a `monaco-builtin` language (json/css), a `keiko-language-service` language (typescript), and a
- * `"none"` language (markdown/yaml) — and that large-file degraded mode disables a formattable language.
+ * for rich-worker languages now classified as `"none"` (json/css), a `keiko-language-service`
+ * language (typescript), and other `"none"` languages (markdown/yaml) — and that large-file
+ * degraded mode disables a formattable language.
  *
  * The harness mirrors EditorWidget.test.tsx: the heavy browser-only surface and the IndexedDB-backed
  * hot-exit store are mocked, and the Monaco runtime never loads in jsdom.
@@ -76,8 +77,8 @@ vi.mock("next/dynamic", () => {
 
 const BASE_VERSION = { sizeBytes: 12, modifiedAt: 1, contentHash: "a".repeat(64) };
 
-// The server advertises a TS/JS formatting provider only — the `monaco-builtin` languages must NOT
-// depend on it (ADR-0068 D3), so json/css are intentionally absent from the server capability set.
+// The server advertises a TS/JS formatting provider only. JSON/CSS/HTML rich Monaco workers are not
+// shipped in the release artifact, so json/css are intentionally absent from the capability set.
 const LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
   schemaVersion: "1",
   providers: [
@@ -146,18 +147,18 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
-  it("marks Format available for a monaco-builtin language (json) without a server provider", async () => {
+  it("marks Format unavailable for json without a server provider or Monaco worker", async () => {
     await renderFile("data.json", { path: "data.json", name: "data.json", extension: "json" });
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "false");
-    expect(statusField("formatting")).toHaveTextContent("Format ready");
+    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
-  it("marks Format available for a monaco-builtin language (css) without a server provider", async () => {
+  it("marks Format unavailable for css without a server provider or Monaco worker", async () => {
     await renderFile("styles.css", { path: "styles.css", name: "styles.css", extension: "css" });
 
-    expect(formatButton()).toHaveAttribute("aria-disabled", "false");
-    expect(statusField("formatting")).toHaveTextContent("Format ready");
+    expect(formatButton()).toHaveAttribute("aria-disabled", "true");
+    expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
   it("marks Format available for a keiko-language-service language (typescript) when the server is up", async () => {
@@ -186,17 +187,14 @@ describe("EditorRuntimeWidget — registry-gated Format availability (ADR-0068 D
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");
   });
 
-  it("disables the Format button in large-file degraded mode even for a formattable language (json)", async () => {
-    const oversizedJson = `${"x\n".repeat(10_001)}x`;
-    await renderFile("data.json", {
-      path: "data.json",
-      name: "data.json",
-      extension: "json",
-      content: oversizedJson,
-      sizeBytes: oversizedJson.length,
+  it("disables the Format button in large-file degraded mode even for a formattable language (typescript)", async () => {
+    const oversizedTs = `${"const value = 1;\n".repeat(10_001)}const tail = 2;\n`;
+    await renderFile("src/app.ts", {
+      content: oversizedTs,
+      sizeBytes: oversizedTs.length,
     });
 
-    // largeFileDegraded gates the button (canFormat) even though the language is registry-formattable;
+    // largeFileDegraded gates the button (canFormat) even though the language is provider-formattable;
     // the status field reads the same effective availability, so the two agree (ADR-0068 D4).
     expect(formatButton()).toHaveAttribute("aria-disabled", "true");
     expect(statusField("formatting")).toHaveTextContent("Format unavailable");

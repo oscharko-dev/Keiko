@@ -1,4 +1,4 @@
-// Voice Digital Twin AC6 metric derivations (Epic #491, Issue #505; ADR-0068).
+// Voice Digital Twin AC6 metric derivations (Epic #491, Issue #505; ADR-0110).
 //
 // Each metric is a pure derivation over a frozen keiko-contracts state machine, returning a small
 // content-free record the scorer compares against the fixture oracle. The runtime reducers that drive
@@ -169,7 +169,7 @@ export function deriveBufferBoundednessMetric(
 // ─── Latency posture class (Deliverable "latency") ───────────────────────────────────
 // A total, deterministic map from the contract media-transport to the latency POSTURE class the transport
 // implies. This is NOT a wall-clock measurement (which would need a clock + network reads and is out of the
-// pure-harness boundary, covered by the keiko-ui voice-timebase suite, ADR-0061); it is the deterministic
+// pure-harness boundary, covered by the keiko-ui voice-timebase suite, ADR-0103); it is the deterministic
 // class the contract's transport choice fixes: `webrtc` is interactive full-duplex, `gateway-batch` is a
 // single batched request/response, and `none` has no latency surface. Keyed for totality so a new media
 // transport added to the contract is a compile error here, not a silent wrong class.

@@ -52,7 +52,8 @@ function createRequestId(): string {
 }
 
 function taskLabel(task: CommandTask): string {
-  return `${task.kind} · ${task.label}`;
+  const trust = task.trustState === "trusted" ? "" : " · approval required";
+  return `${task.kind} · ${task.label}${trust}`;
 }
 
 function eventLabel(kind: CommandRunnerEvent["kind"]): string {
@@ -112,6 +113,10 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const pendingRequestIdRef = useRef<string | null>(null);
   const runBtnRef = useRef<HTMLButtonElement | null>(null);
   const prevRunningRef = useRef(false);
+  const selectedTask = tasks.find((task) => task.id === taskId);
+  const runnableTaskSelected = selectedTask !== undefined && selectedTask.trustState === "trusted";
+  const selectedTaskRequiresApproval = selectedTask?.trustState === "approval-required";
+  const runDisabled = running || !runnableTaskSelected;
 
   // Load the discovered task catalog whenever the project path changes. A failure surfaces as an
   // error; an empty catalog is a valid "no runnable scripts" state.
@@ -175,7 +180,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
   const onSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>): Promise<void> => {
       e.preventDefault();
-      if (running || runningRef.current || taskId.length === 0) return;
+      if (running || runningRef.current || !runnableTaskSelected) return;
       setError(null);
       setResult(null);
       setInFlightRunId(null);
@@ -195,7 +200,7 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         setInFlightRunId(null);
       }
     },
-    [projectInput, running, taskId],
+    [projectInput, runnableTaskSelected, running, taskId],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
@@ -237,13 +242,17 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
           />
         </div>
         <div className="tm-actions">
+          {/* GEN-UI-FOCUS-014: aria-disabled instead of HTML disabled while running —
+              disabling the focused submit button throws keyboard focus to <body>.
+              onSubmit already guards re-entry; the no-selection condition stays
+              hard-disabled (pre-interaction state), mirroring TerminalWidget. */}
           <button
             type="submit"
             className="tm-action"
             data-primary="true"
             ref={runBtnRef}
-            disabled={running || tasks.length === 0 || taskId.length === 0}
-            aria-disabled={running || tasks.length === 0 || taskId.length === 0}
+            disabled={!runnableTaskSelected}
+            aria-disabled={runDisabled}
           >
             {running ? "Running…" : "Run task"}
           </button>
@@ -262,6 +271,11 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
         {tasks.length === 0 && projectInput.length > 0 && error === null ? (
           <p className="tm-limits" role="status">
             No runnable test, build, or run tasks were discovered for this project.
+          </p>
+        ) : null}
+        {selectedTaskRequiresApproval ? (
+          <p className="tm-limits" role="status">
+            Server-side workspace trust is required before this repository-authored script can run.
           </p>
         ) : null}
       </form>
@@ -301,8 +315,30 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
             {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
           </div>
-          {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
-          {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
+          {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll containers exposed as focusable
+              named regions so keyboard-only users can scroll them (WCAG 2.1.1). */}
+          {result.stdout.length > 0 ? (
+            <pre
+              className="tm-stdout"
+              role="region"
+              aria-label="Task stdout"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stdout}
+            </pre>
+          ) : null}
+          {result.stderr.length > 0 ? (
+            <pre
+              className="tm-stderr"
+              role="region"
+              aria-label="Task stderr"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stderr}
+            </pre>
+          ) : null}
         </div>
       ) : null}
 

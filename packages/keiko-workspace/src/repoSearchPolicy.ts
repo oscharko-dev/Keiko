@@ -3,6 +3,7 @@ import type {
   CandidateSignal,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   canonicalMetadataEcosystem,
   isCanonicalMetadataFile,
@@ -10,7 +11,10 @@ import {
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
 } from "./ecosystems.js";
-import { expandedQueryTerms } from "./repoSearchQueryTerms.js";
+import { naturalLanguageContentTerms } from "./repoSearchMatchers.js";
+import { lexicalPathSignals, queryRankingTerms } from "./repoSearchRanking.js";
+import { fuseLexicalAndSemanticRanks, type SemanticSearchMatch } from "./repoSearchSemantic.js";
+import { isDenied } from "./ignore.js";
 import type { DiscoveredFile } from "./types.js";
 
 export type SearchIntent =
@@ -38,6 +42,8 @@ export type CandidateBucket =
 
 export interface SearchHints {
   readonly retrievalIntent?: SearchIntent | undefined;
+  readonly lowValuePathAllowlist?: readonly string[] | undefined;
+  readonly recentPaths?: readonly string[] | undefined;
 }
 
 export interface SearchPolicy {
@@ -45,6 +51,8 @@ export interface SearchPolicy {
   readonly intent: SearchIntent;
   readonly applyGitignore: boolean;
   readonly omitLowValueWorkspaceFiles: boolean;
+  readonly lowValuePathAllowlist: readonly string[];
+  readonly recentPaths: readonly string[];
 }
 
 // Explainable per-file ranking diagnostic: why a candidate ended up where it did. `signals`
@@ -174,6 +182,16 @@ const CONFIG_EXTENSIONS = new Set([
 ]);
 const DOC_EXTENSIONS = new Set(["adoc", "md", "mdx", "rst", "txt"]);
 const TEST_FILE_RE = /(?:^|[./_-])(?:test|spec|fixture|mock)s?(?:[./_-]|$)/iu;
+const IMPLEMENTATION_INTENT_TERMS = new Set([
+  "define",
+  "defined",
+  "definition",
+  "implement",
+  "implemented",
+  "implementation",
+  "source",
+]);
+
 function emptyBucketCounts(): Record<CandidateBucket, number> {
   return {
     "canonical-metadata": 0,
@@ -205,6 +223,43 @@ function normalizedPath(scopePath: string): string {
   return scopePath.split("\\").join("/").toLowerCase();
 }
 
+function stripDotSlashPrefix(path: string): string {
+  let normalized = path;
+  while (normalized.startsWith("./")) {
+    normalized = normalized.slice(2);
+  }
+  return normalized;
+}
+
+function stripTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return path.slice(0, end);
+}
+
+function normalizedScopePath(scopePath: string): string | undefined {
+  const normalized = stripTrailingSlashes(stripDotSlashPrefix(scopePath.split("\\").join("/")));
+  if (normalized.length === 0 || !isValidScopePath(normalized, { mustBeRelative: true })) {
+    return undefined;
+  }
+  return isDenied(normalized) ? undefined : normalized;
+}
+
+function normalizedHintPaths(paths: readonly string[] | undefined): readonly string[] {
+  if (paths === undefined) {
+    return [];
+  }
+  return [
+    ...new Set(
+      paths
+        .map((path) => normalizedScopePath(path))
+        .filter((path): path is string => path !== undefined),
+    ),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 function pathSegments(scopePath: string): readonly string[] {
   return normalizedPath(scopePath)
     .split("/")
@@ -225,6 +280,14 @@ function isLowValueOrGenerated(scopePath: string): boolean {
   return hasLowValueSegment(scopePath) || isGeneratedArtifactPath(scopePath);
 }
 
+function pathMatchesHint(scopePath: string, paths: readonly string[]): boolean {
+  const normalized = normalizedPath(scopePath);
+  return paths.some((path) => {
+    const hint = path.toLowerCase();
+    return normalized === hint || normalized.startsWith(`${hint}/`);
+  });
+}
+
 function isSourceExtension(ext: string, scopePath: string): boolean {
   return SOURCE_EXTENSIONS.has(ext) || isEcosystemSourceFile(scopePath);
 }
@@ -240,7 +303,7 @@ function isConfigPath(scopePath: string): boolean {
 }
 
 function normalizedQueryTerms(query: RetrievalQuery): readonly string[] {
-  return expandedQueryTerms(query.text, false);
+  return queryRankingTerms(query.text);
 }
 
 const CONTENT_SCORE_STOP_TERMS: ReadonlySet<string> = new Set([
@@ -287,8 +350,7 @@ function contentQueryTerms(query: RetrievalQuery): readonly string[] {
   return normalizedQueryTerms(query).filter((term) => {
     const lower = term.toLowerCase();
     return (
-      !CONTENT_SCORE_STOP_TERMS.has(lower) &&
-      (term.length >= 3 || SHORT_CODE_TERMS.has(lower))
+      !CONTENT_SCORE_STOP_TERMS.has(lower) && (term.length >= 3 || SHORT_CODE_TERMS.has(lower))
     );
   });
 }
@@ -351,8 +413,7 @@ function contentTermScore(
   const coverage = (hits.exactHits + hits.substringHits * 0.5) / Math.max(termCount, 1);
   const intentMultiplier =
     intent === "targeted-code-search" || intent === "diagnostic-search" ? 1.15 : 1;
-  const rawScore =
-    hits.exactHits * 14 + hits.substringHits * 6 + coverage * 45 + exactSymbolBonus;
+  const rawScore = hits.exactHits * 14 + hits.substringHits * 6 + coverage * 45 + exactSymbolBonus;
   return Math.min(140, Math.round(rawScore * intentMultiplier));
 }
 
@@ -417,6 +478,10 @@ function bucketByPath(scopePath: string): CandidateBucket {
     return "docs";
   }
   return "other";
+}
+
+export function candidateBucketForPath(scopePath: string): CandidateBucket {
+  return bucketByPath(scopePath);
 }
 
 function bucketScore(bucket: CandidateBucket, intent: SearchIntent): number {
@@ -500,36 +565,35 @@ function genericBucketScore(bucket: CandidateBucket): number {
   return scores[bucket];
 }
 
-function pathTermBonus(scopePath: string, terms: readonly string[]): number {
-  const path = normalizedPath(scopePath);
-  const name = basename(path);
-  const segments = pathSegments(path);
-  let exactPath = 0;
-  let basenameHit = 0;
-  let segmentHit = 0;
-  let substringHit = 0;
-  for (const term of terms) {
-    if (path === term || path.endsWith(`/${term}`)) {
-      exactPath = Math.max(exactPath, 35);
-    } else if (name === term || name.startsWith(`${term}.`)) {
-      basenameHit = Math.max(basenameHit, 25);
-    } else if (segments.includes(term)) {
-      segmentHit = Math.max(segmentHit, 20);
-    } else if (path.includes(term)) {
-      substringHit = Math.max(substringHit, 12);
-    }
-  }
-  return Math.min(50, exactPath + basenameHit + segmentHit + substringHit);
-}
-
 function depthPenalty(scopePath: string): number {
   return Math.min(pathSegments(scopePath).length, 12);
+}
+
+function queryIntentBoost(bucket: CandidateBucket, terms: readonly string[]): number {
+  if (!terms.some((term) => IMPLEMENTATION_INTENT_TERMS.has(term))) {
+    return 0;
+  }
+  if (bucket === "source" || bucket === "symbol-source" || bucket === "exact-path") {
+    return 24;
+  }
+  if (bucket === "test" || bucket === "docs" || bucket === "overview-doc") {
+    return -12;
+  }
+  return 0;
+}
+
+function recentPathBoost(scopePath: string, recentPaths: readonly string[]): number {
+  if (recentPaths.length === 0) {
+    return 0;
+  }
+  return pathMatchesHint(scopePath, recentPaths) ? 28 : 0;
 }
 
 interface ScoredCandidate {
   readonly file: DiscoveredFile;
   readonly bucket: CandidateBucket;
   readonly score: number;
+  readonly bucketTiebreak: number;
   readonly signals: readonly CandidateSignal[];
   readonly ecosystem: string | undefined;
 }
@@ -546,21 +610,41 @@ function scoreCandidate(
 ): ScoredCandidate {
   const path = file.relativePath;
   const bucket = bucketByPath(path);
-  const bucketWeight = bucketScore(bucket, policy.intent);
-  const termBonus = pathTermBonus(path, terms);
-  const contentScore = contentScores?.get(path) ?? 0;
+  const lexical = lexicalPathSignals(path, terms);
   const depth = depthPenalty(path);
+  const bucketTiebreak = bucketScore(bucket, policy.intent);
+  const intentBoost = queryIntentBoost(bucket, terms);
+  const recencyBoost = recentPathBoost(path, policy.recentPaths);
   const ecosystem = bucket === "canonical-metadata" ? canonicalMetadataEcosystem(path) : undefined;
   const signals: CandidateSignal[] = [
-    { name: `bucket:${bucket}`, value: bucketWeight },
-    { name: "path-term-bonus", value: termBonus },
-    { name: "content-term-score", value: contentScore },
-    { name: "depth-penalty", value: -depth },
+    { name: "query-path-score", value: lexical.score },
+    { name: "query-coverage", value: lexical.coverageBonus },
+    { name: "query-intent-boost", value: intentBoost },
+    { name: "git-recency", value: recencyBoost },
+    { name: `bucket:${bucket}`, value: bucketTiebreak / 100 },
+    { name: "depth-penalty", value: -(depth / 1000) },
   ];
   if (ecosystem !== undefined) {
     signals.push({ name: `ecosystem:${ecosystem}`, value: 1 });
   }
-  return { file, bucket, score: bucketWeight + termBonus + contentScore - depth, signals, ecosystem };
+  const contentScore = contentScores?.get(path) ?? 0;
+  if (contentScore > 0) {
+    signals.push({ name: "content-term-score", value: contentScore });
+  }
+  return {
+    file,
+    bucket,
+    score:
+      lexical.score +
+      contentScore +
+      intentBoost +
+      recencyBoost +
+      bucketTiebreak / 100 -
+      depth / 1000,
+    bucketTiebreak,
+    signals,
+    ecosystem,
+  };
 }
 
 function rankCandidates(
@@ -577,6 +661,7 @@ function rankCandidates(
   const scored = files.map((file) => scoreCandidate(file, terms, policy, contentScores));
   scored.sort((a, b) => {
     if (a.score !== b.score) return b.score - a.score;
+    if (a.bucketTiebreak !== b.bucketTiebreak) return b.bucketTiebreak - a.bucketTiebreak;
     if (a.file.relativePath < b.file.relativePath) return -1;
     return a.file.relativePath > b.file.relativePath ? 1 : 0;
   });
@@ -604,6 +689,8 @@ export function resolveSearchPolicy(
     intent,
     applyGitignore: mode === "workspace-root-default",
     omitLowValueWorkspaceFiles: mode === "workspace-root-default",
+    lowValuePathAllowlist: normalizedHintPaths(hints?.lowValuePathAllowlist),
+    recentPaths: normalizedHintPaths(hints?.recentPaths),
   };
 }
 
@@ -618,6 +705,8 @@ export function legacyDiscoveryPolicy(hasExplicitRelativePaths: boolean): Search
     intent: "generic",
     applyGitignore: false,
     omitLowValueWorkspaceFiles: false,
+    lowValuePathAllowlist: [],
+    recentPaths: [],
   };
 }
 
@@ -635,6 +724,9 @@ export function policyOmissionReason(
   if (!policy.omitLowValueWorkspaceFiles) {
     return undefined;
   }
+  if (pathMatchesHint(scopePath, policy.lowValuePathAllowlist)) {
+    return undefined;
+  }
   if (isLockfile(scopePath) && policy.intent !== "project-metadata") {
     return "generated";
   }
@@ -644,7 +736,24 @@ export function policyOmissionReason(
 }
 
 export function extraIgnoreLinesForSearch(policy: SearchPolicy): readonly string[] {
-  return policy.omitLowValueWorkspaceFiles ? LOW_VALUE_IGNORE_LINES : [];
+  if (!policy.omitLowValueWorkspaceFiles) {
+    return [];
+  }
+  return [...LOW_VALUE_IGNORE_LINES, ...unignoreLinesForAllowlist(policy.lowValuePathAllowlist)];
+}
+
+function unignoreLinesForAllowlist(paths: readonly string[]): readonly string[] {
+  const lines: string[] = [];
+  for (const scopePath of paths) {
+    const segments = scopePath.split("/").filter((segment) => segment.length > 0);
+    let current = "";
+    for (const segment of segments) {
+      current = current.length === 0 ? segment : `${current}/${segment}`;
+      lines.push(`!/${current}/`);
+    }
+    lines.push(`!/${scopePath}`);
+  }
+  return [...new Set(lines)];
 }
 
 export function orderCandidatesForSearch(
@@ -684,6 +793,86 @@ export function orderCandidatesForSearch(
   };
 }
 
+function semanticScoreByPath(
+  matches: readonly SemanticSearchMatch[],
+): ReadonlyMap<string, SemanticSearchMatch> {
+  const out = new Map<string, SemanticSearchMatch>();
+  for (const match of matches) {
+    const current = out.get(match.scopePath);
+    if (current === undefined || match.score > current.score) {
+      out.set(match.scopePath, match);
+    }
+  }
+  return out;
+}
+
+function semanticDiagnosticEntry(
+  fused: ReturnType<typeof fuseLexicalAndSemanticRanks>[number],
+  match: SemanticSearchMatch,
+  current: RankedCandidateDiagnostic | undefined,
+): RankedCandidateDiagnostic {
+  const semanticSignals: readonly CandidateSignal[] = [
+    { name: "semantic-score", value: match.score },
+    ...fused.signals,
+  ];
+  return current === undefined
+    ? {
+        scopePath: fused.scopePath,
+        bucket: candidateBucketForPath(fused.scopePath),
+        score: match.score * 1_000 + fused.normalizedFusedScore,
+        ecosystem: undefined,
+        signals: semanticSignals,
+      }
+    : {
+        ...current,
+        score: current.score + match.score * 1_000,
+        signals: [...current.signals, ...semanticSignals],
+      };
+}
+
+function compareRankedCandidateDiagnostic(
+  a: RankedCandidateDiagnostic,
+  b: RankedCandidateDiagnostic,
+): number {
+  if (a.score !== b.score) return b.score - a.score;
+  return a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0;
+}
+
+export function withSemanticRankingDiagnostics(
+  diagnostics: SearchDiagnostics,
+  lexical: readonly { readonly scopePath: string; readonly score: number }[],
+  matches: readonly SemanticSearchMatch[],
+): SearchDiagnostics {
+  if (matches.length === 0) {
+    return diagnostics;
+  }
+  const semanticByPath = semanticScoreByPath(matches);
+  const existing = new Map(diagnostics.rankedCandidates.map((entry) => [entry.scopePath, entry]));
+  const fusion = fuseLexicalAndSemanticRanks(
+    lexical,
+    [...semanticByPath.values()].map((match) => ({
+      scopePath: match.scopePath,
+      score: match.score,
+    })),
+  );
+  for (const fused of fusion) {
+    const match = semanticByPath.get(fused.scopePath);
+    if (match === undefined) {
+      continue;
+    }
+    existing.set(
+      fused.scopePath,
+      semanticDiagnosticEntry(fused, match, existing.get(fused.scopePath)),
+    );
+  }
+  return {
+    ...diagnostics,
+    rankedCandidates: [...existing.values()]
+      .sort(compareRankedCandidateDiagnostic)
+      .slice(0, MAX_RANKED_CANDIDATE_DIAGNOSTICS),
+  };
+}
+
 export function shouldScoreContent(
   query: RetrievalQuery,
   text: string,
@@ -696,10 +885,9 @@ export function shouldScoreContent(
     return true;
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
-  const terms = normalizedQueryTerms(query).filter(
-    (term) =>
-      term.length >= 4 ||
-      SHORT_CODE_TERMS.has(term.toLowerCase()),
-  );
+  const terms =
+    query.kind === "exact-symbol"
+      ? [query.caseSensitive ? query.text : query.text.toLowerCase()]
+      : naturalLanguageContentTerms(query.text, query.caseSensitive);
   return terms.length === 0 || terms.some((term) => haystack.includes(term));
 }

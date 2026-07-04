@@ -49,13 +49,22 @@ export function buildChatCompactionResurfacingContext(
   }
 }
 
+// Feature-detect the node adapter's prefix-scoped listing (GEN-PERF-CHAT-005). When present it filters
+// directory entries by prefix BEFORE the per-file containment stat, so this per-send call does not stat
+// every unrelated manifest in the shared, retention-unbounded evidence dir. The in-memory store (and
+// any adapter lacking the capability) falls back to list() + JS prefix filter — same result set.
+function listByPrefix(store: EvidenceStore, prefix: string): readonly string[] {
+  const candidate = (store as { listByPrefix?: (p: string) => readonly string[] }).listByPrefix;
+  if (typeof candidate === "function") {
+    return candidate.call(store, prefix);
+  }
+  return store.list().filter((runId) => runId.startsWith(prefix));
+}
+
 function loadChatCompactionRecords(store: EvidenceStore, chatId: string): readonly TimedRecord[] {
   const prefix = `chat-${sha256Hex(chatId).slice(0, 16)}-t`;
   const records: TimedRecord[] = [];
-  for (const runId of store.list()) {
-    if (!runId.startsWith(prefix)) {
-      continue;
-    }
+  for (const runId of listByPrefix(store, prefix)) {
     const manifest = safeLoad(store, runId);
     if (manifest === undefined) {
       continue;

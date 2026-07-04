@@ -333,9 +333,7 @@ describe("applyModelRerankResults", () => {
 
   it("uses topN as the final prompt cap, not the preliminary candidate pool cap", () => {
     const preliminary = rerankAndSelect(
-      Array.from({ length: 20 }, (_, index) =>
-        connector(`c-${String(index)}`, 1 - index * 0.01),
-      ),
+      Array.from({ length: 20 }, (_, index) => connector(`c-${String(index)}`, 1 - index * 0.01)),
       GENEROUS_BUDGET,
     );
 

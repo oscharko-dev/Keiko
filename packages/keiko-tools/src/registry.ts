@@ -23,7 +23,7 @@ import { nodeSpawnFn, runCommand, type ExecutableResolver, type SpawnFn } from "
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
 import { TOOL_DEFINITIONS } from "./schemas.js";
-import { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
+import { createContainedNodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 import {
   resolveToolHostConfig,
   type CommandResult,
@@ -125,7 +125,7 @@ export class WorkspaceToolHost implements ToolPort {
   }) {
     this.workspace = deps.workspace;
     this.fs = deps.fs ?? nodeWorkspaceFs;
-    this.writer = deps.writer ?? nodeWorkspaceWriter;
+    this.writer = deps.writer ?? createContainedNodeWorkspaceWriter(this.workspace.root);
     this.spawn = deps.spawn ?? nodeSpawnFn;
     this.resolveExecutable = deps.resolveExecutable;
     this.config = resolveToolHostConfig(deps.config);

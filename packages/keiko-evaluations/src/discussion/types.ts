@@ -1,4 +1,4 @@
-// Discussion Intelligence evaluation types (Epic #491, Issue #502; ADR-0065).
+// Discussion Intelligence evaluation types (Epic #491, Issue #502; ADR-0107).
 //
 // This subpackage scores the deterministic discussion scaffold defined by the keiko-contracts
 // `discussion-intelligence` leaf module — the five colleague-like modes, the disagreement structure,

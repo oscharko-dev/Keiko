@@ -13,7 +13,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadConfigFromFile } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps, currentGatewayConfig } from "./deps.js";
 import type { BuildHandlerDepsOptions } from "./deps.js";
-import { createProviderSecretResolver, openProviderCredentialVault } from "./credentialVault.js";
+import {
+  RERANKER_SECRET_REF,
+  createProviderSecretResolver,
+  openProviderCredentialVault,
+} from "./credentialVault.js";
 
 const REAL_TMPDIR = realpathSync(tmpdir());
 
@@ -106,6 +110,38 @@ describe("local credential migration (#1320)", () => {
       // The running gateway still resolves the real credential from the vault.
       expect(currentGatewayConfig(deps)?.providers[0]?.apiKey).toBe("legacy-secret-key");
       expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe("https://gw.example.com");
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("migrates a plaintext reranker apiKey into the provider credential vault", () => {
+    const l = layout();
+    writeConfig(
+      l.configPath,
+      legacyConfig({
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://rerank.example.com/v1",
+          apiKey: "legacy-rerank-secret",
+          timeoutMs: 12_000,
+        },
+      }),
+    );
+    const deps = buildUiHandlerDeps(l.options({ ...VAULT_ENV }));
+    try {
+      const onDisk = readFileSync(l.configPath, "utf8");
+      expect(onDisk).not.toContain("legacy-rerank-secret");
+      expect(onDisk).toContain(RERANKER_SECRET_REF);
+      expect(onDisk).toContain("apiKeySecretRef");
+
+      const vault = openProviderCredentialVault({
+        configPath: l.configPath,
+        env: { ...VAULT_ENV },
+      });
+      expect(vault.get(RERANKER_SECRET_REF)).toBe("legacy-rerank-secret");
+      expect(currentGatewayConfig(deps)?.reranker?.apiKey).toBe("legacy-rerank-secret");
+      expect(currentGatewayConfig(deps)?.reranker?.baseUrl).toBe("https://rerank.example.com/v1");
     } finally {
       deps.store.close();
     }

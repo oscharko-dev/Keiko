@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { GroundedAnswer as GroundedAnswerWire } from "@/lib/types";
 import { Icons } from "../Icons";
 import { connPath, relLabel } from "./connectionUtils";
@@ -201,17 +201,26 @@ function useArmedRemove(): {
   readonly armedId: string | null;
   readonly arm: (id: string) => void;
   readonly disarm: () => void;
+  // GEN-UI-A11Y-015 — monotonic counter bumped ONLY when the arm auto-expires (the silent timeout
+  // revert). A user-initiated disarm (confirm/blur) does not bump it, so we announce the cancellation
+  // exactly for the case a sighted user would have seen the "Remove?" badge quietly revert.
+  readonly autoCancelledNonce: number;
 } {
   const [armedId, setArmedId] = useState<string | null>(null);
+  const [autoCancelledNonce, setAutoCancelledNonce] = useState(0);
   useEffect(() => {
     if (armedId === null) return;
-    const timer = setTimeout(() => setArmedId(null), REMOVE_ARM_TIMEOUT_MS);
+    const timer = setTimeout(() => {
+      setArmedId(null);
+      setAutoCancelledNonce((n) => n + 1);
+    }, REMOVE_ARM_TIMEOUT_MS);
     return () => clearTimeout(timer);
   }, [armedId]);
   return {
     armedId,
     arm: (id: string) => setArmedId(id),
     disarm: () => setArmedId(null),
+    autoCancelledNonce,
   };
 }
 
@@ -299,7 +308,18 @@ function FlowParticles({
 function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayerProps): ReactNode {
   const activity = useOptionalChatSessionActivity();
   const reducedMotion = usePrefersReducedMotion();
-  const { armedId, arm, disarm } = useArmedRemove();
+  const { armedId, arm, disarm, autoCancelledNonce } = useArmedRemove();
+  // GEN-UI-A11Y-015 — one shared polite live region for the badge layer. It announces the silent
+  // auto-disarm ("Removal cancelled …") that a screen-reader user would otherwise miss entirely,
+  // since the badge quietly reverts from "Remove?" back to its label with no other signal. Driven
+  // only by the auto-expiry nonce, never by a user-initiated confirm/blur disarm.
+  const [removalAnnouncement, setRemovalAnnouncement] = useState("");
+  const prevAutoCancelledNonce = useRef(autoCancelledNonce);
+  useEffect(() => {
+    if (autoCancelledNonce === prevAutoCancelledNonce.current) return;
+    prevAutoCancelledNonce.current = autoCancelledNonce;
+    setRemovalAnnouncement("Removal cancelled — the connection was not removed.");
+  }, [autoCancelledNonce]);
   // A data exchange is live whenever the chat session has a request in flight. We only light up
   // chat↔data-source edges (dataChannel), so an ungrounded reply over a chat with no source edge
   // animates nothing. Heavy/light intensity is remembered from the last settled answer (see useChannelFlow).
@@ -362,6 +382,11 @@ function ConnectionsLayerImpl({ wins, conns, connecting, api }: ConnectionsLayer
           midpoint lands under a window was invisible AND unclickable. Badges therefore live in
           their own layer above the windows; the lines stay below (unchanged look). */}
       <div className="conn-badge-layer">
+        {/* GEN-UI-A11Y-015 — one shared status region for the whole badge layer. Announces the silent
+            auto-disarm so a screen-reader user learns the connection was NOT removed. */}
+        <div className="visually-hidden" role="status" aria-live="polite">
+          {removalAnnouncement}
+        </div>
         {items.map((it) => {
           const active = flowing && it.dataChannel;
           if (!visibleBadgeIds.has(it.c.id)) return null;

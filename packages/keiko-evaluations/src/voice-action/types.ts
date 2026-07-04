@@ -1,4 +1,4 @@
-// Voice Action Governance evaluation types (Epic #491, Issue #503; ADR-0066).
+// Voice Action Governance evaluation types (Epic #491, Issue #503; ADR-0108).
 //
 // This subpackage scores the deterministic spoken-action governance scaffold defined by the
 // keiko-contracts `voice-action-intent` leaf module — the fail-closed effect taxonomy, the capability

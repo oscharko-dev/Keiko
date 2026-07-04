@@ -28,5 +28,6 @@
     "@oscharko-dev/keiko-contracts": "0.2.11",
     "@oscharko-dev/keiko-security": "0.2.11",
     "@oscharko-dev/keiko-workspace": "0.2.11"
-  }
+  },
+  "private": true
 }

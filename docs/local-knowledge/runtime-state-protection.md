@@ -48,6 +48,21 @@ reconstruct document content:
 
 This split mirrors the Memory Vault's content-vs-metadata model (ADR-0035).
 
+### Plaintext lexical retrieval projection
+
+`chunk_lexical_index.text` and `chunk_lexical_index.exact_text` are a deliberate plaintext retrieval
+projection, not encrypted content columns. SQLite FTS/BM25 cannot search randomized AES-GCM
+envelopes, and the current Local Knowledge retrieval design depends on local lexical fallback when
+embedding search is unavailable or degraded. These rows can reveal normalized search terms from
+indexed documents, so they are treated as a bounded residual privacy risk rather than as safe
+metadata.
+
+The encrypted store records this scope explicitly in `schema_meta` as
+`content_encryption_scope=reconstructive-columns/v3`. The local-state audit fails if that marker is
+missing or unsupported, and it scans the plaintext lexical projection for secret-shaped material so
+a credential-like value indexed into FTS is release-visible instead of hidden behind a broad
+"encrypted Local Knowledge" claim.
+
 ## Key resolution
 
 The store key is resolved per store-open through the shared `resolveLocalVaultKey` seam with a
@@ -84,6 +99,8 @@ forward migration before any content read:
    clearly.
 3. `PRAGMA wal_checkpoint(TRUNCATE)` then `VACUUM` rewrite the file so plaintext that lingered in the
    WAL or on freed pages does not remain on disk.
+4. The completion marker includes the explicit encryption scope; it does not claim whole-database
+   encryption or lexical-index encryption.
 
 If a sealed probe exists without the completion marker, the store treats it as an incomplete
 encrypted migration: no-key opens fail, wrong-key opens fail before any mutation, and same-key opens

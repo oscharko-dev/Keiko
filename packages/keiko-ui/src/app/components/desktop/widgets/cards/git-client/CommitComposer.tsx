@@ -9,6 +9,7 @@
 // server-resolved policy result); quality warnings are advisory and never block. Visible product text
 // says "Git" only (contract §7); styles compose existing globals.css tokens (ADR-0051). AI-suggestion
 // affordances from the redesign render only when a genuine suggestion exists — never fabricated.
+// See ADR-0098 for the git-client window conventions.
 
 import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";

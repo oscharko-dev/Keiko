@@ -240,6 +240,21 @@ describe("CapsuleDetail — overview section", () => {
     });
   });
 
+  it("renders multi-gibibyte storage size as GB, not a capped MB value", async () => {
+    // Regression (GEN-DUP-SEMANTIC-001): the local formatBytes capped at MB and had no
+    // GB branch, so a 2 GiB capsule rendered "2048.0 MB". The canonical presenter rolls over.
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: { ...FULL_DETAIL.health, storageSizeBytes: 2 * 1024 ** 3 },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2.0 GB")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/MB$/)).not.toBeInTheDocument();
+  });
+
   it("renders embedding model identity", async () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
 
@@ -336,9 +351,7 @@ describe("CapsuleDetail — embedding compatibility section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Embedding compatibility" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Embedding compatibility" })).toBeInTheDocument();
     });
 
     expect(screen.getByText("Pinned model")).toBeInTheDocument();
@@ -386,9 +399,7 @@ describe("CapsuleDetail — contextual retrieval section", () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { name: "Contextual retrieval" }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Contextual retrieval" })).toBeInTheDocument();
     });
 
     expect(
@@ -433,7 +444,9 @@ describe("CapsuleDetail — contextual retrieval section", () => {
       });
     });
     expect(
-      screen.getByText("Saved. Full rebuild / rechunk this capsule to apply retrieval text changes."),
+      screen.getByText(
+        "Saved. Full rebuild / rechunk this capsule to apply retrieval text changes.",
+      ),
     ).toBeInTheDocument();
   });
 
@@ -788,9 +801,7 @@ describe("CapsuleDetail — vectorCompatible=false", () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Incompatible/i).length).toBeGreaterThan(0);
     });
-    expect(
-      screen.getByRole("button", { name: /current embedding model/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /current embedding model/i })).toBeInTheDocument();
   });
 
   it("renders stale-reason list items when staleReasons is non-empty", async () => {

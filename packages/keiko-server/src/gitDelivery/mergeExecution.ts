@@ -1,4 +1,4 @@
-// Governed merge execution core for the #478 merge routes (Epic #470, ADR-0065).
+// Governed merge execution core for the #478 merge routes (Epic #470, ADR-0087).
 //
 // The merge preview + execute routes share ONE path: resolve and authorize the project workspace, read
 // the provider's content-free merge-readiness facts, and (for execute) drive the #478 merge gateway
@@ -37,6 +37,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import {
   defaultGitDeliveryActionId,
@@ -64,6 +65,7 @@ export interface GitDeliveryMergeSeams {
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
+  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly strategyPolicy?: GitMergeStrategyPolicy | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;

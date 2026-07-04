@@ -1,4 +1,3 @@
-// Package version constant. Pinned to 0.1.0 because the tools surface is internal and
-// versioned via the umbrella keiko package. Bump on any breaking-shape change to the public
-// barrel (errors, ports, types) so consumers can detect divergence in tests.
-export const KEIKO_TOOLS_VERSION = "0.1.0" as const;
+// Package version constant. Bumped in lockstep with the package.json version so consumers can
+// detect divergence in tests without parsing package metadata at runtime.
+export const KEIKO_TOOLS_VERSION = "0.2.11" as const;

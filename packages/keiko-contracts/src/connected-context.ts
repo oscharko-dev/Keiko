@@ -285,7 +285,15 @@ export type UncertaintyMarkerKind =
   | "scope-incomplete"
   | "budget-clipped"
   | "tool-unavailable"
-  | "low-confidence";
+  | "low-confidence"
+  // GEN-AI-GROUNDING-001/-008 (RB-4): the grounded answer's inline `[path:line]` reference names a
+  // file/line that was NOT in the retrieved evidence pack sent to the model. Post-generation
+  // citation reconciliation appends this marker so an ungrounded (fabricated) reference is surfaced
+  // rather than displayed as a supported grounded claim.
+  | "unsupported-citation"
+  // GEN-AI-GATEWAY-001 (RB-4): the model completion was truncated (finishReason "length"); the
+  // partial answer is surfaced with this marker instead of being consumed as a complete answer.
+  | "incomplete-answer";
 
 export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "no-evidence",
@@ -294,6 +302,8 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "budget-clipped",
   "tool-unavailable",
   "low-confidence",
+  "unsupported-citation",
+  "incomplete-answer",
 ] as const;
 
 export interface UncertaintyMarker {
@@ -347,18 +357,32 @@ export interface RankedCandidateExplanation {
   readonly signals: readonly CandidateSignal[];
 }
 
-export interface ContextPackDiagnostics {
-  readonly rankedCandidates: readonly RankedCandidateExplanation[];
-  readonly coverage?: ContextCoverageDiagnostics | undefined;
-  // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
-  // when present it is validated by validateContextBudget. Never affects the pack stableId.
-  readonly contextBudget?: ContextBudget | undefined;
+export type ContextCoverageTruncationReason =
+  "aborted" | "file-cap" | "match-cap" | "timeout" | "depth-pruned";
+
+export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTruncationReason[] = [
+  "aborted",
+  "file-cap",
+  "match-cap",
+  "timeout",
+  "depth-pruned",
+] as const;
+
+export interface ContextCoverageLimits {
+  readonly maxFilesScanned: number;
+  readonly maxMatchesReturned: number;
+  readonly elapsedMsMax: number;
 }
 
+// Path-free coverage summary for repository search. Counts and closed reason enums are safe for
+// prompts, BFF summaries, and evidence manifests; raw paths, query text, and excerpts stay elsewhere.
 export interface ContextCoverageDiagnostics {
+  readonly incomplete: boolean;
+  readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly filesScanned: number;
+  readonly filesSkipped: number;
   readonly oversizedFilesScanned?: number | undefined;
   readonly lowValueRescueFilesDiscovered?: number | undefined;
   readonly lowValueRescueFilesScanned?: number | undefined;
@@ -367,6 +391,19 @@ export interface ContextCoverageDiagnostics {
   readonly deniedByDiscovery: number;
   readonly depthPrunedByDiscovery: number;
   readonly maxFilesPrunedByDiscovery: number;
+  readonly matchesReturned: number;
+  readonly elapsedMs: number;
+  readonly limits: ContextCoverageLimits;
+}
+
+export interface ContextPackDiagnostics {
+  readonly rankedCandidates: readonly RankedCandidateExplanation[];
+  // Optional, additive deterministic context-budget plan (ADR-0052). Absent on legacy packs;
+  // when present it is validated by validateContextBudget. Never affects the pack stableId.
+  readonly contextBudget?: ContextBudget | undefined;
+  // Optional, additive path-free coverage diagnostics. Absent on legacy/non-search packs; when
+  // present it explains whether repository coverage was incomplete and why.
+  readonly coverage?: ContextCoverageDiagnostics | undefined;
 }
 
 // ─── Pack summary ─────────────────────────────────────────────────────────────
@@ -1241,6 +1278,10 @@ function isCandidateSignal(value: unknown): value is CandidateSignal {
   );
 }
 
+function isContextCoverageReason(value: unknown): value is ContextCoverageTruncationReason {
+  return CONTEXT_COVERAGE_TRUNCATION_REASONS.includes(value as ContextCoverageTruncationReason);
+}
+
 function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: string[]): void {
   if (!isRecord(diagnostics) || !Array.isArray(diagnostics.rankedCandidates)) {
     reasons.push("pack.diagnostics.rankedCandidates invalid");
@@ -1275,90 +1316,9 @@ function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: s
       "rankedCandidate.signals invalid",
     );
   }
-  validateDiagnosticsCoverage(diagnostics.coverage, reasons);
   // Additive, guarded: legacy diagnostics without contextBudget validate exactly as before.
   validateDiagnosticsContextBudget(diagnostics.contextBudget, reasons);
-}
-
-function validateDiagnosticsCoverage(
-  coverage: ContextCoverageDiagnostics | undefined,
-  reasons: string[],
-): void {
-  if (coverage === undefined) {
-    return;
-  }
-  if (!isRecord(coverage)) {
-    reasons.push("pack.diagnostics.coverage invalid");
-    return;
-  }
-  validateCoverageRequiredCounts(coverage, reasons);
-  validateCoverageOptionalCounts(coverage, reasons);
-  pushIf(reasons, typeof coverage.truncated !== "boolean", "coverage.truncated invalid");
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.ignoredByDiscovery),
-    "coverage.ignoredByDiscovery invalid",
-  );
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.deniedByDiscovery),
-    "coverage.deniedByDiscovery invalid",
-  );
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.depthPrunedByDiscovery),
-    "coverage.depthPrunedByDiscovery invalid",
-  );
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.maxFilesPrunedByDiscovery),
-    "coverage.maxFilesPrunedByDiscovery invalid",
-  );
-}
-
-function validateCoverageOptionalCounts(
-  coverage: ContextCoverageDiagnostics,
-  reasons: string[],
-): void {
-  pushIf(
-    reasons,
-    coverage.oversizedFilesScanned !== undefined &&
-      !isFiniteNonNegativeInteger(coverage.oversizedFilesScanned),
-    "coverage.oversizedFilesScanned invalid",
-  );
-  pushIf(
-    reasons,
-    coverage.lowValueRescueFilesDiscovered !== undefined &&
-      !isFiniteNonNegativeInteger(coverage.lowValueRescueFilesDiscovered),
-    "coverage.lowValueRescueFilesDiscovered invalid",
-  );
-  pushIf(
-    reasons,
-    coverage.lowValueRescueFilesScanned !== undefined &&
-      !isFiniteNonNegativeInteger(coverage.lowValueRescueFilesScanned),
-    "coverage.lowValueRescueFilesScanned invalid",
-  );
-}
-
-function validateCoverageRequiredCounts(
-  coverage: ContextCoverageDiagnostics,
-  reasons: string[],
-): void {
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.filesDiscovered),
-    "coverage.filesDiscovered invalid",
-  );
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.filesAfterPolicy),
-    "coverage.filesAfterPolicy invalid",
-  );
-  pushIf(
-    reasons,
-    !isFiniteNonNegativeInteger(coverage.filesScanned),
-    "coverage.filesScanned invalid",
-  );
+  validateDiagnosticsCoverage(diagnostics.coverage, reasons);
 }
 
 function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: string[]): void {
@@ -1371,5 +1331,86 @@ function validateDiagnosticsContextBudget(contextBudget: unknown, reasons: strin
   }
   for (const reason of budgetResult.reasons) {
     reasons.push(`pack.diagnostics.contextBudget: ${reason}`);
+  }
+}
+
+const REQUIRED_COVERAGE_FIELDS = [
+  "filesDiscovered",
+  "filesAfterPolicy",
+  "filesScanned",
+  "filesSkipped",
+  "ignoredByDiscovery",
+  "deniedByDiscovery",
+  "depthPrunedByDiscovery",
+  "maxFilesPrunedByDiscovery",
+  "matchesReturned",
+  "elapsedMs",
+] as const;
+
+const OPTIONAL_COVERAGE_FIELDS = [
+  "oversizedFilesScanned",
+  "lowValueRescueFilesDiscovered",
+  "lowValueRescueFilesScanned",
+] as const;
+
+const COVERAGE_LIMIT_FIELDS = ["maxFilesScanned", "maxMatchesReturned", "elapsedMsMax"] as const;
+
+function validateDiagnosticsCoverage(coverage: unknown, reasons: string[]): void {
+  if (coverage === undefined) {
+    return;
+  }
+  if (!isValidCoverageShape(coverage)) {
+    reasons.push("pack.diagnostics.coverage invalid");
+    return;
+  }
+  pushIf(reasons, typeof coverage.incomplete !== "boolean", "coverage.incomplete invalid");
+  pushIf(reasons, typeof coverage.truncated !== "boolean", "coverage.truncated invalid");
+  validateCoverageReasons(coverage, reasons);
+  validateCoverageCounters(coverage, reasons);
+}
+
+function isValidCoverageShape(
+  coverage: unknown,
+): coverage is Record<string, unknown> & { reasons: unknown[]; limits: Record<string, unknown> } {
+  return isRecord(coverage) && Array.isArray(coverage.reasons) && isRecord(coverage.limits);
+}
+
+function validateCoverageReasons(
+  coverage: Record<string, unknown> & { reasons: unknown[] },
+  reasons: string[],
+): void {
+  pushIf(reasons, !coverage.reasons.every(isContextCoverageReason), "coverage.reasons invalid");
+  pushIf(
+    reasons,
+    coverage.incomplete === true && coverage.reasons.length === 0,
+    "coverage.reasons empty for incomplete coverage",
+  );
+  pushIf(
+    reasons,
+    coverage.incomplete === false && coverage.reasons.length > 0,
+    "coverage.reasons present for complete coverage",
+  );
+}
+
+function validateCoverageCounters(
+  coverage: Record<string, unknown> & { limits: Record<string, unknown> },
+  reasons: string[],
+): void {
+  for (const field of REQUIRED_COVERAGE_FIELDS) {
+    pushIf(reasons, !isFiniteNonNegativeInteger(coverage[field]), `coverage.${field} invalid`);
+  }
+  for (const field of OPTIONAL_COVERAGE_FIELDS) {
+    pushIf(
+      reasons,
+      coverage[field] !== undefined && !isFiniteNonNegativeInteger(coverage[field]),
+      `coverage.${field} invalid`,
+    );
+  }
+  for (const field of COVERAGE_LIMIT_FIELDS) {
+    pushIf(
+      reasons,
+      !isFiniteNonNegativeInteger(coverage.limits[field]),
+      `coverage.${field} invalid`,
+    );
   }
 }

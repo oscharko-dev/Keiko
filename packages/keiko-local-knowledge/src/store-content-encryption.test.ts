@@ -420,7 +420,13 @@ describe("legacy plaintext store migration", () => {
 
     // After migration + VACUUM, no plaintext fixture lingers on disk.
     const afterBytes = readAllStoreBytes(dbPath);
-    for (const plaintext of [FIXTURE_TEXT, SECTION_LABEL, HEADING_LABEL, WINDOW_TEXT, CONTEXT_PREFIX]) {
+    for (const plaintext of [
+      FIXTURE_TEXT,
+      SECTION_LABEL,
+      HEADING_LABEL,
+      WINDOW_TEXT,
+      CONTEXT_PREFIX,
+    ]) {
       expect(afterBytes.includes(Buffer.from(plaintext, "utf8"))).toBe(false);
     }
     const raw = new DatabaseSync(dbPath);

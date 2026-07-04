@@ -18,6 +18,8 @@ import {
   type MemoryScopeKind,
   type MemoryStatus,
   type MemoryType,
+  type MemoryConsolidationJobEnvelopeWire,
+  type MemoryConsolidationJobResponseWire,
 } from "@oscharko-dev/keiko-contracts";
 import type {
   ProjectId,
@@ -372,20 +374,33 @@ function loadSelectedMemories(
   };
 }
 
-function redactJob(deps: UiHandlerDeps, record: ConsolidationJobRecord): unknown {
-  return deps.redactor({
+function redactJob(
+  deps: UiHandlerDeps,
+  record: ConsolidationJobRecord,
+): MemoryConsolidationJobEnvelopeWire {
+  const job: MemoryConsolidationJobEnvelopeWire["job"] = {
     id: record.job.id,
     state: record.job.state,
-    startedAt: record.job.startedAt,
-    completedAt: record.job.completedAt,
-    result: record.job.result,
-    error: record.job.error,
+    ...(record.job.startedAt !== undefined ? { startedAt: record.job.startedAt } : {}),
+    ...(record.job.completedAt !== undefined ? { completedAt: record.job.completedAt } : {}),
+    ...(record.job.result !== undefined ? { result: record.job.result } : {}),
+    ...(record.job.error !== undefined ? { error: record.job.error } : {}),
+  };
+  const selection: MemoryConsolidationJobEnvelopeWire["selection"] = {
+    scopes: record.selection.scopes,
+    includeExpired: record.selection.includeExpired,
+    ...(record.selection.types !== undefined ? { types: record.selection.types } : {}),
+    ...(record.selection.statuses !== undefined ? { statuses: record.selection.statuses } : {}),
+  };
+  const envelope: MemoryConsolidationJobEnvelopeWire = {
+    job,
     createdAt: record.createdAt,
-    selection: record.selection,
+    selection,
     settings: record.settings,
     memoryCount: record.memoryCount,
     cancelRequested: record.cancelRequested,
-  });
+  };
+  return deps.redactor(envelope) as MemoryConsolidationJobEnvelopeWire;
 }
 
 function newMemoryEdgeId(): MemoryEdgeId {
@@ -477,7 +492,12 @@ function failScheduledJob(
   error: unknown,
 ): void {
   const completedAt = Date.now();
-  const message = error instanceof Error ? error.message : "Consolidation run failed unexpectedly.";
+  // COUPLING-004: do NOT persist the raw `error.message` onto the job record — it surfaces to the
+  // browser via the job envelope and can embed a filesystem path or SQL fragment. Use the same
+  // fixed, cause-free string finalizeTerminalJob() records for a failed engine run. `error` is left
+  // observable server-side to the caller; only the safe constant crosses the trust boundary.
+  void error;
+  const message = "Consolidation run failed.";
   registry.fail(
     jobId,
     transitionJob(running, "failed", { completedAt, error: message }),
@@ -558,17 +578,18 @@ function scheduleJob(
 }
 
 function registerJobLimit(error: unknown): RouteResult {
+  // COUPLING-004: never forward the raw `error.message` into the 409 envelope. A code-keyed fixed
+  // string carries the outcome without leaking any dynamic detail across the trust boundary.
+  void error;
   return {
     status: 409,
-    body: errorBody(
-      "CONSOLIDATION_JOB_LIMIT",
-      error instanceof Error ? error.message : "Consolidation job limit reached.",
-    ),
+    body: errorBody("CONSOLIDATION_JOB_LIMIT", "Consolidation job limit reached."),
   };
 }
 
 function createJobResponse(deps: UiHandlerDeps, record: ConsolidationJobRecord): RouteResult {
-  return { status: 202, body: { job: redactJob(deps, record) } };
+  const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, record) };
+  return { status: 202, body };
 }
 
 export async function handleCreateConsolidationJob(
@@ -616,7 +637,8 @@ export function handleGetConsolidationJob(ctx: RouteContext, deps: UiHandlerDeps
       body: errorBody("NOT_FOUND", "Consolidation job not found."),
     };
   }
-  return { status: 200, body: { job: redactJob(deps, record) } };
+  const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, record) };
+  return { status: 200, body };
 }
 
 export function handleCancelConsolidationJob(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -636,7 +658,9 @@ export function handleCancelConsolidationJob(ctx: RouteContext, deps: UiHandlerD
   if (updated.job.state === "queued") {
     const canceled = transitionJob(updated.job, "canceled", { completedAt: Date.now() });
     const finalRecord = registry.complete(updated.job.id, canceled, updated.memoryCount) ?? updated;
-    return { status: 202, body: { job: redactJob(deps, finalRecord) } };
+    const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, finalRecord) };
+    return { status: 202, body };
   }
-  return { status: 202, body: { job: redactJob(deps, updated) } };
+  const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, updated) };
+  return { status: 202, body };
 }

@@ -119,6 +119,7 @@ const DIAGNOSTIC_PATTERNS: readonly IntentPattern[] = [
   { term: "error", pattern: /\berror\b|\bfehler\b|\bexception\b|\btraceback\b/iu },
   { term: "stacktrace", pattern: /\bstack[\s_-]?trace\b|\bstacktrace\b/iu },
   { term: "failure", pattern: /\bfail(?:ed|ing|ure)?\b|\bscheitert\b|\bkaputt\b/iu },
+  { term: "broken", pattern: /\bbreak(?:s|ing)?\b|\bbroken\b|\bcrash(?:es|ed|ing)?\b/iu },
   { term: "bug", pattern: /\bbug\b|\bdefect\b|\bregression\b/iu },
   { term: "http-status", pattern: /\b[45]\d{2}\b|\bhttp\b/iu },
 ];

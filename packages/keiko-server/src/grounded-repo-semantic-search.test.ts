@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts";
 import {
-  DEFAULT_SEARCH_LIMITS,
-  type SemanticSearchHit,
+  type SemanticSearchMatch,
   type SemanticSearchProvider,
   type WorkspaceDirEntry,
   type WorkspaceFs,
-  type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import type {
@@ -17,7 +15,10 @@ import type {
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import {
+  configuredRepoSemanticSearchProviderFor,
+  localizeMatchLine,
+} from "./grounded-repo-semantic-search.js";
 
 const ROOT = "/repo";
 const EMBEDDING_MODEL = "text-embedding-3-small";
@@ -33,7 +34,10 @@ function absolutePath(rel: string): string {
   return `${ROOT}/${rel}`.replace(/\/+/gu, "/");
 }
 
-function childEntries(files: Readonly<Record<string, string>>, dirAbs: string): readonly WorkspaceDirEntry[] {
+function childEntries(
+  files: Readonly<Record<string, string>>,
+  dirAbs: string,
+): readonly WorkspaceDirEntry[] {
   const prefix = dirAbs === ROOT ? `${ROOT}/` : `${dirAbs}/`;
   const dirs = new Set<string>();
   const leafs = new Set<string>();
@@ -50,7 +54,12 @@ function childEntries(files: Readonly<Record<string, string>>, dirAbs: string): 
   }
   return [
     ...[...dirs].map((name) => ({ name, isDirectory: true, isFile: false, isSymbolicLink: false })),
-    ...[...leafs].map((name) => ({ name, isDirectory: false, isFile: true, isSymbolicLink: false })),
+    ...[...leafs].map((name) => ({
+      name,
+      isDirectory: false,
+      isFile: true,
+      isSymbolicLink: false,
+    })),
   ];
 }
 
@@ -93,19 +102,6 @@ function testFs(files: Record<string, string>): WorkspaceFs {
       const bytes = new TextEncoder().encode(files[key] ?? "");
       return Promise.resolve(bytes.subarray(0, Math.max(0, Math.min(bytes.length, maxBytes))));
     },
-  };
-}
-
-function workspace(): WorkspaceInfo {
-  return {
-    root: ROOT,
-    name: "repo",
-    version: undefined,
-    testFramework: "unknown",
-    sourceDirs: ["src"],
-    testDirs: [],
-    languages: ["typescript"],
-    ignoreLines: [],
   };
 }
 
@@ -176,27 +172,55 @@ function vectorFor(input: string): Float32Array {
   return new Float32Array([0.2, 0.2]);
 }
 
-async function search(provider: SemanticSearchProvider): Promise<readonly SemanticSearchHit[]> {
+const SEARCH_DOCUMENTS = [
+  {
+    scopePath: "src/auth.ts",
+    text: "export function renewSession() {\n  return refresh token rotation;\n}\n",
+  },
+  {
+    scopePath: "src/billing.ts",
+    text: "export function reconcile() {\n  return invoice ledger totals;\n}\n",
+  },
+] as const;
+
+async function search(provider: SemanticSearchProvider): Promise<readonly SemanticSearchMatch[]> {
   return provider.search({
-    scope: { workspace: workspace(), scopeId: "scope-1", relativePaths: [] },
     query: QUERY,
-    limits: DEFAULT_SEARCH_LIMITS,
-    candidatePaths: ["src/auth.ts", "src/billing.ts"],
-    maxResults: 1,
+    documents: SEARCH_DOCUMENTS,
   });
 }
 
 async function searchMissingCandidate(
   provider: SemanticSearchProvider,
-): Promise<readonly SemanticSearchHit[]> {
+): Promise<readonly SemanticSearchMatch[]> {
   return provider.search({
-    scope: { workspace: workspace(), scopeId: "scope-1", relativePaths: [] },
     query: QUERY,
-    limits: DEFAULT_SEARCH_LIMITS,
-    candidatePaths: ["src/missing.ts"],
-    maxResults: 1,
+    documents: [],
   });
 }
+
+describe("localizeMatchLine (GEN-AI-GROUNDING-006, RB-4)", () => {
+  it("returns the 1-based line with the most distinct query-term overlap", () => {
+    const src =
+      "line one has nothing\nsecond line is empty of terms\n" +
+      "export function renewSession() { rotate(); }\ntrailing line";
+    expect(localizeMatchLine(src, ["session", "renewsession", "rotate"])).toBe(3);
+  });
+
+  it("prefers the line matching the MOST distinct terms", () => {
+    const src = "alpha session\nbeta\nalpha session rotate token\ngamma";
+    expect(localizeMatchLine(src, ["session", "rotate", "token"])).toBe(3);
+  });
+
+  it("falls back to line 1 when no line overlaps a query term", () => {
+    expect(localizeMatchLine("alpha\nbeta\ngamma", ["nonexistentterm"])).toBe(1);
+  });
+
+  it("falls back to line 1 for empty query terms or empty source", () => {
+    expect(localizeMatchLine("alpha\nbeta", [])).toBe(1);
+    expect(localizeMatchLine("", ["alpha"])).toBe(1);
+  });
+});
 
 describe("configuredRepoSemanticSearchProviderFor", () => {
   it("returns undefined when no embedding-capable provider is configured", () => {
@@ -209,18 +233,22 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
   });
 
   it("uses configured embedding credentials and ranks scoped candidates by cosine similarity", async () => {
-    const embeddingRequest = vi.fn((request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
-      Promise.resolve({
-        ok: true,
-        value: { vector: vectorFor(request.input), modelId: request.modelId },
-      }),
+    const embeddingRequest = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: vectorFor(request.input), modelId: request.modelId },
+        }),
     );
     const deps = depsWith(config(true), embeddingRequest);
     const fs = testFs({
       "src/auth.ts": "export function renewSession() {\n  return refresh token rotation;\n}\n",
       "src/billing.ts": "export function reconcile() {\n  return invoice ledger totals;\n}\n",
     });
-    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, { fs, maxCandidates: 8 });
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs,
+      maxCandidates: 8,
+    });
 
     expect(provider).toBeDefined();
     if (provider === undefined) throw new Error("expected semantic provider");
@@ -230,7 +258,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
       scopePath: "src/auth.ts",
-      lineRange: { startLine: 1, endLine: 4 },
+      line: 1,
     });
     expect(hits[0]?.score).toBeGreaterThan(0.99);
     expect(embeddingRequest).toHaveBeenCalledWith(
@@ -264,7 +292,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     deps.store.close();
   });
 
-  it("persists candidate document vectors and reuses them across provider instances", async () => {
+  it("reuses candidate document vectors within a provider instance", async () => {
     const files: Record<string, string> = {
       "src/auth.ts": "export function renewSession() {\n  return refresh token rotation;\n}\n",
       "src/billing.ts": "export function reconcile() {\n  return invoice ledger totals;\n}\n",
@@ -287,32 +315,15 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     const firstHits = await search(firstProvider);
 
     expect(firstHits[0]?.scopePath).toBe("src/auth.ts");
-    expect(Object.keys(files).some((key) => key.startsWith(".keiko/repo-semantic-search/"))).toBe(
-      true,
-    );
-
-    const secondEmbeddingRequest = vi.fn(
-      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
-        Promise.resolve({
-          ok: true,
-          value: { vector: vectorFor(request.input), modelId: request.modelId },
-        }),
-    );
-    const secondDeps = depsWith(config(true), secondEmbeddingRequest);
-    const secondProvider = configuredRepoSemanticSearchProviderFor(secondDeps, undefined, {
-      fs,
-      maxCandidates: 8,
-    });
-    if (secondProvider === undefined) throw new Error("expected second semantic provider");
-
-    const secondHits = await search(secondProvider);
-    const secondInputs = secondEmbeddingRequest.mock.calls.map(([request]) => request.input);
+    const secondHits = await search(firstProvider);
+    const secondInputs = firstEmbeddingRequest.mock.calls
+      .slice(3)
+      .map(([request]) => request.input);
 
     expect(secondHits).toEqual(firstHits);
     expect(secondInputs).toEqual([QUERY.text]);
     expect(secondInputs.some((input) => input.includes("Path:"))).toBe(false);
     firstDeps.store.close();
-    secondDeps.store.close();
   });
 
   it("clamps query and candidate document inputs to the embedding model context window", async () => {
@@ -338,11 +349,13 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     if (provider === undefined) throw new Error("expected semantic provider");
 
     await provider.search({
-      scope: { workspace: workspace(), scopeId: "scope-1", relativePaths: [] },
       query: { ...QUERY, text: `session renewal ${"query ".repeat(2_000)}` },
-      limits: DEFAULT_SEARCH_LIMITS,
-      candidatePaths: ["src/long.ts"],
-      maxResults: 1,
+      documents: [
+        {
+          scopePath: "src/long.ts",
+          text: `export const value = "${"document ".repeat(2_000)}";`,
+        },
+      ],
     });
 
     expect(capturedInputs).toHaveLength(2);

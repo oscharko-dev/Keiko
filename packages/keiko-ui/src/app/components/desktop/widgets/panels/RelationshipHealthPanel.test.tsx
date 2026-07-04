@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 
 vi.mock("../../../../relationships/api.js", () => ({
   getHealth: vi.fn(),
@@ -156,5 +157,24 @@ describe("RelationshipHealthPanel", () => {
     await waitFor(() => {
       expect(screen.getByText("Healthy")).toBeInTheDocument();
     });
+  });
+
+  it("passes axe on a populated findings state (GEN-UI-TEST-GAP-009)", async () => {
+    mockGetHealth.mockResolvedValue({
+      checkedAt: 1_700_000_000_000,
+      totals: { ...ZERO_TOTALS, blocked: 1, stale: 1 },
+      truncated: false,
+      findings: {
+        ...emptyFindings(),
+        blockedRelationships: [relRef("rel-blocked-axe")],
+        staleRelationships: [relRef("rel-stale-axe")],
+      },
+    });
+    const { container } = render(<RelationshipHealthPanel onSelectRelationship={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Blocked/i, level: 3 })).toBeInTheDocument();
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

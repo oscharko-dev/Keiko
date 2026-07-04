@@ -17,6 +17,24 @@ interface JsonObject {
   readonly [key: string]: JsonValue | undefined;
 }
 
+export interface ImportEdgeStableIdInput {
+  readonly importerPath: string;
+  readonly specifier: string;
+  readonly targetPath?: string | undefined;
+  readonly kind: string;
+  readonly line: number;
+  readonly ordinal: number;
+}
+
+export interface SymbolGraphRecordStableIdInput {
+  readonly symbol: string;
+  readonly scopePath: string;
+  readonly kind: string;
+  readonly line: number;
+  readonly ordinal: number;
+  readonly enclosingSymbol?: string | undefined;
+}
+
 function canonicalize(value: JsonValue | undefined): string {
   if (value === undefined) {
     return "null";
@@ -83,6 +101,30 @@ export function connectedContextPackStableId(input: ConnectedContextPackStableId
     atomStableIds: sortedAtomIds,
   };
   return `p-${sha256Hex(canonicalize(shape))}`;
+}
+
+export function importEdgeStableId(input: ImportEdgeStableIdInput): string {
+  const shape: JsonObject = {
+    importerPath: input.importerPath,
+    specifier: input.specifier,
+    targetPath: input.targetPath,
+    kind: input.kind,
+    line: input.line,
+    ordinal: input.ordinal,
+  };
+  return `ie-${sha256Hex(canonicalize(shape))}`;
+}
+
+export function symbolGraphRecordStableId(input: SymbolGraphRecordStableIdInput): string {
+  const shape: JsonObject = {
+    symbol: input.symbol,
+    scopePath: input.scopePath,
+    kind: input.kind,
+    line: input.line,
+    ordinal: input.ordinal,
+    enclosingSymbol: input.enclosingSymbol,
+  };
+  return `sg-${sha256Hex(canonicalize(shape))}`;
 }
 
 // Coarse byte cap (128 KiB) for the file-level invalidation hash. Matches the exploration budget's

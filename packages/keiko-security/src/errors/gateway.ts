@@ -2,7 +2,7 @@
 // `error.code`; they never parse `error.message`. Every message is redacted at construction
 // so errors are always safe to log or surface across trust boundaries (ADR-0003).
 
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export const ERROR_CODES = {
   AUTHENTICATION: "GATEWAY_AUTHENTICATION",
@@ -32,14 +32,14 @@ export type GatewayEgressErrorCode =
   | typeof ERROR_CODES.PROXY_BLOCKED_BY_POLICY
   | typeof ERROR_CODES.TLS_CA_FAILURE;
 
-export abstract class GatewayError extends Error {
-  abstract readonly code: ErrorCode;
+export abstract class GatewayError extends RedactingError {
+  abstract override readonly code: ErrorCode;
   abstract readonly retryable: boolean;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+  // RB-6 (GEN-OBS-CORRELATION-503): the gateway's own per-call request id, attached at the throw site
+  // so a FAILED model call — not just a successful one (usage.requestId) — can be tied back to the
+  // gateway's record and to the server/UI correlation id. Optional so no constructor changes and no
+  // existing GatewayError construction/test is affected.
+  requestId?: string;
 }
 
 export class AuthenticationError extends GatewayError {

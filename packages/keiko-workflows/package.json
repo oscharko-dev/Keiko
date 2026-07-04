@@ -38,5 +38,6 @@
     "@oscharko-dev/keiko-verification": "0.2.11",
     "@oscharko-dev/keiko-harness": "0.2.11",
     "@oscharko-dev/keiko-quality-intelligence": "0.2.11"
-  }
+  },
+  "private": true
 }

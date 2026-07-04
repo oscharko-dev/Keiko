@@ -14,6 +14,7 @@
 import { join } from "node:path";
 import {
   deleteQualityIntelligenceRun,
+  EvidenceReadError,
   loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
@@ -58,7 +59,14 @@ export function handleQiDeleteRun(ctx: RouteContext, deps: UiHandlerDeps): Route
   try {
     // Not-found is an explicit 404 (the primitive itself is idempotent and would report "absent",
     // but the BFF gives the caller a clear signal that nothing was there to delete).
-    if (loadQualityIntelligenceRun(id, { evidenceDir }) === undefined) {
+    let present = false;
+    try {
+      present = loadQualityIntelligenceRun(id, { evidenceDir }) !== undefined;
+    } catch (error) {
+      if (!(error instanceof EvidenceReadError)) throw error;
+      present = true;
+    }
+    if (!present) {
       return errorResult(404, "QI_NOT_FOUND", "Quality Intelligence run not found.");
     }
     const receipt = deleteQualityIntelligenceRun(id, {

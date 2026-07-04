@@ -1,6 +1,6 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,12 @@ import {
 import type { RouteContext } from "./routes.js";
 import type { UiStore } from "./store/index.js";
 import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
-import { gitEnv, networkGitEnv, type GitProcessRunner } from "./gitRoutes.js";
+import {
+  defaultGitNetworkProcessRunner,
+  gitEnv,
+  networkGitEnv,
+  type GitProcessRunner,
+} from "./gitRoutes.js";
 
 let root: string;
 let store: UiStore;
@@ -663,7 +668,8 @@ describe("GET /api/git/remotes", () => {
 });
 
 // The local-read env is config-isolated (no user gitconfig / credential helper / SSH identity); the
-// network-sync env inherits the real environment so a fetch/pull can authenticate, but never prompts.
+// network-sync env preserves only the account/SSH-agent state needed for credentials and never
+// prompts or inherits arbitrary process secrets.
 describe("git process env factories", () => {
   it("hardens the local-read env: HOME and global config point at the null device", () => {
     const env = gitEnv();
@@ -677,29 +683,88 @@ describe("git process env factories", () => {
     }
   });
 
-  it("keeps the network-sync env credential-capable but non-interactive and fail-closed", () => {
-    // Stub a sentinel real-env var and HOME so the assertion holds regardless of ambient HOME and a
-    // mutation dropping the `...process.env` inheritance is caught deterministically.
+  it("keeps the network-sync env credential-capable but allowlisted and fail-closed", () => {
     const sentinelKey = "KEIKO_NETWORK_ENV_SENTINEL";
     vi.stubEnv(sentinelKey, "inherited-value");
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
+    vi.stubEnv("GIT_ASKPASS", "/tmp/unsafe-askpass");
+    vi.stubEnv("SSH_ASKPASS", "/tmp/unsafe-ssh-askpass");
     vi.stubEnv("HOME", "/home/keiko-test-user");
+    vi.stubEnv("SSH_AUTH_SOCK", "/tmp/ssh-agent.sock");
     try {
       const env = networkGitEnv();
       expect(env.GIT_TERMINAL_PROMPT).toBe("0");
-      // Inherits the real environment (credential.helper + SSH identities are discoverable) — it is
-      // NOT the hardened "/nonexistent" sentinel the local reads use.
-      expect(env[sentinelKey]).toBe("inherited-value");
+      expect(env[sentinelKey]).toBeUndefined();
+      expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
       expect(env.HOME).toBe("/home/keiko-test-user");
       expect(env.HOME).not.toBe("/nonexistent");
+      expect(env.SSH_AUTH_SOCK).toBe("/tmp/ssh-agent.sock");
       // SSH runs in BatchMode and requires known host keys, so it fails closed instead of prompting
       // or silently trusting a first-use host.
       expect(env.GIT_SSH_COMMAND).toContain("BatchMode=yes");
       expect(env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
+      expect(env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");
       expect(env.GIT_SSH_COMMAND).not.toContain("accept-new");
-      // The network env does NOT isolate the user's global git config (that would hide credentials).
+      expect(env.GIT_ASKPASS).not.toBe("/tmp/unsafe-askpass");
+      expect(env.SSH_ASKPASS).not.toBe("/tmp/unsafe-ssh-askpass");
+      expect(env.SSH_ASKPASS_REQUIRE).toBe("never");
+      expect(env.GCM_INTERACTIVE).toBe("never");
+      expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+      // User git config remains discoverable through HOME/XDG, but env-level GIT_CONFIG_* overrides
+      // are not inherited from the caller.
       expect(env.GIT_CONFIG_GLOBAL).toBeUndefined();
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("uses the hardened network env at the actual fetch and pull spawn boundary", async () => {
+    const binDir = await mkdtemp(join(tmpdir(), "keiko-git-network-bin-"));
+    const capturePath = join(binDir, "git-env.jsonl");
+    const fakeGit = join(binDir, "git");
+    await writeFile(
+      fakeGit,
+      [
+        "#!/usr/bin/env node",
+        'const fs = require("node:fs");',
+        `fs.appendFileSync(${JSON.stringify(capturePath)}, JSON.stringify({ args: process.argv.slice(2), env: process.env }) + "\\n");`,
+        "process.exit(0);",
+      ].join("\n"),
+      "utf8",
+    );
+    await chmod(fakeGit, 0o755);
+    vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("AWS_SECRET_ACCESS_KEY", "aws-secret-that-must-not-reach-git");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", "/tmp/attacker.gitconfig");
+    vi.stubEnv("GIT_ASKPASS", "/tmp/unsafe-askpass");
+    try {
+      await defaultGitNetworkProcessRunner(["fetch", "--no-tags"], {
+        cwd: root,
+        maxBytes: 4096,
+        timeoutMs: 5_000,
+      });
+      await defaultGitNetworkProcessRunner(["pull", "--ff-only"], {
+        cwd: root,
+        maxBytes: 4096,
+        timeoutMs: 5_000,
+      });
+      const records = (await readFile(capturePath, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { args: readonly string[]; env: NodeJS.ProcessEnv });
+      expect(records.map((record) => record.args[0])).toEqual(["fetch", "pull"]);
+      for (const record of records) {
+        expect(record.env.GIT_TERMINAL_PROMPT).toBe("0");
+        expect(record.env.GIT_SSH_COMMAND).toContain("StrictHostKeyChecking=yes");
+        expect(record.env.GIT_SSH_COMMAND).toContain("NumberOfPasswordPrompts=0");
+        expect(record.env.GIT_ASKPASS).not.toBe("/tmp/unsafe-askpass");
+        expect(record.env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+        expect(record.env.GIT_CONFIG_GLOBAL).toBeUndefined();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(binDir, { recursive: true, force: true });
     }
   });
 });

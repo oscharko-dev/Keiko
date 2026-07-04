@@ -5,7 +5,7 @@
 // the workspace layer's own WorkspaceError); this base exists so later boundary failures have a
 // typed home without re-deriving the pattern.
 
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export const VERIFICATION_CODES = {
   PLAN_EMPTY: "VERIFICATION_PLAN_EMPTY",
@@ -13,13 +13,8 @@ export const VERIFICATION_CODES = {
 
 export type VerificationCode = (typeof VERIFICATION_CODES)[keyof typeof VERIFICATION_CODES];
 
-export abstract class VerificationError extends Error {
-  abstract readonly code: VerificationCode;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+export abstract class VerificationError extends RedactingError {
+  abstract override readonly code: VerificationCode;
 }
 
 // Raised when a verification run is requested but the plan contains no steps (e.g. --only with an

@@ -31,6 +31,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "../task-workspace/authorization.js";
+import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 
@@ -55,6 +56,7 @@ export interface GitDeliveryExecutionSeams {
   readonly stagedPathsReader?:
     ((workspace: WorkspaceInfo) => Promise<readonly string[]>) | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
+  readonly approvalStore?: GitDeliveryApprovalStore | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
 }

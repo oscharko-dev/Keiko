@@ -159,6 +159,7 @@ function hasPersistedWorkspaceForCandidate(
   repositoryId: string,
   leaf: string,
   candidate: string,
+  knownPaths: ReadonlySet<string>,
 ): boolean {
   const byWorkspaceId = ctx.deps.store.getById(leaf);
   if (
@@ -167,12 +168,10 @@ function hasPersistedWorkspaceForCandidate(
   ) {
     return true;
   }
-  return ctx.deps.store
-    .listAll()
-    .some(
-      (instance) =>
-        instance.repositoryId === repositoryId && instance.managedWorktreePath === candidate,
-    );
+  // Reuse the single validated listAll() snapshot captured in buildKnownPathsByRepo (keyed by
+  // repositoryId -> managedWorktreePath set) instead of re-running store.listAll() (with its per-row
+  // JSON.parse + validateWorkspaceInstance) once PER orphan candidate (GEN-PERF-PERSISTENCE-016).
+  return knownPaths.has(candidate);
 }
 
 // request-cleanup: a settled (cleanup-eligible) instance → cleanup-pending. Operator-approval gated by
@@ -447,10 +446,11 @@ async function cleanupOneOrphan(
   repositoryId: string,
   leaf: string,
   ownershipProven: boolean,
+  knownPaths: ReadonlySet<string>,
 ): Promise<OrphanCleanupOutcome> {
   const orphanId = deriveOrphanId(repositoryId, leaf);
   const candidate = join(ctx.deps.managedRoot, repositoryId, leaf);
-  if (hasPersistedWorkspaceForCandidate(ctx, repositoryId, leaf, candidate)) {
+  if (hasPersistedWorkspaceForCandidate(ctx, repositoryId, leaf, candidate, knownPaths)) {
     return { removed: false };
   }
   const pathContained = isManagedTargetContained(ctx.deps.managedRoot, candidate);
@@ -561,7 +561,7 @@ async function cleanupOrphansImpl(
       // Serialize each candidate leaf and re-check persisted liveness inside the critical section. The
       // initial known-path snapshot may be stale if a provision finishes while a sweep is walking disk.
       const outcome = await ctx.deps.mutex.runExclusive([workspaceKey(leaf)], () =>
-        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven),
+        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known),
       );
       if (outcome.removed) removed += 1;
       if (outcome.refusal !== undefined) refused.push(outcome.refusal);

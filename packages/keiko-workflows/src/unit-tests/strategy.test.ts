@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveTestStrategy, strategyAnchorPath } from "./strategy.js";
-import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { makeEntry, makePack, makeWorkspaceInfo } from "./_support.js";
 import type { TestConventions } from "./types.js";
 

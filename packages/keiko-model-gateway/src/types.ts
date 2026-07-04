@@ -64,7 +64,7 @@ export {
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
 
 // The sensitive persona → provider-voice-id mapping (Issue #1557, ADR-0094 D2). `voiceId` is a
-// provider-sensitive string (ADR-0058 D6 treats provider voice identifiers as sensitive metadata),
+// provider-sensitive string (ADR-0100 D6 treats provider voice identifiers as sensitive metadata),
 // so it sits beside `apiKey` on the credential tier and NEVER crosses to contracts. The browser only
 // ever learns which personas exist (the content-free `ModelCapability.supportedVoicePersonas` enum
 // derived from this mapping at parse time), never the voice id behind a persona.
@@ -108,6 +108,7 @@ export interface OutboundHttpEgressConfig {
   readonly httpsProxy?: string | undefined;
   readonly noProxy?: readonly string[] | undefined;
   readonly caBundlePath?: string | undefined;
+  readonly allowPrivateNetwork?: boolean | undefined;
 }
 
 export interface CircuitBreakerConfig {

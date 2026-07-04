@@ -18,18 +18,34 @@ function fixedNow(): number {
   return FIXED_NOW;
 }
 
-function atom(scopePath: string, score: number): EvidenceAtom {
+function atom(
+  scopePath: string,
+  score: number,
+  provenance: EvidenceAtom["provenance"] = {
+    kind: "lexical-search",
+    tool: "ripgrep",
+    queryFingerprint: "fp",
+  },
+): EvidenceAtom {
   return {
     schemaVersion: "1",
     stableId: `atom-${scopePath}-${score.toString()}`,
     scopePath,
     lineRange: undefined,
     score,
-    provenance: { kind: "lexical-search", tool: "ripgrep", queryFingerprint: "fp" },
+    provenance,
     redactionState: "redacted",
     emittedAtMs: 0,
     ledgerRef: undefined,
   };
+}
+
+function semanticAtom(scopePath: string, score: number): EvidenceAtom {
+  return atom(scopePath, score, {
+    kind: "model-rerank",
+    tool: "repo.semanticSearch:fixture",
+    queryFingerprint: "fp",
+  });
 }
 
 function gitAtom(scopePath: string, recency: number, churn: number): EvidenceAtom {
@@ -257,5 +273,24 @@ describe("rankCandidates", () => {
     );
     expect(result.diagnostics.totalAtoms).toBe(3);
     expect(result.diagnostics.uniqueCandidates).toBe(2);
+  });
+
+  it("lets semantic evidence outrank a lexical decoy and explains the contribution", () => {
+    const result = rankCandidates(
+      {
+        atoms: [atom("README.md", 1), semanticAtom("src/billing/calculateCharge.ts", 0.97)],
+        anchors: [anchor("CheckoutMismatch", "identifier")],
+        context: { retrievalIntent: "diagnostic-search" },
+      },
+      BASE_OPTIONS,
+    );
+
+    expect(result.kept[0]?.scopePath).toBe("src/billing/calculateCharge.ts");
+    expect(result.kept[0]?.signals.map((signal) => signal.name)).toEqual(
+      expect.arrayContaining(["lexical-score", "semantic-score", "structural-edge"]),
+    );
+    expect(result.kept[0]?.signals.find((signal) => signal.name === "semantic-score")?.value).toBe(
+      0.97,
+    );
   });
 });

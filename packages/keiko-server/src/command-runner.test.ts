@@ -2,7 +2,7 @@
 // exercises the real allowlist + discovery + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in command-runner-routes.test.ts.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
@@ -101,6 +101,13 @@ const PACKAGE_JSON = JSON.stringify({
     "-evil": "rm -rf /",
   },
 });
+const TEST_SANDBOX_AVAILABILITY = {
+  bubblewrap: true,
+  unshare: false,
+  seatbelt: false,
+  docker: false,
+  podman: false,
+} as const;
 
 // ── Fixture ──────────────────────────────────────────────────────────────────────
 
@@ -129,12 +136,20 @@ function makeManager(
   spawnImpl: SpawnFn = makeSpawn(),
   overrides: Partial<CommandRunnerManagerOptions> = {},
 ): CommandRunnerManager {
+  const { runDeps, ...rest } = overrides;
   return createCommandRunnerManager({
     store,
     evidenceStore,
     processEnv: { PATH: "/usr/bin" },
-    runDeps: { spawn: spawnImpl, resolveExecutable: (command: string) => command },
-    ...overrides,
+    isWorkspaceTrustedForPackageScripts: () => true,
+    runDeps: {
+      spawn: spawnImpl,
+      resolveExecutable: (command: string) => command,
+      sandboxAvailability: TEST_SANDBOX_AVAILABILITY,
+      platform: "linux",
+      ...runDeps,
+    },
+    ...rest,
   });
 }
 
@@ -147,6 +162,7 @@ function collect(manager: CommandRunnerManager): CommandRunnerEvent[] {
 // ── Discovery ─────────────────────────────────────────────────────────────────────
 
 describe("CommandRunnerManager — discovery", () => {
+  // eslint-disable-next-line complexity -- single discovery assertion covers the command kind/trust matrix.
   it("discovers package.json scripts and classifies kinds", () => {
     const catalog = makeManager().discover(workspaceRoot);
     expect(catalog.projectId).toBe(workspaceRoot);
@@ -163,6 +179,27 @@ describe("CommandRunnerManager — discovery", () => {
     // Every task maps to a frozen `npm run <script>` argv — never free-form input.
     expect(byId.get("npm-script:test")?.args).toEqual(["run", "test"]);
     expect(byId.get("npm-script:test")?.executable).toBe("npm");
+    expect(byId.get("npm-script:test")?.trustState).toBe("trusted");
+    expect(byId.get("npm-script:test")?.trustReason).toBe("repository-authored-script");
+  });
+
+  it("marks repository-authored scripts approval-required when no server trust predicate approves", () => {
+    const catalog = makeManager(makeSpawn(), {
+      isWorkspaceTrustedForPackageScripts: undefined,
+    }).discover(workspaceRoot);
+    expect(catalog.tasks.every((task) => task.trustState === "approval-required")).toBe(true);
+    expect(new Set(catalog.tasks.map((task) => task.trustReason))).toEqual(
+      new Set(["repository-authored-script"]),
+    );
+  });
+
+  it("fails closed to approval-required when the server trust predicate throws", () => {
+    const catalog = makeManager(makeSpawn(), {
+      isWorkspaceTrustedForPackageScripts: () => {
+        throw new Error("trust store unavailable");
+      },
+    }).discover(workspaceRoot);
+    expect(catalog.tasks.every((task) => task.trustState === "approval-required")).toBe(true);
   });
 
   it("skips unsafe script names that could inject a flag", () => {
@@ -183,6 +220,17 @@ describe("CommandRunnerManager — discovery", () => {
 // ── Execution outcomes ─────────────────────────────────────────────────────────────
 
 describe("CommandRunnerManager — execution", () => {
+  it("denies repository-authored scripts before spawn unless the server trusts the workspace", async () => {
+    const spawn = vi.fn<SpawnFn>(makeSpawn({ stdout: "should not run", exitCode: 0 }));
+    const manager = makeManager(spawn, { isWorkspaceTrustedForPackageScripts: undefined });
+    const events = collect(manager);
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
+    ).rejects.toMatchObject({ code: "TASK_REQUIRES_TRUST", status: 403 });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+  });
+
   it("runs an allowlisted task and reports a clean exit", async () => {
     const manager = makeManager(makeSpawn({ stdout: "all good\n", exitCode: 0 }));
     const events = collect(manager);
@@ -192,6 +240,31 @@ describe("CommandRunnerManager — execution", () => {
     expect(result.kind).toBe("test");
     expect(result.stdout).toContain("all good");
     expect(events.map((event) => event.kind)).toEqual(["run-started", "run-completed"]);
+  });
+
+  it("runs trusted repository scripts with no-network execution-root isolation by default", async () => {
+    const spawn = vi.fn<SpawnFn>(makeSpawn({ stdout: "sandboxed\n", exitCode: 0 }));
+    const manager = makeManager(spawn);
+
+    await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
+
+    expect(spawn).toHaveBeenCalled();
+    const [command, args] = spawn.mock.calls[0] ?? [];
+    expect(command).toBe("bwrap");
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--unshare-net",
+        "--bind",
+        realpathSync(workspaceRoot),
+        "/keiko-execution-root",
+        "--chdir",
+        "/keiko-execution-root",
+        "--",
+        "npm",
+        "run",
+        "test",
+      ]),
+    );
   });
 
   it("reports a non-zero exit as a failed run, not an error", async () => {
@@ -317,7 +390,7 @@ describe("CommandRunnerManager — evidence", () => {
     expect(raw).not.toContain("vitest");
   });
 
-  it("does not fail a run when evidence persistence is unavailable", async () => {
+  it("fails closed when evidence persistence is unavailable", async () => {
     const failing: EvidenceStore = {
       ...createInMemoryEvidenceStore(),
       put: (): string => {
@@ -327,7 +400,19 @@ describe("CommandRunnerManager — evidence", () => {
     const manager = makeManager(makeSpawn({ stdout: "ok", exitCode: 0 }), {
       evidenceStore: failing,
     });
-    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" });
-    expect(result.failureReason).toBe("none");
+    const events = collect(manager);
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED", status: 500 });
+    expect(events.map((event) => event.kind)).toEqual(["run-started"]);
+  });
+
+  it("fails closed when no evidence store is configured", async () => {
+    const manager = makeManager(makeSpawn({ stdout: "ok", exitCode: 0 }), {
+      evidenceStore: undefined,
+    });
+    await expect(
+      manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED", status: 500 });
   });
 });

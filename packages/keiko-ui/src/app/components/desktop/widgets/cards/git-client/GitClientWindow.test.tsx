@@ -666,7 +666,6 @@ describe("GitClientWindow — toolbar actions", () => {
 
   it("Create Pull Request opens an embedded PR panel with selected repository context", async () => {
     const user = userEvent.setup();
-    const openWindow = vi.fn();
     const client = makeClient({
       getSummary: vi.fn(async () =>
         makeSummary({
@@ -683,13 +682,13 @@ describe("GitClientWindow — toolbar actions", () => {
       })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
-    render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Create pull request/ }));
 
-    expect(openWindow).not.toHaveBeenCalled();
+    // The PR flow opens an embedded panel in the right pane — never a standalone window.
     const panel = await screen.findByRole("region", { name: "Pull Request" });
     expect(panel).toBeInTheDocument();
     expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
@@ -804,7 +803,6 @@ describe("GitClientWindow — toolbar actions", () => {
 
   it("Merge opens an embedded merge panel with selected repository context", async () => {
     const user = userEvent.setup();
-    const openWindow = vi.fn();
     const client = makeClient({
       getSummary: vi.fn(async () =>
         makeSummary({
@@ -821,13 +819,13 @@ describe("GitClientWindow — toolbar actions", () => {
       })),
       getStatus: vi.fn(async () => makeStatus({ branch: "feat/issue-1577" })),
     });
-    render(<GitClientWindow projectId={REPO_A.path} client={client} openWindow={openWindow} />);
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
     await waitFor(() => expect(client.getRemotes).toHaveBeenCalledWith(REPO_A.path));
 
     await user.click(screen.getByRole("button", { name: /Merge/ }));
 
-    expect(openWindow).not.toHaveBeenCalled();
+    // The merge flow opens an embedded panel in the right pane — never a standalone window.
     const panel = await screen.findByRole("region", { name: "Merge" });
     expect(panel).toBeInTheDocument();
     expect(within(panel).getByLabelText("Head branch")).toHaveValue("feat/issue-1577");
@@ -1004,6 +1002,30 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
       projectId: REPO_A.path,
       remote: "origin",
     });
+  });
+
+  // GEN-PERF-WIDGET-006 — the sync outcome must carry a duration and an ahead/behind
+  // repository-state delta, not just a bare status string.
+  it("surfaces sync duration and ahead/behind delta in the outcome", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+      syncPreview: vi.fn<GitClientSeam["syncPreview"]>(async (input) =>
+        makeSyncPreview(input.operation, { behind: 2 }),
+      ),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+
+    await user.click(await screen.findByRole("button", { name: "Run sync: Pull" }));
+
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalled());
+    const pill = await screen.findByRole("status", { name: /Pull: succeeded/ });
+    // GEN-UI-A11Y-017: the outcome now lives in the region's visible text content (announced via
+    // aria-live) rather than a duplicating aria-label, so assert against textContent.
+    const label = pill.textContent ?? "";
+    // Duration segment "in <n>s" and the ahead/behind delta must both be present.
+    expect(label).toMatch(/in \d+(\.\d+)?s/);
+    expect(label).toMatch(/behind 2/);
   });
 
   it("does not execute network sync when preview blocks", async () => {
@@ -1381,24 +1403,14 @@ describe("GitClientWindow — required visible / absent words", () => {
 
   it("renders 'Pull Request' as a visible button", async () => {
     render(
-      <GitClientWindow
-        projectId={REPO_A.path}
-        client={makeClient()}
-        onOpenEditor={vi.fn()}
-        openWindow={vi.fn()}
-      />,
+      <GitClientWindow projectId={REPO_A.path} client={makeClient()} onOpenEditor={vi.fn()} />,
     );
     expect(await screen.findByRole("button", { name: /Create pull request/i })).toBeInTheDocument();
   });
 
   it("renders 'Merge' as a visible button", async () => {
     render(
-      <GitClientWindow
-        projectId={REPO_A.path}
-        client={makeClient()}
-        onOpenEditor={vi.fn()}
-        openWindow={vi.fn()}
-      />,
+      <GitClientWindow projectId={REPO_A.path} client={makeClient()} onOpenEditor={vi.fn()} />,
     );
     expect(await screen.findByRole("button", { name: /Merge/ })).toBeInTheDocument();
   });
@@ -1414,14 +1426,7 @@ describe("GitClientWindow — required visible / absent words", () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusWithChanges()),
     });
-    render(
-      <GitClientWindow
-        projectId={REPO_A.path}
-        client={client}
-        onOpenEditor={vi.fn()}
-        openWindow={vi.fn()}
-      />,
-    );
+    render(<GitClientWindow projectId={REPO_A.path} client={client} onOpenEditor={vi.fn()} />);
     await waitFor(() => expect(client.listRepositories).toHaveBeenCalled());
 
     const body = document.body.textContent ?? "";

@@ -15,7 +15,7 @@
 //  - minimum 24×24 target (WCAG 2.5.8)
 //  - stable keys derived from kind+id, not array indices
 
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { updateChatLocalKnowledgeScopes } from "@/lib/api";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
@@ -95,9 +95,11 @@ function ConnectorPillItem({
     <span className="scope-pill-wrap">
       <span className="scope-pill scope-pill--connector">
         <span aria-hidden="true">◆</span>
-        <span role="status" aria-live="polite">
-          {label}
-        </span>
+        {/* GEN-UI-STATE-001 (WCAG 4.1.3): plain label span — NOT a live region. A per-pill
+            role="status" re-announced the unchanged label on every routine re-render / chat switch.
+            The genuine binding-change announcement lives in one always-mounted sr-only region at the
+            group level (ConnectorScopePill), firing only when the connector set actually changes. */}
+        <span aria-label={label}>{label}</span>
         {/* aria-disabled (not native disabled) while busy: native disabled drops keyboard
             focus mid-request (C169); the handleDisconnect busy guard blocks re-activation. */}
         <button
@@ -123,6 +125,13 @@ function ConnectorPillItem({
   );
 }
 
+// Content-free signature of the connector-scope set: the ordered scope keys. Two chats binding the
+// same connectors produce the same signature (routine re-render, no re-announce); a connect/disconnect
+// changes the key set and does.
+function connectorScopesSignature(scopes: readonly ChatLocalKnowledgeScope[]): string {
+  return scopes.map((scope) => scopeKey(scope)).join(" ");
+}
+
 export function ConnectorScopePill({
   chat,
   onDisconnect,
@@ -130,9 +139,45 @@ export function ConnectorScopePill({
   labels = new Map(),
 }: ConnectorScopePillProps): ReactNode {
   const scopes = effectiveLocalKnowledgeScopes(chat);
-  if (scopes.length === 0) return null;
+  const signature = connectorScopesSignature(scopes);
+
+  // GEN-UI-STATE-001 (WCAG 4.1.3): ONE always-mounted sr-only polite region announces a genuine
+  // binding change. It stays empty until the connector signature actually changes after mount, so a
+  // chat switch to the same-shaped connectors — or any routine re-render — never re-announces.
+  // Mirrors WorkflowHandoff's prevRef/useEffect guard.
+  const [announcement, setAnnouncement] = useState("");
+  const prevSignatureRef = useRef(signature);
+  useEffect(() => {
+    if (prevSignatureRef.current !== signature) {
+      prevSignatureRef.current = signature;
+      setAnnouncement(
+        scopes.length === 0
+          ? "Connected capsule removed."
+          : `Connected capsules updated: ${String(scopes.length)} ${scopes.length === 1 ? "source" : "sources"}.`,
+      );
+    }
+  }, [signature, scopes.length]);
+
+  const announcer = (
+    <span
+      className="sr-only"
+      role="status"
+      aria-live="polite"
+      data-testid="connector-scope-announcer"
+    >
+      {announcement}
+    </span>
+  );
+
+  // Keep the header clean when the chat never had a connector binding: with no scopes AND no pending
+  // announcement, render nothing. After the last connector is disconnected the effect populates
+  // `announcement`, so the polite region re-mounts with content and the removal is still announced.
+  if (scopes.length === 0) {
+    return announcement === "" ? null : announcer;
+  }
   return (
     <span className="scope-pill-group scope-pill-group--connector">
+      {announcer}
       {scopes.map((scope) => (
         <ConnectorPillItem
           key={scopeKey(scope)}

@@ -14,6 +14,7 @@ import type {
   MemoryUnpin,
   MemoryUpdate,
 } from "./memory-operations.js";
+import { MEMORY_FORGET_REASONS } from "./memory-operations.js";
 import { MEMORY_SENSITIVITIES, MEMORY_TYPES } from "./memory.js";
 import {
   validateMemoryProvenance,
@@ -321,8 +322,11 @@ export function validateMemoryForget(input: unknown): MemoryValidation<MemoryFor
   if (!isFiniteNonNegativeNumber(input.forgottenAt)) {
     errors.push("forget.forgottenAt must be a finite non-negative number");
   }
-  if (!isSafeText(input.reason, MEMORY_REASON_MAX_CHARS)) {
-    errors.push("forget.reason must be a bounded control-free non-empty string");
+  if (
+    !isSafeText(input.reason, MEMORY_REASON_MAX_CHARS) ||
+    !(MEMORY_FORGET_REASONS as readonly string[]).includes(input.reason)
+  ) {
+    errors.push("forget.reason must be a supported content-free reason code");
   }
   if (input.userAcknowledgedDestructive !== true) {
     errors.push("forget.userAcknowledgedDestructive must be the literal true");

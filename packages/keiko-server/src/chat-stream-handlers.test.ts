@@ -451,6 +451,54 @@ describe("desktop chat SSE streaming handler", () => {
     expect(JSON.stringify(persisted)).not.toContain("The model returned an empty response.");
   });
 
+  it("RB-6: an UNEXPECTED mid-stream throw surfaces INTERNAL (not GATEWAY_ERROR) with a correlation id and a logged cause", async () => {
+    // GEN-OBS-DIAGNOSTICS-602 + STATUS-403: before RB-6 an unexpected (non-gateway) mid-stream throw
+    // was silently relabelled GATEWAY_ERROR — falsely blaming the provider — and the cause was
+    // dropped with no server-side trace. Now: honest INTERNAL code, a correlation id on the frame,
+    // and a redacted diagnostic record.
+    const chatId = seedChat();
+    const records: {
+      correlationId: string;
+      source: string;
+      message: string;
+      errorClass: string;
+    }[] = [];
+    const throwingModel: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("x")),
+      async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+        yield { type: "delta", token: "partial" };
+        await Promise.resolve();
+        throw new Error("boom-unexpected-mid-stream");
+      },
+    };
+    const res = captureRes();
+    const ctx: RouteContext = {
+      ...routeContext(
+        makeReq({ chatId, projectPath: projectDir, modelId: CHAT_MODEL, content: "hello" }),
+        res.res,
+      ),
+      correlationId: "cid-mid-stream-000001",
+    };
+    await handleSendDesktopChatStream(
+      ctx,
+      deps(throwingModel, { diagnostics: { record: (r) => records.push(r) } }),
+    );
+
+    const error = parseSse(res.writes).find((record) => record.event === "error");
+    expect(error).toBeDefined();
+    const data = error?.data as { code?: string; message?: string; correlationId?: string };
+    expect(data.code).toBe("INTERNAL");
+    expect(data.code).not.toBe("GATEWAY_ERROR");
+    expect(data.correlationId).toBe("cid-mid-stream-000001");
+
+    // The cause is captured server-side, keyed by the same id — no longer an untraceable black box.
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    expect(record?.correlationId).toBe("cid-mid-stream-000001");
+    expect(record?.source).toBe("chat.stream");
+    expect(record?.message).toContain("boom-unexpected-mid-stream");
+  });
+
   it("persists the user message but NO assistant message when the stream is cancelled", async () => {
     const chatId = seedChat();
     // captureResWithEvents is required here so the res.on("close") listener registered by
@@ -500,6 +548,31 @@ describe("desktop chat SSE streaming handler", () => {
     expect(captured.destroyed).toBe(true);
     // After backpressure the controller was aborted, so no "done" event is written.
     const events = parseSse(captured.writes).map((record) => record.event);
+    expect(events).not.toContain("done");
+  });
+
+  it("does NOT relabel a backpressure kill as a user 'cancelled' event (GEN-PERF-CHAT-006)", async () => {
+    // RED reason: pre-fix, a backpressure kill left turn === undefined and the handler unconditionally
+    // wrote sseMessage('cancelled') to the already-destroyed socket, so a slow-client termination was
+    // indistinguishable downstream from an intentional user cancel.
+    // GREEN reason: streamConversation flags termination.backpressure via the writeOrDestroy signal;
+    // the caller then skips the 'cancelled' terminal frame, keeping the two terminations distinct.
+    const chatId = seedChat();
+    const captured = captureResWithEvents();
+    captured.writeReturns = false; // backpressure on the first token write
+    const req = makeReq({
+      chatId,
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      content: "hello slow client",
+    });
+    const { model } = streamingModel("answer");
+    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+
+    const events = parseSse(captured.writes).map((record) => record.event);
+    expect(captured.destroyed).toBe(true);
+    // The distinguishing assertion: a backpressure kill is NOT surfaced as a user cancel.
+    expect(events).not.toContain("cancelled");
     expect(events).not.toContain("done");
   });
 

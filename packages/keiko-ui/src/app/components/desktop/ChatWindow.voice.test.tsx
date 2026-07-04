@@ -695,7 +695,10 @@ describe("ChatWindow voice dialog-mode switch (Issue #1559)", () => {
     expect(screen.queryByRole("button", { name: "Stop voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
@@ -790,7 +793,10 @@ describe("ChatWindow voice dialogue-session controller (Issue #1560)", () => {
     expect(screen.queryByRole("button", { name: "Stop voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start speaking" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");
     expect(within(box).getByRole("switch", { name: "Voice dialogue mode" })).toBeInTheDocument();
@@ -905,7 +911,10 @@ describe("ChatWindow voice dialogue survives the first committed turn (Issue #15
       "true",
     );
     expect(screen.queryByRole("button", { name: "Leave voice dialogue" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Interrupt the assistant" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     // The conversation is now shown and the composer stays in the clean voice-control layout.
     const box = getComposerBox();
     expect(box).toHaveAttribute("data-voice-aura", "on");

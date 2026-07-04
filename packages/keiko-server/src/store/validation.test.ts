@@ -56,93 +56,93 @@ describe("validateProjectPath — happy path", () => {
 
 describe("validateProjectPath — fail-closed", () => {
   it("rejects a null-byte → invalid_path", () => {
-    expectCode(() => validateProjectPath("/tmp/has\0null", { mustExist: false }), "invalid_path");
+    expectCode(() => validateProjectPath("/tmp/has\0null", { mustExist: false }), "INVALID_PATH");
   });
 
   it("rejects a non-absolute path → invalid_path", () => {
-    expectCode(() => validateProjectPath("relative/path", { mustExist: false }), "invalid_path");
+    expectCode(() => validateProjectPath("relative/path", { mustExist: false }), "INVALID_PATH");
   });
 
   it("rejects http:// remote URL → invalid_path", () => {
     expectCode(
       () => validateProjectPath("http://evil.example.com/x", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects ssh:// remote URL → invalid_path", () => {
-    expectCode(() => validateProjectPath("ssh://host/x", { mustExist: false }), "invalid_path");
+    expectCode(() => validateProjectPath("ssh://host/x", { mustExist: false }), "INVALID_PATH");
   });
 
   it("rejects file:// remote URL → invalid_path", () => {
     expectCode(
       () => validateProjectPath("file:///etc/passwd", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects Windows UNC paths → invalid_path", () => {
     expectCode(
       () => validateProjectPath("\\\\server\\share\\repo", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects forward-slash UNC paths → invalid_path", () => {
     expectCode(
       () => validateProjectPath("//server/share/repo", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects backslash Windows device paths → invalid_path", () => {
     expectCode(
       () => validateProjectPath("\\\\?\\C:\\Users\\dev\\repo", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects forward-slash Windows device paths → invalid_path", () => {
     expectCode(
       () => validateProjectPath("//?/C:/Users/dev/repo", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects DOS device paths (\\\\.\\PhysicalDrive0) → invalid_path", () => {
     expectCode(
       () => validateProjectPath("\\\\.\\PhysicalDrive0", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects Windows-style traversal segments → invalid_path", () => {
-    expectCode(() => validateProjectPath("/tmp\\..\\etc", { mustExist: false }), "invalid_path");
+    expectCode(() => validateProjectPath("/tmp\\..\\etc", { mustExist: false }), "INVALID_PATH");
   });
 
   it("rejects a path with a /../ traversal segment → invalid_path", () => {
     expectCode(
       () => validateProjectPath("/tmp/../etc/passwd", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects an over-length path (>4096) → invalid_path", () => {
     const huge = "/" + "x".repeat(5000);
-    expectCode(() => validateProjectPath(huge, { mustExist: false }), "invalid_path");
+    expectCode(() => validateProjectPath(huge, { mustExist: false }), "INVALID_PATH");
   });
 
   it("rejects an empty string → invalid_path", () => {
-    expectCode(() => validateProjectPath("", { mustExist: false }), "invalid_path");
+    expectCode(() => validateProjectPath("", { mustExist: false }), "INVALID_PATH");
   });
 
   it("rejects a non-directory file → path_not_directory", () => {
-    expectCode(() => validateProjectPath(realFile, { mustExist: true }), "path_not_directory");
+    expectCode(() => validateProjectPath(realFile, { mustExist: true }), "PATH_NOT_DIRECTORY");
   });
 
   it("rejects a missing path → path_not_found", () => {
     const missing = join(tmpDir, "nope-" + String(Date.now()));
-    expectCode(() => validateProjectPath(missing, { mustExist: true }), "path_not_found");
+    expectCode(() => validateProjectPath(missing, { mustExist: true }), "PATH_NOT_FOUND");
   });
 });
 
@@ -182,14 +182,14 @@ describe("validateProjectPath — Windows drive paths (cross-platform, mustExist
   it("rejects a Windows drive path with a traversal segment", () => {
     expectCode(
       () => validateProjectPath("C:\\Users\\..\\Windows", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 
   it("rejects a Windows drive path containing a null byte", () => {
     expectCode(
       () => validateProjectPath("C:\\Users\\evil\0name", { mustExist: false }),
-      "invalid_path",
+      "INVALID_PATH",
     );
   });
 });

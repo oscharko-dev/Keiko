@@ -266,6 +266,21 @@ function defaultIsProcessAlive(pid: number): boolean {
   }
 }
 
+// ESRCH-safe kill. `process.kill` throws ESRCH when the target has already exited; for a stop/cleanup
+// kill that is the intended end state, not a failure. Swallowing it prevents `keiko start` from
+// crashing with an opaque `Error: kill ESRCH` when the UI child exits on its own before the SIGTERM
+// lands (observed on Windows: the crash masked the real "UI did not become healthy" report).
+export const safeKillProcess: ProcessKiller = (pid, signal) => {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH") {
+      return;
+    }
+    throw error;
+  }
+};
+
 function defaultIsPortAvailable(host: string, port: number): Promise<boolean> {
   return new Promise<boolean>((resolveAvailable) => {
     const server = createNetServer();
@@ -586,7 +601,7 @@ function runtimeDeps(deps: LifecycleCliDeps): LifecycleRuntimeDeps {
       deps.sleep ??
       ((ms: number): Promise<void> => new Promise((resolveSleep) => setTimeout(resolveSleep, ms))),
     isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
-    killProcess: deps.killProcess ?? process.kill.bind(process),
+    killProcess: deps.killProcess ?? safeKillProcess,
     isPortAvailable: deps.isPortAvailable ?? defaultIsPortAvailable,
     openExternal: deps.openExternal ?? defaultOpenExternal,
   };

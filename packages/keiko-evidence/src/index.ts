@@ -41,6 +41,7 @@ export {
   DEFAULT_EVIDENCE_DIR,
   resolveEvidenceDir,
   type EvidenceStore,
+  type NodeEvidenceStore,
 } from "./store.js";
 export {
   writeSideFile,
@@ -92,6 +93,8 @@ export {
   deleteQualityIntelligenceCandidates,
   applyQualityIntelligenceCandidateEdit,
   QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
+  QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION,
+  qualityIntelligenceCandidatesArtifactContentHash,
   createNodeContainedJsonArtifactStore,
   redactQualityIntelligenceEvidence,
   snapshotQualityIntelligenceRunsForRecovery,
@@ -123,6 +126,7 @@ export {
   type RecordFigmaSnapshotStructuralScreenInput,
   type UpdateFigmaSnapshotUserMetadataInput,
   type QualityIntelligenceCandidateRow,
+  type QualityIntelligenceCandidatesArtifactIntegrity,
   type QualityIntelligenceCandidatesArtifact,
   type RecordQualityIntelligenceCandidatesInput,
   type ApplyQualityIntelligenceCandidateEditInput,
@@ -162,6 +166,8 @@ export {
   type QualityIntelligenceRetentionEnforcementOptions,
   type QualityIntelligenceRetentionEnforcementResult,
   type QualityIntelligenceRetentionResult,
+  type QualityIntelligenceRetentionSkippedReason,
+  type QualityIntelligenceRetentionSkippedRun,
   type QualityIntelligenceRunDeletedEvent,
   type QualityIntelligenceRunSnapshotEntry,
   type QualityIntelligenceSchemaValidationResult,

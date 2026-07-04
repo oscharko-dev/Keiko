@@ -15,7 +15,11 @@ import type {
 import { chunkDocument } from "./chunking/chunker-runner.js";
 import type { ChunkingOptions } from "./chunking/types.js";
 import { createCapsule, type CreateCapsuleInput } from "./capsule-lifecycle.js";
-import { insertDocumentRow, insertDocumentTextRow, insertParsedUnitRow } from "./discovery/persist.js";
+import {
+  insertDocumentRow,
+  insertDocumentTextRow,
+  insertParsedUnitRow,
+} from "./discovery/persist.js";
 import { embedChunkBatch } from "./indexing/embedding-batcher.js";
 import { replaceLexicalRowsForDocument } from "./indexing/lexical-index-persist.js";
 import type { ChunkToEmbed } from "./indexing/types.js";
@@ -306,8 +310,10 @@ function indexSeedLexicalRows(
         "ORDER BY order_index ASC",
       ].join(" "),
     )
-    .all({ c: String(options.capsuleId), d: String(options.documentId) }) as unknown as
-    readonly SeedChunkSpanRow[];
+    .all({
+      c: String(options.capsuleId),
+      d: String(options.documentId),
+    }) as unknown as readonly SeedChunkSpanRow[];
   replaceLexicalRowsForDocument(
     store._internal.db,
     options.capsuleId,

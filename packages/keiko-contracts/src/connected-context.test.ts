@@ -27,6 +27,7 @@ import type {
   CandidateOmissionReason,
   ConnectedContextPack,
   ConnectedFileEntry,
+  ContextCoverageDiagnostics,
   EvidenceAtom,
   EvidenceAtomProvenanceKind,
   EvidenceAtomRedactionState,
@@ -106,6 +107,32 @@ function happyPack(): ConnectedContextPack {
     uncertainty: [],
     emittedAtMs: 4_000,
     ledgerRef: undefined,
+  };
+}
+
+function coverageDiagnostics(
+  overrides: Partial<ContextCoverageDiagnostics> = {},
+): ContextCoverageDiagnostics {
+  return {
+    incomplete: true,
+    reasons: ["file-cap"],
+    filesDiscovered: 101,
+    filesAfterPolicy: 100,
+    filesScanned: 50,
+    filesSkipped: 51,
+    truncated: true,
+    ignoredByDiscovery: 1,
+    deniedByDiscovery: 0,
+    depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
+    matchesReturned: 12,
+    elapsedMs: 250,
+    limits: {
+      maxFilesScanned: 50,
+      maxMatchesReturned: 100,
+      elapsedMsMax: 5_000,
+    },
+    ...overrides,
   };
 }
 
@@ -1240,15 +1267,71 @@ describe("validateConnectedContextPack", () => {
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 
+  it("accepts path-free coverage diagnostics alongside ranking diagnostics", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({ reasons: ["match-cap", "timeout"] }),
+      },
+    };
+
+    expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("rejects incomplete coverage without a closed truncation reason", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({ reasons: [] }),
+      },
+    };
+
+    expectInvalidWithReason(validateConnectedContextPack(pack), "empty for incomplete coverage");
+  });
+
+  it("rejects complete coverage that still carries truncation reasons", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: coverageDiagnostics({ incomplete: false }),
+      },
+    };
+
+    expectInvalidWithReason(validateConnectedContextPack(pack), "present for complete coverage");
+  });
+
+  it("rejects malformed coverage counters and reason enums", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      diagnostics: {
+        rankedCandidates: [],
+        coverage: {
+          ...coverageDiagnostics(),
+          reasons: ["path:src/secret.ts"],
+          filesScanned: Number.NaN,
+        } as unknown as ContextCoverageDiagnostics,
+      },
+    };
+
+    expectInvalidWithReason(validateConnectedContextPack(pack), "coverage.reasons invalid");
+    expectInvalidWithReason(validateConnectedContextPack(pack), "coverage.filesScanned invalid");
+  });
+
   it("accepts additive low-value rescue coverage diagnostics", () => {
     const pack: ConnectedContextPack = {
       ...happyPack(),
       diagnostics: {
         rankedCandidates: [],
         coverage: {
+          incomplete: false,
+          reasons: [],
           filesDiscovered: 0,
           filesAfterPolicy: 0,
           filesScanned: 1,
+          filesSkipped: 0,
           oversizedFilesScanned: 0,
           lowValueRescueFilesDiscovered: 1,
           lowValueRescueFilesScanned: 1,
@@ -1257,6 +1340,13 @@ describe("validateConnectedContextPack", () => {
           deniedByDiscovery: 0,
           depthPrunedByDiscovery: 0,
           maxFilesPrunedByDiscovery: 0,
+          matchesReturned: 1,
+          elapsedMs: 1,
+          limits: {
+            maxFilesScanned: 50,
+            maxMatchesReturned: 100,
+            elapsedMsMax: 5_000,
+          },
         },
       },
     };

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -283,12 +283,77 @@ describe("UpdateSessionManager", () => {
     }
   });
 
+  it("quarantines a corrupt file lock and starts a new update", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-corrupt-"));
+    try {
+      const now = Date.parse("2026-06-30T00:10:00.000Z");
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(lockPath, "{not-json", { mode: 0o600 });
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 10_000,
+        now: () => now,
+        pidAlive: () => true,
+      });
+      const manager = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock,
+        runCommandImpl: () => Promise.resolve(commandResult()),
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(manager.start({ targetVersion: "0.2.12" }).session.phase).toBe("preparing");
+      await waitForPhase(manager, "restart-required");
+      const entries = await readdir(tempDir);
+      expect(entries.some((entry) => entry.startsWith("update.lock.corrupt."))).toBe(true);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers a file lock from a dead process before the stale timeout", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "keiko-update-lock-dead-"));
+    try {
+      const now = Date.parse("2026-06-30T00:00:01.000Z");
+      const lockPath = join(tempDir, "update.lock");
+      await writeFile(
+        lockPath,
+        `${JSON.stringify({
+          sessionId: "dead",
+          targetVersion: "0.2.10",
+          startedAt: "2026-06-30T00:00:00.000Z",
+          pid: 999_999,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const lock = createFileUpdateSessionLock(lockPath, {
+        staleMs: 10 * 60_000,
+        now: () => now,
+        pidAlive: () => false,
+      });
+      const manager = createUpdateSessionManager({
+        detector: () => supportedMode(),
+        lock,
+        runCommandImpl: () => Promise.resolve(commandResult()),
+      });
+
+      expect(lock.isLocked()).toBe(false);
+      expect(manager.start({ targetVersion: "0.2.12" }).session.phase).toBe("preparing");
+      await waitForPhase(manager, "restart-required");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("namespaces file locks under the Keiko state directory", async () => {
     const firstStateDir = await mkdtemp(join(tmpdir(), "keiko-update-state-a-"));
     const secondStateDir = await mkdtemp(join(tmpdir(), "keiko-update-state-b-"));
     try {
-      const first = createStateDirUpdateSessionLock(firstStateDir);
-      const second = createStateDirUpdateSessionLock(secondStateDir);
+      const liveLockOptions = {
+        now: (): number => Date.parse("2026-06-30T00:00:01.000Z"),
+        pidAlive: (): boolean => true,
+      };
+      const first = createStateDirUpdateSessionLock(firstStateDir, liveLockOptions);
+      const second = createStateDirUpdateSessionLock(secondStateDir, liveLockOptions);
 
       expect(updateSessionLockPath(firstStateDir)).toBe(
         join(firstStateDir, "updates", "update-session.lock"),

@@ -165,9 +165,7 @@ function indexOfNth(haystack: string, needle: string, n: number): number {
 }
 
 function unwrapCssModuleGlobals(source: string): string {
-  return source
-    .replace(/:global\(([^()]+)\)/g, "$1")
-    .replace(/\.lazyWidgetScope\s*/g, "");
+  return source.replace(/:global\(([^()]+)\)/g, "$1").replace(/\.lazyWidgetScope\s*/g, "");
 }
 
 function expectLazyCssModuleImport(component: string, fileName: string): void {

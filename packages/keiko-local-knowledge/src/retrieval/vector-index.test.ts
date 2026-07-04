@@ -206,8 +206,7 @@ function fakeVectorIndexStore(state: FakeVectorIndexState): KnowledgeStore {
       if (sql.includes("WHERE embedding MATCH")) {
         return {
           all: (params: Record<string, unknown> = {}): readonly FakeSqliteVecCandidateRow[] => {
-            const sourceId =
-              typeof params.source_id === "string" ? params.source_id : undefined;
+            const sourceId = typeof params.source_id === "string" ? params.source_id : undefined;
             return state.queryRows.filter(
               (row) => sourceId === undefined || row.source_id === sourceId,
             );
@@ -511,10 +510,10 @@ describe("searchVectorIndex", () => {
         },
       };
 
-      const result = searchVectorIndex(
-        requestFor(fixture.store, capsule, new Float32Array(32)),
-        { mode: "sqlite-vec", sqliteVec },
-      );
+      const result = searchVectorIndex(requestFor(fixture.store, capsule, new Float32Array(32)), {
+        mode: "sqlite-vec",
+        sqliteVec,
+      });
 
       expect(loads).toBe(0);
       expect(result).toMatchObject({
@@ -587,10 +586,9 @@ describe("searchVectorIndex", () => {
       expect(result.diagnostics.provider).toBe("sqlite-vec");
       expect(result.diagnostics.status).toBe("fallback-unavailable");
       expect(result.diagnostics.indexName).toBe("keiko_lk_vec_1536_cosine");
-      expect([
-        "sqlite-load-extension-unavailable",
-        "sqlite-vec-extension-load-failed",
-      ]).toContain(result.diagnostics.reason);
+      expect(["sqlite-load-extension-unavailable", "sqlite-vec-extension-load-failed"]).toContain(
+        result.diagnostics.reason,
+      );
     } finally {
       fixture.cleanup();
     }
@@ -614,7 +612,12 @@ describe("searchVectorIndex", () => {
       queryRows: [
         { chunk_id: "chunk-b", capsule_id: "cap-vector-index", source_id: "src-b", distance: 0.1 },
         { chunk_id: "chunk-a", capsule_id: "cap-vector-index", source_id: "src-a", distance: 0.1 },
-        { chunk_id: "chunk-low", capsule_id: "cap-vector-index", source_id: "src-a", distance: 0.9 },
+        {
+          chunk_id: "chunk-low",
+          capsule_id: "cap-vector-index",
+          source_id: "src-a",
+          distance: 0.9,
+        },
       ],
       insertedTempRows: [],
       wroteReadyState: false,

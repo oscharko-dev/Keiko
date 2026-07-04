@@ -14,6 +14,7 @@ import {
   type UiHandlerDeps,
 } from "./index.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 
@@ -136,7 +137,11 @@ describe("GET/PUT /api/workspace/state", () => {
   it("stores a bounded workspace snapshot for another browser to read", async () => {
     const put = await fetchRawWithInit("/api/workspace/state", {
       method: "PUT",
-      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-0"',
+        "X-Keiko-CSRF": "1",
+      },
       body: JSON.stringify({
         windows: [
           { id: "files-1", type: "files", x: 1, y: 2, w: 3, h: 4, z: 5, cfg: {}, max: false },
@@ -145,6 +150,7 @@ describe("GET/PUT /api/workspace/state", () => {
       }),
     });
     expect(put.status).toBe(200);
+    expect(put.headers.get("etag")).toBe('"workspace-state-1"');
     expect(JSON.parse(put.text)).toMatchObject({ workspace: { revision: 1 } });
 
     const get = await fetchRaw("/api/workspace/state");
@@ -168,11 +174,93 @@ describe("GET/PUT /api/workspace/state", () => {
   it("rejects malformed workspace state payloads", async () => {
     const res = await fetchRawWithInit("/api/workspace/state", {
       method: "PUT",
-      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-0"',
+        "X-Keiko-CSRF": "1",
+      },
       body: JSON.stringify({ windows: {}, connections: [] }),
     });
     expect(res.status).toBe(400);
-    expect(JSON.parse(res.text)).toMatchObject({ error: { code: "invalid_request" } });
+    expect(JSON.parse(res.text)).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("requires If-Match and rejects stale workspace writes without mutating", async () => {
+    const first = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-0"',
+        "X-Keiko-CSRF": "1",
+      },
+      body: JSON.stringify({
+        windows: [
+          { id: "files-1", type: "files", x: 1, y: 2, w: 3, h: 4, z: 5, cfg: {}, max: false },
+        ],
+        connections: [],
+      }),
+    });
+    expect(first.status).toBe(200);
+
+    const missing = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      body: JSON.stringify({ windows: [], connections: [] }),
+    });
+    expect(missing.status).toBe(428);
+    expect(JSON.parse(missing.text)).toMatchObject({
+      error: { code: "PRECONDITION_REQUIRED" },
+    });
+
+    const stale = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-0"',
+        "X-Keiko-CSRF": "1",
+      },
+      body: JSON.stringify({ windows: [], connections: [] }),
+    });
+    expect(stale.status).toBe(412);
+    expect(stale.headers.get("etag")).toBe('"workspace-state-1"');
+    expect(JSON.parse(stale.text)).toMatchObject({ error: { code: "PRECONDITION_FAILED" } });
+
+    const get = await fetchRaw("/api/workspace/state");
+    const body = JSON.parse(get.text) as { workspace: { revision: number; windows: unknown[] } };
+    expect(body.workspace.revision).toBe(1);
+    expect(body.workspace.windows).toHaveLength(1);
+  });
+
+  it("keeps the same revision for identical workspace PUT payloads", async () => {
+    const payload = {
+      windows: [
+        { id: "files-1", type: "files", x: 1, y: 2, w: 3, h: 4, z: 5, cfg: {}, max: false },
+      ],
+      connections: [],
+    };
+    const first = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-0"',
+        "X-Keiko-CSRF": "1",
+      },
+      body: JSON.stringify(payload),
+    });
+    expect(first.status).toBe(200);
+
+    const second = await fetchRawWithInit("/api/workspace/state", {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-1"',
+        "X-Keiko-CSRF": "1",
+      },
+      body: JSON.stringify(payload),
+    });
+    expect(second.status).toBe(200);
+    expect(JSON.parse(second.text)).toMatchObject({ workspace: { revision: 1 } });
+    expect(second.headers.get("etag")).toBe('"workspace-state-1"');
   });
 
   it("gzips large JSON API responses when requested", async () => {
@@ -189,7 +277,11 @@ describe("GET/PUT /api/workspace/state", () => {
     }));
     const put = await fetchRawWithInit("/api/workspace/state", {
       method: "PUT",
-      headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+      headers: {
+        "Content-Type": "application/json",
+        "If-Match": '"workspace-state-0"',
+        "X-Keiko-CSRF": "1",
+      },
       body: JSON.stringify({ windows, connections: [] }),
     });
     expect(put.status).toBe(200);
@@ -513,4 +605,159 @@ describe("CSRF guard — PATCH/DELETE methods (M1)", () => {
     expect(response.status).toBe(415);
     expect(await response.json()).toMatchObject({ error: { code: "UNSUPPORTED_MEDIA_TYPE" } });
   });
+});
+
+// GEN-TEST-MISSING-008 + RB-6 (GEN-OBS-DIAGNOSTICS-901, CORRELATION-103/402) — pins the top-level
+// catch (server.ts): opaque-but-safe 500 AND correlation-id + redacted-cause enrichment. The
+// correlation-id/diagnostic assertions EXTEND (do not replace) the original opacity invariant, exactly
+// as the Step 09 seam comment mandated. Reverting the catch to a bare `.catch(() => {})` (dropping the
+// id or the diagnostic) flips these red — this is the regression gate for RB-6.
+describe("top-level route-error catch (GEN-TEST-MISSING-008, RB-6)", () => {
+  const SECRET_MARKER = "boom-secret-DO-NOT-LEAK";
+
+  // Builds deps whose GET /api/projects read seam (handleListProjects → store.listProjects)
+  // throws a plain, non-UiStoreError Error. That throw escapes the desktop error mapping,
+  // propagates through dispatchApi + handle unhandled, and lands in the top-level `.catch`
+  // in createUiServer — the exact code path under test. A capturing diagnostics sink lets the
+  // RB-6 assertions prove the cause is retained server-side (never surfaced to the browser).
+  function throwingDeps(diagnostics?: UiHandlerDeps["diagnostics"]): UiHandlerDeps {
+    const store = createInMemoryUiStore();
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: buildRedactor({}),
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+      registry: createRunRegistry(),
+      modelPortFactory: () => undefined,
+      store: {
+        ...store,
+        listProjects: (): never => {
+          throw new Error(SECRET_MARKER);
+        },
+      },
+    };
+  }
+
+  async function startWithThrowingDeps(diagnostics?: UiHandlerDeps["diagnostics"]): Promise<void> {
+    await closeServer();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps: throwingDeps(diagnostics),
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+  }
+
+  it("returns an opaque 500 carrying a correlation id, without leaking the thrown error", async () => {
+    await startWithThrowingDeps();
+
+    // rawRequest resolves only on the response 'end' event, so a passing await here also proves
+    // the socket completed (no hang) after the top-level catch ran writeJson + res.end.
+    const res = await rawRequest("/api/projects");
+    const bodyText = res.body.toString("utf8");
+    const parsed = JSON.parse(bodyText) as {
+      error: { code: string; message: string; correlationId?: string };
+    };
+
+    // (1) status is exactly 500, opaque code + message unchanged …
+    expect(res.status).toBe(500);
+    expect(parsed.error.code).toBe("INTERNAL");
+    expect(parsed.error.message).toBe("An unexpected error occurred.");
+
+    // (2) RB-6: the body now carries a well-formed correlation id, echoed on the response header,
+    // and the two agree — so a user-reported failure maps to exactly one server-side record.
+    expect(parsed.error.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    const headerId = res.headers["x-keiko-correlation-id"];
+    expect(headerId).toBe(parsed.error.correlationId);
+
+    // (3) the secret marker must not leak anywhere in the body …
+    expect(bodyText).not.toContain(SECRET_MARKER);
+    // … nor in any response header (name or value). Serialize the full header set to be exhaustive.
+    const headerBlob = Object.entries(res.headers)
+      .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(",") : value}`)
+      .join("\n");
+    expect(headerBlob).not.toContain(SECRET_MARKER);
+
+    // (4) the response completed cleanly (Content-Length present, socket not left open).
+    expect(res.headers["content-length"]).toBeDefined();
+  });
+
+  it("routes the redacted cause to the operator diagnostic sink, keyed by the correlation id", async () => {
+    // RB-6 (GEN-OBS-DIAGNOSTICS-901): the cause is no longer discarded. Capture the sink and prove
+    // the record carries the correlation id, the error class, and the cause message — server-side
+    // only (the assertion in the previous test proves it never reaches the browser).
+    const records: ServerDiagnosticRecord[] = [];
+    await startWithThrowingDeps({ record: (r) => records.push(r) });
+
+    const res = await rawRequest("/api/projects");
+    const parsed = JSON.parse(res.body.toString("utf8")) as {
+      error: { correlationId?: string };
+    };
+
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    expect(record?.correlationId).toBe(parsed.error.correlationId);
+    expect(record?.source).toBe("server.top-level-catch");
+    expect(record?.operation).toBe("GET /api/projects");
+    expect(record?.errorClass).toBe("Error");
+    // The cause IS captured for the operator (redactor here knows no secrets, so it passes through);
+    // this is the whole point of RB-6 — the previously-dropped cause is now diagnosable.
+    expect(record?.message).toContain(SECRET_MARKER);
+    expect(typeof record?.timestamp).toBe("string");
+  });
+
+  it("honours a well-formed client-supplied correlation id (UI → server continuity)", async () => {
+    // RB-6 (GEN-OBS-CORRELATION-601): a UI-supplied id on X-Keiko-Correlation-Id is reused, so a
+    // failure is traceable from the browser through the server with a single id.
+    await startWithThrowingDeps();
+    const clientId = "ui-req-0123456789abcdef";
+    const res = await rawRequest("/api/projects", { "x-keiko-correlation-id": clientId });
+    const parsed = JSON.parse(res.body.toString("utf8")) as {
+      error: { correlationId?: string };
+    };
+    expect(res.headers["x-keiko-correlation-id"]).toBe(clientId);
+    expect(parsed.error.correlationId).toBe(clientId);
+  });
+
+  it("rejects a malformed client-supplied correlation id and mints a fresh one", async () => {
+    // A client cannot inject a header value or bloat the diagnostic log: a bad id is replaced.
+    await startWithThrowingDeps();
+    const res = await rawRequest("/api/projects", {
+      "x-keiko-correlation-id": "bad id with spaces\tand-tabs",
+    });
+    const parsed = JSON.parse(res.body.toString("utf8")) as {
+      error: { correlationId?: string };
+    };
+    expect(parsed.error.correlationId).not.toBe("bad id with spaces\tand-tabs");
+    expect(parsed.error.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+  });
+
+  it("stays alive and keeps serving requests after a handler throw (no process crash)", async () => {
+    await startWithThrowingDeps();
+
+    // First request trips the throwing seam …
+    const first = await rawRequest("/api/projects");
+    expect(first.status).toBe(500);
+
+    // … and a second, unrelated request on the same server still succeeds, proving the catch
+    // isolated the failure (an unhandled rejection would have taken the process/server down).
+    const health = await fetchRaw("/api/health");
+    expect(health.status).toBe(200);
+    expect(JSON.parse(health.text)).toMatchObject({ status: "ok" });
+  });
+
+  // NOTE: A mid-stream throw (a throw AFTER headers are sent, exercising the `else { res.end(); }`
+  // branch) is intentionally NOT wired here. The existing helpers offer no seam to inject a throw
+  // into an in-flight streaming response — the streaming handlers own and terminate their sockets
+  // internally rather than re-throwing past `dispatchApi`'s STREAMING short-circuit to the top-level
+  // catch — so a mid-stream case cannot be constructed without adding a production test hook, which
+  // is out of scope for this test-only change. The headers-not-sent branch above is fully covered.
 });

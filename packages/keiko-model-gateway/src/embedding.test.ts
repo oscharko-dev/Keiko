@@ -524,6 +524,48 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     expect(capturedAuth).toBe(`Bearer ${apiKey}`);
   });
 
+  it("RB-4 (GEN-AI-GATEWAY-002): routes an OpenAI-compatible embedding provider to /embeddings", async () => {
+    let seenUrl = "";
+    const fetchImpl = mockFetch((url) => {
+      seenUrl = url;
+      return new Response(makeSuccessBody(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "text-embedding-3-small",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(seenUrl).toBe("https://example.test/v1/embeddings");
+  });
+
+  it("RB-4 (GEN-AI-GATEWAY-002): routes an Azure-configured embedding provider to its deployment URL", async () => {
+    let seenUrl = "";
+    const fetchImpl = mockFetch((url) => {
+      seenUrl = url;
+      return new Response(makeSuccessBody(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await requestOpenAIEmbedding({
+      endpoint: "https://my-azure.openai.azure.com",
+      apiKey: "k",
+      modelId: "text-embedding-3-small",
+      input: "ping",
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2024-06-01",
+      fetchImpl,
+    });
+    expect(seenUrl).toBe(
+      "https://my-azure.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings?api-version=2024-06-01",
+    );
+  });
+
   it("pins float encoding and normalizes returned scalar vectors", async () => {
     let sentBody: unknown = null;
     const fetchImpl = mockFetch((_url, init) => {
@@ -673,13 +715,22 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
   it("returns 'cancelled' when the caller's signal aborts (#192 Copilot)", async () => {
     const controller = new AbortController();
     const fetchImpl = mockFetch(
-      () =>
+      (_url, init) =>
         new Promise<Response>((_resolve, reject) => {
-          // Simulate fetch reacting to the abort. The classifier should treat caller-abort
-          // as cancellation, NOT a timeout.
-          controller.signal.addEventListener("abort", () => {
-            reject(new DOMException("aborted", "AbortError"));
-          });
+          // Simulate fetch reacting to the composed request signal. The classifier should treat
+          // caller-abort as cancellation, NOT a timeout, even if the abort beats listener setup.
+          const abortError = new DOMException("aborted", "AbortError");
+          if (init.signal?.aborted === true) {
+            reject(abortError);
+            return;
+          }
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(abortError);
+            },
+            { once: true },
+          );
         }),
     );
     const promise = requestOpenAIEmbedding({

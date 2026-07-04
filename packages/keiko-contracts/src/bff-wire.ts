@@ -21,6 +21,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateOmissionReason,
   type ConnectedContextPack,
+  type ContextCoverageDiagnostics,
   type ExplorationBudget,
   type ExplorationUsage,
   type RetrievalQueryKind,
@@ -34,6 +35,7 @@ import type {
   KnowledgeSourceId,
 } from "./local-knowledge.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
+import type { DiscussionMode } from "./discussion-intelligence.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -392,6 +394,112 @@ export interface DesktopChatSendResponse {
   readonly memory?: ConversationMemoryResultWire;
 }
 
+export const DESKTOP_CHAT_STREAM_EVENT_TYPES = ["token", "done", "error", "cancelled"] as const;
+export type DesktopChatStreamEventType = (typeof DESKTOP_CHAT_STREAM_EVENT_TYPES)[number];
+
+export const DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES = ["done", "error", "cancelled"] as const;
+export type DesktopChatStreamTerminalEventType =
+  (typeof DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES)[number];
+
+export interface DesktopChatStreamTokenEvent {
+  readonly event: "token";
+  readonly data: {
+    readonly text: string;
+  };
+}
+
+export interface DesktopChatStreamDoneEvent {
+  readonly event: "done";
+  readonly data: DesktopChatSendResponse;
+}
+
+export interface DesktopChatStreamErrorEvent {
+  readonly event: "error";
+  readonly data: {
+    readonly code: string;
+    readonly message: string;
+    // RB-6 (GEN-OBS-CORRELATION-402): the request correlation id, so a failed streamed turn is
+    // traceable to exactly one server-side diagnostic record. Optional and additive — the type guard
+    // and existing frames that omit it are unaffected.
+    readonly correlationId?: string;
+  };
+}
+
+export interface DesktopChatStreamCancelledEvent {
+  readonly event: "cancelled";
+  readonly data: Readonly<Record<string, never>>;
+}
+
+export type DesktopChatStreamEvent =
+  | DesktopChatStreamTokenEvent
+  | DesktopChatStreamDoneEvent
+  | DesktopChatStreamErrorEvent
+  | DesktopChatStreamCancelledEvent;
+
+export type DesktopChatStreamTerminalEvent = Extract<
+  DesktopChatStreamEvent,
+  { readonly event: DesktopChatStreamTerminalEventType }
+>;
+
+export interface DesktopChatSendAbortContract {
+  readonly buffered: "client-disconnect-aborts-model-call";
+  readonly streaming: "client-disconnect-aborts-model-call";
+  readonly streamingTerminalEvent: "cancelled";
+}
+
+export const DESKTOP_CHAT_SEND_ABORT_CONTRACT: DesktopChatSendAbortContract = {
+  buffered: "client-disconnect-aborts-model-call",
+  streaming: "client-disconnect-aborts-model-call",
+  streamingTerminalEvent: "cancelled",
+} as const;
+
+function isWireRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isDesktopChatTokenData(data: unknown): boolean {
+  return isWireRecord(data) && typeof data.text === "string";
+}
+
+function isDesktopChatErrorData(data: unknown): boolean {
+  return isWireRecord(data) && typeof data.code === "string" && typeof data.message === "string";
+}
+
+function isDesktopChatDoneData(data: unknown): boolean {
+  return isWireRecord(data) && isWireRecord(data.chat) && Array.isArray(data.messages);
+}
+
+export function isDesktopChatStreamEvent(value: unknown): value is DesktopChatStreamEvent {
+  if (!isWireRecord(value)) return false;
+  const { event, data } = value;
+  switch (event) {
+    case "token":
+      return isDesktopChatTokenData(data);
+    case "error":
+      return isDesktopChatErrorData(data);
+    case "cancelled":
+      return isWireRecord(data);
+    case "done":
+      return isDesktopChatDoneData(data);
+    default:
+      return false;
+  }
+}
+
+export function isDesktopChatStreamTerminalEvent(
+  value: DesktopChatStreamEvent,
+): value is DesktopChatStreamTerminalEvent {
+  return eventIsDesktopChatStreamTerminal(value.event);
+}
+
+export function eventIsDesktopChatStreamTerminal(
+  event: DesktopChatStreamEventType,
+): event is DesktopChatStreamTerminalEventType {
+  return DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES.includes(
+    event as DesktopChatStreamTerminalEventType,
+  );
+}
+
 // Issue #148 — Safe document context extraction for conversation inputs.
 // One wire entry per attached document the UI has extracted text from. The server passes the
 // `text` field through into a structured prompt block — it does NOT re-extract from disk
@@ -420,6 +528,35 @@ export interface ConversationAttachmentDescriptorWire {
   readonly sizeBytes: number;
 }
 
+// Issue #149 — canonical attachment allowlist + per-attachment ceiling + MIME classifier
+// (GEN-DUP-SEMANTIC-013 / GEN-DUP-SEMANTIC-014). Both the keiko-ui composer (useChatSession)
+// and the keiko-server conversation validator had re-declared this policy inline and drifted:
+// the server accepted a 7-literal document superset the client did not. This adopts the
+// SERVER's current superset as canonical so both sides classify identically — a UX fix, not a
+// security loosening (the server behaviour is unchanged). SVG is denied even though it is
+// `image/*` because it is a script-carrying vector.
+export const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8 MiB, per-attachment ceiling
+export const ALLOWED_IMAGE_MIME_PREFIXES = ["image/"] as const;
+export const ALLOWED_DOCUMENT_MIME_PREFIXES = ["text/"] as const;
+export const ALLOWED_DOCUMENT_MIME_LITERALS: ReadonlySet<string> = new Set([
+  "application/json",
+  "application/x-yaml",
+  "application/yaml",
+  "application/xml",
+  "application/javascript",
+  "application/typescript",
+  "application/pdf",
+]);
+
+export function classifyAttachmentMime(mimeType: string): "image" | "document" | "unsupported" {
+  // SVG is denied (script-carrying vector) even though it is image/*
+  if (mimeType === "image/svg+xml" || mimeType === "image/svg") return "unsupported";
+  if (ALLOWED_IMAGE_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return "image";
+  if (ALLOWED_DOCUMENT_MIME_PREFIXES.some((p) => mimeType.startsWith(p))) return "document";
+  if (ALLOWED_DOCUMENT_MIME_LITERALS.has(mimeType)) return "document";
+  return "unsupported";
+}
+
 // Issue #148 — wire shape for POST /api/desktop/chat. Authored here (not inside keiko-server)
 // so the UI and the server share a single source of truth for the send payload. Existing
 // callers that omit `documentContext` or `attachments` keep working — both fields are optional
@@ -430,8 +567,10 @@ export interface DesktopChatSendRequestWire {
   readonly projectPath: string;
   readonly content: string;
   readonly modelId?: string | undefined;
+  readonly memory?: ConversationMemoryRequestWire | undefined;
   readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
   readonly attachments?: readonly ConversationAttachmentDescriptorWire[] | undefined;
+  readonly discussionMode?: DiscussionMode | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
@@ -576,11 +715,7 @@ export interface GroundedUncertainty {
 }
 
 export type GroundedRerankerStatus =
-  | "disabled"
-  | "not-configured"
-  | "unavailable"
-  | "invalid-response"
-  | "applied";
+  "disabled" | "not-configured" | "unavailable" | "invalid-response" | "applied";
 
 export interface GroundedRerankerDiagnostics {
   readonly status: GroundedRerankerStatus;
@@ -632,6 +767,9 @@ export interface GroundedAnswerContextPackSummary {
   readonly uncertaintyCount: number;
   readonly elapsedMs: number;
   readonly rankingSummary?: GroundedAnswerRankingSummary | undefined;
+  // Path-free coverage/truncation summary. Present only when the source pack carries search coverage
+  // diagnostics; contains counts and closed reason enums, never raw paths, query text, or excerpts.
+  readonly coverage?: ContextCoverageDiagnostics | undefined;
   // Path-free aggregate of the context-assembly pass (ADR-0057 D1). Absent on legacy / non-profiled
   // turns; present only when assembly diagnostics were supplied to the builder.
   readonly contextSummary?: GroundedAnswerContextSummary | undefined;
@@ -747,6 +885,7 @@ export function buildGroundedAnswerContextPackSummary(
   assemblyDiagnostics?: ContextAssemblyDiagnostics,
 ): GroundedAnswerContextPackSummary {
   const rankingSummary = buildRankingSummary(pack);
+  const coverage = pack.diagnostics?.coverage;
   const contextSummary =
     assemblyDiagnostics !== undefined ? buildContextSummary(assemblyDiagnostics) : undefined;
   return {
@@ -763,6 +902,7 @@ export function buildGroundedAnswerContextPackSummary(
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
     ...(rankingSummary !== undefined ? { rankingSummary } : {}),
+    ...(coverage !== undefined ? { coverage } : {}),
     ...(contextSummary !== undefined ? { contextSummary } : {}),
   };
 }

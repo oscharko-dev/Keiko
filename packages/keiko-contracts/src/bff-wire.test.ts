@@ -6,13 +6,21 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGroundedAnswerContextPackSummary,
+  classifyAttachmentMime,
   DEFAULT_GROUNDING_LIMITS,
+  DESKTOP_CHAT_SEND_ABORT_CONTRACT,
+  DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
+  eventIsDesktopChatStreamTerminal,
   GROUNDING_LIMIT_CEILINGS,
+  isDesktopChatStreamEvent,
+  MAX_ATTACHMENT_BYTES,
   MAX_CONNECTED_SOURCES,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
   resolveGroundingLimits,
   type Chat,
   type ChatLocalKnowledgeScope,
+  type DesktopChatSendRequestWire,
+  type DesktopChatStreamTerminalEvent,
   type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type GroundedAnswerContextSummary,
@@ -33,11 +41,23 @@ import {
   DEFAULT_EXPLORATION_BUDGET,
   type CandidateOmissionReason,
   type ConnectedContextPack,
+  type ContextCoverageDiagnostics,
   type ExplorationUsage,
   type RetrievalQuery,
   type SelectedScope,
   type SelectedScopeKind,
 } from "./connected-context.js";
+
+type Assert<T extends true> = T;
+type HasKey<T, K extends PropertyKey> = K extends keyof T ? true : false;
+
+// Compile-time assertions that the wire request owns these keys. Exported so the linter treats the
+// aliases as used while tsc still fails the build if any key is dropped from the contract.
+export type DesktopChatSendRequestOwnership = [
+  Assert<HasKey<DesktopChatSendRequestWire, "memory">>,
+  Assert<HasKey<DesktopChatSendRequestWire, "attachments">>,
+  Assert<HasKey<DesktopChatSendRequestWire, "discussionMode">>,
+];
 
 const USAGE_FIXTURE: ExplorationUsage = {
   searchCalls: 3,
@@ -55,6 +75,32 @@ function emptyOmittedCounts(): Record<CandidateOmissionReason, number> {
     counts[reason] = 0;
   }
   return counts;
+}
+
+function coverageDiagnostics(
+  overrides: Partial<ContextCoverageDiagnostics> = {},
+): ContextCoverageDiagnostics {
+  return {
+    truncated: true,
+    incomplete: true,
+    reasons: ["file-cap"],
+    filesDiscovered: 101,
+    filesAfterPolicy: 100,
+    filesScanned: 50,
+    filesSkipped: 51,
+    ignoredByDiscovery: 1,
+    deniedByDiscovery: 0,
+    depthPrunedByDiscovery: 0,
+    maxFilesPrunedByDiscovery: 0,
+    matchesReturned: 12,
+    elapsedMs: 250,
+    limits: {
+      maxFilesScanned: 50,
+      maxMatchesReturned: 100,
+      elapsedMsMax: 5_000,
+    },
+    ...overrides,
+  };
 }
 
 function scope(kind: SelectedScopeKind, relativePaths: readonly string[]): SelectedScope {
@@ -120,6 +166,26 @@ describe("buildGroundedAnswerContextPackSummary", () => {
   it("omits rankingSummary when the pack carries no diagnostics", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0);
     expect("rankingSummary" in summary).toBe(false);
+  });
+
+  it("projects path-free coverage diagnostics when the pack carries them", () => {
+    const coverage = coverageDiagnostics({ reasons: ["file-cap", "depth-pruned"] });
+    const summary = buildGroundedAnswerContextPackSummary(
+      pack({
+        diagnostics: {
+          rankedCandidates: [],
+          coverage,
+        },
+      }),
+      0,
+      0,
+    );
+
+    expect(summary.coverage).toStrictEqual(coverage);
+    const serialized = JSON.stringify(summary.coverage);
+    expect(serialized).not.toContain("src/");
+    expect(serialized).not.toContain("how does foo work");
+    expect(serialized).not.toContain("/home/dev/keiko");
   });
 
   it("derives a path-free ranking aggregate from pack diagnostics", () => {
@@ -273,6 +339,45 @@ describe("buildGroundedAnswerContextPackSummary", () => {
   it("structural test: summary JSON is bounded (well below the 1KB review target)", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
     expect(JSON.stringify(summary).length).toBeLessThan(1_000);
+  });
+});
+
+describe("desktop chat BFF wire contracts", () => {
+  it("accepts every owned SSE event and rejects malformed payloads", () => {
+    expect(isDesktopChatStreamEvent({ event: "token", data: { text: "hello" } })).toBe(true);
+    expect(
+      isDesktopChatStreamEvent({
+        event: "done",
+        data: { chat: { id: "chat-1" }, messages: [] },
+      }),
+    ).toBe(true);
+    expect(isDesktopChatStreamEvent({ event: "error", data: { code: "X", message: "No" } })).toBe(
+      true,
+    );
+    expect(isDesktopChatStreamEvent({ event: "cancelled", data: {} })).toBe(true);
+    expect(isDesktopChatStreamEvent({ event: "done", data: { chat: {}, messages: "no" } })).toBe(
+      false,
+    );
+    expect(isDesktopChatStreamEvent({ event: "token", data: { text: 1 } })).toBe(false);
+  });
+
+  it("pins terminal SSE events as an exhaustive subset", () => {
+    const terminal: Record<DesktopChatStreamTerminalEvent["event"], true> = {
+      done: true,
+      error: true,
+      cancelled: true,
+    };
+    expect(DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES).toEqual(Object.keys(terminal));
+    expect(eventIsDesktopChatStreamTerminal("done")).toBe(true);
+    expect(eventIsDesktopChatStreamTerminal("token")).toBe(false);
+  });
+
+  it("publishes the buffered/streaming abort policy at the wire boundary", () => {
+    expect(DESKTOP_CHAT_SEND_ABORT_CONTRACT).toEqual({
+      buffered: "client-disconnect-aborts-model-call",
+      streaming: "client-disconnect-aborts-model-call",
+      streamingTerminalEvent: "cancelled",
+    });
   });
 });
 
@@ -587,5 +692,31 @@ describe("resolveGroundingLimits", () => {
       expect(typeof result[key]).toBe("number");
       expect(result[key]).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("classifyAttachmentMime (GEN-DUP-SEMANTIC-013 / -014)", () => {
+  it("classifies image/* as image but denies SVG", () => {
+    expect(classifyAttachmentMime("image/png")).toBe("image");
+    expect(classifyAttachmentMime("image/jpeg")).toBe("image");
+    expect(classifyAttachmentMime("image/svg+xml")).toBe("unsupported");
+    expect(classifyAttachmentMime("image/svg")).toBe("unsupported");
+  });
+
+  it("classifies text/* and the document literal superset as document", () => {
+    expect(classifyAttachmentMime("text/markdown")).toBe("document");
+    expect(classifyAttachmentMime("text/plain")).toBe("document");
+    expect(classifyAttachmentMime("application/pdf")).toBe("document");
+    expect(classifyAttachmentMime("application/xml")).toBe("document");
+    expect(classifyAttachmentMime("application/typescript")).toBe("document");
+    expect(classifyAttachmentMime("application/json")).toBe("document");
+  });
+
+  it("classifies unknown application types as unsupported", () => {
+    expect(classifyAttachmentMime("application/octet-stream")).toBe("unsupported");
+  });
+
+  it("pins the per-attachment ceiling at 8 MiB", () => {
+    expect(MAX_ATTACHMENT_BYTES).toBe(8_388_608);
   });
 });

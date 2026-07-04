@@ -550,10 +550,35 @@ describe("memory handlers", () => {
     const tombstones = vault.listTombstonesByScope({ kind: "global" });
     expect(tombstones).toHaveLength(1);
     expect(tombstones[0]?.memoryId).toBe(memoryId("memory-forget-1"));
-    expect(tombstones[0]?.reason).toBe("user removed stale package-manager preference");
+    expect(tombstones[0]?.reason).toBe("user-request");
     expect(tombstones[0]?.reviewerId).toBe("operator-a");
     expect(tombstones[0]?.originalStatus).toBe("accepted");
     expect(JSON.stringify(tombstones)).not.toContain("PRIVATE-BODY-FORGET-FINGERPRINT");
+    expect(JSON.stringify(tombstones)).not.toContain("package-manager preference");
+  });
+
+  it("does not persist browser-supplied forget reason text into tombstones", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("memory-forget-sensitive-reason", "body can be forgotten"));
+
+    const result = await handleForgetMemory(
+      makeCtx(
+        "/api/memory/memory-forget-sensitive-reason/forget",
+        {
+          acknowledged: true,
+          reason:
+            "forget customer-id CUST-SECRET-123 and token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+        { id: "memory-forget-sensitive-reason" },
+      ),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    const serializedTombstones = JSON.stringify(vault.listTombstonesByScope({ kind: "global" }));
+    expect(serializedTombstones).toContain("user-request");
+    expect(serializedTombstones).not.toContain("CUST-SECRET-123");
+    expect(serializedTombstones).not.toContain("ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   });
 
   it("rejects destructive forget requests that omit explicit acknowledgement", async () => {
@@ -699,7 +724,7 @@ describe("memory handlers", () => {
     expect(tombstones[0]).toEqual(
       expect.objectContaining({
         memoryId: memoryId("memory-delete-1"),
-        reason: "operator requested delete",
+        reason: "user-request",
         reviewerId: "local-operator",
         originalStatus: "accepted",
       }),

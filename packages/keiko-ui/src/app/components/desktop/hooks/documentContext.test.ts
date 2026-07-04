@@ -33,11 +33,17 @@ function makeDoc(overrides: Partial<PendingDocument> & { text: string }): Pendin
   };
 }
 
-/** A PendingDocument whose File.text() rejects, to exercise the unreadable path. */
+/**
+ * A PendingDocument whose read rejects, to exercise the unreadable path. A genuinely unreadable
+ * file (e.g. EACCES) rejects whether the extractor reads the whole file (`file.text()`) or only a
+ * bounded prefix (`file.slice(...).text()` — GEN-PERF-CHAT-013), so both entry points reject here.
+ */
 function makeUnreadableDoc(name: string): PendingDocument {
   const file = new File(["unused"], name, { type: "text/plain" });
-  Object.defineProperty(file, "text", {
-    value: () => Promise.reject(new Error("/Users/secret/denied: EACCES permission denied")),
+  const reject = () => Promise.reject(new Error("/Users/secret/denied: EACCES permission denied"));
+  Object.defineProperty(file, "text", { value: reject });
+  Object.defineProperty(file, "slice", {
+    value: () => ({ text: reject }),
   });
   return { id: "bad-1", name, mimeType: "text/plain", sizeBytes: 10, file };
 }
@@ -202,14 +208,93 @@ describe("extractDocumentContext — aggregate budget", () => {
     expect(failures.join(" ")).toContain("first 16 documents");
   });
 
-  it("stays silent for genuinely empty files and binary (PDF) documents", async () => {
+  it("stays silent for genuinely empty files but discloses binary (PDF) text skips", async () => {
     const { entries, failures } = await extractDocumentContext([
       makeDoc({ id: "empty", name: "empty.txt", text: "" }),
-      { ...makeDoc({ id: "pdf", name: "spec.pdf", text: "x" }), mimeType: "application/pdf" },
+      {
+        ...makeDoc({ id: "pdf", name: "/Users/secret/spec.pdf", text: "x" }),
+        mimeType: "application/pdf",
+      },
     ]);
     expect(entries).toEqual([]);
-    // Empty file lost nothing; the PDF metadata-only path is by design — no noise for either.
-    expect(failures).toEqual([]);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('"spec.pdf"');
+    expect(failures[0]).toContain("without document text");
+    expect(failures[0]).not.toContain("/Users/");
+  });
+});
+
+describe("extractDocumentContext — bounded prefix read (GEN-PERF-CHAT-013)", () => {
+  it("reads only the budgeted prefix via slice(), never the whole file", async () => {
+    // 8 MiB file. The whole-file path would call file.text() (or slice the whole blob); the
+    // bounded path must slice at most ~64 KiB + marker + a few bytes of overshoot.
+    const eightMiB = "a".repeat(8 * 1024 * 1024);
+    const file = new File([eightMiB], "big.txt", { type: "text/plain" });
+
+    const sliceCalls: Array<{ start?: number | undefined; end?: number | undefined }> = [];
+    const realSlice = file.slice.bind(file);
+    let wholeTextCalled = false;
+    Object.defineProperty(file, "slice", {
+      value: (start?: number, end?: number, contentType?: string) => {
+        sliceCalls.push({ start, end });
+        return realSlice(start, end, contentType);
+      },
+    });
+    Object.defineProperty(file, "text", {
+      value: () => {
+        wholeTextCalled = true;
+        return Promise.resolve(eightMiB);
+      },
+    });
+
+    const doc: PendingDocument = {
+      id: "big",
+      name: "big.txt",
+      mimeType: "text/plain",
+      sizeBytes: eightMiB.length,
+      file,
+    };
+    const { entries } = await extractDocumentContext([doc]);
+
+    // The whole-file text() reader must NOT be used.
+    expect(wholeTextCalled).toBe(false);
+    // Exactly one slice, bounded well under the file size.
+    expect(sliceCalls).toHaveLength(1);
+    const call = sliceCalls[0];
+    expect(call?.start).toBe(0);
+    expect(call?.end).toBeDefined();
+    // end <= 64 KiB + marker bytes + 4 (overshoot); comfortably under a MiB.
+    const markerBytes = utf8Bytes(DOCUMENT_TRUNCATION_MARKER);
+    expect(call?.end).toBeLessThanOrEqual(MAX_DOCUMENT_CONTEXT_TEXT_BYTES + markerBytes + 4);
+    // Still produces a correctly truncated entry.
+    expect(entries[0]?.truncated).toBe(true);
+    expect(utf8Bytes(entries[0]?.text ?? "")).toBeLessThanOrEqual(MAX_DOCUMENT_CONTEXT_TEXT_BYTES);
+  });
+
+  it("yields a byte-identical entry to the whole-file path for a below-budget file", async () => {
+    const text = "# Notes\nHello 漢字 🎉 world.";
+    // Reference entry from the ordinary (real File) path.
+    const { entries: ref } = await extractDocumentContext([
+      makeDoc({ id: "d1", name: "notes.md", mimeType: "text/markdown", text }),
+    ]);
+
+    // A File whose whole-file text() throws — proving the bounded prefix slice produced the entry.
+    const file = new File([text], "notes.md", { type: "text/markdown" });
+    Object.defineProperty(file, "text", {
+      value: () => Promise.reject(new Error("whole-file text() must not be called")),
+    });
+    const doc: PendingDocument = {
+      id: "d1",
+      name: "notes.md",
+      mimeType: "text/markdown",
+      sizeBytes: utf8Bytes(text),
+      file,
+    };
+    const { entries: bounded } = await extractDocumentContext([doc]);
+
+    expect(bounded).toEqual(ref);
+    expect(bounded[0]?.text).toBe(text);
+    expect(bounded[0]?.truncated).toBe(false);
   });
 });
 

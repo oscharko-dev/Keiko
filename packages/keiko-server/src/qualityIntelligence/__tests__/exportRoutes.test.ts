@@ -14,6 +14,7 @@ import {
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
   applyQualityIntelligenceCandidateEdit,
+  loadQualityIntelligenceCandidates,
   loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import type {
@@ -292,7 +293,7 @@ describe("handleQiExport — no candidates", () => {
 });
 
 describe("handleQiExport — malformed candidates companion", () => {
-  it("returns 500 QI_EXPORT_FAILED when the candidates companion is corrupted", async () => {
+  it("returns 409 QI_CANDIDATES_TAMPERED when the candidates companion is corrupted", async () => {
     writeFileSync(
       join(evidenceDir, "qi", `${RUN_ID}.candidates.json`),
       JSON.stringify({
@@ -323,8 +324,34 @@ describe("handleQiExport — malformed candidates companion", () => {
         deps(evidenceDir),
       ),
     );
-    expect(result.status).toBe(500);
-    expect((result.body as { error: { code: string } }).error.code).toBe("QI_EXPORT_FAILED");
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CANDIDATES_TAMPERED");
+  });
+
+  it("returns 409 when candidate content is edited after the companion integrity hash was written", async () => {
+    const artifact = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (artifact === undefined) throw new Error("expected seeded artifact");
+    writeFileSync(
+      join(evidenceDir, "qi", `${RUN_ID}.candidates.json`),
+      JSON.stringify({
+        ...artifact,
+        candidates: artifact.candidates.map((candidate) =>
+          candidate.id === "cand-001"
+            ? { ...candidate, title: "Tampered export title" }
+            : candidate,
+        ),
+      }),
+      "utf8",
+    );
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CANDIDATES_TAMPERED");
   });
 });
 
@@ -722,6 +749,31 @@ describe("handleQiExport — run-scope approval gates the approvedOnly filter", 
     );
     expect(result.status).toBe(409);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
+
+  it("rejects approvedOnly export when the review artifact approval is forged", async () => {
+    writeFileSync(
+      join(evidenceDir, "qi", `${RUN_ID}.review.json`),
+      JSON.stringify({
+        qiReviewSchemaVersion: 1,
+        runId: RUN_ID,
+        runState: "open",
+        candidateStates: { "cand-001": "approved" },
+        auditLog: [],
+        lastUpdatedAt: "2026-06-01T12:00:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false, approvedOnly: true })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_REVIEW_TAMPERED");
   });
 
   it("permits a TMS dry-run (forces approvedOnly) once the RUN is approved", async () => {

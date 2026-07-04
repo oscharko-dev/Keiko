@@ -1,8 +1,8 @@
 // Structural code-intelligence adapter. The exported name stays `importGraphAdapter` for API
-// compatibility, but the implementation now builds a request-local polyglot graph: resolved
-// imports/re-exports, definitions, call references, API route/client contracts, and DTO links.
+// compatibility, while the implementation delegates to the request-local polyglot index.
 
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+
 import { buildCodeIntelligenceIndex, lookupCodeIntelligenceAtoms } from "./codeIntelligence.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";

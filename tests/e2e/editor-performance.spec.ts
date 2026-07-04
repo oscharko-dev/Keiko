@@ -1,8 +1,30 @@
 import { expect, test, type Page, type Response } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// Number of cold-start samples: kept at 3 for the manual/release-evidence smoke, raised (>=10) in the
+// scheduled/CI perf job via KEIKO_PERF_RUNS so p50/p95 are stable rather than the max of 3 noisy
+// samples (GEN-PERF-BENCHMARK-013).
+function resolveMeasuredRuns(): number {
+  const raw = process.env.KEIKO_PERF_RUNS;
+  if (raw === undefined) return 3;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 1 ? parsed : 3;
+}
+
+// Stamp the commit the evidence was measured at for the freshness gate (GEN-PERF-BENCHMARK-001).
+function resolveCommit(): string {
+  const fromEnv = process.env.GITHUB_SHA ?? process.env.KEIKO_PERF_COMMIT;
+  if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 /**
  * Keiko Editor browser-measured release evidence (Issue #1209; ADR-0042 D3.6 §B4/B5/B6/B11).
@@ -494,6 +516,7 @@ function buildEvidence(
 ): Record<string, unknown> {
   return {
     measuredAtIso: new Date().toISOString(),
+    commit: resolveCommit(),
     harness:
       "packaged CLI serving the production static UI via tests/e2e/config/playwright.editor-performance.config.ts",
     b4ColdStartMs: {
@@ -554,7 +577,7 @@ async function collectEvidenceMeasurements(
   page: Page,
   capture: WorkerCapture,
 ): Promise<EvidenceMeasurements> {
-  const measuredRuns = 3;
+  const measuredRuns = resolveMeasuredRuns();
   const coldStartsMs = await measureColdStarts(page, 1, measuredRuns);
   let typing: TypingMetrics = {
     longTasks: [],
@@ -575,11 +598,23 @@ async function collectEvidenceMeasurements(
   return { coldStartsMs, typing, memory };
 }
 
+// Documented B11 ceilings (docs/keiko-editor/1207-performance-budgets.md): peak heap growth across
+// open/close cycles and residual growth after close.
+const B11_PEAK_GROWTH_BUDGET_BYTES = 128 * 1024 * 1024;
+const B11_RESIDUAL_GROWTH_BUDGET_BYTES = 16 * 1024 * 1024;
+
+// eslint-disable-next-line max-lines-per-function -- single release-evidence gate asserting every B4/B5/B6/B11 budget and worker-load guard together; splitting would scatter the coupled expectations.
 function assertEvidenceBudgets(
   evidence: {
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
     b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
     b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    b11Memory: {
+      supported: boolean;
+      baselineBytes: number | null;
+      peakBytes: number | null;
+      residualBytes: number | null;
+    };
     workerLoadCapture: {
       totalWorkerRequests: number;
       editorWorkerLoaded: boolean;
@@ -603,7 +638,26 @@ function assertEvidenceBudgets(
   expect(workerRequests.some(isTsWorkerRequest)).toBe(false);
   expect(workerRequests.some(isLanguageWorkerRequest)).toBe(false);
   expect(evidence.b4ColdStartMs.p50 > 0).toBe(true);
-  expect(measuredRuns).toBe(3);
+  expect(measuredRuns).toBe(resolveMeasuredRuns());
+  // B11 memory: assert the recorded ceilings so the budget is actionable rather than merely recorded
+  // (GEN-PERF-BENCHMARK-003). When the browser exposes a heap probe, peak/residual growth over the
+  // baseline must stay within the documented budgets; a genuine worker/model leak that exceeds heap
+  // quantization now fails the gate instead of being silently recorded.
+  if (
+    evidence.b11Memory.supported &&
+    evidence.b11Memory.baselineBytes !== null &&
+    evidence.b11Memory.peakBytes !== null &&
+    evidence.b11Memory.residualBytes !== null
+  ) {
+    expect(
+      evidence.b11Memory.peakBytes - evidence.b11Memory.baselineBytes,
+      "B11 peak heap growth budget",
+    ).toBeLessThanOrEqual(B11_PEAK_GROWTH_BUDGET_BYTES);
+    expect(
+      evidence.b11Memory.residualBytes - evidence.b11Memory.baselineBytes,
+      "B11 residual heap growth budget",
+    ).toBeLessThanOrEqual(B11_RESIDUAL_GROWTH_BUDGET_BYTES);
+  }
 }
 
 test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evidence", async ({
@@ -631,6 +685,12 @@ test("records Keiko Editor browser release evidence (B4/B5/B6/B11) @release-evid
     b4ColdStartMs: { budgetP50: number; budgetP95: number; p50: number; p95: number };
     b5KeystrokeMs: { budgetMax: number; captured: boolean; maxLongTaskMs: number };
     b6InteractionMs: { budgetP75: number; captured: boolean; p75: number };
+    b11Memory: {
+      supported: boolean;
+      baselineBytes: number | null;
+      peakBytes: number | null;
+      residualBytes: number | null;
+    };
     workerLoadCapture: {
       totalWorkerRequests: number;
       editorWorkerLoaded: boolean;

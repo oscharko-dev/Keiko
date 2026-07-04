@@ -391,8 +391,7 @@ function tableRows(tableXml: string): readonly Paragraph[] {
       const labels = headers.length > 0 ? headers : normalizeTableHeaders([]);
       const projected = cells
         .map(
-          (cell, cellIndex) =>
-            `${labels[cellIndex] ?? `Column ${String(cellIndex + 1)}`}=${cell}`,
+          (cell, cellIndex) => `${labels[cellIndex] ?? `Column ${String(cellIndex + 1)}`}=${cell}`,
         )
         .join(" | ");
       return { text: `Table row ${String(index + 1)}: ${projected}` };

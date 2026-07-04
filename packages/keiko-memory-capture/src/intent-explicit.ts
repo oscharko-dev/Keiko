@@ -8,7 +8,11 @@
 //
 // Pure: no clock, no randomness, no IO. All time and IDs come from CaptureContext.
 
-import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+  type MemoryId,
+  type MemoryScope,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
@@ -32,7 +36,6 @@ const ACTUALLY_RE = /^\s*(?:actually|eigentlich),?\s+(.+?)\s*$/iu;
 const CORRECTION_LABEL_RE = /^\s*(?:correction|korrektur):\s*(.+?)\s*$/iu;
 const THATS_WRONG_RE =
   /^\s*(?:that(?:'s|\s+is)\s+wrong|das\s+stimmt\s+nicht|falsch)[,.]?\s+(.+?)\s+(is|are|should\s+be|ist|sind|sollte\s+sein)\s+(.+?)\s*$/iu;
-
 // Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
 // preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
@@ -163,7 +166,11 @@ export function tryExtractForget(
   if (resolved.kind === "ambiguous") {
     return { kind: "rejected", reason: "ambiguous-forget" };
   }
-  const operation = buildForget({ context, memoryId: resolved.memoryId, reason: target });
+  const operation = buildForget({
+    context,
+    memoryId: resolved.memoryId,
+    reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
+  });
   return { kind: "forget", operation, requiresConfirmation: true };
 }
 
@@ -220,11 +227,7 @@ function extractCorrectionBody(text: string): string | null {
     return labelMatch[1];
   }
   const wrongMatch = THATS_WRONG_RE.exec(text);
-  if (
-    wrongMatch?.[1] !== undefined &&
-    wrongMatch[2] !== undefined &&
-    wrongMatch[3] !== undefined
-  ) {
+  if (wrongMatch?.[1] !== undefined && wrongMatch[2] !== undefined && wrongMatch[3] !== undefined) {
     return `${wrongMatch[1]} ${wrongMatch[2]} ${wrongMatch[3]}`;
   }
   return null;

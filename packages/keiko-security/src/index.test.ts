@@ -10,6 +10,8 @@ import {
   redact,
   createAuditRedactor,
   deepRedactStrings,
+  isCredentialKeyName,
+  objectContainsCredentialKey,
   assertValidRunId,
   isKeikoApiKeyEnvName,
   keikoApiKeySecretValues,
@@ -30,17 +32,29 @@ import {
   VERIFICATION_CODES,
   VerificationError,
   toFailure,
+  RedactingError,
+  DIR_MODE,
+  FILE_MODE,
+  ensureDirHardened,
+  chmodIfPresent,
+  SqliteQuickCheckError,
+  sqliteErrorLike,
+  sqliteErrorText,
+  isSqliteCorruptionError,
+  errorRecord,
 } from "./index.js";
 
 describe("keiko-security package surface", () => {
   it("exposes the version constant pinned at 0.1.0", () => {
-    expect(KEIKO_SECURITY_VERSION).toBe("0.1.0");
+    expect(KEIKO_SECURITY_VERSION).toBe("0.2.11");
   });
 
   it("exposes the redaction primitives as callable functions", () => {
     expect(typeof redact).toBe("function");
     expect(typeof createAuditRedactor).toBe("function");
     expect(typeof deepRedactStrings).toBe("function");
+    expect(typeof isCredentialKeyName).toBe("function");
+    expect(typeof objectContainsCredentialKey).toBe("function");
   });
 
   it("exposes the runId validator as a callable function", () => {
@@ -97,5 +111,24 @@ describe("keiko-security package surface", () => {
 
   it("toFailure is exposed via the security barrel", () => {
     expect(typeof toFailure).toBe("function");
+  });
+
+  it("exposes the shared RedactingError base as a constructor", () => {
+    expect(typeof RedactingError).toBe("function");
+  });
+
+  it("exposes the shared fs-hardening primitives", () => {
+    expect(DIR_MODE).toBe(0o700);
+    expect(FILE_MODE).toBe(0o600);
+    expect(typeof ensureDirHardened).toBe("function");
+    expect(typeof chmodIfPresent).toBe("function");
+  });
+
+  it("exposes the shared SQLite corruption classifier", () => {
+    expect(typeof SqliteQuickCheckError).toBe("function");
+    expect(typeof sqliteErrorLike).toBe("function");
+    expect(typeof sqliteErrorText).toBe("function");
+    expect(typeof isSqliteCorruptionError).toBe("function");
+    expect(typeof errorRecord).toBe("function");
   });
 });

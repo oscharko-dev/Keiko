@@ -16,19 +16,22 @@ import type { IncomingMessage } from "node:http";
 import {
   analyzeGitCommitIntent,
   evaluateGitPolicy,
-  isGitDeliveryApprovalRequirement,
   KEIKO_DEFAULT_COMMIT_MESSAGE_POLICY,
   validateGitCommitMessage,
   type GitCommitChangeSummary,
   type GitCommitIntentAnalysis,
   type GitCommitMessagePolicy,
   type GitCommitMessageValidation,
-  type GitDeliveryApprovalRequirement,
   type GitDeliveryResolvedInputs,
 } from "@oscharko-dev/keiko-contracts";
 import { evaluateGitPreflight, summarizeStagedChangeset } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  parseGitDeliveryApprovalRequest,
+  resolveGitDeliveryApprovalRequirement,
+  type ParsedGitDeliveryApprovalRequest,
+} from "./approvalStore.js";
 import {
   executeGovernedMutation,
   gitDeliveryMutationResponse,
@@ -229,20 +232,13 @@ interface ExecuteRequest {
   readonly projectId: string;
   readonly message: string;
   readonly allowEmpty: boolean;
-  readonly approval: GitDeliveryApprovalRequirement;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
 }
-
-const NO_APPROVAL: GitDeliveryApprovalRequirement = { required: false };
 
 function validateExecute(obj: Record<string, unknown>): ExecuteRequest | undefined {
   if (!isNonEmptyString(obj.message)) return undefined;
   if (obj.allowEmpty !== undefined && typeof obj.allowEmpty !== "boolean") return undefined;
-  const approval: GitDeliveryApprovalRequirement | undefined =
-    obj.approval === undefined
-      ? NO_APPROVAL
-      : isGitDeliveryApprovalRequirement(obj.approval)
-        ? obj.approval
-        : undefined;
+  const approval = parseGitDeliveryApprovalRequest(obj.approval);
   if (approval === undefined) return undefined;
   return {
     projectId: obj.projectId as string,
@@ -281,15 +277,16 @@ export const createHandleCommitExecute = (
         }),
       };
     }
+    const command = { kind: "commit" as const, message: req.message, allowEmpty: req.allowEmpty };
+    const verifiedApproval = resolveGitDeliveryApprovalRequirement(req.approval, {
+      store: seams.approvalStore,
+      binding: { projectId: req.projectId, operation: "commit", command },
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
     let result;
     try {
-      result = await executeGovernedMutation(
-        { kind: "commit", message: req.message, allowEmpty: req.allowEmpty },
-        req.approval,
-        workspace,
-        deps,
-        seams,
-      );
+      result = await executeGovernedMutation(command, verifiedApproval, workspace, deps, seams);
     } catch {
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }

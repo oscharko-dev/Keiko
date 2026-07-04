@@ -1,4 +1,4 @@
-// Voice Digital Twin scorer (Epic #491, Issue #505; ADR-0068).
+// Voice Digital Twin scorer (Epic #491, Issue #505; ADR-0110).
 //
 // Pure per-dimension scoring + suite aggregation across the eleven capstone dimensions. Each dimension is a
 // pure function over the fixture + its derived observation. A dimension a fixture does not declare is

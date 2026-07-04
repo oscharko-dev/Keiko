@@ -1,8 +1,8 @@
-// BFF voice dictation route (Issue #494, Epic #491, ADR-0058 D1/D2/D4/D6). `POST /api/voice/transcribe`
+// BFF voice dictation route (Issue #494, Epic #491, ADR-0100 D1/D2/D4/D6). `POST /api/voice/transcribe`
 // accepts one short controlled composer-dictation clip and returns its transcript. The route is
 // capability-gated: it transcribes only when the resolved voice capability advertises speech-to-text
 // (AC1), and otherwise answers a deterministic, secret-free `VOICE_UNAVAILABLE` so Keiko stays fully
-// usable in no-voice / policy-disabled / unreachable deployments (AC2, ADR-0058 D1).
+// usable in no-voice / policy-disabled / unreachable deployments (AC2, ADR-0100 D1).
 //
 // The audio rides inside the existing JSON + CSRF request envelope (base64 `audio` field) so the
 // server's "state-changing requests must be JSON and carry the CSRF guard" invariant is preserved
@@ -43,7 +43,7 @@ import { isVoiceDisabledByPolicy } from "./read-handlers.js";
 // The decoded-audio ceiling for one dictation clip. This is the authoritative bound on the
 // transcribable duration: regardless of codec, a clip cannot exceed this many bytes, so the maximum
 // possible duration is bounded even though precise server-side duration measurement would require
-// decoding the container (out of scope — no audio-processing dependency, ADR-0058 supply-chain D8).
+// decoding the container (out of scope — no audio-processing dependency, ADR-0100 supply-chain D8).
 const MAX_AUDIO_BYTES = 4_000_000;
 // The JSON envelope ceiling. base64 inflates by ~4/3, so this comfortably holds MAX_AUDIO_BYTES of
 // base64 plus the small JSON field overhead while still rejecting an oversized body early (413).
@@ -144,7 +144,7 @@ async function readJsonObject(
   return parsed;
 }
 
-// Deterministic, secret-free disabled response (AC1/AC2, ADR-0058 D1). Returned both when no STT
+// Deterministic, secret-free disabled response (AC1/AC2, ADR-0100 D1). Returned both when no STT
 // capability is configured/enabled and when a configured provider is selected but missing — the
 // browser sees a stable shape and Keiko remains fully usable.
 function unavailable(deps: UiHandlerDeps): RouteResult {
@@ -318,7 +318,7 @@ function resolveSttProvider(config: GatewayConfig): ModelProviderConfig | undefi
   return config.providers.find((provider) => provider.modelId === modelId);
 }
 
-// Capability gate (AC1, ADR-0058 D1): resolves the STT provider to dictate against, or a clean
+// Capability gate (AC1, ADR-0100 D1): resolves the STT provider to dictate against, or a clean
 // VOICE_UNAVAILABLE RouteResult when no speech-to-text capability is configured, enabled, reachable,
 // or backed by a provider record. Runs before any audio is read so a disabled deployment does zero
 // audio work.

@@ -529,6 +529,95 @@ describe("desktop chat routes", () => {
     ]);
   });
 
+  it("replays an idempotent realtime voice turn without duplicating persisted messages", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const payload = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      idempotencyKey: "voice-turn-replay-1",
+      messages: [
+        { role: "user", content: "open the deploy log", timestamp: 1_700_000_000_000 },
+        { role: "assistant", content: "The deploy log is open.", timestamp: 1_700_000_000_001 },
+      ],
+    };
+
+    const first = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+    const firstBody = (await first.json()) as {
+      error?: { code?: string; message?: string };
+      messages?: { id: string; runId?: string }[];
+    };
+    const second = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(payload),
+    });
+    const secondBody = (await second.json()) as {
+      error?: { code?: string; message?: string };
+      messages?: { id: string; runId?: string }[];
+    };
+
+    expect(first.status, JSON.stringify(firstBody.error)).toBe(200);
+    expect(second.status, JSON.stringify(secondBody.error)).toBe(200);
+    expect(secondBody.messages?.map((message) => message.id)).toEqual(
+      firstBody.messages?.map((message) => message.id),
+    );
+    expect(firstBody.messages?.some((message) => message.runId !== undefined)).toBe(false);
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("rejects divergent realtime voice-turn reuse of an idempotency key", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const basePayload = {
+      chatId: created.chat.id,
+      projectPath: projectDir,
+      idempotencyKey: "voice-turn-conflict-1",
+      messages: [
+        { role: "user", content: "open the deploy log", timestamp: 1_700_000_000_000 },
+        { role: "assistant", content: "The deploy log is open.", timestamp: 1_700_000_000_001 },
+      ],
+    };
+    const first = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify(basePayload),
+    });
+    const second = await fetch(`${base()}/api/desktop/chat/voice-turn`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        ...basePayload,
+        messages: [
+          { role: "user", content: "open a different log", timestamp: 1_700_000_000_000 },
+          { role: "assistant", content: "The deploy log is open.", timestamp: 1_700_000_000_001 },
+        ],
+      }),
+    });
+
+    const firstBody = (await first.clone().json()) as {
+      error?: { code?: string; message?: string };
+    };
+    expect(first.status, JSON.stringify(firstBody.error)).toBe(200);
+    expect(second.status).toBe(409);
+    const conflict = (await second.json()) as { error?: { code?: string } };
+    expect(conflict.error?.code).toBe("VOICE_TURN_IDEMPOTENCY_CONFLICT");
+    expect(store.listMessages(created.chat.id)).toHaveLength(2);
+  });
+
   it("captures MemoriaViva proposals from realtime voice turns without generating a second chat answer", async () => {
     const memoryDir = join(tmp, "voice-turn-memory-vault");
     mkdirSync(memoryDir);
@@ -1527,7 +1616,7 @@ describe("desktop chat routes", () => {
       } else {
         expect(res.status).toBe(400);
         const body = (await res.json()) as { error?: { code?: string } };
-        expect(body.error?.code).toBe("path_not_found");
+        expect(body.error?.code).toBe("PATH_NOT_FOUND");
       }
     } finally {
       cwdSpy.mockRestore();
@@ -1618,6 +1707,82 @@ describe("desktop chat routes", () => {
     const draftIdx = lastTurn?.content.indexOf("Should we ship this?") ?? -1;
     expect(headerIdx).toBeGreaterThanOrEqual(0);
     expect(draftIdx).toBeGreaterThan(headerIdx);
+  });
+
+  it("passes the client disconnect signal to buffered model calls", async () => {
+    const memoryDir = join(tmp, "desktop-chat-buffered-abort-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    let capturedSignal: AbortSignal | undefined;
+    let modelStartedResolve: (() => void) | undefined;
+    let abortObservedResolve: (() => void) | undefined;
+    const modelStarted = new Promise<void>((resolve) => {
+      modelStartedResolve = resolve;
+    });
+    const abortObserved = new Promise<void>((resolve) => {
+      abortObservedResolve = resolve;
+    });
+    const abortAwareModel: ModelPort = {
+      call(request, signal): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        capturedSignal = signal;
+        modelStartedResolve?.();
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              abortObservedResolve?.();
+              reject(new Error("model call aborted"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    await restartWithDeps(deps(abortAwareModel, { memoryVault }));
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const controller = new AbortController();
+    const send = fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      signal: controller.signal,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "abort this buffered request",
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {},
+        },
+      }),
+    }).catch((error: unknown) => error);
+
+    await modelStarted;
+    expect(capturedSignal?.aborted).toBe(false);
+    controller.abort();
+    await Promise.race([
+      abortObserved,
+      new Promise((_resolve, reject) =>
+        setTimeout(() => {
+          reject(new Error("timed out waiting for buffered abort"));
+        }, 1_000),
+      ),
+    ]);
+    expect(capturedSignal?.aborted).toBe(true);
+    await send;
+
+    const persisted = store.listMessages(created.chat.id);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+    expect(listAllMemories(memoryVault, { includeExpired: true })).toEqual([]);
+    memoryVault.close();
   });
 
   it("ignores an unknown discussionMode value (no block, send still succeeds)", async () => {
@@ -2069,7 +2234,7 @@ describe("desktop chat routes", () => {
     });
     expect(sendRes.status).toBe(400);
     const body = (await sendRes.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe("invalid_path");
+    expect(body.error?.code).toBe("INVALID_PATH");
     expect(seenRequests).toHaveLength(0);
   });
 
@@ -2086,7 +2251,7 @@ describe("desktop chat routes", () => {
     });
     expect(sendRes.status).toBe(400);
     const body = (await sendRes.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe("invalid_path");
+    expect(body.error?.code).toBe("INVALID_PATH");
     expect(seenRequests).toHaveLength(0);
   });
 
@@ -2103,7 +2268,7 @@ describe("desktop chat routes", () => {
     });
     expect(sendRes.status).toBe(400);
     const body = (await sendRes.json()) as { error?: { code?: string } };
-    expect(body.error?.code).toBe("invalid_path");
+    expect(body.error?.code).toBe("INVALID_PATH");
     expect(seenRequests).toHaveLength(0);
   });
 

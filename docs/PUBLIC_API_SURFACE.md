@@ -1,4 +1,4 @@
-# Public API surface — 0.2.0 baseline
+# Public API surface — 0.2.11 baseline
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only.
@@ -36,6 +36,7 @@ details of the shipped artifact:
 @oscharko-dev/keiko-memory-vault
 @oscharko-dev/keiko-model-gateway
 @oscharko-dev/keiko-quality-intelligence
+@oscharko-dev/keiko-sandbox
 @oscharko-dev/keiko-sdk
 @oscharko-dev/keiko-security
 @oscharko-dev/keiko-server

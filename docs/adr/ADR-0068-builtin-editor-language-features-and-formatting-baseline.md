@@ -97,7 +97,8 @@ exported from the contracts barrel:
 
 ```ts
 // How a language's "Format Document" is served in the browser:
-//  - "monaco-builtin":        Monaco's bundled json/css/html worker provides the formatter.
+//  - "monaco-builtin":        Reserved for future ADR-approved browser formatters that do not ship
+//                              extra Monaco language workers.
 //  - "keiko-language-service": the Keiko formatting bridge calls the deterministic server service.
 //  - "none":                   no in-browser document formatter is reachable for this language.
 export type EditorBuiltinFormattingSource = "monaco-builtin" | "keiko-language-service" | "none";
@@ -125,11 +126,13 @@ The table covers exactly `EDITOR_LANGUAGE_MODE_IDS` (D6 pins exhaustiveness). Th
 
 - `typescript`, `javascript` → `"keiko-language-service"` (no Monaco TS worker is loaded; Keiko's
   bridge formats them deterministically server-side — #1198/#1201).
-- `json`, `css`, `scss`, `less`, `html` → `"monaco-builtin"` (Monaco's bundled json/css/html workers
-  provide the formatter; this is the issue's "JSON/CSS/HTML … where safe" set).
-- `markdown`, `yaml`, `python`, `java`, `go`, `rust`, `sql`, `shell` → `"none"` (no reachable
-  in-browser document formatter; the server can format some of them, but that is out of this issue's
-  browser-formatting scope and would require a non-explicit governed path we are not adding).
+- `json`, `css`, `scss`, `less`, `html`, `markdown`, `yaml`, `python`, `java`, `go`, `rust`, `sql`,
+  `shell` → `"none"` (no reachable in-browser document formatter).
+
+Packaging update (Step 06 remediation, ADR-0042 D3.6): the original ADR-0068 plan allowed Monaco's
+JSON/CSS/HTML workers for browser formatting. Release packaging now keeps those rich workers out of
+the shipped static export to preserve the B2/B3 budgets, so the current registry advertises no
+`"monaco-builtin"` languages.
 
 This module is a strict leaf (ADR-0019): pure types, frozen const tables, pure functions; no
 `keiko-*` imports, no clock/crypto/randomness; browser-importable.
@@ -213,13 +216,12 @@ unknown/unsupported fallback, rendered as plain text with no governed intelligen
 ### D7 — No double-registration: the Keiko bridge stays language-service-only
 
 We will keep `FORMATTING_ELIGIBLE_LANGUAGES` (the Keiko `DocumentFormattingEditProvider` selector) as
-**exactly the `keiko-language-service` set** (ts/js). Monaco's bundled json/css/html workers register
-their own `DocumentFormattingEditProvider` for json/css/scss/less/html; the Keiko bridge must **not**
-register for those, or two providers would compete for "Format Document" (non-deterministic resolution,
-and the Keiko bridge would shadow the bundled worker). We make the coupling explicit and test-pinned:
+**exactly the `keiko-language-service` set** (ts/js). The Keiko bridge must **not** register for other
+languages unless a future ADR adds an explicit governed provider; the release artifact no longer ships
+Monaco's rich json/css/html workers. We make the coupling explicit and test-pinned:
 `FORMATTING_ELIGIBLE_LANGUAGES` must equal `{ id : registry[id].documentFormatting ===
 "keiko-language-service" }`. The bridge's failure-safe contract (AC3/AC4) is unchanged and unique to
-the language-service path; Monaco's own workers own their failure behaviour for the built-in set.
+the language-service path.
 
 ### D8 — Failure-safe path is reused, not re-built; AC3/AC4 need only added tests
 
@@ -264,11 +266,12 @@ must not be resolved by a non-additive contract edit.
   Format never silently no-ops (D3, D4).
 - Browser formatting reachability gets one editor-tier source of truth, distinct from server
   capability — ending the "server can format yaml, browser can't" confusion (D1, D2).
-- css/scss/less/html tokenize and their built-in formatters become reachable once the missing
-  `basic-languages` imports are added (D5), making AC1/AC2 correct for the full `monaco-builtin` set.
-- No double-registration risk: the Keiko bridge and Monaco's bundled workers own disjoint language
-  sets, pinned by a coherence test (D7).
-- AC3/AC4 are satisfied by the proven #1201 failure-safe path plus Monaco's own contract — added
+- css/scss/less/html tokenize once the missing `basic-languages` imports are added (D5). Their
+  browser formatters are no longer reachable in the current release artifact because Step 06 keeps
+  the rich Monaco language workers out of the shipped static export.
+- No double-registration risk: the Keiko bridge owns only the language-service set, pinned by a
+  coherence test (D7).
+- AC3/AC4 are satisfied by the proven #1201 failure-safe path for the language-service set — added
   tests, not new risk (D8).
 - The two contract leaves cannot silently diverge (D6).
 
@@ -361,13 +364,12 @@ owner and the contracts owner do not need to coordinate beyond that pin.
 ### Alternative 3: Register the Keiko formatting bridge for json/css/html too (one formatter path for everything)
 
 - **Pros**: a single, uniformly-governed formatting path; one failure-safe implementation.
-- **Cons**: double-registers a `DocumentFormattingEditProvider` against Monaco's bundled json/css/html
-  workers (non-deterministic resolution / shadowing); forces server round-trips for languages Monaco
-  already formats locally and deterministically in-browser; and pulls json/css/html server formatting
-  onto the explicit-command hot path for no user benefit. The issue explicitly wants
-  "Monaco-supported browser capabilities … where safe."
-- **Why rejected**: it discards the bundled workers' value and creates a real correctness hazard
-  (competing providers). D7 keeps the sets disjoint.
+- **Cons**: would require either shipping rich Monaco json/css/html workers again or adding governed
+  server providers for those languages; both are outside the current release packaging budget and
+  explicit-command scope.
+- **Why rejected**: it would reopen the language-worker packaging decision or add new governed
+  provider scope. D7 keeps non-language-service languages out of the bridge until that work is
+  explicitly accepted.
 
 ### Alternative 4: Lazily register css/scss/less/html grammars on first open instead of at bootstrap
 

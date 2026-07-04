@@ -3,12 +3,66 @@ import {
   EDITOR_HOT_EXIT_TTL_MS,
   type EditorHotExitSnapshotV1,
 } from "@oscharko-dev/keiko-contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteEditorHotExitSnapshot,
   readEditorHotExitSnapshot,
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
+import {
+  deleteEditorHotExitContent,
+  readEditorHotExitContent,
+  writeEditorHotExitContent,
+} from "../../../../../lib/api";
+
+const hotExitApi = vi.hoisted(() => {
+  const encoder = new TextEncoder();
+  let seq = 0;
+  const records = new Map<string, unknown>();
+  return {
+    records,
+    reset(): void {
+      seq = 0;
+      records.clear();
+    },
+    write: vi.fn((snapshot: EditorHotExitSnapshotV1) => {
+      seq += 1;
+      const snapshotRef = `hot-exit-ref-${String(seq)}`;
+      records.set(snapshotRef, {
+        schemaVersion: 1,
+        content: snapshot.content,
+        baseVersion: snapshot.baseVersion,
+        contentHash: snapshot.contentHash,
+        savedContentHash: snapshot.savedContentHash,
+        contentSizeBytes: encoder.encode(snapshot.content).length,
+        updatedAt: snapshot.updatedAt,
+        paneId: snapshot.paneId,
+        windowId: snapshot.windowId,
+      });
+      return Promise.resolve({
+        snapshotRef,
+        contentSizeBytes: encoder.encode(snapshot.content).length,
+      });
+    }),
+    read: vi.fn((input: { readonly snapshotRef: string }) =>
+      Promise.resolve(
+        records.has(input.snapshotRef)
+          ? { found: true, snapshot: records.get(input.snapshotRef) }
+          : { found: false },
+      ),
+    ),
+    delete: vi.fn((input: { readonly snapshotRef: string }) => {
+      records.delete(input.snapshotRef);
+      return Promise.resolve();
+    }),
+  };
+});
+
+vi.mock("../../../../../lib/api", () => ({
+  writeEditorHotExitContent: hotExitApi.write,
+  readEditorHotExitContent: hotExitApi.read,
+  deleteEditorHotExitContent: hotExitApi.delete,
+}));
 
 type RequestHandler = ((event?: Event) => void) | null;
 type FakeOpenRequest = FakeIdbRequest<FakeDatabase> & {
@@ -89,6 +143,10 @@ class FakeDatabase {
     this.stores.set(name, new Map<string, unknown>());
   }
 
+  deleteObjectStore(name: string): void {
+    this.stores.delete(name);
+  }
+
   transaction(name: string): FakeTransaction {
     let records = this.stores.get(name);
     if (records === undefined) {
@@ -103,9 +161,10 @@ class FakeDatabase {
 
 class FakeIndexedDb {
   private readonly databases = new Map<string, FakeDatabase>();
+  private readonly versions = new Map<string, number>();
   openCount = 0;
 
-  open(name: string): IDBOpenDBRequest {
+  open(name: string, version?: number): IDBOpenDBRequest {
     this.openCount += 1;
     const request = new FakeIdbRequest<FakeDatabase>() as FakeOpenRequest;
     queueMicrotask(() => {
@@ -115,11 +174,28 @@ class FakeIndexedDb {
         db = new FakeDatabase();
         this.databases.set(name, db);
       }
+      const currentVersion = this.versions.get(name) ?? 0;
+      const requestedVersion = version ?? currentVersion;
+      const upgrade = fresh || requestedVersion > currentVersion;
+      this.versions.set(name, requestedVersion);
       request.result = db;
-      if (fresh) request.onupgradeneeded?.(new Event("upgradeneeded"));
+      if (upgrade) request.onupgradeneeded?.(new Event("upgradeneeded"));
       request.onsuccess?.();
     });
     return request as unknown as IDBOpenDBRequest;
+  }
+
+  records(name: string, store: string): Map<string, unknown> {
+    return this.databases.get(name)?.stores.get(store) ?? new Map();
+  }
+
+  seed(name: string, version: number, store: string, records: Map<string, unknown>): void {
+    const db = new FakeDatabase();
+    db.createObjectStore(store);
+    const target = db.stores.get(store);
+    for (const [key, value] of records) target?.set(key, value);
+    this.databases.set(name, db);
+    this.versions.set(name, version);
   }
 }
 
@@ -270,6 +346,10 @@ async function expectRejectedMessage(promise: Promise<unknown>, message: string)
 
 beforeEach(() => {
   fakeGetAllCount = 0;
+  hotExitApi.reset();
+  vi.mocked(writeEditorHotExitContent).mockClear();
+  vi.mocked(readEditorHotExitContent).mockClear();
+  vi.mocked(deleteEditorHotExitContent).mockClear();
   installIndexedDb();
 });
 
@@ -288,6 +368,74 @@ describe("editorHotExitStore", () => {
 
     await deleteEditorHotExitSnapshot("/repo", "src/app.ts");
     await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 1_001)).resolves.toBeNull();
+  });
+
+  it("stores only metadata in IndexedDB, never raw roots, paths, or buffer content", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const stored = snapshot({
+      workspaceRoot: "/Users/alice/private/project",
+      relativePath: "secrets/.env",
+      content: "API_KEY=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+    });
+
+    await writeEditorHotExitSnapshot(stored);
+
+    expect(writeEditorHotExitContent).toHaveBeenCalledWith(stored);
+    const records = indexedDb.records("keiko-editor-hot-exit", "snapshots");
+    expect(records.size).toBe(1);
+    const [rawKey] = [...records.keys()];
+    expect(rawKey).toMatch(/^[a-f0-9]{64}$/u);
+    const serialized = JSON.stringify([...records.entries()]);
+    expect(serialized).not.toContain("/Users/alice/private/project");
+    expect(serialized).not.toContain("secrets/.env");
+    expect(serialized).not.toContain("API_KEY");
+    expect(serialized).not.toContain("ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(serialized).toContain("hot-exit-ref-1");
+  });
+
+  it("clears the IndexedDB recovery index when the server suppresses secret-shaped content", async () => {
+    const indexedDb = new FakeIndexedDb();
+    installIndexedDb(indexedDb);
+    const clean = snapshot({ relativePath: "src/app.ts", content: "const value = 1;\n" });
+    await writeEditorHotExitSnapshot(clean);
+    expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(1);
+
+    vi.mocked(writeEditorHotExitContent).mockResolvedValueOnce({
+      snapshotRef: "hot-exit-ref-suppressed",
+      contentSizeBytes: 0,
+      suppressed: true,
+    });
+    await writeEditorHotExitSnapshot(
+      snapshot({
+        relativePath: "src/app.ts",
+        content: "API_KEY=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+        updatedAt: 2_000,
+      }),
+    );
+
+    expect(indexedDb.records("keiko-editor-hot-exit", "snapshots").size).toBe(0);
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 2_001)).resolves.toBeNull();
+  });
+
+  it("purges legacy v1 plaintext IndexedDB records during the v2 upgrade", async () => {
+    const indexedDb = new FakeIndexedDb();
+    indexedDb.seed(
+      "keiko-editor-hot-exit",
+      1,
+      "snapshots",
+      new Map([["/repo\u0000src/app.ts", snapshot({ content: "legacy plaintext secret" })]]),
+    );
+    installIndexedDb(indexedDb);
+
+    await expect(readEditorHotExitSnapshot("/repo", "src/app.ts", 1_001)).resolves.toBeNull();
+
+    const serialized = JSON.stringify([
+      ...indexedDb.records("keiko-editor-hot-exit", "snapshots").entries(),
+    ]);
+    expect(serialized).not.toContain("/repo");
+    expect(serialized).not.toContain("src/app.ts");
+    expect(serialized).not.toContain("legacy plaintext secret");
   });
 
   it("reuses one IndexedDB connection across hot-exit operations", async () => {

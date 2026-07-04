@@ -144,6 +144,8 @@ import {
   writeEditorHotExitSnapshot,
 } from "./editorHotExitStore";
 import { LruSessionCache } from "./editorSessionCache";
+import { readableTabCapacity, visibleTabsForCapacity } from "./editorTabViewport";
+import { documentSessionKey, documentUri, rootHash, safeDomIdSegment } from "./editorDocumentUri";
 
 const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"), {
   ssr: false,
@@ -167,8 +169,6 @@ const SESSION_CACHE_CAPACITY = 16;
 const HOT_EXIT_WRITE_DEBOUNCE_MS = 400;
 const CONTENT_HASH_DEBOUNCE_MS = 150;
 const UTF8_ENCODER = new TextEncoder();
-const READABLE_TAB_TILE_WIDTH_PX = 112;
-const TAB_SUMMARY_TRIGGER_WIDTH_PX = 58;
 // Pre-GET bootstrap seed for `languageCapabilities` before the async `/api/editor/language/capabilities`
 // GET resolves. It seeds the TypeScript/JavaScript provider as available so the primary editing
 // surface registers its governed intelligence at the FIRST `onMount` and does not remount when the GET
@@ -189,27 +189,6 @@ const BOOTSTRAP_LANGUAGE_CAPABILITIES: LanguageServiceCapabilities = {
     },
   ],
 };
-
-function readableTabCapacity(tablistWidth: number, tabCount: number): number {
-  if (tablistWidth <= 0 || tabCount <= 2) return tabCount;
-  if (tablistWidth >= tabCount * READABLE_TAB_TILE_WIDTH_PX) return tabCount;
-  const widthForTabs = Math.max(
-    READABLE_TAB_TILE_WIDTH_PX,
-    tablistWidth - TAB_SUMMARY_TRIGGER_WIDTH_PX,
-  );
-  return Math.max(1, Math.min(tabCount - 1, Math.floor(widthForTabs / READABLE_TAB_TILE_WIDTH_PX)));
-}
-
-function visibleTabsForCapacity(
-  documentTabs: readonly string[],
-  startIndex: number,
-  capacity: number,
-): readonly string[] {
-  if (capacity >= documentTabs.length) return documentTabs;
-  const maxStart = Math.max(0, documentTabs.length - capacity);
-  const start = Math.min(Math.max(0, startIndex), maxStart);
-  return documentTabs.slice(start, start + capacity);
-}
 
 type EditorTabHandleProps = Pick<
   ButtonHTMLAttributes<HTMLButtonElement>,
@@ -259,6 +238,13 @@ export interface EditorRuntimeWidgetProps {
         context?: EditorTabHandleContext,
       ) => EditorTabHandleProps)
     | undefined;
+  /**
+   * GEN-PERF-EDITOR-003 — the file currently "held" (pointer-drag armed) in THIS pane, or
+   * undefined. A per-pane scalar so a hold-state change re-renders only the affected pane;
+   * the stable renderTabHandle reads the actual flag from the host's ref at call time. This
+   * prop exists purely to trip React.memo for the one pane that must repaint its tab visual.
+   */
+  readonly heldTabFile?: string | undefined;
   readonly toolbarExtras?: ReactNode | undefined;
   readonly linkedRoot?: string | null;
   readonly linkedFilePath?: string | undefined;
@@ -277,40 +263,25 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "The file could not be loaded.";
 }
 
-function safeDomIdSegment(value: string): string {
-  const safe = value.replace(/[^A-Za-z0-9_-]/gu, "-");
-  return safe.length > 0 ? safe : "editor";
-}
-
 /** Map a workspace path to a renderable editor language; intelligence is registry/capability-gated below. */
 function inferEditorLanguage(path: string): EditorLanguageId {
   const language = inferMonacoLanguageId(path);
   return isSupportedEditorLanguage(language) ? language : "plaintext";
 }
 
-function rootHash(root: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < root.length; index += 1) {
-    hash ^= root.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
+function dropHotExitPersistenceFailure(operation: Promise<unknown>): void {
+  void operation.catch(() => {
+    // Hot-exit persistence is best-effort recovery storage; a vault outage must not surface as an
+    // unhandled editor error or block normal file editing.
+  });
+}
+
+async function deleteHotExitSnapshotBestEffort(root: string, file: string): Promise<void> {
+  try {
+    await deleteEditorHotExitSnapshot(root, file);
+  } catch {
+    // Keep file save semantics independent from best-effort recovery cleanup.
   }
-  return hash.toString(16).padStart(8, "0");
-}
-
-function encodePathSegments(path: string): string {
-  return path
-    .split(/[\\/]+/)
-    .map(encodeURIComponent)
-    .join("/");
-}
-
-/** A stable, host-scoped Monaco model URI for a (root, file) pair, without exposing a filesystem path. */
-function documentUri(root: string, file: string): string {
-  return `keiko-editor://workspace/${rootHash(root)}/${encodePathSegments(file)}`;
-}
-
-function documentSessionKey(root: string, file: string): string {
-  return `${root}\u0000${file}`;
 }
 
 async function sha256HexBytes(bytes: Uint8Array, fallbackText: string): Promise<string> {
@@ -356,8 +327,28 @@ function editorAriaLabel(root: string, file: string): string {
   return `Editor: ${file} in ${root}`;
 }
 
-function currentLineQueryText(text: string, line: number, character: number): string | undefined {
-  const currentLine = text.split("\n")[line] ?? "";
+// GEN-PERF-EDITOR-004 — extract a single 0-indexed line without splitting the whole buffer.
+// Walks newline boundaries to the target line (O(offset) up to the line, not O(N) with an
+// N-line array allocation), then slices the bounded line. Returns "" for out-of-range lines,
+// matching the previous `split("\n")[line] ?? ""` behavior.
+export function lineAtIndex(text: string, line: number): string {
+  if (line < 0) return "";
+  let start = 0;
+  for (let i = 0; i < line; i += 1) {
+    const nextNewline = text.indexOf("\n", start);
+    if (nextNewline === -1) return ""; // fewer lines than requested
+    start = nextNewline + 1;
+  }
+  const end = text.indexOf("\n", start);
+  return end === -1 ? text.slice(start) : text.slice(start, end);
+}
+
+export function currentLineQueryText(
+  text: string,
+  line: number,
+  character: number,
+): string | undefined {
+  const currentLine = lineAtIndex(text, line);
   const beforeCursor = currentLine.slice(0, Math.max(0, character));
   const query = beforeCursor
     .replace(/[^A-Za-z0-9_.$/-]+/g, " ")
@@ -497,10 +488,11 @@ function EditorRuntimeWidget({
 }: EditorRuntimeWidgetProps): ReactNode {
   const hasTarget = root !== undefined && root.length > 0 && file !== undefined && file.length > 0;
   const generatedId = useId();
-  const editorDomIdPrefix = useMemo(
-    () => `ed-${safeDomIdSegment(windowId ?? generatedId)}`,
+  const editorModelScope = useMemo(
+    () => safeDomIdSegment(windowId ?? generatedId),
     [generatedId, windowId],
   );
+  const editorDomIdPrefix = useMemo(() => `ed-${editorModelScope}`, [editorModelScope]);
   const tabId = `${editorDomIdPrefix}-active-tab`;
   const tabpanelId = `${editorDomIdPrefix}-tabpanel`;
   const tablistRef = useRef<HTMLDivElement>(null);
@@ -600,6 +592,11 @@ function EditorRuntimeWidget({
   const [saveStatus, setSaveStatus] = useState<EditorSaveStatus>("idle");
   const [saveError, setSaveError] = useState<string | undefined>(undefined);
   const [formatRequestNonce, setFormatRequestNonce] = useState(0);
+  // GEN-UI-INTERACTION-003: the Tests/Format/Save toolbar buttons stay in the tab order with
+  // aria-disabled (not native disabled) and guard their onClick internally, so activating one while
+  // unavailable is a silent no-op. This holds a brief spoken reason surfaced in the polite live region
+  // below so keyboard/screen-reader users learn why nothing happened.
+  const [toolbarNotice, setToolbarNotice] = useState("");
   // Issue #1202: the governed test-generation flow state (pure reducer owned by the editor package).
   // A monotonic sequence backs the cross-boundary request identity for stale-response discard.
   const [testGenState, dispatchTestGen] = useReducer<
@@ -724,7 +721,9 @@ function EditorRuntimeWidget({
   );
 
   const currentDocumentUri =
-    hasTarget && root !== undefined && file !== undefined ? documentUri(root, file) : null;
+    hasTarget && root !== undefined && file !== undefined
+      ? documentUri(root, file, editorModelScope)
+      : null;
   const fileModelMatchesTarget =
     fileModel !== null &&
     currentDocumentUri !== null &&
@@ -749,7 +748,7 @@ function EditorRuntimeWidget({
     if (!dirty) {
       if (lastHotExitSnapshotKeyRef.current === snapshotKey) {
         lastHotExitSnapshotKeyRef.current = null;
-        void deleteEditorHotExitSnapshot(root, file);
+        dropHotExitPersistenceFailure(deleteEditorHotExitSnapshot(root, file));
       }
       return;
     }
@@ -769,7 +768,7 @@ function EditorRuntimeWidget({
         windowId: windowId ?? "editor",
       };
       lastHotExitSnapshotKeyRef.current = snapshotKey;
-      void writeEditorHotExitSnapshot(snapshot);
+      dropHotExitPersistenceFailure(writeEditorHotExitSnapshot(snapshot));
     }, HOT_EXIT_WRITE_DEBOUNCE_MS);
     return () => {
       window.clearTimeout(timer);
@@ -872,7 +871,7 @@ function EditorRuntimeWidget({
         .then(async (response) => {
           if (signal.cancelled) return;
           const identity: EditorDocumentIdentity = {
-            uri: documentUri(root, file),
+            uri: documentUri(root, file, editorModelScope),
             language: inferEditorLanguage(file),
             version: 0,
           };
@@ -903,7 +902,7 @@ function EditorRuntimeWidget({
           setLoadState({ status: "error", message: errorMessage(err) });
         });
     },
-    [hasTarget, root, file],
+    [editorModelScope, hasTarget, root, file],
   );
 
   useEffect(() => {
@@ -937,7 +936,7 @@ function EditorRuntimeWidget({
     // holding those edits must go too — otherwise the reload would immediately re-offer them as a
     // recovery. Serialized store mutations keep this delete ordered ahead of the reload's snapshot read.
     if (root !== undefined && file !== undefined) {
-      void deleteEditorHotExitSnapshot(root, file);
+      dropHotExitPersistenceFailure(deleteEditorHotExitSnapshot(root, file));
     }
     reload();
   }, [reload, root, file]);
@@ -949,6 +948,9 @@ function EditorRuntimeWidget({
   const reloadConfirmRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!reloadConfirm) return;
+    // GEN-UI-FOCUS-006: capture the opener (the Reload button) before moving focus into the dialog,
+    // and restore it on close so keyboard focus returns to the trigger instead of being lost to <body>.
+    const opener = document.activeElement as HTMLElement | null;
     reloadConfirmRef.current?.focus();
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
       if (event.key === "Escape") cancelReloadDiscard();
@@ -956,6 +958,9 @@ function EditorRuntimeWidget({
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
+      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
+        opener.focus();
+      }
     };
   }, [reloadConfirm, cancelReloadDiscard]);
 
@@ -1008,7 +1013,7 @@ function EditorRuntimeWidget({
             currentSelection: cached?.currentSelection ?? null,
             diagnosticsSummary: cached?.diagnosticsSummary ?? null,
           });
-          await deleteEditorHotExitSnapshot(root, file);
+          await deleteHotExitSnapshotBestEffort(root, file);
           return true;
         }
         // The persisted file moved on disk regardless of any concurrent edits — always adopt the new
@@ -1031,7 +1036,7 @@ function EditorRuntimeWidget({
             saveStatusReducer(saveStatusReducer(status, { type: "succeeded" }), { type: "edited" }),
           );
         }
-        await deleteEditorHotExitSnapshot(root, file);
+        await deleteHotExitSnapshotBestEffort(root, file);
         return true;
       } catch (err: unknown) {
         if (activeSessionKeyRef.current !== saveSessionKey) {
@@ -1126,7 +1131,7 @@ function EditorRuntimeWidget({
 
   const discardRecovery = useCallback((): void => {
     if (root !== undefined && file !== undefined) {
-      void deleteEditorHotExitSnapshot(root, file);
+      dropHotExitPersistenceFailure(deleteEditorHotExitSnapshot(root, file));
     }
     setRecoverySnapshot(null);
     setRecoveryDiskBaseline(null);
@@ -1457,11 +1462,9 @@ function EditorRuntimeWidget({
   const hoverEnabled = providerOperationEnabled(languageProvider, "hover") && !largeFileDegraded;
   const symbolsEnabled =
     providerOperationEnabled(languageProvider, "symbols") && !largeFileDegraded;
-  // ADR-0068 D3: formatting availability is browser-reachability truth from the editor-tier registry,
-  // NOT the server capability set. `monaco-builtin` languages (json/css/scss/less/html) are formatted
-  // by Monaco's bundled workers and need no server; `keiko-language-service` languages (ts/js) format
-  // through the Keiko bridge and additionally require the server provider to be up; `none` languages
-  // (yaml/markdown/…) have no in-browser formatter and are correctly unavailable (AC5).
+  // Formatting availability is browser-reachability truth from the editor-tier registry. The release
+  // artifact deliberately ships no rich Monaco language workers (ADR-0042 D3.6), so only
+  // `keiko-language-service` languages (ts/js) can format, and only when the server provider is up.
   const builtinFormatting = editorBuiltinDocumentFormatting(completionLanguage ?? "plaintext");
   const formattingAvailable =
     builtinFormatting === "monaco-builtin" ||
@@ -1492,6 +1495,19 @@ function EditorRuntimeWidget({
     hasTarget && completionEnabled && loadState.status === "ready" && !testGenBusy;
   const testGenStatusText = describeTestGenerationStatus(testGenState);
   const testGenStatusLabel = testGenState.kind === "disabled" ? "Tests off" : testGenStatusText;
+
+  // GEN-UI-INTERACTION-003: announce why an aria-disabled toolbar action did nothing when activated.
+  // A leading zero-width space forces the polite live region's text to differ from any prior identical
+  // reason, so repeat activations of the same unavailable button re-announce instead of going silent.
+  const announceToolbarNotice = useCallback((reason: string): void => {
+    setToolbarNotice((current) => (current === reason ? `\u200B${reason}` : reason));
+  }, []);
+  const saveUnavailableReason = (): string => {
+    if (!hasTarget) return "No file open to save.";
+    if (saveStatus === "saving") return "Already saving.";
+    if (loadState.status !== "ready") return "The file is still loading.";
+    return "Nothing to save.";
+  };
 
   const buffer: EditorBuffer | null = useMemo(
     () =>
@@ -1625,13 +1641,17 @@ function EditorRuntimeWidget({
     [version],
   );
 
+  // GEN-PERF-EDITOR-002 — the JSON signature of the last snapshot we actually POSTed, so an
+  // unchanged snapshot (identical cursor/selection/dirty/etc.) is not re-sent.
+  const lastPostedSnapshotSignatureRef = useRef<string | null>(null);
+
   // Issue #1392 — post the current pane snapshot to the BFF. Wrapped in `useCallback` so the bridge
   // hook's register effect re-fires exactly when a snapshot dimension changes (its identity is the
   // dependency). Registration is best-effort and must never affect editing.
   const registerAgentSnapshot = useCallback((): void => {
     if (!hasTarget || root === undefined || file === undefined || activeContentHash === null)
       return;
-    void postEditorAgentSessionSnapshot({
+    const snapshot = {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       sessionId: agentSessionId,
       windowId: windowId ?? "editor",
@@ -1668,9 +1688,16 @@ function EditorRuntimeWidget({
             },
       ...(agentDocumentVersion === null ? {} : { documentVersion: agentDocumentVersion }),
       activeFileContentHash: activeContentHash,
-      textMode: "none",
-      updatedAt: Date.now(),
-    }).catch(() => {
+      textMode: "none" as const,
+    };
+    // GEN-PERF-EDITOR-002 — dedupe: skip the POST when every snapshot dimension is
+    // identical to the last one we sent (the debounce upstream collapses bursts; this
+    // additionally suppresses re-posting an unchanged snapshot). `updatedAt` is stamped
+    // only when we actually send, so it never falsely defeats the equality check.
+    const signature = JSON.stringify(snapshot);
+    if (signature === lastPostedSnapshotSignatureRef.current) return;
+    lastPostedSnapshotSignatureRef.current = signature;
+    void postEditorAgentSessionSnapshot({ ...snapshot, updatedAt: Date.now() }).catch(() => {
       // Agent bridge registration is best-effort and must never affect editing.
     });
   }, [
@@ -2214,6 +2241,12 @@ function EditorRuntimeWidget({
               className="ed-save ed-generate-tests"
               onClick={() => {
                 if (canGenerateTests) runTestGeneration();
+                else
+                  announceToolbarNotice(
+                    testGenBusy
+                      ? "Test generation is already running."
+                      : "Test generation is unavailable for this file.",
+                  );
               }}
               aria-disabled={canGenerateTests ? "false" : "true"}
             >
@@ -2231,6 +2264,7 @@ function EditorRuntimeWidget({
               className="ed-save"
               onClick={() => {
                 if (canFormat) setFormatRequestNonce((value) => value + 1);
+                else announceToolbarNotice("Formatting is unavailable for this file.");
               }}
               aria-disabled={canFormat ? "false" : "true"}
             >
@@ -2248,6 +2282,7 @@ function EditorRuntimeWidget({
               className="ed-save"
               onClick={() => {
                 if (canSave) void persist(content);
+                else announceToolbarNotice(saveUnavailableReason());
               }}
               aria-disabled={saveUnavailable}
             >
@@ -2255,6 +2290,18 @@ function EditorRuntimeWidget({
             </button>
           ) : null}
         </div>
+      </div>
+      {/* GEN-UI-INTERACTION-003: polite live region announcing why an aria-disabled toolbar action
+          did nothing when a keyboard/AT user activated it (the buttons stay focusable and no-op). Uses
+          aria-live (not role="status") so it does not collide with the status bar's role=status region
+          for role-based queries; screen readers announce polite live regions regardless of role. */}
+      <div
+        className="sr-only"
+        aria-live="polite"
+        aria-atomic="true"
+        data-testid="editor-toolbar-notice"
+      >
+        {toolbarNotice}
       </div>
       {recoverySnapshot !== null && !recoveryCompare ? (
         <div className="ed-recovery" role="status">

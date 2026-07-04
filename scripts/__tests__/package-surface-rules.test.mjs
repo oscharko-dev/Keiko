@@ -50,25 +50,68 @@ describe("findForbiddenPaths — clean paths return empty array", () => {
 });
 
 // ---------------------------------------------------------------------------
-// JS source map rule
+// Runtime source map rule
 // ---------------------------------------------------------------------------
 
-describe("findForbiddenPaths — .js.map (JS source map)", () => {
+describe("findForbiddenPaths — runtime source maps", () => {
   it("flags a JS source map at the dist root", () => {
     const hits = findForbiddenPaths(["dist/index.js.map"]);
     expect(hits.length).toBeGreaterThan(0);
-    expect(hits.some((h) => h.label === "a JS source map")).toBe(true);
+    expect(hits.some((h) => h.label === "a runtime source map")).toBe(true);
   });
 
   it("flags a deeply nested .js.map", () => {
     const hits = findForbiddenPaths(["dist/ui/static/chunks/abc123.js.map"]);
-    expect(hits.some((h) => h.label === "a JS source map")).toBe(true);
+    expect(hits.some((h) => h.label === "a runtime source map")).toBe(true);
+  });
+
+  it("flags .mjs.map and .cjs.map artifacts", () => {
+    const hits = findForbiddenPaths([
+      "node_modules/pdfjs-dist/build/pdf.mjs.map",
+      "dist/cli/index.cjs.map",
+    ]);
+    expect(hits.filter((h) => h.label === "a runtime source map")).toHaveLength(2);
+  });
+
+  it("flags non-JS source maps unless explicitly declaration maps", () => {
+    const hits = findForbiddenPaths(["dist/ui/static/app.css.map"]);
+    expect(hits.some((h) => h.label === "a runtime source map")).toBe(true);
   });
 
   it("preserves the exact path on the hit object", () => {
     const path = "dist/cli/index.js.map";
     const hits = findForbiddenPaths([path]);
-    expect(hits.find((h) => h.label === "a JS source map")?.path).toBe(path);
+    expect(hits.find((h) => h.label === "a runtime source map")?.path).toBe(path);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TypeScript build metadata and compiled test artifacts
+// ---------------------------------------------------------------------------
+
+describe("findForbiddenPaths — build metadata and compiled tests", () => {
+  it("flags TypeScript incremental build metadata", () => {
+    const hits = findForbiddenPaths(["dist/tsconfig.tsbuildinfo"]);
+    expect(hits.some((h) => h.label === "TypeScript incremental build metadata")).toBe(true);
+  });
+
+  it("flags compiled test files", () => {
+    const hits = findForbiddenPaths([
+      "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.js",
+      "node_modules/@oscharko-dev/keiko-server/dist/gitRepositoryRoutes.test.d.ts",
+    ]);
+    expect(hits.filter((h) => h.label === "compiled test or spec artifact").length).toBe(2);
+  });
+
+  it("flags nested __tests__ artifacts", () => {
+    const hits = findForbiddenPaths([
+      "node_modules/@oscharko-dev/keiko-evidence/dist/qualityIntelligence/__tests__/retention.js",
+    ]);
+    expect(hits.some((h) => h.label === "compiled test or spec artifact")).toBe(true);
+  });
+
+  it("does not flag production files whose basename contains the word test", () => {
+    expect(findForbiddenPaths(["dist/testGenerationRoutes.js"])).toEqual([]);
   });
 });
 
@@ -114,6 +157,23 @@ describe("findForbiddenPaths — keiko-ui workspace source", () => {
 
   it("does NOT flag a different workspace package under packages/", () => {
     expect(findForbiddenPaths(["packages/keiko-contracts/dist/index.js"])).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nested workspace node_modules rule
+// ---------------------------------------------------------------------------
+
+describe("findForbiddenPaths — nested workspace node_modules", () => {
+  it("flags a dependency nested under a workspace package path", () => {
+    const hits = findForbiddenPaths([
+      "packages/keiko-local-knowledge/node_modules/@types/yauzl/index.d.ts",
+    ]);
+    expect(hits.some((h) => h.label === "a nested workspace node_modules dependency")).toBe(true);
+  });
+
+  it("does not flag root node_modules because bundled runtime dependencies are allowed there", () => {
+    expect(findForbiddenPaths(["node_modules/pdfjs-dist/build/pdf.mjs"])).toEqual([]);
   });
 });
 
@@ -254,9 +314,12 @@ describe("findForbiddenPaths — mixed-path batch", () => {
       "dist/index.js",
       "dist/index.d.ts",
       "dist/index.d.ts.map", // clean — declaration map stays
-      "dist/index.js.map", // forbidden — JS source map
+      "dist/index.js.map", // forbidden — runtime source map
+      "dist/tsconfig.tsbuildinfo", // forbidden — build metadata
       "dist/ui/static/index.html", // clean
       ".env.local", // forbidden — env file
+      "packages/keiko-local-knowledge/node_modules/@types/yauzl/index.d.ts", // forbidden
+      "node_modules/@oscharko-dev/keiko-server/dist/deps.test.js", // forbidden — compiled test
       "node_modules/@oscharko-dev/keiko-contracts/dist/index.js", // clean
       "node_modules/some-native/build/binding.node", // forbidden — native addon
       "dist/cli/index.js", // clean
@@ -264,7 +327,12 @@ describe("findForbiddenPaths — mixed-path batch", () => {
     const hits = findForbiddenPaths(paths);
     const flaggedPaths = hits.map((h) => h.path);
     expect(flaggedPaths).toContain("dist/index.js.map");
+    expect(flaggedPaths).toContain("dist/tsconfig.tsbuildinfo");
     expect(flaggedPaths).toContain(".env.local");
+    expect(flaggedPaths).toContain(
+      "packages/keiko-local-knowledge/node_modules/@types/yauzl/index.d.ts",
+    );
+    expect(flaggedPaths).toContain("node_modules/@oscharko-dev/keiko-server/dist/deps.test.js");
     expect(flaggedPaths).toContain("node_modules/some-native/build/binding.node");
     // Clean paths must NOT appear
     expect(flaggedPaths).not.toContain("dist/index.js");

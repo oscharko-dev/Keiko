@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import { stat } from "node:fs/promises";
+import { isIP } from "node:net";
 import { dirname, isAbsolute, normalize } from "node:path";
 import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -13,6 +14,7 @@ import {
   validateProjectPath,
   type Project,
 } from "./store/index.js";
+import { networkGitEnv } from "./gitRoutes.js";
 
 const MAX_BODY_BYTES = 32 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
@@ -85,16 +87,88 @@ function forbidden(message: string): RouteResult {
   return { status: 403, body: errorBody("DENIED", message) };
 }
 
-function repositoryUrlAllowed(input: string): boolean {
-  if (containsControlCharacter(input)) return false;
-  if (/^git@[^:\s]+:[^\s]+$/u.test(input)) return true;
+type RepositoryHostClass = "public" | "loopback" | "private" | "link-local" | "metadata";
+type Ipv4Parts = readonly [number, number, number, number];
+type Ipv4Rule = readonly [RepositoryHostClass, (parts: Ipv4Parts) => boolean];
+
+function parseIpv4(hostname: string): Ipv4Parts | undefined {
+  if (isIP(hostname) !== 4) return undefined;
+  const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
+    return undefined;
+  }
+  return parts as [number, number, number, number];
+}
+
+const REPOSITORY_IPV4_RULES: readonly Ipv4Rule[] = [
+  ["loopback", ([a]): boolean => a === 127],
+  ["metadata", ([a, b, c, d]): boolean => a === 169 && b === 254 && c === 169 && d === 254],
+  ["link-local", ([a, b]): boolean => a === 169 && b === 254],
+  ["private", ([a]): boolean => a === 10],
+  ["private", ([a, b]): boolean => a === 172 && b >= 16 && b <= 31],
+  ["private", ([a, b]): boolean => a === 192 && b === 168],
+  ["private", ([a, b]): boolean => a === 100 && b >= 64 && b <= 127],
+  ["private", ([a]): boolean => a === 0 || a >= 224],
+  ["private", ([a, b, c]): boolean => a === 192 && b === 0 && c === 0],
+  ["private", ([a, b]): boolean => a === 198 && (b === 18 || b === 19)],
+];
+
+function classifyRepositoryIpv4(parts: Ipv4Parts): RepositoryHostClass {
+  return REPOSITORY_IPV4_RULES.find(([, matches]) => matches(parts))?.[0] ?? "public";
+}
+
+function classifyMappedIpv6(hostname: string): RepositoryHostClass | undefined {
+  if (!hostname.startsWith("::ffff:")) return undefined;
+  const ipv4 = parseIpv4(hostname.slice("::ffff:".length));
+  return ipv4 === undefined ? "private" : classifyRepositoryIpv4(ipv4);
+}
+
+function classifyIpv6FirstSegment(hostname: string): RepositoryHostClass | undefined {
+  const firstText = hostname.split(":", 1)[0] ?? "";
+  const first = firstText.length === 0 ? 0 : Number.parseInt(firstText, 16);
+  if (!Number.isInteger(first)) return undefined;
+  if (first >= 0xfe80 && first <= 0xfebf) return "link-local";
+  if ((first & 0xfe00) === 0xfc00) return "private";
+  return undefined;
+}
+
+function classifyRepositoryIpv6(hostname: string): RepositoryHostClass {
+  if (hostname === "::1") return "loopback";
+  if (hostname === "::") return "private";
+  return classifyMappedIpv6(hostname) ?? classifyIpv6FirstSegment(hostname) ?? "public";
+}
+
+function classifyRepositoryHost(hostname: string): RepositoryHostClass | undefined {
+  const normalized = hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
+  if (normalized === "localhost") return "loopback";
+  const ipv4 = parseIpv4(normalized);
+  if (ipv4 !== undefined) return classifyRepositoryIpv4(ipv4);
+  if (isIP(normalized) === 6) return classifyRepositoryIpv6(normalized);
+  return undefined;
+}
+
+function repositoryHost(input: string): string | undefined {
+  if (containsControlCharacter(input)) return undefined;
+  const scpLike = /^git@([^:\s]+):[^\s]+$/u.exec(input);
+  if (scpLike !== null) return scpLike[1];
   try {
     const url = new URL(input);
-    if (url.username !== "" || url.password !== "") return false;
-    return url.protocol === "https:" || url.protocol === "ssh:";
+    if (url.username !== "" || url.password !== "") return undefined;
+    if (url.protocol !== "https:" && url.protocol !== "ssh:") return undefined;
+    return url.hostname;
   } catch {
-    return false;
+    return undefined;
   }
+}
+
+function repositoryUrlAllowed(input: string): boolean {
+  const host = repositoryHost(input);
+  if (typeof host !== "string" || host.length === 0) return false;
+  const hostClass = classifyRepositoryHost(host);
+  return hostClass === undefined || hostClass === "public";
 }
 
 function containsControlCharacter(input: string): boolean {
@@ -130,15 +204,6 @@ async function assertDestination(candidate: string): Promise<RouteResult | strin
   return normalized;
 }
 
-function gitEnv(): NodeJS.ProcessEnv {
-  return {
-    PATH: process.env.PATH ?? "",
-    GIT_TERMINAL_PROMPT: "0",
-    GIT_PAGER: "cat",
-    PAGER: "cat",
-  };
-}
-
 type CloneRepositoryRunner = (
   repositoryUrl: string,
   destinationPath: string,
@@ -151,7 +216,7 @@ const cloneRepository: CloneRepositoryRunner = function cloneRepository(
   return new Promise((resolveResult) => {
     const child = spawn("git", ["clone", "--", repositoryUrl, destinationPath], {
       cwd: dirname(destinationPath),
-      env: gitEnv(),
+      env: networkGitEnv(),
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],

@@ -2,7 +2,7 @@
 
 Specification for Epic #491, the deliverable of Issue
 [#502](https://github.com/oscharko-dev/Keiko/issues/502) and the authoritative companion to
-[ADR-0065](../adr/ADR-0065-discussion-intelligence.md). It **defines** the five discussion modes, the
+[ADR-0107](../adr/ADR-0107-discussion-intelligence.md). It **defines** the five discussion modes, the
 disagreement structure, the interruption-recovery model, the no-authority and committed-only guarantees,
 and the deferred visible-selector seam. The contract lives in
 [`packages/keiko-contracts/src/discussion-intelligence.ts`](../../packages/keiko-contracts/src/discussion-intelligence.ts);
@@ -175,7 +175,7 @@ pattern in full-duplex voice conversation. `resolved` is terminal.
 ### Pure recovery helpers
 
 The pure transition helpers (`applyDiscussionInterruption`, `applyDiscussionRecovery`,
-`resolveDiscussionTurn`) follow the ADR-0063 voice-transcript posture: illegal transitions return the
+`resolveDiscussionTurn`) follow the ADR-0105 voice-transcript posture: illegal transitions return the
 input context unchanged rather than throwing. A caller that calls `applyDiscussionRecovery` on a
 `resolved` context receives the same context back.
 
@@ -186,7 +186,7 @@ verifies this identity for the full `active -> interrupted -> recovered` path.
 
 ### How the voice binding drives recovery
 
-The voice binding observes the `VoiceTurnSnapshot` from the ADR-0062 turn manager:
+The voice binding observes the `VoiceTurnSnapshot` from the ADR-0104 turn manager:
 
 - When `snapshot.state === "interrupted"` **or** `snapshot.recovering === true`:
   call `applyDiscussionInterruption(currentCtx)` — the discussion context transitions to `interrupted`,
@@ -212,13 +212,13 @@ input arrives by text or voice.
   trigger it through the standard send flow, which routes through the existing `WorkflowHandoffRequest`
   - `userApprovalToken` governed path (Issue #503). There is no voice shortcut past that gate.
 
-This no-authority guarantee is identical to the one documented for ADR-0062 D7 (the turn manager's
+This no-authority guarantee is identical to the one documented for ADR-0104 D7 (the turn manager's
 media-floor-only effect vocabulary).
 
 ## 7. Committed-only voice input
 
 When voice drives a discussion turn, the only admissible input is the committed voice transcript
-projection from ADR-0063:
+projection from ADR-0105:
 
 ```typescript
 selectCommittedVoiceTranscript(segments).text;
@@ -255,9 +255,9 @@ The render path that surfaces a composer-level mode selector — a user-facing p
 select `challenge`, `review`, `decide`, `brainstorm`, or `evidence-check` before sending a message —
 is **deferred**. This is consistent with the runtime-mechanics deferral pattern established in:
 
-- ADR-0061 D10: render-path wiring for the timing engine deferred.
-- ADR-0062 D10: fixture-based posture for turn manager render integration, with seams documented.
-- ADR-0063: committed-only selector shipped and tested; voice-driven commit wiring documented as a seam.
+- ADR-0103 D10: render-path wiring for the timing engine deferred.
+- ADR-0104 D10: fixture-based posture for turn manager render integration, with seams documented.
+- ADR-0105: committed-only selector shipped and tested; voice-driven commit wiring documented as a seam.
 
 The `discussionMode` field on `SendDesktopChatRequest` is already wired through the BFF into
 `composeConversationPrompt`. A future issue adds only the UI surface that populates it. The current
@@ -301,20 +301,20 @@ The suite produces a GO/NO-GO scorecard mirroring `PromptEnhancerScorecard`.
 
 ### Integration with the turn manager (#499)
 
-The turn manager ([ADR-0062](../adr/ADR-0062-voice-turn-manager.md)) owns floor control. When the turn
+The turn manager ([ADR-0104](../adr/ADR-0104-voice-turn-manager.md)) owns floor control. When the turn
 manager enters `interrupted` or `recovering` state, the discussion voice binding calls
 `applyDiscussionInterruption`; when recovery clears, it calls `applyDiscussionRecovery`. The discussion
 binding observes the turn manager snapshot; it does not modify turn manager state.
 
 ### Integration with the transcript segment store (#500)
 
-The transcript store ([ADR-0063](../adr/ADR-0063-voice-transcript-segment-semantics.md)) enforces the
+The transcript store ([ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md)) enforces the
 committed-only boundary. Discussion input from voice is read from `selectCommittedVoiceTranscript`,
 never directly from the segment array.
 
 ### Integration with assistant speech output (#501)
 
-The playback controller ([ADR-0064](../adr/ADR-0064-voice-assistant-speech-output-playback.md)) handles
+The playback controller ([ADR-0106](../adr/ADR-0106-voice-assistant-speech-output-playback.md)) handles
 the spoken assistant response. When the playback phase transitions to `interrupted`, the turn manager
 records it. The discussion binding observes the turn manager, not the playback controller directly. The
 content-free `DiscussionTurnSummary` is available to later consumers (#503, #504) from
@@ -347,12 +347,12 @@ uncommitted, discarded, or failed text.
 
 ## Related
 
-- [ADR-0065](../adr/ADR-0065-discussion-intelligence.md): the authoritative decision record.
-- [ADR-0063](../adr/ADR-0063-voice-transcript-segment-semantics.md): committed-only transcript boundary.
-- [ADR-0062](../adr/ADR-0062-voice-turn-manager.md): turn manager; `VoiceTurnSnapshot`; no-authority effect posture.
-- [ADR-0064](../adr/ADR-0064-voice-assistant-speech-output-playback.md): playback lifecycle; interruption forwarding.
+- [ADR-0107](../adr/ADR-0107-discussion-intelligence.md): the authoritative decision record.
+- [ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md): committed-only transcript boundary.
+- [ADR-0104](../adr/ADR-0104-voice-turn-manager.md): turn manager; `VoiceTurnSnapshot`; no-authority effect posture.
+- [ADR-0106](../adr/ADR-0106-voice-assistant-speech-output-playback.md): playback lifecycle; interruption forwarding.
 - [ADR-0044](../adr/ADR-0044-prompt-enhancer-architecture.md): Prompt Enhancer; `CitationDiscipline`/`ContradictionPolicy`/`GroundingDirective` vocabulary.
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md): voice architecture baseline; text-first principle.
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md): voice architecture baseline; text-first principle.
 - Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491); Issue [#502](https://github.com/oscharko-dev/Keiko/issues/502).
 - [`packages/keiko-contracts/src/discussion-intelligence.ts`](../../packages/keiko-contracts/src/discussion-intelligence.ts): the contract types and functions.
 - [`packages/keiko-ui/src/app/components/desktop/hooks/discussion-voice.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/discussion-voice.ts): the voice integration binding.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { isConversationEligibleModel } from "./capabilities.js";
+import { COST_RANK, isConversationEligibleModel } from "./capabilities.js";
 import {
   assertConfiguredModel,
   findConfiguredCapability,
@@ -364,5 +364,14 @@ describe("selectConfiguredModel — conjunct guards & deterministic tie-break (#
       { kind: "chat" },
     );
     expect(selected).toBe("tie-first");
+  });
+});
+
+describe("COST_RANK single source of truth (GEN-DUP-EXACT-002)", () => {
+  it("ranks cost classes strictly ascending low < medium < high", () => {
+    // model-selection.ts no longer keeps its own COST_RANK copy; it imports this canonical one from
+    // capabilities.ts. Pinning the ordering guards the cheapest-first selection contract.
+    expect(COST_RANK.low).toBeLessThan(COST_RANK.medium);
+    expect(COST_RANK.medium).toBeLessThan(COST_RANK.high);
   });
 });

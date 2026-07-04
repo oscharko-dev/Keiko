@@ -3,7 +3,7 @@
 // Every message is redacted at construction so errors are always safe to log or surface.
 
 import type { PatchConflict, PatchRejection } from "@oscharko-dev/keiko-contracts";
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export const TOOL_CODES = {
   ARGUMENT: "TOOL_ARGUMENT",
@@ -19,13 +19,8 @@ export const TOOL_CODES = {
 
 export type ToolCode = (typeof TOOL_CODES)[keyof typeof TOOL_CODES];
 
-export abstract class ToolError extends Error {
-  abstract readonly code: ToolCode;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+export abstract class ToolError extends RedactingError {
+  abstract override readonly code: ToolCode;
 }
 
 // Malformed tool arguments (a required field missing or of the wrong type).

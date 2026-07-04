@@ -1,6 +1,6 @@
 "use client";
 
-// Governed merge command center (Issue #478, Epic #470, ADR-0065). A per-project card, launched from the
+// Governed merge command center (Issue #478, Epic #470, ADR-0087). A per-project card, launched from the
 // Pull Request section of the governed Git flow, that turns a review-ready pull request into a merged base
 // branch through the governed merge gateway exposed by the BFF.
 //

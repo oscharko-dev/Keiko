@@ -21,6 +21,7 @@ export interface LineSelectionState {
 
 export interface ScoredLine {
   readonly line: number;
+  readonly startLine: number;
   readonly endLine: number;
   readonly score: number;
 }
@@ -221,19 +222,20 @@ function insertBestLine(best: ScoredLine[], candidate: ScoredLine): void {
     if (existing === undefined) {
       continue;
     }
-    const overlaps = merged.line <= existing.endLine && existing.line <= merged.endLine;
+    const overlaps = merged.startLine <= existing.endLine && existing.startLine <= merged.endLine;
     if (!overlaps) {
       continue;
     }
     merged = {
       line: Math.min(merged.line, existing.line),
+      startLine: Math.min(merged.startLine, existing.startLine),
       endLine: Math.max(merged.endLine, existing.endLine),
       score: Math.max(merged.score, existing.score),
     };
     best.splice(index, 1);
   }
   best.push(merged);
-  best.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.line - b.line));
+  best.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.startLine - b.startLine));
   if (best.length > MAX_MATCHES_PER_FILE) {
     best.pop();
   }
@@ -246,22 +248,22 @@ export function collectBestLines(
 ): readonly ScoredLine[] {
   const best: ScoredLine[] = [];
   const lines = text.split(/\r?\n/u);
-  let lineStart = 0;
-  let lineNumber = 1;
-  for (let i = 0; i <= text.length; i += 1) {
-    if (i < text.length && text.charCodeAt(i) !== 10 /* \n */) {
-      continue;
-    }
-    if (timedOut(runner, state, lineNumber - 1)) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    if (timedOut(runner, state, lineIndex)) {
       break;
     }
-    const score = runner.matcher.match(text.slice(lineStart, i));
+    const score = runner.matcher.match(lines[lineIndex] ?? "");
     if (score > 0) {
-      const range = enclosingRange(lines, lineNumber - 1);
-      insertBestLine(best, { line: range.start, endLine: range.end, score });
+      const range = enclosingRange(lines, lineIndex);
+      insertBestLine(best, {
+        line: lineIndex + 1,
+        startLine: range.start,
+        endLine: range.end,
+        score,
+      });
     }
-    lineStart = i + 1;
-    lineNumber += 1;
   }
-  return best.sort((a, b) => a.line - b.line);
+  return best.sort((a, b) =>
+    a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+  );
 }

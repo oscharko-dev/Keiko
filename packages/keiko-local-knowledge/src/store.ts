@@ -11,7 +11,8 @@
 //
 // Crash-safe write tradeoffs documented inline next to each PRAGMA call.
 
-import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
@@ -19,7 +20,21 @@ import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_V1_TABLES,
+  LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
+// Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
+import {
+  chmodIfPresent,
+  ensureDirHardened,
+  FILE_MODE,
+} from "@oscharko-dev/keiko-security/fs-hardening";
+// Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]: the pure classification vocabulary. The
+// KnowledgeStoreError-unwrap hook (see unwrapKnowledgeStoreError) resolves the sealed cause underneath.
+import {
+  SqliteQuickCheckError,
+  errorRecord as sharedErrorRecord,
+  isSqliteCorruptionError as sharedIsSqliteCorruptionError,
+} from "@oscharko-dev/keiko-security/sqlite-corruption";
 
 import { KnowledgeStoreError } from "./errors.js";
 import {
@@ -132,6 +147,13 @@ function setUserVersion(db: DatabaseSync, version: number): void {
 
 function runMigrations(db: DatabaseSync): void {
   const start = currentUserVersion(db);
+  if (start > LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION) {
+    throw new KnowledgeStoreError(
+      `Knowledge-capsule schema version ${String(start)} is newer than this binary supports (${String(
+        LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
+      )})`,
+    );
+  }
   const pending = KNOWLEDGE_CAPSULE_MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
   db.exec("BEGIN");
@@ -184,94 +206,132 @@ function expectedTablesPresent(db: DatabaseSync): boolean {
   return true;
 }
 
-function quarantineFile(target: string): void {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  if (existsSync(target)) {
-    renameSync(target, `${target}.corrupt.${ts}`);
-  }
-  for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
-    if (existsSync(sidecar)) {
-      renameSync(sidecar, `${sidecar}.corrupt.${ts}`);
-    }
-  }
+type OpenAttempt =
+  | { readonly status: "ok"; readonly db: DatabaseSync }
+  | { readonly status: "corrupt"; readonly cause: unknown }
+  | { readonly status: "error"; readonly cause: unknown };
+
+// Unwrap hook for the shared classifier: peel every KnowledgeStoreError layer that carries a cause so
+// the sealed SQLite error underneath is classified rather than the wrapper. Recursive to match the
+// previous local sqliteErrorLike, which stripped nested wrappers to the innermost cause.
+function unwrapKnowledgeStoreError(error: unknown): unknown {
+  return error instanceof KnowledgeStoreError && error.cause !== undefined
+    ? unwrapKnowledgeStoreError(error.cause)
+    : error;
 }
 
-function tryOpenAndMigrate(
-  dbPath: string,
-  onError?: (cause: unknown) => void,
-): DatabaseSync | undefined {
-  // Returns the opened, migrated handle on success; undefined when the file is unusable
-  // (open threw OR the post-migrate schema is missing expected tables OR the file held
-  // foreign content that we refuse to coexist with). Callers handle quarantine + retry.
+const isSqliteCorruptionError = (error: unknown): boolean =>
+  sharedIsSqliteCorruptionError(error, unwrapKnowledgeStoreError);
+const errorRecord = (error: unknown): Record<string, unknown> =>
+  sharedErrorRecord(error, unwrapKnowledgeStoreError);
+
+function assertQuickCheckOk(db: DatabaseSync): void {
+  const rows = db.prepare("PRAGMA quick_check").all() as readonly Record<string, unknown>[];
+  const values = rows
+    .map((row) => Object.values(row)[0])
+    .filter((value): value is string => typeof value === "string");
+  if (values.length === 1 && values[0] === "ok") return;
+  throw new SqliteQuickCheckError(values.length > 0 ? values : ["no quick_check rows returned"]);
+}
+
+function quarantineFile(target: string, cause?: unknown): void {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  const quarantinedPath = `${target}.corrupt.${ts}`;
+  if (existsSync(target)) {
+    renameSync(target, quarantinedPath);
+  }
+  const sidecarQuarantinePaths: string[] = [];
+  for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
+    if (existsSync(sidecar)) {
+      const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
+      renameSync(sidecar, sidecarQuarantinePath);
+      sidecarQuarantinePaths.push(sidecarQuarantinePath);
+    }
+  }
+  writeFileSync(
+    `${quarantinedPath}.diagnostic.json`,
+    `${JSON.stringify(
+      {
+        incidentId: randomUUID(),
+        store: "local-knowledge",
+        timestamp: new Date().toISOString(),
+        dbPath: target,
+        quarantinedPath,
+        sidecarQuarantinePaths,
+        cause: errorRecord(cause ?? new Error("manual quarantine")),
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: FILE_MODE },
+  );
+}
+
+function tryOpenAndMigrate(dbPath: string): OpenAttempt {
   let db: DatabaseSync;
   try {
     db = new DatabaseSync(dbPath);
-  } catch {
-    // Cannot open at all (file missing permissions, OS error). Caller quarantines and retries.
-    return undefined;
+  } catch (cause) {
+    return isSqliteCorruptionError(cause)
+      ? { status: "corrupt", cause }
+      : { status: "error", cause };
   }
   try {
     applyDurabilityPragmas(db);
+    assertQuickCheckOk(db);
     if (hasAnyUserContent(db) && !expectedV1TablesPresent(db)) {
-      // Pre-existing foreign schema or a partial install missing even the v1 tables.
-      // Quarantine and retry. The v1 check is intentionally narrow: a v1 database that
-      // has not yet been migrated to v2 passes here, then runMigrations upgrades it.
+      // Pre-existing foreign schema or a partial install missing even the v1 tables is not
+      // proven SQLite corruption. Refuse to overwrite it; an operator can inspect it in place.
       db.close();
-      return undefined;
+      return {
+        status: "error",
+        cause: new KnowledgeStoreError(
+          `Knowledge-capsule store at ${dbPath} has an unexpected schema; refusing to quarantine without confirmed SQLite corruption.`,
+        ),
+      };
     }
     runMigrations(db);
     if (!expectedTablesPresent(db)) {
       db.close();
-      return undefined;
+      return {
+        status: "error",
+        cause: new KnowledgeStoreError(
+          `Knowledge-capsule store at ${dbPath} is missing expected tables after migration; refusing to quarantine without confirmed SQLite corruption.`,
+        ),
+      };
     }
-    return db;
+    return { status: "ok", db };
   } catch (cause) {
-    onError?.(cause);
     try {
       db.close();
     } catch {
-      // ignore close failure; outer caller will quarantine and retry
+      // Ignore close failure; the original open/migration cause controls recovery classification.
     }
-    return undefined;
+    return isSqliteCorruptionError(cause)
+      ? { status: "corrupt", cause }
+      : { status: "error", cause };
   }
-}
-
-function ensureParentDir(dbPath: string): void {
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) {
-    // 0o700: best-effort on POSIX; ignored on win32.
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  restrictPathPermissions(dir, 0o700);
-}
-
-function restrictPathPermissions(target: string, mode: number): void {
-  if (process.platform === "win32" || !existsSync(target)) return;
-  chmodSync(target, mode);
 }
 
 function restrictStoreFilePermissions(dbPath: string): void {
-  restrictPathPermissions(dbPath, 0o600);
-  restrictPathPermissions(`${dbPath}-wal`, 0o600);
-  restrictPathPermissions(`${dbPath}-shm`, 0o600);
+  chmodIfPresent(dbPath, FILE_MODE);
+  chmodIfPresent(`${dbPath}-wal`, FILE_MODE);
+  chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
 }
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
-  ensureParentDir(opts.dbPath);
-  let db = tryOpenAndMigrate(opts.dbPath);
-  let lastError: unknown;
-  if (db === undefined) {
-    quarantineFile(opts.dbPath);
-    db = tryOpenAndMigrate(opts.dbPath, (cause) => {
-      lastError = cause;
+  ensureDirHardened(dirname(opts.dbPath));
+  let attempt = tryOpenAndMigrate(opts.dbPath);
+  if (attempt.status === "corrupt") {
+    quarantineFile(opts.dbPath, attempt.cause);
+    attempt = tryOpenAndMigrate(opts.dbPath);
+  }
+  if (attempt.status !== "ok") {
+    throw new KnowledgeStoreError(`Failed to open knowledge-capsule store at ${opts.dbPath}.`, {
+      cause: attempt.cause,
     });
   }
-  if (db === undefined) {
-    throw new KnowledgeStoreError(
-      `Failed to open knowledge-capsule store at ${opts.dbPath} even after quarantine.`,
-      lastError !== undefined ? { cause: lastError } : undefined,
-    );
-  }
+  const db = attempt.db;
   // The cipher binds the key resolved for the migrated schema version. Reconcile the store's on-disk
   // encryption state before the handle is usable: this seals a legacy plaintext store forward, or
   // fails closed on a wrong key / missing provider for an already-encrypted store (ADR-0047 D4). A

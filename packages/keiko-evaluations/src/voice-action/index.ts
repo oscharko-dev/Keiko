@@ -1,4 +1,4 @@
-// Public barrel for the Voice Action Governance evaluation suite (Epic #491, Issue #503; ADR-0066).
+// Public barrel for the Voice Action Governance evaluation suite (Epic #491, Issue #503; ADR-0108).
 // Exposes the deterministic observation derivation, the six-dimension scorer, the suite runner, the
 // scorecard renderer, the fixture registry, and the result/fixture types. Self-contained: it is NOT
 // re-exported from the package barrel (the discussion suite is likewise self-contained), so this

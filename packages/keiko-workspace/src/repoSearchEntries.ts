@@ -19,6 +19,7 @@ interface EntryWalk {
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
   readonly files: DiscoveredFile[];
+  readonly directories: string[];
   depthPruned: number;
   maxFilesPruned: number;
   truncated: boolean;
@@ -96,6 +97,7 @@ function walkEntryDirectory(
     walk.truncated = true;
     return;
   }
+  walk.directories.push(dirRel);
   for (const entry of readDirSorted(walk.fs, absoluteDir)) {
     if (walk.files.length >= walk.limits.maxFilesScanned) {
       walk.maxFilesPruned += 1;
@@ -139,6 +141,8 @@ export function collectFromEntries(
   fs: WorkspaceFs,
 ): {
   files: readonly DiscoveredFile[];
+  directories: readonly string[];
+  filesDiscovered: number;
   truncated: boolean;
   depthPruned: number;
   maxFilesPruned: number;
@@ -149,6 +153,7 @@ export function collectFromEntries(
     limits,
     fs,
     files: out,
+    directories: [],
     depthPruned: 0,
     maxFilesPruned: 0,
     truncated: false,
@@ -161,6 +166,8 @@ export function collectFromEntries(
   }
   return {
     files: out.slice(0, limits.maxFilesScanned),
+    directories: [...new Set(walk.directories)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    filesDiscovered: out.length,
     truncated: walk.truncated,
     depthPruned: walk.depthPruned,
     maxFilesPruned: walk.maxFilesPruned,

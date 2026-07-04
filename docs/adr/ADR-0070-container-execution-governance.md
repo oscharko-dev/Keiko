@@ -73,7 +73,7 @@ When no engine is available, or any engine error occurs, the system surfaces a s
 
 ### D6 — Content-free evidence (`"container-run"`)
 
-We will add a `"container-run"` member to `EvidenceTaskType` and write a standard `EvidenceManifest` per finished run, carrying **counts and enums only**: run id, task id, a closed-catalog image **id** (never a free-text image string supplied by a caller), arg count (never the argv), exit code, duration, `timedOut`, `truncated`, and `failureReason`. It never carries the constructed argv, the workspace path, or any container output. `deepRedactStrings` is applied to every string leaf before persistence (ADR-0048). Evidence writes are best-effort; a write hiccup never corrupts a real run result.
+We will add a `"container-run"` member to `EvidenceTaskType` and write a standard `EvidenceManifest` per finished run, carrying **counts and enums only**: run id, task id, a closed-catalog image **id** (never a free-text image string supplied by a caller), arg count (never the argv), exit code, duration, `timedOut`, `truncated`, and `failureReason`. It never carries the constructed argv, the workspace path, or any container output. `deepRedactStrings` is applied to every string leaf before persistence (ADR-0048). Evidence writes are fail-closed for this governed execution surface; a write failure returns `EVIDENCE_WRITE_FAILED` instead of reporting a successful unaudited container run.
 
 ### D7 — Extension seam for future containerized LSP providers
 

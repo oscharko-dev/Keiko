@@ -36,6 +36,8 @@ export type {
   // Issue #1387 — controlled test/build/run command executor wire types.
   CommandTaskKind,
   CommandTaskSource,
+  CommandTaskTrustState,
+  CommandTaskTrustReason,
   CommandTask,
   CommandTaskCatalog,
   CommandFailureReason,
@@ -300,6 +302,7 @@ export type {
   GroundedEvidenceCitation,
   GroundedUncertainty,
   GroundedAnswer,
+  GroundedRerankerDiagnostics,
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
   GroundedAnswerContextSummary,

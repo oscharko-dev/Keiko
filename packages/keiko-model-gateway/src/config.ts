@@ -17,6 +17,7 @@ import {
   modelSupportsRealtimeVoice,
   modelSupportsSpeechOutput,
 } from "@oscharko-dev/keiko-contracts";
+import { outboundTargetBlockedReason } from "./egress-policy.js";
 import type {
   CircuitBreakerConfig,
   CostClass,
@@ -151,6 +152,18 @@ function optionalBoolean(value: unknown, path: string, fallback: boolean): boole
   return value;
 }
 
+function optionalEgressBoolean(value: unknown, path: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") {
+    throw new ConfigInvalidError(`${path} must be a boolean`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  throw new ConfigInvalidError(`${path} must be a boolean`);
+}
+
 function optionalNonEmptyString(value: unknown, path: string, fallback: string): string {
   if (value === undefined) {
     return fallback;
@@ -258,6 +271,11 @@ const EGRESS_FIELDS: readonly EgressField<keyof OutboundHttpEgressConfig>[] = [
     key: "caBundlePath",
     envNames: ["KEIKO_CA_BUNDLE_PATH"],
     parser: optionalCaBundlePath,
+  },
+  {
+    key: "allowPrivateNetwork",
+    envNames: ["KEIKO_ALLOW_PRIVATE_EGRESS"],
+    parser: optionalEgressBoolean,
   },
 ];
 
@@ -536,10 +554,6 @@ function resolveRealtimeAuthMode(
   return requireEnum<RealtimeAuthMode>(value, path, REALTIME_AUTH_MODES);
 }
 
-// Validates a resolved baseUrl for scheme and credential hygiene. Host/IP is
-// intentionally NOT restricted: Keiko addresses private network endpoints
-// (private IPs are a valid, first-class target); this guard is scheme/credential
-// hygiene + defence-in-depth, not host filtering.
 function isLoopbackHost(hostname: string): boolean {
   if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
     return true;
@@ -550,7 +564,12 @@ function isLoopbackHost(hostname: string): boolean {
   return isIP(hostname) === 4 && hostname.startsWith("127.");
 }
 
-export function validateBaseUrl(baseUrl: string, path: string): void {
+// eslint-disable-next-line complexity -- URL policy validation intentionally enumerates each reject reason for operator clarity.
+export function validateBaseUrl(
+  baseUrl: string,
+  path: string,
+  egress?: OutboundHttpEgressConfig,
+): void {
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -571,6 +590,12 @@ export function validateBaseUrl(baseUrl: string, path: string): void {
   if (url.username !== "" || url.password !== "") {
     throw new ConfigInvalidError(
       `${path}.baseUrl must not embed credentials in the URL; provide the key via apiKey`,
+    );
+  }
+  const blockedReason = outboundTargetBlockedReason(url, egress);
+  if (blockedReason !== undefined) {
+    throw new ConfigInvalidError(
+      `${path}.baseUrl targets a ${blockedReason}; set egress.allowPrivateNetwork=true only for approved customer-hosted providers`,
     );
   }
 }
@@ -659,7 +684,7 @@ function resolveInfillingAlignment(
   };
 }
 
-// ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ─────────────────────
+// ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ─────────────────────
 // Shared by both the lenient inline parser and the strict top-level parser so the voice invariants
 // are enforced identically. Voice fields are preserved only when declared, so a non-voice capability
 // carries no voice fields at all and a record round-trips exactly (same discipline as the infilling
@@ -722,7 +747,7 @@ type ParsedVoiceFields = Partial<
 //   1. at least one of speech input / speech output / realtime must be advertised (a voice model
 //      with no advertised capability is meaningless — fail-closed);
 //   2. the provider locality must be declared (providers are represented explicitly, never inferred
-//      from an endpoint URL or environment name — ADR-0058 D7 / the epic invariant).
+//      from an endpoint URL or environment name — ADR-0100 D7 / the epic invariant).
 function resolveVoiceKindFields(
   raw: Record<string, unknown>,
   path: string,
@@ -1042,6 +1067,7 @@ function resolveProviderConnection(
   path: string,
   modelId: string,
   env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
   options: ParseGatewayConfigOptions,
 ): ProviderConnection {
   const fileBaseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl : "";
@@ -1056,7 +1082,7 @@ function resolveProviderConnection(
       `${path}.apiKey must be set via config, secret reference, or environment`,
     );
   }
-  validateBaseUrl(baseUrl, path);
+  validateBaseUrl(baseUrl, path, egress);
   return { baseUrl, apiKey };
 }
 
@@ -1065,9 +1091,10 @@ function parseProviderConfig(
   path: string,
   modelId: string,
   env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
   options: ParseGatewayConfigOptions,
 ): ModelProviderConfig {
-  const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, options);
+  const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, egress, options);
   const voiceProfiles = parseVoiceProfiles(raw.voiceProfiles, `${path}.voiceProfiles`);
   const endpointStyle = resolveProviderEndpointStyle(
     raw.endpointStyle,
@@ -1110,6 +1137,7 @@ function parseProvider(
   raw: unknown,
   index: number,
   env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
   options: ParseGatewayConfigOptions,
 ): ParsedProvider {
   const path = `providers[${String(index)}]`;
@@ -1119,7 +1147,7 @@ function parseProvider(
   const modelId = requireNonEmptyString(raw.modelId, `${path}.modelId`);
   const capability = parseProviderCapability(raw.capability, `${path}.capability`, modelId);
   return {
-    provider: parseProviderConfig(raw, path, modelId, env, options),
+    provider: parseProviderConfig(raw, path, modelId, env, egress, options),
     ...(capability === undefined ? {} : { capability }),
   };
 }
@@ -1176,7 +1204,11 @@ function rerankerModelId(block: Record<string, unknown>, env: EnvSource): string
   return requireNonEmptyString(block.modelId, "reranker.modelId");
 }
 
-function rerankerBaseUrl(block: Record<string, unknown>, env: EnvSource): string {
+function rerankerBaseUrl(
+  block: Record<string, unknown>,
+  env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
+): string {
   const envValue = env.KEIKO_RERANKER_BASE_URL;
   const baseUrl =
     envValue !== undefined && envValue.length > 0
@@ -1187,7 +1219,7 @@ function rerankerBaseUrl(block: Record<string, unknown>, env: EnvSource): string
   if (baseUrl.length === 0) {
     throw new ConfigInvalidError("reranker.baseUrl must be set via config or environment");
   }
-  validateBaseUrl(baseUrl, "reranker");
+  validateBaseUrl(baseUrl, "reranker", egress);
   return baseUrl;
 }
 
@@ -1228,7 +1260,7 @@ function parseRerankerConfig(
   }
   const config: RerankerConfig = {
     modelId: rerankerModelId(block, env),
-    baseUrl: rerankerBaseUrl(block, env),
+    baseUrl: rerankerBaseUrl(block, env, egress),
     apiKey,
     apiKeyHeaderName: rerankerHeaderName(block, env),
     timeoutMs: rerankerTimeoutMs(block, env),
@@ -1365,7 +1397,9 @@ function buildGatewayConfig(
   egress: OutboundHttpEgressConfig | undefined,
   options: ParseGatewayConfigOptions,
 ): GatewayConfig {
-  const parsed = providersRaw.map((item, index) => parseProvider(item, index, env, options));
+  const parsed = providersRaw.map((item, index) =>
+    parseProvider(item, index, env, egress, options),
+  );
   const providers = providersWithEgress(parsed, egress);
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const capabilities = applyVoicePersonaDerivation(merged, providers);
@@ -1457,8 +1491,7 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
       : {
           reranker: {
             modelId: config.reranker.modelId,
-            credentialHeaderName:
-              config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+            credentialHeaderName: config.reranker.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
             timeoutMs: config.reranker.timeoutMs,
           },
         }),

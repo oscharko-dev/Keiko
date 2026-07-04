@@ -128,9 +128,7 @@ describe("wrong key fails loudly", () => {
     first.insertMemory(secretMemory("m1"));
     first.close();
 
-    const second = openVault(dir, KEY_B);
-    expect(() => second.getMemory("m1" as MemoryId)).toThrow();
-    second.close();
+    expect(() => openVault(dir, KEY_B)).toThrow();
   });
 });
 

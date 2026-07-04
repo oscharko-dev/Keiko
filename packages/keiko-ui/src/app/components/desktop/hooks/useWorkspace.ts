@@ -53,6 +53,9 @@ const CONTENT_MAX_ZOOM = 2;
 const MIN_CAMERA_ANIMATION_DURATION_MS = 90;
 const MAX_CAMERA_ANIMATION_DURATION_MS = 280;
 const DIRECT_PAN_SMOOTHNESS_SCALE = 0;
+// GEN-PERF-WORKSPACE-004 — how long after the last wheel/pan/zoom view commit the
+// data-view-active gesture flag lingers before the wallpaper draw resumes.
+const VIEW_ACTIVE_SETTLE_MS = 160;
 
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
@@ -68,9 +71,9 @@ function readView(): View {
     ) {
       const p = parsed as { zoom: number; x?: number; y?: number };
       return {
-        zoom: p.zoom,
-        x: typeof p.x === "number" ? p.x : 0,
-        y: typeof p.y === "number" ? p.y : 0,
+        zoom: Number.isFinite(p.zoom) ? clampViewZoom(p.zoom) : 1,
+        x: typeof p.x === "number" && Number.isFinite(p.x) ? p.x : 0,
+        y: typeof p.y === "number" && Number.isFinite(p.y) ? p.y : 0,
       };
     }
   } catch {
@@ -251,6 +254,20 @@ function windowIdFromWheelTarget(target: EventTarget | null): string | null {
   return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
 }
 
+// GEN-UI-KEYBOARD-006 — resolve which window a keyboard chord (move/resize/content
+// zoom/snap) acts on from where focus currently is, instead of always the topmost
+// window. Walk up from document.activeElement to the nearest
+// `.window[data-window-id]` and use that window; return null when focus sits
+// outside any window (so the chord no-ops rather than silently mutating a window
+// the user is not looking at). The section itself carries tabIndex={-1}, so a
+// window-section focus still resolves to its own id here — only a focus entirely
+// outside every window falls through to the topZ tiebreak in the caller.
+function focusedWindowId(): string | null {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  if (!(active instanceof Element)) return null;
+  return active.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
+}
+
 interface UsePanZoomArgs {
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly view: View;
@@ -358,6 +375,30 @@ function usePanZoom({
   const scheduleViewPersist = useCallback((): void => {
     viewPersistDebounceRef.current?.schedule(() => persistList(VIEW_LS, viewRef.current));
   }, []);
+
+  // GEN-PERF-WORKSPACE-004 — flag the workspace host with data-view-active while a
+  // wheel/trackpad pan or zoom gesture is in flight so WorkspaceShader can skip its
+  // full-screen fbm draw for the gesture (the same suppression the background-pan
+  // data-panning attribute already provides). Cleared a short settle after the last
+  // view change (mirroring useZoomActive's settle) so the wallpaper resumes.
+  const viewActiveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const markViewActive = useCallback((): void => {
+    const el = wsRef.current;
+    if (el === null) return;
+    el.dataset["viewActive"] = "true";
+    if (viewActiveTimerRef.current !== null) clearTimeout(viewActiveTimerRef.current);
+    viewActiveTimerRef.current = setTimeout(() => {
+      viewActiveTimerRef.current = null;
+      const host = wsRef.current;
+      if (host !== null) delete host.dataset["viewActive"];
+    }, VIEW_ACTIVE_SETTLE_MS);
+  }, [wsRef]);
+  useEffect(
+    () => () => {
+      if (viewActiveTimerRef.current !== null) clearTimeout(viewActiveTimerRef.current);
+    },
+    [],
+  );
 
   // Issue #1580 follow-up — keep the live view synchronous through viewRef, but
   // take the durable localStorage write out of the pan/zoom frame path. Even this
@@ -468,6 +509,7 @@ function usePanZoom({
       pendingViewSmoothnessScaleRef.current = smoothnessScale;
       pendingViewMinDurationRef.current = minDurationMs;
       scheduleViewPersist();
+      markViewActive();
 
       if (
         typeof window.requestAnimationFrame !== "function" ||
@@ -490,7 +532,7 @@ function usePanZoom({
         if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
-    [animateView, scheduleViewPersist, setView],
+    [animateView, scheduleViewPersist, markViewActive, setView],
   );
 
   useEffect(() => {
@@ -590,6 +632,7 @@ interface UseHydrateArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly zc: MutableRefObject<number>;
+  readonly lastAppliedSerializedRef: MutableRefObject<string | null>;
 }
 
 interface WorkspaceSnapshot {
@@ -639,6 +682,12 @@ function workspaceStateEtag(revision: number): string {
   return `"workspace-state-${String(revision)}"`;
 }
 
+function revisionFromWorkspaceEtag(value: string | null): number | null {
+  const match = /^"workspace-state-(\d+)"$/u.exec(value ?? "");
+  if (match === null) return null;
+  return Number.parseInt(match[1]!, 10);
+}
+
 async function fetchServerWorkspaceSnapshot(
   knownRevision: number,
 ): Promise<ServerWorkspaceSnapshot | null> {
@@ -671,27 +720,96 @@ async function fetchServerWorkspaceSnapshot(
   }
 }
 
+// The fetch keepalive body cap is 64KiB per origin (spec). Use a conservative
+// budget so headers + the PUT body together stay under the limit; a keepalive
+// request over this budget is rejected by the browser and the final flush is
+// silently lost, so we fall back to a normal (non-keepalive) PUT (GEN-PERF-
+// PERSISTENCE-005). The server's own hard cap is MAX_WORKSPACE_STATE_BODY_BYTES.
+const KEEPALIVE_BODY_BUDGET_BYTES = 60 * 1024;
+
+function serializedBodyByteLength(body: string): number {
+  if (typeof Blob === "function") return new Blob([body]).size;
+  if (typeof TextEncoder === "function") return new TextEncoder().encode(body).length;
+  // Last-resort UTF-8 byte estimate.
+  return unescape(encodeURIComponent(body)).length;
+}
+
+// Exported for tests (GEN-PERF-PERSISTENCE-005). A serialized body over the
+// keepalive budget must not be sent with keepalive:true (the browser rejects it and
+// the flush is silently lost).
+export function keepaliveBodyFitsBudget(body: string): boolean {
+  return serializedBodyByteLength(body) <= KEEPALIVE_BODY_BUDGET_BYTES;
+}
+export const WORKSPACE_KEEPALIVE_BODY_BUDGET_BYTES = KEEPALIVE_BODY_BUDGET_BYTES;
+// Reset the overcap counter (tests only).
+export function resetWorkspaceKeepaliveOvercapCount(): void {
+  workspaceKeepaliveOvercapCount = 0;
+}
+
+// Surfaced (not swallowed) when the final flush cannot be delivered — a bounded
+// per-origin console.warn so an oversize/rejected keepalive is observable rather
+// than a silent data loss. Never logs body contents (SEC: no secret-shaped
+// payloads escape). Counter is process-local and used by the perf/telemetry test.
+let workspaceKeepaliveOvercapCount = 0;
+export function readWorkspaceKeepaliveOvercapCount(): number {
+  return workspaceKeepaliveOvercapCount;
+}
+function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
+  workspaceKeepaliveOvercapCount += 1;
+  if (typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      `workspace-state: keepalive body ${String(byteLength)}B over budget; retrying without keepalive`,
+    );
+  }
+}
+
 async function putServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
-  opts: { readonly signal?: AbortSignal; readonly keepalive?: boolean } = {},
-): Promise<number | null> {
+  opts: {
+    readonly baseRevision: number;
+    readonly signal?: AbortSignal;
+    readonly keepalive?: boolean;
+  },
+): Promise<
+  | { readonly kind: "ok"; readonly revision: number }
+  | { readonly kind: "conflict"; readonly revision: number | null }
+  | null
+> {
   if (typeof fetch !== "function") return null;
+  const serializedBody = JSON.stringify({ windows: wins, connections: conns });
+  // GEN-PERF-PERSISTENCE-005 — a keepalive PUT whose body exceeds the 64KiB
+  // keepalive cap is rejected by the browser and the flush is lost. If the body
+  // is over the keepalive budget, drop keepalive and send a normal PUT (which
+  // usually still completes on visibilitychange). Sanitize's data-URL/large-
+  // payload dropping upstream keeps this rare; the guard makes it non-silent.
+  let keepalive = opts.keepalive === true;
+  if (keepalive && serializedBodyByteLength(serializedBody) > KEEPALIVE_BODY_BUDGET_BYTES) {
+    surfaceWorkspaceKeepaliveOvercap(serializedBodyByteLength(serializedBody));
+    keepalive = false;
+  }
   try {
     const response = await fetch(WORKSPACE_STATE_API, {
       method: "PUT",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
+        "If-Match": workspaceStateEtag(opts.baseRevision),
         "X-Keiko-CSRF": "1",
       },
-      body: JSON.stringify({ windows: wins, connections: conns }),
-      // keepalive lets the final flush survive page unload (sanitize already drops
-      // large data-URL payloads, so the body stays well under the 64KB limit).
-      // sendBeacon cannot set the required X-Keiko-CSRF header, hence keepalive.
-      ...(opts.keepalive === true ? { keepalive: true } : {}),
+      body: serializedBody,
+      // keepalive lets the final flush survive page unload; disabled above when the
+      // body is over the keepalive budget. sendBeacon cannot set the required
+      // X-Keiko-CSRF header, hence keepalive.
+      ...(keepalive ? { keepalive: true } : {}),
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
+    if (response.status === 412 || response.status === 428) {
+      return {
+        kind: "conflict",
+        revision: revisionFromWorkspaceEtag(response.headers.get("etag")),
+      };
+    }
     if (!response.ok) return null;
     const body: unknown = await response.json();
     const workspace =
@@ -700,10 +818,27 @@ async function putServerWorkspaceSnapshot(
         : undefined;
     if (typeof workspace !== "object" || workspace === null) return null;
     const revision = (workspace as Record<string, unknown>)["revision"];
-    return typeof revision === "number" ? revision : null;
+    return typeof revision === "number" ? { kind: "ok", revision } : null;
   } catch {
     return null;
   }
+}
+
+function buildServerWorkspaceSnapshot(
+  wins: readonly AppWindow[],
+  conns: readonly Connection[],
+): {
+  readonly wins: readonly AppWindow[];
+  readonly conns: readonly Connection[];
+  readonly serialized: string;
+} {
+  const persistedWins = sanitizePersistedWindows(wins);
+  const persistedConns = sanitizePersistedConnections(conns, persistedWins);
+  return {
+    wins: persistedWins,
+    conns: persistedConns,
+    serialized: JSON.stringify({ windows: persistedWins, connections: persistedConns }),
+  };
 }
 
 function applyPersistedWorkspaceSnapshot(
@@ -717,14 +852,25 @@ function applyPersistedWorkspaceSnapshot(
   setConns(snapshot.conns);
 }
 
-function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
+function useHydrate({
+  wsRef,
+  setWins,
+  setConns,
+  zc,
+  lastAppliedSerializedRef,
+}: UseHydrateArgs): void {
   useLayoutEffect(() => {
     const el = wsRef.current;
     if (el === null) return;
     // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
     // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
-    applyPersistedWorkspaceSnapshot(readPersistedWorkspaceSnapshot(), setWins, setConns, zc);
-  }, [wsRef, setWins, setConns, zc]);
+    const snapshot = readPersistedWorkspaceSnapshot();
+    // GEN-PERF-PERSISTENCE-001 — seed the applied-serialization baseline from the
+    // hydrated snapshot so an immediate cross-tab storage event echoing this exact
+    // value is recognised as a no-op (before the debounced local persist runs).
+    lastAppliedSerializedRef.current = serializePersistedSnapshot(snapshot);
+    applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
+  }, [wsRef, setWins, setConns, zc, lastAppliedSerializedRef]);
 }
 
 interface UseStorageSyncArgs {
@@ -732,6 +878,21 @@ interface UseStorageSyncArgs {
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly zc: MutableRefObject<number>;
   readonly beforeApplyRemote: () => void;
+  readonly lastAppliedSerializedRef: MutableRefObject<string | null>;
+  readonly suppressNextLocalPersistRef: MutableRefObject<boolean>;
+}
+
+// Serialize a persisted snapshot to a stable equality key. Uses the sanitize path
+// so the comparison matches exactly what the debounced localStorage write emits.
+function serializePersistedSnapshot(snapshot: {
+  readonly wins: readonly AppWindow[];
+  readonly conns: readonly Connection[];
+}): string {
+  const persistedWins = sanitizePersistedWindows(snapshot.wins);
+  return JSON.stringify({
+    windows: persistedWins,
+    connections: sanitizePersistedConnections(snapshot.conns, persistedWins),
+  });
 }
 
 function useWorkspaceStorageSync({
@@ -739,19 +900,42 @@ function useWorkspaceStorageSync({
   setConns,
   zc,
   beforeApplyRemote,
+  lastAppliedSerializedRef,
+  suppressNextLocalPersistRef,
 }: UseStorageSyncArgs): void {
   useEffect(() => {
     const onStorage = (event: StorageEvent): void => {
       if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
       if (event.key !== WS_LS && event.key !== CONN_LS) return;
+      const snapshot = readPersistedWorkspaceSnapshot();
+      // GEN-PERF-PERSISTENCE-001 — a cross-tab storage event unconditionally
+      // re-applied the whole snapshot with brand-new object identities (defeating
+      // every WindowFrame memo and bumping useLinkRevision) even when the incoming
+      // serialized value equalled what is already applied. Skip the re-apply when
+      // the sanitized serialization is unchanged.
+      const serialized = serializePersistedSnapshot(snapshot);
+      if (serialized === lastAppliedSerializedRef.current) return;
+      lastAppliedSerializedRef.current = serialized;
       beforeApplyRemote();
-      applyPersistedWorkspaceSnapshot(readPersistedWorkspaceSnapshot(), setWins, setConns, zc);
+      // GEN-PERF-PERSISTENCE-012 (storage path) — a just-applied remote snapshot
+      // must not be immediately re-written to localStorage (echoing back exactly
+      // what the sibling tab wrote). suppressNextServerPersistRef already guards
+      // the server PUT; this guards the localStorage write.
+      suppressNextLocalPersistRef.current = true;
+      applyPersistedWorkspaceSnapshot(snapshot, setWins, setConns, zc);
     };
     window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener("storage", onStorage);
     };
-  }, [setWins, setConns, zc, beforeApplyRemote]);
+  }, [
+    setWins,
+    setConns,
+    zc,
+    beforeApplyRemote,
+    lastAppliedSerializedRef,
+    suppressNextLocalPersistRef,
+  ]);
 }
 
 interface UseServerSyncArgs {
@@ -780,6 +964,11 @@ function useWorkspaceServerSync({
   if (putDebounceRef.current === null)
     putDebounceRef.current = createTrailingDebounce(PERSIST_DEBOUNCE_MS);
   const putAbortRef = useRef<AbortController | null>(null);
+  const localDirtyRef = useRef(false);
+  const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
+  if (wins !== null && wins.length > 0 && lastAcknowledgedSnapshotRef.current === null) {
+    localDirtyRef.current = true;
+  }
 
   const serverSyncEnabled = typeof navigator === "undefined" || navigator.webdriver !== true;
 
@@ -789,22 +978,41 @@ function useWorkspaceServerSync({
   const runServerPut = useCallback((keepalive: boolean): void => {
     const latestWins = winsRef.current;
     if (latestWins === null) return;
-    const persistedWins = sanitizePersistedWindows(latestWins);
-    const persistedConns = sanitizePersistedConnections(connsRef.current, persistedWins);
+    const snapshot = buildServerWorkspaceSnapshot(latestWins, connsRef.current);
+    if (snapshot.serialized === lastAcknowledgedSnapshotRef.current) {
+      localDirtyRef.current = false;
+      return;
+    }
     putAbortRef.current?.abort();
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     putAbortRef.current = controller;
-    void putServerWorkspaceSnapshot(persistedWins, persistedConns, {
+    const baseRevision = revisionRef.current;
+    void putServerWorkspaceSnapshot(snapshot.wins, snapshot.conns, {
+      baseRevision,
       ...(controller !== null ? { signal: controller.signal } : {}),
       keepalive,
-    }).then((revision) => {
-      if (revision !== null && revision > revisionRef.current) revisionRef.current = revision;
+    }).then((result) => {
+      if (result?.kind === "conflict") {
+        if (result.revision !== null && result.revision > revisionRef.current) {
+          revisionRef.current = result.revision;
+        }
+        return;
+      }
+      if (result?.kind !== "ok") return;
+      lastAcknowledgedSnapshotRef.current = snapshot.serialized;
+      localDirtyRef.current = false;
+      if (result.revision > revisionRef.current) revisionRef.current = result.revision;
     });
   }, []);
 
   const applyServerSnapshot = useCallback(
     (serverSnapshot: ServerWorkspaceSnapshot): void => {
       const snapshot = snapshotFromRaw(serverSnapshot.windows, serverSnapshot.connections);
+      lastAcknowledgedSnapshotRef.current = JSON.stringify({
+        windows: snapshot.wins,
+        connections: snapshot.conns,
+      });
+      localDirtyRef.current = false;
       if (serverSnapshot.revision > revisionRef.current) {
         revisionRef.current = serverSnapshot.revision;
       }
@@ -829,6 +1037,7 @@ function useWorkspaceServerSync({
       ) {
         return;
       }
+      if (localDirtyRef.current) return;
       applyServerSnapshot(serverSnapshot);
     };
     const startPolling = (): void => {
@@ -873,6 +1082,21 @@ function useWorkspaceServerSync({
       suppressNextPersistRef.current = false;
       return;
     }
+    const snapshot = buildServerWorkspaceSnapshot(wins, conns);
+    if (
+      lastAcknowledgedSnapshotRef.current === null &&
+      snapshot.wins.length === 0 &&
+      snapshot.conns.length === 0
+    ) {
+      lastAcknowledgedSnapshotRef.current = snapshot.serialized;
+      localDirtyRef.current = false;
+      return;
+    }
+    if (snapshot.serialized === lastAcknowledgedSnapshotRef.current) {
+      localDirtyRef.current = false;
+      return;
+    }
+    localDirtyRef.current = true;
     putDebounceRef.current?.schedule(() => runServerPut(false));
   }, [wins, conns, suppressNextPersistRef, serverSyncEnabled, runServerPut]);
 
@@ -900,10 +1124,36 @@ function useWorkspaceServerSync({
   }, [serverSyncEnabled, runServerPut]);
 }
 
+interface SnapChordActions {
+  readonly setSnap: (zone: SnapZone | null) => void;
+  readonly commitSnap: (id: string) => void;
+}
+
 interface UseKeyboardArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly rect: () => DOMRect | null;
   readonly cancelConnectRef: MutableRefObject<() => void>;
+  // GEN-UI-KEYBOARD-009 — the snap actions the keyboard snap chords drive. Held in
+  // a ref because the snap actions are assembled after this hook is called; the ref
+  // is populated in the same render before any keydown can fire.
+  readonly snapRef: MutableRefObject<SnapChordActions | null>;
+}
+
+// GEN-UI-KEYBOARD-009 — the keyboard equivalent of an edge/quadrant drag snap.
+// Cmd/Ctrl+Alt+Arrow snaps the focused window to a half/maximized region using the
+// exact same api.setSnap → api.commitSnap path a pointer drag arms, so the snapped
+// geometry (and the maximize/restore prev snapshot) is identical. Left/Right tile
+// to that half; Up maximizes. Down is intentionally unbound (no lower snap zone).
+const SNAP_ARROW_ZONES: Readonly<Record<string, SnapZone | null>> = {
+  ArrowLeft: "left",
+  ArrowRight: "right",
+  ArrowUp: "maxi",
+  ArrowDown: null,
+};
+
+function handleSnapChord(snap: SnapChordActions, zone: SnapZone, targetId: string): void {
+  snap.setSnap(zone);
+  snap.commitSnap(targetId);
 }
 
 // Audit C296 — the content-zoom chord matches event.code, not event.key: macOS
@@ -920,16 +1170,30 @@ const CONTENT_ZOOM_CODES: Readonly<Record<string, string>> = {
   Numpad0: "0",
 };
 
+// GEN-UI-KEYBOARD-006 — pick the window a keyboard chord acts on: the window that
+// currently holds focus (targetId) when it resolves to a live, non-minimized
+// window; otherwise the topZ frontmost window as the tiebreak. The caller passes
+// targetId=null when focus is outside every window, in which case this returns
+// null and the chord is a no-op.
+function chordTargetWindow(ws: readonly AppWindow[], targetId: string | null): AppWindow | null {
+  if (targetId !== null) {
+    const focused = ws.find((w) => w.id === targetId);
+    return focused !== undefined && focused.minimized !== true ? focused : null;
+  }
+  return topZ(ws);
+}
+
 function handleContentZoomKey(
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
   key: string,
+  targetId: string | null,
 ): void {
   setWins((ws) => {
     if (ws === null || ws.length === 0) return ws;
-    const top = topZ(ws);
-    if (top === null) return ws;
-    const z = nextContentZoom(top.zoom ?? 1, key);
-    return ws.map((w) => (w.id === top.id ? { ...w, zoom: z } : w));
+    const target = chordTargetWindow(ws, targetId);
+    if (target === null) return ws;
+    const z = nextContentZoom(target.zoom ?? 1, key);
+    return ws.map((w) => (w.id === target.id ? { ...w, zoom: z } : w));
   });
 }
 
@@ -938,17 +1202,18 @@ function handleArrowKey(
   rect: DOMRect,
   arrow: ArrowState,
   size: boolean,
+  targetId: string | null,
 ): void {
   setWins((ws) => {
     if (ws === null || ws.length === 0) return ws;
-    const top = topZ(ws);
-    if (top === null) return ws;
-    const next = size ? applyArrowResize(top, rect, arrow) : applyArrowMove(top, rect, arrow);
-    return ws.map((w) => (w.id === top.id ? { ...w, ...next, max: false } : w));
+    const target = chordTargetWindow(ws, targetId);
+    if (target === null) return ws;
+    const next = size ? applyArrowResize(target, rect, arrow) : applyArrowMove(target, rect, arrow);
+    return ws.map((w) => (w.id === target.id ? { ...w, ...next, max: false } : w));
   });
 }
 
-function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs): void {
+function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeyboardArgs): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       // Escape must cancel an in-flight connect even when focus sits in a form
@@ -960,6 +1225,11 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs):
         return;
       }
       if (isFormField(document.activeElement)) return;
+      // GEN-UI-KEYBOARD-006 — every geometry/content chord now acts on the window
+      // that currently holds focus, not the topmost window regardless of focus.
+      // `null` means focus is outside any window, in which case the chord no-ops
+      // (it must never silently mutate a window the user is not operating).
+      const targetId = focusedWindowId();
       // Audit C296 — plain Cmd/Ctrl+Plus/Minus/0 used to be preventDefault'ed
       // app-wide, hijacking the browser's page zoom (the primary text-scaling
       // tool, WCAG 1.4.4) for a single-window content zoom. Content zoom now
@@ -968,23 +1238,38 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs):
       const zoomKey = CONTENT_ZOOM_CODES[e.code];
       if ((e.metaKey || e.ctrlKey) && e.altKey && zoomKey !== undefined) {
         e.preventDefault();
-        handleContentZoomKey(setWins, zoomKey);
+        if (targetId !== null) handleContentZoomKey(setWins, zoomKey, targetId);
         return;
       }
       if (!/^Arrow/.test(e.key)) return;
+      // GEN-UI-KEYBOARD-009 — Cmd/Ctrl+Alt+Arrow snaps the focused window to a
+      // half/maximized region (the keyboard equivalent of an edge/quadrant drag
+      // snap). Checked before the move/resize branch below because it shares the
+      // Alt modifier with resize; it wins only when Cmd/Ctrl is also held.
+      if ((e.metaKey || e.ctrlKey) && e.altKey) {
+        // ArrowDown maps to null (no lower snap zone); an unmapped key is undefined.
+        const zone = SNAP_ARROW_ZONES[e.key];
+        e.preventDefault();
+        const snap = snapRef.current;
+        if (zone != null && snap !== null && targetId !== null) {
+          handleSnapChord(snap, zone, targetId);
+        }
+        return;
+      }
       const move = e.metaKey || e.ctrlKey;
       const size = e.altKey;
       if (!move && !size) return;
       e.preventDefault();
+      if (targetId === null) return;
       const r = rect();
       if (r === null) return;
-      handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size);
+      handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size, targetId);
     };
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
     };
-  }, [setWins, rect, cancelConnectRef]);
+  }, [setWins, rect, cancelConnectRef, snapRef]);
 }
 
 interface UseFitMaximizedArgs {
@@ -1005,6 +1290,20 @@ export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow 
   return x === w.x && y === w.y ? w : { ...w, x, y };
 }
 
+// Exported for tests (audit GEN-PERF-WORKSPACE-001). fitWindowToViewport already
+// identity-preserves per unchanged window, but a plain `.map` still allocates a
+// new array on every ResizeObserver tick — so a no-op resize committed a fresh
+// `wins` identity, re-rendering the whole shell and re-firing the persist chain.
+// Return the ORIGINAL array when no element changed identity so React bails the
+// state update entirely (true no-op resize).
+export function fitWindowsToViewport(
+  wins: readonly AppWindow[],
+  vp: ViewportWorld,
+): readonly AppWindow[] {
+  const next = wins.map((w) => fitWindowToViewport(w, vp));
+  return next.every((w, i) => w === wins[i]) ? wins : next;
+}
+
 function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void {
   useEffect(() => {
     const el = wsRef.current;
@@ -1018,7 +1317,7 @@ function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void
         w: r.width / v.zoom,
         h: r.height / v.zoom,
       };
-      setWins((ws) => (ws === null ? ws : ws.map((w) => fitWindowToViewport(w, vp))));
+      setWins((ws) => (ws === null ? ws : fitWindowsToViewport(ws, vp)) as AppWindow[] | null);
     });
     ro.observe(el);
     return () => {
@@ -1080,9 +1379,48 @@ export function useWorkspace(
     onConnectorBind,
     onConnectorUnbind,
   } = opts;
+  // GEN-PERF-RENDER-001 — route the optional scope-bind callbacks through refs so the
+  // connectActions/api memos never rebind when a parent (AppShell) passes NEW callback
+  // identities per render (its scope-bind callbacks depend on the whole `session`,
+  // which changes on every keystroke/SSE token). The stable wrappers below read the
+  // live callback each call, preserving behaviour (`?? true` on bind, no-op on unbind
+  // when the underlying callback is absent) while keeping api referentially stable.
+  const onScopeBindRef = useRef(onScopeBind);
+  onScopeBindRef.current = onScopeBind;
+  const onScopeUnbindRef = useRef(onScopeUnbind);
+  onScopeUnbindRef.current = onScopeUnbind;
+  const onConnectorBindRef = useRef(onConnectorBind);
+  onConnectorBindRef.current = onConnectorBind;
+  const onConnectorUnbindRef = useRef(onConnectorUnbind);
+  onConnectorUnbindRef.current = onConnectorUnbind;
+  const stableScopeBind = useCallback(
+    (chatWindowId: string, scope: ChatConnectedScope): boolean | Promise<boolean> =>
+      onScopeBindRef.current?.(chatWindowId, scope) ?? true,
+    [],
+  );
+  const stableScopeUnbind = useCallback((chatWindowId: string, scope: ChatConnectedScope): void => {
+    onScopeUnbindRef.current?.(chatWindowId, scope);
+  }, []);
+  const stableConnectorBind = useCallback(
+    (chatWindowId: string, scope: ChatLocalKnowledgeScope): boolean | Promise<boolean> =>
+      onConnectorBindRef.current?.(chatWindowId, scope) ?? true,
+    [],
+  );
+  const stableConnectorUnbind = useCallback(
+    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
+      onConnectorUnbindRef.current?.(chatWindowId, scope);
+    },
+    [],
+  );
+
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
   const suppressNextServerPersistRef = useRef(false);
+  // GEN-PERF-PERSISTENCE-001/012 — the last sanitized snapshot serialization that is
+  // currently applied, and a flag suppressing the immediate localStorage rewrite of a
+  // snapshot that just arrived from persistence (cross-tab storage event).
+  const lastAppliedSerializedRef = useRef<string | null>(null);
+  const suppressNextLocalPersistRef = useRef(false);
   const beforeApplyRemote = useCallback((): void => {
     suppressNextServerPersistRef.current = true;
   }, []);
@@ -1125,6 +1463,10 @@ export function useWorkspace(
   connectingRef.current = connecting;
   const connectCleanupRef = useRef<(() => void) | null>(null);
   const cancelConnectRef = useRef<() => void>(() => undefined);
+  // GEN-UI-KEYBOARD-009 — the keyboard snap chords drive the same setSnap/commitSnap
+  // path as a pointer drag snap. The snap actions are assembled below (after this
+  // ref is created); the ref is populated in the same render before any keydown.
+  const snapChordRef = useRef<SnapChordActions | null>(null);
 
   const { viewRef, worldVP, zoomTo, fitView, resetView, panBy, rect } = usePanZoom({
     wsRef,
@@ -1135,8 +1477,15 @@ export function useWorkspace(
     setWins,
   });
 
-  useHydrate({ wsRef, setWins, setConns, zc });
-  useWorkspaceStorageSync({ setWins, setConns, zc, beforeApplyRemote });
+  useHydrate({ wsRef, setWins, setConns, zc, lastAppliedSerializedRef });
+  useWorkspaceStorageSync({
+    setWins,
+    setConns,
+    zc,
+    beforeApplyRemote,
+    lastAppliedSerializedRef,
+    suppressNextLocalPersistRef,
+  });
   useWorkspaceServerSync({
     wins,
     conns,
@@ -1153,12 +1502,27 @@ export function useWorkspace(
   // + setItem. Sanitize windows once and reuse the result for connection pruning/persistence.
   useDebouncedPersist(() => {
     if (wins === null) return;
+    // GEN-PERF-PERSISTENCE-012 — a snapshot that just arrived from a sibling tab's
+    // storage event was immediately re-written to localStorage (a byte-identical
+    // echo). Skip that single rewrite; a genuine later local mutation clears the
+    // flag and persists normally.
+    if (suppressNextLocalPersistRef.current) {
+      suppressNextLocalPersistRef.current = false;
+      return;
+    }
     const persistedWins = sanitizePersistedWindows(wins);
+    const persistedConns = sanitizePersistedConnections(conns, persistedWins);
     persistList(WS_LS, persistedWins);
-    persistList(CONN_LS, sanitizePersistedConnections(conns, persistedWins));
+    persistList(CONN_LS, persistedConns);
+    // Track what is now durably applied so a cross-tab storage event echoing this
+    // exact value is recognised as a no-op (PERSISTENCE-001 equality guard).
+    lastAppliedSerializedRef.current = JSON.stringify({
+      windows: persistedWins,
+      connections: persistedConns,
+    });
   }, [conns, wins]);
 
-  useKeyboardCtrls({ setWins, rect, cancelConnectRef });
+  useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef: snapChordRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
   // Issue #1580 — the WorkspaceApi object and all of its action closures are the
@@ -1167,9 +1531,9 @@ export function useWorkspace(
   // React.memo on those children a permanent no-op and re-renders all N windows
   // per frame. Every closure below already mutates via setWins functional updaters
   // and reads live state through winsRef/connsRef/viewRef/zc, so it captures NO
-  // stale wins/conns/view and can be built ONCE. The only non-stable inputs are the
-  // optional scope-bind callbacks, which are listed in the relevant deps so a parent
-  // swapping a callback still rebinds.
+  // stale wins/conns/view and can be built ONCE. The optional scope-bind callbacks are
+  // now routed through refs (stable* wrappers, GEN-PERF-RENDER-001), so even a parent
+  // swapping their identities every render no longer rebinds connectActions/api.
   const mutations = useMemo(
     () => makeMutations({ setWins, zc, worldVP, winsRef }),
     [setWins, zc, worldVP, winsRef],
@@ -1179,6 +1543,10 @@ export function useWorkspace(
     () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
     [setSnapPrev, snapZone, worldVP, mutations],
   );
+  // GEN-UI-KEYBOARD-009 — publish the snap actions to the keyboard-chord ref so
+  // Cmd/Ctrl+Alt+Arrow can arm and commit a snap without re-attaching the keydown
+  // listener when the (memoized) snap actions change identity.
+  snapChordRef.current = snap;
   const connectActions = useMemo(
     () =>
       makeConnectActions({
@@ -1194,10 +1562,10 @@ export function useWorkspace(
         focus: mutations.focus,
         setConns,
         setConnecting,
-        onScopeBind,
-        onScopeUnbind,
-        onConnectorBind,
-        onConnectorUnbind,
+        onScopeBind: stableScopeBind,
+        onScopeUnbind: stableScopeUnbind,
+        onConnectorBind: stableConnectorBind,
+        onConnectorUnbind: stableConnectorUnbind,
       }),
     [
       wsRef,
@@ -1212,10 +1580,10 @@ export function useWorkspace(
       mutations,
       setConns,
       setConnecting,
-      onScopeBind,
-      onScopeUnbind,
-      onConnectorBind,
-      onConnectorUnbind,
+      stableScopeBind,
+      stableScopeUnbind,
+      stableConnectorBind,
+      stableConnectorUnbind,
     ],
   );
   cancelConnectRef.current = connectActions.cancelConnect;
@@ -1242,17 +1610,19 @@ export function useWorkspace(
           const chatWindowId =
             c.boundChatWindowId ??
             (win.type === "chat" ? win.id : other.type === "chat" ? other.id : null);
-          const scope = boundScopeOf(c) ?? filesChatBindScope(win, other, Date.now());
-          if (scope !== null && chatWindowId !== null) onScopeUnbind?.(chatWindowId, scope);
+          const scope =
+            boundScopeOf(c) ??
+            (c.boundScopeElided === true ? null : filesChatBindScope(win, other, Date.now()));
+          if (scope !== null && chatWindowId !== null) stableScopeUnbind(chatWindowId, scope);
           const connectorScope = boundConnectorScopeOf(c) ?? connectorChatBind(win, other);
           if (connectorScope !== null && chatWindowId !== null) {
-            onConnectorUnbind?.(chatWindowId, connectorScope);
+            stableConnectorUnbind(chatWindowId, connectorScope);
           }
         }
       }
       mutations.close(id);
     },
-    [winsByIdRef, connsByEndpointRef, mutations, onScopeUnbind, onConnectorUnbind],
+    [winsByIdRef, connsByEndpointRef, mutations, stableScopeUnbind, stableConnectorUnbind],
   );
 
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(

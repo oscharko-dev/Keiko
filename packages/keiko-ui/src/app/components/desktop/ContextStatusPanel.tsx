@@ -18,8 +18,7 @@ import {
   type GroundedAnswerContextSummary,
 } from "@/lib/types";
 
-const ASSEMBLED_TOKEN_HINT =
-  `Conservative assembled-context estimate for this grounded answer, produced by the context allocator's ${DEFAULT_TOKEN_ESTIMATOR_ID} token estimator. It is separate from the live composer context below.`;
+const ASSEMBLED_TOKEN_HINT = `Conservative assembled-context estimate for this grounded answer, produced by the context allocator's ${DEFAULT_TOKEN_ESTIMATOR_ID} token estimator. It is separate from the live composer context below.`;
 
 // Sentence-case the four-value pressure enum for the metric column (e.g. "moderate" → "Moderate").
 function pressureLabel(pressure: ContextBudgetPressure): string {

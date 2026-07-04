@@ -31,6 +31,15 @@ describe("resolveSearchPolicy", () => {
     expect(explicit.applyGitignore).toBe(false);
     expect(explicit.omitLowValueWorkspaceFiles).toBe(false);
   });
+
+  it("normalizes hint paths without accepting traversal or denied paths", () => {
+    const policy = resolveSearchPolicy(false, {
+      lowValuePathAllowlist: ["./vendor/generated///", "../outside", ".env"],
+      recentPaths: ["src\\payments\\PaymentService.ts///"],
+    });
+    expect(policy.lowValuePathAllowlist).toEqual(["vendor/generated"]);
+    expect(policy.recentPaths).toEqual(["src/payments/PaymentService.ts"]);
+  });
 });
 
 describe("legacyDiscoveryPolicy", () => {
@@ -83,8 +92,45 @@ describe("orderCandidatesForSearch", () => {
       (entry) => entry.scopePath === "src/payments/PaymentService.ts",
     );
     expect(
-      source?.signals.some((signal) => signal.name === "path-term-bonus" && signal.value > 0),
+      source?.signals.some((signal) => signal.name === "query-path-score" && signal.value > 0),
     ).toBe(true);
+  });
+
+  it("reorders the same candidates for materially different debugging questions", () => {
+    const files = [
+      file("docs/auth-debugging.md"),
+      file("src/auth/ApiClient.ts"),
+      file("src/auth/TokenValidator.ts"),
+    ];
+    const apiClient = orderCandidatesForSearch(
+      files,
+      query("Where is ApiClient timeout handling implemented?"),
+      policy,
+      0,
+      0,
+    ).files.map((entry) => entry.relativePath);
+    const tokenValidator = orderCandidatesForSearch(
+      files,
+      query("Where does TokenValidator reject expired JWTs?"),
+      policy,
+      0,
+      0,
+    ).files.map((entry) => entry.relativePath);
+    expect(apiClient[0]).toBe("src/auth/ApiClient.ts");
+    expect(tokenValidator[0]).toBe("src/auth/TokenValidator.ts");
+    expect(apiClient).not.toEqual(tokenValidator);
+  });
+
+  it("lets a code match outrank manifest and prose priors", () => {
+    const files = [file("package.json"), file("README.md"), file("src/payments/refundPayment.ts")];
+    const { files: ordered } = orderCandidatesForSearch(
+      files,
+      query("Where is refundPayment implemented?"),
+      policy,
+      0,
+      0,
+    );
+    expect(ordered[0]?.relativePath).toBe("src/payments/refundPayment.ts");
   });
 
   it("is deterministic and locale-independent on score ties (code-point order)", () => {
@@ -170,6 +216,22 @@ describe("orderCandidatesForSearch — polyglot ecosystem awareness", () => {
     );
     expect(ordered[0]?.relativePath).toBe("config/features.yaml");
     expect(diagnostics.candidateBuckets.config).toBe(1);
+  });
+
+  it("keeps short discriminative code tokens in the lexical score", () => {
+    const files = [file("docs/api.md"), file("src/http/ApiIdUrlMapper.ts")];
+    const { files: ordered, diagnostics } = orderCandidatesForSearch(
+      files,
+      query("Where is the API id url mapper implemented?"),
+      resolveSearchPolicy(false, { retrievalIntent: "targeted-code-search" }),
+      0,
+      0,
+    );
+    expect(ordered[0]?.relativePath).toBe("src/http/ApiIdUrlMapper.ts");
+    const source = diagnostics.rankedCandidates.find(
+      (entry) => entry.scopePath === "src/http/ApiIdUrlMapper.ts",
+    );
+    expect(source?.signals.some((signal) => signal.name === "query-path-score")).toBe(true);
   });
 
   it("emits explainable per-file ranking signals for the top candidates", () => {

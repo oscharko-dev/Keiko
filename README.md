@@ -498,13 +498,13 @@ Keiko sends this request shape to `${baseUrl}/rerank`:
 
 Environment variables override the file block:
 
-| Variable                                | Purpose                                |
-| --------------------------------------- | -------------------------------------- |
-| `KEIKO_RERANKER_MODEL_ID`               | Reranker model/deployment id.          |
-| `KEIKO_RERANKER_BASE_URL`               | LiteLLM-compatible `/v1` base URL.     |
-| `KEIKO_RERANKER_API_KEY`                | Reranker gateway token.                |
-| `KEIKO_RERANKER_API_KEY_HEADER_NAME`    | Credential header name.                |
-| `KEIKO_RERANKER_TIMEOUT_MS`             | Per-rerank request timeout.            |
+| Variable                             | Purpose                            |
+| ------------------------------------ | ---------------------------------- |
+| `KEIKO_RERANKER_MODEL_ID`            | Reranker model/deployment id.      |
+| `KEIKO_RERANKER_BASE_URL`            | LiteLLM-compatible `/v1` base URL. |
+| `KEIKO_RERANKER_API_KEY`             | Reranker gateway token.            |
+| `KEIKO_RERANKER_API_KEY_HEADER_NAME` | Credential header name.            |
+| `KEIKO_RERANKER_TIMEOUT_MS`          | Per-rerank request timeout.        |
 
 When the block is missing, the request times out, the endpoint returns an unsupported response, or
 the model endpoint is unavailable, grounded answers fall back to the existing retrieval order and
@@ -563,7 +563,7 @@ Keiko is a local tool, not a remote service.
 - The UI binds to `127.0.0.1`.
 - API keys are accepted from local config, local environment, or the first-run UI flow.
 - Local config stores **secret references, not secret values**: provider API keys and the Figma token are sealed in per-feature AES-256-GCM vaults, and `keiko.config.json` carries only non-secret metadata and stable `apiKeySecretRef` references ([ADR-0046](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0046-local-credential-vault.md)).
-- Memory Vault ([ADR-0035](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0035-memory-vault-encryption-at-rest.md)) and Local Knowledge ([ADR-0047](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0047-local-knowledge-content-encryption.md)) content are encrypted at rest; metadata stays cleartext for retrieval.
+- Memory Vault ([ADR-0035](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0035-memory-vault-encryption-at-rest.md)) and Local Knowledge ([ADR-0047](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0047-local-knowledge-content-encryption.md)) configured content columns are encrypted at rest. Local Knowledge keeps a plaintext lexical FTS projection for local fallback retrieval; the local-state auditor treats that projection as reconstructive residual data and scans it for secret-shaped material.
 - Credentials are redacted from logs, evidence, and browser responses.
 - Workspace reads are bounded by the selected local project path.
 - Commands are allowlisted and run without a shell.
@@ -577,7 +577,7 @@ Known limits:
 - Keiko is not a sandbox or OS-level isolation layer.
 - Local encryption protects data **at rest**. It does not protect against malware running as the same user, a live compromised Keiko process, or a stolen machine on which the OS keychain is already unlocked — while a store is open its content is decrypted in process memory by necessity. The keyfile key tier stores the key beside the data; regulated deployments should prefer an injected `KEIKO_*_KEY` or the OS keychain.
 - Workflow evidence files are ordinary local files. Quality Intelligence run manifests carry SHA-256 integrity hashes verified on read (tamper-evident, not tamper-proof). Customer-reconstructive evidence artifacts are not yet encrypted at rest — owner-only permissions, redaction, and bounded retention are the compensating controls ([ADR-0048](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0048-evidence-artifact-confidentiality.md)).
-- Cleartext metadata leaks the shape of stored data (how much, which scopes, when), not its content.
+- Cleartext metadata leaks the shape of stored data (how much, which scopes, when). Local Knowledge's plaintext lexical FTS projection can also reveal normalized indexed terms; see the runtime-state contract before using it for regulated corpora.
 - Local project scripts can execute repository code when you run verification.
 - Do not run Keiko against untrusted repositories.
 

@@ -17,11 +17,16 @@
 // queued -> completed: the engine must observe at least the "running" state for the lifecycle
 // to remain auditable.
 
+import { RedactingError } from "@oscharko-dev/keiko-security/errors/base";
 import type { ConsolidationJob, ConsolidationJobState, ConsolidationResult } from "./types.js";
 
 export type ConsolidationJobErrorCode = "invalid-transition";
 
-export class ConsolidationJobError extends Error {
+// Extends the shared RedactingError base so the composed `ConsolidationJobError(code): from -> to`
+// message is scrubbed of secret shapes by construction, unifying the memory error taxonomy
+// [GEN-MAINT-COUPLING-003/004]. The `from`/`to` state fields are PRESERVED as the machine-readable
+// surface; the code union stays LOCAL to this package.
+export class ConsolidationJobError extends RedactingError {
   public readonly code: ConsolidationJobErrorCode;
   public readonly from: ConsolidationJobState;
   public readonly to: ConsolidationJobState;
@@ -31,7 +36,6 @@ export class ConsolidationJobError extends Error {
     to: ConsolidationJobState,
   ) {
     super(`ConsolidationJobError(${code}): ${from} -> ${to}`);
-    this.name = "ConsolidationJobError";
     this.code = code;
     this.from = from;
     this.to = to;

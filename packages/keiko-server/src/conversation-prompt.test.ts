@@ -132,7 +132,7 @@ describe("composeConversationPrompt", () => {
   });
 
   // Issue #502 — the immutable system prompt must NOT change when discussion modes are added.
-  it("keeps CONVERSATION_SYSTEM_PROMPT byte-identical (immutable, ADR-0065)", () => {
+  it("keeps CONVERSATION_SYSTEM_PROMPT byte-identical (immutable, ADR-0107)", () => {
     expect(CONVERSATION_SYSTEM_PROMPT).toBe(
       "You are Keiko, an enterprise developer-assist AI. Be concise, practical, and explicit about uncertainty. " +
         "Answer in German by default. Use another language only when the user explicitly asks for it or the task clearly requires it. " +

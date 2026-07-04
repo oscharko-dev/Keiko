@@ -5,6 +5,15 @@
 // "this looked like a credential" without learning which pattern fired, which keeps the rejection
 // path itself from leaking the candidate's content. The reason taxonomy is a closed string union
 // so a UI surface can branch deterministically on `reason`.
+//
+// CaptureRejection is a THROWN error (reserved for programmer mistakes — user-input rejection is
+// data-flow via CaptureOutcome, not exceptions), so it now extends the shared RedactingError base:
+// its `.message` is scrubbed of secret shapes by construction, closing the fragmented-taxonomy and
+// redaction-asymmetry gaps [GEN-MAINT-COUPLING-003/004]. The `reason` field is PRESERVED as the
+// domain discriminator; `.code` mirrors it to satisfy the base's stable-code contract. The reason
+// union stays LOCAL to this package.
+
+import { RedactingError } from "@oscharko-dev/keiko-security/errors/base";
 
 export type RejectionReason =
   | "credential-shape"
@@ -32,12 +41,17 @@ export type RejectionReason =
 // A capture-level error thrown only for programmer mistakes (e.g. handing an invalid scope hint
 // to an internal helper). Rejection of user input is data-flow via CaptureOutcome `kind:"rejected"`,
 // NOT exceptions — exceptions reserved for "this code path is unreachable in normal operation".
-export class CaptureRejection extends Error {
+export class CaptureRejection extends RedactingError {
   public readonly reason: RejectionReason;
 
   public constructor(reason: RejectionReason, message: string) {
     super(message);
-    this.name = "CaptureRejection";
     this.reason = reason;
+  }
+
+  // Mirror `reason` under the base's stable-code contract so the whole memory taxonomy exposes a
+  // uniform `.code` discriminator. `reason` stays the canonical name for existing callers.
+  public override get code(): RejectionReason {
+    return this.reason;
   }
 }

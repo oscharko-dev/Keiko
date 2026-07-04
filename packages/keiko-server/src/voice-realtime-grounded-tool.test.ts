@@ -309,7 +309,10 @@ describe("handleRealtimeGroundedVoiceTool", () => {
       toolOutput: {
         status: "ok",
         answer: answer.content,
-        persisted: { userMessageId: answer.userMessageId, assistantMessageId: answer.assistantMessageId },
+        persisted: {
+          userMessageId: answer.userMessageId,
+          assistantMessageId: answer.assistantMessageId,
+        },
       },
     });
   });
@@ -365,6 +368,47 @@ describe("handleRealtimeGroundedVoiceTool", () => {
       { marker: "[1]", label: "docs/fachkonzept.md", source: "Repository" },
       { marker: "[2]", label: "Fachkonzept.pdf", source: "Knowledge capsule: test" },
     ]);
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-005): forwards abstention so voice does not speak over empty evidence", async () => {
+    const chat = createChat();
+    const answer = groundedAnswer(chat.id, {
+      uncertainty: [{ kind: "no-evidence", claim: "No supporting evidence was found." }],
+    });
+    runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
+
+    const result = await handleRealtimeGroundedVoiceTool(ctx(requestFor(chat)), deps());
+
+    expect(result.status).toBe(200);
+    const toolOutput = (
+      result.body as {
+        toolOutput: {
+          noEvidence: boolean;
+          instruction: string;
+          uncertainty: readonly { kind: string }[];
+        };
+      }
+    ).toolOutput;
+    expect(toolOutput.noEvidence).toBe(true);
+    expect(toolOutput.instruction.toLowerCase()).toContain("no supporting");
+    expect(toolOutput.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-005): speaks with an uncertainty caveat when reconciliation flags unsupported claims", async () => {
+    const chat = createChat();
+    const answer = groundedAnswer(chat.id, {
+      uncertainty: [
+        { kind: "unsupported-citation", claim: "The answer cited a source not in the evidence." },
+      ],
+    });
+    runGroundedAskInputMock.mockResolvedValue({ status: 200, body: answer } satisfies RouteResult);
+
+    const result = await handleRealtimeGroundedVoiceTool(ctx(requestFor(chat)), deps());
+
+    const toolOutput = (result.body as { toolOutput: { noEvidence: boolean; instruction: string } })
+      .toolOutput;
+    expect(toolOutput.noEvidence).toBe(false);
+    expect(toolOutput.instruction.toLowerCase()).toContain("unverified");
   });
 
   it("falls back to the model query when no user transcript is available", async () => {

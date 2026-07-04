@@ -121,6 +121,12 @@ export async function runBugVerification(
     processEnv: state.deps.processEnv ?? process.env,
     now: state.now,
     fs,
+    networkEnforcement:
+      state.deps.verificationNetworkEnforcement ??
+      (state.deps.spawn !== undefined ? "enforce-or-degrade" : undefined),
+    ...(state.deps.verificationEnforcedNetworkAvailable === undefined
+      ? {}
+      : { enforcedNetworkAvailable: state.deps.verificationEnforcedNetworkAvailable }),
   });
   const summary = summarizeForAudit(report);
   state.emitter.emit({

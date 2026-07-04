@@ -1,4 +1,4 @@
-import { createRef, type RefObject } from "react";
+import { createRef, useCallback, useState, type ReactNode, type RefObject } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -1119,6 +1119,53 @@ describe("WindowFrame content zoom controls", () => {
     expect(startConnect).not.toHaveBeenCalled();
   });
 
+  it("confirms an in-flight valid connection with Enter on the focused window section (GEN-UI-KEYBOARD-011)", () => {
+    const confirmConnect = vi.fn();
+    const startConnect = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState="valid"
+        linkRevision={0}
+        api={api({ confirmConnect, startConnect })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const section = container.querySelector<HTMLElement>(".window");
+    expect(section).not.toBeNull();
+
+    // Enter on the section itself (not a port) completes the connect. fireEvent
+    // dispatches from the section so event.target === event.currentTarget, matching
+    // focus on the tabIndex=-1 window region.
+    fireEvent.keyDown(section as HTMLElement, { key: "Enter" });
+
+    expect(confirmConnect).toHaveBeenCalledTimes(1);
+    expect(confirmConnect).toHaveBeenCalledWith("agents-1", expect.any(Object));
+    expect(startConnect).not.toHaveBeenCalled();
+  });
+
+  it("does not confirm from a section Enter when the window is not a valid connect target", () => {
+    const confirmConnect = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api({ confirmConnect })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const section = container.querySelector<HTMLElement>(".window");
+    expect(section).not.toBeNull();
+    fireEvent.keyDown(section as HTMLElement, { key: "Enter" });
+
+    expect(confirmConnect).not.toHaveBeenCalled();
+  });
+
   it("renders the compact too-small state instead of mounting unusable content", () => {
     render(
       <WindowFrame
@@ -1137,5 +1184,170 @@ describe("WindowFrame content zoom controls", () => {
       "data-mode",
       "tiny",
     );
+  });
+});
+
+describe("WindowFrame body memo — discrete breakpoint keying (GEN-PERF-RENDER-003)", () => {
+  it("does not rebuild the body on a same-band resize but rebuilds on a band crossing", () => {
+    const bodyRenders: number[] = [];
+    // The registered render fn runs exactly once per body memo rebuild. Use chat so
+    // both sides of the crossing still call def.render (agents' tiny path bypasses it).
+    registerWindowRender("chat", () => {
+      bodyRenders.push(1);
+      return <div data-testid="chat-body" />;
+    });
+    const stableApi = api();
+    const wsRef = createRef<HTMLElement>();
+    // Preserve cfg identity across rerenders — a live resize keeps the same cfg
+    // object; only geometry changes. (A fresh {} per render would churn the memo on
+    // win.cfg and mask the ew/eh keying under test.)
+    const cfg = {};
+    const base = appWindow({ type: "chat", cfg });
+
+    // chat `compact` breakpoint is ew < 640; start above it (compact=false).
+    const { rerender } = render(
+      <WindowFrame
+        win={{ ...base, w: 720, h: 560 }}
+        top
+        connState={null}
+        linkRevision={0}
+        api={stableApi}
+        wsRef={wsRef}
+      />,
+    );
+    expect(bodyRenders.length).toBe(1);
+
+    // Resize within the same band (still above 640, no other breakpoint crossed): the
+    // continuous ew/eh change, but the discrete breakpoint signature does not, so the
+    // body memo must hold — no rebuild.
+    rerender(
+      <WindowFrame
+        win={{ ...base, w: 700, h: 559 }}
+        top
+        connState={null}
+        linkRevision={0}
+        api={stableApi}
+        wsRef={wsRef}
+      />,
+    );
+    expect(bodyRenders.length).toBe(1);
+
+    // Cross the compact breakpoint (w below 640) → compact flips → body rebuilds.
+    rerender(
+      <WindowFrame
+        win={{ ...base, w: 600, h: 559 }}
+        top
+        connState={null}
+        linkRevision={0}
+        api={stableApi}
+        wsRef={wsRef}
+      />,
+    );
+    expect(bodyRenders.length).toBe(2);
+  });
+});
+
+describe("WindowFrame resize handles are pointer-only (GEN-UI-INTERACTION-007)", () => {
+  it("marks every resize handle aria-hidden", () => {
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top
+        connState={null}
+        linkRevision={0}
+        api={api()}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const handles = Array.from(container.querySelectorAll<HTMLElement>(".wz"));
+    // n, s, e, w, ne, nw, se, sw — all 8 handles.
+    expect(handles).toHaveLength(8);
+    for (const handle of handles) {
+      expect(handle).toHaveAttribute("aria-hidden", "true");
+    }
+  });
+});
+
+// GEN-UI-FOCUS-012 — closing/minimizing a window must move keyboard focus to a
+// surviving window section (or the FAB), never leave it on <body>. A minimal
+// stateful stand-in for Workspace: it holds the window list, derives `top` from the
+// highest z, and removes the closed window so the survivor rises to data-top.
+function FocusRestoreHarness({
+  wins: initial,
+}: {
+  readonly wins: readonly AppWindow[];
+}): ReactNode {
+  const [wins, setWins] = useState<readonly AppWindow[]>(initial);
+  const wsRef = createRef<HTMLElement>();
+  const close = useCallback((id: string): void => {
+    setWins((current) => current.filter((w) => w.id !== id));
+  }, []);
+  const minimize = useCallback((id: string): void => {
+    setWins((current) => current.filter((w) => w.id !== id));
+  }, []);
+  const topId = wins.reduce<AppWindow | null>(
+    (best, w) => (best === null || w.z > best.z ? w : best),
+    null,
+  )?.id;
+  return (
+    <div className="ws-scene">
+      {wins.map((w) => (
+        <WindowFrame
+          key={w.id}
+          win={w}
+          top={w.id === topId}
+          connState={null}
+          linkRevision={0}
+          api={api({ close, minimize })}
+          wsRef={wsRef}
+        />
+      ))}
+      <button type="button" className="ws-fab" aria-label="New window">
+        New window
+      </button>
+    </div>
+  );
+}
+
+describe("WindowFrame close/minimize focus restore (GEN-UI-FOCUS-012)", () => {
+  it("moves focus to the new top window after closing the top window — never <body>", async () => {
+    const user = userEvent.setup();
+    render(
+      <FocusRestoreHarness
+        wins={[
+          appWindow({ id: "chat-1", type: "chat", z: 5, w: 600, h: 420 }),
+          appWindow({ id: "files-1", type: "files", z: 1, w: 600, h: 420 }),
+        ]}
+      />,
+    );
+
+    // chat-1 is the top window; closing it should raise files-1 to data-top and
+    // land keyboard focus there.
+    await user.click(screen.getByRole("button", { name: "Close Chat window" }));
+
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active).not.toBe(document.body);
+      expect(active).toHaveAttribute("data-window-id", "files-1");
+      expect(active).toHaveAttribute("data-top", "true");
+    });
+  });
+
+  it("never leaves focus on <body> when the last window is closed (falls back to the FAB)", async () => {
+    const user = userEvent.setup();
+    render(
+      <FocusRestoreHarness
+        wins={[appWindow({ id: "chat-1", type: "chat", z: 5, w: 600, h: 420 })]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Close Chat window" }));
+
+    await waitFor(() => {
+      const active = document.activeElement;
+      expect(active).not.toBe(document.body);
+      expect(active).toHaveClass("ws-fab");
+    });
   });
 });

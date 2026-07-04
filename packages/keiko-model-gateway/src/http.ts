@@ -1,10 +1,16 @@
 import { readFileSync } from "node:fs";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { request as httpRequest } from "node:http";
 import type { IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect as netConnect, isIP } from "node:net";
 import type { Socket } from "node:net";
 import * as tls from "node:tls";
+import {
+  normalizeHost,
+  outboundAddressBlockedReason,
+  outboundTargetBlockedReason,
+} from "./egress-policy.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
@@ -230,7 +236,7 @@ export function streamingResponseFromNode(
   res: import("node:http").IncomingMessage,
   onCancel: () => void,
   maxBytes: number = MAX_RESPONSE_BYTES,
-  onDone?: (() => void)  ,
+  onDone?: () => void,
 ): Response {
   let total = 0;
   let done = false;
@@ -317,10 +323,6 @@ async function fetchWithCaBundle(
   });
 }
 
-function normalizeHost(hostname: string): string {
-  return hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
-}
-
 function tlsServerName(hostname: string): string | undefined {
   const normalized = normalizeHost(hostname);
   return isIP(normalized) === 0 ? normalized : undefined;
@@ -394,6 +396,54 @@ function proxyForTarget(
   if (target.protocol === "https:") return egress.httpsProxy ?? egress.httpProxy;
   if (target.protocol === "http:") return egress.httpProxy;
   return undefined;
+}
+
+function blockedTargetError(reason: string): OutboundHttpEgressError {
+  return new OutboundHttpEgressError(
+    "PROXY_BLOCKED_BY_POLICY",
+    `Outbound target is blocked by gateway egress policy (${reason}).`,
+  );
+}
+
+function redirectTarget(original: URL, response: Response): URL | undefined {
+  if (response.status < 300 || response.status >= 400) return undefined;
+  const location = response.headers.get("location");
+  if (location === null || location.trim().length === 0) return undefined;
+  try {
+    return new URL(location, original);
+  } catch {
+    throw new OutboundHttpEgressError(
+      "PROXY_BLOCKED_BY_POLICY",
+      "Outbound redirect target is invalid.",
+    );
+  }
+}
+
+async function enforceRedirectTargetPolicy(
+  original: URL,
+  response: Response,
+  egress: OutboundHttpEgressConfig | undefined,
+  options: { readonly resolveDns: boolean },
+): Promise<Response> {
+  const redirected = redirectTarget(original, response);
+  if (redirected === undefined) return response;
+  await enforceOutboundTargetPolicy(redirected, egress, options);
+  return response;
+}
+
+async function enforceOutboundTargetPolicy(
+  target: URL,
+  egress: OutboundHttpEgressConfig | undefined,
+  options: { readonly resolveDns: boolean },
+): Promise<void> {
+  const literalReason = outboundTargetBlockedReason(target, egress);
+  if (literalReason !== undefined) throw blockedTargetError(literalReason);
+  if (egress?.allowPrivateNetwork === true || !options.resolveDns) return;
+  const addresses = await dnsLookup(target.hostname, { all: true, verbatim: true });
+  for (const address of addresses) {
+    const reason = outboundAddressBlockedReason(address.address, egress);
+    if (reason !== undefined) throw blockedTargetError(`DNS resolved to ${reason}`);
+  }
 }
 
 function proxyPort(proxy: URL): number {
@@ -859,14 +909,28 @@ export async function gatewayFetch(
   // Compose caller signal + optional timeout into a single signal for all paths.
   const composedSignal = composeSignal(rest.signal, timeoutMs);
   const init: RequestInit =
-    composedSignal !== undefined ? { ...rest, signal: composedSignal } : rest;
+    composedSignal !== undefined
+      ? { ...rest, redirect: "manual", signal: composedSignal }
+      : { ...rest, redirect: "manual" };
   const doFetch = fetchImpl ?? globalThis.fetch;
   const target = new URL(url);
   const proxy = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
+  const resolveDns = fetchImpl === undefined && proxy === undefined;
+  await enforceOutboundTargetPolicy(target, egress, { resolveDns });
+  const redirectPolicy = { resolveDns };
   if (proxy !== undefined) {
-    return fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
+    const response = await fetchViaProxy(target, init, proxy, egress, maxResponseBytes);
+    return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
   }
-  return fetchDirectWithCaFallback(url, init, doFetch, useCaFallback, egress, maxResponseBytes);
+  const response = await fetchDirectWithCaFallback(
+    url,
+    init,
+    doFetch,
+    useCaFallback,
+    egress,
+    maxResponseBytes,
+  );
+  return enforceRedirectTargetPolicy(target, response, egress, redirectPolicy);
 }
 
 export async function readJsonCapped(
@@ -898,7 +962,7 @@ export async function readJsonCapped(
 // cumulative size exactly like `readJsonCapped`. Used by the text-to-speech adapter (Issue #1558) to
 // pull synthesized audio off the provider response without buffering an unbounded payload: a provider
 // that streams more than `maxBytes` is aborted and rejected rather than exhausting memory (the same
-// bounded-egress guarantee every other gateway call inherits, ADR-0038/ADR-0058 D4). The returned
+// bounded-egress guarantee every other gateway call inherits, ADR-0038/ADR-0100 D4). The returned
 // array is `ArrayBuffer`-backed so it is a valid `BodyInit`/`BufferSource` for downstream consumers
 // without a type assertion.
 export async function readBytesCapped(

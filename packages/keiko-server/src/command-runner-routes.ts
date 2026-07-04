@@ -14,6 +14,7 @@ import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js"
 import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
+import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
 import {
   errorBody,
   STREAMING,
@@ -107,8 +108,8 @@ async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promi
   }
 }
 
-// GET /api/commands/catalog — the discovered, vetted task list for a project. Requires the runner so
-// discovery uses the same workspace containment as execution.
+// GET /api/commands/catalog — the discovered task list for a project, including server-owned trust
+// state. Requires the runner so discovery uses the same workspace containment as execution.
 export async function handleCommandCatalog(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -177,21 +178,38 @@ export function handleCommandEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   return STREAMING;
 }
 
-function openCommandSseStream(
+// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
+// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
+// because the client is not draining, before the socket is destroyed.
+export function openCommandSseStream(
   res: ServerResponse,
   manager: CommandRunnerManager,
   redactor: UiHandlerDeps["redactor"],
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
+  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
+  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
+  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
+  // (hence no abort) can occur before `unsubscribe` is assigned.
+  const controller = new AbortController();
   let seq = 0;
   const unsubscribe = manager.subscribe((event) => {
     seq += 1;
-    writeCommandEvent(res, event, seq, redactor);
+    writeCommandEvent(res, event, seq, redactor, controller, onBackpressure);
   });
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
   res.write(readyMessage());
   res.on("close", () => {
-    unsubscribe();
+    stop();
   });
 }
 
@@ -200,11 +218,11 @@ function writeCommandEvent(
   event: CommandRunnerEvent,
   seq: number,
   redactor: UiHandlerDeps["redactor"],
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   const redacted = redactor(event);
   const data = JSON.stringify(redacted);
   const frame = `id: ${String(seq)}\nevent: command:${event.kind}\ndata: ${data}\n\n`;
-  if (!res.write(frame)) {
-    res.destroy();
-  }
+  writeOrDestroy(res, frame, controller, onBackpressure);
 }

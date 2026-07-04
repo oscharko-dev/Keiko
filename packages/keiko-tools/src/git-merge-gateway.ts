@@ -1,4 +1,4 @@
-// The governed merge gateway (Issue #478, Epic #470, ADR-0065) — AC1–AC5.
+// The governed merge gateway (Issue #478, Epic #470, ADR-0087) — AC1–AC5.
 //
 // This is the merge-orchestration authority the #472 kernel and the #477 PR gateway both deferred: a
 // THIRD parallel execution authority, never an extension of the publish gateway or the PR gateway. A

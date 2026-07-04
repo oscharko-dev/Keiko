@@ -29,7 +29,7 @@ function permissionsPolicy(allowMicrophone: boolean): string {
 
 // Applies the CSP and the base security headers, plus `Cache-Control: no-store` for API responses
 // (the contract requires it on every `/api/*` response; D5). The microphone directive is relaxed only
-// when `options.allowMicrophone` is true (ADR-0058 D6 / docs/voice/privacy-contract.md).
+// when `options.allowMicrophone` is true (ADR-0100 D6 / docs/voice/privacy-contract.md).
 export function applySecurityHeaders(
   res: ServerResponse,
   csp: string,

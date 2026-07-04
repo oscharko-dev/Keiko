@@ -105,13 +105,14 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Local, per-contributor agent/IDE state — never shared.
 /.claude/
 /.codex/
 /.air/
 /.playwright-mcp/
 /.idea/
-/AGENTS.md
-/CLAUDE.md
+# NOTE: AGENTS.md and CLAUDE.md are intentionally TRACKED — they are the shared,
+# checked-in agent guide (AGENTS.md is canonical; CLAUDE.md imports it). Do not re-ignore.
 
 # Node
 node_modules/
@@ -126,6 +127,8 @@ playwright-report/
 keiko.config.json
 /credentials/
 keiko-live-start.png
+workspace-index-*.json
+workspace-index-*.json.*.tmp
 
 # Versioned developer sandbox. Keep the sandbox sources committed, but never commit generated
 # installs, runtime state, logs, or ad-hoc local config from sandbox runs.

@@ -80,10 +80,7 @@ describe("ContextStatusPanel", () => {
     expect(details).toHaveClass("grounded-evidence-disclosure");
     expect(summaryEl).toHaveClass("grounded-evidence-summary");
     expect(summaryEl).toHaveAttribute("aria-label", "Context assembly details");
-    expect(summaryEl).toHaveAttribute(
-      "title",
-      expect.stringContaining(DEFAULT_TOKEN_ESTIMATOR_ID),
-    );
+    expect(summaryEl).toHaveAttribute("title", expect.stringContaining(DEFAULT_TOKEN_ESTIMATOR_ID));
     expect(title).toHaveTextContent("Context");
     expect(meta).toHaveTextContent("34.0k est. assembled tokens");
     expect(meta).toHaveTextContent("Moderate pressure");

@@ -89,7 +89,7 @@ export function resolveContainedPath(root: string, pathname: string): string | u
 export async function serveFile(
   res: ServerResponse,
   filePath: string,
-  acceptEncoding?: string | readonly string[]  ,
+  acceptEncoding?: string | readonly string[],
 ): Promise<boolean> {
   let info;
   try {

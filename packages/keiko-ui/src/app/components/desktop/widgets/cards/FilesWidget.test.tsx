@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactElement } from "react";
+import { axe } from "jest-axe";
+import { Profiler, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
@@ -46,6 +47,20 @@ const treeEntryBase = {
   symlink: false,
   readable: true,
 };
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -186,6 +201,92 @@ describe("FilesWidget", () => {
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
+  });
+
+  it("ignores a stale tree response after the root changes", async () => {
+    const rootA = deferred<Awaited<ReturnType<typeof fetchFilesTree>>>();
+    const rootB = deferred<Awaited<ReturnType<typeof fetchFilesTree>>>();
+    vi.mocked(fetchFilesTree).mockImplementation((root: string) => {
+      if (root === "/repo-a") return rootA.promise;
+      if (root === "/repo-b") return rootB.promise;
+      return Promise.resolve({ root, path: "", truncated: false, entries: [] });
+    });
+    const onActiveFileChange = vi.fn();
+    const view = render(<FilesWidget root="/repo-a" onActiveFileChange={onActiveFileChange} />);
+
+    view.rerender(<FilesWidget root="/repo-b" onActiveFileChange={onActiveFileChange} />);
+
+    await act(async () => {
+      rootB.resolve({
+        root: "/repo-b-real",
+        path: "",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "new.txt", path: "new.txt", kind: "file" }],
+      });
+      await rootB.promise;
+    });
+    expect(await screen.findByText("new.txt")).toBeInTheDocument();
+    expect(onActiveFileChange).toHaveBeenCalledWith(null, "/repo-b-real", null);
+
+    await act(async () => {
+      rootA.resolve({
+        root: "/repo-a-real",
+        path: "",
+        truncated: false,
+        entries: [{ ...treeEntryBase, name: "old.txt", path: "old.txt", kind: "file" }],
+      });
+      await rootA.promise;
+    });
+    expect(screen.queryByText("old.txt")).not.toBeInTheDocument();
+    expect(onActiveFileChange).not.toHaveBeenCalledWith(null, "/repo-a-real", null);
+  });
+
+  it("shares identical startup tree and Git status reads across sibling Files windows", async () => {
+    vi.mocked(fetchGitStatus).mockResolvedValue({
+      schemaVersion: "1",
+      root: "/repo",
+      state: "unavailable",
+      available: false,
+      reason: "not-a-repository",
+      detached: false,
+      clean: true,
+      stagedCount: 0,
+      unstagedCount: 0,
+      untrackedCount: 0,
+      conflictedCount: 0,
+      changes: [],
+      truncated: false,
+      maxChanges: 500,
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValue({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          sizeBytes: 18,
+          extension: "json",
+        },
+      ],
+    });
+
+    render(
+      <>
+        <FilesWidget root="/repo" />
+        <FilesWidget root="/repo" />
+        <FilesWidget root="/repo" />
+      </>,
+    );
+
+    expect(await screen.findAllByRole("treeitem", { name: /package\.json/i })).toHaveLength(3);
+    expect(fetchFilesTree).toHaveBeenCalledTimes(1);
+    expect(fetchFilesTree).toHaveBeenCalledWith("/repo", "");
+    expect(fetchGitStatus).toHaveBeenCalledTimes(1);
+    expect(fetchGitStatus).toHaveBeenCalledWith("/repo");
   });
 
   it("progressively reveals large folders instead of rendering every row at once", async () => {
@@ -1114,6 +1215,44 @@ describe("FilePreview", () => {
     expect(updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(session.replaceChat).not.toHaveBeenCalled();
   });
+
+  // GEN-PERF-WIDGET-005 — a large text preview must not render one DOM row per line eagerly
+  // (~25k rows for a 1 MB file). The initial render is windowed; "Show more lines" reveals more.
+  it("windows a very large text preview and reveals more lines on demand", async () => {
+    const lineCount = 25_000;
+    const content = `${Array.from({ length: lineCount }, (_, i) => `line ${String(i)}`).join(
+      "\n",
+    )}\n`;
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/repo",
+      path: "big.txt",
+      name: "big.txt",
+      sizeBytes: content.length,
+      modifiedAt: 1,
+      extension: "txt",
+      mime: "text/plain",
+      symlink: false,
+      kind: "text",
+      content,
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+
+    render(<FilePreview root="/repo" path="big.txt" onClose={() => undefined} />);
+
+    await screen.findByRole("region", { name: "File preview: big.txt" });
+    // Only the first batch of lines is mounted, not all 25k.
+    const initialRows = document.querySelectorAll(".fpv-line");
+    expect(initialRows.length).toBeLessThanOrEqual(500);
+    expect(initialRows.length).toBeGreaterThan(0);
+
+    const showMore = screen.getByRole("button", { name: /Show \d+ more lines/ });
+    await userEvent.click(showMore);
+
+    const afterRows = document.querySelectorAll(".fpv-line");
+    expect(afterRows.length).toBeGreaterThan(initialRows.length);
+    expect(afterRows.length).toBeLessThanOrEqual(1000);
+  });
 });
 
 describe("FilesWidget file operations", () => {
@@ -1250,6 +1389,88 @@ describe("FilesWidget file operations", () => {
     });
   });
 
+  // GEN-UI-FOCUS-002 — the delete-confirmation dialog must trap focus, focus a button on open,
+  // cancel on Escape, and return focus to the originating tree row on close (WCAG 2.1.2/2.4.3).
+  it("focuses, traps and Escape-cancels the delete dialog, restoring focus to the row", async () => {
+    render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /app\.ts/i });
+    row.focus();
+    expect(row).toHaveFocus();
+
+    // Delete on the focused readable row opens the confirmation dialog (VS Code parity).
+    fireEvent.keyDown(row, { key: "Delete" });
+
+    const dialog = await screen.findByRole("dialog", { name: /delete file\?/i });
+    // The dialog describes its warning body so screen readers announce the consequence.
+    expect(dialog).toHaveAttribute("aria-describedby", "files-delete-body");
+    expect(document.getElementById("files-delete-body")).toHaveTextContent(/cannot be undone/i);
+
+    // Focus is moved into the dialog (onto the primary Delete button).
+    const deleteBtn = screen.getByRole("button", { name: "Delete" });
+    await waitFor(() => expect(deleteBtn).toHaveFocus());
+
+    // Tab from the last control wraps back to the first (focus stays inside the dialog).
+    const cancelBtn = screen.getByRole("button", { name: "Cancel" });
+    cancelBtn.focus();
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(deleteBtn).toHaveFocus();
+    // Shift+Tab from the first control wraps to the last.
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(cancelBtn).toHaveFocus();
+
+    // Escape cancels the dialog and returns focus to the originating tree row.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: /delete file\?/i })).not.toBeInTheDocument(),
+    );
+    expect(deleteFilesEntry).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("treeitem", { name: /app\.ts/i })).toHaveFocus();
+    });
+  });
+
+  // GEN-UI-KEYBOARD-003 — the context menu moves focus to its first item on open and supports
+  // arrow roving among the menu items.
+  it("focuses the first context-menu item and roves with arrow keys", async () => {
+    render(<FilesWidget root="/repo" />);
+
+    fireEvent.contextMenu(await screen.findByText("app.ts"));
+
+    const rename = await screen.findByRole("menuitem", { name: "Rename…" });
+    await waitFor(() => expect(rename).toHaveFocus());
+
+    const menu = screen.getByRole("menu", { name: "File actions" });
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Duplicate" })).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    expect(rename).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "End" });
+    expect(screen.getByRole("menuitem", { name: "New Folder…" })).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "Home" });
+    expect(rename).toHaveFocus();
+  });
+
+  // GEN-UI-TEST-GAP-006 (#16) — the file tree plus an open delete dialog must be axe-clean.
+  // The tree exposes a separate caret toggle button alongside each treeitem, which axe's
+  // aria-required-children rule flags as a not-allowed child of role="tree"; that pre-existing
+  // structural item is tracked independently of these focus findings, so it is disabled here.
+  it("has no axe violations for the tree and the open delete dialog", async () => {
+    const axeOptions = { rules: { "aria-required-children": { enabled: false } } } as const;
+    const { container } = render(<FilesWidget root="/repo" />);
+
+    const row = await screen.findByRole("treeitem", { name: /app\.ts/i });
+    expect(await axe(container, axeOptions)).toHaveNoViolations();
+
+    row.focus();
+    fireEvent.keyDown(row, { key: "Delete" });
+    const dialog = await screen.findByRole("dialog", { name: /delete file\?/i });
+    // The delete dialog itself (the surface these findings hardened) is axe-clean under all rules.
+    expect(await axe(dialog)).toHaveNoViolations();
+    // The full container (tree + dialog) is clean aside from the tracked tree-structure item.
+    expect(await axe(container, axeOptions)).toHaveNoViolations();
+  });
+
   it("keeps the inline editor open and shows the error when a create fails", async () => {
     vi.mocked(createFilesEntry).mockRejectedValue(
       new Error("An entry with that name already exists."),
@@ -1320,4 +1541,138 @@ describe("FilesWidget file operations", () => {
       mutation: expect.objectContaining({ path: "src/app.ts", previousPath: "app.ts" }),
     });
   });
+
+  // GEN-PERF-WIDGET-004 — while a tooltip is visible, pointer motion must not commit a React
+  // render (the tooltip moves imperatively). Count Profiler commits across a pointermove burst.
+  it("does not re-render the tree on pointermove while a tooltip is visible", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package-lock.json",
+          path: "package-lock.json",
+          kind: "file",
+          extension: "json",
+        },
+      ],
+    });
+
+    let commits = 0;
+    render(
+      <Profiler id="files" onRender={() => (commits += 1)}>
+        <FilesWidget root="/repo" />
+      </Profiler>,
+    );
+
+    const fileRow = await screen.findByRole("treeitem", { name: /package-lock\.json/i });
+    const name = fileRow.querySelector<HTMLElement>(".tr-name");
+    Object.defineProperty(name, "scrollWidth", { configurable: true, value: 160 });
+    Object.defineProperty(name, "clientWidth", { configurable: true, value: 80 });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.pointerEnter(fileRow, { clientX: 100, clientY: 100 });
+      act(() => {
+        vi.advanceTimersByTime(650);
+      });
+      const tooltip = screen.getByRole("tooltip");
+      const leftBefore = (tooltip as HTMLElement).style.left;
+
+      commits = 0;
+      for (let i = 0; i < 50; i += 1) {
+        fireEvent.pointerMove(fileRow, { clientX: 100 + i, clientY: 100 + i });
+      }
+
+      // Pointer motion committed no React render …
+      expect(commits).toBe(0);
+      // … but the tooltip element moved imperatively.
+      expect((tooltip as HTMLElement).style.left).not.toBe(leftBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // GEN-PERF-MEMORY-005 — the directories cache is bounded. After expanding far more than the
+  // cap, re-expanding the oldest (evicted) directory re-fetches, while a recent one does not.
+  it("evicts least-recently-loaded directories beyond the cache cap", async () => {
+    // Root holds 60 sibling directories dir-000 … dir-059; each returns one file when opened.
+    const DIR_COUNT = 60;
+    const rootEntries = Array.from({ length: DIR_COUNT }, (_, i) => ({
+      ...treeEntryBase,
+      name: `dir-${String(i).padStart(3, "0")}`,
+      path: `dir-${String(i).padStart(3, "0")}`,
+      kind: "directory" as const,
+    }));
+    // Each directory's inner file is uniquely named so tree rows are unambiguous by name.
+    const innerName = (i: number): string => `inner-${String(i).padStart(3, "0")}.ts`;
+    vi.mocked(fetchFilesTree).mockImplementation((_root: string, path = "") => {
+      if (path === "") {
+        return Promise.resolve({ root: "/repo", path: "", truncated: false, entries: rootEntries });
+      }
+      const i = Number.parseInt(path.slice("dir-".length), 10);
+      return Promise.resolve({
+        root: "/repo",
+        path,
+        truncated: false,
+        entries: [
+          {
+            ...treeEntryBase,
+            name: innerName(i),
+            path: `${path}/${innerName(i)}`,
+            kind: "file" as const,
+          },
+        ],
+      });
+    });
+
+    render(<FilesWidget root="/repo" />);
+    await screen.findByRole("treeitem", { name: /dir-000/ });
+
+    // Toggle a directory via its caret button, whose aria-label deterministically names the
+    // folder ("Expand folder: dir-NNN" / "Collapse folder: dir-NNN").
+    const dirName = (i: number): string => `dir-${String(i).padStart(3, "0")}`;
+    // fireEvent.click (not userEvent) keeps DIR_COUNT iterations well under the timeout.
+    const expandDir = (i: number): void => {
+      fireEvent.click(screen.getByRole("button", { name: `Expand folder: ${dirName(i)}` }));
+    };
+    const collapseDir = (i: number): void => {
+      fireEvent.click(screen.getByRole("button", { name: `Collapse folder: ${dirName(i)}` }));
+    };
+    const innerVisible = (i: number): boolean =>
+      screen.queryByRole("treeitem", { name: new RegExp(innerName(i)) }) !== null;
+
+    // Expand then immediately collapse dir-000: it is now cached but NOT pinned (not in the
+    // expanded set). Eviction only runs when a later directory loads.
+    expandDir(0);
+    await screen.findByRole("treeitem", { name: new RegExp(innerName(0)) });
+    collapseDir(0);
+    expect(innerVisible(0)).toBe(false);
+
+    // Expand dir-001 … dir-(N-1) and leave them expanded (pinned). Each load runs pruning; once
+    // the cache passes the cap, the sole unpinned entry (dir-000) is evicted.
+    for (let i = 1; i < DIR_COUNT; i += 1) {
+      expandDir(i);
+      await screen.findByRole("treeitem", { name: new RegExp(innerName(i)) });
+    }
+
+    const dir000FetchesBefore = vi
+      .mocked(fetchFilesTree)
+      .mock.calls.filter((call) => call[1] === "dir-000").length;
+
+    // Re-expand dir-000: its cache entry was evicted, so it re-fetches.
+    expandDir(0);
+    await screen.findByRole("treeitem", { name: new RegExp(innerName(0)) });
+    const dir000FetchesAfter = vi
+      .mocked(fetchFilesTree)
+      .mock.calls.filter((call) => call[1] === "dir-000").length;
+    expect(dir000FetchesAfter).toBeGreaterThan(dir000FetchesBefore);
+    // This GEN-PERF-MEMORY-005 test expands 60 directories; it is fast in isolation but CPU-starved
+    // under the full parallel suite on a many-core host (~14 vitest workers contend). The CI quality
+    // job runs test:coverage:packages and test:coverage:ui back-to-back under v8 instrumentation, so
+    // the wall-clock budget is doubled to survive that peak load (GEN-TEST-FLAKE). No assertion is
+    // weakened — the eviction/re-fetch proof (dir000FetchesAfter > dir000FetchesBefore) is unchanged.
+  }, 120_000);
 });

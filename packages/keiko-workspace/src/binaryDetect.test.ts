@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_BINARY_PROBE, looksBinary } from "./binaryDetect.js";
+import {
+  DEFAULT_BINARY_PROBE,
+  decodeTextBytes,
+  detectTextByteEncoding,
+  looksBinary,
+} from "./binaryDetect.js";
 
 describe("looksBinary", () => {
   it("returns false on empty input", () => {
@@ -70,6 +75,26 @@ describe("looksBinary", () => {
     }
     expect(looksBinary(bytes, { maxProbeBytes: 8 })).toBe(false);
     expect(looksBinary(bytes, { maxProbeBytes: 16 })).toBe(true);
+  });
+
+  it("recognizes UTF-16LE source bytes with a BOM as text", () => {
+    const bytes = new Uint8Array([0xff, 0xfe, 0x65, 0x00, 0x78, 0x00, 0x70, 0x00]);
+    expect(detectTextByteEncoding(bytes)).toBe("utf-16le");
+    expect(looksBinary(bytes)).toBe(false);
+    expect(decodeTextBytes(bytes)?.text).toBe("exp");
+  });
+
+  it("recognizes UTF-16BE source bytes without a BOM by NUL parity", () => {
+    const bytes = new Uint8Array([0x00, 0x63, 0x00, 0x6c, 0x00, 0x61, 0x00, 0x73, 0x00, 0x73]);
+    expect(detectTextByteEncoding(bytes)).toBe("utf-16be");
+    expect(looksBinary(bytes)).toBe(false);
+    expect(decodeTextBytes(bytes)?.text).toBe("class");
+  });
+
+  it("does not trim invalid trailing bytes unless the caller declares a capped read", () => {
+    const bytes = new Uint8Array([0x65, 0x78, 0x70, 0xc3]);
+    expect(decodeTextBytes(bytes)).toBeUndefined();
+    expect(decodeTextBytes(bytes, "utf-8", { allowIncompleteTail: true })?.text).toBe("exp");
   });
 
   it("exposes a frozen default probe of 4096 bytes", () => {
