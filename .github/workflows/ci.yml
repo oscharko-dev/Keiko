@@ -196,20 +196,6 @@ jobs:
           npm run prepare:bin
           npm run build:ui
           npm run check:editor-release-evidence
-      - name: TEMP capture linux editor release evidence
-        # TEMPORARY (remove after committing the linux-generated evidence): the committed
-        # docs/release/1209-bundle-evidence.json is measured on the maintainer's macOS machine, whose
-        # @next/swc-darwin bundle differs byte-for-byte from CI's @next/swc-linux-x64, so the freshness
-        # fingerprint never matches on Linux. This regenerates it on the runner and uploads it so the
-        # maintainer can commit the linux-x64 evidence. Runs even though the check above failed.
-        if: always()
-        run: node scripts/editor-release-evidence.mjs --json
-      - name: TEMP upload linux editor release evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4.6.2
-        with:
-          name: linux-editor-release-evidence
-          path: docs/release/1209-bundle-evidence.json
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
       - name: Installable-package smoke with optional dependencies
