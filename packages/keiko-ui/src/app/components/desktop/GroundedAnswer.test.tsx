@@ -10,6 +10,7 @@ import type {
   GroundedAnswerContextPackSummary,
   GroundedEvidenceCitation,
   GroundedUncertainty,
+  KnowledgePodRetrievalActivity,
   LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
 
@@ -41,6 +42,54 @@ function knowledgeCitation(
       documentId: "doc-1" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
       chunkId: "chunk-1" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
     },
+    ...overrides,
+  };
+}
+
+function retrievalActivity(
+  overrides: Partial<KnowledgePodRetrievalActivity> = {},
+): KnowledgePodRetrievalActivity {
+  return {
+    schemaVersion: "1",
+    summary: {
+      searchedCount: 1,
+      skippedCount: 0,
+      degradedCount: 0,
+      deniedCount: 0,
+      unavailableCount: 0,
+      notSelectedCount: 0,
+      denseCandidateCount: 12,
+      lexicalCandidateCount: 5,
+      fusedCandidateCount: 8,
+      referenceCount: 3,
+      citationCount: 1,
+    },
+    privacy: {
+      localFirst: true,
+      rawContentExposed: false,
+      rawQueryExposed: false,
+      privatePathsExposed: false,
+      directVectorScoreComparison: false,
+    },
+    pods: [
+      {
+        podId: "cap-1" as KnowledgePodRetrievalActivity["pods"][number]["podId"],
+        podKind: "pod",
+        displayName: "Alpha Capsule",
+        state: "searched",
+        modes: ["local-only", "hybrid", "lexical", "vector"],
+        reasonCodes: ["searched"],
+        sourceIds: ["src-1" as KnowledgePodRetrievalActivity["pods"][number]["sourceIds"][number]],
+        counts: {
+          sourceCount: 1,
+          documentCount: 2,
+          chunkCount: 6,
+          vectorCount: 6,
+          referenceCount: 3,
+          citationCount: 1,
+        },
+      },
+    ],
     ...overrides,
   };
 }
@@ -115,7 +164,7 @@ function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType
 
 function localKnowledgeAnswer(
   citations: readonly LocalKnowledgeEvidenceCitation[] = [knowledgeCitation()],
-): GroundedAnswerType {
+): Extract<GroundedAnswerType, { readonly groundingKind: "local-knowledge" }> {
   return {
     groundingKind: "local-knowledge",
     userMessageId: "lk-u",
@@ -350,6 +399,24 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText("1 / 10 references")).toBeInTheDocument();
   });
 
+  it("renders redacted Knowledge Pod retrieval activity for a local-knowledge answer", () => {
+    const a: GroundedAnswerType = {
+      ...localKnowledgeAnswer(),
+      retrievalActivity: retrievalActivity(),
+    };
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(
+      screen.getByRole("region", { name: "Knowledge Pod retrieval activity" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Knowledge Pod activity")).toBeInTheDocument();
+    expect(screen.getByText("12 vector · 5 lexical · 8 fused")).toBeInTheDocument();
+    expect(screen.getByText("3 references · 1 citation")).toBeInTheDocument();
+    expect(screen.getByText(/Alpha Capsule · 3 references · 1 citation/)).toBeInTheDocument();
+    expect(screen.getByText(/Modes: local only, hybrid, lexical, vector/)).toBeInTheDocument();
+    expect(screen.getByText(/Reasons: searched/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/Users\/|raw query|private path/i)).not.toBeInTheDocument();
+  });
+
   it("renders folder citations, connector citations, and the hybrid source summary for a hybrid answer", () => {
     const a: GroundedAnswerType = {
       groundingKind: "hybrid",
@@ -369,6 +436,7 @@ describe("GroundedAnswer", () => {
       uncertainty: [],
       omittedCount: 0,
       elapsedMs: 55,
+      retrievalActivity: retrievalActivity(),
       contextPack: {
         kind: "hybrid",
         folderSourceCount: 2,
@@ -398,6 +466,7 @@ describe("GroundedAnswer", () => {
       screen.getByText("Hybrid: 2 folder sources + 1 Knowledge Pod source"),
     ).toBeInTheDocument();
     expect(screen.getByText("Knowledge scope: Quasar Manual")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge Pod activity")).toBeInTheDocument();
   });
 
   it("renders one static evidence reference per citation with the path:start-end label", () => {

@@ -34,6 +34,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "./local-knowledge.js";
+import type { KnowledgePodRetrievalActivity } from "./local-knowledge-retrieval-activity.js";
 import type { MemorySensitivity, MemorySourceKind, MemoryStatus } from "./memory.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
@@ -955,6 +956,7 @@ export interface LocalKnowledgeGroundedAnswer {
   readonly noEvidence: boolean;
   readonly noEvidenceReason?: string | undefined;
   readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
+  readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
 // Epic #189 — the hybrid grounded answer merges folder evidence (#177/#532 lexical) and connector
@@ -984,6 +986,7 @@ export interface HybridGroundedAnswer {
   readonly omittedCount: number;
   readonly elapsedMs: number;
   readonly contextPack: HybridGroundedAnswerContextSummary;
+  readonly retrievalActivity?: KnowledgePodRetrievalActivity | undefined;
 }
 
 export type GroundedAnswer =

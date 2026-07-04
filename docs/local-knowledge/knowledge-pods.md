@@ -136,6 +136,48 @@ Raw vector scores remain comparable only inside one embedding space. Cross-pod a
 cross-space retrieval must continue to use rank fusion, metadata, and optional text-level
 reranking rather than direct score mixing.
 
+## Retrieval activity projection
+
+Grounded local-knowledge and hybrid answers may include a `retrievalActivity` object.
+The object is an additive, browser-safe projection owned by
+`KnowledgePodRetrievalActivity` in `@oscharko-dev/keiko-contracts`; callers that do not
+understand it can ignore the field without changing answer content, citations, or
+context-pack behavior.
+
+The projection answers a narrow question: which selected Knowledge Pods were searched,
+skipped, degraded, denied, unavailable, or not selected for answer context. It is not a
+new retrieval engine, evidence store, or manifest format. The server assembles activity
+from existing Local Knowledge retrieval diagnostics, selected references, grounded
+citations, reranker diagnostics, capsule lifecycle state, and redacted Knowledge Pod
+summary counts.
+
+Allowed activity evidence:
+
+- pod id, pod kind, safe display name, safe source ids, and counts;
+- state, mode, and reason-code enums owned by `keiko-contracts`;
+- dense, lexical, and fused candidate counts;
+- selected reference and cited-evidence counts;
+- privacy flags that must keep raw content, raw query text, private paths, and direct
+  vector score comparisons disabled.
+
+Forbidden activity evidence:
+
+- raw user query text, prompt text, model output beyond the normal answer, source
+  bodies, excerpts, vectors, absolute paths, provider endpoints, tokens, API keys, or
+  PII-like display metadata;
+- raw per-document vector scores or any direct cross-space score comparison;
+- provider-specific diagnostic blobs that are not normalized into Keiko-owned reason
+  codes.
+
+Current local activity modes are `local-only`, `lexical`, `vector`, `hybrid`, and
+`reranked`. `sealed`, `remote`, and `federated` are reserved compatibility modes so
+future governed pod designs can use the same UI contract without changing the shape.
+
+Server consumers must validate every emitted activity object with
+`validateKnowledgePodRetrievalActivity()`. UI consumers should render only the supplied
+safe counts and labels. If activity is absent, an answer remains valid and the existing
+grounded-evidence disclosure is still canonical.
+
 ## Future remote or federated pods
 
 Remote, federated, shared, or cloud-backed pods are out of scope for Epic #1815. Any
@@ -157,11 +199,13 @@ plan before any `capsule` storage term is renamed.
 
 Advisory release-note categories for the release owner to encode in governed
 [ADR-0099](../adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
-metadata are `improvements` for terminology, `state-or-compatibility-changes` for the
-additive summary contract, and `ui-polish` for visible copy updates. Priority is high
-because the change affects primary Local Knowledge selection language. The structured
+metadata are `improvements` for terminology and activity transparency,
+`state-or-compatibility-changes` for additive browser-safe contracts, and `ui-polish`
+for visible copy updates. Priority is high when a change affects primary Local
+Knowledge selection language or grounded-answer evidence disclosure. The structured
 release-impact catalog remains the authoritative release source once release-owner
-review evidence is recorded.
+review evidence is recorded; pending entries must not be added if they would make the
+machine-checked catalog fail before release-owner approval exists.
 
 Known limits:
 
@@ -178,8 +222,13 @@ Known limits:
 The Knowledge Pod compatibility and redaction behavior is covered by:
 
 - `packages/keiko-contracts/src/local-knowledge-pods.test.ts`
+- `packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts`
 - `packages/keiko-local-knowledge/src/knowledge-pods.test.ts`
+- `packages/keiko-server/src/local-knowledge-grounded-qa.rescue.test.ts`
+- `packages/keiko-server/src/grounded-qa-hybrid.test.ts`
 - `packages/keiko-server/src/local-knowledge-handlers.test.ts`
+- `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.test.tsx`
+- `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.a11y.test.tsx`
 - `packages/keiko-ui/src/app/local-knowledge/connector-graph.test.tsx`
 - `packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.test.tsx`
 - `packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/RunLauncher.test.tsx`

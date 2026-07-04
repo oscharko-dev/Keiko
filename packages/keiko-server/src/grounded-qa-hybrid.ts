@@ -74,10 +74,12 @@ import {
 } from "./grounded-qa-multi-source.js";
 import {
   LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
+  buildKnowledgePodRetrievalActivity,
   buildSelectedScopeSourceLookup,
   createEmbeddingAdapter,
   openStoreForDeps,
   projectLocalKnowledgeCitation,
+  retrievalActivityResultFromRetrieval,
   scopeStateFailure,
   selectedCapsulesForScope,
   type SelectedLocalKnowledgeScope,
@@ -181,12 +183,14 @@ interface RetrievedConnector {
   readonly label: string;
   readonly selected: SelectedLocalKnowledgeScope;
   readonly references: readonly RetrievalReference[];
+  readonly result: RetrievalResult;
 }
 
 interface SkippedConnector {
   readonly label: string;
   readonly reason: string;
   readonly message: string;
+  readonly selected?: SelectedLocalKnowledgeScope | undefined;
 }
 
 interface FolderRetrieval {
@@ -453,7 +457,7 @@ async function retrieveConnectors(
     if (scope === undefined || selected === undefined || label === undefined) continue;
     const failure = scopeStateFailure(selected);
     if (failure !== undefined) {
-      skipped.push({ label, reason: failure.reason, message: failure.message });
+      skipped.push({ label, reason: failure.reason, message: failure.message, selected });
       continue;
     }
     const outcome = await retrieveOneConnector(retrieve, store, scope, selected);
@@ -462,10 +466,11 @@ async function retrieveConnectors(
         label,
         reason: "embedding-unavailable",
         message: "Embedding adapter unavailable.",
+        selected,
       });
       continue;
     }
-    retrieved.push({ label, selected, references: outcome.references });
+    retrieved.push({ label, selected, references: outcome.references, result: outcome });
   }
   return { retrieved, skipped };
 }
@@ -611,6 +616,48 @@ function selectedConnectorPreviewCitations(
         };
       }),
   );
+}
+
+function connectorCapsuleIds(connector: RetrievedConnector): ReadonlySet<string> {
+  return new Set(connector.selected.capsules.map((capsule) => String(capsule.id)));
+}
+
+function knowledgeCitationsForConnector(
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  connector: RetrievedConnector,
+): readonly LocalKnowledgeEvidenceCitation[] {
+  const capsuleIds = connectorCapsuleIds(connector);
+  return citations.filter((citation) => capsuleIds.has(String(citation.lineage.capsuleId)));
+}
+
+function selectedConnectorSkips(skipped: readonly SkippedConnector[]): readonly {
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly reason: string;
+}[] {
+  return skipped.flatMap((entry) =>
+    entry.selected === undefined ? [] : [{ selected: entry.selected, reason: entry.reason }],
+  );
+}
+
+function buildHybridRetrievalActivity(
+  store: KnowledgeStore,
+  connectors: readonly RetrievedConnector[],
+  skipped: readonly SkippedConnector[],
+  knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[],
+  reranker: GroundedRerankerDiagnostics,
+): HybridGroundedAnswer["retrievalActivity"] {
+  return buildKnowledgePodRetrievalActivity({
+    store,
+    sources: connectors.map((connector) => ({
+      selected: connector.selected,
+      result: retrievalActivityResultFromRetrieval(
+        connector.result,
+        knowledgeCitationsForConnector(knowledgeCitations, connector),
+        reranker,
+      ),
+    })),
+    skipped: selectedConnectorSkips(skipped),
+  });
 }
 
 function zeroExploration(): GroundedAnswerContextPackSummary["usage"] {
@@ -1014,6 +1061,30 @@ function hybridAnswerUncertainty(
   ];
 }
 
+function hybridAnswerContextPack(
+  ctx: HybridGroundedAskCtx,
+  sources: RetrievedSources,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+  assistant: GroundedAnswerResult,
+  knowledgeCitationCount: number,
+  reranker: GroundedRerankerDiagnostics,
+): HybridGroundedAnswer["contextPack"] {
+  const summary = folderSummary(sources.folders, ctx.deps.redactor, {
+    contextProfile: ctx.contextProfile,
+  });
+  return buildHybridContextPack(
+    ctx,
+    sources,
+    selected,
+    limits,
+    summary,
+    assistant,
+    knowledgeCitationCount,
+    reranker,
+  );
+}
+
 function assembleHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
@@ -1027,15 +1098,19 @@ function assembleHybridAnswer(
   const { redactor } = ctx.deps;
   const citations = selectedFolderCitations(selected, redactor);
   const knowledgeCitations = selectedConnectorCitations(selected, redactor);
+  const retrievalActivity = buildHybridRetrievalActivity(
+    store,
+    sources.connectors,
+    sources.skipped,
+    knowledgeCitations,
+    reranker,
+  );
   const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
     ctx,
     sources.folders,
   );
   persistConnectorAudit(store, sources.connectors, selected, ctx.modelId);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
-  const summary = folderSummary(sources.folders, redactor, {
-    contextProfile: ctx.contextProfile,
-  });
   return {
     groundingKind: "hybrid",
     ...ids,
@@ -1047,12 +1122,12 @@ function assembleHybridAnswer(
     uncertainty: hybridAnswerUncertainty(sources, selected, assistant, redactor),
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,
-    contextPack: buildHybridContextPack(
+    retrievalActivity,
+    contextPack: hybridAnswerContextPack(
       ctx,
       sources,
       selected,
       limits,
-      summary,
       assistant,
       knowledgeCitations.length,
       reranker,

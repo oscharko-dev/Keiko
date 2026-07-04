@@ -14,6 +14,7 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  getCapsule,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
   updateCapsuleState,
@@ -25,6 +26,7 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  buildKnowledgePodRetrievalActivity,
   buildLocalKnowledgeCitations,
   createEmbeddingAdapter,
   enforcedNoEvidenceReason,
@@ -32,6 +34,7 @@ import {
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   localKnowledgeNoEvidenceAnswer,
   renderCitationLabel,
+  type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
@@ -89,6 +92,42 @@ function capsule(provider = "openai"): KnowledgeCapsule {
     storageReference: "capsules/cap-1",
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function retrievalActivityReference(
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+): RetrievalReference {
+  const chunkId = "chunk-activity-state" as ChunkId;
+  return {
+    chunkId,
+    capsuleId,
+    score: 0.7,
+    citation: {
+      documentId: "doc-activity-state" as DocumentId,
+      capsuleId,
+      sourceId,
+      chunkId,
+      safeDisplayName: "activity-state.md",
+    },
+  };
+}
+
+function requireCapsule(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsuleId,
+): KnowledgeCapsule {
+  const found = getCapsule(store, capsuleId);
+  if (found === undefined) throw new Error(`missing capsule ${String(capsuleId)}`);
+  return found;
+}
+
+function selectedActivityScope(capsuleValue: KnowledgeCapsule): SelectedLocalKnowledgeScope {
+  return {
+    capsules: [capsuleValue],
+    scopeKind: "capsule",
+    scopeLabel: capsuleValue.displayName,
   };
 }
 
@@ -505,6 +544,60 @@ describe("local-knowledge preview metadata persistence", () => {
   });
 });
 
+type LocalKnowledgeAnswer = Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>;
+
+function expectAppliedRerankerDiagnostics(
+  answer: LocalKnowledgeAnswer,
+  capsuleId: KnowledgeCapsuleId,
+): void {
+  const reranker = answer.contextPack.reranker;
+  const indexLifecycle = answer.contextPack.indexLifecycle;
+  const indexedCapsule = indexLifecycle?.capsules[0];
+  const citation = answer.citations[0];
+  expect(reranker).toMatchObject({ status: "applied", keptCount: 1 });
+  expect(reranker?.candidateCount).toBeGreaterThan(0);
+  expect(reranker?.documentCount).toBe(reranker?.candidateCount);
+  expect(answer.contextPack.referencesUsed).toBe(1);
+  expect(indexLifecycle).toMatchObject({
+    schemaVersion: "local-knowledge-index-lifecycle-v1",
+    stale: false,
+  });
+  expect(indexLifecycle?.capsules).toHaveLength(1);
+  expect(indexedCapsule?.capsuleId).toBe(capsuleId);
+  expect(typeof indexedCapsule?.updatedAt).toBe("number");
+  expect(citation?.score).toBe(0.91);
+}
+
+function expectRerankedRetrievalActivity(
+  answer: LocalKnowledgeAnswer,
+  capsuleId: KnowledgeCapsuleId,
+): void {
+  const activity = answer.retrievalActivity;
+  const activityPod = activity?.pods[0];
+  expect(activity).toMatchObject({
+    schemaVersion: "1",
+    privacy: {
+      localFirst: true,
+      rawContentExposed: false,
+      rawQueryExposed: false,
+      privatePathsExposed: false,
+      directVectorScoreComparison: false,
+    },
+  });
+  expect(activity?.summary.referenceCount).toBe(1);
+  expect(activity?.summary.citationCount).toBe(1);
+  expect(activityPod).toMatchObject({
+    podId: capsuleId,
+    displayName: "Reranker Diagnostics Capsule",
+    state: "searched",
+    reasonCodes: ["searched"],
+    counts: { referenceCount: 1, citationCount: 1 },
+  });
+  expect(activityPod?.modes).toContain("local-only");
+  expect(activityPod?.modes).toContain("reranked");
+  expect(JSON.stringify(activity)).not.toContain("alpha beta reranked citation evidence");
+}
+
 describe("local-knowledge reranker diagnostics", () => {
   it("surfaces applied reranker diagnostics on the single-connector grounded answer", async () => {
     const embeddingModelId = "text-embedding-3-small";
@@ -655,24 +748,131 @@ describe("local-knowledge reranker diagnostics", () => {
       { readonly groundingKind: "local-knowledge" }
     >;
     expect(rerankCalls).toBe(1);
-    expect(answer.contextPack.reranker).toMatchObject({
-      status: "applied",
-      keptCount: 1,
+    expectAppliedRerankerDiagnostics(answer, seeded.capsuleId);
+    expectRerankedRetrievalActivity(answer, seeded.capsuleId);
+  });
+});
+
+describe("local-knowledge retrieval activity", () => {
+  it("prioritizes denied and degraded activity states over searched references", async () => {
+    const sourceId = "src-activity-states" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
     });
-    expect(answer.contextPack.reranker?.candidateCount).toBeGreaterThan(0);
-    expect(answer.contextPack.reranker?.documentCount).toBe(
-      answer.contextPack.reranker?.candidateCount,
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Activity State Capsule",
+        capsuleId: "cap-activity-states",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const reference = retrievalActivityReference(seeded.capsuleId, sourceId);
+      const selected = selectedActivityScope(capsuleValue);
+
+      const denied = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [reference],
+              citationCounts: new Map(),
+              noEvidence: true,
+              reason: "answer-grounding-rejected",
+            },
+          },
+        ],
+      });
+      const degraded = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [reference],
+              citationCounts: new Map([[String(seeded.capsuleId), 1]]),
+              noEvidence: false,
+              embeddingDegraded: true,
+            },
+          },
+        ],
+      });
+
+      expect(denied.pods[0]).toMatchObject({
+        state: "denied",
+        reasonCodes: ["searched", "answer-grounding-rejected"],
+      });
+      expect(degraded.pods[0]).toMatchObject({
+        state: "degraded",
+        reasonCodes: ["searched", "embedding-failed"],
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("surfaces not-ready Knowledge Pods without retrieving or leaking raw content", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Indexing Activity Capsule",
+      capsuleId: "cap-indexing-activity",
+      sourceId: "src-indexing-activity",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "indexing");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "retrieval-activity-project");
+    const created = rescueStore.createChat(project.path, "Retrieval activity", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => {
+        throw new Error("model must not be called for state-failure activity");
+      },
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What is indexed?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
     );
-    expect(answer.contextPack.referencesUsed).toBe(1);
-    const indexLifecycle = answer.contextPack.indexLifecycle;
-    expect(indexLifecycle).toMatchObject({
-      schemaVersion: "local-knowledge-index-lifecycle-v1",
-      stale: false,
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    const activity = answer.retrievalActivity;
+    expect(activity?.summary.unavailableCount).toBe(1);
+    expect(activity?.summary.referenceCount).toBe(0);
+    expect(activity?.summary.citationCount).toBe(0);
+    expect(activity?.pods[0]).toMatchObject({
+      podId: seeded.capsuleId,
+      displayName: "Indexing Activity Capsule",
+      state: "unavailable",
+      reasonCodes: ["indexing-in-progress"],
+      counts: { referenceCount: 0, citationCount: 0 },
     });
-    expect(indexLifecycle?.capsules).toHaveLength(1);
-    expect(indexLifecycle?.capsules[0]?.capsuleId).toBe(seeded.capsuleId);
-    expect(typeof indexLifecycle?.capsules[0]?.updatedAt).toBe("number");
-    expect(answer.citations[0]?.score).toBe(0.91);
+    expect(activity?.privacy.rawContentExposed).toBe(false);
+    expect(activity?.privacy.rawQueryExposed).toBe(false);
+    expect(JSON.stringify(activity)).not.toContain("What is indexed?");
   });
 });
 
