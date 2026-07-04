@@ -240,3 +240,19 @@ Full local verification run on 2026-07-04:
 - `npm run check:version-consistency` — PASS.
 - `npm run check:release-impact` — PASS. No catalog entry was added because release-owner
   approval evidence is required before a new machine-checked release-impact row can remain green.
+
+CI repair and security verification update on 2026-07-04:
+
+- GitHub `Build, scan, SBOM, smoke` initially failed because Linux computed editor release evidence
+  fingerprint `8e39300b5a056f7eb72665e053d5785840475164826f8fa6c5551ae7eac531d6` while the
+  first commit carried a macOS-generated fingerprint.
+- Reproduced the CI sequence in a Node 22.23.1 Linux container:
+  `npm ci && npm run build && npm run prepare:bin && npm run build:ui && node scripts/editor-release-evidence.mjs --json`
+  — PASS, regenerated `docs/release/1209-bundle-evidence.json` with the Linux fingerprint.
+- Re-ran the Linux evidence gate in the same container:
+  `npm run check:editor-release-evidence` — PASS.
+- Re-ran local lightweight checks after the evidence-only repair:
+  `git diff --check` — PASS; `npm run format:check` — PASS.
+- Ran the repository's nearest local Qodana/static-analysis equivalent for this security-sensitive
+  redaction surface: `npm run check:security-regression-matrix` — PASS, 42 findings mapped.
+- GitHub CodeQL remains the remote static-analysis gate for the final PR head.
