@@ -11,10 +11,13 @@
 import { mkdtemp, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   __qiVerificationStats,
   __resetQiVerificationCacheForTests,
+  createNodeQualityIntelligenceLocalStore,
   listQualityIntelligenceRuns,
   loadQualityIntelligenceRun,
   recordQualityIntelligenceRun,
@@ -62,6 +65,23 @@ function listAll(): void {
   }
 }
 
+function withoutMtime(stat: WorkspaceStat): WorkspaceStat {
+  const base = {
+    size: stat.size,
+    isFile: stat.isFile,
+    isDirectory: stat.isDirectory,
+    isSymbolicLink: stat.isSymbolicLink,
+  };
+  return stat.hardLinkCount === undefined ? base : { ...base, hardLinkCount: stat.hardLinkCount };
+}
+
+function noMtimeFs(): WorkspaceFs {
+  return {
+    ...nodeWorkspaceFs,
+    stat: (absolutePath: string): WorkspaceStat => withoutMtime(nodeWorkspaceFs.stat(absolutePath)),
+  };
+}
+
 describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
   it("re-verifies ZERO unchanged manifests on a second list, and stays under budget for 100", () => {
     const count = 100;
@@ -107,6 +127,35 @@ describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
     const future = new Date(Date.now() + 5_000);
     await utimes(target, future, future);
     loadQualityIntelligenceRun(runId, { evidenceDir });
+    expect(__qiVerificationStats.verifications).toBe(1);
+  });
+
+  it("does not cache when the filesystem cannot report mtimeMs", () => {
+    const runId = "run-vcache-no-mtime";
+    const store = createNodeQualityIntelligenceLocalStore(evidenceDir, { fs: noMtimeFs() });
+    recordQualityIntelligenceRun(baseInput(runId), { store });
+    __qiVerificationStats.verifications = 0;
+
+    loadQualityIntelligenceRun(runId, { store });
+    expect(__qiVerificationStats.verifications).toBe(1);
+
+    loadQualityIntelligenceRun(runId, { store });
+    expect(__qiVerificationStats.verifications).toBe(2);
+  });
+
+  it("bounds the verification cache and re-verifies the evicted oldest manifest", () => {
+    const count = 257;
+    for (let i = 0; i < count; i += 1) {
+      recordQualityIntelligenceRun(baseInput(`run-vcache-evict-${String(i).padStart(3, "0")}`), {
+        evidenceDir,
+      });
+    }
+    __qiVerificationStats.verifications = 0;
+
+    loadQualityIntelligenceRun("run-vcache-evict-000", { evidenceDir });
+    expect(__qiVerificationStats.verifications).toBe(1);
+
+    loadQualityIntelligenceRun("run-vcache-evict-256", { evidenceDir });
     expect(__qiVerificationStats.verifications).toBe(1);
   });
 });
