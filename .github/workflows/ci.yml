@@ -309,9 +309,11 @@ jobs:
         run: npm run check:coverage:ui
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        # chromium for the smoke + editor-perf suites; webkit for the workspace-performance
-        # @release-evidence cross-browser project (playwright.workspace-performance.config.ts).
-        run: npx playwright install --with-deps chromium webkit
+        # chromium is the reference browser for the smoke + perf-evidence suites. The
+        # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
+        # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
+        # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
+        run: npx playwright install --with-deps chromium
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke

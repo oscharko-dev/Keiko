@@ -48,7 +48,7 @@
     "test:e2e:smoke": "playwright test --config tests/e2e/config/playwright.config.ts --project=chromium --grep @smoke",
     "test:e2e:local-knowledge": "playwright test --config tests/e2e/config/playwright.local-knowledge-regression.config.ts",
     "test:e2e:editor-perf": "playwright test --config tests/e2e/config/playwright.editor-performance.config.ts --project=chromium --grep @release-evidence",
-    "test:e2e:workspace-perf": "playwright test --config tests/e2e/config/playwright.workspace-performance.config.ts --grep @release-evidence",
+    "test:e2e:workspace-perf": "playwright test --config tests/e2e/config/playwright.workspace-performance.config.ts --project=chromium --grep @release-evidence",
     "test:e2e:editor-fidelity-1295": "playwright test --config tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts --project=chromium",
     "test:e2e:editor-fidelity-1296": "playwright test --config tests/e2e/config/playwright.issue-1296-editor-agent.config.ts --project=chromium",
     "test:e2e:editor-agent-1394": "playwright test --config tests/e2e/config/playwright.issue-1394-editor-agent.config.ts --project=chromium",

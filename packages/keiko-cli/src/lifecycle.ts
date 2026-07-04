@@ -270,7 +270,7 @@ function defaultIsProcessAlive(pid: number): boolean {
 // kill that is the intended end state, not a failure. Swallowing it prevents `keiko start` from
 // crashing with an opaque `Error: kill ESRCH` when the UI child exits on its own before the SIGTERM
 // lands (observed on Windows: the crash masked the real "UI did not become healthy" report).
-const safeKillProcess: ProcessKiller = (pid, signal) => {
+export const safeKillProcess: ProcessKiller = (pid, signal) => {
   try {
     process.kill(pid, signal);
   } catch (error) {
