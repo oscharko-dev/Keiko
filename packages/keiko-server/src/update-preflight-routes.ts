@@ -61,8 +61,13 @@ export async function runUpdatePreflight(
   if (registry.status !== "ok" || registry.latestVersion === undefined) {
     return degradedRegistryReport(base, registry);
   }
-  if (compareSemver(registry.latestVersion, currentVersion) <= 0) {
+  const versionComparison = compareSemver(registry.latestVersion, currentVersion);
+  if (versionComparison < 0) {
     return currentVersionReport(base, registry.latestVersion, registry);
+  }
+  if (versionComparison === 0) {
+    const github = await fetchGitHubRelease(deps, currentVersion);
+    return currentVersionReport(base, registry.latestVersion, registry, github);
   }
   return updateAvailableReport(
     deps,

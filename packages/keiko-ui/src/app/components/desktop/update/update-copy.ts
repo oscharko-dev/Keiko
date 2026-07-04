@@ -37,11 +37,9 @@ export function isSessionInProgress(session: UpdateSession | undefined): boolean
 export function hasStartupUpdateSignal(report: UpdatePreflightReport): boolean {
   return (
     report.updateAvailable ||
-    report.status === "degraded" ||
     report.severity === "critical" ||
     report.manualUpdateRequired ||
-    report.blockers.length > 0 ||
-    report.warnings.length > 0
+    report.userActionRequired
   );
 }
 
@@ -58,15 +56,21 @@ export function isManualUpdatePath(
   );
 }
 
+export function isUpdateCheckUnavailable(report: UpdatePreflightReport): boolean {
+  return report.status === "degraded" && !report.updateAvailable;
+}
+
 export function updateTone(
   report: UpdatePreflightReport,
   session: UpdateSession | undefined,
   remediation: UpdateRemediationStatusReport,
 ): UpdateTone {
   if (session?.phase === "failed" || remediation.overallStatus === "failed") return "danger";
-  if (report.severity === "critical" || report.blockers.length > 0) return "warning";
+  if (report.severity === "critical" || report.blockers.some((item) => item.userActionRequired)) {
+    return "warning";
+  }
   if (session?.phase === "succeeded" || remediation.overallStatus === "completed") return "success";
-  if (report.updateAvailable || report.status === "degraded") return "info";
+  if (report.updateAvailable || isUpdateCheckUnavailable(report)) return "info";
   return "neutral";
 }
 
@@ -99,7 +103,7 @@ export function statusTitle(
     return t("updates.status.installing");
   }
   if (report.severity === "critical") return t("updates.status.critical");
-  if (report.status === "degraded") return t("updates.status.degraded");
+  if (isUpdateCheckUnavailable(report)) return t("updates.status.unavailable");
   if (report.updateAvailable) return t("updates.status.available");
   return t("updates.status.current");
 }

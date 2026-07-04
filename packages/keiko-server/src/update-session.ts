@@ -9,6 +9,7 @@ import {
   UPDATE_SESSION_SCHEMA_VERSION,
   type UpdateInstallMode,
   type UpdateInstallPackageManager,
+  type UpdateRestartCommandPreview,
   type UpdateSession,
   type UpdateSessionFailureReason,
   type UpdateSessionStartRequest,
@@ -40,6 +41,41 @@ import {
 import type { UpdateSessionLock } from "./update-session-lock.js";
 
 export { UpdateSessionError } from "./update-session-support.js";
+
+const RESTART_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
+const SIMPLE_SHELL_ARG = /^[A-Za-z0-9_./:@%+=,-]+$/u;
+
+function validPort(value: string | undefined): value is string {
+  if (value === undefined || !/^\d{1,5}$/u.test(value)) return false;
+  const port = Number(value);
+  return port >= 1 && port <= 65535;
+}
+
+function validHost(value: string | undefined): value is string {
+  return value !== undefined && RESTART_HOSTS.has(value);
+}
+
+function validStateDir(value: string | undefined): value is string {
+  return value !== undefined && value.length > 0 && !/[\0\r\n]/u.test(value);
+}
+
+function shellQuoteArg(value: string): string {
+  if (SIMPLE_SHELL_ARG.test(value)) return value;
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
+function restartCommandPreview(env: NodeJS.ProcessEnv): UpdateRestartCommandPreview | undefined {
+  const port = env.KEIKO_UI_PORT;
+  const host = env.KEIKO_UI_HOST;
+  const stateDir = env.KEIKO_STATE_DIR;
+  if (!validPort(port) || !validHost(host) || !validStateDir(stateDir)) return undefined;
+  const args = ["restart", "--port", port, "--host", host, "--state-dir", stateDir];
+  return {
+    executable: "keiko",
+    args,
+    label: ["keiko", ...args].map(shellQuoteArg).join(" "),
+  };
+}
 
 export interface UpdateSessionStartOutcome {
   readonly session: UpdateSession;
@@ -215,6 +251,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private createSession(targetVersion: string, mode: UpdateInstallMode): UpdateSession {
     const timestamp = nowIso(this.now);
     const packageManager = this.packageManagerFor(mode);
+    const restartPreview = restartCommandPreview(this.env);
     return {
       schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
       sessionId: this.idFactory(),
@@ -225,6 +262,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       packageManager,
       installRoot: mode.installRoot,
       commandPreview: buildUpdateCommand(packageManager, targetVersion),
+      ...(restartPreview === undefined ? {} : { restartCommandPreview: restartPreview }),
       startedAt: timestamp,
       updatedAt: timestamp,
       cancelable: true,

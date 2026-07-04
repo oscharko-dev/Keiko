@@ -1,13 +1,14 @@
 import type {
   UpdatePreflightBlocker,
   UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
   UpdatePreflightReleaseSummary,
   UpdatePreflightReport,
   UpdatePreflightSeverity,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_PREFLIGHT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
-import { BULLET_LIMIT, uniqueStrings } from "./update-preflight-registry.js";
+import { BULLET_LIMIT, normalizeText, uniqueStrings } from "./update-preflight-registry.js";
 import type { GitHubReleaseOutcome, RegistryOutcome } from "./update-preflight-registry.js";
 import { blocker, maxSeverity, uniqueBlockers } from "./update-preflight-impact.js";
 import type { CatalogImpactResolution } from "./update-preflight-impact.js";
@@ -62,10 +63,13 @@ function patchNotesFrom(
   targetVersion: string | undefined,
 ): UpdatePreflightPatchNotes | undefined {
   if (release === undefined && impact === undefined) return undefined;
+  const summary = release?.summary ?? patchFallbackSummary(impact, targetVersion);
+  const sections = patchSections(release);
   return {
     collapsed: true,
-    summary: release?.summary ?? patchFallbackSummary(impact, targetVersion),
-    bullets: patchBullets(release, impact),
+    summary,
+    bullets: patchBullets(release, impact, summary),
+    ...(sections !== undefined ? { sections } : {}),
     details: patchDetails(impact),
   };
 }
@@ -83,11 +87,24 @@ function patchFallbackSummary(
 function patchBullets(
   release: UpdatePreflightReleaseSummary | undefined,
   impact: UpdatePreflightImpactSummary | undefined,
+  summary: string,
 ): readonly string[] {
-  return uniqueStrings([...(release?.notes ?? []), ...(impact?.releaseNoteBullets ?? [])]).slice(
-    0,
-    BULLET_LIMIT,
-  );
+  const summaryKey = normalizeText(summary).toLowerCase();
+  return uniqueStrings([...(release?.notes ?? []), ...(impact?.releaseNoteBullets ?? [])])
+    .filter((note) => normalizeText(note).toLowerCase() !== summaryKey)
+    .slice(0, BULLET_LIMIT);
+}
+
+function patchSections(
+  release: UpdatePreflightReleaseSummary | undefined,
+): readonly UpdatePreflightPatchNoteSection[] | undefined {
+  const sections = release?.noteSections
+    ?.map((section) => ({
+      title: normalizeText(section.title),
+      bullets: uniqueStrings(section.bullets),
+    }))
+    .filter((section) => section.title.length > 0 && section.bullets.length > 0);
+  return sections !== undefined && sections.length > 0 ? sections : undefined;
 }
 
 function patchDetails(impact: UpdatePreflightImpactSummary | undefined): readonly string[] {
@@ -166,16 +183,28 @@ export function currentVersionReport(
   base: ReportBase,
   targetVersion: string,
   registry: RegistryOutcome,
+  github?: GitHubReleaseOutcome,
 ): UpdatePreflightReport {
   return buildReport(base, {
     targetVersion,
     updateAvailable: false,
     status: "current",
     registryStatus: "ok",
-    releaseMetadataStatus: "not-needed",
+    releaseMetadataStatus:
+      github?.release !== undefined ? "live" : (github?.status ?? "not-needed"),
     severity: "none",
-    warnings: warningsOf(registry.warning),
+    ...(github?.release !== undefined ? { release: github.release } : {}),
+    warnings: warningsOf(registry.warning, currentReleaseMetadataWarning(github)),
   });
+}
+
+function currentReleaseMetadataWarning(
+  github: GitHubReleaseOutcome | undefined,
+): string | undefined {
+  if (github === undefined || github.release !== undefined) return undefined;
+  if (github.status === "malformed") return "Current release notes were malformed.";
+  if (github.status === "unavailable") return "Current release notes are unavailable.";
+  return undefined;
 }
 
 function updateAvailableWithoutReleaseReport(
