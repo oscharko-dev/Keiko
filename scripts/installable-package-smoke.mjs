@@ -627,7 +627,12 @@ async function assertPackagedLifecycleCommands(tmp) {
   const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
   const bin = join(packageRoot, "dist", "cli", "index.js");
   const port = await reserveUiPort();
-  const stateDir = join(tmp, ".keiko-lifecycle-smoke");
+  // The runtime state / UI data dir MUST live outside the workspace (the lifecycle cwd = tmp): keiko
+  // rejects a state dir inside the current workspace so the UI DB can never overlap a selected
+  // repository (packages/keiko-server/src/store/paths.ts). A dir under tmp failed on Linux/Windows;
+  // macOS masked it because /var realpath resolution made the containment check miss. A sibling temp
+  // dir is outside the workspace on every platform.
+  const stateDir = mkdtempSync(join(tmpdir(), "keiko-smoke-state-"));
   const lifecycleRun = lifecycleCommandRunner(tmp, bin, port, stateDir);
 
   let started = false;
@@ -643,6 +648,7 @@ async function assertPackagedLifecycleCommands(tmp) {
     if (started) {
       lifecycleRun("stop");
     }
+    rmSync(stateDir, { recursive: true, force: true });
   }
 }
 

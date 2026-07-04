@@ -52,10 +52,12 @@ function setWebdriver(value: boolean): void {
 }
 
 function dispatchStorage(key: string, newValue: string): void {
-  // Construct with the event type only, then define the read-only fields the handler reads. Passing
-  // them through the init dict is standard, but the DOM externs CodeQL analyses against model
-  // StorageEvent with a narrower signature, so the init dict reads as superfluous trailing arguments.
-  const event = new StorageEvent("storage");
+  // Dispatch a plain Event stamped with the StorageEvent fields the useWorkspace handler actually
+  // reads (storageArea, key, newValue). The standard `new StorageEvent(type, init)` constructor is
+  // correct, but the DOM externs CodeQL analyses against model StorageEvent with no formal parameters,
+  // so it reports every argument as a superfluous trailing argument. Event has a modelled signature,
+  // so this avoids the false positive with identical runtime semantics.
+  const event = new Event("storage");
   Object.defineProperties(event, {
     key: { value: key },
     newValue: { value: newValue },
