@@ -258,6 +258,67 @@ function verifiedBlobBytes(
   return bytes;
 }
 
+// GEN-PERF-PERSISTENCE-011 — the PDF preview delivery layer opens a fresh reader per HTTP RANGE
+// request, and each open fully decrypts (contentCipher.openBlob) + SHA-256-verifies the whole blob
+// (<=64 MiB). For a single document a viewer issues many sequential range requests, so the same
+// bytes are decrypted+verified over and over. A tiny in-process LRU of the ALREADY-VERIFIED decrypted
+// bytes, keyed by capsule + contentHash, lets N ranges decode+verify once.
+//
+// Safety invariants (SEC): (1) integrity is verified ONCE per (capsule, contentHash) load BEFORE the
+// bytes are cached — a hash/length mismatch or a decrypt failure is NEVER cached and NEVER served;
+// (2) a cached entry is, by construction, bytes whose sha256 == contentHash, so serving them is
+// always the exact content that hash identifies (a tampered on-disk blob decodes to a different hash
+// on its first read and is rejected, never cached); (3) decrypted bytes live in-process only, are
+// bounded to a couple of entries, and expire after a short TTL — no new at-rest exposure.
+const VERIFIED_BLOB_CACHE_MAX_ENTRIES = 2;
+const VERIFIED_BLOB_CACHE_TTL_MS = 3 * 60 * 1000;
+
+interface VerifiedBlobCacheEntry {
+  readonly bytes: Uint8Array;
+  readonly expiresAtMs: number;
+}
+
+const verifiedBlobCache = new Map<string, VerifiedBlobCacheEntry>();
+
+// Injectable clock so tests can advance TTL deterministically; defaults to Date.now.
+let verifiedBlobClock: () => number = () => Date.now();
+
+// Test-only: reset the module-level verified-blob cache + clock.
+export function __resetVerifiedBlobCacheForTests(clock?: () => number): void {
+  verifiedBlobCache.clear();
+  verifiedBlobClock = clock ?? ((): number => Date.now());
+}
+
+function verifiedBlobCacheKey(capsuleId: KnowledgeCapsuleId | string, contentHash: string): string {
+  return `${String(capsuleId)} ${contentHash}`;
+}
+
+function verifiedBlobCacheGet(key: string): Uint8Array | undefined {
+  const entry = verifiedBlobCache.get(key);
+  if (entry === undefined) return undefined;
+  if (verifiedBlobClock() >= entry.expiresAtMs) {
+    verifiedBlobCache.delete(key);
+    return undefined;
+  }
+  // Refresh LRU recency.
+  verifiedBlobCache.delete(key);
+  verifiedBlobCache.set(key, entry);
+  return entry.bytes;
+}
+
+function verifiedBlobCachePut(key: string, bytes: Uint8Array): void {
+  verifiedBlobCache.delete(key);
+  verifiedBlobCache.set(key, {
+    bytes,
+    expiresAtMs: verifiedBlobClock() + VERIFIED_BLOB_CACHE_TTL_MS,
+  });
+  while (verifiedBlobCache.size > VERIFIED_BLOB_CACHE_MAX_ENTRIES) {
+    const oldest = verifiedBlobCache.keys().next().value;
+    if (oldest === undefined) break;
+    verifiedBlobCache.delete(oldest);
+  }
+}
+
 function verifiedBlobBytesByHash(
   store: KnowledgeStore,
   row: DocumentBlobByHashRow,
@@ -358,6 +419,19 @@ export function readPdfDocumentBlobByContentHash(
   if (row.blob_media_type !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) {
     return { kind: "unreadable", reason: "malformed" };
   }
+  // GEN-PERF-PERSISTENCE-011 — reuse already-verified decrypted bytes across the many sequential
+  // range reads for one document. The cache is keyed by (capsule, contentHash) and only ever holds
+  // bytes that already passed the length + sha256 integrity check below, so a hit is always the
+  // exact verified content for this contentHash — no unverified bytes are ever served.
+  const cacheKey = verifiedBlobCacheKey(capsuleId, contentHash);
+  const cached = verifiedBlobCacheGet(cacheKey);
+  if (cached !== undefined) {
+    return blobByHashReadOk(row, cached, override);
+  }
   const bytes = verifiedBlobBytesByHash(store, row);
-  return bytes instanceof Uint8Array ? blobByHashReadOk(row, bytes, override) : bytes;
+  if (!(bytes instanceof Uint8Array)) {
+    return bytes;
+  }
+  verifiedBlobCachePut(cacheKey, bytes);
+  return blobByHashReadOk(row, bytes, override);
 }

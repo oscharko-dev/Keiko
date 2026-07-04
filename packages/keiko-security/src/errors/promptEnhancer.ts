@@ -4,7 +4,7 @@
 // error is always safe to log, persist as evidence, or surface across a trust boundary — it can never
 // carry a secret, raw user input, untrusted-evidence text, or a provider/deployment endpoint.
 
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export const PROMPT_ENHANCER_ERROR_CODES = {
   // A generated prompt or candidate failed safety validation (the validate stage rejected it).
@@ -26,13 +26,8 @@ export const PROMPT_ENHANCER_ERROR_CODES = {
 export type PromptEnhancerErrorCode =
   (typeof PROMPT_ENHANCER_ERROR_CODES)[keyof typeof PROMPT_ENHANCER_ERROR_CODES];
 
-export abstract class PromptEnhancerError extends Error {
-  abstract readonly code: PromptEnhancerErrorCode;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+export abstract class PromptEnhancerError extends RedactingError {
+  abstract override readonly code: PromptEnhancerErrorCode;
 }
 
 // The validate stage rejected a generated prompt. `findingCodes` are the closed-vocabulary safety

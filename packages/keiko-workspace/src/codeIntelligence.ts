@@ -128,10 +128,7 @@ export interface DtoContractEdge {
 }
 
 export type PackageDependencyKind =
-  | "dependencies"
-  | "devDependencies"
-  | "peerDependencies"
-  | "optionalDependencies";
+  "dependencies" | "devDependencies" | "peerDependencies" | "optionalDependencies";
 
 export interface PackageDependencyEdge {
   readonly sourcePackage: string;
@@ -477,8 +474,7 @@ function resolveDirectoryCandidate(
     return !rest.includes("/") && extensions.some((ext) => rest.endsWith(`.${ext}`));
   });
   matches.sort(
-    (a, b) =>
-      Number(a.endsWith("_test.go")) - Number(b.endsWith("_test.go")) || a.localeCompare(b),
+    (a, b) => Number(a.endsWith("_test.go")) - Number(b.endsWith("_test.go")) || a.localeCompare(b),
   );
   return matches[0];
 }
@@ -502,7 +498,9 @@ function isGoModPath(scopePath: string): boolean {
 }
 
 function asStringArray(value: unknown): readonly string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 function exportTargets(value: unknown): readonly string[] {
@@ -524,9 +522,12 @@ function exportTargets(value: unknown): readonly string[] {
 }
 
 function packageEntryTargets(parsed: Record<string, unknown>): readonly string[] {
-  const exportsTargets = isRecord(parsed.exports) ? exportTargets(parsed.exports["."]) : exportTargets(parsed.exports);
-  const fallback = [parsed.module, parsed.main, parsed.types]
-    .filter((value): value is string => typeof value === "string");
+  const exportsTargets = isRecord(parsed.exports)
+    ? exportTargets(parsed.exports["."])
+    : exportTargets(parsed.exports);
+  const fallback = [parsed.module, parsed.main, parsed.types].filter(
+    (value): value is string => typeof value === "string",
+  );
   return [...new Set([...exportsTargets, ...fallback, "."])];
 }
 
@@ -583,7 +584,10 @@ function collectWorkspacePackages(
 ): readonly WorkspacePackageAlias[] {
   const packages: WorkspacePackageAlias[] = [];
   for (const candidate of candidates) {
-    if (!isPackageJsonPath(candidate.relativePath) || candidate.relativePath.includes("node_modules/")) {
+    if (
+      !isPackageJsonPath(candidate.relativePath) ||
+      candidate.relativePath.includes("node_modules/")
+    ) {
       continue;
     }
     let parsed: unknown;
@@ -621,8 +625,12 @@ function collectGoModules(
     }
     let text: string;
     try {
-      text = readWorkspaceFile(scope.workspace, candidate.relativePath, { maxBytes: 65_536 }, fs)
-        .text;
+      text = readWorkspaceFile(
+        scope.workspace,
+        candidate.relativePath,
+        { maxBytes: 65_536 },
+        fs,
+      ).text;
     } catch {
       continue;
     }
@@ -775,7 +783,9 @@ function resolvePackageTargetPath(
     return direct;
   }
   const sourceSibling = base.replace(/\.(?:mjs|cjs|js|jsx)$/u, "");
-  return sourceSibling === base ? undefined : resolveCandidate(pathSet, sourceSibling, JS_EXTENSIONS);
+  return sourceSibling === base
+    ? undefined
+    : resolveCandidate(pathSet, sourceSibling, JS_EXTENSIONS);
 }
 
 function resolveWorkspacePackageTarget(
@@ -858,7 +868,11 @@ function resolvePythonRelativeImport(
   for (let i = 1; i < leadingDots; i += 1) {
     baseDir = dirname(baseDir);
   }
-  return resolveCandidate(pathSet, posix.join(baseDir, moduleName.replace(/\./gu, "/")), PY_EXTENSIONS);
+  return resolveCandidate(
+    pathSet,
+    posix.join(baseDir, moduleName.replace(/\./gu, "/")),
+    PY_EXTENSIONS,
+  );
 }
 
 function resolveImportTarget(
@@ -1208,9 +1222,8 @@ function collectTypescriptReExportBindings(
 function hasDefaultModifier(node: ts.Node): boolean {
   return (
     ts.canHaveModifiers(node) &&
-    ts
-      .getModifiers(node)
-      ?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) === true
+    ts.getModifiers(node)?.some((modifier) => modifier.kind === ts.SyntaxKind.DefaultKeyword) ===
+      true
   );
 }
 
@@ -1650,13 +1663,16 @@ function symbolLineHasConstructorFields(kind: CodeSymbolKind, line: string): boo
     /\b(?:(?:data|public|private|protected|internal|abstract|final|sealed|open)\s+)*class\s+[A-Za-z_$][\w$]*\s*\(/u.test(
       line,
     ) ||
-    (kind === "record" &&
-      /\brecord\s+(?:class\s+|struct\s+)?[A-Za-z_$][\w$]*\s*\(/u.test(line))
+    (kind === "record" && /\brecord\s+(?:class\s+|struct\s+)?[A-Za-z_$][\w$]*\s*\(/u.test(line))
   );
 }
 
 function fieldNameFromGoStructTag(tagText: string | undefined): string | undefined {
-  const tagName = /\bjson:"([^"]*)"/u.exec(tagText ?? "")?.[1]?.split(",").at(0)?.trim();
+  const tagName = /\bjson:"([^"]*)"/u
+    .exec(tagText ?? "")?.[1]
+    ?.split(",")
+    .at(0)
+    ?.trim();
   if (tagName === undefined || tagName.length === 0 || tagName === "-") {
     return undefined;
   }
@@ -1786,7 +1802,8 @@ function collectSymbols(file: SourceFile): readonly CodeSymbol[] {
         scopePath: file.scopePath,
         language: file.language,
         lineRange: lineRange(lineNo),
-        fields: recordFields.length > 0 ? recordFields : collectBlockFields(lines, index, file.language),
+        fields:
+          recordFields.length > 0 ? recordFields : collectBlockFields(lines, index, file.language),
         parser: "polyglot-regex",
       });
       break;
@@ -1953,8 +1970,7 @@ function stripQuotedLiterals(line: string): string {
 }
 
 function stripLineComment(line: string, language: CodeLanguage): string {
-  const markers =
-    language === "python" || language === "ruby" ? ["#"] : ["//", "#"];
+  const markers = language === "python" || language === "ruby" ? ["#"] : ["//", "#"];
   let end = line.length;
   for (const marker of markers) {
     const at = line.indexOf(marker);
@@ -2047,7 +2063,11 @@ interface EndpointScanText {
   readonly isCodeAt: (offset: number) => boolean;
 }
 
-function lineCommentMarkerAt(text: string, index: number, language: CodeLanguage): string | undefined {
+function lineCommentMarkerAt(
+  text: string,
+  index: number,
+  language: CodeLanguage,
+): string | undefined {
   if (text.startsWith("//", index) && language !== "python" && language !== "ruby") {
     return "//";
   }
@@ -2057,7 +2077,10 @@ function lineCommentMarkerAt(text: string, index: number, language: CodeLanguage
   return undefined;
 }
 
-function maskEndpointCommentOrDocstringText(text: string, language: CodeLanguage): EndpointScanText {
+function maskEndpointCommentOrDocstringText(
+  text: string,
+  language: CodeLanguage,
+): EndpointScanText {
   const chars = text.split("");
   const codeMask = new Uint8Array(text.length);
   codeMask.fill(1);
@@ -2070,7 +2093,7 @@ function maskEndpointCommentOrDocstringText(text: string, language: CodeLanguage
   };
 
   let index = 0;
-  let stringDelimiter: "'" | "\"" | "`" | undefined;
+  let stringDelimiter: "'" | '"' | "`" | undefined;
   let escaped = false;
   let inBlockComment = false;
   let pythonTripleQuote: string | undefined;
@@ -2110,20 +2133,14 @@ function maskEndpointCommentOrDocstringText(text: string, language: CodeLanguage
         escaped = true;
       } else if (text[index] === stringDelimiter) {
         stringDelimiter = undefined;
-      } else if (
-        stringDelimiter !== "`" &&
-        (text[index] === "\n" || text[index] === "\r")
-      ) {
+      } else if (stringDelimiter !== "`" && (text[index] === "\n" || text[index] === "\r")) {
         stringDelimiter = undefined;
       }
       index += 1;
       continue;
     }
 
-    if (
-      language === "python" &&
-      (text.startsWith('"""', index) || text.startsWith("'''", index))
-    ) {
+    if (language === "python" && (text.startsWith('"""', index) || text.startsWith("'''", index))) {
       pythonTripleQuote = text.slice(index, index + 3);
       for (let offset = 0; offset < 3; offset += 1) {
         maskAt(index + offset);
@@ -2150,7 +2167,7 @@ function maskEndpointCommentOrDocstringText(text: string, language: CodeLanguage
     }
 
     const char = text[index];
-    if (char === "'" || char === "\"" || char === "`") {
+    if (char === "'" || char === '"' || char === "`") {
       stringDelimiter = char;
       escaped = false;
       codeMask[index] = 0;
@@ -2173,7 +2190,10 @@ function maskEndpointCommentOrDocstringText(text: string, language: CodeLanguage
   };
 }
 
-function matchStartsInCode(scan: EndpointScanText, match: Pick<RegExpMatchArray, "index">): boolean {
+function matchStartsInCode(
+  scan: EndpointScanText,
+  match: Pick<RegExpMatchArray, "index">,
+): boolean {
   return match.index !== undefined && scan.isCodeAt(match.index);
 }
 
@@ -2395,7 +2415,8 @@ function collectPolyglotReferences(
       const resolved = resolveReferenceTarget(file, name, byName, importBindings);
       if (
         resolved === undefined ||
-        (resolved.symbol.scopePath === file.scopePath && sameLineRange(resolved.symbol.lineRange, range))
+        (resolved.symbol.scopePath === file.scopePath &&
+          sameLineRange(resolved.symbol.lineRange, range))
       ) {
         continue;
       }
@@ -2668,11 +2689,12 @@ function fetchMethod(line: string): string {
   return /\bmethod\s*:\s*(["'`])([A-Z]+)\1/iu.exec(line)?.[2]?.toUpperCase() ?? "GET";
 }
 
-function collectFetchClientEndpoints(file: SourceFile, scan: EndpointScanText): readonly ApiEndpoint[] {
+function collectFetchClientEndpoints(
+  file: SourceFile,
+  scan: EndpointScanText,
+): readonly ApiEndpoint[] {
   const endpoints: ApiEndpoint[] = [];
-  for (const match of scan.text.matchAll(
-    /\bfetch\s*\(\s*(["'`])([^"'`]+)\1([\s\S]*?)\)/gu,
-  )) {
+  for (const match of scan.text.matchAll(/\bfetch\s*\(\s*(["'`])([^"'`]+)\1([\s\S]*?)\)/gu)) {
     if (!matchStartsInCode(scan, match)) {
       continue;
     }
@@ -2768,7 +2790,10 @@ function collectGraphqlFields(segment: string): readonly string[] {
   return fields;
 }
 
-function collectGraphqlSchemaEndpoints(file: SourceFile, scan: EndpointScanText): readonly ApiEndpoint[] {
+function collectGraphqlSchemaEndpoints(
+  file: SourceFile,
+  scan: EndpointScanText,
+): readonly ApiEndpoint[] {
   const endpoints: ApiEndpoint[] = [];
   const lines = scan.lines;
   let currentKind: string | undefined;
@@ -2926,7 +2951,10 @@ function collectProtobufServiceEndpoints(file: SourceFile): readonly ApiEndpoint
   return endpoints;
 }
 
-function collectProtobufClientEndpoints(file: SourceFile, scan: EndpointScanText): readonly ApiEndpoint[] {
+function collectProtobufClientEndpoints(
+  file: SourceFile,
+  scan: EndpointScanText,
+): readonly ApiEndpoint[] {
   const endpoints: ApiEndpoint[] = [];
   const clientServicesByVariable = new Map<string, string>();
   const lines = scan.lines;
@@ -3317,16 +3345,10 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
         lineOffset,
       );
       if (rtkDirectQuery?.[2] !== undefined) emit("client", "ANY", rtkDirectQuery[2]);
-      const rtkUrl = firstCodeMatch(
-        line,
-        /\burl\s*:\s*(["'`])([^"'`]+)\1/u,
-        scan,
-        lineOffset,
-      );
+      const rtkUrl = firstCodeMatch(line, /\burl\s*:\s*(["'`])([^"'`]+)\1/u, scan, lineOffset);
       if (rtkUrl?.[2] !== undefined) {
         const rtkMethod =
-          firstCodeMatch(line, /\bmethod\s*:\s*(["'])([A-Z]+)\1/iu, scan, lineOffset)?.[2] ??
-          "ANY";
+          firstCodeMatch(line, /\bmethod\s*:\s*(["'])([A-Z]+)\1/iu, scan, lineOffset)?.[2] ?? "ANY";
         emit("client", rtkMethod, rtkUrl[2]);
       }
     }
@@ -3336,11 +3358,7 @@ function collectEndpoints(file: SourceFile): readonly ApiEndpoint[] {
       scan,
       lineOffset,
     );
-    if (
-      axiosCall?.[1] !== undefined &&
-      axiosCall[2] !== undefined &&
-      axiosCall[4] !== undefined
-    ) {
+    if (axiosCall?.[1] !== undefined && axiosCall[2] !== undefined && axiosCall[4] !== undefined) {
       const objectName = axiosCall[1];
       if (["axios", "client", "api"].includes(objectName) || axiosBasePaths.has(objectName)) {
         emit(
@@ -4021,11 +4039,7 @@ function looksStructuralPathTerm(term: string): boolean {
   return /[./:@_-]/u.test(term);
 }
 
-function includesAny(
-  haystack: string,
-  terms: readonly string[],
-  query: RetrievalQuery,
-): boolean {
+function includesAny(haystack: string, terms: readonly string[], query: RetrievalQuery): boolean {
   const value = query.caseSensitive ? haystack : haystack.toLowerCase();
   if (query.kind === "exact-symbol") {
     return terms.some((term) => value.includes(term));
@@ -4560,33 +4574,27 @@ export function queryCodeIntelligenceIndex(
   const atoms: EvidenceAtom[] = [];
   for (const item of index.imports) {
     const text = `${item.specifier} ${item.importerPath} ${item.targetPath ?? ""}`;
-    if (includesAny(text, terms, query))
-      atoms.push(importEdgeAtom(scope, query, nowMs, item));
+    if (includesAny(text, terms, query)) atoms.push(importEdgeAtom(scope, query, nowMs, item));
   }
   for (const item of index.symbols) {
     const text = `${item.name} ${item.scopePath} ${item.fields.join(" ")}`;
-    if (includesAny(text, terms, query))
-      atoms.push(symbolAtom(scope, query, nowMs, item));
+    if (includesAny(text, terms, query)) atoms.push(symbolAtom(scope, query, nowMs, item));
   }
   for (const item of index.calls) {
     const text = `${item.calleeName} ${item.targetName} ${item.callerPath} ${item.targetPath}`;
-    if (includesAny(text, terms, query))
-      atoms.push(callAtom(scope, query, nowMs, item));
+    if (includesAny(text, terms, query)) atoms.push(callAtom(scope, query, nowMs, item));
   }
   for (const item of index.references) {
     const text = `${item.referenceName} ${item.targetName} ${item.referencerPath} ${item.targetPath}`;
-    if (includesAny(text, terms, query))
-      atoms.push(referenceAtom(scope, query, nowMs, item));
+    if (includesAny(text, terms, query)) atoms.push(referenceAtom(scope, query, nowMs, item));
   }
   for (const item of index.apiContracts) {
     const text = `${item.client.method} ${item.client.path} ${item.client.scopePath} ${item.server.scopePath}`;
-    if (includesAny(text, terms, query))
-      atoms.push(apiContractAtom(scope, query, nowMs, item));
+    if (includesAny(text, terms, query)) atoms.push(apiContractAtom(scope, query, nowMs, item));
   }
   for (const item of index.dtoContracts) {
     const text = `${item.source.name} ${item.target.name} ${item.sharedFields.join(" ")} ${item.source.scopePath} ${item.target.scopePath}`;
-    if (includesAny(text, terms, query))
-      atoms.push(dtoContractAtom(scope, query, nowMs, item));
+    if (includesAny(text, terms, query)) atoms.push(dtoContractAtom(scope, query, nowMs, item));
   }
   for (const item of index.packageDependencies) {
     const text = `${item.sourcePackage} ${item.targetPackage} ${item.dependencyKind} ${item.sourcePath} ${item.targetPath}`;

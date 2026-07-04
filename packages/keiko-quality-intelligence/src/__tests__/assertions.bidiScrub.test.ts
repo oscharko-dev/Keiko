@@ -7,6 +7,7 @@
 // survives.
 
 import { describe, expect, it } from "vitest";
+import { stripUnsafeFormatChars as contractsStripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 import {
   canonicaliseFragmentList,
@@ -213,6 +214,67 @@ describe("canonicaliseFragmentList", () => {
   it("uses candidate-text normalisation so zero-width spoofed duplicates collapse", () => {
     const zwsp = cp(0x200b);
     expect(canonicaliseFragmentList([`log${zwsp}in`, "login"])).toEqual(["login"]);
+  });
+});
+
+// ─── GEN-DUP-NEAR-003: single canonical implementation ───────────────────────
+// The QI `stripUnsafeFormatChars` is now a re-export of the keiko-contracts canonical
+// primitive. This asserts equivalence over a fixture that spans every removal range so a
+// future divergence (e.g. the base layer widening the set) is caught here rather than silently.
+
+describe("stripUnsafeFormatChars — canonical equivalence with keiko-contracts (GEN-DUP-NEAR-003)", () => {
+  // One char per range the canonical stripper removes, interleaved with visible text.
+  const fixtureCodePoints: readonly number[] = [
+    0x0000, // C0 NUL
+    0x0007, // C0 BEL
+    0x001f, // C0 last
+    0x007f, // DEL
+    0x0080, // C1 first
+    0x0085, // C1 NEL
+    0x009f, // C1 last
+    0x061c, // Arabic letter mark
+    0x200b, // ZWSP
+    0x200c, // ZWNJ
+    0x200d, // ZWJ
+    0x200e, // LRM
+    0x200f, // RLM
+    0x202a, // LRE
+    0x202b, // RLE
+    0x202c, // PDF
+    0x202d, // LRO
+    0x202e, // RLO
+    0x2060, // word joiner (U+2060..U+206F block)
+    0x2064, // invisible plus
+    0x2066, // LRI
+    0x2067, // RLI
+    0x2068, // FSI
+    0x2069, // PDI
+    0x206a, // inhibit symmetric swapping (deprecated format)
+    0x206f, // nominal digit shapes (deprecated format, block end)
+    0xfeff, // BOM / ZWNBSP
+    0x0009, // TAB (preserved)
+    0x000a, // LF (preserved)
+    0x000d, // CR (preserved)
+  ];
+  const fixture = fixtureCodePoints.map((code) => `x${cp(code)}y`).join("|");
+
+  it("QI stripUnsafeFormatChars(x) === contracts stripUnsafeFormatChars(x) over the full range fixture", () => {
+    expect(stripUnsafeFormatChars(fixture)).toBe(contractsStripUnsafeFormatChars(fixture));
+  });
+
+  it("both strip the widened U+2060..U+206F block (superset)", () => {
+    for (const code of [0x2060, 0x2064, 0x206a, 0x206f]) {
+      const dirty = `a${cp(code)}b`;
+      expect(stripUnsafeFormatChars(dirty), `U+${code.toString(16)} must be stripped`).toBe("ab");
+      // isUnsafeFormatCodePoint must track the re-exported stripper's removal set.
+      expect(isUnsafeFormatCodePoint(code)).toBe(true);
+    }
+  });
+
+  it("preserves TAB/LF/CR identically to the canonical stripper", () => {
+    const kept = "line1\tcol\nline2\r\nline3";
+    expect(stripUnsafeFormatChars(kept)).toBe(kept);
+    expect(stripUnsafeFormatChars(kept)).toBe(contractsStripUnsafeFormatChars(kept));
   });
 });
 

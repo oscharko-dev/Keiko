@@ -279,7 +279,11 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       }
       setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
     };
-    return subscribeSharedEventSource(containerEventsUrl(), CONTAINER_EVENT_SOURCE_TYPES, onMessage);
+    return subscribeSharedEventSource(
+      containerEventsUrl(),
+      CONTAINER_EVENT_SOURCE_TYPES,
+      onMessage,
+    );
   }, [running]);
 
   // Return focus to Run when the Cancel button unmounts at run end so keyboard users keep their place.
@@ -365,12 +369,16 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
             />
           </div>
           <div className="tm-actions">
+            {/* GEN-UI-FOCUS-014: aria-disabled instead of HTML disabled while running —
+                disabling the focused submit button throws keyboard focus to <body>.
+                onSubmit already guards re-entry; the no-selection condition stays
+                hard-disabled (pre-interaction state), mirroring TerminalWidget. */}
             <button
               type="submit"
               className="tm-action"
               data-primary="true"
               ref={runBtnRef}
-              disabled={running || tasks.length === 0 || taskId.length === 0}
+              disabled={tasks.length === 0 || taskId.length === 0}
               aria-disabled={running || tasks.length === 0 || taskId.length === 0}
             >
               {running ? "Running…" : "Run diagnostic"}

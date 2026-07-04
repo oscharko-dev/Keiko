@@ -1,14 +1,11 @@
 import { createHash } from "node:crypto";
-import { dirname } from "node:path";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createSqliteAuditSink,
   getCapsule,
   getCapsuleSet,
   listCapsuleSources,
-  openKnowledgeStore,
   readCitationExcerpt,
-  resolveKnowledgeStorePath,
   runGroundedAnswer,
   type AnswerGenerator,
   type AnswerGeneratorInput,
@@ -17,7 +14,7 @@ import {
   type ReferenceReranker,
   type ReferenceRerankerResult,
 } from "@oscharko-dev/keiko-local-knowledge";
-import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
+import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
 import type {
   Chat,
@@ -117,28 +114,19 @@ function internalError(message: string): RouteResult {
   return { status: 500, body: errorBody("INTERNAL", message) };
 }
 
-function runtimeStateDir(deps: UiHandlerDeps): string | undefined {
-  if (deps.uiDbPath === undefined || deps.uiDbPath.length === 0) {
-    return undefined;
-  }
-  return dirname(deps.uiDbPath);
-}
-
 export function openStoreForDeps(deps: UiHandlerDeps): {
   readonly store: KnowledgeStore;
   close(): void;
 } {
-  const root = runtimeStateDir(deps);
-  if (root === undefined) {
-    throw new Error("UI runtime-state path is unavailable.");
-  }
-  const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
-  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
+  // Hot read path: no abandoned-job recovery, so an actively-running indexing job in another
+  // process is never mistaken for an orphan and flipped to `failed`. Preserves the exported
+  // { store, close } shape that external modules reference via ReturnType<typeof openStoreForDeps>
+  // by omitting the dbPath the shared opener also returns.
+  const session = openKnowledgeStoreForDeps(deps, { recover: false });
   return {
-    store,
+    store: session.store,
     close: (): void => {
-      store.close();
+      session.close();
     },
   };
 }
@@ -824,11 +812,7 @@ function isNoEvidenceAnswer(answer: string): boolean {
   if (compact.length === 0 || compact.length > 240) return false;
   const lower = compact.toLowerCase();
   if (lower === LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER.toLowerCase()) return true;
-  if (
-    LEGACY_LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWERS.some(
-      (legacy) => lower === legacy.toLowerCase(),
-    )
-  ) {
+  if (LEGACY_LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWERS.some((legacy) => lower === legacy.toLowerCase())) {
     return true;
   }
   return REFUSAL_PATTERNS.some((pattern) => pattern.test(compact));

@@ -1,4 +1,5 @@
 import {
+  COST_RANK,
   createDefaultChatCapability,
   createDefaultEmbeddingCapability,
   isLikelyEmbeddingModelId,
@@ -21,7 +22,6 @@ import type {
   VoicePersona,
 } from "./types.js";
 
-const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 const voiceCapabilityCache = new WeakMap<
   ConfiguredCapabilitySource,
   Map<string, VoiceCapabilityResolution>
@@ -128,7 +128,7 @@ function voiceResolutionCacheKey(options: VoiceResolutionOptions): string {
   return `${options.policyDisabled === true ? "1" : "0"}:${unreachableKey}`;
 }
 
-// Voice-capability resolution (Issue #493, ADR-0058 D1/D2). Resolves the configured capabilities
+// Voice-capability resolution (Issue #493, ADR-0100 D1/D2). Resolves the configured capabilities
 // and applies the voice profile ladder. Only configured providers are eligible, so a voice
 // capability that names no provider can never be elected — the same fail-closed rule as completion
 // selection. The result is content-free and safe to serialise to the browser (AC4/AC5).
@@ -146,12 +146,15 @@ export function resolveVoiceCapability(
   if (cached !== undefined) {
     return cached;
   }
-  const resolved = resolveVoiceCapabilityFromCapabilities(listConfiguredCapabilities(config), options);
+  const resolved = resolveVoiceCapabilityFromCapabilities(
+    listConfiguredCapabilities(config),
+    options,
+  );
   byOptions.set(key, resolved);
   return resolved;
 }
 
-// Speech-to-text model selection (Issue #494, ADR-0058 D2/D4). Returns the configured voice
+// Speech-to-text model selection (Issue #494, ADR-0100 D2/D4). Returns the configured voice
 // provider that advertises speech-to-text (dictation), cheapest-first by cost class, or undefined
 // when none is configured. Only configured providers are eligible — the same fail-closed rule as
 // `selectConfiguredModel` — so a voice capability that names no provider can never be elected, and a
@@ -169,7 +172,7 @@ export function selectSpeechToTextModel(config: ConfiguredCapabilitySource): str
   return best?.id;
 }
 
-// Realtime-voice model selection (Issue #497, ADR-0058 D3, ADR-0059). Returns the configured voice
+// Realtime-voice model selection (Issue #497, ADR-0100 D3, ADR-0101). Returns the configured voice
 // provider that advertises realtime voice (full-duplex conversation), cheapest-first by cost class,
 // or undefined when none is configured. Only configured providers are eligible — the same
 // fail-closed rule as `selectSpeechToTextModel` — so a voice capability that names no provider can

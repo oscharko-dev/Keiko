@@ -96,6 +96,10 @@ function countSkipMessage(displayName: string): string {
   return `"${displayName}" won't be sent — only the first ${String(MAX_DOCUMENT_CONTEXT_ENTRIES)} documents are included.`;
 }
 
+function nonTextDocumentMessage(displayName: string): string {
+  return `Couldn't extract text from "${displayName}" — it will be sent without document text.`;
+}
+
 interface ExtractionState {
   readonly entries: ConversationDocumentContextWire[];
   remainingAggregate: number;
@@ -136,7 +140,15 @@ async function readDocumentInto(
   if (state.remainingAggregate <= 0) return budgetSkipMessage(basename(doc.name));
   let raw: string;
   try {
-    raw = await doc.file.text();
+    // GEN-PERF-CHAT-013 — read only the budgeted prefix instead of the whole file. The per-entry
+    // budget never exceeds MAX_DOCUMENT_CONTEXT_TEXT_BYTES, so slicing that many bytes plus a small
+    // overshoot (the truncation marker's worst-case byte cost, +4 for a straddling code point) is
+    // enough for buildEntry to (a) reproduce a byte-identical entry for below-budget files and
+    // (b) still detect truncation for files that exceed the budget. This bounds per-send work to
+    // ~64 KiB per document regardless of the underlying file size.
+    const prefixBudget =
+      MAX_DOCUMENT_CONTEXT_TEXT_BYTES + utf8ByteLength(DOCUMENT_TRUNCATION_MARKER) + 4;
+    raw = await doc.file.slice(0, prefixBudget).text();
   } catch {
     // Never throw — surface a fixed, path-safe failure so the send proceeds without this doc.
     return failureMessage(basename(doc.name));
@@ -161,16 +173,24 @@ async function readDocumentInto(
 export async function extractDocumentContext(
   documents: readonly PendingDocument[],
 ): Promise<DocumentExtractionResult> {
-  const extractable = documents.filter((doc) => isTextExtractableMime(doc.mimeType));
+  const failures: string[] = [];
+  const extractable: PendingDocument[] = [];
+  for (const doc of documents) {
+    if (isTextExtractableMime(doc.mimeType)) {
+      extractable.push(doc);
+    } else {
+      failures.push(nonTextDocumentMessage(basename(doc.name)));
+    }
+  }
   const included = extractable.slice(0, MAX_DOCUMENT_CONTEXT_ENTRIES);
   const state: ExtractionState = { entries: [], remainingAggregate: MAX_AGGREGATE_DOCUMENT_BYTES };
-  const failures: string[] = [];
   for (const doc of included) {
     const failure = await readDocumentInto(state, doc);
     if (failure !== undefined) failures.push(failure);
   }
   // Audit C075 — documents beyond the 16-entry cap were sliced away without any hint. Binary
-  // documents (PDF) are intentionally NOT reported: their metadata-only path is by design.
+  // documents (PDF) are reported above because metadata-only attachment routing still needs
+  // user-visible disclosure that no document text was extracted.
   for (const doc of extractable.slice(MAX_DOCUMENT_CONTEXT_ENTRIES)) {
     failures.push(countSkipMessage(basename(doc.name)));
   }

@@ -4,7 +4,7 @@
 // the same persistence path production uses.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -218,6 +218,38 @@ describe("exportMemoryDiagnostics — storage path redaction", () => {
       now: () => FIXED_NOW,
     });
     expect(diag.storagePath).not.toContain(secret);
+  });
+
+  it("reports redacted memory vault quarantine files", () => {
+    const vault = makeVault();
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-memory-diag-secret-"));
+    const secret = "secret-memory-dir-segment";
+    const memoryDir = join(tmp, secret);
+    const redact = (input: string): string => input.replace(secret, "[redacted]");
+    try {
+      mkdirSync(memoryDir);
+      writeFileSync(join(memoryDir, "keiko-memory.db.corrupt.2026-07-03T10-00-00-000Z"), "db");
+      writeFileSync(
+        join(memoryDir, "keiko-memory.db.corrupt.2026-07-03T10-00-00-000Z.diagnostic.json"),
+        "{}",
+      );
+      const diag = exportMemoryDiagnostics({
+        vault,
+        scopes: [SCOPE],
+        evidenceStore: createInMemoryEvidenceStore(),
+        redactString: redact,
+        evidenceDir: "/tmp/evidence",
+        memoryDir,
+        now: () => FIXED_NOW,
+      });
+      expect(diag.quarantinedStores).toEqual([
+        expect.objectContaining({ kind: "database", sizeBytes: 2 }),
+        expect.objectContaining({ kind: "diagnostic", sizeBytes: 2 }),
+      ]);
+      expect(JSON.stringify(diag.quarantinedStores)).not.toContain(secret);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("masks scope coordinates in the diagnostics snapshot", () => {

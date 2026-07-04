@@ -1,4 +1,4 @@
-// Issue #502 — Tests for the discussion-mode directive block renderer (ADR-0065).
+// Issue #502 — Tests for the discussion-mode directive block renderer (ADR-0107).
 
 import { describe, expect, it } from "vitest";
 import {

@@ -1,4 +1,4 @@
-// Discussion Intelligence evaluation runner (Epic #491, Issue #502; ADR-0065).
+// Discussion Intelligence evaluation runner (Epic #491, Issue #502; ADR-0107).
 //
 // Derives a deterministic observation for each fixture from the frozen keiko-contracts tables and the
 // pure recovery helpers, scores the seven discussion-quality dimensions, aggregates a scorecard, and

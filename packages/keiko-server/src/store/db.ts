@@ -3,9 +3,21 @@
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
+import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+// Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
+import {
+  chmodIfPresent,
+  ensureDirHardened,
+  FILE_MODE,
+} from "@oscharko-dev/keiko-security/fs-hardening";
+// Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]: the pure classification vocabulary.
+import {
+  SqliteQuickCheckError,
+  errorRecord,
+  isSqliteCorruptionError,
+} from "@oscharko-dev/keiko-security/sqlite-corruption";
 import type {
   Chat,
   ChatMessage,
@@ -162,6 +174,9 @@ function createMessageBatch(
   }
 }
 
+// Flat UiStore factory: one thin arrow per store method delegating to a sql* helper. No
+// branching/logic to extract; splitting the literal would only obscure the 1:1 method→helper mapping.
+// eslint-disable-next-line max-lines-per-function
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   return {
     listProjects: () => sqlListProjects(db),
@@ -208,18 +223,50 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     replaceAssistantMessageContent: (id: string, content: string, timestamp: number): ChatMessage =>
       sqlReplaceAssistantMessageContent(db, id, content, timestamp),
-    close: (): void => { db.close(); },
+    close: (): void => {
+      db.close();
+    },
   };
 }
 
-function quarantineCorruptDb(target: string): void {
+function assertQuickCheckOk(db: DatabaseSync): void {
+  const rows = db.prepare("PRAGMA quick_check").all() as readonly Record<string, unknown>[];
+  const values = rows
+    .map((row) => Object.values(row)[0])
+    .filter((value): value is string => typeof value === "string");
+  if (values.length === 1 && values[0] === "ok") return;
+  throw new SqliteQuickCheckError(values.length > 0 ? values : ["no quick_check rows returned"]);
+}
+
+function quarantineCorruptDb(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  renameSync(target, `${target}.corrupt.${ts}`);
+  const quarantinedPath = `${target}.corrupt.${ts}`;
+  renameSync(target, quarantinedPath);
+  const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
-      renameSync(sidecar, `${sidecar}.corrupt.${ts}`);
+      const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
+      renameSync(sidecar, sidecarQuarantinePath);
+      sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }
+  writeFileSync(
+    `${quarantinedPath}.diagnostic.json`,
+    `${JSON.stringify(
+      {
+        incidentId: randomUUID(),
+        store: "ui-db",
+        timestamp: new Date().toISOString(),
+        dbPath: target,
+        quarantinedPath,
+        sidecarQuarantinePaths,
+        cause: errorRecord(cause ?? new Error("manual quarantine")),
+      },
+      null,
+      2,
+    )}\n`,
+    { mode: FILE_MODE },
+  );
 }
 
 // Issue #639 — bound the SQLITE_BUSY window so concurrent UI/BFF writers (chat writes,
@@ -250,28 +297,6 @@ export function createInMemoryUiStore(opts?: UiStoreFactoryOptions): UiStore {
 // Node on-disk factory
 // ────────────────────────────────────────────────────────────────────────────
 
-function ensureDirHardened(dir: string): void {
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  if (process.platform !== "win32") {
-    try {
-      chmodSync(dir, 0o700);
-    } catch {
-      // best-effort; leave existing perms if owner change is unavailable
-    }
-  }
-}
-
-function chmodIfPresent(path: string, mode: number): void {
-  if (process.platform === "win32") return;
-  try {
-    chmodSync(path, mode);
-  } catch {
-    // file may not exist yet (WAL/-shm sidecars); best-effort
-  }
-}
-
 // Issue #539: deps.ts needs the raw DatabaseSync to compose the relationship-engine store on
 // the same UI database file. The relationship V5 schema lives in this DB (schema.ts §V5);
 // keeping a single connection avoids WAL-coordination overhead. `createNodeUiStore` stays a
@@ -281,18 +306,22 @@ export function openNodeUiDatabase(dbPath: string): DatabaseSync {
   let db = preparedDatabase(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL");
+    assertQuickCheckOk(db);
     runMigrations(db);
-  } catch {
-    // Corrupt DB: quarantine (rename to .corrupt.<iso>) and open a fresh one.
+  } catch (error) {
     db.close();
-    quarantineCorruptDb(dbPath);
+    if (!isSqliteCorruptionError(error)) {
+      throw error;
+    }
+    quarantineCorruptDb(dbPath, error);
     db = preparedDatabase(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
+    assertQuickCheckOk(db);
     runMigrations(db);
   }
-  chmodIfPresent(dbPath, 0o600);
-  chmodIfPresent(`${dbPath}-wal`, 0o600);
-  chmodIfPresent(`${dbPath}-shm`, 0o600);
+  chmodIfPresent(dbPath, FILE_MODE);
+  chmodIfPresent(`${dbPath}-wal`, FILE_MODE);
+  chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
   return db;
 }
 

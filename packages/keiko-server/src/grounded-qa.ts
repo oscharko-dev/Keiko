@@ -519,7 +519,8 @@ function withPromptModelInputBudget(
   pack: ConnectedContextPack,
   modelInputTokensMax: number | undefined,
 ): ConnectedContextPack {
-  const effective = modelInputTokensMax === undefined ? undefined : positiveInteger(modelInputTokensMax);
+  const effective =
+    modelInputTokensMax === undefined ? undefined : positiveInteger(modelInputTokensMax);
   if (effective === undefined || effective === pack.budget.modelInputTokensMax) return pack;
   return { ...pack, budget: { ...pack.budget, modelInputTokensMax: effective } };
 }
@@ -670,7 +671,11 @@ function promptBudgetedMessages(
   let best = emptyMessages;
   while (low <= high) {
     const totalExcerptBytes = Math.floor((low + high) / 2);
-    const candidate = build(question, withPromptExcerptBudget(budgetedPack, totalExcerptBytes), redactor);
+    const candidate = build(
+      question,
+      withPromptExcerptBudget(budgetedPack, totalExcerptBytes),
+      redactor,
+    );
     if (promptByteLength(candidate) <= limit) {
       best = candidate;
       low = totalExcerptBytes + 1;
@@ -802,13 +807,7 @@ export function buildGroundedGatewayMessages(
   redactor: Redactor,
   options?: GroundedGatewayPromptOptions,
 ): readonly GatewayChatMessage[] {
-  return promptBudgetedMessages(
-    question,
-    pack,
-    redactor,
-    buildRawGroundedGatewayMessages,
-    options,
-  );
+  return promptBudgetedMessages(question, pack, redactor, buildRawGroundedGatewayMessages, options);
 }
 
 function createGatewayAnswerer(
@@ -821,8 +820,7 @@ function createGatewayAnswerer(
   return {
     answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
-      const promptOptions =
-        modelInputTokensMax === undefined ? undefined : { modelInputTokensMax };
+      const promptOptions = modelInputTokensMax === undefined ? undefined : { modelInputTokensMax };
       const response = await model.call(
         {
           modelId,
@@ -839,6 +837,9 @@ function createGatewayAnswerer(
           promptTokens: response.usage.promptTokens,
           completionTokens: response.usage.completionTokens,
         },
+        // GEN-AI-GATEWAY-001 (RB-4): carry the finishReason so a truncated ("length") completion is
+        // surfaced by runGroundedExploration instead of being consumed as a complete answer.
+        finishReason: response.finishReason,
       };
     },
   };
@@ -861,11 +862,7 @@ function defaultRunner(
       input.budget === undefined
         ? { ...input, budget: modelWindowAwareBudget(deps, modelId) }
         : input;
-    const contextPackReranker = configuredContextPackRerankerFor(
-      deps,
-      budgetedInput.query,
-      signal,
-    );
+    const contextPackReranker = configuredContextPackRerankerFor(deps, budgetedInput.query, signal);
     const repoSemanticSearchProvider = configuredRepoSemanticSearchProviderFor(deps, signal);
     return runGroundedExploration(budgetedInput, {
       answerer: createGatewayAnswerer(model, modelId, deps.redactor, signal, modelInputTokensMax),
@@ -1064,7 +1061,7 @@ function persistGroundedAuditEvidence(
 }
 
 async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
-  const { chat, content, deps } = workerCtx;
+  const { content, deps } = workerCtx;
   const query = buildQuery(content, () => Date.now());
   const output = await runGroundedRunner(workerCtx, query);
   if (isRouteResult(output)) return output;
@@ -1073,10 +1070,23 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   }
   const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps);
   if (cancelResult !== undefined) return cancelResult;
+  return finalizeGroundedAnswer(workerCtx, output);
+}
+
+// Persists the exchange, projects citations/uncertainty, and assembles the wire answer for a
+// single-source folder ask. Split out of runAsk to keep both under the LOC bound.
+function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOutput): RouteResult {
+  const { chat, content, deps } = workerCtx;
   const userContent = redactString(deps.redactor, content);
   const assistantContent = redactString(deps.redactor, output.assistantContent);
-  const citations = buildCitations(output.pack, deps.redactor);
-  const evidenceRunId = persistGroundedAuditEvidence(workerCtx, output, citations.length);
+  // GEN-AI-GROUNDING-002/-003 (RB-4): when the folder path abstained (no usable evidence), the model
+  // was never called. Suppress citations and do NOT persist grounded evidence or a grounded memory
+  // turn — there is nothing to ground, so no grounded-evidence manifest may be written.
+  const abstained = output.noEvidence === true;
+  const citations = abstained ? [] : buildCitations(output.pack, deps.redactor);
+  const evidenceRunId = abstained
+    ? undefined
+    : persistGroundedAuditEvidence(workerCtx, output, citations.length);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     deps,
     chat.id,
@@ -1093,7 +1103,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     groundingKind: "connected-context",
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
-    evidenceRunId,
+    ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
     content: assistantContent,
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
@@ -1102,13 +1112,15 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     contextPack,
   };
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
-  rememberGroundedTurn({
-    assistantMessageId: assistantMessage.id,
-    chatId: chat.id,
-    workspaceRoot: output.pack.scope.workspaceRoot,
-    evidenceRunId,
-    packs: [output.pack],
-  });
+  if (!abstained) {
+    rememberGroundedTurn({
+      assistantMessageId: assistantMessage.id,
+      chatId: chat.id,
+      workspaceRoot: output.pack.scope.workspaceRoot,
+      ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
+      packs: [output.pack],
+    });
+  }
   return { status: 200, body: answer };
 }
 

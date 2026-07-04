@@ -35,6 +35,10 @@
       "types": "./dist/text-safety.d.ts",
       "import": "./dist/text-safety.js"
     },
+    "./line-offsets": {
+      "types": "./dist/line-offsets.d.ts",
+      "import": "./dist/line-offsets.js"
+    },
     "./verification-summary": {
       "types": "./dist/verification-summary.d.ts",
       "import": "./dist/verification-summary.js"
@@ -54,6 +58,14 @@
     "./memory": {
       "types": "./dist/memory-barrel.d.ts",
       "import": "./dist/memory-barrel.js"
+    },
+    "./memory-fixtures": {
+      "types": "./dist/memory-fixtures.d.ts",
+      "import": "./dist/memory-fixtures.js"
+    },
+    "./memory-consolidation-wire": {
+      "types": "./dist/memory-consolidation-wire.d.ts",
+      "import": "./dist/memory-consolidation-wire.js"
     },
     "./memory-workflow-port": {
       "types": "./dist/memory-workflow-port.d.ts",

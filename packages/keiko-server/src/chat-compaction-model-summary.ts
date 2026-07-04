@@ -140,9 +140,21 @@ function buildSummaryPrompt(
 
 function recordSignalLines(record: ContextCompactionRecord): string[] {
   const lines = ["Structured deterministic signals:"];
-  addList(lines, "Facts", record.preservedFacts?.map((fact) => fact.statement));
-  addList(lines, "Constraints", record.userConstraints?.map((item) => item.statement));
-  addList(lines, "Assumptions", record.assumptions?.map((item) => item.statement));
+  addList(
+    lines,
+    "Facts",
+    record.preservedFacts?.map((fact) => fact.statement),
+  );
+  addList(
+    lines,
+    "Constraints",
+    record.userConstraints?.map((item) => item.statement),
+  );
+  addList(
+    lines,
+    "Assumptions",
+    record.assumptions?.map((item) => item.statement),
+  );
   addList(lines, "Decisions", record.decisions);
   addList(lines, "Open questions", record.openQuestions);
   addList(lines, "Errors", record.failingTests);

@@ -79,8 +79,7 @@ export interface EcosystemStructureAvailabilityContext {
   readonly fs: WorkspaceFs;
 }
 
-export interface EcosystemStructureExtractorContext
-  extends EcosystemStructureAvailabilityContext {
+export interface EcosystemStructureExtractorContext extends EcosystemStructureAvailabilityContext {
   readonly query: RetrievalQuery;
   readonly limits: SearchLimits;
   readonly deps?: {

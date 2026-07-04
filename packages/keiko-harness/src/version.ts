@@ -3,4 +3,4 @@
 // from HARNESS_VERSION (the runtime/event-schema version that lives in @oscharko-dev/keiko-contracts
 // — re-exported from the package barrel so consumers see a single import source).
 
-export const KEIKO_HARNESS_VERSION = "0.1.0" as const;
+export const KEIKO_HARNESS_VERSION = "0.2.11" as const;

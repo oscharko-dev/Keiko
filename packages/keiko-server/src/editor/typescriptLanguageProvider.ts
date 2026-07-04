@@ -108,6 +108,26 @@ function symbolKind(kind: string): LanguageSymbolKind {
   return SYMBOL_KIND_BY_ELEMENT.get(kind) ?? "variable";
 }
 
+// GEN-PERF-EDITOR-001: previously every request built a fresh LanguageService with its OWN
+// `ts.createDocumentRegistry()`, so the default-lib .d.ts set and every reachable import were
+// re-parsed from scratch per diagnostics/completion/hover request. A DocumentRegistry is
+// TypeScript's built-in cache of parsed SourceFiles that a LanguageService consults — sharing
+// ONE process-wide registry across all `withService` calls lets a warm request reuse the
+// already-parsed lib/import ASTs (keyed by path + version + compilation settings inside the
+// registry) instead of re-parsing them. This is behavior-preserving: the registry only caches
+// immutable parsed source; each request still runs against a freshly-built contained host so
+// the overlay text, root containment (maxWorkspaceReadFiles/Bytes) and cancellation semantics
+// are unchanged. The overlay file itself is version-keyed by the host, so an edited buffer is
+// re-parsed while unchanged lib/import files are reused.
+//
+// Lazily created so tests can spy on `ts.createDocumentRegistry` and observe a single call.
+let sharedDocumentRegistry: ts.DocumentRegistry | undefined;
+
+function documentRegistry(): ts.DocumentRegistry {
+  sharedDocumentRegistry ??= ts.createDocumentRegistry();
+  return sharedDocumentRegistry;
+}
+
 function withService<T>(ctx: LanguageProviderContext, run: (service: ts.LanguageService) => T): T {
   const hostOptions: ContainedHostOptions = {
     fs: ctx.fs,
@@ -119,10 +139,13 @@ function withService<T>(ctx: LanguageProviderContext, run: (service: ts.Language
     limits: ctx.limits,
   };
   const host = createContainedLanguageServiceHost(hostOptions);
-  const service = ts.createLanguageService(host, ts.createDocumentRegistry());
+  const service = ts.createLanguageService(host, documentRegistry());
   try {
     return run(service);
   } finally {
+    // Dispose releases this service's references into the SHARED registry (ref-counted by
+    // path+version), so cached SourceFiles for files still referenced by a later request
+    // survive while truly-unreferenced entries are collected — no unbounded growth.
     service.dispose();
   }
 }

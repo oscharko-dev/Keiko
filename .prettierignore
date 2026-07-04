@@ -11,3 +11,10 @@ docs/release/1209-perf-evidence.json
 .github/workflows/
 docs/adr/
 ui/
+# Frozen, byte-sensitive proof/evidence artifacts (design-system fidelity + a11y proofs, release
+# manifests). These are generated/curated release evidence — reformatting them would churn or break
+# the SHA-referenced #1300/#1405 fidelity gates, so they are excluded like the release evidence above.
+docs/design-system/evidence/
+# Security regression matrix is a curated security-stream data artifact (content-validated by
+# scripts/check-security-regression-matrix.mjs); keep its bytes stable, do not restyle it.
+scripts/security-regression-matrix.json

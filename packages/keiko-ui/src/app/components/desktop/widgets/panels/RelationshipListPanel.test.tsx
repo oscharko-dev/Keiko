@@ -285,6 +285,47 @@ describe("RelationshipListPanel", () => {
     });
   });
 
+  describe("row badge is presentational (GEN-UI-A11Y-012)", () => {
+    it("does not nest a role=status / aria-live region inside the interactive row button", async () => {
+      const rel = makeRelationship("rel-status");
+      mockListRelationships.mockResolvedValue({
+        entries: [rel],
+        truncated: false,
+        nextCursor: null,
+      });
+      const { container } = renderPanel({
+        activityMap: new Map([["rel-status", "processing"]]),
+      });
+      await waitFor(() => {
+        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+      });
+      const rowBtn = container.querySelector('[role="listitem"] button.rel-row');
+      expect(rowBtn).not.toBeNull();
+      // The nested badge must NOT be a live region inside the button.
+      expect(rowBtn?.querySelector('[role="status"]')).toBeNull();
+      expect(rowBtn?.querySelector('[aria-live="polite"]')).toBeNull();
+      // The badge wrapper is hidden from the accessibility tree instead.
+      expect(rowBtn?.querySelector(".rb-edge-badge")?.getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("folds the current activity label into the row button aria-label", async () => {
+      const rel = makeRelationship("rel-activity-label");
+      mockListRelationships.mockResolvedValue({
+        entries: [rel],
+        truncated: false,
+        nextCursor: null,
+      });
+      const { container } = renderPanel({
+        activityMap: new Map([["rel-activity-label", "processing"]]),
+      });
+      await waitFor(() => {
+        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+      });
+      const rowBtn = container.querySelector('[role="listitem"] button.rel-row');
+      expect(rowBtn?.getAttribute("aria-label")).toContain("activity: Processing");
+    });
+  });
+
   describe("activity stream wiring", () => {
     it("uses live activity and throughput state for rendered badges", async () => {
       const rel = makeRelationship("rel-live");
@@ -341,7 +382,7 @@ describe("RelationshipListPanel", () => {
       const onFilterChange = vi.fn();
       renderPanel({ onFilterChange });
       // The type filter is a combobox: input + datalist of valid relationship types (F026 C071)
-      const input = screen.getByRole("combobox", { name: /filter relationships by type/i });
+      const input = screen.getByRole("combobox", { name: /filter by type/i });
       fireEvent.change(input, { target: { value: "reads" } });
       // 250ms debounce
       await waitFor(
@@ -397,7 +438,7 @@ describe("RelationshipListPanel", () => {
       expect(screen.getByRole("button", { name: /minimal/i }).getAttribute("aria-pressed")).toBe(
         "true",
       );
-      expect(screen.getByRole("combobox", { name: /filter relationships by type/i })).toHaveValue(
+      expect(screen.getByRole("combobox", { name: /filter by type/i })).toHaveValue(
         "reads-context",
       );
 
@@ -414,7 +455,7 @@ describe("RelationshipListPanel", () => {
           "true",
         );
       });
-      expect(screen.getByRole("combobox", { name: /filter relationships by type/i })).toHaveValue(
+      expect(screen.getByRole("combobox", { name: /filter by type/i })).toHaveValue(
         "produces-evidence",
       );
       const lastCall = mockListRelationships.mock.calls.at(-1);
@@ -469,9 +510,7 @@ describe("RelationshipListPanel", () => {
       });
       renderPanel();
       await waitFor(() => {
-        expect(
-          screen.getByRole("combobox", { name: /filter relationships by type/i }),
-        ).toBeDefined();
+        expect(screen.getByRole("combobox", { name: /filter by type/i })).toBeDefined();
       });
 
       const modal = document.createElement("div");
@@ -484,7 +523,7 @@ describe("RelationshipListPanel", () => {
         // the modal guard must still suppress the slash shortcut.
         fireEvent.keyDown(screen.getByTestId("relationship-list-panel"), { key: "/" });
         expect(document.activeElement).not.toBe(
-          screen.getByRole("combobox", { name: /filter relationships by type/i }),
+          screen.getByRole("combobox", { name: /filter by type/i }),
         );
       } finally {
         modal.remove();
@@ -501,7 +540,7 @@ describe("RelationshipListPanel", () => {
       });
       renderPanel();
       const filterInput = await screen.findByRole("combobox", {
-        name: /filter relationships by type/i,
+        name: /filter by type/i,
       });
 
       // Single-character shortcuts must not fire app-wide while the window is merely

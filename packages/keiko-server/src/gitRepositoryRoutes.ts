@@ -94,7 +94,10 @@ type Ipv4Rule = readonly [RepositoryHostClass, (parts: Ipv4Parts) => boolean];
 function parseIpv4(hostname: string): Ipv4Parts | undefined {
   if (isIP(hostname) !== 4) return undefined;
   const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
     return undefined;
   }
   return parts as [number, number, number, number];

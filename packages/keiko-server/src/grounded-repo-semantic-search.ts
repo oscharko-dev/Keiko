@@ -16,11 +16,7 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import {
-  currentGatewayConfig,
-  currentGatewayEgressConfig,
-  type UiHandlerDeps,
-} from "./deps.js";
+import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 
 const MAX_SEMANTIC_CANDIDATES = 32;
@@ -35,6 +31,10 @@ interface ProviderCredentials {
   readonly apiKeyHeaderName?: string;
   readonly egress?: NonNullable<ModelProviderConfig["egress"]>;
   readonly timeoutMs: number;
+  // GEN-AI-GATEWAY-002 (RB-4): forward Azure deployment routing to the embedding adapter so an
+  // Azure-configured embedding provider is dispatched to its deployment URL, not silently misrouted.
+  readonly endpointStyle?: ModelProviderConfig["endpointStyle"];
+  readonly apiVersion?: string;
 }
 
 interface EmbeddingContext {
@@ -43,8 +43,7 @@ interface EmbeddingContext {
   readonly credentials: ProviderCredentials;
   readonly request: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
   readonly batchRequest?:
-    | ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>)
-    | undefined;
+    ((request: OpenAIEmbeddingBatchRequest) => Promise<OpenAIEmbeddingBatchOutcome>) | undefined;
   readonly fs: WorkspaceFs;
   readonly signal?: AbortSignal | undefined;
   readonly maxCandidates: number;
@@ -55,6 +54,10 @@ interface EmbeddingContext {
 interface CandidateDocument {
   readonly scopePath: string;
   readonly text: string;
+  // GEN-AI-GROUNDING-006 (RB-4): the ORIGINAL (pre-embedding-normalization, un-prefixed) source text
+  // is kept so a whole-file semantic hit can be localized to the matched passage's line rather than
+  // emitting a fixed line:1 the citation layer would trust.
+  readonly sourceText: string;
   readonly order: number;
 }
 
@@ -91,6 +94,8 @@ function providerCredentials(
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
     ...(egress !== undefined ? { egress } : {}),
+    ...(provider.endpointStyle !== undefined ? { endpointStyle: provider.endpointStyle } : {}),
+    ...(provider.apiVersion !== undefined ? { apiVersion: provider.apiVersion } : {}),
   };
 }
 
@@ -318,10 +323,71 @@ function rankHits(
   return [...hits].sort((a, b) => compareHits(orderByPath, a, b)).slice(0, maxResults);
 }
 
+// GEN-AI-GROUNDING-006 (RB-4): a whole-file embedding hit carries no line span. Rather than emit a
+// fixed line:1 the citation layer trusts, run a cheap deterministic second-pass localization: pick
+// the source line that shares the most distinct query terms. Falls back to line 1 only when no line
+// overlaps any query term (or the query has no usable terms).
+const LOCALIZE_STOPWORDS = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "which",
+  "what",
+  "where",
+  "does",
+  "this",
+  "that",
+  "from",
+  "into",
+  "how",
+  "are",
+  "was",
+  "use",
+  "uses",
+]);
+
+function localizeQueryTerms(queryText: string): readonly string[] {
+  const terms = new Set<string>();
+  for (const raw of queryText.toLowerCase().split(/[^a-z0-9_./]+/u)) {
+    if (raw.length >= 3 && !LOCALIZE_STOPWORDS.has(raw)) {
+      terms.add(raw);
+    }
+  }
+  return [...terms];
+}
+
+export function localizeMatchLine(sourceText: string, queryTerms: readonly string[]): number {
+  if (queryTerms.length === 0 || sourceText.length === 0) {
+    return 1;
+  }
+  const lines = sourceText.split("\n");
+  let bestLine = 1;
+  let bestScore = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const lower = (lines[index] ?? "").toLowerCase();
+    if (lower.trim().length === 0) {
+      continue;
+    }
+    let matched = 0;
+    for (const term of queryTerms) {
+      if (lower.includes(term)) {
+        matched += 1;
+      }
+    }
+    if (matched > bestScore) {
+      bestScore = matched;
+      bestLine = index + 1;
+    }
+  }
+  return bestLine;
+}
+
 function hitForDocument(
   document: CandidateDocument,
   vector: Float32Array | undefined,
   queryVector: Float32Array,
+  queryTerms: readonly string[],
 ): SemanticSearchMatch | undefined {
   if (vector === undefined) {
     return undefined;
@@ -332,7 +398,7 @@ function hitForDocument(
   }
   return {
     scopePath: document.scopePath,
-    line: 1,
+    line: localizeMatchLine(document.sourceText, queryTerms),
     score,
   };
 }
@@ -341,6 +407,7 @@ function hitsFromVectors(
   documents: readonly CandidateDocument[],
   vectors: readonly (Float32Array | undefined)[],
   queryVector: Float32Array,
+  queryTerms: readonly string[],
 ): readonly SemanticSearchMatch[] {
   const hits: SemanticSearchMatch[] = [];
   for (let index = 0; index < documents.length; index += 1) {
@@ -348,7 +415,7 @@ function hitsFromVectors(
     if (document === undefined) {
       continue;
     }
-    const hit = hitForDocument(document, vectors[index], queryVector);
+    const hit = hitForDocument(document, vectors[index], queryVector, queryTerms);
     if (hit !== undefined) {
       hits.push(hit);
     }
@@ -370,7 +437,7 @@ function candidateDocuments(
     }
     const text = embeddingText(ctx, `Path: ${source.scopePath}\n${source.text}`).trim();
     if (text.length > 0) {
-      documents.push({ scopePath: source.scopePath, text, order: index });
+      documents.push({ scopePath: source.scopePath, text, sourceText: source.text, order: index });
     }
   }
   return documents;
@@ -398,7 +465,12 @@ async function semanticSearch(
     return [];
   }
   const vectors = await embedDocuments(ctx, documents, signal);
-  return rankHits(hitsFromVectors(documents, vectors, queryVector), documents, maxResults);
+  const queryTerms = localizeQueryTerms(request.query.text);
+  return rankHits(
+    hitsFromVectors(documents, vectors, queryVector, queryTerms),
+    documents,
+    maxResults,
+  );
 }
 
 export function configuredRepoSemanticSearchProviderFor(

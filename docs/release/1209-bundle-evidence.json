@@ -1,22 +1,27 @@
 {
+  "releaseEvidenceVersion": 1,
+  "staticExport": {
+    "root": "dist/ui/static",
+    "fileCount": 251
+  },
   "b1": {
-    "firstLoadScriptCount": 11,
+    "firstLoadScriptCount": 13,
     "monacoMarkersInFirstLoad": 0,
     "ok": true
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1133887,
-    "loadedTotalBytes": 1133887,
+    "shipsTotalBytes": 1172423,
+    "loadedTotalBytes": 1172423,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 110398,
+    "largestWorkerBytes": 106160,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 110398,
+    "largestLoadedWorkerBytes": 106160,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -25,47 +30,48 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 110266,
-      "path": "packages/keiko-ui/out/_next/static/chunks/0oj6iz8mnbx8s.js"
+      "gzipBytes": 105525,
+      "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 110398,
-      "path": "packages/keiko-ui/out/_next/static/chunks/43ils02xq1hm1.js"
+      "gzipBytes": 106160,
+      "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js"
     }
   ],
   "disabledLanguageWorkers": [],
   "editorRuntimeChunkCount": 5,
   "editorRuntimeChunks": [
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/29350453epqhl.js",
-      "gzipBytes": 884136,
-      "rawBytes": 3615222,
+      "path": "dist/ui/static/_next/static/chunks/2tklwylfuzj8q.js",
+      "gzipBytes": 922728,
+      "rawBytes": 3764223,
       "workerLabel": null
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/43ils02xq1hm1.js",
-      "gzipBytes": 110398,
-      "rawBytes": 362942,
+      "path": "dist/ui/static/_next/static/chunks/10oufba3tpp4h.js",
+      "gzipBytes": 106160,
+      "rawBytes": 349877,
       "workerLabel": "editor"
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/0oj6iz8mnbx8s.js",
-      "gzipBytes": 110266,
-      "rawBytes": 362942,
+      "path": "dist/ui/static/_next/static/chunks/0n73dz2_v1il1.js",
+      "gzipBytes": 105525,
+      "rawBytes": 349877,
       "workerLabel": "editor"
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/1c7eg9jvw1s-i.js",
-      "gzipBytes": 16685,
-      "rawBytes": 50363,
+      "path": "dist/ui/static/_next/static/chunks/3us1gpdrl_uxf.js",
+      "gzipBytes": 20490,
+      "rawBytes": 63552,
       "workerLabel": null
     },
     {
-      "path": "packages/keiko-ui/out/_next/static/chunks/35s_u8205h3r5.js",
-      "gzipBytes": 12402,
-      "rawBytes": 36086,
+      "path": "dist/ui/static/_next/static/chunks/1-p5yem7n8812.js",
+      "gzipBytes": 17520,
+      "rawBytes": 54017,
       "workerLabel": null
     }
-  ]
+  ],
+  "measurementSha256": "8e39300b5a056f7eb72665e053d5785840475164826f8fa6c5551ae7eac531d6"
 }

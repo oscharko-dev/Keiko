@@ -9,6 +9,11 @@
 // runtime dependency: ADR-0023 D12 + supply-chain gate forbid it.
 
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+// Single canonical Unicode-strip primitive lives in the base layer (keiko-contracts).
+// It is a true SUPERSET of the former QI-local removal set (GEN-DUP-NEAR-003): it additionally
+// strips the U+2060..U+206F block. Re-export it here so the QI-internal call sites and the QI
+// package barrel keep the same `stripUnsafeFormatChars` name without a second implementation.
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 
 /**
  * NFKC-normalise + trim a free-text fragment, returning the empty string for
@@ -62,50 +67,33 @@ const isUnsafeLow = (cp: number): boolean => {
   return cp >= 0x0080 && cp <= 0x009f;
 };
 
-// Returns true for code points in the upper unsafe range (bidi / zero-width / BOM).
-// Split from isUnsafeCodePoint to keep cyclomatic complexity below the lint limit.
+// Returns true for code points in the upper unsafe range (bidi / zero-width / BOM / format block).
+// Split from isUnsafeCodePoint to keep cyclomatic complexity below the lint limit. Kept byte-for-byte
+// aligned with the canonical keiko-contracts `stripUnsafeFormatChars` removal set (including the
+// U+2060..U+206F block) so this predicate faithfully reflects exactly which code points the
+// re-exported stripper removes.
 const isUnsafeHigh = (cp: number): boolean => {
   if (cp === 0x061c) return true; // Arabic letter mark
   if (cp >= 0x200b && cp <= 0x200f) return true; // ZWSP/ZWNJ/ZWJ/LRM/RLM
   if (cp >= 0x202a && cp <= 0x202e) return true; // Bidi embedding + override
-  if (cp === 0xfeff) return true; // BOM / ZWNBSP
-  return cp >= 0x2066 && cp <= 0x2069; // Bidi isolates
+  if (cp >= 0x2060 && cp <= 0x206f) return true; // Word joiner / invisible math / deprecated format
+  if (cp >= 0x2066 && cp <= 0x2069) return true; // Bidi isolates (subset of the block above)
+  return cp === 0xfeff; // BOM / ZWNBSP
 };
 
 /**
- * Returns true when `cp` is a code point that must be removed from persisted
- * candidate text. See {@link stripUnsafeFormatChars} for the full set.
+ * Returns true when `cp` is a code point that the canonical
+ * {@link stripUnsafeFormatChars} removes from persisted candidate text. QI-only
+ * predicate (consumed by keiko-server runIngestion + QI tests); keiko-contracts
+ * exposes only the stripper, so this mirror stays local but tracks that removal
+ * set exactly.
  */
 export const isUnsafeFormatCodePoint = (cp: number): boolean => isUnsafeLow(cp) || isUnsafeHigh(cp);
 
-/**
- * Remove Unicode bidi-override, zero-width, and C0/C1/DEL control code points
- * from `value`, preserving ordinary text, accents, CJK, emoji, and the
- * legitimate whitespace trio TAB (U+0009) / LF (U+000A) / CR (U+000D).
- *
- * Removed code-point ranges:
- *   - C0 controls U+0000–U+001F except U+0009, U+000A, U+000D
- *   - DEL U+007F
- *   - C1 controls U+0080–U+009F
- *   - Arabic letter mark U+061C
- *   - Zero-width / BOM: U+200B, U+200C, U+200D, U+FEFF
- *   - LRM / RLM: U+200E, U+200F
- *   - Bidi embedding / override: U+202A–U+202E
- *   - Bidi isolate: U+2066–U+2069
- *
- * Iterates by code point (not UTF-16 code unit) so surrogate pairs for
- * supplementary-plane emoji are handled correctly. Pure and deterministic.
- */
-export const stripUnsafeFormatChars = (value: string): string => {
-  const chars: string[] = [];
-  for (const ch of value) {
-    const cp = ch.codePointAt(0);
-    if (cp !== undefined && !isUnsafeFormatCodePoint(cp)) {
-      chars.push(ch);
-    }
-  }
-  return chars.join("");
-};
+// The value-bearing stripper itself is the single canonical implementation in the base layer.
+// Re-exported (not reimplemented) here so QI-internal call sites and the package barrel keep the
+// `stripUnsafeFormatChars` name. See the import at the top of this file (GEN-DUP-NEAR-003).
+export { stripUnsafeFormatChars };
 
 /**
  * Value-bearing candidate-text normaliser: NFKC-normalise, strip unsafe

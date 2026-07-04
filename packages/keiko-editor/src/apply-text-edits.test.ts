@@ -89,10 +89,24 @@ describe("applyTextEditsToText", () => {
     expect(applyTextEditsToText("a😀b", [edit(0, 3, 0, 4, "X")])).toBe("a😀X");
   });
 
-  it("splits lines on \\n only, leaving a CRLF carriage return as part of the line (documented contract)", () => {
-    // The helper consumes Monaco-normalised (\n) content; if a host passes CRLF, the \r occupies a
-    // column on its line. Line 1 starts just after the \n, so replacing its first column hits 'b'.
+  it("treats CRLF as a single line terminator (GEN-DUP-SEMANTIC-017: CRLF-aware, not LF-only)", () => {
+    // Line 1 starts just after the CRLF, so replacing its first column hits 'b'.
     expect(applyTextEditsToText("a\r\nb", [edit(1, 0, 1, 1, "X")])).toBe("a\r\nX");
+  });
+
+  it("clamps a past-content column onto the CRLF line content, never onto the CR or LF", () => {
+    // Line 0 content is "ab"; column 99 must clamp to offset 2 (before the CR), so the inserted "Z"
+    // lands after "ab" and BEFORE the carriage return — the LF-only fork wrongly inserted after "\r".
+    expect(applyTextEditsToText("ab\r\ncd", [edit(0, 99, 0, 99, "Z")])).toBe("abZ\r\ncd");
+  });
+
+  it("clamps a past-content column onto a lone-CR (old-Mac) line content, never onto the CR", () => {
+    expect(applyTextEditsToText("ab\rcd", [edit(0, 99, 0, 99, "Z")])).toBe("abZ\rcd");
+  });
+
+  it("replaces the correct span across two CRLF-terminated lines", () => {
+    // With CRLF-aware line starts, line 1 begins at offset 4 ('c'); replacing [1,0]-[1,2] hits "cd".
+    expect(applyTextEditsToText("ab\r\ncd\r\n", [edit(1, 0, 1, 2, "Z")])).toBe("ab\r\nZ\r\n");
   });
 
   it("does not mutate the input edits array", () => {

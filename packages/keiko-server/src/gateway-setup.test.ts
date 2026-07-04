@@ -1279,9 +1279,7 @@ describe("handleGatewaySetup", () => {
     expect(result.status).toBe(200);
     expect(discoveryCalls).toBe(1);
     expect(testerCalls).toBe(1);
-    expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe(
-      "https://169.254.169.254/v1",
-    );
+    expect(currentGatewayConfig(deps)?.providers[0]?.baseUrl).toBe("https://169.254.169.254/v1");
     deps.store.close();
   });
 

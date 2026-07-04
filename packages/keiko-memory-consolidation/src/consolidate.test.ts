@@ -153,9 +153,7 @@ describe("runConsolidation - multi-way duplicate (3+ members)", () => {
     const result = runConsolidation([a, b, c], baseOptions({ jaccardThreshold: 0 }));
     expect(result.updatesProposed).toHaveLength(1);
     const update = must(result.updatesProposed[0]);
-    expect(update.bodyPatch).toBe(
-      "- use tabs\n- prefer compact diffs\n- keep PR titles short",
-    );
+    expect(update.bodyPatch).toBe("- use tabs\n- prefer compact diffs\n- keep PR titles short");
     expect(update.reviewerNote).toContain("Deterministic union fallback");
     expect(result.summaryStatus).toMatchObject({
       kind: "not-configured",
@@ -269,12 +267,12 @@ describe("runConsolidation - updatesProposed without merge summary", () => {
   it("does not emit MemoryUpdate envelopes for two-member auto-edge duplicates", () => {
     const older = makeRecord({ id: "m-old", body: "same", createdAt: 100 });
     const newer = makeRecord({ id: "m-new", body: "same", createdAt: 200 });
-    const result = runConsolidation([
-      older,
-      newer,
-    ], baseOptions({
-      summaryGenerator: () => "same",
-    }));
+    const result = runConsolidation(
+      [older, newer],
+      baseOptions({
+        summaryGenerator: () => "same",
+      }),
+    );
     expect(result.updatesProposed).toEqual([]);
   });
 });

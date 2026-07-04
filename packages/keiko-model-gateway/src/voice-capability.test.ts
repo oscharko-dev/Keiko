@@ -1,4 +1,4 @@
-// Voice capability resolution tests (Issue #493, Epic #491, ADR-0058). Exercises the five
+// Voice capability resolution tests (Issue #493, Epic #491, ADR-0100). Exercises the five
 // deployment profiles named by the issue deliverables — no-voice, STT-only, full voice, denied
 // (policy-disabled), and unreachable — plus the acceptance criteria: AC1 (false when no voice
 // model), AC2 (dictation when only STT), AC3 (full conversation only with realtime OR both speech
@@ -108,7 +108,7 @@ describe("resolveVoiceCapabilityFromCapabilities — STT-only profile (AC2)", ()
     const result = resolve([voiceCap({ supportsSpeechInput: true })]);
     expect(result.profile).not.toBe("full-realtime");
     expect(result.transport.webrtcMedia).toBe(false);
-    // The control plane role is active for any non-none profile (ADR-0058 D3).
+    // The control plane role is active for any non-none profile (ADR-0100 D3).
     expect(result.transport.websocketControl).toBe(true);
   });
 });
@@ -189,7 +189,7 @@ describe("resolveVoiceCapabilityFromCapabilities — unreachable profile", () =>
   });
 });
 
-describe("resolveVoiceCapabilityFromCapabilities — provider locality (ADR-0058 D7)", () => {
+describe("resolveVoiceCapabilityFromCapabilities — provider locality (ADR-0100 D7)", () => {
   it("reports the locality when every elected provider agrees", () => {
     const result = resolve([
       voiceCap({ id: "a", supportsSpeechInput: true, voiceProviderLocality: "customer-hosted" }),

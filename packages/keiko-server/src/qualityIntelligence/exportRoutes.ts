@@ -26,7 +26,12 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { loadRunReviewState, candidateReviewStateOf, runReviewStateOf } from "./reviewStore.js";
+import {
+  QualityIntelligenceReviewIntegrityError,
+  loadRunReviewState,
+  candidateReviewStateOf,
+  runReviewStateOf,
+} from "./reviewStore.js";
 import { assemblePdf, assembleZipBundle } from "./exportAssembly.js";
 
 type Adapter = QI.QualityIntelligenceExportAdapter;
@@ -502,7 +507,37 @@ async function readExportRequest(req: IncomingMessage): Promise<ExportOutcome> {
   return { ok: true, request };
 }
 
-// eslint-disable-next-line complexity -- export must fail closed across manifest, artifact, integrity, and adapter states.
+// Loads and integrity-validates the candidate artifact for export. Returns a typed error result on
+// tamper/empty so handleQiExport stays under the LOC bound.
+function loadExportableArtifact(
+  id: string,
+  evidenceDir: string,
+):
+  | { readonly artifact: NonNullable<ReturnType<typeof loadQualityIntelligenceCandidates>> }
+  | { readonly error: RouteResult } {
+  let artifact: ReturnType<typeof loadQualityIntelligenceCandidates>;
+  try {
+    artifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
+  } catch (error) {
+    if (error instanceof EvidenceReadError) {
+      return {
+        error: errorResult(
+          409,
+          "QI_CANDIDATES_TAMPERED",
+          "The candidate artifact failed integrity validation.",
+        ),
+      };
+    }
+    throw error;
+  }
+  if (artifact === undefined || artifact.candidates.length === 0) {
+    return {
+      error: errorResult(409, "QI_NO_CANDIDATES", "This run has no candidates to export."),
+    };
+  }
+  return { artifact };
+}
+
 export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const { id } = ctx.params;
   if (id === undefined || id.trim().length === 0) {
@@ -519,22 +554,9 @@ export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Pr
     if (manifest === undefined) {
       return errorResult(404, "QI_NOT_FOUND", "Quality Intelligence run not found.");
     }
-    let artifact: ReturnType<typeof loadQualityIntelligenceCandidates>;
-    try {
-      artifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
-    } catch (error) {
-      if (error instanceof EvidenceReadError) {
-        return errorResult(
-          409,
-          "QI_CANDIDATES_TAMPERED",
-          "The candidate artifact failed integrity validation.",
-        );
-      }
-      throw error;
-    }
-    if (artifact === undefined || artifact.candidates.length === 0) {
-      return errorResult(409, "QI_NO_CANDIDATES", "This run has no candidates to export.");
-    }
+    const loaded = loadExportableArtifact(id, evidenceDir);
+    if ("error" in loaded) return loaded.error;
+    const artifact = loaded.artifact;
     const outcome = serialiseExport(
       id,
       parsed.request,
@@ -547,7 +569,14 @@ export async function handleQiExport(ctx: RouteContext, deps: UiHandlerDeps): Pr
     // append is best-effort and must not turn a successful export into a 500 — see recordExportEvidence.
     const evidenceWarnings = recordExportEvidence(id, outcome, evidenceDir);
     return resultWithWarnings(outcome.result, evidenceWarnings);
-  } catch {
+  } catch (error) {
+    if (error instanceof QualityIntelligenceReviewIntegrityError) {
+      return errorResult(
+        409,
+        "QI_REVIEW_TAMPERED",
+        "The review artifact failed integrity validation.",
+      );
+    }
     return errorResult(500, "QI_EXPORT_FAILED", "Failed to build the export.");
   }
 }

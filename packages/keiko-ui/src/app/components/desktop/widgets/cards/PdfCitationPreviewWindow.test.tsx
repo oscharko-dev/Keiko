@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
@@ -710,5 +713,91 @@ describe("PdfCitationPreviewWindow", () => {
     });
     expect(button).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText("The originating chat is no longer available.")).toBeInTheDocument();
+  });
+
+  // GEN-PERF-WIDGET-001 — a view-only cfg write (scroll page-crossing, zoom, rotate, fit) must
+  // NOT reload/re-parse the document. Simulate such a write by rerendering with a fresh
+  // updateCfg identity plus a changed currentPage cfg value and assert the document was fetched
+  // and parsed exactly once (the load effect no longer depends on updateCfg/reopenPreview).
+  it("does not re-fetch or re-parse the document on a view-only cfg write", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+    const cfg = firstCall[1] as Record<string, unknown>;
+
+    const { rerender } = render(
+      <PdfCitationPreviewWindow
+        cfg={cfg}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(1);
+      expect(getDocument).toHaveBeenCalledTimes(1);
+    });
+
+    // Three successive view-only cfg writes, each with a NEW updateCfg identity (as WindowFrame
+    // mints per cfg write) and a changed currentPage — exactly the churn that used to reload.
+    for (const page of [2, 3, 2]) {
+      rerender(
+        <PdfCitationPreviewWindow
+          cfg={{ ...cfg, currentPage: page, rotation: page * 90 }}
+          focusWindow={vi.fn()}
+          restoreWindow={vi.fn()}
+          updateCfg={vi.fn()}
+          windowId={windowId ?? "missing"}
+        />,
+      );
+    }
+
+    // Give any (incorrectly) re-triggered effect a chance to fire.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(fetchPdfCitationPreviewDocument).toHaveBeenCalledTimes(1);
+    expect(getDocument).toHaveBeenCalledTimes(1);
+  });
+
+  // GEN-UI-KEYBOARD-002 — the scrollable page region must be keyboard-focusable so arrow/PageUp/
+  // PageDown scroll it (WCAG 2.1.1). Assert the region carries tabIndex 0 once bytes render.
+  it("exposes the scrollable page region as a keyboard-focusable region", async () => {
+    const add = vi.fn<Parameters<typeof openPdfCitationPreviewWindow>[0]>(() => "pdf-preview-1");
+    const windowId = openPdfCitationPreviewWindow(add, PREVIEW);
+    const firstCall = add.mock.calls[0];
+    if (firstCall === undefined) throw new Error("expected preview window to open");
+
+    render(
+      <PdfCitationPreviewWindow
+        cfg={firstCall[1] as Record<string, unknown>}
+        focusWindow={vi.fn()}
+        restoreWindow={vi.fn()}
+        updateCfg={vi.fn()}
+        windowId={windowId ?? "missing"}
+      />,
+    );
+
+    const region = await screen.findByRole("region", { name: /policy wording\.pdf pdf preview/i });
+    expect(region).toHaveClass("pdfv-scroll");
+    expect(region).toHaveAttribute("tabindex", "0");
+  });
+
+  // GEN-UI-FOCUS-001 + GEN-UI-VISUAL-001 — the .tm-action chrome and its focus ring must be
+  // re-declared under THIS module's scope (the TerminalWidget copy cannot match the PDF window's
+  // CSS-module hash). jsdom cannot compute the ring, so guard the source rule at the string level.
+  it("re-declares the tm-action chrome and focus ring under the pdf module scope", () => {
+    // Resolve the sibling CSS module relative to THIS test file, not process.cwd(): the coverage
+    // gate (test:coverage:ui) runs from the repo root, so a cwd-relative path would ENOENT there.
+    const css = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), "PdfCitationPreviewWindow.module.css"),
+      "utf8",
+    );
+    expect(css).toMatch(/:global\(\.tm-action\)\s*\{/);
+    expect(css).toMatch(/:global\(\.tm-action\):focus-visible\s*\{[^}]*--focus-ring[^}]*\}/);
   });
 });

@@ -385,11 +385,11 @@ describe("deriveContextProfileFromCapability", () => {
   });
 
   it("records the model id in the optional metadata", () => {
-    expect(deriveContextProfileFromCapability(chatCapability("gpt-bank", 128_000, 8_000))).toMatchObject(
-      {
-        model: { id: "gpt-bank" },
-      },
-    );
+    expect(
+      deriveContextProfileFromCapability(chatCapability("gpt-bank", 128_000, 8_000)),
+    ).toMatchObject({
+      model: { id: "gpt-bank" },
+    });
   });
 
   it("falls back to the default profile geometry for placeholder runtime capabilities", () => {

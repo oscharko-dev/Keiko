@@ -5,7 +5,7 @@ import { buildBugRunState } from "./internal.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";
 import type { BugInvestigationDeps, BugInvestigationInput } from "./types.js";
-import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import {
   detectWorkspace,
   type WorkspaceFs,

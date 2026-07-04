@@ -145,7 +145,7 @@ describe("CompletionModelSelection serialisability (AC3)", () => {
   });
 });
 
-// ─── Voice capability (Issue #493, ADR-0058 D2/D5/D7) ──────────────────────────
+// ─── Voice capability (Issue #493, ADR-0100 D2/D5/D7) ──────────────────────────
 
 const voiceCap = (overrides: Partial<ModelCapability> = {}): ModelCapability =>
   cap({

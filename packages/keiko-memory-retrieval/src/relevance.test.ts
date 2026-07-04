@@ -58,9 +58,9 @@ describe("lexicalRelevance", () => {
 
   it("matches German query and memory pairs despite umlauts and stopwords", () => {
     const record = buildRecord({ body: "Die Datenbank-Konfiguration liegt in München." });
-    expect(lexicalRelevance("Was ist die Datenbank Konfiguration fuer Muenchen?", record)).toBeGreaterThan(
-      0,
-    );
+    expect(
+      lexicalRelevance("Was ist die Datenbank Konfiguration fuer Muenchen?", record),
+    ).toBeGreaterThan(0);
   });
 
   it("includes tags in the record token set", () => {

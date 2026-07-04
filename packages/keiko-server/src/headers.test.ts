@@ -3,17 +3,13 @@
 // against accidental relaxation.
 
 import { describe, expect, it } from "vitest";
-import type { ServerResponse } from "node:http";
 import { applySecurityHeaders } from "./headers.js";
+import { mockResponse } from "./_support.js";
 
-function fakeResponse(): { res: ServerResponse; headers: Map<string, string> } {
-  const headers = new Map<string, string>();
-  const res = {
-    setHeader(name: string, value: string): void {
-      headers.set(name.toLowerCase(), value);
-    },
-  } as unknown as ServerResponse;
-  return { res, headers };
+// The shared mockResponse() captures setHeader into a lower-cased Map — the same shape this suite's
+// hand-rolled fakeResponse() produced before GEN-DX-002.
+function fakeResponse(): ReturnType<typeof mockResponse> {
+  return mockResponse();
 }
 
 const CSP = "default-src 'none'; script-src 'self'";
@@ -44,7 +40,7 @@ describe("applySecurityHeaders", () => {
     expect(headers.get("permissions-policy")).toContain("microphone=()");
   });
 
-  it("scopes microphone to (self) only when allowMicrophone is true (Issue #495 / ADR-0058 D6)", () => {
+  it("scopes microphone to (self) only when allowMicrophone is true (Issue #495 / ADR-0100 D6)", () => {
     const { res, headers } = fakeResponse();
     applySecurityHeaders(res, CSP, false, { allowMicrophone: true });
     expect(headers.get("permissions-policy")).toBe(

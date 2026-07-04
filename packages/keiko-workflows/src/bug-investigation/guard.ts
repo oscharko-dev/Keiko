@@ -11,6 +11,8 @@
 // insensitive (matching #6 isDenied) so a case-only variant cannot bypass the guard on
 // case-insensitive filesystems (macOS/Windows); the traversal check is case-invariant by nature.
 
+import { toPosix } from "./path-utils.js";
+
 const LOCKFILE_BASENAMES: readonly string[] = [
   "package-lock.json",
   "npm-shrinkwrap.json",
@@ -19,10 +21,6 @@ const LOCKFILE_BASENAMES: readonly string[] = [
 ];
 
 const SENSITIVE_DIRS: readonly string[] = [".github", ".husky"];
-
-function toPosix(relPath: string): string {
-  return relPath.split("\\").join("/");
-}
 
 // Copies #8's isTraversal logic EXACTLY: an absolute leading slash or any `..` segment can resolve
 // to a file OUTSIDE the apparent location after #6 resolveWithinWorkspace collapses it. Rejected

@@ -284,7 +284,16 @@ function renderExplainReport(report: RunReport): ReactNode {
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">Report</div>
-      <pre>{report.report}</pre>
+      {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container (max-height 220px) exposed
+          as a focusable named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
+      <pre
+        role="region"
+        aria-label="Report"
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+        tabIndex={0}
+      >
+        {report.report}
+      </pre>
     </div>
   );
 }
@@ -313,7 +322,16 @@ function renderTextCard(title: string, value: string | undefined): ReactNode {
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">{title}</div>
-      <pre>{value}</pre>
+      {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
+          named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
+      <pre
+        role="region"
+        aria-label={title}
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+        tabIndex={0}
+      >
+        {value}
+      </pre>
     </div>
   );
 }
@@ -638,7 +656,16 @@ export function AgentRunWidget({
       {input !== null ? (
         <details className="arun-input">
           <summary>Run input</summary>
-          <pre>{JSON.stringify(input, null, 2)}</pre>
+          {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll container exposed as a focusable
+              named region so keyboard-only users can scroll it (WCAG 2.1.1). */}
+          <pre
+            role="region"
+            aria-label="Run input"
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+            tabIndex={0}
+          >
+            {JSON.stringify(input, null, 2)}
+          </pre>
         </details>
       ) : null}
 
@@ -705,20 +732,44 @@ export function AgentRunWidget({
           {report.dryRunPreview !== undefined ? (
             <div className="arun-result-card">
               <div className="arun-result-title">Dry-run preview</div>
-              <pre>{report.dryRunPreview}</pre>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Dry-run preview"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {report.dryRunPreview}
+              </pre>
             </div>
           ) : null}
           {report.proposedDiff !== undefined ? (
             <div className="arun-result-card">
               <div className="arun-result-title">Proposed diff</div>
-              <pre>{report.proposedDiff}</pre>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Proposed diff"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {report.proposedDiff}
+              </pre>
             </div>
           ) : null}
           {renderVerification(report)}
           {report.applyReport !== undefined ? (
             <div className="arun-result-card arun-applied">
               <div className="arun-result-title">Applied</div>
-              <pre>{JSON.stringify(report.applyReport, null, 2)}</pre>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Applied"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {JSON.stringify(report.applyReport, null, 2)}
+              </pre>
             </div>
           ) : null}
         </div>
@@ -750,7 +801,15 @@ export function AgentRunWidget({
           {evidence.patch?.redactedDiff !== undefined ? (
             <div className="arun-result-card">
               <div className="arun-result-title">Proposed diff</div>
-              <pre>{evidence.patch.redactedDiff}</pre>
+              {/* GEN-UI-KEYBOARD-005 — focusable named scroll region (WCAG 2.1.1). */}
+              <pre
+                role="region"
+                aria-label="Proposed diff"
+                // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+                tabIndex={0}
+              >
+                {evidence.patch.redactedDiff}
+              </pre>
             </div>
           ) : null}
         </div>

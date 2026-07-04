@@ -8,6 +8,8 @@
 // fail-closed evidence persistence: a settled run is not reported successful unless its content-free
 // evidence manifest is durably written.
 
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+
 export const COMMAND_RUNNER_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
@@ -37,14 +39,11 @@ const STATUS_MAP: Readonly<Record<CommandRunnerErrorCode, number>> = {
   INTERNAL: 500,
 };
 
-export class CommandRunnerError extends Error {
+export class CommandRunnerError extends CodedHttpError {
   public readonly code: CommandRunnerErrorCode;
-  public readonly status: number;
 
   public constructor(code: CommandRunnerErrorCode, message: string) {
-    super(message);
-    this.name = "CommandRunnerError";
+    super(message, httpStatusFor(STATUS_MAP, code));
     this.code = code;
-    this.status = STATUS_MAP[code];
   }
 }

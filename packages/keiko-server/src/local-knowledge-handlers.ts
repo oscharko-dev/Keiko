@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { basename } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   addSourceToCapsule,
@@ -24,7 +24,6 @@ import {
   listResumableDocuments,
   openKnowledgeStore,
   removeSourceFromCapsule,
-  resolveKnowledgeStorePath,
   runIndexingJob,
   updateSourceScopeInCapsule,
   updateCapsuleEmbeddingModelIdentity,
@@ -54,7 +53,7 @@ import type {
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
-import { localKnowledgeProtectionOptions } from "./localKnowledgeKeyProvider.js";
+import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
@@ -227,90 +226,16 @@ function scopeToJson(scope: KnowledgeSourceScope): string {
   return JSON.stringify(copy);
 }
 
-function runtimeStateDir(deps: UiHandlerDeps): string | undefined {
-  if (deps.uiDbPath === undefined || deps.uiDbPath.length === 0) {
-    return undefined;
-  }
-  return dirname(deps.uiDbPath);
-}
-
-interface RecoverableRunningJobRow {
-  readonly id: string;
-  readonly capsule_id: string;
-  readonly cancellation_requested: number;
-}
-
-function recoverAbandonedIndexingJobs(store: ReturnType<typeof openKnowledgeStore>): void {
-  const rows = store._internal.db
-    .prepare(
-      [
-        "SELECT id, capsule_id, cancellation_requested",
-        "FROM indexing_jobs",
-        "WHERE status = 'running'",
-        "ORDER BY started_at ASC, id ASC",
-      ].join(" "),
-    )
-    .all() as unknown as readonly RecoverableRunningJobRow[];
-  if (rows.length === 0) {
-    return;
-  }
-  const finishedAt = store._internal.now();
-  for (const row of rows) {
-    if (
-      localKnowledgeIndexingRegistry.isActiveCapsule(row.capsule_id) ||
-      localKnowledgeIndexingRegistry.isActiveJob(row.id)
-    ) {
-      continue;
-    }
-    const cancelled = row.cancellation_requested === 1;
-    store._internal.db
-      .prepare(
-        [
-          "UPDATE indexing_jobs SET",
-          "  status = :status,",
-          "  finished_at = :finished_at,",
-          "  last_error_code = :error_code,",
-          "  last_error_message = :error_message",
-          "WHERE id = :id AND status = 'running'",
-        ].join(" "),
-      )
-      .run({
-        status: cancelled ? "cancelled" : "failed",
-        finished_at: finishedAt,
-        error_code: cancelled ? "CANCELLED" : "INDEXING_INTERRUPTED",
-        error_message: cancelled
-          ? "Indexing was cancelled before the run could be finalized."
-          : "Indexing stopped unexpectedly before completion. Restart the run to finish indexing.",
-        id: row.id,
-      });
-    try {
-      updateCapsuleState(store, row.capsule_id as KnowledgeCapsuleId, "error");
-    } catch {
-      // informational only — the recovered job row is the durable source of truth
-    }
-  }
-}
-
+// Capsule-management path: recover abandoned `running` jobs on open (recover: true) so a run left
+// mid-flight by a crash/restart is reconciled to a terminal state before the handler reads it.
+// Shares the store-open boilerplate + recovery body with the read path and the remediation path
+// (GEN-DUP-NEAR-001 / GEN-DUP-NEAR-006); the recover flag preserves the intentional split.
 function openStoreForDeps(deps: UiHandlerDeps): {
   readonly store: ReturnType<typeof openKnowledgeStore>;
   readonly dbPath: string;
   close(): void;
 } {
-  const root = runtimeStateDir(deps);
-  if (root === undefined) {
-    throw new KnowledgeStoreError("UI runtime-state path is unavailable.");
-  }
-  const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
-  const protection = localKnowledgeProtectionOptions(deps.localKnowledgeKeyProvider);
-  const store = openKnowledgeStore(protection === undefined ? { dbPath } : { dbPath, protection });
-  recoverAbandonedIndexingJobs(store);
-  return {
-    store,
-    dbPath,
-    close: (): void => {
-      store.close();
-    },
-  };
+  return openKnowledgeStoreForDeps(deps, { recover: true });
 }
 
 function storageSizeBytes(dbPath: string): number {
@@ -596,7 +521,10 @@ function embeddingCompatibilityForPinnedProvider(
     );
   }
   if (
-    !storedProviderMatchesConfiguredProvider(capsule.embeddingModelIdentity.provider, pinnedProvider)
+    !storedProviderMatchesConfiguredProvider(
+      capsule.embeddingModelIdentity.provider,
+      pinnedProvider,
+    )
   ) {
     return embeddingCompatibilityResult(
       capsule,
@@ -720,9 +648,7 @@ function countContextualRetrievalChunksByStatus(
   status: string,
 ): number {
   const row = store._internal.db
-    .prepare(
-      "SELECT COUNT(*) AS n FROM chunks WHERE capsule_id = :c AND context_status = :status",
-    )
+    .prepare("SELECT COUNT(*) AS n FROM chunks WHERE capsule_id = :c AND context_status = :status")
     .get({ c: String(capsule.id), status }) as { readonly n: number } | undefined;
   return row?.n ?? 0;
 }
@@ -1214,9 +1140,12 @@ function buildLargeDocumentHealth(
 }
 
 function localKnowledgeOcrAdapter(deps: UiHandlerDeps): OcrAdapter {
-  return deps.localKnowledgeOcrAdapter ?? createOcrAdapterFromEnv(deps.env, {
-    runner: runLocalTesseractCommand,
-  });
+  return (
+    deps.localKnowledgeOcrAdapter ??
+    createOcrAdapterFromEnv(deps.env, {
+      runner: runLocalTesseractCommand,
+    })
+  );
 }
 
 async function localKnowledgeExtractionCapabilitiesFor(
@@ -1400,7 +1329,9 @@ async function buildCapsuleResponseBody(
 ): Promise<Record<string, unknown>> {
   const diagnostics = loadParserDiagnostics(store, capsule.id);
   const jobs = loadIndexingJobs(store, capsule.id);
-  const capabilities = await localKnowledgeExtractionCapabilitiesFor(localKnowledgeOcrAdapter(deps));
+  const capabilities = await localKnowledgeExtractionCapabilitiesFor(
+    localKnowledgeOcrAdapter(deps),
+  );
   return {
     capsule,
     health: buildCapsuleHealth(deps, store, dbPath, capsule),
@@ -2225,7 +2156,9 @@ function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsP
     patch.contextualRetrieval = parseContextualRetrievalPatch(body.contextualRetrieval);
   }
   if (!patchHasFields(patch)) {
-    throw new InvalidRequest("Patch must include displayName, description, or contextualRetrieval.");
+    throw new InvalidRequest(
+      "Patch must include displayName, description, or contextualRetrieval.",
+    );
   }
   return patch;
 }
@@ -2434,13 +2367,7 @@ function persistSourceRootRebind(
   source: KnowledgeSource,
   scope: KnowledgeSourceScope,
 ): void {
-  updateSourceScopeInCapsule(
-    store,
-    capsule.id,
-    source.id,
-    scope,
-    createSqliteAuditSink(store),
-  );
+  updateSourceScopeInCapsule(store, capsule.id, source.id, scope, createSqliteAuditSink(store));
   updateCapsuleState(store, capsule.id, "stale");
 }
 

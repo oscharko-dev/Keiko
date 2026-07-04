@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import { ApiError, fetchFilesTree, fetchProjects } from "@/lib/api";
 import type { FilesTreeEntry, ProjectWithAvailability } from "@/lib/types";
@@ -128,6 +135,27 @@ function useFocusTrap(
     narrowedDialog.addEventListener("keydown", handleKeyDown);
     return () => narrowedDialog.removeEventListener("keydown", handleKeyDown);
   }, [active, dialogRef, onEscape]);
+}
+
+// GEN-UI-KEYBOARD-010 — optional ArrowUp/ArrowDown/Home/End roving across the browser rows so a
+// keyboard user can move down the list without repeated Tab presses. Tab still works: this only
+// intercepts the arrow/Home/End keys. Each row's focusable control (a button, or the checkbox in
+// multi-select mode) is the roving target.
+function handleListNavKey(list: HTMLUListElement, event: ReactKeyboardEvent): void {
+  const keys = new Set(["ArrowDown", "ArrowUp", "Home", "End"]);
+  if (!keys.has(event.key)) return;
+  const rows = Array.from(
+    list.querySelectorAll<HTMLElement>(
+      ".lkd-picker-entry button:not([disabled]),.lkd-picker-entry input:not([disabled])",
+    ),
+  );
+  if (rows.length === 0) return;
+  const index = rows.indexOf(document.activeElement as HTMLElement);
+  event.preventDefault();
+  if (event.key === "ArrowDown") rows[Math.min(index + 1, rows.length - 1)]?.focus();
+  else if (event.key === "ArrowUp") rows[index <= 0 ? 0 : index - 1]?.focus();
+  else if (event.key === "Home") rows[0]?.focus();
+  else if (event.key === "End") rows[rows.length - 1]?.focus();
 }
 
 function modeAllowsFileSelection(mode: LocalFileBrowserSelectionMode): boolean {
@@ -372,7 +400,14 @@ export function LocalFileBrowserDialog({
               Loading folder...
             </p>
           ) : (
-            <ul className="lkd-picker-list" aria-label="Local source browser">
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.1 roving list navigation
+            <ul
+              className="lkd-picker-list"
+              aria-label="Local source browser"
+              // GEN-UI-KEYBOARD-010 — arrow/Home/End roving across the rows (Tab still works); the
+              // listener only reroutes arrow keys between the rows' own focusable controls.
+              onKeyDown={(event) => handleListNavKey(event.currentTarget, event)}
+            >
               {entries.map((entry) => {
                 // A selectable source is a REGULAR file only. A "symlink"-kind entry (and any file
                 // flagged symlink) must never be offered for selection — the workspace read path

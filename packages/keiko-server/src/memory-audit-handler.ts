@@ -232,7 +232,11 @@ function verifyEventIntegrity(
   if (integrity.sequence !== expectedSequence) {
     return "audit hash chain sequence mismatch";
   }
-  const actualHash = hashAuditEvent(withoutIntegrity(event), integrity.previousHash, integrity.sequence);
+  const actualHash = hashAuditEvent(
+    withoutIntegrity(event),
+    integrity.previousHash,
+    integrity.sequence,
+  );
   return integrity.eventHash === actualHash ? null : "audit hash chain eventHash mismatch";
 }
 
@@ -460,9 +464,7 @@ export function createMemoryAuditDeleteCommitHandler(
         evidenceStore: options.evidenceStore,
         redactString: options.redactString,
         required: true,
-        ...(options.onPersistError === undefined
-          ? {}
-          : { onPersistError: options.onPersistError }),
+        ...(options.onPersistError === undefined ? {} : { onPersistError: options.onPersistError }),
       },
       auditEvents,
     );

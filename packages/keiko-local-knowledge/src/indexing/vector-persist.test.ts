@@ -14,6 +14,7 @@ import {
   composeVectorRecord,
   countVectorsForDocument,
   insertVectorRow,
+  invalidateVectorIndexStateForCapsules,
   type VectorInsertRow,
 } from "./vector-persist.js";
 
@@ -112,5 +113,91 @@ describe("composeVectorRecord", () => {
     expect(record.sourceId).toBe(fixture.seeded.sourceId);
     expect(record.documentId).toBe(fixture.seeded.documentId);
     expect(record.chunkId).toBe(fixture.chunkId);
+  });
+});
+
+// GEN-PERF-PERSISTENCE-013: per-row insert must not invalidate the capsule's vector-index state once
+// per row (a DELETE that is a no-op after the first row of a document). Batch callers invalidate ONCE
+// at the transaction boundary. We count db.prepare calls compiling the index-state DELETE as the proxy.
+describe("insertVectorRow index-state invalidation (GEN-PERF-PERSISTENCE-013)", () => {
+  const INVALIDATE_MARKER = "DELETE FROM vector_index_state";
+
+  function countInvalidations(run: () => void): number {
+    const db = fixture.store._internal.db as unknown as {
+      prepare: (sql: string) => unknown;
+    };
+    const original = db.prepare.bind(db);
+    let count = 0;
+    db.prepare = (sql: string): unknown => {
+      if (sql.includes(INVALIDATE_MARKER)) count += 1;
+      return original(sql);
+    };
+    try {
+      run();
+    } finally {
+      db.prepare = original;
+    }
+    return count;
+  }
+
+  it("still invalidates once by default (single-row caller unchanged)", () => {
+    const invalidations = countInvalidations(() => {
+      insertVectorRow(
+        fixture.store._internal.db,
+        fixture.store._internal.contentCipher,
+        buildRow(fixture, { id: "vec:default-1" as string as VectorId }),
+      );
+    });
+    expect(invalidations).toBe(1);
+  });
+
+  it("does NOT invalidate per row when invalidateIndexState:false", () => {
+    const [c2, c3] = seedDocumentWithChunks(
+      fixture.store,
+      fixture.seeded,
+      "one two three four five six seven eight nine ten eleven twelve thirteen",
+      "unit-2",
+    );
+    const invalidations = countInvalidations(() => {
+      insertVectorRow(
+        fixture.store._internal.db,
+        fixture.store._internal.contentCipher,
+        buildRow(fixture, { id: "vec:batch-1" as string as VectorId }),
+        { invalidateIndexState: false },
+      );
+      if (c2 !== undefined) {
+        insertVectorRow(
+          fixture.store._internal.db,
+          fixture.store._internal.contentCipher,
+          buildRow(fixture, { id: "vec:batch-2" as string as VectorId, chunkId: c2 }),
+          { invalidateIndexState: false },
+        );
+      }
+      if (c3 !== undefined) {
+        insertVectorRow(
+          fixture.store._internal.db,
+          fixture.store._internal.contentCipher,
+          buildRow(fixture, { id: "vec:batch-3" as string as VectorId, chunkId: c3 }),
+          { invalidateIndexState: false },
+        );
+      }
+    });
+    // Pre-fix: 3 rows => 3 invalidations. Fixed: 0 during inserts (deferred to the batch boundary).
+    expect(invalidations).toBe(0);
+  });
+
+  it("invalidateVectorIndexStateForCapsules invalidates once per DISTINCT capsule", () => {
+    const capsuleA = fixture.seeded.capsuleId;
+    const invalidations = countInvalidations(() => {
+      // Same capsule repeated 5x collapses to a single invalidation.
+      invalidateVectorIndexStateForCapsules(fixture.store._internal.db, [
+        capsuleA,
+        capsuleA,
+        capsuleA,
+        capsuleA,
+        capsuleA,
+      ]);
+    });
+    expect(invalidations).toBe(1);
   });
 });

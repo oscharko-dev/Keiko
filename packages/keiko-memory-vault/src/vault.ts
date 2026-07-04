@@ -55,7 +55,9 @@ import {
 import {
   deleteTombstonesByScopeBeforeRows,
   insertTombstoneRow,
+  listForgetTombstoneVectors,
   listTombstonesByScopeRows,
+  selectForgetSuppressionBodyHashPresence,
   updateTombstoneBodyHashByScopeRows,
 } from "./tombstones.js";
 import {
@@ -276,12 +278,21 @@ type MemoryMutators = Pick<
   | "listMemoryMetadataByScope"
 >;
 
+// Internal-only: carries the forgotten memory's embedding (fetched BEFORE the row is deleted,
+// since ON DELETE CASCADE removes memory_embeddings with it) alongside the public delete result, so
+// applyPreparedDelete can seal it onto the tombstone. Never surfaced on MemoryDeleteResult itself —
+// that public contract is unchanged (GEN-AI-MEMORY-003, RB-4).
+interface PreparedDelete {
+  readonly result: MemoryDeleteResult;
+  readonly bodyEmbedding: Float32Array | undefined;
+}
+
 function prepareDelete(
   db: DatabaseSync,
   id: MemoryId,
   options: DeleteMemoryOptions,
   opts: ResolvedOptions,
-): MemoryDeleteResult {
+): PreparedDelete {
   gateDeleteOptions(options);
   const existing = existingMemoryOrThrow(db, id, opts.cipher);
   const tombstone = options.tombstone
@@ -290,19 +301,22 @@ function prepareDelete(
   if (tombstone !== undefined) {
     assertTombstoneMatchesRecord(existing, tombstone);
   }
-  return { memoryId: id, scope: existing.scope, tombstone };
+  const bodyEmbedding =
+    tombstone === undefined ? undefined : getEmbeddingRow(db, id, opts.cipher)?.vector;
+  return { result: { memoryId: id, scope: existing.scope, tombstone }, bodyEmbedding };
 }
 
 function applyPreparedDelete(
   db: DatabaseSync,
-  result: MemoryDeleteResult,
+  prepared: PreparedDelete,
   opts: ResolvedOptions,
 ): void {
+  const { result } = prepared;
   if (!deleteMemoryRow(db, result.memoryId)) {
     throw new MemoryStorageError("not-found", "Memory not found.");
   }
   if (result.tombstone !== undefined) {
-    insertTombstoneRow(db, result.tombstone, opts.cipher);
+    insertTombstoneRow(db, result.tombstone, opts.cipher, prepared.bodyEmbedding);
   }
 }
 
@@ -332,13 +346,13 @@ function runDelete(
   db.exec("BEGIN");
   try {
     applyPreparedDelete(db, ready, opts);
-    opts.beforeDeleteCommit(eventsForDeletedRecords([ready]));
+    opts.beforeDeleteCommit(eventsForDeletedRecords([ready.result]));
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return ready;
+  return ready.result;
 }
 
 function runBatchDeleteMemories(
@@ -349,16 +363,16 @@ function runBatchDeleteMemories(
   const ready = deletes.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
   db.exec("BEGIN");
   try {
-    for (const result of ready) {
-      applyPreparedDelete(db, result, opts);
+    for (const prepared of ready) {
+      applyPreparedDelete(db, prepared, opts);
     }
-    opts.beforeDeleteCommit(eventsForDeletedRecords(ready));
+    opts.beforeDeleteCommit(eventsForDeletedRecords(ready.map((prepared) => prepared.result)));
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
-  return ready;
+  return ready.map((prepared) => prepared.result);
 }
 
 function updateMemoryInPlace(
@@ -535,6 +549,7 @@ type TombstoneAndAccessOps = Pick<
   MemoryVaultStore,
   | "listTombstonesByScope"
   | "hasForgetTombstoneForBody"
+  | "forgetTombstoneVectors"
   | "purgeTombstonesByScopeBefore"
   | "recordAccess"
   | "recordOutcome"
@@ -625,17 +640,24 @@ function buildTombstoneAndAccessOps(
       gateMemoryScope(scope);
       const currentHash = opts.bodySuppressionHash(body);
       const legacyHash = memoryBodySuppressionHash(body);
-      const tombstones = listTombstonesByScopeRows(db, scope, opts.cipher);
-      if (tombstones.some((tombstone) => tombstone.bodyHash === currentHash)) {
+      // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
+      // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
+      // rows and zero reason decrypts (strengthens confidentiality on this hot path).
+      const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
+      if (presence.current) {
         return true;
       }
-      if (!tombstones.some((tombstone) => tombstone.bodyHash === legacyHash)) {
+      if (!presence.legacy) {
         return false;
       }
       withSidecarHardening(opts, () => {
         updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
       });
       return true;
+    },
+    forgetTombstoneVectors: (scope: MemoryScope): readonly Float32Array[] => {
+      gateMemoryScope(scope);
+      return listForgetTombstoneVectors(db, scope, opts.cipher);
     },
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
       return withSidecarHardening(opts, () => {

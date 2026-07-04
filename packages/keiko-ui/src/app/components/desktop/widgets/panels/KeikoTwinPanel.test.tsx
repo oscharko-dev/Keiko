@@ -40,7 +40,7 @@ describe("KeikoTwinPanel", () => {
       within(prPolicy as HTMLElement).getByRole("button", { name: "Ask" }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "EVAL" }));
+    await user.click(screen.getByRole("tab", { name: "EVAL" }));
     expect(screen.queryByText("5/6 passed")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Run evaluation" }));
@@ -56,7 +56,7 @@ describe("KeikoTwinPanel", () => {
     const user = userEvent.setup();
     renderPanel();
 
-    await user.click(screen.getByRole("button", { name: "Connections" }));
+    await user.click(screen.getByRole("tab", { name: "Connections" }));
 
     const mailBridge = screen.getByRole("button", { name: "Mail" });
     expect(mailBridge).toHaveAttribute("aria-pressed", "false");
@@ -67,7 +67,7 @@ describe("KeikoTwinPanel", () => {
       expect(window.localStorage.getItem("keiko.twin.bridges")).toContain('"mail":true');
     });
 
-    await user.click(screen.getByRole("button", { name: "Persona" }));
+    await user.click(screen.getByRole("tab", { name: "Persona" }));
     const designerPersona = screen.getByRole("button", { name: /Designer/ });
     expect(designerPersona).toHaveAttribute("aria-pressed", "false");
 
@@ -78,5 +78,29 @@ describe("KeikoTwinPanel", () => {
     await waitFor(() => {
       expect(window.localStorage.getItem("keiko.twin.persona")).toBe("Designer");
     });
+  });
+
+  // GEN-UI-A11Y-002: the tab strip must expose the ARIA tabs pattern so the active
+  // tab is discoverable by assistive tech, not only via CSS.
+  it("exposes the tab strip as an accessible tablist with a labelled tabpanel", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(4);
+
+    const policyTab = screen.getByRole("tab", { name: "Policy" });
+    expect(policyTab).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "EVAL" })).toHaveAttribute("aria-selected", "false");
+
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", policyTab.id);
+    expect(policyTab).toHaveAttribute("aria-controls", panel.id);
+
+    await user.click(screen.getByRole("tab", { name: "EVAL" }));
+    const evalTab = screen.getByRole("tab", { name: "EVAL" });
+    expect(evalTab).toHaveAttribute("aria-selected", "true");
+    expect(policyTab).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", evalTab.id);
   });
 });

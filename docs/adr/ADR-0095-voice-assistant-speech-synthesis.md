@@ -13,7 +13,7 @@ Proposed (Issue #1558, Epic #1556, 2026-06-26)
 Epic #1556 builds a **colleague-like voice dialogue mode** on top of the completed Epic #491 voice
 foundation. Two siblings established the surface this issue consumes:
 
-- **Issue #501 (ADR-0064)** added the optional, capability-gated assistant speech-output **playback
+- **Issue #501 (ADR-0106)** added the optional, capability-gated assistant speech-output **playback
   state machine** — the `voice-playback.ts` contract, the deterministic `voice-playback-state.ts`
   controller, the `useVoicePlayback` binding, and the `VoicePlayback` UI (persistent mute toggle +
   transient status/alert strip). It deliberately deployed **no TTS model**: the controller exposes
@@ -32,7 +32,7 @@ lifecycle and keeping the spoken and written answers synchronized. It is the aud
 deferred, built on the registry #1557 added. It adds no dialogue-mode toggle UI, no raw-audio
 persistence, and no independent answer generation.
 
-The existing dictation flow (Issue #494, ADR-0058 D4) is the mirror image and the reuse template:
+The existing dictation flow (Issue #494, ADR-0100 D4) is the mirror image and the reuse template:
 dictation sends audio (multipart) and receives text; synthesis sends text (JSON) and receives audio.
 Both ride the single `gatewayFetch` egress seam, so synthesis inherits the same corporate-proxy,
 custom-CA, timeout, byte-cap, and content-free error-mapping behavior as every other productive model
@@ -171,9 +171,9 @@ synthesis.
 - ADR-0094: Voice provider capability registry extension — the `selectSpeechOutputModel` /
   `selectVoicePersonaVoice` selection family, the `supportsSpeechOutput` flag, and the credential-tier
   `voiceProfiles` persona → voice-id mapping this ADR consumes (D4).
-- ADR-0064: Voice assistant speech-output playback (Issue #501) — the `voice-playback.ts` contract, the
+- ADR-0106: Voice assistant speech-output playback (Issue #501) — the `voice-playback.ts` contract, the
   `voice-playback-state.ts` controller, and the `useVoicePlayback` binding this ADR drives (D7).
-- ADR-0058: Capability-gated Voice Digital Twin architecture (Issue #492) — D4 single egress seam, the
+- ADR-0100: Capability-gated Voice Digital Twin architecture (Issue #492) — D4 single egress seam, the
   voice capability ladder, and the no-raw-audio-persistence invariant carried forward here.
 - ADR-0038: the `gatewayFetch` egress seam this adapter reuses for proxy / custom-CA / timeout / byte-cap
   behavior.

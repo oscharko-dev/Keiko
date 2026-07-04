@@ -24,7 +24,8 @@ const DEFAULT_QWEN3_TOKENIZER_MODULE_ENV = "KEIKO_QWEN3_TOKENIZER_MODULE";
 const TOKENIZER_MODE_ENV = "KEIKO_LOCAL_KNOWLEDGE_TOKENIZER";
 const TOKENIZER_REQUIRED_ENV = "KEIKO_QWEN3_TOKENIZER_REQUIRED";
 
-const CJK_OR_KANA_OR_HANGUL_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const CJK_OR_KANA_OR_HANGUL_PATTERN =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const ASCII_LETTER_PATTERN = /[A-Za-z]/u;
 const DIGIT_PATTERN = /\p{N}/u;
 const LATIN_LETTER_PATTERN = /\p{Script=Latin}/u;
@@ -45,12 +46,17 @@ function longAsciiWordPenalty(text: string): number {
   for (const match of text.matchAll(ASCII_WORD_PATTERN)) {
     const word = match[0];
     if (word.length <= 12) continue;
-    penalty += Math.ceil(word.length / LONG_WORD_CHARS_PER_TOKEN) -
+    penalty +=
+      Math.ceil(word.length / LONG_WORD_CHARS_PER_TOKEN) -
       Math.ceil(word.length / ASCII_WORD_CHARS_PER_TOKEN);
   }
   return Math.max(0, penalty);
 }
 
+// NOTE (GEN-DUP-SEMANTIC-002): intentionally NOT the canonical byte-based estimateTokens in
+// @oscharko-dev/keiko-contracts. This is the embedding-context fallback for a real Qwen3/SentencePiece
+// tokenizer (injectable via LocalKnowledgeTokenizer), script-class calibrated to fail small against a
+// 32K embedding budget, so it must stay its own conservative unit rather than the prompt-token currency.
 export function defaultTokenEstimator(text: string): number {
   if (text.length === 0) return 0;
   const cjk = countCodePoints(text, CJK_OR_KANA_OR_HANGUL_PATTERN);
@@ -124,7 +130,8 @@ function tokenIdsFromEncoded(encoded: unknown): readonly unknown[] | undefined {
 }
 
 function moduleIdentity(moduleLike: unknown): string {
-  if (typeof moduleLike !== "object" || moduleLike === null) return QWEN3_SENTENCEPIECE_TOKENIZER_ID;
+  if (typeof moduleLike !== "object" || moduleLike === null)
+    return QWEN3_SENTENCEPIECE_TOKENIZER_ID;
   const candidate = moduleLike as { readonly tokenizerIdentity?: unknown };
   return typeof candidate.tokenizerIdentity === "string" && candidate.tokenizerIdentity.length > 0
     ? candidate.tokenizerIdentity

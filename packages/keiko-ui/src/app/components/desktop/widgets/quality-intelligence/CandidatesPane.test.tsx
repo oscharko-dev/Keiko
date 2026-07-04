@@ -4,7 +4,7 @@
 //   - Empty state: no candidates → "No test cases" message.
 //   - Card rendering: one card per candidate with title, riskClass, review badge,
 //     preconditions, steps, expectedResults lists, and tags.
-//   - onReview present: Approve/Reject/Request-changes buttons render.
+//   - onReview present: Approve/Reject/Request-changes/Withdraw buttons render.
 //   - onReview present: clicking Approve calls onReview(id, "approve").
 //   - onReview present: clicking Reject calls onReview(id, "reject").
 //   - onReview present: clicking Request-changes calls onReview(id, "request-changes").
@@ -26,8 +26,8 @@ import type { CandidateQualityVerdict } from "./qiShared";
 //
 // The pane consumes the browser-safe `QualityIntelligenceUiCandidate` projection, which carries the
 // human `reviewState` ("open" until a reviewer acts) alongside the generation `status`. The review
-// badge and the Approve/Reject/Request-changes pressed states are driven by `reviewState`, NOT by the
-// generation `status` — they are distinct concepts on the wire shape.
+// badge and the Approve/Reject/Request-changes/Withdraw states are driven by `reviewState`, NOT by
+// the generation `status` — they are distinct concepts on the wire shape.
 
 let candidateCounter = 0;
 
@@ -161,7 +161,7 @@ describe("CandidatesPane — card rendering", () => {
 // ---------------------------------------------------------------------------
 
 describe("CandidatesPane — review buttons when onReview is provided", () => {
-  it("renders Approve, Reject, and Request-changes buttons for each candidate", () => {
+  it("renders Approve, Reject, Request-changes, and Withdraw buttons for each candidate", () => {
     const c = makeCandidate();
     const onReview = vi.fn();
     render(<CandidatesPane candidates={[c]} onReview={onReview} />);
@@ -169,6 +169,7 @@ describe("CandidatesPane — review buttons when onReview is provided", () => {
     expect(screen.getByRole("button", { name: /approve/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reject/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /request.changes/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /withdraw/i })).toBeInTheDocument();
   });
 
   it("calls onReview with (candidateId, 'approve') when Approve is clicked", async () => {
@@ -204,6 +205,17 @@ describe("CandidatesPane — review buttons when onReview is provided", () => {
     expect(onReview).toHaveBeenCalledWith(c.id, "request-changes");
   });
 
+  it("calls onReview with (candidateId, 'withdraw') when Withdraw is clicked", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate();
+    const onReview = vi.fn();
+    render(<CandidatesPane candidates={[c]} onReview={onReview} />);
+
+    await user.click(screen.getByRole("button", { name: /withdraw/i }));
+    expect(onReview).toHaveBeenCalledOnce();
+    expect(onReview).toHaveBeenCalledWith(c.id, "withdraw");
+  });
+
   it("calls onReview with the correct candidateId when multiple candidates are shown", async () => {
     const user = userEvent.setup();
     const c1 = makeCandidate({ title: "First candidate" });
@@ -237,6 +249,11 @@ describe("CandidatesPane — no review buttons when onReview is absent", () => {
   it("does not render Request-changes buttons when onReview is not provided", () => {
     render(<CandidatesPane candidates={[makeCandidate()]} />);
     expect(screen.queryByRole("button", { name: /request.changes/i })).not.toBeInTheDocument();
+  });
+
+  it("does not render Withdraw buttons when onReview is not provided", () => {
+    render(<CandidatesPane candidates={[makeCandidate()]} />);
+    expect(screen.queryByRole("button", { name: /withdraw/i })).not.toBeInTheDocument();
   });
 });
 
@@ -287,9 +304,9 @@ describe("CandidatesPane — aria-pressed on review buttons", () => {
 // ---------------------------------------------------------------------------
 //
 // When a candidate is in a terminal state (approved | rejected | withdrawn), the server will reject
-// any Approve / Reject / Request-changes action with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED. The UI
-// pre-empts the error by aria-disabling those three buttons and surfacing a Reopen button instead.
-// Non-terminal states (open | changes-requested) keep the original behaviour: three actions enabled,
+// any Approve / Reject / Request-changes / Withdraw action with 409
+// QI_REVIEW_TRANSITION_NOT_ALLOWED. The UI pre-empts the error by aria-disabling those four buttons
+// and surfacing a Reopen button instead. Non-terminal states keep the original behaviour: actions enabled,
 // no Reopen button.
 
 describe("CandidatesPane — terminal-state controls (Issue #282)", () => {
@@ -315,6 +332,16 @@ describe("CandidatesPane — terminal-state controls (Issue #282)", () => {
   );
 
   it.each(["approved", "rejected", "withdrawn"] as const)(
+    "aria-disables Withdraw when reviewState is '%s' (terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      const withdrawBtn = screen.getByRole("button", { name: /^withdraw$/i });
+      expect(withdrawBtn).toHaveAttribute("aria-disabled", "true");
+    },
+  );
+
+  it.each(["approved", "rejected", "withdrawn"] as const)(
     "renders a Reopen button when reviewState is '%s' (terminal)",
     (state) => {
       const c = makeCandidate({ reviewState: state });
@@ -332,7 +359,7 @@ describe("CandidatesPane — terminal-state controls (Issue #282)", () => {
     expect(onReview).toHaveBeenCalledWith(c.id, "reopen");
   });
 
-  it("Approve/Reject/Request-changes have an aria-describedby pointing to the final-note in terminal state", () => {
+  it("governed terminal actions have an aria-describedby pointing to the final-note", () => {
     const c = makeCandidate({ reviewState: "approved" });
     render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
     const approveBtn = screen.getByRole("button", { name: /^approve$/i });
@@ -359,6 +386,17 @@ describe("CandidatesPane — terminal-state controls (Issue #282)", () => {
       const c = makeCandidate({ reviewState: state });
       render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
       expect(screen.getByRole("button", { name: /^approve$/i })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+    },
+  );
+
+  it.each(["open", "changes-requested"] as const)(
+    "Withdraw is NOT aria-disabled when reviewState is '%s' (non-terminal)",
+    (state) => {
+      const c = makeCandidate({ reviewState: state });
+      render(<CandidatesPane candidates={[c]} onReview={vi.fn()} />);
+      expect(screen.getByRole("button", { name: /^withdraw$/i })).not.toHaveAttribute(
         "aria-disabled",
       );
     },

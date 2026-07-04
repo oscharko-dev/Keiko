@@ -498,13 +498,13 @@ Keiko sends this request shape to `${baseUrl}/rerank`:
 
 Environment variables override the file block:
 
-| Variable                                | Purpose                                |
-| --------------------------------------- | -------------------------------------- |
-| `KEIKO_RERANKER_MODEL_ID`               | Reranker model/deployment id.          |
-| `KEIKO_RERANKER_BASE_URL`               | LiteLLM-compatible `/v1` base URL.     |
-| `KEIKO_RERANKER_API_KEY`                | Reranker gateway token.                |
-| `KEIKO_RERANKER_API_KEY_HEADER_NAME`    | Credential header name.                |
-| `KEIKO_RERANKER_TIMEOUT_MS`             | Per-rerank request timeout.            |
+| Variable                             | Purpose                            |
+| ------------------------------------ | ---------------------------------- |
+| `KEIKO_RERANKER_MODEL_ID`            | Reranker model/deployment id.      |
+| `KEIKO_RERANKER_BASE_URL`            | LiteLLM-compatible `/v1` base URL. |
+| `KEIKO_RERANKER_API_KEY`             | Reranker gateway token.            |
+| `KEIKO_RERANKER_API_KEY_HEADER_NAME` | Credential header name.            |
+| `KEIKO_RERANKER_TIMEOUT_MS`          | Per-rerank request timeout.        |
 
 When the block is missing, the request times out, the endpoint returns an unsupported response, or
 the model endpoint is unavailable, grounded answers fall back to the existing retrieval order and

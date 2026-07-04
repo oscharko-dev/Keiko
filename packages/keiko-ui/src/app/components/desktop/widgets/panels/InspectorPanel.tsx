@@ -55,12 +55,21 @@ export function InspectorPanel(): ReactNode {
             <>
               <div className="rb-section-label">Configuration</div>
               <div className="rb-rows">
-                {cfgRows.map(([k, v]) => (
-                  <div className="rb-row" key={k}>
-                    <span className="rb-row-k">{k}</span>
-                    <span className="rb-row-v mono">{String(v).slice(0, 20) || "—"}</span>
-                  </div>
-                ))}
+                {cfgRows.map(([k, v]) => {
+                  // GEN-UI-VISUAL-004 — surface the full value on hover and to AT via title, and
+                  // append an ellipsis when the displayed value is truncated at 20 chars.
+                  const full = String(v);
+                  const truncated = full.length > 20;
+                  const display = truncated ? `${full.slice(0, 20)}…` : full;
+                  return (
+                    <div className="rb-row" key={k}>
+                      <span className="rb-row-k">{k}</span>
+                      <span className="rb-row-v mono" title={full}>
+                        {display || "—"}
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}

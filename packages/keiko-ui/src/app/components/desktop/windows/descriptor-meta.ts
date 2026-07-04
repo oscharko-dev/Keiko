@@ -2,7 +2,7 @@
 //
 // ADR-0029 extends the existing WindowsRegistry.ts with four declarative
 // metadata fields per object type: lifecycle, trustBoundary, authority,
-// persistence. To keep the existing 377-line registry file unchanged, the
+// persistence. To keep the registry file unchanged, the
 // extension lives in this sidecar table.
 //
 // The closed-set enums are owned by @oscharko-dev/keiko-contracts; the

@@ -388,7 +388,11 @@ export function retrieveMemoryContext(
   const filtered = applyFilters(deduped, request, resolved);
   const edgesByMemory = buildEdgesIndex(port, filtered.candidates);
   const semanticById = semanticScoresAboveFloor(request.semanticById, resolved.semanticMinScore);
-  const relevanceRequest = requestWithSemanticFloor(request, semanticById, resolved.semanticMinScore);
+  const relevanceRequest = requestWithSemanticFloor(
+    request,
+    semanticById,
+    resolved.semanticMinScore,
+  );
   const rankQuery = buildRankQuery(request, resolved, semanticById);
   const ranked = rankMemories(
     filtered.candidates,

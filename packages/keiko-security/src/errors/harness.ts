@@ -7,18 +7,13 @@ import {
   type HarnessCode,
   type HarnessFailure,
 } from "@oscharko-dev/keiko-contracts";
-import { redact } from "../redaction.js";
+import { RedactingError } from "./base.js";
 
 export { HARNESS_CODES };
 export type { HarnessCode };
 
-export abstract class HarnessError extends Error {
-  abstract readonly code: HarnessCode;
-
-  constructor(message: string, secrets: readonly string[] = []) {
-    super(redact(message, secrets));
-    this.name = new.target.name;
-  }
+export abstract class HarnessError extends RedactingError {
+  abstract override readonly code: HarnessCode;
 }
 
 // Raised when a configured safety limit is breached. Carries the precise category so

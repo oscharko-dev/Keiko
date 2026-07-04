@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Icons } from "./Icons";
+import { formatBytes } from "@/lib/format";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type {
   AttachmentRejectionReason,
@@ -75,12 +76,6 @@ export function buildAcceptString(model: ModelCapability | undefined): string {
 
 // ─── Formatters ────────────────────────────────────────────────────────────────
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${String(bytes)} B`;
-  if (bytes < 1_048_576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1_048_576).toFixed(1)} MiB`;
-}
-
 function truncateName(name: string, max = 32): string {
   if (name.length <= max) return name;
   const ext = name.lastIndexOf(".");
@@ -105,13 +100,15 @@ function AttachmentChip({ attachment, onRemove }: AttachmentChipProps): ReactNod
 
   return (
     <div className="attach-chip" role="listitem">
-      {attachment.kind === "image" && attachment.previewDataUrl !== undefined ? (
+      {attachment.kind === "image" && attachment.previewUrl !== undefined ? (
         // Thumbnail: capped at 40×40 via CSS. Decorative — the filename renders as
         // adjacent text, so alt="" (uiux-fix F040 C320: the previous alt={name} +
         // aria-hidden="true" combination was contradictory ARIA; AC #4 — no path).
+        // GEN-PERF-MEMORY-001 — previewUrl is an object URL (URL.createObjectURL), revoked by the
+        // owning hook on removal; still carries no filesystem path.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={attachment.previewDataUrl}
+          src={attachment.previewUrl}
           alt=""
           className="attach-chip-thumb"
           width={40}

@@ -120,6 +120,30 @@ describe("TerminalWidget", () => {
     });
   });
 
+  it("exposes the stdout/stderr output as keyboard-focusable named regions", async () => {
+    // GEN-UI-KEYBOARD-005 (test-plan #31) — the overflow:auto output <pre> must be a
+    // focusable region with an accessible name so keyboard-only users can scroll it.
+    vi.mocked(createTerminalExecution).mockResolvedValue({
+      executionId: "e1",
+      exitCode: 1,
+      stdout: "o".repeat(4000),
+      stderr: "e".repeat(4000),
+      durationMs: 12,
+      truncated: false,
+      timedOut: false,
+    });
+    render(<TerminalWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
+
+    const stdout = await screen.findByRole("region", { name: /command stdout/i });
+    expect(stdout.tagName).toBe("PRE");
+    expect(stdout).toHaveAttribute("tabindex", "0");
+    const stderr = screen.getByRole("region", { name: /command stderr/i });
+    expect(stderr.tagName).toBe("PRE");
+    expect(stderr).toHaveAttribute("tabindex", "0");
+  });
+
   it("surfaces a COMMAND_DENIED error with the code", async () => {
     vi.mocked(createTerminalExecution).mockRejectedValue(
       new ApiError("COMMAND_DENIED", "Command is not in the allowlist.", 403),
@@ -144,7 +168,9 @@ describe("TerminalWidget", () => {
   });
 
   it("appends SSE events to the recent events list in live order", async () => {
-    vi.mocked(createTerminalExecution).mockImplementation(() => new Promise<never>(() => undefined));
+    vi.mocked(createTerminalExecution).mockImplementation(
+      () => new Promise<never>(() => undefined),
+    );
     render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
     expect(FakeEventSource.last).toBeNull();
@@ -183,7 +209,9 @@ describe("TerminalWidget", () => {
   });
 
   it("closes the EventSource when unmounted", async () => {
-    vi.mocked(createTerminalExecution).mockImplementation(() => new Promise<never>(() => undefined));
+    vi.mocked(createTerminalExecution).mockImplementation(
+      () => new Promise<never>(() => undefined),
+    );
     const { unmount } = render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
     expect(FakeEventSource.last).toBeNull();

@@ -152,11 +152,18 @@ export {
 export type {
   QualityIntelligenceReviewerKind,
   QualityIntelligenceReviewState,
+  QualityIntelligenceReviewAction,
   QualityIntelligenceReviewRecord,
 } from "./reviewRecord.js";
 export {
   QUALITY_INTELLIGENCE_REVIEWER_KINDS,
   QUALITY_INTELLIGENCE_REVIEW_STATES,
+  QUALITY_INTELLIGENCE_REVIEW_ACTIONS,
+  QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES,
+  QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET,
+  isQualityIntelligenceReviewAction,
+  isTerminalReviewState,
+  reviewActionResultState,
 } from "./reviewRecord.js";
 
 // ─── Export bundle ─────────────────────────────────────────────────────────────
@@ -202,6 +209,7 @@ export {
 
 // ─── BFF wire shapes (Issue #280) ─────────────────────────────────────────────
 export type {
+  QualityIntelligenceRunStatus,
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunListResponse,
@@ -248,3 +256,4 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./bffWire.js";
+export { QUALITY_INTELLIGENCE_RUN_STATUSES } from "./bffWire.js";

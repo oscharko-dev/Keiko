@@ -27,6 +27,9 @@ import type {
 
 export const TOKEN_PER_WORD_RATIO = 1.3;
 
+// NOTE (GEN-DUP-SEMANTIC-002): intentionally NOT the canonical byte-based estimateTokens in
+// @oscharko-dev/keiko-contracts. This word-count estimate is inverted here by clipToTokenBudget's
+// exact 1.3 round-trip (token budget -> word budget), so it must stay a self-consistent local unit.
 export function estimateTokens(text: string): number {
   if (text === "") return 0;
   const words = text

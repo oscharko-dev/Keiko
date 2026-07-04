@@ -408,7 +408,9 @@ describe("workspaceIndex", () => {
 
     const fileTermCapped = buildWorkspaceIndexLexicalRecord(
       Array.from({ length: 40 }, (_, line) =>
-        Array.from({ length: 16 }, (_, index) => `Line${String(line)}Term${String(index)}`).join(" "),
+        Array.from({ length: 16 }, (_, index) => `Line${String(line)}Term${String(index)}`).join(
+          " ",
+        ),
       ).join("\n"),
     );
     expect(fileTermCapped.truncated).toBe(true);
@@ -488,8 +490,14 @@ describe("workspaceIndex", () => {
     });
 
     expect(snapshot.relativePaths).toEqual(["src/a.ts", "src/b.ts"]);
-    expect(snapshot.discovery.files.map((file) => file.scopePath)).toEqual(["src/a.ts", "src/c.ts"]);
-    expect(snapshot.discovery.directories.map((directory) => directory.scopePath)).toEqual(["", "src"]);
+    expect(snapshot.discovery.files.map((file) => file.scopePath)).toEqual([
+      "src/a.ts",
+      "src/c.ts",
+    ]);
+    expect(snapshot.discovery.directories.map((directory) => directory.scopePath)).toEqual([
+      "",
+      "src",
+    ]);
     expect(snapshot.records).toHaveLength(1);
     const record = snapshot.records[0];
     expect(record).toBeDefined();
@@ -526,7 +534,11 @@ describe("workspaceIndex", () => {
     tracked.writeFile("src/new.ts", "export const beta = 'needle';\n");
     expect(isWorkspaceIndexSnapshotFresh(snapshot, currentScope.workspace, tracked.fs)).toBe(false);
 
-    const inspection = inspectWorkspaceIndexDirectories(snapshot, currentScope.workspace, tracked.fs);
+    const inspection = inspectWorkspaceIndexDirectories(
+      snapshot,
+      currentScope.workspace,
+      tracked.fs,
+    );
     expect(inspection.valid).toBe(true);
     expect(inspection.deltas).toEqual(
       expect.arrayContaining([

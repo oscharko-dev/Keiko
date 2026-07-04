@@ -100,11 +100,7 @@ function isScalar(value: unknown): boolean {
 
 function isEmptyContainer(value: unknown): boolean {
   if (Array.isArray(value)) return value.length === 0;
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    Object.keys(value).length === 0
-  );
+  return value !== null && typeof value === "object" && Object.keys(value).length === 0;
 }
 
 function isScalarOrEmpty(value: unknown): boolean {

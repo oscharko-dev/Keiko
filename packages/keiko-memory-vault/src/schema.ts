@@ -44,7 +44,10 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 // re-embedding scans can detect compatible rows without touching sealed vector blobs.
 // v9 = vault-local secret table. Stores a sealed per-vault HMAC key used for tombstone body
 // suppression hashes, so the same deleted body does not produce a cross-vault dictionary key.
-export const MEMORY_VAULT_SCHEMA_VERSION = 9;
+// v10 = forget-tombstone semantic fingerprint (GEN-AI-MEMORY-003, RB-4). Adds a sealed embedding
+// vector to tombstones so a paraphrase of a forgotten body (different body_hash, similar cosine)
+// can be suppressed at capture without storing the deleted body text itself.
+export const MEMORY_VAULT_SCHEMA_VERSION = 10;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -191,6 +194,10 @@ CREATE TABLE IF NOT EXISTS memory_vault_secrets (
 ) STRICT;
 `;
 
+const V10_SQL = `
+ALTER TABLE memory_tombstones ADD COLUMN body_embedding BLOB;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 3, sql: V3_SQL },
@@ -200,6 +207,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 7, sql: V7_SQL },
   { version: 8, sql: V8_SQL },
   { version: 9, sql: V9_SQL },
+  { version: 10, sql: V10_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

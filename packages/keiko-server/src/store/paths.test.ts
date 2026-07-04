@@ -60,15 +60,15 @@ describe("resolveUiDbPath", () => {
   });
 
   it("rejects a relative explicit path", () => {
-    expectCode(() => resolveUiDbPath("keiko-ui.db", {}), "invalid_request");
+    expectCode(() => resolveUiDbPath("keiko-ui.db", {}), "INVALID_REQUEST");
   });
 
   it("rejects a relative KEIKO_UI_DATA_DIR value", () => {
-    expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "." }), "invalid_request");
+    expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "." }), "INVALID_REQUEST");
   });
 
   it("rejects an explicit database path inside the current workspace", () => {
-    expectCode(() => resolveUiDbPath(join(process.cwd(), "keiko-ui.db"), {}), "invalid_request");
+    expectCode(() => resolveUiDbPath(join(process.cwd(), "keiko-ui.db"), {}), "INVALID_REQUEST");
   });
 
   it("allows the gitignored workspace .keiko runtime root", () => {
@@ -83,17 +83,17 @@ describe("resolveUiDbPath", () => {
     const target = makeTempDir();
     const link = join(makeTempDir(), "data-link");
     symlinkSync(target, link, "dir");
-    expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: link }), "invalid_request");
+    expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: link }), "INVALID_REQUEST");
   });
 
   it("rejects an explicit path containing NUL bytes (CWE-22 parity with memory-vault)", () => {
-    expectCode(() => resolveUiDbPath("/tmp/legit\0/etc/passwd", {}), "invalid_request");
+    expectCode(() => resolveUiDbPath("/tmp/legit\0/etc/passwd", {}), "INVALID_REQUEST");
   });
 
   it("rejects a KEIKO_UI_DATA_DIR value containing NUL bytes (CWE-22 parity)", () => {
     expectCode(
       () => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "/tmp/legit\0/etc" }),
-      "invalid_request",
+      "INVALID_REQUEST",
     );
   });
 });
@@ -105,7 +105,7 @@ describe("assertUiDbOutsideProject", () => {
     expect(project.startsWith(process.cwd())).toBe(false);
     expectCode(() => {
       assertUiDbOutsideProject(dbPath, project);
-    }, "invalid_request");
+    }, "INVALID_REQUEST");
   });
 
   it("allows a selected project to contain its own .keiko runtime UI DB", () => {
@@ -121,7 +121,7 @@ describe("assertUiDbOutsideProject", () => {
     const project = join(dirname(dbPath), "repo");
     expectCode(() => {
       assertUiDbOutsideProject(dbPath, project);
-    }, "invalid_request");
+    }, "INVALID_REQUEST");
   });
 
   it("allows disjoint UI DB and project paths", () => {

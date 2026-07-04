@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 
 import { RelationshipImpactCard } from "./RelationshipImpactCard";
 import type { DependencyReport, ApiRelationship } from "../../../../relationships/api";
@@ -135,5 +136,20 @@ describe("RelationshipImpactCard", () => {
       <RelationshipImpactCard outgoing={null} incoming={null} onSelectRelationship={vi.fn()} />,
     );
     expect(screen.getAllByText(/Loading…/i).length).toBe(2);
+  });
+
+  it("passes axe on a populated impact state (GEN-UI-TEST-GAP-009)", async () => {
+    const { container } = render(
+      <RelationshipImpactCard
+        outgoing={report({
+          endpoints: ["origin", "cap-x", "cap-y"],
+          relationships: [rel("rel-a")],
+        })}
+        incoming={report({ endpoints: ["origin", "cap-z"] })}
+        onSelectRelationship={vi.fn()}
+      />,
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

@@ -2,7 +2,7 @@
 // The tarball gate still fails closed if any matching path survives; this script keeps the normal
 // prepack/prepublish flow from shipping tsc incremental state or test-only helpers.
 
-import { readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +26,10 @@ function isCompiledTestArtifact(name) {
   return /\.(test|spec)\.[cm]?[jt]sx?$/.test(name) || /\.(test|spec)\.d\.ts(?:\.map)?$/.test(name);
 }
 
+function isRuntimeSourceMap(name) {
+  return name.endsWith(".map") && !name.endsWith(".d.ts.map");
+}
+
 function pruneDistTree(repoRoot, distDir, removed) {
   const entries = readdirSync(distDir, { withFileTypes: true });
   for (const entry of entries) {
@@ -39,10 +43,43 @@ function pruneDistTree(repoRoot, distDir, removed) {
       pruneDistTree(repoRoot, path, removed);
       continue;
     }
-    if (entry.name.endsWith(".tsbuildinfo") || isCompiledTestArtifact(entry.name)) {
+    if (
+      entry.name.endsWith(".tsbuildinfo") ||
+      isCompiledTestArtifact(entry.name) ||
+      isRuntimeSourceMap(entry.name)
+    ) {
       rmSync(path, { force: true });
       removed.push(path);
     }
+  }
+}
+
+function bundledWorkspaceDirs(repoRoot) {
+  const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+  const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
+  const dirs = [];
+  for (const name of bundled) {
+    const shortName = name.replace(/^@oscharko-dev\//, "");
+    const dir = assertWithinRepo(repoRoot, join(repoRoot, "packages", shortName));
+    if (existsSync(dir)) dirs.push(dir);
+  }
+  return dirs;
+}
+
+function pruneBundledWorkspaceNodeModules(repoRoot, removed) {
+  for (const workspaceDir of bundledWorkspaceDirs(repoRoot)) {
+    const nested = assertWithinRepo(repoRoot, join(workspaceDir, "node_modules"));
+    if (!existsSync(nested)) continue;
+    rmSync(nested, { recursive: true, force: true });
+    removed.push(nested);
+  }
+}
+
+function pruneThirdPartyRuntimeSourceMaps(repoRoot, removed) {
+  for (const packageDir of [join(repoRoot, "node_modules", "pdfjs-dist")]) {
+    const resolved = assertWithinRepo(repoRoot, packageDir);
+    if (!existsSync(resolved)) continue;
+    pruneDistTree(repoRoot, resolved, removed);
   }
 }
 
@@ -59,6 +96,8 @@ export function prunePackageBuildArtifacts(repoRoot = defaultRepoRoot) {
     }
     pruneDistTree(repoRoot, distDir, removed);
   }
+  pruneThirdPartyRuntimeSourceMaps(repoRoot, removed);
+  pruneBundledWorkspaceNodeModules(repoRoot, removed);
   return removed;
 }
 
@@ -70,6 +109,8 @@ if (invokedDirectly) {
   if (removed.length === 0) {
     console.log("prune-package-build-artifacts: no build-only package artifacts present");
   } else {
-    console.log(`prune-package-build-artifacts: removed ${String(removed.length)} build-only artifacts`);
+    console.log(
+      `prune-package-build-artifacts: removed ${String(removed.length)} build-only artifacts`,
+    );
   }
 }

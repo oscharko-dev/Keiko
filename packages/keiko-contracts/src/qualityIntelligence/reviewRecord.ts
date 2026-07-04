@@ -28,6 +28,58 @@ export const QUALITY_INTELLIGENCE_REVIEW_STATES: readonly QualityIntelligenceRev
   "withdrawn",
 ] as const;
 
+export type QualityIntelligenceReviewAction =
+  "approve" | "reject" | "request-changes" | "reopen" | "withdraw";
+
+export const QUALITY_INTELLIGENCE_REVIEW_ACTIONS: readonly QualityIntelligenceReviewAction[] = [
+  "approve",
+  "reject",
+  "request-changes",
+  "reopen",
+  "withdraw",
+] as const;
+
+export function isQualityIntelligenceReviewAction(
+  value: unknown,
+): value is QualityIntelligenceReviewAction {
+  return (
+    typeof value === "string" &&
+    QUALITY_INTELLIGENCE_REVIEW_ACTIONS.includes(value as QualityIntelligenceReviewAction)
+  );
+}
+
+// Terminal review states + the action→state projection (GEN-DUP-SEMANTIC-008 /
+// GEN-DUP-SEMANTIC-009). The set of states from which a review no longer transitions, and the
+// canonical mapping from a reviewer action to the state it produces, were both re-implemented
+// inline across the server review runtime and the UI. Reuses the existing
+// `QualityIntelligenceReviewState` literal type as the projection codomain so a new review state
+// cannot be introduced here without the compiler noticing.
+export const QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES = [
+  "approved",
+  "rejected",
+  "withdrawn",
+] as const;
+
+export function isTerminalReviewState(state: string): boolean {
+  return (QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES as readonly string[]).includes(state);
+}
+
+export const QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET: Readonly<
+  Record<QualityIntelligenceReviewAction, QualityIntelligenceReviewState>
+> = {
+  approve: "approved",
+  reject: "rejected",
+  "request-changes": "changes-requested",
+  reopen: "open",
+  withdraw: "withdrawn",
+};
+
+export function reviewActionResultState(
+  action: QualityIntelligenceReviewAction,
+): QualityIntelligenceReviewState {
+  return QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET[action];
+}
+
 export interface QualityIntelligenceReviewRecord {
   readonly id: QualityIntelligenceReviewRecordId;
   readonly runId: QualityIntelligenceRunId;

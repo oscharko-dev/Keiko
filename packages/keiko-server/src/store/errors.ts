@@ -2,13 +2,13 @@
 // strings in `.message` — these surface to the BFF error envelope and must be safe to log/expose.
 
 export type UiStoreErrorCode =
-  | "invalid_path"
-  | "path_not_directory"
-  | "path_not_found"
-  | "project_exists"
-  | "not_found"
-  | "invalid_request"
-  | "internal";
+  | "INVALID_PATH"
+  | "PATH_NOT_DIRECTORY"
+  | "PATH_NOT_FOUND"
+  | "PROJECT_EXISTS"
+  | "NOT_FOUND"
+  | "INVALID_REQUEST"
+  | "INTERNAL";
 
 export class UiStoreError extends Error {
   public readonly code: UiStoreErrorCode;
@@ -23,25 +23,25 @@ export class UiStoreError extends Error {
 }
 
 export function invalidPath(message: string): UiStoreError {
-  return new UiStoreError("invalid_path", message, 400);
+  return new UiStoreError("INVALID_PATH", message, 400);
 }
 
 export function pathNotDirectory(): UiStoreError {
-  return new UiStoreError("path_not_directory", "The path is not a directory.", 400);
+  return new UiStoreError("PATH_NOT_DIRECTORY", "The path is not a directory.", 400);
 }
 
 export function pathNotFound(): UiStoreError {
-  return new UiStoreError("path_not_found", "The path does not exist.", 400);
+  return new UiStoreError("PATH_NOT_FOUND", "The path does not exist.", 400);
 }
 
 export function notFound(entity: string): UiStoreError {
-  return new UiStoreError("not_found", `${entity} not found.`, 404);
+  return new UiStoreError("NOT_FOUND", `${entity} not found.`, 404);
 }
 
 export function invalidRequest(message: string): UiStoreError {
-  return new UiStoreError("invalid_request", message, 400);
+  return new UiStoreError("INVALID_REQUEST", message, 400);
 }
 
 export function projectExists(): UiStoreError {
-  return new UiStoreError("project_exists", "Project already registered.", 409);
+  return new UiStoreError("PROJECT_EXISTS", "Project already registered.", 409);
 }

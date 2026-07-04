@@ -5,10 +5,12 @@ import { describe, expect, it } from "vitest";
 import { NotificationsPanel } from "./NotificationsPanel";
 
 describe("NotificationsPanel — list semantics (PA-01)", () => {
-  it("renders the notification container as a list", () => {
+  it("renders the notification container as a live log region (GEN-UI-A11Y-014)", () => {
+    // The container is now a role="log" (mirrors TerminalWidget) so future dynamic notifications
+    // are announced; its <li> children keep their listitem semantics for structure.
     render(<NotificationsPanel />);
-    const list = screen.getByRole("list");
-    expect(list).toBeInTheDocument();
+    const log = screen.getByRole("log");
+    expect(log).toBeInTheDocument();
   });
 
   it("renders each notification as a listitem", () => {
@@ -27,9 +29,21 @@ describe("NotificationsPanel — list semantics (PA-01)", () => {
 
   it("every item has visible title text accessible to screen readers", () => {
     render(<NotificationsPanel />);
-    const list = screen.getByRole("list");
-    expect(within(list).getByText("Agent finished build-board")).toBeInTheDocument();
-    expect(within(list).getByText("diff-review ready to merge")).toBeInTheDocument();
-    expect(within(list).getByText("lint-pass queued")).toBeInTheDocument();
+    const log = screen.getByRole("log");
+    expect(within(log).getByText("Agent finished build-board")).toBeInTheDocument();
+    expect(within(log).getByText("diff-review ready to merge")).toBeInTheDocument();
+    expect(within(log).getByText("lint-pass queued")).toBeInTheDocument();
+  });
+});
+
+describe("NotificationsPanel — polite log live region (GEN-UI-A11Y-014)", () => {
+  it("annotates the list as a named, polite log so future additions are announced", () => {
+    render(<NotificationsPanel />);
+    // role=log resolves to the accessible role "log"; the same element keeps its list semantics
+    // via the aria-label + role, and is reachable by its accessible name.
+    const log = screen.getByRole("log", { name: "Notifications" });
+    expect(log).toHaveAttribute("aria-live", "polite");
+    expect(log).toHaveAttribute("aria-relevant", "additions text");
+    expect(log).toHaveAttribute("aria-atomic", "false");
   });
 });

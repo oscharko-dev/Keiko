@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { RedactingError } from "@oscharko-dev/keiko-security/errors/base";
 import { FIXED_NOW_MS } from "./_support.js";
 import { buildConsolidationJob, ConsolidationJobError, transitionJob } from "./job.js";
 import type { ConsolidationJob, ConsolidationJobState, ConsolidationResult } from "./types.js";
@@ -96,5 +97,37 @@ describe("transitionJob - illegal transitions throw ConsolidationJobError", () =
       expect(error.to).toBe("running");
       expect(error.code).toBe("invalid-transition");
     }
+  });
+
+  // GEN-MAINT-COUPLING-003/004 guard: the class now extends the shared RedactingError base, so the
+  // redact-at-construction invariant applies uniformly across the memory error taxonomy. The
+  // composed message is enum-only (`ConsolidationJobError(code): from -> to`) so it is secret-free
+  // by construction; the redaction proof below shows the base's scrub is nonetheless live for the
+  // class by driving a secret through the shared constructor via a same-base test subclass.
+  describe("shared RedactingError base (COUPLING-003/004)", () => {
+    it("is an instanceof RedactingError and exposes .code / .name / from / to", () => {
+      const job: ConsolidationJob = { id: "j", state: "completed" };
+      try {
+        transitionJob(job, "running");
+        expect.fail("expected ConsolidationJobError to be thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(RedactingError);
+        const error = err as ConsolidationJobError;
+        expect(error.code).toBe("invalid-transition");
+        expect(error.name).toBe("ConsolidationJobError");
+        expect(error.from).toBe("completed");
+        expect(error.to).toBe("running");
+      }
+    });
+
+    it("redacts a known secret shape via the shared base constructor", () => {
+      // A secret shape redact() scrubs (OpenAI-style key). Split so the literal is never contiguous.
+      const secret = "sk-" + "test0ABC123DEF456GHI789";
+      const probe = new (class extends RedactingError {
+        readonly code = "invalid-transition";
+      })(`leaked ${secret} value`);
+      expect(probe.message).not.toContain(secret);
+      expect(probe.message).toContain("[REDACTED]");
+    });
   });
 });

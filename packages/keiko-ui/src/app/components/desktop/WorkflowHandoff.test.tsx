@@ -455,4 +455,40 @@ describe("useChatSession run-summary patching", () => {
       expect(second.result.current.messages[0]?.workflowStatus).toBe("completed");
     });
   });
+
+  // GEN-PERF-CHAT-011 — the run-summary poller is aborted on unmount. After the hook unmounts,
+  // no further fetchRunReport calls fire even though the run never reached a terminal state.
+  // Pre-fix (fire-and-forget module-level loop with the mounted-check only at the setState edge)
+  // the loop kept issuing fetches for up to 120 attempts after unmount; this pins that it stops.
+  it("stops fetchRunReport after the owning hook unmounts (poll aborted)", async () => {
+    vi.useFakeTimers();
+    try {
+      // Never-terminal run report: keeps the poll alive so only the abort can stop it.
+      const report = vi
+        .spyOn(api, "fetchRunReport")
+        .mockResolvedValue({ report: { status: "running" } });
+
+      vi.spyOn(api, "fetchChatMessages").mockResolvedValue({
+        messages: [systemRunSummaryMessage({ id: "m-abort", runId: "run-abort" })],
+      });
+
+      const view = renderHook(() => useChatSession());
+
+      // Flush the boot + first poll fetch. runOnlyPendingTimersAsync repeatedly drains queued
+      // microtasks/timers so the async bootstrap and the first fetchRunReport settle.
+      await vi.waitFor(() => {
+        expect(report.mock.calls.length).toBeGreaterThanOrEqual(1);
+      });
+      const callsBeforeUnmount = report.mock.calls.length;
+
+      // Unmount aborts the run-summary controller — the pending sleep rejects and the loop parks.
+      view.unmount();
+
+      // Advance well past several poll intervals. No further fetches must be issued.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(report.mock.calls.length).toBe(callsBeforeUnmount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

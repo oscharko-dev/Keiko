@@ -10,22 +10,26 @@
 // only real `<runId>.json` files and never follows a symlink (lstat skip).
 
 import {
-  chmodSync,
   closeSync,
+  fsyncSync,
   readdirSync,
   readFileSync,
   openSync,
   lstatSync,
-  renameSync,
   rmSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { replaceViaDurableTempFile } from "./durable-write.js";
 import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
-import { existingOwnedDirectory, prepareOwnedDirectory, removeOwnedRunDirectory } from "./fs-safety.js";
+import {
+  existingOwnedDirectory,
+  prepareOwnedDirectory,
+  removeOwnedRunDirectory,
+} from "./fs-safety.js";
 import { assertValidRunId } from "./runid.js";
 
 const MANIFEST_SUFFIX = ".json";
@@ -147,10 +151,22 @@ function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
   }
 }
 
-function listManifestRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
+function listManifestRunIds(
+  realBase: string,
+  fs: WorkspaceFs,
+  runIdPrefix?: string,
+): readonly string[] {
   const runIds: string[] = [];
   try {
     for (const entry of readdirSync(realBase, { withFileTypes: true })) {
+      const runId = entry.name.slice(0, entry.name.length - MANIFEST_SUFFIX.length);
+      // Filter by the caller's runId prefix BEFORE the per-file stat so an unfiltered directory of
+      // unrelated manifests never pays the isSingleLinkRegularFile stat (GEN-PERF-CHAT-005). This is
+      // safe: only names matching the requested prefix are ever statted or later loaded, and the
+      // single-link containment guard still runs on every name we actually surface.
+      if (runIdPrefix !== undefined && !runId.startsWith(runIdPrefix)) {
+        continue;
+      }
       // Never follow a symlink: only count entries the ledger itself wrote as regular files.
       if (
         entry.isSymbolicLink() ||
@@ -160,7 +176,7 @@ function listManifestRunIds(realBase: string, fs: WorkspaceFs): readonly string[
       ) {
         continue;
       }
-      runIds.push(entry.name.slice(0, entry.name.length - MANIFEST_SUFFIX.length));
+      runIds.push(runId);
     }
   } catch (error) {
     throw new EvidenceReadError(
@@ -175,16 +191,9 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
   try {
     // O_EXCL ("wx"): refuse to open through a pre-planted symlink at the temp path, closing the
     // temp-vs-final containment asymmetry (the final target is realpath-contained, the temp was
-    // not). A randomUUID suffix never collides, so "wx" never spuriously fails.
-    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
-    // Best-effort 0o600 on the temp file (the rename preserves the mode). Failure is non-fatal:
-    // POSIX-default umask handles the common case; not all filesystems support chmod (e.g. Windows).
-    try {
-      chmodSync(temp, 0o600);
-    } catch {
-      // ignore; not all filesystems support chmod (e.g. Windows)
-    }
-    renameSync(temp, target);
+    // not). The helper fsyncs the temp file before rename and the containing directory after
+    // rename so the rename discipline is durable across power loss.
+    replaceViaDurableTempFile(target, temp, json);
   } catch (error) {
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
@@ -226,9 +235,9 @@ function putManifest(
   return target;
 }
 
-function listManifests(baseDir: string, fs: WorkspaceFs): readonly string[] {
+function listManifests(baseDir: string, fs: WorkspaceFs, runIdPrefix?: string): readonly string[] {
   const realBase = existingBaseDir(baseDir, fs);
-  return realBase === undefined ? [] : listManifestRunIds(realBase, fs);
+  return realBase === undefined ? [] : listManifestRunIds(realBase, fs, runIdPrefix);
 }
 
 function getManifest(baseDir: string, fs: WorkspaceFs, runId: string): string | undefined {
@@ -260,6 +269,39 @@ function sleepSync(ms: number): void {
   Atomics.wait(waitView, 0, 0, ms);
 }
 
+// GEN-PERF-PERSISTENCE-007 — the `EvidenceStore.update` contract is synchronous (many callers rely
+// on the sync signature), so the wait between poll attempts cannot yield the event loop. The fix is
+// therefore to make the busy-wait UNNECESSARY in the common case: record the holder's PID in the
+// lock file and reclaim it IMMEDIATELY when that PID is no longer alive (a crashed writer, or a
+// test-created lock with no live owner) instead of blocking up to MANIFEST_LOCK_TIMEOUT_MS on the
+// mtime-staleness fallback. A lock held by a LIVE foreign process is still honoured (cross-process
+// serialisation is preserved) — only dead/ownerless locks are reclaimed without waiting, so the
+// event loop is not blocked on locks that will never be released on their own.
+function readLockOwnerPid(lockPath: string): number | undefined {
+  try {
+    const raw = readFileSync(lockPath, "utf8").trim();
+    const pid = Number.parseInt(raw, 10);
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// True when no live process owns the lock: the recorded PID is absent/unparseable, or the process is
+// gone (kill(pid, 0) throws ESRCH). A live owner (kill succeeds, or EPERM = alive but not ours) keeps
+// the lock. Never treats our OWN pid as a live foreign holder — a same-process leftover is reclaimable.
+function lockOwnerIsDead(lockPath: string): boolean {
+  const pid = readLockOwnerPid(lockPath);
+  if (pid === undefined) return true;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return errorCode(error) !== "EPERM";
+  }
+}
+
 function acquireManifestLock(realBase: string, runId: string): () => void {
   assertValidRunId(runId);
   assertLockFilenameFits(runId);
@@ -278,6 +320,7 @@ function acquireManifestLock(realBase: string, runId: string): () => void {
     }
   }
 
+  writeLockOwnerPid(fd);
   return (): void => {
     try {
       closeSync(fd);
@@ -287,11 +330,21 @@ function acquireManifestLock(realBase: string, runId: string): () => void {
   };
 }
 
+function writeLockOwnerPid(fd: number): void {
+  try {
+    writeSync(fd, `${String(process.pid)}\n`);
+    fsyncSync(fd);
+  } catch {
+    // Best-effort ownership stamp: if the write fails the lock still works via mtime staleness.
+  }
+}
+
 function retryManifestLock(error: unknown, lockPath: string, deadline: number): boolean {
   if (errorCode(error) !== "EEXIST") {
     return false;
   }
-  if (lockIsStale(lockPath)) {
+  // Reclaim IMMEDIATELY (no wait) when the recorded owner is dead/ownerless or the mtime is stale.
+  if (lockOwnerIsDead(lockPath) || lockIsStale(lockPath)) {
     rmSync(lockPath, { force: true });
     return true;
   }
@@ -371,17 +424,27 @@ function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
   rmSync(target, { force: true });
 }
 
+// The node adapter surfaces one capability beyond the EvidenceStore contract: a prefix-scoped list
+// that filters directory entries by runId prefix BEFORE the per-file containment stat, so callers
+// with a known prefix (e.g. per-chat compaction records) do not stat/sort every unrelated manifest
+// in a shared, retention-unbounded evidence directory. Callers feature-detect this optional method.
+export interface NodeEvidenceStore extends EvidenceStore {
+  readonly listByPrefix: (runIdPrefix: string) => readonly string[];
+}
+
 export function createNodeEvidenceStore(
   baseDir: string,
   fs: WorkspaceFs = nodeWorkspaceFs,
   randomSuffix: () => string = randomUUID,
-): EvidenceStore {
+): NodeEvidenceStore {
   return {
     put: (runId: string, json: string): string =>
       putManifest(baseDir, fs, randomSuffix, runId, json),
     update: (runId: string, update: (existingJson: string | undefined) => string): string =>
       updateManifest(baseDir, fs, randomSuffix, runId, update),
     list: (): readonly string[] => listManifests(baseDir, fs),
+    listByPrefix: (runIdPrefix: string): readonly string[] =>
+      listManifests(baseDir, fs, runIdPrefix),
     get: (runId: string): string | undefined => getManifest(baseDir, fs, runId),
     location: (runId: string): string => reportLocation(baseDir, fs, runId),
     delete: (runId: string): void => {

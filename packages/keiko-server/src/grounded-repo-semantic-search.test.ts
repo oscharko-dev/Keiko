@@ -15,7 +15,10 @@ import type {
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { configuredRepoSemanticSearchProviderFor } from "./grounded-repo-semantic-search.js";
+import {
+  configuredRepoSemanticSearchProviderFor,
+  localizeMatchLine,
+} from "./grounded-repo-semantic-search.js";
 
 const ROOT = "/repo";
 const EMBEDDING_MODEL = "text-embedding-3-small";
@@ -31,7 +34,10 @@ function absolutePath(rel: string): string {
   return `${ROOT}/${rel}`.replace(/\/+/gu, "/");
 }
 
-function childEntries(files: Readonly<Record<string, string>>, dirAbs: string): readonly WorkspaceDirEntry[] {
+function childEntries(
+  files: Readonly<Record<string, string>>,
+  dirAbs: string,
+): readonly WorkspaceDirEntry[] {
   const prefix = dirAbs === ROOT ? `${ROOT}/` : `${dirAbs}/`;
   const dirs = new Set<string>();
   const leafs = new Set<string>();
@@ -48,7 +54,12 @@ function childEntries(files: Readonly<Record<string, string>>, dirAbs: string): 
   }
   return [
     ...[...dirs].map((name) => ({ name, isDirectory: true, isFile: false, isSymbolicLink: false })),
-    ...[...leafs].map((name) => ({ name, isDirectory: false, isFile: true, isSymbolicLink: false })),
+    ...[...leafs].map((name) => ({
+      name,
+      isDirectory: false,
+      isFile: true,
+      isSymbolicLink: false,
+    })),
   ];
 }
 
@@ -188,6 +199,29 @@ async function searchMissingCandidate(
   });
 }
 
+describe("localizeMatchLine (GEN-AI-GROUNDING-006, RB-4)", () => {
+  it("returns the 1-based line with the most distinct query-term overlap", () => {
+    const src =
+      "line one has nothing\nsecond line is empty of terms\n" +
+      "export function renewSession() { rotate(); }\ntrailing line";
+    expect(localizeMatchLine(src, ["session", "renewsession", "rotate"])).toBe(3);
+  });
+
+  it("prefers the line matching the MOST distinct terms", () => {
+    const src = "alpha session\nbeta\nalpha session rotate token\ngamma";
+    expect(localizeMatchLine(src, ["session", "rotate", "token"])).toBe(3);
+  });
+
+  it("falls back to line 1 when no line overlaps a query term", () => {
+    expect(localizeMatchLine("alpha\nbeta\ngamma", ["nonexistentterm"])).toBe(1);
+  });
+
+  it("falls back to line 1 for empty query terms or empty source", () => {
+    expect(localizeMatchLine("alpha\nbeta", [])).toBe(1);
+    expect(localizeMatchLine("", ["alpha"])).toBe(1);
+  });
+});
+
 describe("configuredRepoSemanticSearchProviderFor", () => {
   it("returns undefined when no embedding-capable provider is configured", () => {
     const deps = depsWith(config(false), () =>
@@ -199,18 +233,22 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
   });
 
   it("uses configured embedding credentials and ranks scoped candidates by cosine similarity", async () => {
-    const embeddingRequest = vi.fn((request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
-      Promise.resolve({
-        ok: true,
-        value: { vector: vectorFor(request.input), modelId: request.modelId },
-      }),
+    const embeddingRequest = vi.fn(
+      (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({
+          ok: true,
+          value: { vector: vectorFor(request.input), modelId: request.modelId },
+        }),
     );
     const deps = depsWith(config(true), embeddingRequest);
     const fs = testFs({
       "src/auth.ts": "export function renewSession() {\n  return refresh token rotation;\n}\n",
       "src/billing.ts": "export function reconcile() {\n  return invoice ledger totals;\n}\n",
     });
-    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, { fs, maxCandidates: 8 });
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs,
+      maxCandidates: 8,
+    });
 
     expect(provider).toBeDefined();
     if (provider === undefined) throw new Error("expected semantic provider");

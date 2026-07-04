@@ -89,10 +89,11 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // The repository root the inventory is listed for. Updated by refresh(root); reused by post-mutation
   // refreshes so they re-list the same repository without the caller re-supplying it.
   const rootRef = useRef<string | null>(null);
+  const operationSeqRef = useRef(0);
 
   // Re-reads the active binding plus (when a repository root is known) the inventory, committing both
   // in one settle. An inventory failure never hides the active binding — the list degrades to empty.
-  const reload = useCallback(async (): Promise<void> => {
+  const reload = useCallback(async (operationSeq: number): Promise<void> => {
     const root = rootRef.current;
     const [active, instances] = await Promise.all([
       getActiveTaskWorkspace(),
@@ -100,16 +101,19 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
         ? Promise.resolve<readonly WorkspaceInstance[]>([])
         : listTaskWorkspaces(root).catch(() => [] as readonly WorkspaceInstance[]),
     ]);
+    if (operationSeqRef.current !== operationSeq) return;
     dispatch({ kind: "settle", instances, active });
   }, []);
 
   const refresh = useCallback(
     async (root?: string): Promise<void> => {
       if (root !== undefined) rootRef.current = root;
+      const operationSeq = (operationSeqRef.current += 1);
       dispatch({ kind: "load-start" });
       try {
-        await reload();
+        await reload(operationSeq);
       } catch (error) {
+        if (operationSeqRef.current !== operationSeq) return;
         dispatch({ kind: "fail", error: messageFor(error) });
       }
     },
@@ -120,11 +124,14 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // atomically. Surfaces keep the previous active root until reload lands (no mixed transient state).
   const mutate = useCallback(
     async (action: () => Promise<unknown>): Promise<void> => {
+      const operationSeq = (operationSeqRef.current += 1);
       dispatch({ kind: "mutate-start" });
       try {
         await action();
-        await reload();
+        if (operationSeqRef.current !== operationSeq) return;
+        await reload(operationSeq);
       } catch (error) {
+        if (operationSeqRef.current !== operationSeq) return;
         dispatch({ kind: "fail", error: messageFor(error) });
       }
     },

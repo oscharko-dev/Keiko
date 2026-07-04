@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 const DEFAULT_STALE_LOCK_MS = 10 * 60_000;
@@ -48,6 +56,12 @@ function parseRecord(value: string): UpdateSessionLockRecord | undefined {
     ) {
       return undefined;
     }
+    if (!Number.isInteger(parsed.pid) || parsed.pid <= 0) {
+      return undefined;
+    }
+    if (!Number.isFinite(Date.parse(parsed.startedAt))) {
+      return undefined;
+    }
     return parsed as unknown as UpdateSessionLockRecord;
   } catch {
     return undefined;
@@ -74,6 +88,24 @@ function readLock(lockPath: string): UpdateSessionLockRecord | undefined {
   return parseRecord(readFileSync(lockPath, "utf8"));
 }
 
+type LockInspection =
+  | { readonly status: "absent" }
+  | { readonly status: "valid"; readonly record: UpdateSessionLockRecord }
+  | { readonly status: "corrupt" }
+  | { readonly status: "unreadable" };
+
+function inspectLock(lockPath: string): LockInspection {
+  if (!existsSync(lockPath)) {
+    return { status: "absent" };
+  }
+  try {
+    const record = parseRecord(readFileSync(lockPath, "utf8"));
+    return record === undefined ? { status: "corrupt" } : { status: "valid", record };
+  } catch {
+    return { status: "unreadable" };
+  }
+}
+
 function ensurePrivateParent(lockPath: string): void {
   const parent = dirname(lockPath);
   mkdirSync(parent, { recursive: true, mode: LOCK_DIR_MODE });
@@ -94,14 +126,44 @@ function writeLock(lockPath: string, record: UpdateSessionLockRecord): void {
   }
 }
 
-function reclaimable(
-  record: UpdateSessionLockRecord | undefined,
+function reclaimableValidRecord(
+  record: UpdateSessionLockRecord,
   options: ResolvedFileUpdateSessionLockOptions,
 ): boolean {
-  if (record === undefined) return false;
+  if (!options.pidAlive(record.pid)) return true;
   const ageMs = lockAgeMs(record, options.now);
   if (ageMs === undefined || ageMs < options.staleMs) return false;
-  return !options.pidAlive(record.pid) || ageMs >= options.staleMs * 2;
+  return ageMs >= options.staleMs * 2;
+}
+
+function reclaimable(
+  inspection: LockInspection,
+  options: ResolvedFileUpdateSessionLockOptions,
+): boolean {
+  if (inspection.status === "absent" || inspection.status === "corrupt") return true;
+  if (inspection.status === "unreadable") return false;
+  return reclaimableValidRecord(inspection.record, options);
+}
+
+function quarantineCorruptLock(lockPath: string, now: () => number): void {
+  const stamp = new Date(now()).toISOString().replace(/[:.]/g, "-");
+  try {
+    renameSync(lockPath, `${lockPath}.corrupt.${stamp}`);
+  } catch {
+    unlinkSync(lockPath);
+  }
+}
+
+function removeReclaimableLock(
+  lockPath: string,
+  inspection: LockInspection,
+  now: () => number,
+): void {
+  if (inspection.status === "corrupt") {
+    quarantineCorruptLock(lockPath, now);
+    return;
+  }
+  unlinkSync(lockPath);
 }
 
 export function createFileUpdateSessionLock(
@@ -114,15 +176,21 @@ export function createFileUpdateSessionLock(
     pidAlive: inputOptions.pidAlive ?? defaultPidAlive,
   };
   return {
-    isLocked: (): boolean => existsSync(lockPath),
+    isLocked: (): boolean => {
+      const inspection = inspectLock(lockPath);
+      if (inspection.status === "absent" || inspection.status === "corrupt") return false;
+      if (inspection.status === "unreadable") return true;
+      return !reclaimableValidRecord(inspection.record, options);
+    },
     acquire: (record): boolean => {
       try {
         writeLock(lockPath, record);
         return true;
       } catch {
         try {
-          if (!reclaimable(readLock(lockPath), options)) return false;
-          unlinkSync(lockPath);
+          const inspection = inspectLock(lockPath);
+          if (!reclaimable(inspection, options)) return false;
+          removeReclaimableLock(lockPath, inspection, options.now);
           writeLock(lockPath, record);
           return true;
         } catch {

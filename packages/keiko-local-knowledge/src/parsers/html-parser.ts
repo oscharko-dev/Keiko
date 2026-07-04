@@ -370,7 +370,10 @@ function appendTableRows(state: ScanState, tableHtml: string): void {
     rows.length > 1 && first.some((cell) => cell.header || /[A-Za-z_]/u.test(cell.text));
   const maxCells = rows.reduce((max, row) => Math.max(max, row.length), 0);
   const headers = headerIsSchema
-    ? normalizeHeaders(first.map((cell) => cell.text), maxCells)
+    ? normalizeHeaders(
+        first.map((cell) => cell.text),
+        maxCells,
+      )
     : normalizeHeaders([], maxCells);
   const dataRows = headerIsSchema ? rows.slice(1) : rows;
   for (const row of dataRows) {

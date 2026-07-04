@@ -64,12 +64,7 @@ export interface UpdateInstallMode {
 }
 
 export type UpdateSessionPhase =
-  | "preparing"
-  | "running"
-  | "restart-required"
-  | "succeeded"
-  | "failed"
-  | "cancelled";
+  "preparing" | "running" | "restart-required" | "succeeded" | "failed" | "cancelled";
 
 export const UPDATE_SESSION_PHASES: readonly UpdateSessionPhase[] = Object.freeze([
   "preparing",
@@ -159,8 +154,7 @@ export interface UpdateSessionStartRequestParseFail {
 }
 
 export type UpdateSessionStartRequestParse =
-  | UpdateSessionStartRequestParseOk
-  | UpdateSessionStartRequestParseFail;
+  UpdateSessionStartRequestParseOk | UpdateSessionStartRequestParseFail;
 
 export interface UpdateRestartVerificationRequestParseOk {
   readonly ok: true;
@@ -173,8 +167,7 @@ export interface UpdateRestartVerificationRequestParseFail {
 }
 
 export type UpdateRestartVerificationRequestParse =
-  | UpdateRestartVerificationRequestParseOk
-  | UpdateRestartVerificationRequestParseFail;
+  UpdateRestartVerificationRequestParseOk | UpdateRestartVerificationRequestParseFail;
 
 const TARGET_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
@@ -203,9 +196,7 @@ function validRequestId(value: unknown): value is string {
   );
 }
 
-export function parseUpdateSessionStartRequest(
-  input: unknown,
-): UpdateSessionStartRequestParse {
+export function parseUpdateSessionStartRequest(input: unknown): UpdateSessionStartRequestParse {
   const errors: string[] = [];
   if (!isRecord(input)) {
     return { ok: false, errors: ["request must be an object"] };

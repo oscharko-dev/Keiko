@@ -3,10 +3,7 @@ import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import type { HarnessShaperInput, ToolCallResult } from "@oscharko-dev/keiko-harness";
 import { createServerHarnessToolShaper, serverHarnessToolShaper } from "./harness-tool-shaper.js";
 
-function inputFor(
-  result: ToolCallResult,
-  toolName = "run_command",
-): HarnessShaperInput {
+function inputFor(result: ToolCallResult, toolName = "run_command"): HarnessShaperInput {
   return {
     result,
     toolName,

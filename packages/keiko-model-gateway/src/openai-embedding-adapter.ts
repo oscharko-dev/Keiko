@@ -9,7 +9,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import type { OutboundHttpEgressConfig } from "./types.js";
+import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 export interface OpenAIEmbeddingRequest {
   readonly endpoint: string;
@@ -22,6 +22,11 @@ export interface OpenAIEmbeddingRequest {
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  // GEN-AI-GATEWAY-002 (RB-4): Azure deployment routing. When "azure-openai-deployment" the request
+  // is dispatched to `{endpoint}/openai/deployments/{modelId}/embeddings?api-version=...` instead of
+  // being silently misrouted to the OpenAI-compatible `{endpoint}/embeddings` path.
+  readonly endpointStyle?: ProviderEndpointStyle | undefined;
+  readonly apiVersion?: string | undefined;
 }
 
 export interface OpenAIEmbeddingSuccess {
@@ -47,6 +52,9 @@ export interface OpenAIEmbeddingBatchRequest {
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  // GEN-AI-GATEWAY-002 (RB-4): Azure deployment routing (see OpenAIEmbeddingRequest).
+  readonly endpointStyle?: ProviderEndpointStyle | undefined;
+  readonly apiVersion?: string | undefined;
 }
 
 export type OpenAIEmbeddingBatchOutcome =
@@ -146,8 +154,18 @@ function parseEmbeddingShape(payload: unknown): ParsedEmbedding | null {
   };
 }
 
-function joinUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+function joinUrl(request: {
+  readonly endpoint: string;
+  readonly modelId: string;
+  readonly endpointStyle?: ProviderEndpointStyle | undefined;
+  readonly apiVersion?: string | undefined;
+}): string {
+  const trimmed = request.endpoint.endsWith("/") ? request.endpoint.slice(0, -1) : request.endpoint;
+  if (request.endpointStyle === "azure-openai-deployment") {
+    return `${trimmed}/openai/deployments/${encodeURIComponent(
+      request.modelId,
+    )}/embeddings?api-version=${encodeURIComponent(request.apiVersion ?? "")}`;
+  }
   return `${trimmed}/embeddings`;
 }
 
@@ -214,7 +232,7 @@ function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
-    url: joinUrl(request.endpoint),
+    url: joinUrl(request),
     headers,
     body,
     signal,
@@ -308,7 +326,7 @@ function buildBatchRequest(request: OpenAIEmbeddingBatchRequest): BuiltRequest {
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
-    url: joinUrl(request.endpoint),
+    url: joinUrl(request),
     headers,
     body,
     signal,

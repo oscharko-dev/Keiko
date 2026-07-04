@@ -82,6 +82,14 @@ describe("effectiveStrength", () => {
     const s = stats([["m", { lastAccessedAt: NOW, accessCount: 1000 }]]);
     expect(effectiveStrength(r, s.get("m" as MemoryId), NOW)).toBe(1);
   });
+
+  it("collapses a non-finite (NaN) confidence to 0 (GEN-DUP-SEMANTIC-003)", () => {
+    // The strength clamp is now the canonical contracts clampUnit, which maps NaN -> 0. A record whose
+    // provenance.confidence is NaN (a corrupt row) therefore yields strength 0 rather than propagating
+    // a NaN that would poison every downstream threshold comparison in the maintenance planner.
+    const r = makeRecord({ id: "m", confidence: Number.NaN, createdAt: NOW });
+    expect(effectiveStrength(r, undefined, NOW)).toBe(0);
+  });
 });
 
 describe("effectiveStrength — outcome-gated utility factor (O-V1)", () => {

@@ -85,8 +85,19 @@ function buildAdapter(
   };
 }
 
+// Strip trailing "/" characters with a single linear scan. The equivalent regex `/\/+$/` is retried
+// at every index by `String.replace`, which is O(n^2) on adversarial input such as `"/".repeat(n)+"x"`
+// (CodeQL js/polynomial-redos). A charCode loop is O(n) and behaviourally identical for URL trimming.
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47 /* "/" */) {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
 function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/u, "");
+  const normalized = stripTrailingSlashes(baseUrl.trim());
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
@@ -461,31 +472,49 @@ function gatherScopeEmbeddings(
 }
 
 export interface NoveltyInsertResult {
-  // The inserted record, or null when the candidate was merged into an existing near-duplicate.
+  // The inserted record, or null when the candidate was merged into an existing near-duplicate, OR
+  // suppressed as a semantic paraphrase of a forgotten memory (GEN-AI-MEMORY-003, RB-4).
   readonly inserted: MemoryRecord | null;
   // The canonical memory the candidate merged into (reinforced via recordAccess), or null.
   readonly mergedInto: MemoryId | null;
 }
 
+// GEN-AI-MEMORY-003 (RB-4): forgetting a memory must suppress a paraphrased re-capture, not only an
+// exact-body-hash match. `isSuppressedByForgetTombstone` (memory-suppression.ts) already catches the
+// exact-hash case before this gate runs; this catches a candidate whose embedding is cosine-similar
+// to a FORGOTTEN memory's embedding even though its normalized body (and hence body_hash) differs.
+// Pure: true iff some forget-tombstone vector in scope is at/above threshold. A null candidate (no
+// embedder configured) never suppresses — graceful degradation matches the rest of this module.
+function isSemanticForgetParaphrase(
+  vault: MemoryVaultStore,
+  scope: MemoryRecord["scope"],
+  candidate: MemoryEmbeddingInput | null,
+  threshold: number,
+): boolean {
+  if (candidate === null) return false;
+  const forgottenVectors = vault.forgetTombstoneVectors(scope);
+  return forgottenVectors.some((vector) => cosineSimilarity(candidate.vector, vector) >= threshold);
+}
+
 // Insert a freshly-built salience capture record UNLESS it is a semantic near-duplicate of an
-// existing in-scope memory, in which case reinforce the canonical (recordAccess) and skip the
-// duplicate. Embeds the body exactly ONCE (reused for both the novelty check and storage), so this
-// replaces — not adds to — the prior best-effort embed-on-capture call. Never throws past the
-// vault's own guards; a null embedding degrades to a plain insert.
+// existing in-scope memory (reinforce the canonical instead) or a semantic paraphrase of a memory
+// the user already forgot (suppress it entirely — RB-4). Embeds the body exactly ONCE (reused for
+// the forget check, the novelty check, and storage), so this replaces — not adds to — the prior
+// best-effort embed-on-capture call. Never throws past the vault's own guards; a null embedding
+// degrades to a plain insert.
 export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
 ): Promise<NoveltyInsertResult> {
   const embedding = await embedMemoryText(deps, record.body, "document");
+  const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
+  const dedupThreshold = calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD;
+  if (isSemanticForgetParaphrase(vault, record.scope, embedding, dedupThreshold)) {
+    return { inserted: null, mergedInto: null };
+  }
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
-  const calibration =
-    embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
-  const duplicateOf = findSemanticDuplicate(
-    embedding,
-    neighbors,
-    calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD,
-  );
+  const duplicateOf = findSemanticDuplicate(embedding, neighbors, dedupThreshold);
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
     return { inserted: null, mergedInto: duplicateOf };

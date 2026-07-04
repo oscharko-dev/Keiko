@@ -119,6 +119,22 @@ function isAutoApplicableConsolidationEdge(edge: MemoryEdge): boolean {
   );
 }
 
+function isConsolidationEdge(edge: MemoryEdge): boolean {
+  return edge.provenanceSummary?.startsWith("consolidation:") === true;
+}
+
+function alreadyAppliedConsolidationEdge(vault: MemoryVaultStore, edge: MemoryEdge): boolean {
+  if (!isConsolidationEdge(edge)) return false;
+  return vault
+    .listOutgoingEdges(edge.fromMemoryId)
+    .some(
+      (existing) =>
+        existing.toMemoryId === edge.toMemoryId &&
+        existing.kind === edge.kind &&
+        isConsolidationEdge(existing),
+    );
+}
+
 function applyEdges(
   vault: MemoryVaultStore,
   edges: ReturnType<typeof runConsolidation>["edgesProposed"],
@@ -126,6 +142,7 @@ function applyEdges(
   let created = 0;
   for (const edge of edges) {
     if (!isAutoApplicableConsolidationEdge(edge)) continue;
+    if (alreadyAppliedConsolidationEdge(vault, edge)) continue;
     vault.insertEdge(edge);
     created += 1;
   }
@@ -363,8 +380,14 @@ export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): Ro
   try {
     const counts = runMemoryMaintenance(vault, deps.evidenceStore);
     return { status: 200, body: counts };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Memory maintenance failed.";
-    return { status: 500, body: errorBody("MEMORY_MAINTENANCE_FAILED", message) };
+  } catch {
+    // COUPLING-004: never forward the raw `error.message` into the response envelope — a vault
+    // fault can embed a filesystem path or SQL fragment. Match memoryMutationErrorBody() /
+    // governanceErrorBody(): a code-keyed, fixed string that carries no dynamic detail across the
+    // trust boundary. The concrete cause is observable server-side via the thrown error, not here.
+    return {
+      status: 500,
+      body: errorBody("MEMORY_MAINTENANCE_FAILED", "Memory maintenance failed."),
+    };
   }
 }

@@ -287,8 +287,9 @@ describe("gateway readiness route", () => {
     const fetchImpl = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
-      .mockResolvedValueOnce(jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] })) as
-      typeof fetch;
+      .mockResolvedValueOnce(
+        jsonResponse({ results: [{ index: 0, relevance_score: 0.99 }] }),
+      ) as typeof fetch;
     const config: GatewayConfig = {
       ...gatewayConfig(),
       reranker: {
@@ -493,8 +494,7 @@ describe("gateway readiness route", () => {
     ]);
     const longContextRequest = requestBodyAt(fetchImpl, 3);
     const longContextMessages = longContextRequest.messages as
-      | readonly { readonly content?: unknown }[]
-      | undefined;
+      readonly { readonly content?: unknown }[] | undefined;
     const longContextUserContent = longContextMessages?.[1]?.content;
     expect(typeof longContextUserContent).toBe("string");
     if (typeof longContextUserContent === "string") {

@@ -190,9 +190,11 @@ function KnowledgeConnectorNode({
       </div>
       <div className="connector-node-copy">
         <p className="connector-node-kicker">{connectorNodeStateLabel(selectedState)}</p>
-        <h2 className="connector-node-title" title={label}>
+        {/* Non-heading element: this compact connector node is a leaf card with no
+            sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
+        <p className="connector-node-title" title={label}>
           {label}
-        </h2>
+        </p>
         <p className="connector-node-meta">Local Knowledge capsule</p>
       </div>
       <button type="button" className="connector-node-manage" onClick={onManageConnectors}>

@@ -72,17 +72,22 @@ describe("documentFormatting split (ADR-0068 D1 truth table)", () => {
     expect(idsWithFormatting("keiko-language-service")).toEqual(["javascript", "typescript"]);
   });
 
-  it("routes exactly json/css/scss/less/html through Monaco's bundled workers", () => {
-    expect(idsWithFormatting("monaco-builtin")).toEqual(["css", "html", "json", "less", "scss"]);
+  it("routes no language through Monaco's rich language workers", () => {
+    expect(idsWithFormatting("monaco-builtin")).toEqual([]);
   });
 
   it("leaves the remaining languages with no reachable browser formatter", () => {
     expect(idsWithFormatting("none")).toEqual([
+      "css",
       "go",
+      "html",
       "java",
+      "json",
+      "less",
       "markdown",
       "python",
       "rust",
+      "scss",
       "shell",
       "sql",
       "yaml",
@@ -131,7 +136,7 @@ describe("editorBuiltinCapability", () => {
 
 describe("editorBuiltinDocumentFormatting", () => {
   it("reports the source for known ids", () => {
-    expect(editorBuiltinDocumentFormatting("json")).toBe("monaco-builtin");
+    expect(editorBuiltinDocumentFormatting("json")).toBe("none");
     expect(editorBuiltinDocumentFormatting("javascript")).toBe("keiko-language-service");
     expect(editorBuiltinDocumentFormatting("yaml")).toBe("none");
   });
@@ -144,12 +149,14 @@ describe("editorBuiltinDocumentFormatting", () => {
 });
 
 describe("isBuiltinFormattingAvailable", () => {
-  it("is true for monaco-builtin and keiko-language-service languages", () => {
-    expect(isBuiltinFormattingAvailable("css")).toBe(true);
+  it("is true for keiko-language-service languages", () => {
+    expect(isBuiltinFormattingAvailable("javascript")).toBe(true);
     expect(isBuiltinFormattingAvailable("typescript")).toBe(true);
   });
 
   it("is false for 'none' languages and unknown ids", () => {
+    expect(isBuiltinFormattingAvailable("css")).toBe(false);
+    expect(isBuiltinFormattingAvailable("json")).toBe(false);
     expect(isBuiltinFormattingAvailable("markdown")).toBe(false);
     expect(isBuiltinFormattingAvailable("python")).toBe(false);
     expect(isBuiltinFormattingAvailable("cobol")).toBe(false);

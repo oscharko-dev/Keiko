@@ -152,10 +152,12 @@ function budgetsFromWeights(
 }
 
 export function splitExplorationBudget(base: ExplorationBudget, n: number): ExplorationBudget {
-  return budgetsFromWeights(
-    base,
-    Array.from({ length: Math.max(1, n) }, () => 1),
-  )[0] ?? base;
+  return (
+    budgetsFromWeights(
+      base,
+      Array.from({ length: Math.max(1, n) }, () => 1),
+    )[0] ?? base
+  );
 }
 
 // Relevance-weighted fan-out allocation. The sum of every budget dimension equals the base cap, so

@@ -5,6 +5,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorPickerWidget } from "./ConnectorPickerWidget";
 import type { CapsulesResponse, CapsuleSetsResponse } from "@/lib/local-knowledge-api";
@@ -173,5 +174,71 @@ describe("ConnectorPickerWidget", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("network error");
     });
+  });
+});
+
+describe("ConnectorPickerWidget — a11y (GEN-UI-A11Y-018 / test-plan #28)", () => {
+  it("renders the connector-node title as a non-heading (no orphan heading)", () => {
+    render(
+      <ConnectorPickerWidget
+        presentation="node"
+        selectedKind="capsule"
+        selectedId="cap-abc"
+        selectedLabel="First KC"
+        selectedState="ready"
+        onSelect={vi.fn()}
+      />,
+    );
+    // The title carries its class but must NOT be a heading — a compact leaf card
+    // has no sectioning context, so an <h2> would be an orphan heading.
+    const title = screen.getByText("First KC");
+    expect(title.tagName).toBe("P");
+    expect(title).toHaveClass("connector-node-title");
+    expect(screen.queryByRole("heading", { name: "First KC" })).toBeNull();
+  });
+
+  it("jest-axe: connector-node (presentation=node) has no violations", async () => {
+    const { container } = render(
+      <ConnectorPickerWidget
+        presentation="node"
+        selectedKind="capsule"
+        selectedId="cap-abc"
+        selectedLabel="First KC"
+        selectedState="ready"
+        onSelect={vi.fn()}
+      />,
+    );
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: loaded list state has no violations", async () => {
+    defaultMocks();
+    const { container } = render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: empty state has no violations", async () => {
+    mockFetchCapsules.mockResolvedValue({ capsules: [] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
+    const { container } = render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Create a connector/i })).toBeInTheDocument();
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: error state has no violations", async () => {
+    mockFetchCapsules.mockRejectedValue(new Error("network error"));
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
+    const { container } = render(<ConnectorPickerWidget onSelect={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("network error");
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
   });
 });

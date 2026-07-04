@@ -1,4 +1,4 @@
-// Issue #503, Epic #491 (ADR-0066) — the Voice ↔ Spoken-action-governance binding. It is the
+// Issue #503, Epic #491 (ADR-0108) — the Voice ↔ Spoken-action-governance binding. It is the
 // deterministic, synchronous, content-free seam that lets a SPOKEN turn PROPOSE a governed action while
 // guaranteeing voice can never EXECUTE one or bypass any existing gate. It mirrors the #502
 // discussion-voice binding exactly: a factory closure with a content-free observer, dormant for

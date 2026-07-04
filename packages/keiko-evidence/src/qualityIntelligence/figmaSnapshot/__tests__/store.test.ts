@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { EvidenceReadError, EvidenceWriteError } from "../../../errors.js";
 import {
+  __resetFigmaSnapshotSweepRegistryForTests,
   createNodeFigmaSnapshotStore,
   enforceFigmaSnapshotRetention,
   type FigmaSnapshotStore,
@@ -48,6 +49,9 @@ let dir: string;
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "figma-snapshot-"));
+  // GEN-PERF-PERSISTENCE-010: start each test from a cold module-level re-sweep registry so the
+  // amortised sweep never carries state across tests (each test also uses a unique temp dir).
+  __resetFigmaSnapshotSweepRegistryForTests();
 });
 
 afterEach(() => {
@@ -765,6 +769,10 @@ describe("createNodeFigmaSnapshotStore — orphan side-dir cleanup", () => {
     const orphanDir = join(sideBase, RUN_ID);
     rmSync(join(qiDir, `${RUN_ID}.figma-snapshot.json`), { force: true });
 
+    // GEN-PERF-PERSISTENCE-010: the priming `store` already swept+stamped this dir; clear the
+    // module registry so `store2` (a LATER request) sweeps on first use, as before amortisation.
+    __resetFigmaSnapshotSweepRegistryForTests();
+
     // New store instance — sweep fires on first use.
     const store2 = createNodeFigmaSnapshotStore(dir);
     expect(store2.load(RUN_ID)).toBeUndefined();
@@ -1070,6 +1078,10 @@ describe("figma snapshot store-init retention (Issue #1323 AC4)", () => {
         },
       });
     }
+    // GEN-PERF-PERSISTENCE-010: the seeding writer already swept+stamped this dir at the module
+    // level. Clear the registry so the store-under-test (which models a LATER request past the
+    // re-sweep interval) performs its own sweep+retention pass, exactly as before the amortisation.
+    __resetFigmaSnapshotSweepRegistryForTests();
   };
 
   it("runs retention on a fresh store instance and evicts the oldest beyond an explicit cap", () => {

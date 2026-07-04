@@ -56,17 +56,7 @@ export const bankingDefault: PolicyProfile = freezeProfile({
   id: "banking-default",
   displayLabel: "Banking — default",
   priorityKeywords: [
-    [
-      "fraud",
-      "aml",
-      "kyc",
-      "sanction",
-      "betrug",
-      "geldwäsche",
-      "sanktion",
-      "dsgvo",
-      "bafin",
-    ],
+    ["fraud", "aml", "kyc", "sanction", "betrug", "geldwäsche", "sanktion", "dsgvo", "bafin"],
     [
       "payment",
       "transfer",

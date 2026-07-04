@@ -1049,7 +1049,9 @@ export function SettingsPanel({
             // toggle-button pattern, same as the density buttons in
             // RelationshipListPanel (state was previously CSS-only via data-on).
             aria-pressed={tab === id}
-            onPointerDown={() => setTab(id)}
+            // GEN-UI-A11Y-010: onClick alone drives the tab switch — the extra
+            // onPointerDown duplicated the state update (double setTab) without
+            // adding keyboard reach, so it is removed.
             onClick={() => setTab(id)}
           >
             {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}

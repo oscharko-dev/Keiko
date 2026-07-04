@@ -60,7 +60,9 @@ function zipDocumentXml(xml: string): Uint8Array {
   );
 }
 
-function zipDocxEntries(entries: readonly { readonly name: string; readonly content: string }[]): Uint8Array {
+function zipDocxEntries(
+  entries: readonly { readonly name: string; readonly content: string }[],
+): Uint8Array {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let localOffset = 0;
@@ -184,8 +186,8 @@ describe("docxParser", () => {
       headingParagraphXml("Policy"),
       '<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/></w:numPr></w:pPr><w:r><w:t>Review backups</w:t></w:r></w:p>',
       "<w:tbl>",
-      '<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>',
-      '<w:tr><w:tc><w:p><w:r><w:t>Firewall</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Enabled</w:t></w:r></w:p></w:tc></w:tr>',
+      "<w:tr><w:tc><w:p><w:r><w:t>Name</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Status</w:t></w:r></w:p></w:tc></w:tr>",
+      "<w:tr><w:tc><w:p><w:r><w:t>Firewall</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Enabled</w:t></w:r></w:p></w:tc></w:tr>",
       "</w:tbl>",
       "</w:body></w:document>",
     ].join("");

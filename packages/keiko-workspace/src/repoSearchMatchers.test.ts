@@ -18,9 +18,9 @@ describe("buildMatcher definition intent scoring", () => {
     const matcher = buildMatcher(nlq("Where is PaymentService defined?"));
     const reference = matcher.match("PaymentService registry entry");
     expect(matcher.match("public final class PaymentService {")).toBeGreaterThan(reference);
-    expect(matcher.match("internal sealed partial class PaymentService : BaseService {")).toBeGreaterThan(
-      reference,
-    );
+    expect(
+      matcher.match("internal sealed partial class PaymentService : BaseService {"),
+    ).toBeGreaterThan(reference);
   });
 
   it("boosts Python, Go, and Rust function/type declarations over plain references", () => {

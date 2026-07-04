@@ -35,6 +35,14 @@ vi.mock("@/lib/api", () => ({
       super(message);
     }
   },
+  StreamingUnavailableError: class StreamingUnavailableError extends Error {
+    constructor(
+      public readonly code: string,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
   askGrounded: vi.fn(),
   appendDesktopChatVoiceTurn: vi.fn(),
   createDesktopChat: vi.fn(),
@@ -119,6 +127,20 @@ function message(patch: Partial<ChatMessage> = {}): ChatMessage {
     createdAt: 1,
     ...patch,
   } as ChatMessage;
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+  readonly reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("useChatSession pure guards", () => {
@@ -309,6 +331,141 @@ describe("useChatSession bootstrap", () => {
   });
 });
 
+describe("useChatSession stale async landing guards", () => {
+  async function setupSwitchSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-a", streaming: false })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ id: "chat-current", selectedModel: "chat-a" })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValueOnce({
+      messages: [message({ id: "msg-current", chatId: "chat-current" })],
+    });
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("keeps the last selected chat when an earlier openChat resolves late", async () => {
+    const rendered = await setupSwitchSession();
+    const chatA = chat({ id: "chat-a", title: "A", updatedAt: 10 });
+    const chatB = chat({ id: "chat-b", title: "B", updatedAt: 20 });
+    const openA = deferred<{ messages: readonly ChatMessage[] }>();
+    const openB = deferred<{ messages: readonly ChatMessage[] }>();
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) => {
+      if (chatId === "chat-a") return openA.promise;
+      if (chatId === "chat-b") return openB.promise;
+      return Promise.resolve({ messages: [] });
+    });
+
+    let openAPromise!: Promise<void>;
+    let openBPromise!: Promise<void>;
+    act(() => {
+      openAPromise = rendered.result.current.openChat(chatA);
+      openBPromise = rendered.result.current.openChat(chatB);
+    });
+
+    await act(async () => {
+      openB.resolve({ messages: [message({ id: "msg-b", chatId: "chat-b" })] });
+      await openBPromise;
+    });
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+
+    await act(async () => {
+      openA.resolve({ messages: [message({ id: "msg-a", chatId: "chat-a" })] });
+      await openAPromise;
+    });
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+  });
+
+  it("keeps project and chat state aligned when an earlier openProject resolves late", async () => {
+    const rendered = await setupSwitchSession();
+    const projectA = project("/repo-a");
+    const projectB = project("/repo-b");
+    const chatA = chat({ id: "chat-a", projectPath: "/repo-a", title: "A", updatedAt: 10 });
+    const chatB = chat({ id: "chat-b", projectPath: "/repo-b", title: "B", updatedAt: 20 });
+    const chatsA = deferred<{ chats: readonly Chat[] }>();
+    const chatsB = deferred<{ chats: readonly Chat[] }>();
+    vi.mocked(fetchChats).mockImplementation((projectPath: string) => {
+      if (projectPath === "/repo-a") return chatsA.promise;
+      if (projectPath === "/repo-b") return chatsB.promise;
+      return Promise.resolve({ chats: [] });
+    });
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) => {
+      if (chatId === "chat-b") {
+        return Promise.resolve({ messages: [message({ id: "msg-b", chatId: "chat-b" })] });
+      }
+      return Promise.resolve({ messages: [message({ id: "msg-a", chatId: "chat-a" })] });
+    });
+
+    let openAPromise!: Promise<void>;
+    let openBPromise!: Promise<void>;
+    act(() => {
+      openAPromise = rendered.result.current.openProject(projectA);
+      openBPromise = rendered.result.current.openProject(projectB);
+    });
+
+    await act(async () => {
+      chatsB.resolve({ chats: [chatB] });
+      await openBPromise;
+    });
+    expect(rendered.result.current.activeProject?.path).toBe("/repo-b");
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+
+    await act(async () => {
+      chatsA.resolve({ chats: [chatA] });
+      await openAPromise;
+    });
+    expect(rendered.result.current.activeProject?.path).toBe("/repo-b");
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+  });
+
+  it("drops a buffered send result after switching to another chat", async () => {
+    const rendered = await setupSwitchSession();
+    const chatB = chat({ id: "chat-b", title: "B", updatedAt: 20 });
+    const send = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat).mockReturnValue(send.promise);
+    vi.mocked(fetchChatMessages).mockImplementation((chatId: string) => {
+      if (chatId === "chat-b") {
+        return Promise.resolve({ messages: [message({ id: "msg-b", chatId: "chat-b" })] });
+      }
+      return Promise.resolve({ messages: [] });
+    });
+
+    let sendPromise!: Promise<void>;
+    act(() => {
+      sendPromise = rendered.result.current.sendMessage({ text: "question for A" });
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await rendered.result.current.openChat(chatB);
+    });
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+
+    await act(async () => {
+      send.resolve({
+        chat: chat({ id: "chat-current", title: "Current", updatedAt: 30 }),
+        messages: [message({ id: "msg-a-answer", chatId: "chat-current", role: "assistant" })],
+      });
+      await sendPromise;
+    });
+
+    expect(rendered.result.current.activeChat?.id).toBe("chat-b");
+    expect(rendered.result.current.messages.map((entry) => entry.id)).toEqual(["msg-b"]);
+    expect(rendered.result.current.sendStatus).toBe("cancelled");
+  });
+});
+
 describe("useChatSession pending attachment validation", () => {
   async function setupAttachmentSession(
     models: readonly ModelCapability[] = [model({ id: "chat-a" })],
@@ -355,6 +512,42 @@ describe("useChatSession pending attachment validation", () => {
     await act(async () => {
       const outcome = await result.current.addPendingAttachment(
         new File(["payload"], "payload.bin", { type: "application/octet-stream" }),
+      );
+      expect(outcome).toEqual({ ok: false, reason: "unsupported-type" });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  // GEN-DUP-SEMANTIC-013 — adopting the shared contracts classifier widened the client document
+  // allowlist to match the server (previously the client under-approximated it). application/xml
+  // now classifies as a document rather than "unsupported-type".
+  it("accepts application/xml as a document once the classifier matches the server", async () => {
+    const { result } = await setupAttachmentSession([
+      model({ id: "chat-a", supportsDocumentInput: true }),
+    ]);
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["<root/>"], "data.xml", { type: "application/xml" }),
+      );
+      expect(outcome).toEqual({ ok: true });
+    });
+
+    expect(result.current.pendingAttachments).toHaveLength(1);
+    expect(result.current.pendingAttachments[0]?.kind).toBe("document");
+  });
+
+  // GEN-DUP-SEMANTIC-013 — image/svg+xml is script-carrying and stays rejected client-side even
+  // for an image-capable model, matching the server's SVG deny.
+  it("rejects image/svg+xml even for an image-capable model", async () => {
+    const { result } = await setupAttachmentSession([
+      model({ id: "chat-a", supportsImageInput: true }),
+    ]);
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["<svg/>"], "vector.svg", { type: "image/svg+xml" }),
       );
       expect(outcome).toEqual({ ok: false, reason: "unsupported-type" });
     });
@@ -442,6 +635,124 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     // The optimistic user message must NOT have been appended.
     expect(result.current.messages).toHaveLength(0);
   });
+
+  // GEN-PERF-CHAT-008 (keiko-ui side) — a grounded turn must issue EXACTLY ONE messages fetch and
+  // EXACTLY ONE chats fetch to reconcile after the ask (no duplicate refetch storm). The deeper fix
+  // (server returning the {chat, messages} delta so the client applies it locally with zero
+  // refetch) is a cross-package follow-up in keiko-server/keiko-contracts; this pins the client
+  // never regresses to more than one of each per grounded turn.
+  it("issues exactly one messages fetch and one chats fetch per grounded turn", async () => {
+    const { result } = await setupGroundedSession();
+
+    // Reset the boot-time fetch counts so we measure only the grounded turn's traffic.
+    vi.mocked(fetchChatMessages).mockClear();
+    vi.mocked(fetchChats).mockClear();
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [message({ id: "u1", role: "user" }), message({ id: "a1", role: "assistant" })],
+    });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ id: "chat-grounded", updatedAt: 99 })],
+    });
+    // askGrounded resolves with a grounded answer (shape is not inspected before the reconcile).
+    vi.mocked(askGrounded).mockResolvedValue({
+      answer: "grounded reply",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+
+    act(() => {
+      result.current.setDraft("Summarise the repo.");
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(askGrounded).toHaveBeenCalledTimes(1);
+    // Exactly one of each reconcile fetch — no duplicate messages/chats refetch.
+    expect(fetchChatMessages).toHaveBeenCalledTimes(1);
+    expect(fetchChats).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useChatSession sendMessage — ungrounded attachment descriptors", () => {
+  async function setupUngroundedAttachmentSession(): Promise<
+    ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
+  > {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [
+        model({
+          id: "chat-attachments",
+          streaming: false,
+          supportsImageInput: true,
+          supportsDocumentInput: true,
+        }),
+      ],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({
+      chats: [chat({ selectedModel: "chat-attachments" })],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(sendDesktopChat).mockResolvedValue({
+      chat: chat({ selectedModel: "chat-attachments" }),
+      messages: [],
+      memory: undefined,
+    } as never);
+
+    const rendered = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+    return rendered;
+  }
+
+  it("sends image and document attachment descriptors on the ungrounded path", async () => {
+    const { result } = await setupUngroundedAttachmentSession();
+
+    await act(async () => {
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["image"], "screen.png", { type: "image/png" }),
+        ),
+      ).toEqual({ ok: true });
+      expect(
+        await result.current.addPendingAttachment(
+          new File(["hello"], "notes.txt", { type: "text/plain" }),
+        ),
+      ).toEqual({ ok: true });
+    });
+    act(() => {
+      result.current.setDraft("Use the attached context.");
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendDesktopChat).mock.calls[0]?.[0]).toMatchObject({
+      attachments: [
+        {
+          kind: "image",
+          name: "screen.png",
+          mimeType: "image/png",
+          sizeBytes: 5,
+        },
+        {
+          kind: "document",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+        },
+      ],
+      documentContext: [
+        {
+          displayName: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: 5,
+          text: "hello",
+        },
+      ],
+    });
+    expect(result.current.pendingAttachments).toHaveLength(0);
+  });
 });
 
 describe("useChatSession appendVoiceTurn", () => {
@@ -482,6 +793,13 @@ describe("useChatSession appendVoiceTurn", () => {
     });
 
     expect(appendDesktopChatVoiceTurn).toHaveBeenCalledTimes(2);
+    const firstInput = vi.mocked(appendDesktopChatVoiceTurn).mock.calls[0]?.[0];
+    const secondInput = vi.mocked(appendDesktopChatVoiceTurn).mock.calls[1]?.[0];
+    expect(firstInput?.idempotencyKey).toBeDefined();
+    expect(secondInput?.idempotencyKey).toBe(firstInput?.idempotencyKey);
+    expect(secondInput?.messages.map((entry) => entry.timestamp)).toEqual(
+      firstInput?.messages.map((entry) => entry.timestamp),
+    );
     expect(result.current.error).toBeUndefined();
     expect(result.current.messages.map((entry) => [entry.role, entry.content])).toEqual([
       ["user", "Remember the release gate."],

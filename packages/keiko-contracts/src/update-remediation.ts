@@ -130,8 +130,7 @@ export interface UpdateRemediationStatusRequestParseFail {
 }
 
 export type UpdateRemediationStatusRequestParse =
-  | UpdateRemediationStatusRequestParseOk
-  | UpdateRemediationStatusRequestParseFail;
+  UpdateRemediationStatusRequestParseOk | UpdateRemediationStatusRequestParseFail;
 
 export interface UpdateRemediationActionRequestParseOk {
   readonly ok: true;
@@ -144,8 +143,7 @@ export interface UpdateRemediationActionRequestParseFail {
 }
 
 export type UpdateRemediationActionRequestParse =
-  | UpdateRemediationActionRequestParseOk
-  | UpdateRemediationActionRequestParseFail;
+  UpdateRemediationActionRequestParseOk | UpdateRemediationActionRequestParseFail;
 
 const TARGET_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const MAX_TARGET_VERSION_LENGTH = 64;

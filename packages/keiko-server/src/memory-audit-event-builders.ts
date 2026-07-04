@@ -178,10 +178,7 @@ export function buildInsertedEvent(
       return buildSingleRecordEvent(
         "memory:accepted",
         record,
-        safeSummary(
-          `memory inserted as accepted (type=${record.type})`,
-          ctx.redactString,
-        ),
+        safeSummary(`memory inserted as accepted (type=${record.type})`, ctx.redactString),
         ctx,
       );
     case "rejected":

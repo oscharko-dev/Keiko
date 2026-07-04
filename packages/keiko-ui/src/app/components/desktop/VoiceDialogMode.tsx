@@ -101,6 +101,17 @@ interface VoiceProfileSelectProps {
 // Stable id for the visible active-voice label that names the selector (AC2/AC4).
 export const VOICE_PROFILE_LABEL_ID = "cmp-voice-dialog-profile-label";
 
+// GEN-UI-A11Y-013 (WCAG 4.1.2) — the Interrupt (barge-in) buttons are inert until the assistant
+// holds the floor. They use `aria-disabled` (NOT the native `disabled` attribute) with an onClick
+// guard so the control keeps keyboard focus and screen-reader discoverability while unavailable — a
+// native `disabled` would blur the just-focused control and hide it from AT — mirroring the
+// composer's focusable-but-inert send button and VoiceDictation's busy mic. Each button references a
+// sr-only hint (distinct ids so both can coexist in the DOM) naming the availability condition, so a
+// screen-reader user hears WHY the control is currently unavailable.
+const INTERRUPT_UNAVAILABLE_HINT = "Available only while the assistant is speaking.";
+const SESSION_INTERRUPT_HINT_ID = "cmp-voice-dialog-interrupt-hint";
+const TURN_INTERRUPT_HINT_ID = "cmp-voice-turn-interrupt-hint";
+
 export function VoiceProfileSelect({
   personas,
   selected,
@@ -228,10 +239,19 @@ export function VoiceDialogControls({
           type="button"
           className="cmp-voice-btn"
           aria-label="Interrupt the assistant"
-          disabled={!canInterrupt}
-          onClick={onInterrupt}
+          // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
+          // availability condition audible; the native `disabled` would blur and hide it.
+          aria-disabled={!canInterrupt}
+          aria-describedby={SESSION_INTERRUPT_HINT_ID}
+          onClick={() => {
+            if (!canInterrupt) return;
+            onInterrupt();
+          }}
         >
           Interrupt
+          <span id={SESSION_INTERRUPT_HINT_ID} className="sr-only">
+            {INTERRUPT_UNAVAILABLE_HINT}
+          </span>
         </button>
       ) : null}
       <button
@@ -305,10 +325,19 @@ export function VoiceDialogTurnControls({
         className="cmp-voice-btn"
         aria-label="Interrupt the assistant"
         data-tip="Interrupt the assistant"
-        disabled={!canInterrupt}
-        onClick={onInterrupt}
+        // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
+        // availability condition audible; the native `disabled` would blur and hide it.
+        aria-disabled={!canInterrupt}
+        aria-describedby={TURN_INTERRUPT_HINT_ID}
+        onClick={() => {
+          if (!canInterrupt) return;
+          onInterrupt();
+        }}
       >
         <span aria-hidden="true">Interrupt</span>
+        <span id={TURN_INTERRUPT_HINT_ID} className="sr-only">
+          {INTERRUPT_UNAVAILABLE_HINT}
+        </span>
       </button>
     </div>
   );

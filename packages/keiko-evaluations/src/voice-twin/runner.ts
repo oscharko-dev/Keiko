@@ -1,4 +1,4 @@
-// Voice Digital Twin evaluation runner (Epic #491, Issue #505; ADR-0068).
+// Voice Digital Twin evaluation runner (Epic #491, Issue #505; ADR-0110).
 //
 // Derives a deterministic observation for each fixture from the frozen keiko-contracts voice tables and
 // state machines — the capability cell, the egress / supply-chain audit, and exactly the AC6 metric

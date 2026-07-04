@@ -165,11 +165,7 @@ export function lookupCitationPreviewSnapshotForStoredCitation(
     }
 
     const resolvedChunkId = chunk.id as ChunkId;
-    const currentCitation = mapChunkToCitation(
-      store,
-      citation.lineage.capsuleId,
-      resolvedChunkId,
-    );
+    const currentCitation = mapChunkToCitation(store, citation.lineage.capsuleId, resolvedChunkId);
     return {
       kind: "ok",
       snapshot: buildSnapshot(

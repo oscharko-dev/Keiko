@@ -36,6 +36,7 @@
 //     which already gates archive/forget. So a faded memory still archives/forgets, but its
 //     provenance stays intact and every run is idempotent.
 
+import { clampUnit } from "@oscharko-dev/keiko-contracts";
 import type {
   MemoryForgetReason,
   MemoryId,
@@ -89,12 +90,6 @@ export interface PlanMaintenanceOptions {
   readonly policy?: Partial<MemoryMaintenancePolicy>;
 }
 
-function clamp01(n: number): number {
-  if (n < 0) return 0;
-  if (n > 1) return 1;
-  return n;
-}
-
 function recencyFactorOf(
   record: MemoryRecord,
   stat: MemoryAccessStatLike | undefined,
@@ -115,7 +110,7 @@ function recencyFactorOf(
 function utilityFactor(stat: MemoryAccessStatLike | undefined): number {
   const count = stat?.outcomeCount ?? 0;
   if (count <= 0) return 1;
-  const meanUtility = clamp01((stat?.utilitySum ?? 0) / count);
+  const meanUtility = clampUnit((stat?.utilitySum ?? 0) / count);
   return 0.5 + meanUtility;
 }
 
@@ -129,7 +124,7 @@ export function effectiveStrength(
   const base = record.provenance.confidence;
   const freqBoost = 1 + 0.15 * Math.log1p(stat?.accessCount ?? 0);
   const recencyFactor = recencyFactorOf(record, stat, nowMs, halfLifeMs);
-  return clamp01(base * freqBoost * recencyFactor * utilityFactor(stat));
+  return clampUnit(base * freqBoost * recencyFactor * utilityFactor(stat));
 }
 
 // ─── Per-record decision ───────────────────────────────────────────────────────

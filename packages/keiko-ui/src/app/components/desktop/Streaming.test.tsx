@@ -1160,7 +1160,11 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     });
     const afterFirstToken = view.result.current.messages.find((m) => m.role === "assistant");
     expect(afterFirstToken).toBeUndefined();
-    expect(view.result.current.streamingAssistantMessage?.content).toBe("Hello ");
+    // GEN-PERF-CHAT-007 — token deltas are flushed once per animation frame, so the accumulated
+    // content appears after the frame rather than synchronously with the onToken call.
+    await waitFor(() => {
+      expect(view.result.current.streamingAssistantMessage?.content).toBe("Hello ");
+    });
 
     act(() => {
       capturedHandlers?.onToken("world");
@@ -1415,5 +1419,96 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
 
     expect(view.result.current.sendStatus).toBe("cancelled");
     expect(view.result.current.error).toBeUndefined();
+  });
+
+  // GEN-PERF-CHAT-007 — streamed token deltas are coalesced to one requestAnimationFrame flush.
+  // A burst of N onToken callbacks landing in one frame must produce exactly ONE state commit
+  // whose content is the ordered concatenation; a terminal handler flushes any residual buffer.
+  it("coalesces a burst of onTokens into a single per-frame flush (ordered concat)", async () => {
+    // Deterministic rAF: capture the scheduled callback instead of running it on a timer so we
+    // control exactly when (and how many times) the flush runs.
+    const rafCallbacks: FrameRequestCallback[] = [];
+    const rafSpy = vi
+      .spyOn(globalThis, "requestAnimationFrame")
+      .mockImplementation((cb: FrameRequestCallback): number => {
+        rafCallbacks.push(cb);
+        return rafCallbacks.length;
+      });
+    vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => undefined);
+
+    let capturedHandlers: StreamHandlers | undefined;
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      (_input, _signal, handlers): Promise<void> => {
+        capturedHandlers = handlers;
+        return new Promise<void>(() => undefined);
+      },
+    );
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("hi"));
+    act(() => {
+      void view.result.current.sendMessage();
+    });
+    await waitFor(() => {
+      expect(capturedHandlers).toBeDefined();
+    });
+
+    // Fire 20 tokens WITHOUT running the frame. The status flips on the first token, but the
+    // streamed content must NOT appear yet — it is buffered until the single frame flush.
+    const tokens = Array.from({ length: 20 }, (_unused, i) => `t${String(i)}-`);
+    act(() => {
+      for (const token of tokens) capturedHandlers?.onToken(token);
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("streaming");
+    });
+    // 20 tokens => at most ONE frame scheduled (coalesced), and no content committed yet.
+    expect(rafCallbacks).toHaveLength(1);
+    expect(view.result.current.streamingAssistantMessage?.content).toBe("");
+
+    // Run the single scheduled frame — the whole buffer is applied in ONE commit, in order.
+    act(() => {
+      const frame = rafCallbacks.shift();
+      frame?.(performance.now());
+    });
+    await waitFor(() => {
+      expect(view.result.current.streamingAssistantMessage?.content).toBe(tokens.join(""));
+    });
+    // No extra frame was scheduled by the flush itself.
+    expect(rafCallbacks).toHaveLength(0);
+
+    // A residual token after the flush schedules exactly one more frame; onDone flushes it.
+    act(() => {
+      capturedHandlers?.onToken("residual");
+    });
+    expect(rafCallbacks).toHaveLength(1);
+    act(() => {
+      capturedHandlers?.onDone({
+        chat: { ...streamingChat(), updatedAt: 42 },
+        messages: [
+          {
+            id: "assistant-final",
+            chatId: "chat-stream",
+            role: "assistant",
+            content: `${tokens.join("")}residual`,
+            timestamp: 10,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      });
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("completed");
+    });
+    // onDone flushed synchronously (the pending frame was cancelled), so it did not rely on the
+    // deferred rAF; the canonical message carries the full text.
+    const finalMsg = view.result.current.messages.find((m) => m.id === "assistant-final");
+    expect(finalMsg?.content).toBe(`${tokens.join("")}residual`);
+
+    rafSpy.mockRestore();
   });
 });

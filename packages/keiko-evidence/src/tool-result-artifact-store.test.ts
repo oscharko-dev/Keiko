@@ -11,7 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { createNodeToolResultArtifactStore, TOOL_RESULT_ARTIFACT_SUFFIX } from "./tool-result-artifact-store.js";
+import {
+  createNodeToolResultArtifactStore,
+  TOOL_RESULT_ARTIFACT_SUFFIX,
+} from "./tool-result-artifact-store.js";
 
 const ARTIFACT_ID = "a".repeat(64);
 
@@ -60,9 +63,12 @@ describe("createNodeToolResultArtifactStore", () => {
     try {
       symlinkSync(outside, join(baseDir, "tool-results"), "dir");
       const store = createNodeToolResultArtifactStore(baseDir);
-      expect(() => { store.write(ARTIFACT_ID, "clean"); }).toThrow(/symlink/);
-      expect(() => readFileSync(join(outside, `${ARTIFACT_ID}${TOOL_RESULT_ARTIFACT_SUFFIX}`)))
-        .toThrow();
+      expect(() => {
+        store.write(ARTIFACT_ID, "clean");
+      }).toThrow(/symlink/);
+      expect(() =>
+        readFileSync(join(outside, `${ARTIFACT_ID}${TOOL_RESULT_ARTIFACT_SUFFIX}`)),
+      ).toThrow();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

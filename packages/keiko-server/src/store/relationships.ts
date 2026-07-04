@@ -200,7 +200,7 @@ function rebuildScope(row: RelationshipRow): RelationshipScope {
     default:
       // STRICT mode + CHECK constraint at the schema layer prevent this; surfaced as a typed
       // error so callers never see a partial row silently.
-      throw new UiStoreError("internal", "Unknown relationship scope kind.", 500);
+      throw new UiStoreError("INTERNAL", "Unknown relationship scope kind.", 500);
   }
 }
 
@@ -371,7 +371,7 @@ export function insertRelationship(db: DatabaseSync, rel: NewRelationship): Stor
     );
   } catch (error) {
     if (error instanceof Error && /UNIQUE/i.test(error.message)) {
-      throw new UiStoreError("invalid_request", "Cardinality constraint violated.", 409);
+      throw new UiStoreError("INVALID_REQUEST", "Cardinality constraint violated.", 409);
     }
     throw error;
   }
@@ -389,7 +389,7 @@ export function insertRelationship(db: DatabaseSync, rel: NewRelationship): Stor
   });
   const row = db.prepare(SQL_GET).get(rel.id, rel.workspaceId) as RelationshipRow | undefined;
   if (row === undefined) {
-    throw new UiStoreError("internal", "Insert returned no row.", 500);
+    throw new UiStoreError("INTERNAL", "Insert returned no row.", 500);
   }
   return rowToRelationship(row);
 }

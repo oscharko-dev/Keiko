@@ -245,4 +245,63 @@ describe("ChatHistoryPanel", () => {
     await user.type(renameInput, "x");
     expect(renameInput).not.toHaveAttribute("aria-invalid", "true");
   });
+
+  // GEN-UI-KEYBOARD-008 (test-plan #42) — the tablist is a single roving tab stop:
+  // ArrowRight from the Active tab moves BOTH focus and selection to the Deleted tab.
+  it("ArrowRight on the Active tab rovers focus and selection to Deleted (GEN-UI-KEYBOARD-008)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const activeTab = screen.getByRole("tab", { name: /active/i });
+    const deletedTab = screen.getByRole("tab", { name: /deleted/i });
+
+    // Roving tabindex: only the selected (Active) tab is a Tab stop.
+    expect(activeTab).toHaveAttribute("tabindex", "0");
+    expect(deletedTab).toHaveAttribute("tabindex", "-1");
+
+    activeTab.focus();
+    expect(activeTab).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+
+    // Focus and selection both moved to the Deleted tab; roving tabindex flipped.
+    expect(deletedTab).toHaveFocus();
+    expect(deletedTab).toHaveAttribute("aria-selected", "true");
+    expect(activeTab).toHaveAttribute("aria-selected", "false");
+    expect(deletedTab).toHaveAttribute("tabindex", "0");
+    expect(activeTab).toHaveAttribute("tabindex", "-1");
+
+    // ArrowLeft wraps back to Active.
+    await user.keyboard("{ArrowLeft}");
+    expect(activeTab).toHaveFocus();
+    expect(activeTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  // GEN-UI-FOCUS-016 (test-plan #43) — entering inline delete-confirm moves focus onto
+  // the confirmation, and Escape cancels the destructive confirm.
+  it("focuses the confirm Delete button on delete-confirm and cancels on Escape (GEN-UI-FOCUS-016)", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const row = screen.getByText("Sprint triage").closest(".chat-history-row");
+    expect(row).not.toBeNull();
+    const scoped = row as HTMLElement;
+
+    // Activate Delete via keyboard (focus + Enter).
+    const deleteButton = within(scoped).getByRole("button", { name: "Delete" });
+    deleteButton.focus();
+    await user.keyboard("{Enter}");
+
+    // Confirmation mode: focus lands on the destructive confirm Delete button.
+    const confirmDelete = within(scoped).getByRole("button", { name: "Delete" });
+    expect(confirmDelete).toHaveFocus();
+    expect(within(scoped).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    // Escape cancels the confirmation and restores the default row actions.
+    await user.keyboard("{Escape}");
+    expect(within(scoped).queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(within(scoped).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(within(scoped).getByRole("button", { name: "Delete" })).toBeInTheDocument();
+    expect(updateChat).not.toHaveBeenCalled();
+  });
 });

@@ -837,6 +837,33 @@ describe("files API helpers", () => {
     );
   });
 
+  it("rejects malformed contract-owned Git responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        root: "/repo space",
+        state: "available",
+        available: true,
+        branch: "main",
+        detached: false,
+        clean: true,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        changes: "not-an-array",
+        truncated: false,
+        maxChanges: 500,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchGitStatus("/repo space")).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+  });
+
   it("encodes Git summary, history, and remotes requests", async () => {
     const fetchMock = vi
       .fn()
@@ -1530,6 +1557,49 @@ describe("sendDesktopChatStream — SSE residual lineBuffer flush", () => {
 
     expect(handlers.onDone).toHaveBeenCalledTimes(1);
     expect(handlers.onError).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed contract-owned SSE payloads with a user-facing ApiError", async () => {
+    const stream = makeSseStream([
+      `event: done\ndata: ${JSON.stringify({ chat: { id: "c3" }, messages: "bad" })}\n\n`,
+    ]);
+
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+
+    await expect(
+      sendDesktopChatStream(
+        { chatId: "c3", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        handlers,
+      ),
+    ).rejects.toMatchObject({
+      code: "MALFORMED_DESKTOP_CHAT_STREAM_EVENT",
+      message: "The chat stream returned an invalid event. Retry the request.",
+    });
+
+    expect(handlers.onDone).not.toHaveBeenCalled();
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onCancelled).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed SSE JSON with a user-facing ApiError", async () => {
+    const stream = makeSseStream(["event: token\ndata: {not-json}\n\n"]);
+
+    const handlers = makeStreamHandlers();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+
+    await expect(
+      sendDesktopChatStream(
+        { chatId: "c4", projectPath: "/repo", content: "hello" },
+        new AbortController().signal,
+        handlers,
+      ),
+    ).rejects.toMatchObject({
+      code: "MALFORMED_DESKTOP_CHAT_STREAM_EVENT",
+    });
+
+    expect(handlers.onToken).not.toHaveBeenCalled();
   });
 });
 

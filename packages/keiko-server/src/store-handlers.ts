@@ -136,7 +136,7 @@ function badRequest(code: string, message: string): RouteResult {
 }
 
 function notFoundResult(message: string): RouteResult {
-  return { status: 404, body: errorBody("not_found", message) };
+  return { status: 404, body: errorBody("NOT_FOUND", message) };
 }
 
 function forbiddenResult(code: string, message: string): RouteResult {
@@ -146,7 +146,7 @@ function forbiddenResult(code: string, message: string): RouteResult {
 function payloadTooLarge(): RouteResult {
   return {
     status: 413,
-    body: errorBody("payload_too_large", "Request body exceeds the size limit."),
+    body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
   };
 }
 
@@ -155,7 +155,7 @@ async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Pro
     return await worker();
   } catch (error) {
     if (error instanceof BodyTooLargeError) return payloadTooLarge();
-    if (error instanceof InvalidRequest) return badRequest("invalid_request", error.message);
+    if (error instanceof InvalidRequest) return badRequest("INVALID_REQUEST", error.message);
     if (error instanceof UiStoreError) return uiStoreErrorResult(error);
     throw error;
   }
@@ -431,7 +431,7 @@ function runHandlerSync(worker: () => RouteResult): RouteResult {
   try {
     return worker();
   } catch (error) {
-    if (error instanceof InvalidRequest) return badRequest("invalid_request", error.message);
+    if (error instanceof InvalidRequest) return badRequest("INVALID_REQUEST", error.message);
     if (error instanceof UiStoreError) return uiStoreErrorResult(error);
     throw error;
   }

@@ -1,7 +1,7 @@
 // Epic #270 — QiHubPanel tests. The hub lists past runs and opens a run as a result card via the
 // injected `openRun` callback; finishing a run from the launcher also opens its card.
 
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QiHubPanel } from "./QiHubPanel";
@@ -240,6 +240,80 @@ describe("QiHubPanel", () => {
     // is preserved and returns via Retry → loadRuns.
     expect(await screen.findByTestId("qi-error-state")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+  });
+
+  // ── Delete focus restoration (GEN-UI-FOCUS-003 / test-plan #46, WCAG 2.4.3) ────
+  // A confirmed delete unmounts the focused row. Focus must land on a stable surviving control
+  // (the next/previous run's Open button, or the runs heading when the last run is removed) —
+  // never stranded on <body>.
+
+  it("moves focus to a surviving run's Open button after deleting one of several runs (#46)", async () => {
+    const user = userEvent.setup();
+    const deleteImpl = fakeDelete();
+    // First load: two runs. Post-delete refetch: only the second (surviving) run.
+    const fetchRunsImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runs: [makeRun("qi-run-aaaa1111", "succeeded"), makeRun("qi-run-bbbb2222", "succeeded")],
+        limit: 50,
+        totalRunIds: 2,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        runs: [makeRun("qi-run-bbbb2222", "succeeded")],
+        limit: 50,
+        totalRunIds: 1,
+        truncated: false,
+      }) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRuns;
+    render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fetchRunsImpl} deleteImpl={deleteImpl} />);
+
+    // Delete the FIRST run. Its two-step confirm control lives in that row.
+    const firstDelete = (
+      await screen.findAllByRole("button", { name: /delete run/i })
+    )[0] as HTMLElement;
+    await user.click(firstDelete);
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    // After the refetch commits, focus parks on the surviving run's Open button — not <body>.
+    const survivingOpen = await screen.findByRole("button", {
+      name: /open run qi-run-bbbb2222/i,
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(survivingOpen);
+    });
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("moves focus to the runs heading after deleting the last run (#46)", async () => {
+    const user = userEvent.setup();
+    const deleteImpl = fakeDelete();
+    const fetchRunsImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        runs: [makeRun("qi-run-aaaa1111", "succeeded")],
+        limit: 50,
+        totalRunIds: 1,
+        truncated: false,
+      })
+      .mockResolvedValueOnce({
+        runs: [],
+        limit: 50,
+        totalRunIds: 0,
+        truncated: false,
+      }) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRuns;
+    render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fetchRunsImpl} deleteImpl={deleteImpl} />);
+
+    await user.click(await screen.findByRole("button", { name: /delete run/i }));
+    await user.click(screen.getByRole("button", { name: /confirm delete/i }));
+
+    // The last run is gone (empty state), so focus parks on the (focusable) runs heading — the
+    // empty-state container is not focusable — and is never stranded on <body>.
+    await screen.findByText(/no runs yet/i);
+    const heading = screen.getByRole("heading", { name: /^runs$/i });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(heading);
+    });
+    expect(document.activeElement).not.toBe(document.body);
   });
 
   // Issue #282 A11y-2: run rows must show a review badge next to the status badge, and the

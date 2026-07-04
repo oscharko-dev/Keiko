@@ -4,7 +4,7 @@
 // after the build steps.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -29,6 +29,7 @@ const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
       "consumed by keiko-ui or the CLI product (Issue #1191; integration tracked under Epic #1189)",
   ],
 ]);
+const WRITE_CONTRACT = process.argv.includes("--write");
 
 function packFiles() {
   const env = { ...process.env };
@@ -129,6 +130,20 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+function stableValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stableValue(entry));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, stableValue(entry)]),
+    );
+  }
+  return value;
+}
+
 function formatTsDiagnostics(diagnostics) {
   return diagnostics
     .map((diagnostic) => {
@@ -191,37 +206,69 @@ function assertServerRuntimeSurface(paths) {
   }
 }
 
-async function assertRootPublicApiContract(paths) {
-  const contract = readRootPackageSurfaceContract();
-  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
-  if (stableJson(manifest.exports ?? {}) !== stableJson(contract.packageExports ?? {})) {
+function assertRootPackageExports(packageExports, contract) {
+  if (!WRITE_CONTRACT && stableJson(packageExports) !== stableJson(contract.packageExports ?? {})) {
     fail(
       `package.json exports drifted from ${ROOT_PACKAGE_SURFACE_CONTRACT_PATH} ` +
         "(the root package must stay monolithic-root only).",
     );
   }
+}
+
+function assertRootExportFiles(paths) {
   for (const required of ["dist/index.js", "dist/index.d.ts"]) {
     if (!paths.includes(required)) {
       fail(`the tarball does not include ${required} (SDK root export — run \`npm run build\`).`);
     }
   }
-  const url = pathToFileURL(resolve("dist/index.js")).href;
-  const runtimeExports = Object.keys(await import(url)).sort();
-  const runtimeDiff = diffExpectedExports(runtimeExports, contract.runtimeExports);
+}
+
+function writeRootPublicApiContract(contract) {
+  writeFileSync(
+    ROOT_PACKAGE_SURFACE_CONTRACT_PATH,
+    `${JSON.stringify(stableValue(contract), null, 2)}\n`,
+    "utf8",
+  );
+}
+
+function assertRootContractMatches(currentContract, contract) {
+  const runtimeDiff = diffExpectedExports(currentContract.runtimeExports, contract.runtimeExports);
   if (runtimeDiff.missing.length > 0 || runtimeDiff.unexpected.length > 0) {
     fail(
       "root runtime export contract drifted " +
         `(missing ${String(runtimeDiff.missing.length)}, unexpected ${String(runtimeDiff.unexpected.length)}).`,
     );
   }
-  const typeExports = collectTypeExports(resolve("dist/index.d.ts"));
-  const typeDiff = diffExpectedExports(typeExports, contract.declarationExports);
+  const typeDiff = diffExpectedExports(
+    currentContract.declarationExports,
+    contract.declarationExports,
+  );
   if (typeDiff.missing.length > 0 || typeDiff.unexpected.length > 0) {
     fail(
       "root declaration export contract drifted " +
         `(missing ${String(typeDiff.missing.length)}, unexpected ${String(typeDiff.unexpected.length)}).`,
     );
   }
+}
+
+async function assertRootPublicApiContract(paths) {
+  const contract = readRootPackageSurfaceContract();
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+  const packageExports = manifest.exports ?? {};
+  assertRootPackageExports(packageExports, contract);
+  assertRootExportFiles(paths);
+
+  const url = pathToFileURL(resolve("dist/index.js")).href;
+  const currentContract = {
+    packageExports,
+    runtimeExports: Object.keys(await import(url)).sort(),
+    declarationExports: collectTypeExports(resolve("dist/index.d.ts")),
+  };
+  if (WRITE_CONTRACT) {
+    writeRootPublicApiContract(currentContract);
+    return;
+  }
+  assertRootContractMatches(currentContract, contract);
 }
 
 function assertBundledPayload(paths) {
@@ -237,6 +284,59 @@ function assertBundledPayload(paths) {
       fail(
         `bundleDependencies entry ${name} ships no files under ${distPrefix} ` +
           "— the workspace bundle is incomplete (run `npm run build:packages`).",
+      );
+    }
+  }
+}
+
+function workspaceManifestByName(workspaceName) {
+  for (const entry of readdirSync("packages", { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = join("packages", entry.name, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (manifest.name === workspaceName) {
+      return { dir: join("packages", entry.name), manifest };
+    }
+  }
+  return null;
+}
+
+function collectExportTargets(exportsField) {
+  const targets = new Set();
+  function visit(value) {
+    if (typeof value === "string") {
+      if (value.startsWith("./")) targets.add(value.slice(2));
+      return;
+    }
+    if (value !== null && typeof value === "object") {
+      for (const entry of Object.values(value)) visit(entry);
+    }
+  }
+  visit(exportsField);
+  return [...targets].sort();
+}
+
+function assertBundledWorkspaceExportArtifacts(paths) {
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+  const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
+  for (const name of bundled) {
+    const workspace = workspaceManifestByName(name);
+    if (workspace === null) {
+      fail(`bundleDependencies entry ${name} does not map to a packages/* workspace.`);
+    }
+    const exportsField = workspace.manifest.exports;
+    if (exportsField === undefined) {
+      fail(`${name} declares no package.json exports; publish surface would be implicit.`);
+    }
+    const shortName = name.replace(/^@oscharko-dev\//, "");
+    const prefix = `node_modules/@oscharko-dev/${shortName}/`;
+    const missing = collectExportTargets(exportsField)
+      .map((target) => `${prefix}${target}`)
+      .filter((target) => !paths.includes(target));
+    if (missing.length > 0) {
+      fail(
+        `${name} export targets are missing from the packed artifact: ${missing.join(", ")} ` +
+          "(run `npm run build:packages`).",
       );
     }
   }
@@ -292,6 +392,97 @@ function assertLocalKnowledgeDistPath(paths) {
   }
 }
 
+function walkFiles(dir, ignoreDirNames = new Set()) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (ignoreDirNames.has(entry.name)) continue;
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkFiles(full, ignoreDirNames));
+    } else if (entry.isFile()) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+function collectSourceInputs() {
+  const inputs = [
+    "package.json",
+    "package-lock.json",
+    "tsconfig.build.json",
+    "tsconfig.packages.json",
+  ];
+  for (const file of readdirSync(".")) {
+    if (/^tsconfig\..*\.json$/.test(file)) inputs.push(file);
+  }
+  inputs.push(...walkFiles("src", new Set(["dist", "node_modules"])));
+  inputs.push("scripts/build-ui.mjs");
+  for (const entry of readdirSync("packages", { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dir = join("packages", entry.name);
+    inputs.push(join(dir, "package.json"));
+    try {
+      inputs.push(...walkFiles(join(dir, "src"), new Set(["dist", "node_modules", "coverage"])));
+    } catch {
+      // Some workspaces can be non-runtime packages; package.json still acts as the build input.
+    }
+  }
+  return inputs;
+}
+
+function collectBuildOutputs(paths) {
+  const outputs = [
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/ui/static/index.html",
+    "dist/ui/csp-hashes.json",
+  ];
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+  const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
+  for (const name of bundled) {
+    const shortName = name.replace(/^@oscharko-dev\//, "");
+    for (const required of [
+      `node_modules/@oscharko-dev/${shortName}/dist/index.js`,
+      `node_modules/@oscharko-dev/${shortName}/dist/index.d.ts`,
+    ]) {
+      if (paths.includes(required)) outputs.push(required);
+    }
+  }
+  return outputs;
+}
+
+function assertBuiltArtifactsFresh(paths) {
+  const inputs = collectSourceInputs().filter((path) => {
+    try {
+      return statSync(path).isFile();
+    } catch {
+      return false;
+    }
+  });
+  const outputs = collectBuildOutputs(paths);
+  for (const output of outputs) {
+    try {
+      if (!statSync(output).isFile()) {
+        fail(`build output ${output} is not a file; run \`npm run build && npm run build:ui\`.`);
+      }
+    } catch {
+      fail(`build output ${output} is missing; run \`npm run build && npm run build:ui\`.`);
+    }
+  }
+  const newestInput = inputs.reduce((latest, path) => Math.max(latest, statSync(path).mtimeMs), 0);
+  const oldestOutput = outputs.reduce(
+    (oldest, path) => Math.min(oldest, statSync(path).mtimeMs),
+    Number.POSITIVE_INFINITY,
+  );
+  if (newestInput > oldestOutput + 1000) {
+    fail(
+      "build outputs are older than source/package inputs; run " +
+        "`npm run clean && npm run build && npm run build:ui` before package-surface.",
+    );
+  }
+}
+
 const files = packFiles();
 const paths = files.map((f) => f.path);
 
@@ -330,11 +521,16 @@ assertServerRuntimeSurface(paths);
 await assertRootPublicApiContract(paths);
 assertRootWorkspaceContract();
 assertBundledPayload(paths);
+assertBundledWorkspaceExportArtifacts(paths);
 assertWorkflowHandoffSubpath(paths);
 assertLocalKnowledgeDistPath(paths);
+assertBuiltArtifactsFresh(paths);
 
 // Keiko Editor bundle-size budget (Issue #1207; ADR-0042 D3.6). Enforced here so it runs inside the
 // `ci` prepack chain (via `smoke:install`), as well as standalone via `npm run check:editor-bundle-size`.
 runEditorBundleSizeCheck();
 
-console.log(`package-surface check passed: ${String(paths.length)} files, dist/ui/static present.`);
+console.log(
+  `package-surface check passed: ${String(paths.length)} files, dist/ui/static present` +
+    `${WRITE_CONTRACT ? ", root contract regenerated" : ""}.`,
+);

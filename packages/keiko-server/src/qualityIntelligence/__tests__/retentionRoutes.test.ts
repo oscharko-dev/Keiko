@@ -6,7 +6,7 @@
 // not-found → 404, idempotent re-delete → 404, missing-id → 400, missing-evidenceDir → 500.
 // No network — pure handler + real fs.
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -144,6 +144,16 @@ describe("handleQiDeleteRun — delete sweeps the run and its review companion",
     expect(result.status).toBe(200);
     const body = result.body as { removedCompanionSuffixes: readonly string[] };
     expect(body.removedCompanionSuffixes).not.toContain(".review.json");
+  });
+
+  it("deletes a corrupt manifest and sweeps companions instead of making the run immortal", () => {
+    writeFileSync(manifestPath(evidenceDir, RUN_ID), "{not valid json", "utf8");
+
+    const result = asResult(handleQiDeleteRun(ctx(RUN_ID), deps(evidenceDir)));
+
+    expect(result.status).toBe(200);
+    expect(existsSync(manifestPath(evidenceDir, RUN_ID))).toBe(false);
+    expect(existsSync(reviewPath(evidenceDir, RUN_ID))).toBe(false);
   });
 });
 

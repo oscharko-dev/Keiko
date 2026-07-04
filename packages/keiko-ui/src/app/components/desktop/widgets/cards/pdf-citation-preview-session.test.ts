@@ -169,9 +169,7 @@ describe("pdf-citation-preview-session", () => {
     await Promise.resolve();
 
     expect(closePdfCitationPreviewSession).not.toHaveBeenCalled();
-    expect(getPdfCitationPreviewSession("pdf-preview-2")?.session.handle).toBe(
-      "preview-session-1",
-    );
+    expect(getPdfCitationPreviewSession("pdf-preview-2")?.session.handle).toBe("preview-session-1");
   });
 
   it("reuses and focuses the existing viewer for the same verified PDF session", () => {

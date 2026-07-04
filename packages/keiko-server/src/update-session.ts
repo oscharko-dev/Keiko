@@ -86,8 +86,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
   private activeAbort:
-    | { readonly sessionId: string; readonly controller: AbortController }
-    | undefined;
+    { readonly sessionId: string; readonly controller: AbortController } | undefined;
 
   public constructor(options: UpdateSessionManagerOptions = {}) {
     this.env = options.processEnv ?? process.env;

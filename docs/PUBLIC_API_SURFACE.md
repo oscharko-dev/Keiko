@@ -1,4 +1,4 @@
-# Public API surface — 0.2.0 baseline
+# Public API surface — 0.2.11 baseline
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only.

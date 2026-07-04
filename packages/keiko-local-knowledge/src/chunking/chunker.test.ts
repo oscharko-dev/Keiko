@@ -119,9 +119,8 @@ describe("chunkParsedUnit — pure", () => {
   });
 
   it("does not begin or end chunks inside a word when whitespace boundaries are available", () => {
-    const text = "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima. ".repeat(
-      5,
-    );
+    const text =
+      "Alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima. ".repeat(5);
     const unit = pageUnit(0, text.length);
     const chunks = chunkParsedUnit(unit, text, {
       maxTokens: 9,
@@ -179,9 +178,11 @@ describe("chunkParsedUnit — pure", () => {
     expect(chunks.length).toBeGreaterThan(3);
     expect(chunks[0]?.characterStart).toBe(0);
     expect(chunks[chunks.length - 1]?.characterEnd).toBe(text.length);
-    expect(chunks.some((chunk) => text.slice(chunk.characterStart, chunk.characterEnd).includes("| Feld |"))).toBe(
-      true,
-    );
+    expect(
+      chunks.some((chunk) =>
+        text.slice(chunk.characterStart, chunk.characterEnd).includes("| Feld |"),
+      ),
+    ).toBe(true);
     for (const chunk of chunks) {
       const excerpt = text.slice(chunk.characterStart, chunk.characterEnd);
       expect(excerpt).toBe(text.substring(chunk.characterStart, chunk.characterEnd));

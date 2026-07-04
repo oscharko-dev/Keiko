@@ -1406,7 +1406,7 @@ describe("parseModelCapability", () => {
   });
 });
 
-// ─── Voice capability parsing (Issue #493, ADR-0058 D5/D7) ───────────────────────
+// ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ───────────────────────
 // The voice ModelKind plus its additive sub-capability flags and provider locality, with the two
 // voice invariants enforced identically by the strict and inline parsers: voice fields require
 // kind "voice"; a voice capability must advertise ≥1 sub-capability and declare a locality.

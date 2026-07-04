@@ -8,6 +8,7 @@
 //   - statusHistogram       record count per MemoryStatus across all scanned scopes
 //   - recentAuditEvents     last N audit events (already redacted at persist time)
 //   - storagePath           the configured evidence dir, run through redactString
+//   - quarantinedStores     redacted inventory of memory vault .corrupt.* files, if memoryDir set
 //
 // Hard invariants:
 //
@@ -21,10 +22,12 @@
 //
 // This function does NOT mutate the vault. It only reads.
 
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import type { MemoryAuditEvent, MemoryScope, MemoryStatus } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { MEMORY_DB_FILENAME, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { auditRunIdFor } from "./memory-audit-handler.js";
 import {
   auditEventTouchesScope,
@@ -44,6 +47,12 @@ export interface MemoryScopeCount {
 
 export type MemoryStatusHistogram = Readonly<Record<MemoryStatus, number>>;
 
+export interface MemoryQuarantinedStore {
+  readonly kind: "database" | "wal" | "shm" | "diagnostic";
+  readonly path: string;
+  readonly sizeBytes: number;
+}
+
 export interface MemoryDiagnostics {
   readonly schemaVersion: "1";
   readonly generatedAt: number;
@@ -51,6 +60,7 @@ export interface MemoryDiagnostics {
   readonly statusHistogram: MemoryStatusHistogram;
   readonly recentAuditEvents: readonly MemoryAuditEvent[];
   readonly storagePath: string;
+  readonly quarantinedStores: readonly MemoryQuarantinedStore[];
 }
 
 export interface ExportMemoryDiagnosticsOptions {
@@ -61,6 +71,9 @@ export interface ExportMemoryDiagnosticsOptions {
   // The configured evidence dir. Redacted into `storagePath` so a custom path with a
   // sensitive segment (rare but possible) is not leaked.
   readonly evidenceDir: string;
+  // Optional memory dir. When provided, diagnostics inventories vault quarantine files
+  // without reading their content.
+  readonly memoryDir?: string | undefined;
   // Cap on the number of audit events returned. Defaults to 50; clamped to [1, 1000].
   readonly lastNAuditEvents?: number;
   // Optional clock; defaults to Date.now. Tests inject for determinism.
@@ -72,6 +85,10 @@ export interface ExportMemoryDiagnosticsOptions {
 const DEFAULT_AUDIT_EVENT_TAIL = 50;
 const MIN_AUDIT_EVENT_TAIL = 1;
 const MAX_AUDIT_EVENT_TAIL = 1000;
+
+const MEMORY_DB_QUARANTINE_PREFIX = `${MEMORY_DB_FILENAME}.corrupt.`;
+const MEMORY_WAL_QUARANTINE_PREFIX = `${MEMORY_DB_FILENAME}-wal.corrupt.`;
+const MEMORY_SHM_QUARANTINE_PREFIX = `${MEMORY_DB_FILENAME}-shm.corrupt.`;
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────────
 
@@ -146,6 +163,43 @@ function readAuditManifest(store: EvidenceStore, runId: string): readonly Memory
   }
 }
 
+function quarantinedStoreKind(name: string): MemoryQuarantinedStore["kind"] | undefined {
+  if (name.startsWith(MEMORY_DB_QUARANTINE_PREFIX) && name.endsWith(".diagnostic.json")) {
+    return "diagnostic";
+  }
+  if (name.startsWith(MEMORY_DB_QUARANTINE_PREFIX)) {
+    return "database";
+  }
+  if (name.startsWith(MEMORY_WAL_QUARANTINE_PREFIX)) {
+    return "wal";
+  }
+  if (name.startsWith(MEMORY_SHM_QUARANTINE_PREFIX)) {
+    return "shm";
+  }
+  return undefined;
+}
+
+function listQuarantinedStores(
+  memoryDir: string | undefined,
+  redactString: (input: string) => string,
+): readonly MemoryQuarantinedStore[] {
+  if (memoryDir === undefined) return [];
+  try {
+    return readdirSync(memoryDir, { withFileTypes: true })
+      .flatMap((entry): MemoryQuarantinedStore[] => {
+        if (!entry.isFile()) return [];
+        const kind = quarantinedStoreKind(entry.name);
+        if (kind === undefined) return [];
+        const path = join(memoryDir, entry.name);
+        const stat = statSync(path);
+        return [{ kind, path: redactString(path), sizeBytes: stat.size }];
+      })
+      .sort((a, b) => a.path.localeCompare(b.path));
+  } catch {
+    return [];
+  }
+}
+
 // ─── Public entry point ───────────────────────────────────────────────────────
 
 export function exportMemoryDiagnostics(
@@ -183,6 +237,7 @@ export function exportMemoryDiagnostics(
     statusHistogram: histogram,
     recentAuditEvents,
     storagePath: options.redactString(options.evidenceDir),
+    quarantinedStores: listQuarantinedStores(options.memoryDir, options.redactString),
   };
 }
 

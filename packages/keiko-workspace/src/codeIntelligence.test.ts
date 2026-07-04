@@ -14,16 +14,18 @@ import type { WorkspaceInfo, WorkspaceLanguage } from "./types.js";
 const MEM_ROOT = "/ws";
 const FIXED_NOW = (): number => 1_700_000_000_000;
 
-function workspace(languages: readonly WorkspaceLanguage[] = [
-  "typescript",
-  "javascript",
-  "java",
-  "python",
-  "go",
-  "csharp",
-  "graphql",
-  "protobuf",
-]): WorkspaceInfo {
+function workspace(
+  languages: readonly WorkspaceLanguage[] = [
+    "typescript",
+    "javascript",
+    "java",
+    "python",
+    "go",
+    "csharp",
+    "graphql",
+    "protobuf",
+  ],
+): WorkspaceInfo {
   return {
     root: MEM_ROOT,
     name: "code-intelligence-demo",
@@ -89,7 +91,10 @@ function requireCodeIntelligenceCachePath(files: Readonly<Record<string, string>
   return cachePath;
 }
 
-function parseCacheEnvelope(files: Readonly<Record<string, string>>, cachePath: string): CacheEnvelopeForTest {
+function parseCacheEnvelope(
+  files: Readonly<Record<string, string>>,
+  cachePath: string,
+): CacheEnvelopeForTest {
   return JSON.parse(files[cachePath] ?? "{}") as CacheEnvelopeForTest;
 }
 
@@ -493,7 +498,7 @@ function enterpriseFixture(): Record<string, string> {
 function edgeCaseFixture(): Record<string, string> {
   return {
     Dockerfile: "FROM node:22\n",
-    "README": "not source\n",
+    README: "not source\n",
     "package.json": JSON.stringify({
       name: "@edge/root",
       dependencies: {
@@ -897,7 +902,9 @@ describe("buildCodeIntelligenceIndex", () => {
 
     expect(index.filesIndexed).toBeGreaterThan(15);
     expect(index.filesSkipped).toBe(0);
-    const parserCoverage = new Map(index.parserCoverage.map((entry) => [entry.parser, entry.filesIndexed]));
+    const parserCoverage = new Map(
+      index.parserCoverage.map((entry) => [entry.parser, entry.filesIndexed]),
+    );
     expect(parserCoverage.get("polyglot-regex")).toBeGreaterThan(0);
     expect(parserCoverage.get("typescript-compiler-ast")).toBeGreaterThan(0);
     expect(index.imports).toEqual(
@@ -1001,7 +1008,9 @@ describe("buildCodeIntelligenceIndex", () => {
       ]),
     );
     expect(
-      sorted(index.endpoints.map((endpoint) => `${endpoint.role}:${endpoint.method}:${endpoint.path}`)),
+      sorted(
+        index.endpoints.map((endpoint) => `${endpoint.role}:${endpoint.method}:${endpoint.path}`),
+      ),
     ).toEqual(
       expect.arrayContaining([
         "client:GET:/api/orders/:param",
@@ -1021,9 +1030,9 @@ describe("buildCodeIntelligenceIndex", () => {
         "server:RPC:/protobuf/orderservice/getorder",
       ]),
     );
-    expect(hasResolvedApiContract(index, "GET", "/api/orders/:param", "GET", "/api/orders/:param")).toBe(
-      true,
-    );
+    expect(
+      hasResolvedApiContract(index, "GET", "/api/orders/:param", "GET", "/api/orders/:param"),
+    ).toBe(true);
     expect(hasResolvedApiContract(index, "POST", "/api/orders", "POST", "/api/orders")).toBe(true);
     expect(
       hasResolvedApiContract(
@@ -1168,13 +1177,17 @@ describe("buildCodeIntelligenceIndex", () => {
       ]),
     );
     const sharedDto = index.symbols.find(
-      (symbol) => symbol.name === "SharedDto" && symbol.scopePath === "src/main/java/com/edge/shared/SharedDto.java",
+      (symbol) =>
+        symbol.name === "SharedDto" &&
+        symbol.scopePath === "src/main/java/com/edge/shared/SharedDto.java",
     );
     expect(sharedDto?.fields).toEqual(expect.arrayContaining(["wire_id", "label"]));
     const goEdge = index.symbols.find((symbol) => symbol.name === "GoEdge");
     expect(goEdge?.fields).toEqual(expect.arrayContaining(["wire_id", "Ignored", "Label"]));
     expect(
-      sorted(index.endpoints.map((endpoint) => `${endpoint.role}:${endpoint.method}:${endpoint.path}`)),
+      sorted(
+        index.endpoints.map((endpoint) => `${endpoint.role}:${endpoint.method}:${endpoint.path}`),
+      ),
     ).toEqual(
       expect.arrayContaining([
         "client:GET:/base/fetch",
@@ -1245,13 +1258,20 @@ describe("buildCodeIntelligenceIndex", () => {
 
     const exactImportAtoms = queryCodeIntelligenceIndex(
       scope,
-      { kind: "exact-symbol", text: "@exact/shared", caseSensitive: true, maxResults: 20, emittedAtMs: 0 },
+      {
+        kind: "exact-symbol",
+        text: "@exact/shared",
+        caseSensitive: true,
+        maxResults: 20,
+        emittedAtMs: 0,
+      },
       index,
       FIXED_NOW(),
     );
     expect(
       exactImportAtoms.some(
-        (atom) => atom.score === 1 && atom.edge?.kind === "import" && atom.edge.label === "@exact/shared",
+        (atom) =>
+          atom.score === 1 && atom.edge?.kind === "import" && atom.edge.label === "@exact/shared",
       ),
     ).toBe(true);
 
@@ -1271,7 +1291,13 @@ describe("buildCodeIntelligenceIndex", () => {
 
     const lookedUp = lookupCodeIntelligenceAtoms(
       scope,
-      { kind: "exact-symbol", text: "ExactDto", caseSensitive: true, maxResults: 3, emittedAtMs: 0 },
+      {
+        kind: "exact-symbol",
+        text: "ExactDto",
+        caseSensitive: true,
+        maxResults: 3,
+        emittedAtMs: 0,
+      },
       { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 3 },
       fs,
       { disableCache: true },
@@ -1300,15 +1326,29 @@ describe("buildCodeIntelligenceIndex", () => {
     expect(fromPersistent.imports).toEqual(first.imports);
 
     files[cachePath] = JSON.stringify({ schemaVersion: -1, fingerprint: "stale", index: null });
-    const rebuilt = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, persistentMemFs(files));
+    const rebuilt = buildCodeIntelligenceIndex(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      persistentMemFs(files),
+    );
     expect(rebuilt.imports).toEqual(first.imports);
 
     const validCache = requireValidCacheIndex(parseCacheEnvelope(files, cachePath));
     expect(typeof validCache.fingerprint).toBe("string");
 
     for (const corruptIndex of corruptIndexVariants(validCache.index)) {
-      writeCacheEnvelope(files, cachePath, validCache.schemaVersion, validCache.fingerprint, corruptIndex);
-      const recovered = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, persistentMemFs(files));
+      writeCacheEnvelope(
+        files,
+        cachePath,
+        validCache.schemaVersion,
+        validCache.fingerprint,
+        corruptIndex,
+      );
+      const recovered = buildCodeIntelligenceIndex(
+        scope,
+        DEFAULT_SEARCH_LIMITS,
+        persistentMemFs(files),
+      );
       expect(recovered.imports).toEqual(first.imports);
     }
   });
@@ -1331,8 +1371,8 @@ describe("lookupCodeIntelligenceAtoms", () => {
       scopePath: "packages/api/src/orders.ts",
     });
     expect(atoms[0]?.provenance.tool).toBe("code-intelligence-index");
-    expect(atoms.some((atom) => atom.edge?.kind === "call" || atom.edge?.kind === "reference")).toBe(
-      true,
-    );
+    expect(
+      atoms.some((atom) => atom.edge?.kind === "call" || atom.edge?.kind === "reference"),
+    ).toBe(true);
   });
 });

@@ -459,8 +459,7 @@ export function resolveModelForQiCapability(
     .slice()
     .sort(
       (a, b) =>
-        COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] ||
-        a.index - b.index,
+        COST_RANK[a.capability.costClass] - COST_RANK[b.capability.costClass] || a.index - b.index,
     );
   const selected = candidates[0]?.capability.id;
   if (selected === undefined) {

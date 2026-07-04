@@ -4,6 +4,7 @@
 // All routes hit the same-origin BFF; the CSRF header is added for mutating methods.
 
 import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 import type {
   CapsuleSetId,
   CapsuleContextualRetrievalSettings,
@@ -58,9 +59,20 @@ export interface CapsuleActionResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Internal fetch wrapper (mirrors api.ts pattern; no external CSRF token dep)
+// Internal fetch wrapper — thin delegation to the shared BFF scaffold (GEN-DUP-NEAR-004).
+// The one divergence this surface preserves is the FRIENDLY parse-failure message (uiux-fix F033,
+// C064): when a non-2xx body is not a parseable error envelope the UI shows a human-readable line
+// instead of the raw "INTERNAL: HTTP 500" machine string.
 // ---------------------------------------------------------------------------
 
+// No parseable error envelope — keep the message human-readable instead of the raw
+// "INTERNAL: HTTP 500" machine string (uiux-fix F033, C064).
+function friendlyParseFailureMessage(status: number): string {
+  return `The server returned an unexpected error (HTTP ${status.toString()}). Try again.`;
+}
+
+// Header union used by the injectable-`fetch` `fetchCapsuleDetail` seam below (it drives a
+// caller-supplied `fetch` rather than the global one, so it cannot delegate to `bffFetchJson`).
 function buildHeaders(method: string, body: BodyInit | null | undefined): Record<string, string> {
   const headers: Record<string, string> = { Accept: "application/json" };
   const isStateChanging = method !== "GET" && method !== "HEAD";
@@ -78,32 +90,12 @@ async function parseError(res: Response): Promise<{ code: string; message: strin
     const envelope = (await res.json()) as { error: { code: string; message: string } };
     return { code: envelope.error.code, message: envelope.error.message };
   } catch {
-    // No parseable error envelope — keep the message human-readable instead of
-    // the raw "INTERNAL: HTTP 500" machine string (uiux-fix F033, C064).
-    return {
-      code: "INTERNAL",
-      message: `The server returned an unexpected error (HTTP ${res.status.toString()}). Try again.`,
-    };
+    return { code: "INTERNAL", message: friendlyParseFailureMessage(res.status) };
   }
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const res = await fetch(path, {
-    ...init,
-    headers: buildHeaders(method, init?.body),
-  });
-
-  if (!res.ok) {
-    const { code, message } = await parseError(res);
-    throw new ApiError(code, message, res.status);
-  }
-
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  return res.json() as Promise<T>;
+  return bffFetchJson<T>(path, init, { parseFailureMessage: friendlyParseFailureMessage });
 }
 
 // ---------------------------------------------------------------------------

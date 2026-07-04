@@ -285,7 +285,15 @@ export type UncertaintyMarkerKind =
   | "scope-incomplete"
   | "budget-clipped"
   | "tool-unavailable"
-  | "low-confidence";
+  | "low-confidence"
+  // GEN-AI-GROUNDING-001/-008 (RB-4): the grounded answer's inline `[path:line]` reference names a
+  // file/line that was NOT in the retrieved evidence pack sent to the model. Post-generation
+  // citation reconciliation appends this marker so an ungrounded (fabricated) reference is surfaced
+  // rather than displayed as a supported grounded claim.
+  | "unsupported-citation"
+  // GEN-AI-GATEWAY-001 (RB-4): the model completion was truncated (finishReason "length"); the
+  // partial answer is surfaced with this marker instead of being consumed as a complete answer.
+  | "incomplete-answer";
 
 export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "no-evidence",
@@ -294,6 +302,8 @@ export const UNCERTAINTY_MARKER_KINDS: readonly UncertaintyMarkerKind[] = [
   "budget-clipped",
   "tool-unavailable",
   "low-confidence",
+  "unsupported-citation",
+  "incomplete-answer",
 ] as const;
 
 export interface UncertaintyMarker {
@@ -348,11 +358,7 @@ export interface RankedCandidateExplanation {
 }
 
 export type ContextCoverageTruncationReason =
-  | "aborted"
-  | "file-cap"
-  | "match-cap"
-  | "timeout"
-  | "depth-pruned";
+  "aborted" | "file-cap" | "match-cap" | "timeout" | "depth-pruned";
 
 export const CONTEXT_COVERAGE_TRUNCATION_REASONS: readonly ContextCoverageTruncationReason[] = [
   "aborted",
@@ -1273,9 +1279,7 @@ function isCandidateSignal(value: unknown): value is CandidateSignal {
 }
 
 function isContextCoverageReason(value: unknown): value is ContextCoverageTruncationReason {
-  return CONTEXT_COVERAGE_TRUNCATION_REASONS.includes(
-    value as ContextCoverageTruncationReason,
-  );
+  return CONTEXT_COVERAGE_TRUNCATION_REASONS.includes(value as ContextCoverageTruncationReason);
 }
 
 function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: string[]): void {
@@ -1403,6 +1407,10 @@ function validateCoverageCounters(
     );
   }
   for (const field of COVERAGE_LIMIT_FIELDS) {
-    pushIf(reasons, !isFiniteNonNegativeInteger(coverage.limits[field]), `coverage.${field} invalid`);
+    pushIf(
+      reasons,
+      !isFiniteNonNegativeInteger(coverage.limits[field]),
+      `coverage.${field} invalid`,
+    );
   }
 }

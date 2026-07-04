@@ -351,6 +351,14 @@ additive, so no package version is bumped.
   must not have.
 - **Why rejected**: D3. One `parsePorcelainV2Branch` consumed by both surfaces is audited once.
 
+## Presentation convention
+
+The git-client surfaces that consume these routes compose existing `globals.css` design-system
+tokens through inline styles and introduce no `globals.css` changes. They therefore respect the
+[ADR-0051](ADR-0051-design-system-visual-regression-and-acceptance-gate.md) visual-regression and
+acceptance gate by construction: no new token, theme override, or stylesheet rule is added, so the
+`#1300` `globals.css.test.ts` proof remains untouched.
+
 ## Related
 
 - [ADR-0080](ADR-0080-governed-git-delivery-contracts.md): the governed Git delivery contracts and

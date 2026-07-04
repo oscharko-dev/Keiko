@@ -26,7 +26,7 @@ It reuses, rather than re-implements, the shipped runtime as its measurement sub
 - the presentational `VoiceDialogMode` surfaces for the accessibility audit;
 - `jest-axe` (already a dev dependency) for the automated accessibility pass.
 
-The contract-boundary Voice Digital Twin evaluation ([#505](evaluation-harness.md), ADR-0068) proves the
+The contract-boundary Voice Digital Twin evaluation ([#505](evaluation-harness.md), ADR-0110) proves the
 profile × environment matrix at the `keiko-contracts` tier and **cannot import `keiko-ui`** (ADR-0019 rule
 3l). Because dialogue mode is a `keiko-ui` runtime concern (live hooks, controls, latency, cleanup,
 accessibility), this evaluation lives beside the runtime in

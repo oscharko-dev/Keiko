@@ -325,9 +325,7 @@ describe("handleQiExport — malformed candidates companion", () => {
       ),
     );
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_CANDIDATES_TAMPERED",
-    );
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CANDIDATES_TAMPERED");
   });
 
   it("returns 409 when candidate content is edited after the companion integrity hash was written", async () => {
@@ -353,9 +351,7 @@ describe("handleQiExport — malformed candidates companion", () => {
       ),
     );
     expect(result.status).toBe(409);
-    expect((result.body as { error: { code: string } }).error.code).toBe(
-      "QI_CANDIDATES_TAMPERED",
-    );
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_CANDIDATES_TAMPERED");
   });
 });
 
@@ -753,6 +749,31 @@ describe("handleQiExport — run-scope approval gates the approvedOnly filter", 
     );
     expect(result.status).toBe(409);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOTHING_TO_EXPORT");
+  });
+
+  it("rejects approvedOnly export when the review artifact approval is forged", async () => {
+    writeFileSync(
+      join(evidenceDir, "qi", `${RUN_ID}.review.json`),
+      JSON.stringify({
+        qiReviewSchemaVersion: 1,
+        runId: RUN_ID,
+        runState: "open",
+        candidateStates: { "cand-001": "approved" },
+        auditLog: [],
+        lastUpdatedAt: "2026-06-01T12:00:00.000Z",
+      }),
+      "utf8",
+    );
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "json", dryRun: false, approvedOnly: true })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_REVIEW_TAMPERED");
   });
 
   it("permits a TMS dry-run (forces approvedOnly) once the RUN is approved", async () => {

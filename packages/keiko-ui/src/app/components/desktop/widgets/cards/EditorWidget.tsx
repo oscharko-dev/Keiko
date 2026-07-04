@@ -18,17 +18,13 @@ import { createPortal } from "react-dom";
 import {
   activeEditorPane,
   createEditorDirtyCloseIntent,
-  createEditorLayoutStateV2,
   editorLayoutOpenFiles,
   editorLayoutPaneIds,
-  editorLayoutPanes,
   editorLayoutReducer,
-  resolveWorkspaceFileIdentifier,
   selectWorkspaceFileTarget,
   serializeEditorLayoutStateV2,
   type EditorDirtyCloseIntent,
   type EditorLayoutNode,
-  type EditorLayoutPaneNode,
   type EditorLayoutSplitNode,
   type EditorLayoutStateV2,
   type EditorPaneStateV2,
@@ -46,6 +42,29 @@ import { FilesWidget, type FilesMutationEvent } from "./FilesWidget";
 import { EditorCommandPalette, type EditorPaletteMode } from "./EditorCommandPalette";
 import { type EditorPaletteHost } from "./editorCommands";
 import { FileIcon } from "../shared/projectTree";
+import {
+  allDirtyFiles,
+  clampNumber,
+  createDistributedPresetLayout,
+  createInitialLayout,
+  dirtyFilesForPane,
+  draggedTabFromEvent,
+  EDITOR_TAB_DRAG_MIME,
+  MAX_EDITOR_PANES,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  normalizeEditorFile,
+  normalizeEditorLayoutStructure,
+  normalizeEditorOpenFiles,
+  openFilesPatchValue,
+  paneIdFromPoint,
+  remapDirtyFilesToPresetPanes,
+  sameStringList,
+  tabInsertionTargetFromPoint,
+  type DraggedTab,
+  type PointerTabDrag,
+  type TabInsertTarget,
+} from "./editorPaneGeometry";
 
 const EditorRuntimeWidget = dynamic<EditorRuntimeWidgetProps>(
   () => import("./EditorRuntimeWidget"),
@@ -75,404 +94,16 @@ interface PendingDirtyClose {
   readonly error?: string | undefined;
 }
 
-interface DraggedTab {
-  readonly paneId: string;
-  readonly file: string;
-}
-
-interface TabInsertTarget {
-  readonly paneId: string;
-  readonly file: string;
-  readonly edge: "before" | "after";
-  readonly targetIndex: number;
-}
-
-interface PointerTabDrag {
-  readonly paneId: string;
-  readonly file: string;
-  readonly startX: number;
-  readonly startY: number;
-  readonly offsetX: number;
-  readonly offsetY: number;
-  readonly width: number;
-  dragging: boolean;
-}
-
 interface PointerTabDragPosition {
   readonly x: number;
   readonly y: number;
   readonly width: number;
 }
 
-const EDITOR_TAB_DRAG_MIME = "application/x-keiko-editor-tab";
 const TAB_POINTER_DRAG_THRESHOLD_PX = 6;
-const MIN_SIDEBAR_WIDTH = 180;
-const DEFAULT_SIDEBAR_WIDTH = 260;
-const MAX_SIDEBAR_WIDTH = 440;
 const MIN_SPLIT_RATIO = 15;
 const MAX_SPLIT_RATIO = 85;
-const MAX_EDITOR_PANES = 2;
 const CLOSED_TAB_HISTORY_LIMIT = 20;
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-// Root-relative file-identifier contract (Issue #1374): turn a configured/persisted file (which
-// may be absolute, e.g. from an older session or a symlink-aliased root) into the root-relative
-// identifier the BFF requires. An absolute path that does not live under `root` resolves to "" so
-// the editor renders its non-blocking empty state instead of sending an absolute path that the BFF
-// would reject with 400 BAD_PATH. This and the chat repository-reference open path
-// (workspaceActions) share the contract in @oscharko-dev/keiko-contracts; the editor window's
-// cfg-persistence normalizer (AppShell.normalizeEditorWindowCfg) is a separate layer that likewise
-// never persists an absolute file id.
-function normalizeEditorFile(root: string, file: string | undefined): string {
-  const resolution = resolveWorkspaceFileIdentifier(root, file);
-  return resolution.kind === "relative" ? resolution.path : "";
-}
-
-function normalizeEditorOpenFiles(
-  root: string,
-  file: string | undefined,
-  openFiles: readonly string[] | undefined,
-): readonly string[] {
-  const out: string[] = [];
-  const add = (path: string | undefined): void => {
-    const normalized = normalizeEditorFile(root, path);
-    if (normalized.length === 0 || out.includes(normalized)) return;
-    out.push(normalized);
-  };
-  for (const path of openFiles ?? []) add(path);
-  add(file);
-  return out;
-}
-
-function sameStringList(left: readonly string[] | undefined, right: readonly string[]): boolean {
-  if (left === undefined) return right.length === 0;
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function openFilesPatchValue(openFiles: readonly string[]): readonly string[] | undefined {
-  return openFiles.length > 0 ? openFiles : undefined;
-}
-
-function sanitizePaneFiles(root: string, pane: EditorPaneStateV2): EditorPaneStateV2 {
-  const openFiles = normalizeEditorOpenFiles(root, pane.activeFile, pane.openFiles);
-  const activeFile = normalizeEditorFile(root, pane.activeFile) || openFiles[0] || "";
-  const tabOrder = normalizeEditorOpenFiles(root, activeFile, pane.tabOrder);
-  return { ...pane, openFiles, activeFile, tabOrder: tabOrder.length > 0 ? tabOrder : openFiles };
-}
-
-function sanitizeLayoutFiles(root: string, layout: EditorLayoutStateV2): EditorLayoutStateV2 {
-  const panes: Record<string, EditorPaneStateV2> = {};
-  for (const [paneId, pane] of Object.entries(layout.panes)) {
-    panes[paneId] = sanitizePaneFiles(root, pane);
-  }
-  return { ...layout, root, panes };
-}
-
-function layoutHasDuplicateFiles(layout: EditorLayoutStateV2): boolean {
-  const seen = new Set<string>();
-  for (const pane of editorLayoutPanes(layout)) {
-    for (const path of pane.openFiles) {
-      if (seen.has(path)) return true;
-      seen.add(path);
-    }
-  }
-  return false;
-}
-
-function layoutHasClonedPanes(layout: EditorLayoutStateV2): boolean {
-  const panes = editorLayoutPanes(layout);
-  if (panes.length < 2) return false;
-  const first = panes[0]?.openFiles ?? [];
-  return panes.every((pane) => sameStringList(pane.openFiles, first));
-}
-
-function createInitialLayout(input: {
-  readonly root: string;
-  readonly file: string;
-  readonly openFiles: readonly string[];
-  readonly layoutJson: string | undefined;
-}): EditorLayoutStateV2 {
-  return normalizeEditorLayoutStructure(
-    input.root,
-    createEditorLayoutStateV2({
-      root: input.root,
-      file: input.file,
-      openFiles: input.openFiles,
-      layoutJson: input.layoutJson,
-      defaultSidebarWidth: DEFAULT_SIDEBAR_WIDTH,
-      minSidebarWidth: MIN_SIDEBAR_WIDTH,
-      maxSidebarWidth: MAX_SIDEBAR_WIDTH,
-    }),
-  );
-}
-
-function createPresetPane(
-  root: string,
-  id: string,
-  activeFile: string,
-  openFiles: readonly string[],
-): EditorPaneStateV2 {
-  const normalizedOpenFiles = normalizeEditorOpenFiles(root, activeFile, openFiles);
-  const normalizedActiveFile =
-    normalizeEditorFile(root, activeFile) || normalizedOpenFiles[0] || "";
-  return {
-    id,
-    activeFile: normalizedActiveFile,
-    openFiles: normalizedOpenFiles,
-    tabOrder: normalizedOpenFiles,
-  };
-}
-
-function paneNode(paneId: string): EditorLayoutPaneNode {
-  return { type: "pane", paneId };
-}
-
-function splitNode(
-  id: string,
-  direction: EditorSplitDirection,
-  first: EditorLayoutNode,
-  second: EditorLayoutNode,
-): EditorLayoutSplitNode {
-  return { type: "split", id, direction, ratio: 50, first, second };
-}
-
-function presetTree(direction: EditorSplitDirection): EditorLayoutSplitNode {
-  return splitNode("split-1", direction, paneNode("pane-1"), paneNode("pane-2"));
-}
-
-function createDistributedPresetLayout(
-  layout: EditorLayoutStateV2,
-  root: string,
-  direction: EditorSplitDirection,
-  sourcePane: EditorPaneStateV2,
-): EditorLayoutStateV2 | null {
-  const openFiles = normalizeEditorOpenFiles(
-    root,
-    sourcePane.activeFile,
-    editorLayoutOpenFiles(layout),
-  );
-  const activeFile = normalizeEditorFile(root, sourcePane.activeFile) || openFiles[0] || "";
-  const otherFiles = openFiles.filter((path) => path !== activeFile);
-  if (activeFile.length === 0 || otherFiles.length === 0) return null;
-  return {
-    ...layout,
-    root,
-    activePaneId: "pane-1",
-    tree: presetTree(direction),
-    panes: {
-      "pane-1": createPresetPane(root, "pane-1", activeFile, [activeFile]),
-      "pane-2": createPresetPane(root, "pane-2", otherFiles[0] ?? "", otherFiles),
-    },
-  };
-}
-
-function createSinglePresetLayout(
-  layout: EditorLayoutStateV2,
-  root: string,
-  activeFile: string,
-  openFiles: readonly string[],
-): EditorLayoutStateV2 {
-  return {
-    ...layout,
-    root,
-    activePaneId: "pane-1",
-    tree: paneNode("pane-1"),
-    panes: {
-      "pane-1": createPresetPane(root, "pane-1", activeFile, openFiles),
-    },
-  };
-}
-
-function dedupeLayoutFilesByActivePane(
-  layout: EditorLayoutStateV2,
-  root: string,
-): EditorLayoutStateV2 {
-  const paneIds = editorLayoutPaneIds(layout);
-  const orderedPaneIds = [
-    layout.activePaneId,
-    ...paneIds.filter((paneId) => paneId !== layout.activePaneId),
-  ];
-  const seen = new Set<string>();
-  const panes: Record<string, EditorPaneStateV2> = { ...layout.panes };
-  for (const paneId of orderedPaneIds) {
-    const pane = layout.panes[paneId];
-    if (pane === undefined) continue;
-    const openFiles = pane.openFiles.filter((path) => {
-      if (seen.has(path)) return false;
-      seen.add(path);
-      return true;
-    });
-    const activeFile = openFiles.includes(pane.activeFile) ? pane.activeFile : (openFiles[0] ?? "");
-    panes[paneId] = createPresetPane(root, pane.id, activeFile, openFiles);
-  }
-  return { ...layout, panes };
-}
-
-function normalizeEditorLayoutStructure(
-  root: string,
-  layout: EditorLayoutStateV2,
-): EditorLayoutStateV2 {
-  const sanitized = sanitizeLayoutFiles(root, layout);
-  const paneIds = editorLayoutPaneIds(sanitized);
-  const hasDuplicateFiles = layoutHasDuplicateFiles(sanitized);
-  if (paneIds.length <= MAX_EDITOR_PANES && !hasDuplicateFiles) {
-    return sanitized;
-  }
-  if (paneIds.length <= MAX_EDITOR_PANES && hasDuplicateFiles && !layoutHasClonedPanes(sanitized)) {
-    const deduped = dedupeLayoutFilesByActivePane(sanitized, root);
-    if (editorLayoutPanes(deduped).every((pane) => pane.openFiles.length > 0)) return deduped;
-  }
-  const sourcePane = activeEditorPane(sanitized);
-  const direction = sanitized.tree.type === "split" ? sanitized.tree.direction : "row";
-  const distributed = createDistributedPresetLayout(sanitized, root, direction, sourcePane);
-  if (distributed !== null) return distributed;
-  const openFiles = editorLayoutOpenFiles(sanitized);
-  const activeFile = normalizeEditorFile(root, sourcePane.activeFile) || openFiles[0] || "";
-  return createSinglePresetLayout(sanitized, root, activeFile, openFiles);
-}
-
-function dirtyFilesForPane(
-  dirtyByPane: Readonly<Record<string, Readonly<Record<string, true>>>>,
-  paneId: string,
-  files: readonly string[],
-): readonly string[] {
-  const paneDirty = dirtyByPane[paneId] ?? {};
-  return files.filter((file) => paneDirty[file] === true);
-}
-
-function allDirtyFiles(
-  dirtyByPane: Readonly<Record<string, Readonly<Record<string, true>>>>,
-): readonly string[] {
-  const out = new Set<string>();
-  for (const paneDirty of Object.values(dirtyByPane)) {
-    for (const path of Object.keys(paneDirty)) out.add(path);
-  }
-  return [...out];
-}
-
-function draggedTabFromEvent(event: DragEvent<HTMLElement>): DraggedTab | null {
-  const payload = event.dataTransfer.getData(EDITOR_TAB_DRAG_MIME);
-  if (payload.length === 0) return null;
-  try {
-    const parsed: unknown = JSON.parse(payload);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "paneId" in parsed &&
-      "file" in parsed &&
-      typeof parsed.paneId === "string" &&
-      typeof parsed.file === "string" &&
-      parsed.paneId.length > 0 &&
-      parsed.file.length > 0
-    ) {
-      return { paneId: parsed.paneId, file: parsed.file };
-    }
-  } catch {
-    // Ignore stale or foreign drag payloads.
-  }
-  return null;
-}
-
-function paneIdFromPoint(clientX: number, clientY: number): string | null {
-  const target = document.elementFromPoint(clientX, clientY);
-  const pane = target?.closest<HTMLElement>(".ed-pane");
-  return pane?.dataset.paneId ?? null;
-}
-
-function tabOrderWithInsertion(
-  files: readonly string[],
-  file: string,
-  targetIndex: number,
-): readonly string[] {
-  const without = files.filter((entry) => entry !== file);
-  const clamped = Math.min(without.length, Math.max(0, targetIndex));
-  return [...without.slice(0, clamped), file, ...without.slice(clamped)];
-}
-
-function tabInsertionTargetFromPoint(
-  drag: PointerTabDrag,
-  clientX: number,
-  clientY: number,
-  layout: EditorLayoutStateV2,
-): TabInsertTarget | null {
-  const targetPaneId = paneIdFromPoint(clientX, clientY);
-  if (targetPaneId === null) return null;
-  const pane = layout.panes[targetPaneId];
-  if (pane === undefined || pane.tabOrder.length < 1) return null;
-
-  const tabNodes = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      ".ed-tab[data-pane-id][data-tab-file], button[data-pane-id][data-tab-file]",
-    ),
-  )
-    .filter((node) => node.dataset.paneId === targetPaneId)
-    .filter((node, index, nodes) => {
-      const file = node.dataset.tabFile;
-      return (
-        file !== undefined && nodes.findIndex((entry) => entry.dataset.tabFile === file) === index
-      );
-    })
-    .map((node) => ({ node, rect: node.getBoundingClientRect() }))
-    .filter(({ rect }) => rect.width > 0 && rect.height > 0);
-  if (tabNodes.length === 0) return null;
-
-  const sameRowNodes = tabNodes.filter(
-    ({ rect }) => clientY >= rect.top - 10 && clientY <= rect.bottom + 10,
-  );
-  const candidates = sameRowNodes.length > 0 ? sameRowNodes : tabNodes;
-  let best = candidates[0];
-  for (const candidate of candidates) {
-    if (best === undefined) {
-      best = candidate;
-      continue;
-    }
-    const candidateCenterX = candidate.rect.left + candidate.rect.width / 2;
-    const candidateCenterY = candidate.rect.top + candidate.rect.height / 2;
-    const bestCenterX = best.rect.left + best.rect.width / 2;
-    const bestCenterY = best.rect.top + best.rect.height / 2;
-    const candidateDistance = Math.hypot(clientX - candidateCenterX, clientY - candidateCenterY);
-    const bestDistance = Math.hypot(clientX - bestCenterX, clientY - bestCenterY);
-    if (candidateDistance < bestDistance) best = candidate;
-  }
-  if (best === undefined) return null;
-
-  const targetFile = best.node.dataset.tabFile;
-  if (targetFile === undefined || targetFile === drag.file) return null;
-  const edge = clientX < best.rect.left + best.rect.width / 2 ? "before" : "after";
-  const targetOrder = pane.tabOrder.filter((entry) => entry !== drag.file);
-  const targetFileIndex = targetOrder.indexOf(targetFile);
-  if (targetFileIndex < 0) return null;
-  const targetIndex = targetFileIndex + (edge === "after" ? 1 : 0);
-
-  if (
-    targetPaneId === drag.paneId &&
-    tabOrderWithInsertion(pane.tabOrder, drag.file, targetIndex).join("\u0000") ===
-      pane.tabOrder.join("\u0000")
-  ) {
-    return null;
-  }
-
-  return { paneId: targetPaneId, file: targetFile, edge, targetIndex };
-}
-
-function remapDirtyFilesToPresetPanes(
-  dirtyByPane: Readonly<Record<string, Readonly<Record<string, true>>>>,
-  layout: EditorLayoutStateV2,
-): Readonly<Record<string, Readonly<Record<string, true>>>> {
-  const dirtyFiles = allDirtyFiles(dirtyByPane);
-  if (dirtyFiles.length === 0) return {};
-  const panes = editorLayoutPanes(layout);
-  const fallbackPane = activeEditorPane(layout);
-  const next: Record<string, Record<string, true>> = {};
-  for (const path of dirtyFiles) {
-    const targetPane = panes.find((pane) => pane.openFiles.includes(path)) ?? fallbackPane;
-    next[targetPane.id] = { ...(next[targetPane.id] ?? {}), [path]: true };
-  }
-  return next;
-}
 
 function DirtyCloseDialog(props: {
   readonly pending: PendingDirtyClose;
@@ -483,7 +114,15 @@ function DirtyCloseDialog(props: {
   const titleId = "editor-dirty-close-title";
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    // GEN-UI-FOCUS-006: capture the opener before moving focus into the dialog, and restore it on
+    // close/unmount so keyboard focus returns to where the user was (never lost to <body>).
+    const opener = document.activeElement as HTMLElement | null;
     dialogRef.current?.focus();
+    return () => {
+      if (opener !== null && typeof opener.focus === "function" && opener.isConnected) {
+        opener.focus();
+      }
+    };
   }, []);
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
@@ -628,6 +267,13 @@ export function EditorWidget({
   const [dirtyByPane, setDirtyByPane] = useState<EditorDirtyByPane>({});
   const [pendingClose, setPendingClose] = useState<PendingDirtyClose | null>(null);
   const [heldTab, setHeldTab] = useState<DraggedTab | null>(null);
+  // GEN-PERF-EDITOR-003 — the tab-drag "held" visual is read from a ref inside the memoized
+  // per-pane renderTabHandle closure, so that closure stays referentially stable (it no
+  // longer closes over `heldTab` state) and React.memo(EditorRuntimeWidget) keeps bailing
+  // non-dragged panes out. The affected pane still re-renders because its `heldTabFile`
+  // scalar prop changes; other panes see an unchanged `undefined` and are skipped.
+  const heldTabRef = useRef<DraggedTab | null>(null);
+  heldTabRef.current = heldTab;
   const [draggedTab, setDraggedTab] = useState<DraggedTab | null>(null);
   const [tabDragPosition, setTabDragPosition] = useState<PointerTabDragPosition | null>(null);
   const [tabDropTargetPaneId, setTabDropTargetPaneId] = useState<string | null>(null);
@@ -1184,11 +830,63 @@ export function EditorWidget({
     }
   }, []);
 
+  // Move DOM focus to the roving tab button for (paneId, file) so document.activeElement follows the
+  // active tab after keyboard navigation (WCAG APG tablist: focus and selection stay together for
+  // automatic activation). The button still carries tabIndex=-1 at this instant — selectOpenFile
+  // re-renders it to tabIndex=0 on the next commit — but a programmatic .focus() works regardless.
+  const focusTabButton = useCallback((paneId: string, file: string): void => {
+    const escapeAttr = (value: string): string =>
+      typeof CSS !== "undefined" && typeof CSS.escape === "function"
+        ? CSS.escape(value)
+        : value.replace(/["\\]/g, "\\$&");
+    const selector = `[role="tab"][data-pane-id="${escapeAttr(paneId)}"][data-tab-file="${escapeAttr(file)}"]`;
+    const focus = (): boolean => {
+      const button = document.querySelector<HTMLElement>(selector);
+      button?.focus();
+      return button !== null;
+    };
+    // Focus synchronously for the common case (target tab already rendered). If the target was in the
+    // overflow menu and is not yet a visible tab, selectOpenFile's re-render scrolls it into view — so
+    // retry once after paint so keyboard focus still lands on it.
+    if (!focus() && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => {
+        focus();
+      });
+    }
+  }, []);
+
   const handleTabKeyDown = useCallback(
     (paneId: string, path: string, event: KeyboardEvent<HTMLButtonElement>): void => {
-      if (!event.altKey) return;
       const pane = layoutRef.current.panes[paneId];
       if (pane === undefined) return;
+      // Plain ArrowLeft/ArrowRight/Home/End (no Alt) roam the roving tab-stop within the pane's
+      // visible tab order and activate the target (automatic activation, WCAG 2.1.1 + APG tablist).
+      // Alt+Arrow keeps its existing reorder/move-across-pane behavior (handled below).
+      if (!event.altKey) {
+        const order = pane.tabOrder;
+        if (order.length === 0) return;
+        const index = order.indexOf(path);
+        let targetFile: string | undefined;
+        if (event.key === "ArrowLeft") {
+          targetFile = order[index <= 0 ? order.length - 1 : index - 1];
+        } else if (event.key === "ArrowRight") {
+          targetFile = order[index < 0 || index >= order.length - 1 ? 0 : index + 1];
+        } else if (event.key === "Home") {
+          targetFile = order[0];
+        } else if (event.key === "End") {
+          targetFile = order[order.length - 1];
+        } else {
+          return;
+        }
+        event.preventDefault();
+        if (targetFile === undefined || targetFile === path) {
+          focusTabButton(paneId, path);
+          return;
+        }
+        selectOpenFile(paneId, targetFile);
+        focusTabButton(paneId, targetFile);
+        return;
+      }
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
         const paneIds = editorLayoutPaneIds(layoutRef.current);
@@ -1220,7 +918,7 @@ export function EditorWidget({
         );
       }
     },
-    [commitLayout],
+    [commitLayout, focusTabButton, selectOpenFile],
   );
 
   const beginTabPointerDrag = useCallback(
@@ -1567,20 +1265,38 @@ export function EditorWidget({
         onSplitPane: (targetPaneId: string, direction: "row" | "column") =>
           splitPane(targetPaneId, direction),
         toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane),
-        renderTabHandle: (path: string, active: boolean, tabDirty: boolean) => ({
-          draggable: true,
+        // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
+        // pane-memoized closure) instead of as a per-render inline closure in renderPane,
+        // so its identity is stable and does not defeat React.memo(EditorRuntimeWidget).
+        // The "held" flag is read from heldTabRef at call time (not closed over as state).
+        renderTabHandle: (path, active, tabDirty, context) => ({
+          draggable: false,
           onDragStart: (event: DragEvent<HTMLButtonElement>) => {
             event.dataTransfer.effectAllowed = "move";
             event.dataTransfer.setData("text/plain", path);
+            event.dataTransfer.setData(
+              EDITOR_TAB_DRAG_MIME,
+              JSON.stringify({ paneId, file: path }),
+            );
+            context?.onDragModeStart?.();
             setDraggedTab({ paneId, file: path });
           },
           onDragEnd: () => setDraggedTab(null),
+          onPointerDown: (event: PointerEvent<HTMLButtonElement>) =>
+            beginTabPointerDrag(paneId, path, event, context?.onDragModeStart),
+          onClickCapture: (event: MouseEvent<HTMLButtonElement>) =>
+            suppressTabClickAfterPointerDrag(paneId, path, event),
           onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) =>
             handleTabKeyDown(paneId, path, event),
           "data-active": active ? "true" : "false",
           "data-dirty": tabDirty ? "true" : "false",
           "data-pane-id": paneId,
           "data-tab-file": path,
+          "data-tab-draggable": "true",
+          "data-tab-held":
+            heldTabRef.current?.paneId === paneId && heldTabRef.current.file === path
+              ? "true"
+              : "false",
         }),
       });
     }
@@ -1595,6 +1311,8 @@ export function EditorWidget({
     splitPane,
     closePane,
     handleTabKeyDown,
+    beginTabPointerDrag,
+    suppressTabClickAfterPointerDrag,
   ]);
 
   if (workspaceRoot.length === 0) {
@@ -1628,6 +1346,10 @@ export function EditorWidget({
           ? { file: tabInsertTarget.file, edge: tabInsertTarget.edge }
           : undefined,
       renderTabHandle: binding.renderTabHandle,
+      // GEN-PERF-EDITOR-003 — a per-pane scalar that changes only for the pane whose tab is
+      // held, so a hold-state change re-renders just that pane (its stable renderTabHandle
+      // re-reads the held flag) while other panes stay memo-bailed.
+      heldTabFile: heldTab?.paneId === pane.id ? heldTab.file : undefined,
     };
     return (
       <section
@@ -1653,34 +1375,7 @@ export function EditorWidget({
             />
           ))}
         </div>
-        <EditorRuntimeWidget
-          {...runtimeProps}
-          renderTabHandle={(path, active, tabDirty, context) => ({
-            draggable: false,
-            onDragStart: (event) => {
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("text/plain", path);
-              event.dataTransfer.setData(
-                EDITOR_TAB_DRAG_MIME,
-                JSON.stringify({ paneId: pane.id, file: path }),
-              );
-              context?.onDragModeStart?.();
-              setDraggedTab({ paneId: pane.id, file: path });
-            },
-            onDragEnd: () => setDraggedTab(null),
-            onPointerDown: (event) =>
-              beginTabPointerDrag(pane.id, path, event, context?.onDragModeStart),
-            onClickCapture: (event) => suppressTabClickAfterPointerDrag(pane.id, path, event),
-            onKeyDown: (event) => handleTabKeyDown(pane.id, path, event),
-            "data-active": active ? "true" : "false",
-            "data-dirty": tabDirty ? "true" : "false",
-            "data-pane-id": pane.id,
-            "data-tab-file": path,
-            "data-tab-draggable": "true",
-            "data-tab-held":
-              heldTab?.paneId === pane.id && heldTab.file === path ? "true" : "false",
-          })}
-        />
+        <EditorRuntimeWidget {...runtimeProps} />
       </section>
     );
   };

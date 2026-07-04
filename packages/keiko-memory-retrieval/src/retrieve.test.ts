@@ -545,9 +545,7 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
       listEdgesForMemories: (ids) => {
         batchCalls += 1;
         expect(ids).toEqual([memoryId("anchor"), memoryId("linked")]);
-        return new Map([
-          [memoryId("linked"), [buildEdge({ from: "anchor", to: "linked" })]],
-        ]);
+        return new Map([[memoryId("linked"), [buildEdge({ from: "anchor", to: "linked" })]]]);
       },
       listOutgoingEdges: () => {
         singleCalls += 1;

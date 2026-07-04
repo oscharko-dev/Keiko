@@ -263,7 +263,16 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
 
     const minInterval = rippleActive(now) ? ACTIVE_FRAME_MS : IDLE_FRAME_MS;
     if (now - lastDraw < minInterval) return;
-    if (host.dataset.panning === "true" || host.dataset.windowMaxed === "true") return;
+    // GEN-PERF-WORKSPACE-004 — data-panning is only set by the background hand-tool
+    // pan. Wheel/trackpad pan and ctrl/cmd-wheel zoom go through usePanZoom and set
+    // data-view-active while the gesture is in flight, so include it in the skip gate
+    // to also suppress the full-screen fbm draw during the most common navigation.
+    if (
+      host.dataset.panning === "true" ||
+      host.dataset.viewActive === "true" ||
+      host.dataset.windowMaxed === "true"
+    )
+      return;
 
     lastDraw = now;
     const time = (now - t0) / 1000;
@@ -309,6 +318,13 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
       gl.deleteProgram(prog);
       gl.deleteShader(vs);
       gl.deleteShader(fs);
+      // GEN-PERF-MEMORY-003 — deleting GL objects does not release the WebGL context
+      // itself. The <canvas> is reused across wallpaper enable/disable and reduced-
+      // motion toggles, so each toggle stranded a context; browsers cap live contexts
+      // (~16) and force-drop the oldest once the cap is hit. Explicitly release it.
+      const loseContext =
+        typeof gl.getExtension === "function" ? gl.getExtension("WEBGL_lose_context") : null;
+      loseContext?.loseContext();
     }
   };
 }

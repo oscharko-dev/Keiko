@@ -1,5 +1,5 @@
 // Regression tests for the Voice Digital Twin control / media protocol contract (Issue #496,
-// ADR-0059). These pin the acceptance criteria as executable, mutation-resistant invariants:
+// ADR-0101). These pin the acceptance criteria as executable, mutation-resistant invariants:
 //   AC1 — WebSocket control is separated from WebRTC media (no control kind carries raw audio).
 //   AC2 — deterministic disabled behavior when voice capability is absent (`none` permits nothing).
 //   AC3 — STT-only dictation does not require the full-realtime media path.
@@ -272,7 +272,7 @@ describe("AC5 — replay includes control + transcripts but excludes raw audio",
 
 describe("AC4 — no new runtime media packages beyond ws + native WebRTC", () => {
   // The protocol forbids any runtime WebRTC SDK / peer / SFU / media-server library by default
-  // (ADR-0058 D8 / docs/voice/supply-chain-policy.md). Enforced as a live assertion over every
+  // (ADR-0100 D8 / docs/voice/supply-chain-policy.md). Enforced as a live assertion over every
   // repository package manifest so a future accidental addition trips this test, not just review.
   const FORBIDDEN_MEDIA_PACKAGES: readonly string[] = [
     "socket.io",

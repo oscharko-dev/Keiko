@@ -177,7 +177,9 @@ function ValiditySection({
         <MetaField
           label={t("memoria.validUntil")}
           value={
-            validity.validUntil !== undefined ? formatTs(validity.validUntil) : t("memoria.noExpiry")
+            validity.validUntil !== undefined
+              ? formatTs(validity.validUntil)
+              : t("memoria.noExpiry")
           }
         />
       </dl>
@@ -382,11 +384,7 @@ export function MemoryDetail({
             {removed ? t("memoria.removedBody") : t("memoria.notFoundBody")}
           </p>
           <p>
-            <BackToMemoriaControl
-              onBack={onBack}
-              controlRef={setRemovedBackControlRef}
-              t={t}
-            />
+            <BackToMemoriaControl onBack={onBack} controlRef={setRemovedBackControlRef} t={t} />
           </p>
         </div>
       </div>

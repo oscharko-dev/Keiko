@@ -16,6 +16,7 @@
 import type {
   EmbeddingModelIdentity,
   IndexingJobError,
+  KnowledgeCapsuleId,
   VectorRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
@@ -28,7 +29,11 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import { EMBEDDING_NORMALIZATION, l2NormalizeVector } from "@oscharko-dev/keiko-model-gateway";
 
-import { composeVectorRecord, insertVectorRow } from "./vector-persist.js";
+import {
+  composeVectorRecord,
+  insertVectorRow,
+  invalidateVectorIndexStateForCapsules,
+} from "./vector-persist.js";
 import {
   IndexingError,
   type ChunkToEmbed,
@@ -529,6 +534,10 @@ function persistOutcomes(
 ): readonly VectorRecord[] {
   const db = store._internal.db;
   const persisted: VectorRecord[] = [];
+  // Collect the distinct capsules touched so index-state invalidation runs ONCE per capsule at the
+  // transaction boundary instead of once per row (GEN-PERF-PERSISTENCE-013). The DELETE is idempotent,
+  // so a single invalidation before COMMIT is equivalent to the former per-row sequence.
+  const touchedCapsules: KnowledgeCapsuleId[] = [];
   db.exec("BEGIN");
   try {
     for (const out of outcomes) {
@@ -545,9 +554,11 @@ function persistOutcomes(
         storageReference: idSource(),
         createdAt: now(),
       };
-      insertVectorRow(db, store._internal.contentCipher, row);
+      insertVectorRow(db, store._internal.contentCipher, row, { invalidateIndexState: false });
+      touchedCapsules.push(row.capsuleId);
       persisted.push(composeVectorRecord(row));
     }
+    invalidateVectorIndexStateForCapsules(db, touchedCapsules);
     db.exec("COMMIT");
   } catch (cause) {
     db.exec("ROLLBACK");

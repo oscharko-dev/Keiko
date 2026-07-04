@@ -286,7 +286,9 @@ function readArtifactIntegrity(
   if (
     artifactIntegrity.schemaVersion !== QUALITY_INTELLIGENCE_CANDIDATES_INTEGRITY_SCHEMA_VERSION
   ) {
-    invalidArtifact("QI candidates companion schema invalid: unsupported artifact integrity version");
+    invalidArtifact(
+      "QI candidates companion schema invalid: unsupported artifact integrity version",
+    );
   }
   if (!isSha256Hex(artifactIntegrity.contentHashSha256Hex)) {
     invalidArtifact("QI candidates companion schema invalid: content hash must be sha256 hex");
@@ -307,18 +309,18 @@ function artifactIntegrityPayload(artifact: {
     runId: artifact.runId,
     generatedAt: artifact.generatedAt,
     candidates: artifact.candidates,
-    ...(artifact.editedRevisions !== undefined ? { editedRevisions: artifact.editedRevisions } : {}),
+    ...(artifact.editedRevisions !== undefined
+      ? { editedRevisions: artifact.editedRevisions }
+      : {}),
   };
 }
 
-export function qualityIntelligenceCandidatesArtifactContentHash(
-  artifact: {
-    readonly runId: string;
-    readonly generatedAt: string;
-    readonly candidates: readonly QualityIntelligenceCandidateRow[];
-    readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
-  },
-): string {
+export function qualityIntelligenceCandidatesArtifactContentHash(artifact: {
+  readonly runId: string;
+  readonly generatedAt: string;
+  readonly candidates: readonly QualityIntelligenceCandidateRow[];
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+}): string {
   return sha256Hex(canonicalise(artifactIntegrityPayload(artifact)));
 }
 

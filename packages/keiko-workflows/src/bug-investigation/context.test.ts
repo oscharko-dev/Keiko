@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildBugContext } from "./context.js";
 import { parseFailureEvidence } from "./failure-parse.js";
 import { DEFAULT_BUG_WORKFLOW_LIMITS } from "./types.js";
-import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 import { makeWorkspaceInfo } from "./_support.js";
 
 const ROOT = "/repo";

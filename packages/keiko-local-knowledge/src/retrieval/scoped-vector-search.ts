@@ -35,10 +35,7 @@ import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
-import {
-  lexicalQueryTermGroups,
-  type LexicalQueryTermGroup,
-} from "./lexical-normalization.js";
+import { lexicalQueryTermGroups, type LexicalQueryTermGroup } from "./lexical-normalization.js";
 import {
   RetrievalError,
   type QueryTransformer,
@@ -190,8 +187,61 @@ const SELECT_VECTOR_CACHE_STAMP_SQL = [
   "WHERE capsule_id = :c",
 ].join(" ");
 
-const DECODED_VECTOR_CACHE = new WeakMap<KnowledgeStore, Map<string, readonly DecodedVectorRow[]>>();
-const ANN_INDEX_CACHE = new WeakMap<KnowledgeStore, Map<string, AnnIndex>>();
+// GEN-PERF-CHAT-004: the grounded-ask path opens a FRESH KnowledgeStore per request and
+// closes it in a `finally`, so a WeakMap keyed by store IDENTITY never hit across requests
+// — every ask re-SELECTed and re-decrypted (AES-GCM) every capsule vector from scratch.
+// We re-key by the store's on-disk dbPath (`db.location()`), a stable identity that
+// survives the fresh-store-per-request boundary. Correctness is preserved because the
+// INNER cache key already embeds the capsule content stamp (`decodeCacheKey` folds in
+// `stamp.n` + `stamp.max_created_at`): any indexing write bumps the stamp and yields a new
+// inner key, so a stale decoded set can never be served after content changes. Key
+// rotation / store reopen changes the on-disk file's decoded content only via the stamp,
+// and an in-memory (never persisted) decrypted vector for a rotated key would still be
+// re-derived because rotation re-writes rows (new stamp). The outer map is bounded by an
+// LRU over dbPaths so distinct runtimes cannot grow it without bound.
+const MAX_DECODED_VECTOR_STORE_ENTRIES = 8;
+
+function storeCacheIdentity(store: KnowledgeStore): string {
+  // `location()` returns the resolved absolute dbPath for the connection. In-memory stores
+  // (":memory:") share the literal string, but each such store is a distinct connection —
+  // fall back to a per-store unique tag so two independent in-memory fixtures never alias.
+  const location = store._internal.db.location();
+  if (location === null || location.length === 0 || location === ":memory:") {
+    return inMemoryStoreTag(store);
+  }
+  return location;
+}
+
+const IN_MEMORY_STORE_TAGS = new WeakMap<KnowledgeStore, string>();
+let inMemoryStoreCounter = 0;
+function inMemoryStoreTag(store: KnowledgeStore): string {
+  const existing = IN_MEMORY_STORE_TAGS.get(store);
+  if (existing !== undefined) return existing;
+  inMemoryStoreCounter += 1;
+  const tag = `:memory:#${String(inMemoryStoreCounter)}`;
+  IN_MEMORY_STORE_TAGS.set(store, tag);
+  return tag;
+}
+
+function touchStoreCache<V>(cache: Map<string, V>, identity: string, created: V): V {
+  const existing = cache.get(identity);
+  if (existing !== undefined) {
+    // LRU: re-insert to move to the newest position.
+    cache.delete(identity);
+    cache.set(identity, existing);
+    return existing;
+  }
+  cache.set(identity, created);
+  while (cache.size > MAX_DECODED_VECTOR_STORE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+  return created;
+}
+
+const DECODED_VECTOR_CACHE = new Map<string, Map<string, readonly DecodedVectorRow[]>>();
+const ANN_INDEX_CACHE = new Map<string, Map<string, AnnIndex>>();
 const ANN_PROJECTION_CACHE = new Map<string, readonly AnnProjection[]>();
 
 function readVectorsForCapsule(
@@ -216,7 +266,10 @@ function readVectorsForCapsule(
     }) as unknown as readonly VectorRow[];
 }
 
-function vectorCacheStamp(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): VectorCacheStampRow {
+function vectorCacheStamp(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+): VectorCacheStampRow {
   return store._internal.db
     .prepare(SELECT_VECTOR_CACHE_STAMP_SQL)
     .get({ c: String(capsuleId) }) as unknown as VectorCacheStampRow;
@@ -252,11 +305,13 @@ function vectorCacheStampForScope(
 }
 
 function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly DecodedVectorRow[]> {
-  const cached = DECODED_VECTOR_CACHE.get(store);
-  if (cached !== undefined) return cached;
+  const identity = storeCacheIdentity(store);
+  const cached = DECODED_VECTOR_CACHE.get(identity);
+  if (cached !== undefined) {
+    return touchStoreCache(DECODED_VECTOR_CACHE, identity, cached);
+  }
   const created = new Map<string, readonly DecodedVectorRow[]>();
-  DECODED_VECTOR_CACHE.set(store, created);
-  return created;
+  return touchStoreCache(DECODED_VECTOR_CACHE, identity, created);
 }
 
 interface AnnProjection {
@@ -277,11 +332,13 @@ type AnnIndexReadResult =
   | { readonly kind: "skipped-too-large"; readonly rowCount: number; readonly limit: number };
 
 function annCacheForStore(store: KnowledgeStore): Map<string, AnnIndex> {
-  const cached = ANN_INDEX_CACHE.get(store);
-  if (cached !== undefined) return cached;
+  const identity = storeCacheIdentity(store);
+  const cached = ANN_INDEX_CACHE.get(identity);
+  if (cached !== undefined) {
+    return touchStoreCache(ANN_INDEX_CACHE, identity, cached);
+  }
   const created = new Map<string, AnnIndex>();
-  ANN_INDEX_CACHE.set(store, created);
-  return created;
+  return touchStoreCache(ANN_INDEX_CACHE, identity, created);
 }
 
 function fnv1a32(value: string): number {
@@ -1070,7 +1127,10 @@ function buildFtsMatchQuery(profile: QueryProfile): string | undefined {
   const groups = profile.lexicalRecallTerms.slice(0, LEXICAL_RECALL_MAX_TERMS);
   if (groups.length === 0) return undefined;
   const operator = profile.strategy === "broad" ? " OR " : " AND ";
-  return groups.map(ftsGroupQuery).filter((term) => term.length > 0).join(operator);
+  return groups
+    .map(ftsGroupQuery)
+    .filter((term) => term.length > 0)
+    .join(operator);
 }
 
 function readFtsCandidatesForCapsule(
@@ -1100,7 +1160,9 @@ function exactLexicalSql(
   const exactClause =
     exactTerms.length === 0
       ? "0"
-      : exactTerms.map((_, i) => `instr(lower(li.exact_text), :exact${String(i)}) > 0`).join(" OR ");
+      : exactTerms
+          .map((_, i) => `instr(lower(li.exact_text), :exact${String(i)}) > 0`)
+          .join(" OR ");
   return [
     "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id, 0 AS bm25_score",
     "FROM chunk_lexical_index AS li",
@@ -1265,9 +1327,7 @@ function upsertFusedCandidate(
       ...(patch.denseRank !== undefined ? { denseRank: patch.denseRank } : {}),
       ...(patch.denseScore !== undefined ? { denseScore: patch.denseScore } : {}),
       ...(patch.lexicalRank !== undefined ? { lexicalRank: patch.lexicalRank } : {}),
-      ...(patch.lexicalBm25Score !== undefined
-        ? { lexicalBm25Score: patch.lexicalBm25Score }
-        : {}),
+      ...(patch.lexicalBm25Score !== undefined ? { lexicalBm25Score: patch.lexicalBm25Score } : {}),
     });
     return;
   }
@@ -1497,7 +1557,9 @@ async function ensureIdentityPreflight(
     provider: identity.provider,
     vectorMetric: identity.vectorMetric,
     expectedDimensions: identity.vectorDimensions,
-    ...(identity.dimensionsParam !== undefined ? { dimensionsParam: identity.dimensionsParam } : {}),
+    ...(identity.dimensionsParam !== undefined
+      ? { dimensionsParam: identity.dimensionsParam }
+      : {}),
     ...(identity.normalization !== undefined ? { normalization: identity.normalization } : {}),
     ...(identity.instructionVersion !== undefined
       ? { instructionVersion: identity.instructionVersion }
@@ -1630,7 +1692,9 @@ function tryVectorIndexForCapsule(
   if (indexed.sawDimensionCompatible) state.anyDimensionCompatible = true;
   if (!indexed.ok) return false;
   state.anyVectorSeen = true;
-  state.candidates.push(...denseCandidatesFromVectorIndex(indexed.candidates, capsule, sourceFilter));
+  state.candidates.push(
+    ...denseCandidatesFromVectorIndex(indexed.candidates, capsule, sourceFilter),
+  );
   return true;
 }
 

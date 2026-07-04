@@ -5,8 +5,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import type { AddressInfo } from "node:net";
-import type { Server } from "node:http";
+import type { Server, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   ContainerCapabilityResponse,
@@ -19,6 +20,8 @@ import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../ind
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
+import { openContainerSseStream } from "./containerRoutes.js";
+import type { SseBackpressureSignal } from "../sse-write.js";
 import type {
   ContainerRunInput,
   ContainerRunnerEventEmitter,
@@ -415,5 +418,116 @@ describe("GET /api/containers/events", () => {
     expect(stream).toContain("event: ready");
     expect(stream).toContain("event: container:run-completed");
     expect(stream).toContain('"runId":"run-99"');
+  });
+});
+
+// Backpressure path (GEN-DUP-NEAR-005): the SSE writer now flows through the shared writeOrDestroy
+// helper. When res.write() returns false the per-connection AbortController is aborted (which
+// unsubscribes from the manager) and the socket is destroyed exactly once, and the optional
+// onBackpressure observer is fired exactly once before the destroy.
+interface FakeSseRes {
+  res: ServerResponse;
+  readonly writes: string[];
+  destroyCount: number;
+  ended: boolean;
+  writeReturns: boolean;
+  readonly emitClose: () => void;
+}
+
+function makeFakeSseRes(): FakeSseRes {
+  const writes: string[] = [];
+  const emitter = new EventEmitter();
+  const state: FakeSseRes = {
+    res: undefined as unknown as ServerResponse,
+    writes,
+    destroyCount: 0,
+    ended: false,
+    writeReturns: true,
+    emitClose: (): void => {
+      emitter.emit("close");
+    },
+  };
+  const res = {
+    writeHead(): ServerResponse {
+      return res as unknown as ServerResponse;
+    },
+    write(chunk: string): boolean {
+      writes.push(chunk);
+      return state.writeReturns;
+    },
+    end(): ServerResponse {
+      state.ended = true;
+      return res as unknown as ServerResponse;
+    },
+    destroy(): void {
+      state.destroyCount += 1;
+    },
+    on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    emit(event: string): boolean {
+      return emitter.emit(event);
+    },
+  };
+  state.res = res as unknown as ServerResponse;
+  return state;
+}
+
+describe("openContainerSseStream backpressure", () => {
+  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeContainerRunnerManager();
+    const signals: SseBackpressureSignal[] = [];
+    // Signal backpressure on every write so the first event frame trips the protective path.
+    fake.writeReturns = false;
+    openContainerSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
+
+    // The frame was written once, the socket destroyed once, and the observer fired exactly once.
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+
+    // The abort unsubscribed from the manager, so a second event produces no further work.
+    const writesAfterKill = fake.writes.length;
+    manager.emitExternal({ kind: "run-started", runId: "run-bp", payload: { taskId: "t" } });
+    expect(fake.writes.length).toBe(writesAfterKill);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+
+    // res.on("close") firing after an abort-driven unsubscribe must not double-unsubscribe/throw.
+    expect(() => {
+      fake.emitClose();
+    }).not.toThrow();
+  });
+
+  it("keeps the normal write path intact when res.write returns true", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeContainerRunnerManager();
+    const signals: SseBackpressureSignal[] = [];
+    openContainerSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    manager.emitExternal({ kind: "run-completed", runId: "run-ok", payload: { note: "x" } });
+
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    expect(fake.writes.join("")).toContain("container:run-completed");
   });
 });

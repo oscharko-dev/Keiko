@@ -10,6 +10,7 @@
 // `.*` alternation, so there is no super-linear backtracking surface. Line count and per-line work
 // are both capped. Pure: no IO, no clock, no RNG.
 
+import { toPosix } from "./path-utils.js";
 import type { BugReportInput, FailureEvidence, FailureFrame } from "./types.js";
 
 // Caps that bound total work regardless of input size.
@@ -31,10 +32,6 @@ const MESSAGE_MARKERS: readonly string[] = [
   "fail",
   "●",
 ];
-
-function toPosix(value: string): string {
-  return value.split("\\").join("/");
-}
 
 // Parses a numeric line number from a token, or undefined when the token is not all-digits.
 function toLine(token: string | undefined): number | undefined {

@@ -17,6 +17,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./packages/keiko-ui/vitest.setup.ts"],
+    // GEN-TEST-FLAKE-001: align the CI-gated UI coverage run's per-test timeout with the root suite
+    // (vitest.config.ts, 15s). jsdom + v8 instrumentation over 235 UI files makes the default 5s a
+    // false-RED risk for the required coverage gate. Parity enforced by
+    // scripts/__tests__/vitest-config-parity.test.mjs.
+    testTimeout: 15_000,
     include: [
       "packages/keiko-ui/src/app/**/*.test.ts",
       "packages/keiko-ui/src/app/**/*.test.tsx",
@@ -29,6 +34,8 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary"],
+      // Emit the coverage summary even on test failure so the ratchet gate stays computable.
+      reportOnFailure: true,
       reportsDirectory: resolve(repoRoot, "packages", "keiko-ui", "coverage"),
       include: ["packages/keiko-ui/src/**/*.{ts,tsx}"],
       exclude: [

@@ -10,10 +10,7 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type {
-  GatewayRequest,
-  NormalizedResponse,
-} from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";

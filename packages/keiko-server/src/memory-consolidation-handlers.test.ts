@@ -6,9 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryConsolidationJobEnvelopeWire,
+  MemoryId,
+  MemoryRecord,
+  MemoryUserId,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createConsolidationJobRegistry } from "./memory-consolidation-registry.js";
+import {
+  createConsolidationJobRegistry,
+  type ConsolidationJobRegistry,
+} from "./memory-consolidation-registry.js";
 import {
   handleCancelConsolidationJob,
   handleCreateConsolidationJob,
@@ -132,6 +140,10 @@ function asJson(result: RouteResult): Record<string, unknown> {
   return result.body as Record<string, unknown>;
 }
 
+function asJobEnvelope(result: RouteResult): MemoryConsolidationJobEnvelopeWire {
+  return asJson(result).job as MemoryConsolidationJobEnvelopeWire;
+}
+
 async function flushImmediate(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -156,24 +168,18 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(result.status).toBe(202);
-    const body = asJson(result);
-    const job = body.job as {
-      id: string;
-      state: string;
-      memoryCount: number;
-      settings: { maxClustersPerRun: number; maxRecordsPerRun: number };
-    };
-    expect(job.state).toBe("queued");
-    expect(job.memoryCount).toBe(0);
-    expect(job.settings.maxClustersPerRun).toBe(10);
-    expect(job.settings.maxRecordsPerRun).toBe(1_000);
+    const created = asJobEnvelope(result);
+    expect(created.job.state).toBe("queued");
+    expect(created.memoryCount).toBe(0);
+    expect(created.settings.maxClustersPerRun).toBe(10);
+    expect(created.settings.maxRecordsPerRun).toBe(1_000);
     await flushImmediate();
     const getResult = handleGetConsolidationJob(
-      makeCtx(`/api/memory/consolidation/jobs/${job.id}`, {}, { jobId: job.id }),
+      makeCtx(`/api/memory/consolidation/jobs/${created.job.id}`, {}, { jobId: created.job.id }),
       deps,
     );
-    const skipped = asJson(getResult).job as { state: string; memoryCount: number };
-    expect(skipped.state).toBe("skipped");
+    const skipped = asJobEnvelope(getResult);
+    expect(skipped.job.state).toBe("skipped");
     expect(skipped.memoryCount).toBe(0);
   });
 
@@ -190,29 +196,21 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(createResult.status).toBe(202);
-    const createdJob = asJson(createResult).job as { id: string };
+    const createdJob = asJobEnvelope(createResult).job;
     await flushImmediate();
     const getResult = handleGetConsolidationJob(
       makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
     expect(getResult.status).toBe(200);
-    const fetched = asJson(getResult).job as {
-      state: string;
-      result?: {
-        edgesProposed: readonly unknown[];
-        elapsedMs: number;
-        recordsInspected: number;
-        truncated: boolean;
-      };
-      memoryCount: number;
-    };
-    expect(fetched.state).toBe("completed");
+    const fetched = asJobEnvelope(getResult);
+    expect(fetched.job.state).toBe("completed");
     expect(fetched.memoryCount).toBe(2);
-    expect(fetched.result?.edgesProposed).toHaveLength(3);
-    expect(fetched.result?.recordsInspected).toBe(2);
-    expect(fetched.result?.truncated).toBe(false);
-    expect(fetched.result?.elapsedMs ?? -1).toBeGreaterThanOrEqual(0);
+    expect(fetched.job.result?.edgesProposed).toHaveLength(3);
+    expect(fetched.job.result?.recordsInspected).toBe(2);
+    expect(fetched.job.result?.truncated).toBe(false);
+    expect(fetched.job.result?.elapsedMs ?? -1).toBeGreaterThanOrEqual(0);
+    expect(fetched.job.result?.conflictPairsDetected).toBe(0);
   });
 
   it("wires stored embeddings into consolidation semantic duplicate detection", async () => {
@@ -246,19 +244,16 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(createResult.status).toBe(202);
-    const createdJob = asJson(createResult).job as { id: string };
+    const createdJob = asJobEnvelope(createResult).job;
     await flushImmediate();
     const getResult = handleGetConsolidationJob(
       makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
-    const fetched = asJson(getResult).job as {
-      state: string;
-      result?: { edgesProposed: readonly unknown[]; recordsInspected: number };
-    };
-    expect(fetched.state).toBe("completed");
-    expect(fetched.result?.recordsInspected).toBe(2);
-    expect(fetched.result?.edgesProposed).toHaveLength(3);
+    const fetched = asJobEnvelope(getResult);
+    expect(fetched.job.state).toBe("completed");
+    expect(fetched.job.result?.recordsInspected).toBe(2);
+    expect(fetched.job.result?.edgesProposed).toHaveLength(3);
   });
 
   it("loads proposed memories by default and routes duplicate output to review", async () => {
@@ -277,24 +272,20 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(createResult.status).toBe(202);
-    const createdJob = asJson(createResult).job as { id: string };
+    const createdJob = asJobEnvelope(createResult).job;
     await flushImmediate();
     const getResult = handleGetConsolidationJob(
       makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
-    const fetched = asJson(getResult).job as {
-      state: string;
-      memoryCount: number;
-      result?: {
-        edgesProposed: readonly unknown[];
-        reviewItems: readonly { reason: string }[];
-      };
-    };
-    expect(fetched.state).toBe("completed");
+    const fetched = asJobEnvelope(getResult);
+    expect(fetched.job.state).toBe("completed");
     expect(fetched.memoryCount).toBe(2);
-    expect(fetched.result?.edgesProposed).toEqual([]);
-    expect(fetched.result?.reviewItems.map((item) => item.reason)).toEqual(["duplicate-review"]);
+    expect(fetched.job.result?.edgesProposed).toEqual([]);
+    expect(fetched.job.result?.reviewItems.map((item) => item.reason)).toEqual([
+      "duplicate-review",
+    ]);
+    expect(fetched.job.result?.reviewItems[0]?.evidence?.[0]?.kind).toBe("lexical-similarity");
   });
 
   it("caps loaded records and marks the result truncated when a selection exceeds maxRecordsPerRun", async () => {
@@ -311,21 +302,17 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(createResult.status).toBe(202);
-    const createdJob = asJson(createResult).job as { id: string };
+    const createdJob = asJobEnvelope(createResult).job;
     await flushImmediate();
     const getResult = handleGetConsolidationJob(
       makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
-    const fetched = asJson(getResult).job as {
-      state: string;
-      result?: { recordsInspected: number; truncated: boolean };
-      memoryCount: number;
-    };
-    expect(fetched.state).toBe("completed");
+    const fetched = asJobEnvelope(getResult);
+    expect(fetched.job.state).toBe("completed");
     expect(fetched.memoryCount).toBe(2);
-    expect(fetched.result?.recordsInspected).toBe(2);
-    expect(fetched.result?.truncated).toBe(true);
+    expect(fetched.job.result?.recordsInspected).toBe(2);
+    expect(fetched.job.result?.truncated).toBe(true);
   });
 
   it("cancels a queued job before execution starts", async () => {
@@ -339,7 +326,7 @@ describe("memory consolidation job handlers", () => {
       }),
       deps,
     );
-    const createdJob = asJson(createResult).job as { id: string };
+    const createdJob = asJobEnvelope(createResult).job;
     const cancelResult = handleCancelConsolidationJob(
       makeCtx(
         `/api/memory/consolidation/jobs/${createdJob.id}/cancel`,
@@ -349,18 +336,15 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(cancelResult.status).toBe(202);
-    const canceled = asJson(cancelResult).job as {
-      state: string;
-      cancelRequested: boolean;
-    };
+    const canceled = asJobEnvelope(cancelResult);
     expect(canceled.cancelRequested).toBe(true);
-    expect(canceled.state).toBe("canceled");
+    expect(canceled.job.state).toBe("canceled");
     await flushImmediate();
     const fetched = handleGetConsolidationJob(
       makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
-    expect((asJson(fetched).job as { state: string }).state).toBe("canceled");
+    expect(asJobEnvelope(fetched).job.state).toBe("canceled");
   });
 
   it("returns 400 for malformed settings", async () => {
@@ -374,6 +358,67 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(result.status).toBe(400);
+  });
+
+  it("does NOT forward a secret-bearing register() fault into the 409 envelope (COUPLING-004)", async () => {
+    // The job-limit path must return a fixed code-keyed string, never the thrown error.message —
+    // which a future registry implementation could compose from dynamic (path/credential) detail.
+    const secret = "sk-" + "test0ABC123DEF456GHI789";
+    const rawMessage = `registry full at /srv/keiko/jobs.db with token ${secret}`;
+    const base = createConsolidationJobRegistry();
+    const throwingRegistry: ConsolidationJobRegistry = {
+      ...base,
+      register: () => {
+        throw new Error(rawMessage);
+      },
+    };
+    const vault = makeVault();
+    const result = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      makeDeps({ memoryVault: vault, consolidationJobs: throwingRegistry }),
+    );
+    expect(result.status).toBe(409);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("CONSOLIDATION_JOB_LIMIT");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("/srv/keiko");
+    expect(body.error.message).toBe("Consolidation job limit reached.");
+  });
+
+  it("does NOT persist a secret-bearing engine fault onto a failed job envelope (COUPLING-004)", async () => {
+    // When the scheduled run throws (here: getEmbeddings faults mid-run) the job's stored `error`
+    // must be a fixed, cause-free string. It surfaces to the browser via the job envelope, so a raw
+    // path or credential in the engine error must never reach it.
+    const secret = "sk-" + "test0ABC123DEF456GHI789";
+    const rawMessage = `embedding read /srv/vault/embeddings.db failed: token ${secret}`;
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
+    insertAcceptedMemory(vault, { id: "m-2", body: "user prefers tabs in the editor" });
+    const faulty: MemoryVaultStore = {
+      ...vault,
+      getEmbeddings: () => {
+        throw new Error(rawMessage);
+      },
+    };
+    const deps = makeDeps({ memoryVault: faulty });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    const createdJob = asJobEnvelope(createResult).job;
+    await flushImmediate();
+    const getResult = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
+      deps,
+    );
+    const fetched = asJobEnvelope(getResult);
+    expect(fetched.job.state).toBe("failed");
+    expect(fetched.job.error).toBe("Consolidation run failed.");
+    const serialized = JSON.stringify(getResult.body);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("/srv/vault");
   });
 
   describe("settings range validation", () => {

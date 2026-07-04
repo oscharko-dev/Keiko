@@ -35,9 +35,7 @@ describe("classifySensitivity", () => {
   });
 
   it("returns confidential for German IBAN, Steuer-ID, and phone shapes", () => {
-    expect(classifySensitivity("Meine IBAN ist DE89 3704 0044 0532 0130 00")).toBe(
-      "confidential",
-    );
+    expect(classifySensitivity("Meine IBAN ist DE89 3704 0044 0532 0130 00")).toBe("confidential");
     expect(classifySensitivity("Steuer-ID: 12 345 678 901")).toBe("confidential");
     expect(classifySensitivity("Ruf mich unter +49 30 1234567 an")).toBe("confidential");
     expect(classifySensitivity("Lokale Nummer 030-1234567 ist privat")).toBe("confidential");

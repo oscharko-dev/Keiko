@@ -1,4 +1,4 @@
-// Voice Digital Twin capability-cell derivation (Epic #491, Issue #505; ADR-0068).
+// Voice Digital Twin capability-cell derivation (Epic #491, Issue #505; ADR-0110).
 //
 // `deriveCapabilityCell` resolves one environment × advertised-capability cell to the contract-derived
 // facts the matrix asserts: the effective profile (after environment degradation), the allowed control

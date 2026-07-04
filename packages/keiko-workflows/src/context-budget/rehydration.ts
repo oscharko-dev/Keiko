@@ -126,7 +126,9 @@ function readToolResultArtifact(
   return {
     resolved: true,
     content: bounded.content,
-    ...(bounded.truncated ? { reason: "tool-result artifact truncated to rehydration budget" } : {}),
+    ...(bounded.truncated
+      ? { reason: "tool-result artifact truncated to rehydration budget" }
+      : {}),
   };
 }
 

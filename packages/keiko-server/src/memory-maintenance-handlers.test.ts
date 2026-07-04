@@ -123,6 +123,17 @@ function counts(result: RouteResult): Record<string, number> {
   return result.body as Record<string, number>;
 }
 
+function uniqueEdgeCount(vault: MemoryVaultStore, ids: readonly MemoryId[]): number {
+  const edges = vault.listEdgesForMemories(ids);
+  const edgeIds = new Set<string>();
+  for (const group of edges.values()) {
+    for (const edge of group) {
+      edgeIds.add(edge.id);
+    }
+  }
+  return edgeIds.size;
+}
+
 describe("handleRunMaintenance", () => {
   it("returns 503 when no vault is configured", () => {
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: undefined }));
@@ -172,6 +183,21 @@ describe("handleRunMaintenance", () => {
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
     expect(counts(result).archived).toBe(1);
     expect(vault.getMemory(mid("m"))?.status).toBe("archived");
+  });
+
+  it("does not duplicate auto-applied consolidation edges on repeated maintenance passes", () => {
+    const vault = makeVault();
+    const now = Date.now();
+    insert(vault, { id: "old", body: "use tabs", createdAt: now - DAY });
+    insert(vault, { id: "new", body: "use tabs", createdAt: now });
+
+    const first = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(first).edgesCreated).toBe(3);
+    expect(uniqueEdgeCount(vault, [mid("old"), mid("new")])).toBe(3);
+
+    const second = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(second).edgesCreated).toBe(0);
+    expect(uniqueEdgeCount(vault, [mid("old"), mid("new")])).toBe(3);
   });
 
   it("forgets an expired non-accepted, non-archived memory and writes a tombstone", () => {
@@ -326,6 +352,29 @@ describe("handleRunMaintenance", () => {
     };
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: faulty }));
     expect(result.status).toBe(500);
+  });
+
+  it("does NOT forward a secret-bearing vault fault message into the 500 envelope (COUPLING-004)", () => {
+    // A vault fault can carry a filesystem path or, worse, a credential. The 500 response must be a
+    // fixed code-keyed string — never the raw error.message.
+    const secret = "sk-" + "test0ABC123DEF456GHI789";
+    const rawMessage = `open /srv/vault/u-1.db failed: token ${secret} at /etc/keiko/secret.key`;
+    const vault = makeVault();
+    const faulty: MemoryVaultStore = {
+      ...vault,
+      listMemoryScopes: () => {
+        throw new Error(rawMessage);
+      },
+    };
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: faulty }));
+    expect(result.status).toBe(500);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("MEMORY_MAINTENANCE_FAILED");
+    const serialized = JSON.stringify(body);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("/srv/vault");
+    expect(serialized).not.toContain("/etc/keiko");
+    expect(body.error.message).toBe("Memory maintenance failed.");
   });
 });
 

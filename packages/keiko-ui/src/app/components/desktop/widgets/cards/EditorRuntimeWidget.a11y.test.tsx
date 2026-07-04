@@ -9,7 +9,8 @@
  *
  * Follows the AgentConflictBanner.test.tsx jest-axe pattern.
  */
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { useEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,10 +20,12 @@ import type {
   LanguageServiceCapabilities,
 } from "../../../../../lib/types";
 import {
+  ApiError,
   fetchEditorLanguageCapabilities,
   fetchFilesContent,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
+  saveFilesContent,
 } from "../../../../../lib/api";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
@@ -336,5 +339,62 @@ describe("EditorRuntimeWidget agent actions — focus management (A11Y)", () => 
     expect(document.activeElement).toBe(before);
     // The editor-surface probe is still mounted (widget did not unmount).
     expect(surface.props).not.toBeNull();
+  });
+});
+
+// ─── Reload-confirm dialog focus restoration (GEN-UI-FOCUS-006) ───────────────
+
+describe("EditorRuntimeWidget reload-confirm dialog — focus restoration (GEN-UI-FOCUS-006)", () => {
+  it("returns focus to the Reload trigger when the reload-confirm dialog closes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget windowId="a11y-reload" root="/repo" file="src/app.ts" paneId="pane-1" />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    // Make the buffer dirty, then fail the save with a 409 so the recoverable conflict + Reload appear.
+    act(() => {
+      surface.props?.onContentChange({ text: "edited value\n", sizeBytes: 13 }, "human");
+    });
+    vi.mocked(saveFilesContent).mockRejectedValueOnce(
+      new ApiError("CONFLICT", "The file changed on disk.", 409),
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    const reload = await screen.findByRole("button", { name: "Reload" });
+    // Clicking Reload focuses the button (userEvent) and opens the reload-confirm dialog (dirty buffer).
+    await user.click(reload);
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+
+    // Cancel the dialog — focus must return to the Reload trigger, not be lost to <body>.
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(document.activeElement).toBe(reload);
+  });
+});
+
+// ─── Toolbar aria-disabled no-op announcement (GEN-UI-INTERACTION-003) ────────
+
+describe("EditorRuntimeWidget toolbar — no-op announcement (GEN-UI-INTERACTION-003)", () => {
+  it("announces a reason in the polite live region when Save is activated with nothing to save", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchFilesContent).mockResolvedValueOnce(fileResponse());
+    render(
+      <EditorRuntimeWidget windowId="a11y-notice" root="/repo" file="src/app.ts" paneId="pane-1" />,
+    );
+    await screen.findByTestId("editor-surface");
+
+    // The buffer is clean (nothing edited), so Save is aria-disabled and a click is a guarded no-op.
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toHaveAttribute("aria-disabled", "true");
+    const notice = screen.getByTestId("editor-toolbar-notice");
+    expect(notice).toHaveTextContent("");
+
+    await user.click(save);
+    await waitFor(() => expect(notice).toHaveTextContent(/Nothing to save/i));
+    // The live region is polite so screen readers announce it without interrupting.
+    expect(notice).toHaveAttribute("aria-live", "polite");
   });
 });

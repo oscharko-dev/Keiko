@@ -2,7 +2,7 @@
 
 Implementation contract delivered by Issue [#494](https://github.com/oscharko-dev/Keiko/issues/494)
 (Epic #491), realizing decisions **D1, D2, D4, and D6** of
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md). It is the optional,
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md). It is the optional,
 capability-gated BFF endpoint for **short controlled composer dictation**: audio in → transcript
 text. It is intentionally narrower than the full Voice Digital Twin — it transcribes one clip per
 request and never implies assistant speech output or realtime turn-taking.
@@ -10,12 +10,12 @@ request and never implies assistant speech output or realtime turn-taking.
 This issue owns the **server route and the provider-neutral STT invocation seam only**. The
 capability-gated native composer dictation UX (microphone capture, the `getUserMedia`
 `Permissions-Policy` relaxation, CSP changes) is Issue #495 and remains gated behind the security
-review (ADR-0058 D6); nothing here relaxes the `Permissions-Policy: ... microphone=() ...` header or
+review (ADR-0100 D6); nothing here relaxes the `Permissions-Policy: ... microphone=() ...` header or
 the CSP (`default-src 'none'` / `connect-src 'self'`).
 
 ## 1. Capability gating
 
-The route is **usable only when the resolved voice capability advertises speech-to-text** (ADR-0058
+The route is **usable only when the resolved voice capability advertises speech-to-text** (ADR-0100
 D1/D2). It gates on the same content-free resolution the UI reads from
 [`GET /api/voice/capability`](capability-configuration.md) and the same `KEIKO_VOICE_DISABLED`
 kill-switch (Issue #493). When voice is not configured, disabled by policy, unreachable, or the
@@ -56,7 +56,7 @@ endpoint adds no relaxation of the server media-type or CSRF gate.
 
 The decoded-byte cap is the authoritative bound on transcribable duration: precise server-side
 duration measurement would require decoding the container, which needs an audio-processing
-dependency that the supply-chain policy (ADR-0058 D8) forbids, so the byte cap bounds the maximum
+dependency that the supply-chain policy (ADR-0100 D8) forbids, so the byte cap bounds the maximum
 possible duration regardless of codec and the optional `durationMs` is an additional declared-length
 ceiling.
 
@@ -96,21 +96,21 @@ operator-safe message — no provider body, URL, path, IP, or credential is ever
 The decoded audio is held only in memory for the duration of the request and is forwarded **once** to
 the configured STT provider through the Model Gateway egress seam (`gatewayFetch`,
 [ADR-0038](../adr/ADR-0038-outbound-egress.md)), so voice traffic inherits the same corporate-proxy,
-custom-CA, timeout, and byte-cap behavior as every other productive model call (ADR-0058 D4). The
+custom-CA, timeout, and byte-cap behavior as every other productive model call (ADR-0100 D4). The
 audio is **never** written to the evidence store, a side file, a log, or any other on-disk location
 (AC3). The only external destination introduced by this route is the configured provider endpoint.
 
 The provider call is provider-neutral: it uses the OpenAI-compatible multipart
 `POST {baseUrl}/audio/transcriptions` contract that the gateway already speaks for chat and
 embeddings. The Azure Foundry `keiko-stt` deployment class is one valid provider locality among three
-([capability-configuration.md](capability-configuration.md) §2, ADR-0058 D7); a customer-hosted
+([capability-configuration.md](capability-configuration.md) §2, ADR-0100 D7); a customer-hosted
 controlled-network endpoint (which may be a private/RFC-1918 host behind a corporate proxy) uses the
 identical shape — the multipart audio body is forwarded byte-for-byte even through the proxy/CA
 fallback egress path.
 
 ## 6. References
 
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — decisions D1, D2, D4, D6.
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — decisions D1, D2, D4, D6.
 - [capability-configuration.md](capability-configuration.md) — capability metadata, the read
   endpoint, and the disable kill-switch (Issue #493).
 - [privacy-contract.md](privacy-contract.md) — credential and redaction posture.

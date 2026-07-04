@@ -16,6 +16,7 @@ import type {
   QualityIntelligenceModelPolicy,
   QualityIntelligenceModelPolicyPreflightResponse,
   QualityIntelligenceModelPolicyResponse,
+  QualityIntelligenceReviewAction,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -23,36 +24,16 @@ import type {
 // ---------------------------------------------------------------------------
 
 import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 
 export const QI_RUN_SSE_BUFFER_LIMIT_CHARS = 256 * 1024;
 
+// Thin wrapper over the shared BFF scaffold (GEN-DUP-NEAR-004): CSRF + JSON content-type on
+// state-changing methods, error-envelope parse, and the 204 → undefined short-circuit (the last
+// folded in from the shared helper — a safe-forward improvement). The hand-rolled SSE fetch below
+// (startQiRun) stays a bespoke streaming path and does NOT route through this helper.
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as { error: { code: string; message: string } };
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic message
-    }
-    throw new ApiError(code, message, res.status);
-  }
-
-  return res.json() as Promise<T>;
+  return bffFetchJson<T>(path, init);
 }
 
 // ---------------------------------------------------------------------------
@@ -237,7 +218,7 @@ export async function preflightQiModelPolicy(
 // POST /api/quality-intelligence/runs/:id/review  (Issue #282)
 // ---------------------------------------------------------------------------
 
-export type QiReviewAction = "approve" | "reject" | "request-changes" | "reopen" | "withdraw";
+export type QiReviewAction = QualityIntelligenceReviewAction;
 
 export interface QiReviewResult {
   readonly runState: string;

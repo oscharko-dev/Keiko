@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, setupGateway } from "@/lib/api";
@@ -46,6 +46,56 @@ describe("GatewaySetupDialog", () => {
 
     await user.keyboard("{Escape}");
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  // GEN-UI-FOCUS-015: the Tab trap must skip fields hidden inside a collapsed
+  // <details> ("Replace model gateway settings" / "Update voice dictation
+  // credentials"), otherwise the trap's first/last boundary can be an invisible
+  // input and Tab appears to lose focus. jsdom supports the <details open>
+  // attribute, so the collapsed-section filter is exercised here even though
+  // jsdom cannot compute offsetParent/layout. The trap boundaries are driven
+  // directly (fireEvent keydown on the dialog) because jsdom's native Tab order
+  // ignores visibility and would otherwise reach the hidden fields.
+  it("keeps the Tab trap boundaries out of collapsed <details> fields (GEN-UI-FOCUS-015)", async () => {
+    render(
+      <GatewaySetupDialog
+        preserveExisting
+        storedApiKeyHeaderName="authorization"
+        storedModels={[modelCapability("internal-chat")]}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog");
+
+    // The replace/update fields exist in the DOM but sit inside collapsed
+    // <details> — they must be excluded from the trap entirely.
+    const hiddenBaseUrl = screen.getByPlaceholderText(
+      "Only enter a value to replace the stored gateway URL",
+    );
+    const gatewayDetails = hiddenBaseUrl.closest("details");
+    expect(gatewayDetails?.open).toBe(false);
+
+    // The kept focusables (in DOM order) are: the two <summary> toggles and the
+    // Figma token input. first = "Replace model gateway settings" summary,
+    // last = Figma token. Both boundaries are visible, never a hidden field.
+    const replaceSummary = screen.getByText("Replace model gateway settings");
+    const figmaToken = screen.getByLabelText(/figma access token optional/i);
+    await waitFor(() => expect(figmaToken).toHaveFocus());
+
+    // Tab from the last boundary (Figma token) wraps to the first boundary,
+    // which is the visible <summary> toggle — NOT a hidden field inside the
+    // collapsed <details>. (The summary lives inside <details> and stays
+    // reachable so the section can be opened by keyboard.)
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(replaceSummary).toHaveFocus();
+    expect(document.activeElement?.tagName).toBe("SUMMARY");
+    expect(document.activeElement).not.toBe(hiddenBaseUrl);
+
+    // Shift+Tab from the first boundary wraps to the last (Figma token) — a
+    // visible field, never one of the hidden replace/voice inputs.
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(figmaToken).toHaveFocus();
+    expect(figmaToken.closest("details")).toBeNull();
   });
 
   it("requires real deployment names for Azure AI Foundry before testing credentials", async () => {

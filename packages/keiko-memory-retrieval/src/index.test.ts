@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import * as api from "./index.js";
 
 describe("public API surface", () => {
-  it("exports the pinned version literal", () => {
-    expect(api.KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.1.0");
+  it("exports the pinned package version literal", () => {
+    expect(api.KEIKO_MEMORY_RETRIEVAL_VERSION).toBe("0.2.11");
   });
 
   it("exports the documented default constants with the documented values", () => {

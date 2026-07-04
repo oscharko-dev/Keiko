@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { RedactingError } from "@oscharko-dev/keiko-security/errors/base";
 import { GovernanceError, type GovernanceErrorCode } from "./errors.js";
+
+// A secret shape redact() scrubs (OpenAI-style key). Split so the literal is never contiguous in
+// source and long enough to satisfy the >= 16-char key pattern.
+const SECRET = "sk-" + "test0ABC123DEF456GHI789";
 
 describe("GovernanceError", () => {
   it("preserves code and message on the instance", () => {
@@ -42,5 +47,24 @@ describe("GovernanceError", () => {
       const err = new GovernanceError(code, "test");
       expect(err.code).toBe(code);
     }
+  });
+
+  // GEN-MAINT-COUPLING-003/004 guard: the class now extends the shared RedactingError base, so a
+  // secret can never reach `.message` even if a call-site forgets to sanitise. Preserving the
+  // `GovernanceError(code): ...` prefix and `.code` is asserted above; this locks in redaction.
+  describe("shared RedactingError base (COUPLING-003/004)", () => {
+    it("is an instanceof RedactingError and exposes .code", () => {
+      const err = new GovernanceError("envelope-validation-failed", "boom");
+      expect(err).toBeInstanceOf(RedactingError);
+      expect(err.code).toBe("envelope-validation-failed");
+    });
+
+    it("redacts a known secret shape from .message at construction", () => {
+      const err = new GovernanceError("invalid-selector-input", `leaked ${SECRET} value`);
+      expect(err.message).not.toContain(SECRET);
+      expect(err.message).toContain("[REDACTED]");
+      // The human-readable prefix survives redaction.
+      expect(err.message).toContain("GovernanceError(invalid-selector-input)");
+    });
   });
 });

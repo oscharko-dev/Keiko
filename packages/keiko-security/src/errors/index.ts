@@ -3,6 +3,7 @@
 // callers can subpath-import (`@oscharko-dev/keiko-security/errors/gateway`) when they want to pull
 // only one layer's error names without dragging the rest in.
 
+export * from "./base.js";
 export * from "./gateway.js";
 export * from "./audit.js";
 export * from "./workspace.js";

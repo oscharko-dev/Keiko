@@ -44,6 +44,8 @@ interface FakeGl {
   readonly drawArrays: ReturnType<typeof vi.fn>;
   readonly deleteBuffer: ReturnType<typeof vi.fn>;
   readonly deleteProgram: ReturnType<typeof vi.fn>;
+  readonly getExtension: ReturnType<typeof vi.fn>;
+  readonly loseContext: ReturnType<typeof vi.fn>;
 }
 
 class FakeResizeObserver {
@@ -79,7 +81,10 @@ function installMatchMedia(initialMatches = false): MatchMediaHarness {
 }
 
 function createGl(): FakeGl {
+  const loseContext = vi.fn();
   return {
+    getExtension: vi.fn((name: string) => (name === "WEBGL_lose_context" ? { loseContext } : null)),
+    loseContext,
     VERTEX_SHADER: 0x8b31,
     FRAGMENT_SHADER: 0x8b30,
     COMPILE_STATUS: 0x8b81,
@@ -376,6 +381,65 @@ describe("WorkspaceShader", () => {
     host.dataset.panning = "true";
     drawAt(1_200);
     expect(gl.drawArrays).toHaveBeenCalledTimes(3);
+  });
+
+  it("releases the WebGL context on dispose (GEN-PERF-MEMORY-003)", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
+    const gl = createGl();
+    stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      gl as unknown as RenderingContext,
+    );
+
+    const { container, unmount } = render(<WorkspaceShader />);
+    const canvas = container.querySelector("canvas") as HTMLCanvasElement;
+    stubHostRect(canvas);
+
+    expect(gl.loseContext).not.toHaveBeenCalled();
+
+    unmount();
+
+    // The context (not just its GL objects) must be explicitly released so repeated
+    // wallpaper toggles do not strand contexts and hit the browser's ~16 cap.
+    expect(gl.getExtension).toHaveBeenCalledWith("WEBGL_lose_context");
+    expect(gl.loseContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the draw during a wheel/trackpad view gesture (GEN-PERF-WORKSPACE-004)", () => {
+    window.localStorage.setItem("keiko.wallpaper.enabled", "true");
+    const gl = createGl();
+    const animation = stubAnimationFrame();
+    vi.spyOn(performance, "now").mockReturnValue(1_000);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(
+      gl as unknown as RenderingContext,
+    );
+
+    const { container } = render(<WorkspaceShader />);
+    const canvas = container.querySelector("canvas") as HTMLCanvasElement;
+    const host = stubHostRect(canvas);
+    FakeResizeObserver.instances[0]?.callback([], FakeResizeObserver.instances[0]);
+
+    const drawAt = (now: number): void => {
+      vi.mocked(performance.now).mockReturnValue(now);
+      animation.callback?.(now);
+    };
+
+    // Baseline: an idle frame draws.
+    drawAt(1_000);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(1);
+
+    // A wheel/trackpad pan or zoom gesture sets data-view-active on the host — the
+    // fbm draw must be skipped for the gesture (was only gated by data-panning,
+    // which the wheel path never sets).
+    host.dataset.viewActive = "true";
+    drawAt(1_100);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(1);
+
+    // Clearing the gesture flag resumes drawing on the next eligible frame.
+    host.removeAttribute("data-view-active");
+    drawAt(1_200);
+    expect(gl.drawArrays).toHaveBeenCalledTimes(2);
   });
 
   it("tears down opacity listeners when shader compilation fails", () => {

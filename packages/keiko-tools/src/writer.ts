@@ -6,16 +6,19 @@
 import {
   closeSync,
   constants,
-  ftruncateSync,
+  existsSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   realpathSync,
   renameSync,
   rmSync,
-  writeFileSync,
+  unlinkSync,
+  writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export interface WorkspaceWriter {
   readonly writeFileUtf8: (absolutePath: string, content: string) => void;
@@ -24,8 +27,7 @@ export interface WorkspaceWriter {
   readonly rename: (fromAbsolute: string, toAbsolute: string) => void;
 }
 
-const NOFOLLOW_WRITE_FLAG =
-  typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+const NOFOLLOW_WRITE_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
 
 function sameNativePath(a: string, b: string): boolean {
   return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
@@ -62,16 +64,75 @@ function assertContainedParent(root: string, absolutePath: string): void {
 }
 
 function writeFileNoFollow(absolutePath: string, content: string): void {
-  const fd = openSync(
-    absolutePath,
-    constants.O_WRONLY | constants.O_CREAT | NOFOLLOW_WRITE_FLAG,
-    0o666,
+  const dir = dirname(absolutePath);
+  const existingMode = existingFileMode(absolutePath);
+  const tempPath = join(
+    dir,
+    `.${basename(absolutePath)}.keiko-write.${String(process.pid)}.${randomUUID()}.tmp`,
   );
+  let fd: number | undefined;
   try {
-    ftruncateSync(fd, 0);
-    writeFileSync(fd, content, "utf8");
-  } finally {
+    fd = openSync(
+      tempPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW_WRITE_FLAG,
+      existingMode,
+    );
+    writeSync(fd, content, 0, "utf8");
+    fsyncSync(fd);
     closeSync(fd);
+    fd = undefined;
+    if (existsSync(absolutePath)) assertNoSymlink(absolutePath);
+    renameSync(tempPath, absolutePath);
+    fsyncDirectory(dir);
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close only.
+      }
+    }
+    if (existsSync(tempPath)) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+  }
+}
+
+function existingFileMode(absolutePath: string): number {
+  try {
+    const stats = lstatSync(absolutePath);
+    if (stats.isSymbolicLink()) {
+      throw new Error("workspace writer refused a symbolic link");
+    }
+    return stats.mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0o666;
+    }
+    throw error;
+  }
+}
+
+function fsyncDirectory(dir: string): void {
+  if (process.platform === "win32") return;
+  let fd: number | undefined;
+  try {
+    fd = openSync(dir, constants.O_RDONLY);
+    fsyncSync(fd);
+  } catch {
+    // Not all filesystems allow directory fsync; the temp file itself is flushed above.
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // Best-effort close only.
+      }
+    }
   }
 }
 
@@ -130,7 +191,9 @@ export function createContainedNodeWorkspaceWriter(workspaceRoot: string): Works
         }
         const created = lstatSync(current);
         if (created.isSymbolicLink() || !created.isDirectory()) {
-          throw new Error("workspace writer refused a non-directory path segment", { cause: error });
+          throw new Error("workspace writer refused a non-directory path segment", {
+            cause: error,
+          });
         }
       }
       assertContained(root, realpathSync(current));

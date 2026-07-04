@@ -3,9 +3,8 @@
 // Browser-safe: imports only from @oscharko-dev/keiko-contracts (ADR-0019 rule 8).
 // CSRF header added automatically for all mutating methods.
 
-import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 import type {
-  MemoryEdge,
   MemoryId,
   MemoryRecord,
   MemoryScope,
@@ -13,7 +12,21 @@ import type {
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
-  MemoryUpdate,
+  MemoryConsolidationJobStateWire,
+  MemoryConsolidationStaleReasonWire,
+  MemoryConsolidationStaleFlagWire,
+  MemoryConsolidationReviewReasonWire,
+  MemoryConsolidationProposedActionWire,
+  MemoryConsolidationEvidenceKindWire,
+  MemoryConsolidationEvidenceWire,
+  MemoryConsolidationReviewItemWire,
+  MemoryConsolidationSummaryStatusWire,
+  MemoryConsolidationResultWire,
+  MemoryConsolidationJobWire,
+  MemoryConsolidationJobSelectionWire,
+  MemoryConsolidationJobSettingsWire,
+  MemoryConsolidationJobEnvelopeWire,
+  MemoryConsolidationJobResponseWire,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -40,92 +53,21 @@ export interface MemoryActionResponse {
   readonly memory: MemoryRecord;
 }
 
-export type MemoryConsolidationJobState =
-  "queued" | "running" | "completed" | "failed" | "canceled" | "skipped";
-
-export type MemoryConsolidationStaleReason = "expired" | "low-confidence" | "aged-out";
-
-export interface MemoryConsolidationStaleFlag {
-  readonly memoryId: MemoryId;
-  readonly reason: MemoryConsolidationStaleReason;
-  readonly detectedAt: number;
-}
-
-export type MemoryConsolidationReviewReason =
-  | "duplicate-review"
-  | "multi-way-duplicate"
-  | "potential-conflict";
-
-export type MemoryConsolidationProposedAction =
-  | { readonly kind: "merge"; readonly winner: MemoryId; readonly losers: readonly MemoryId[] }
-  | { readonly kind: "supersede"; readonly newer: MemoryId; readonly older: MemoryId };
-
-export interface MemoryConsolidationReviewItem {
-  readonly id: string;
-  readonly reason: MemoryConsolidationReviewReason;
-  readonly relatedMemoryIds: readonly MemoryId[];
-  readonly sourceMemoryIds?: readonly MemoryId[];
-  readonly proposedAction?: MemoryConsolidationProposedAction;
-  readonly proposedEdges?: readonly MemoryEdge[];
-  readonly detectedAt: number;
-}
-
-export interface MemoryConsolidationSummaryStatus {
-  readonly kind: "not-configured" | "configured";
-  readonly updatesProposed: number;
-  readonly skippedMergeClusters: number;
-  readonly fallbacksUsed: number;
-}
-
-export interface MemoryConsolidationResult {
-  readonly state: "completed" | "canceled" | "skipped" | "failed";
-  readonly edgesProposed: readonly MemoryEdge[];
-  readonly updatesProposed: readonly MemoryUpdate[];
-  readonly summaryStatus: MemoryConsolidationSummaryStatus;
-  readonly staleFlags: readonly MemoryConsolidationStaleFlag[];
-  readonly reviewItems: readonly MemoryConsolidationReviewItem[];
-  readonly clustersInspected: number;
-  readonly recordsInspected: number;
-  readonly truncated: boolean;
-  readonly elapsedMs: number;
-}
-
-export interface MemoryConsolidationJob {
-  readonly id: string;
-  readonly state: MemoryConsolidationJobState;
-  readonly startedAt?: number;
-  readonly completedAt?: number;
-  readonly result?: MemoryConsolidationResult;
-  readonly error?: string;
-}
-
-export interface MemoryConsolidationJobSelection {
-  readonly scopes: readonly MemoryScope[];
-  readonly types?: readonly MemoryType[];
-  readonly statuses?: readonly MemoryStatus[];
-  readonly includeExpired: boolean;
-}
-
-export interface MemoryConsolidationJobSettings {
-  readonly jaccardThreshold: number;
-  readonly staleConfidenceThreshold: number;
-  readonly maxAgeMs: number;
-  readonly maxClustersPerRun: number;
-  readonly maxRecordsPerRun: number;
-}
-
-export interface MemoryConsolidationJobEnvelope {
-  readonly job: MemoryConsolidationJob;
-  readonly createdAt: number;
-  readonly selection: MemoryConsolidationJobSelection;
-  readonly settings: MemoryConsolidationJobSettings;
-  readonly memoryCount: number;
-  readonly cancelRequested: boolean;
-}
-
-export interface MemoryConsolidationJobResponse {
-  readonly job: MemoryConsolidationJobEnvelope;
-}
+export type MemoryConsolidationJobState = MemoryConsolidationJobStateWire;
+export type MemoryConsolidationStaleReason = MemoryConsolidationStaleReasonWire;
+export type MemoryConsolidationStaleFlag = MemoryConsolidationStaleFlagWire;
+export type MemoryConsolidationReviewReason = MemoryConsolidationReviewReasonWire;
+export type MemoryConsolidationProposedAction = MemoryConsolidationProposedActionWire;
+export type MemoryConsolidationEvidenceKind = MemoryConsolidationEvidenceKindWire;
+export type MemoryConsolidationEvidence = MemoryConsolidationEvidenceWire;
+export type MemoryConsolidationReviewItem = MemoryConsolidationReviewItemWire;
+export type MemoryConsolidationSummaryStatus = MemoryConsolidationSummaryStatusWire;
+export type MemoryConsolidationResult = MemoryConsolidationResultWire;
+export type MemoryConsolidationJob = MemoryConsolidationJobWire;
+export type MemoryConsolidationJobSelection = MemoryConsolidationJobSelectionWire;
+export type MemoryConsolidationJobSettings = MemoryConsolidationJobSettingsWire;
+export type MemoryConsolidationJobEnvelope = MemoryConsolidationJobEnvelopeWire;
+export type MemoryConsolidationJobResponse = MemoryConsolidationJobResponseWire;
 
 export interface MemoryForgetResponse {
   readonly forgotten: true;
@@ -202,42 +144,16 @@ export interface ResolveMemoryConflictResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Internal fetch wrapper (mirrors local-knowledge-api.ts pattern)
+// Internal fetch wrapper — thin delegation to the shared BFF scaffold (GEN-DUP-NEAR-004).
+// Kept as a named private generic so the `fetchImpl = fetchJson<T>` default-param test seam every
+// helper below relies on stays intact. The shared helper applies the same header union (CSRF + JSON
+// content-type on state-changing methods AND JSON content-type whenever a body is present) and the
+// same machine `HTTP <status>` parse-failure message; it additionally folds in the 204 → undefined
+// short-circuit (a safe-forward improvement over the former non-204 path).
 // ---------------------------------------------------------------------------
 
-function buildHeaders(method: string, body?: BodyInit | null): Record<string, string> {
-  const headers: Record<string, string> = { Accept: "application/json" };
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  if (isStateChanging || (body !== undefined && body !== null)) {
-    headers["Content-Type"] = "application/json";
-  }
-  if (isStateChanging) {
-    headers["X-Keiko-CSRF"] = "1";
-  }
-  return headers;
-}
-
-async function parseError(res: Response): Promise<{ code: string; message: string }> {
-  try {
-    const envelope = (await res.json()) as { error: { code: string; message: string } };
-    return { code: envelope.error.code, message: envelope.error.message };
-  } catch {
-    return { code: "INTERNAL", message: `HTTP ${res.status.toString()}` };
-  }
-}
-
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const body = init?.body;
-  const res = await fetch(path, {
-    ...init,
-    headers: buildHeaders(method, body),
-  });
-  if (!res.ok) {
-    const { code, message } = await parseError(res);
-    throw new ApiError(code, message, res.status);
-  }
-  return res.json() as Promise<T>;
+  return bffFetchJson<T>(path, init);
 }
 
 // ---------------------------------------------------------------------------

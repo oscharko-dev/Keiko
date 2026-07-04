@@ -263,12 +263,7 @@ function clearDocumentArtifacts(
 }
 
 function markDocumentFailed(state: RunState, documentId: DocumentId): void {
-  updateDocumentStatusRow(
-    state.options.store._internal.db,
-    state.capsule.id,
-    documentId,
-    "failed",
-  );
+  updateDocumentStatusRow(state.options.store._internal.db, state.capsule.id, documentId, "failed");
 }
 
 // ─── Per-chunk text projection ────────────────────────────────────────────────
@@ -862,6 +857,24 @@ function hasCompleteIndexedTextCoverage(state: RunState, documentId: DocumentId)
   return storedChunksToEmbed(state, documentId) !== undefined;
 }
 
+// When an already-embedded document is skipped, keep its lexical rows consistent with its chunk
+// count. Extracted from applyIncrementalFastPath to keep it under the LOC bound.
+function reconcileLexicalRowsForEmbeddedDocument(
+  state: RunState,
+  documentId: DocumentId,
+  chunkCount: number,
+): void {
+  if (
+    countLexicalRowsForDocument(state.options.store._internal.db, state.capsule.id, documentId) !==
+    chunkCount
+  ) {
+    const stored = storedChunksToEmbed(state, documentId);
+    if (stored !== undefined) {
+      replaceLexicalRowsForChunks(state, documentId, stored);
+    }
+  }
+}
+
 function applyIncrementalFastPath(
   state: RunState,
   result: ExtractionResult,
@@ -882,13 +895,7 @@ function applyIncrementalFastPath(
       !staleChunks &&
       indexedTextComplete
     ) {
-      if (countLexicalRowsForDocument(state.options.store._internal.db, state.capsule.id, documentId) !==
-        coverage.chunkCount) {
-        const stored = storedChunksToEmbed(state, documentId);
-        if (stored !== undefined) {
-          replaceLexicalRowsForChunks(state, documentId, stored);
-        }
-      }
+      reconcileLexicalRowsForEmbeddedDocument(state, documentId, coverage.chunkCount);
       state.skippedDocuments += 1;
       return {
         events: [
@@ -1766,7 +1773,9 @@ function embeddingPreflightOptions(state: RunState): EmbeddingProbeOptions {
     provider: identity.provider,
     vectorMetric: identity.vectorMetric,
     expectedDimensions: identity.vectorDimensions,
-    ...(identity.dimensionsParam !== undefined ? { dimensionsParam: identity.dimensionsParam } : {}),
+    ...(identity.dimensionsParam !== undefined
+      ? { dimensionsParam: identity.dimensionsParam }
+      : {}),
     ...(identity.normalization !== undefined ? { normalization: identity.normalization } : {}),
     ...(identity.instructionVersion !== undefined
       ? { instructionVersion: identity.instructionVersion }
@@ -1858,7 +1867,9 @@ function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): I
   return emit(state, event);
 }
 
-async function resolveIndexingTokenizer(options: IndexingOptions): Promise<LocalKnowledgeTokenizer> {
+async function resolveIndexingTokenizer(
+  options: IndexingOptions,
+): Promise<LocalKnowledgeTokenizer> {
   if (
     options.chunkingOptions?.tokenizer !== undefined ||
     options.chunkingOptions?.tokenEstimator !== undefined

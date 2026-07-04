@@ -158,6 +158,7 @@ export function SyncControl({
 }): ReactNode {
   const disabled = view.disabled || busy;
   const descriptionId = useId();
+  const syncLabelId = useId();
   return (
     <div style={{ display: "inline-flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
       <button
@@ -170,12 +171,20 @@ export function SyncControl({
       >
         <Icons.reset size={12} /> {busy ? "Syncing" : view.label}
       </button>
+      {/* GEN-UI-A11Y-017: role=status derives no accessible name from its own text, and a
+          static aria-label duplicating the announced content is the fragile pattern the finding
+          flags. Instead the accessible name is composed from REAL rendered content — an sr-only
+          "Sync:" context label plus this region's own live text — so name and announcement can
+          never diverge. */}
+      <span id={syncLabelId} className="rv-sr-only">
+        Sync:
+      </span>
       <span
         id={descriptionId}
         role={error === null ? "status" : "alert"}
-        aria-label={`Sync: ${error ?? outcome ?? view.description}`}
         aria-live="polite"
         aria-atomic="true"
+        aria-labelledby={`${syncLabelId} ${descriptionId}`}
         style={{
           ...STATUS_PILL_STYLE,
           maxWidth: 320,

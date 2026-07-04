@@ -20,6 +20,8 @@ import {
   type RouteContext,
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { CORRELATION_RESPONSE_HEADER, resolveCorrelationId } from "./correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
 import { createVoiceControlPlane } from "./voice-realtime.js";
 import { createRunRegistry } from "./runs.js";
@@ -76,10 +78,7 @@ function writeJson(
   }
   const payload = Buffer.from(JSON.stringify(body), "utf8");
   res.setHeader("Content-Type", "application/json; charset=utf-8");
-  if (
-    payload.byteLength >= JSON_GZIP_MIN_BYTES &&
-    acceptsGzip(req.headers["accept-encoding"])
-  ) {
+  if (payload.byteLength >= JSON_GZIP_MIN_BYTES && acceptsGzip(req.headers["accept-encoding"])) {
     res.setHeader("Content-Encoding", "gzip");
     res.setHeader("Vary", "Accept-Encoding");
     Readable.from(payload).pipe(createGzip()).pipe(res);
@@ -154,6 +153,7 @@ async function dispatchApi(
   res: ServerResponse,
   method: string,
   url: URL,
+  correlationId: string,
 ): Promise<void> {
   const match = matchRoute(method, url.pathname);
   if (match === undefined) {
@@ -167,7 +167,7 @@ async function dispatchApi(
   if (isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res)) {
     return;
   }
-  const ctx: RouteContext = { req, res, params: match.params, url };
+  const ctx: RouteContext = { req, res, params: match.params, url, correlationId };
   const outcome = await match.definition.handler(ctx, handlerDeps);
   if (outcome === STREAMING) {
     return;
@@ -230,6 +230,7 @@ async function handle(
   handlerDeps: UiHandlerDeps,
   req: IncomingMessage,
   res: ServerResponse,
+  correlationId: string,
 ): Promise<void> {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
   const apiPath = isApiPath(url.pathname);
@@ -245,7 +246,7 @@ async function handle(
   }
   const method = (req.method ?? "GET").toUpperCase();
   if (apiPath) {
-    await dispatchApi(handlerDeps, req, res, method, url);
+    await dispatchApi(handlerDeps, req, res, method, url, correlationId);
     return;
   }
   await serveStatic(req, res, deps.staticRoot, url.pathname);
@@ -253,8 +254,8 @@ async function handle(
 
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
 // listens on a non-loopback interface. The previous PTY WebSocket upgrade handler is removed — the
-// terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8). Issue #497 (ADR-0058 D3,
-// ADR-0059) re-opens the upgrade for the single loopback voice control path `/api/voice/control`, and
+// terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8). Issue #497 (ADR-0100 D3,
+// ADR-0101) re-opens the upgrade for the single loopback voice control path `/api/voice/control`, and
 // ONLY when the deployment is full-realtime voice capable; every other upgrade keeps the hard reject.
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
@@ -263,9 +264,33 @@ export function createUiServer(deps: UiServerDeps): Server {
     handlerDeps: () => handlerDeps,
   });
   const server = createServer((req, res) => {
-    void handle(deps, handlerDeps, req, res).catch(() => {
+    // RB-6: mint (or reuse a well-formed UI-supplied) correlation id at request entry and echo it on
+    // every response BEFORE handling, so even a streamed/committed response and a top-level failure
+    // carry the same traceable id. `setHeader` survives the later SSE `writeHead(200, SSE_HEADERS)`
+    // (Node merges previously-set headers), so streamed chat responses are covered too.
+    const correlationId = resolveCorrelationId(req);
+    res.setHeader(CORRELATION_RESPONSE_HEADER, correlationId);
+    void handle(deps, handlerDeps, req, res, correlationId).catch((error: unknown) => {
+      // The cause is no longer discarded: it is routed — REDACTED — to the operator diagnostic sink,
+      // keyed by the correlation id, and the id is folded into the opaque 500 body so a user-reported
+      // failure can be tied back to exactly one server-side record (GEN-OBS-DIAGNOSTICS-901).
+      emitServerDiagnostic(
+        handlerDeps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId,
+          operation: `${req.method ?? "GET"} ${req.url ?? "/"}`,
+          source: "server.top-level-catch",
+          error,
+          redact: (message) => String(handlerDeps.redactor(message)),
+        }),
+      );
       if (!res.headersSent) {
-        writeJson(req, res, 500, errorBody("INTERNAL", "An unexpected error occurred."));
+        writeJson(
+          req,
+          res,
+          500,
+          errorBody("INTERNAL", "An unexpected error occurred.", correlationId),
+        );
       } else {
         res.end();
       }

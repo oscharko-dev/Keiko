@@ -1,4 +1,4 @@
-// Voice Digital Twin evaluation types (Epic #491, Issue #505 — the capstone; ADR-0068).
+// Voice Digital Twin evaluation types (Epic #491, Issue #505 — the capstone; ADR-0110).
 //
 // This subpackage is the PROOF MECHANISM for the whole Voice Digital Twin: that it is high quality when
 // available and harmless when unavailable. It scores the deterministic capability / privacy / metric
@@ -190,7 +190,7 @@ export interface BufferBoundednessMetricRecord {
 
 // The deterministic latency POSTURE class per profile (the Deliverable "latency"). Numeric wall-clock /
 // WebRTC setup timing is OUT of the pure-harness boundary (needs clock + network reads); the keiko-ui
-// voice-timebase suite (ADR-0061) covers the wall-clock ring-drain timing. Here we prove only the
+// voice-timebase suite (ADR-0103) covers the wall-clock ring-drain timing. Here we prove only the
 // deterministic latency class the media transport implies: a `webrtc` profile is interactive-realtime,
 // a `gateway-batch` profile is batch, and a `none` profile has no latency surface at all.
 export interface LatencyClassMetricRecord {

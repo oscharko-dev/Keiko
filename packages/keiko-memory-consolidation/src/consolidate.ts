@@ -116,8 +116,7 @@ function optionalResolvedPorts(options: ConsolidationOptions): Partial<ResolvedO
 function resolveNumericKnobs(options: ConsolidationOptions): NumericKnobs {
   return {
     jaccardThreshold: options.jaccardThreshold ?? JACCARD_DEFAULT,
-    semanticSimilarityThreshold:
-      options.semanticSimilarityThreshold ?? SEMANTIC_SIMILARITY_DEFAULT,
+    semanticSimilarityThreshold: options.semanticSimilarityThreshold ?? SEMANTIC_SIMILARITY_DEFAULT,
     staleConfidenceThreshold: options.staleConfidenceThreshold ?? STALE_CONFIDENCE_DEFAULT,
     maxAgeMs: options.maxAgeMs ?? MAX_AGE_MS_DEFAULT,
     maxClustersPerRun: options.maxClustersPerRun ?? MAX_CLUSTERS_PER_RUN_DEFAULT,
@@ -294,7 +293,9 @@ function sourceIdsForCluster(cluster: DuplicateCluster): readonly MemoryId[] {
   return cluster.members.map((member) => member.id);
 }
 
-function mergeActionForCluster(cluster: DuplicateCluster): { readonly winner: MemoryRecord; readonly losers: readonly MemoryRecord[] } | null {
+function mergeActionForCluster(
+  cluster: DuplicateCluster,
+): { readonly winner: MemoryRecord; readonly losers: readonly MemoryRecord[] } | null {
   const sorted = [...cluster.members].sort(compareRecordsByAge);
   const winner = sorted[sorted.length - 1];
   if (winner === undefined || sorted.length < 2) return null;
@@ -423,7 +424,11 @@ function summaryReviewerNote(
 function buildSummaryUpdate(
   cluster: DuplicateCluster,
   resolved: ResolvedOptions,
-): { readonly update: MemoryUpdate | null; readonly fallbackUsed: boolean; readonly skipped: boolean } {
+): {
+  readonly update: MemoryUpdate | null;
+  readonly fallbackUsed: boolean;
+  readonly skipped: boolean;
+} {
   const actionInput = mergeActionForCluster(cluster);
   if (actionInput === null) return { update: null, fallbackUsed: false, skipped: true };
   const sorted = [...cluster.members].sort(compareRecordsByAge);
@@ -432,7 +437,12 @@ function buildSummaryUpdate(
   const unionBody = deterministicUnionBody(sorted);
   const summary = chooseSummaryBody(
     resolved.summaryGenerator,
-    { winner: actionInput.winner, records: sorted, sourceMemoryIds: sourceIdsForCluster(cluster), sourceBodies },
+    {
+      winner: actionInput.winner,
+      records: sorted,
+      sourceMemoryIds: sourceIdsForCluster(cluster),
+      sourceBodies,
+    },
     sourceBodies,
     unionBody,
   );
@@ -618,7 +628,8 @@ function prepareConsolidationRun(
     return { kind: "result", result: emptyResult("canceled", 0, false, resolved) };
   }
   const eligible = eligibleMemories(memories, resolved);
-  if (eligible === null) return { kind: "result", result: emptyResult("failed", 0, false, resolved) };
+  if (eligible === null)
+    return { kind: "result", result: emptyResult("failed", 0, false, resolved) };
   if (eligible.length === 0) {
     return { kind: "result", result: emptyResult("skipped", 0, false, resolved) };
   }

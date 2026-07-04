@@ -15,8 +15,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SecretboxError } from "./errors/secretbox.js";
 import {
   NO_LOCAL_VAULT_KEYCHAIN,
+  SecretVaultStoreError,
   createKeychainVaultKeyAccess,
   createLocalSecretVault,
+  readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
 
@@ -189,6 +191,20 @@ function vaultAt(storePath: string): ReturnType<typeof createLocalSecretVault> {
   return createLocalSecretVault({ key: KEY, storePath });
 }
 
+function expectStoreFault(
+  action: () => unknown,
+  code: SecretVaultStoreError["code"],
+): SecretVaultStoreError {
+  try {
+    action();
+  } catch (error) {
+    expect(error).toBeInstanceOf(SecretVaultStoreError);
+    expect((error as SecretVaultStoreError).code).toBe(code);
+    return error as SecretVaultStoreError;
+  }
+  throw new Error("expected secret vault store operation to fail");
+}
+
 describe("createLocalSecretVault — round-trip", () => {
   it("set then get returns the exact secret", () => {
     const vault = vaultAt(join(dir, "vault.enc.json"));
@@ -335,30 +351,80 @@ describe("createLocalSecretVault — wrong key tamper", () => {
 });
 
 describe("createLocalSecretVault — corrupt store", () => {
-  it("non-JSON store file is treated as empty: get returns undefined and list returns []", () => {
+  it("non-JSON store file fails closed and is preserved", () => {
     const storePath = join(dir, "vault.enc.json");
     writeFileSync(storePath, "this-is-not-json!!!");
 
     const vault = vaultAt(storePath);
-    expect(vault.get("any-ref")).toBeUndefined();
-    expect(vault.list()).toEqual([]);
+    const error = expectStoreFault(() => vault.get("any-ref"), "SECRET_VAULT_STORE_INVALID_JSON");
+    expect(error.storePath).toBe(storePath);
+    expect(String(error)).not.toContain("this-is-not-json");
+    expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_JSON");
+    expect(readFileSync(storePath, "utf8")).toBe("this-is-not-json!!!");
   });
 
-  it("a store file with wrong version number is treated as empty", () => {
+  it("a store file with wrong version number fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
     writeFileSync(storePath, JSON.stringify({ version: 99, entries: { "cred:a": "kv1.x.y" } }));
 
     const vault = vaultAt(storePath);
-    expect(vault.list()).toEqual([]);
-    expect(vault.get("cred:a")).toBeUndefined();
+    expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_SCHEMA");
+    expectStoreFault(() => vault.get("cred:a"), "SECRET_VAULT_STORE_INVALID_SCHEMA");
   });
 
-  it("a store file with entries that are not strings is treated as empty", () => {
+  it("a store file with entries that are not strings fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
     writeFileSync(storePath, JSON.stringify({ version: 1, entries: { "cred:a": 42 } }));
 
     const vault = vaultAt(storePath);
-    expect(vault.list()).toEqual([]);
+    expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_SCHEMA");
+  });
+
+  it("set refuses to overwrite an unreadable existing store", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "secret-A");
+    vault.set("cred:b", "secret-B");
+    writeFileSync(storePath, "{not valid json", "utf8");
+
+    expectStoreFault(() => {
+      vault.set("cred:c", "secret-C");
+    }, "SECRET_VAULT_STORE_INVALID_JSON");
+
+    expect(readFileSync(storePath, "utf8")).toBe("{not valid json");
+  });
+
+  it("replaceAll refuses to overwrite an unreadable existing store", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "secret-A");
+    writeFileSync(storePath, JSON.stringify({ version: 1, entries: null }), "utf8");
+
+    expectStoreFault(() => {
+      vault.replaceAll(new Map([["cred:b", "secret-B"]]));
+    }, "SECRET_VAULT_STORE_INVALID_SCHEMA");
+
+    expect(readFileSync(storePath, "utf8")).toBe(JSON.stringify({ version: 1, entries: null }));
+  });
+
+  it("replaceAll(empty) refuses to delete an unreadable existing store", () => {
+    const storePath = join(dir, "vault.enc.json");
+    const vault = vaultAt(storePath);
+    vault.set("cred:a", "secret-A");
+    writeFileSync(storePath, "null", "utf8");
+
+    expectStoreFault(() => {
+      vault.replaceAll(new Map());
+    }, "SECRET_VAULT_STORE_INVALID_SCHEMA");
+
+    expect(readFileSync(storePath, "utf8")).toBe("null");
+  });
+
+  it("readLocalVaultReferences fails closed over an unreadable reference index", () => {
+    const storePath = join(dir, "vault.enc.json");
+    writeFileSync(storePath, "not-json", "utf8");
+
+    expectStoreFault(() => readLocalVaultReferences(storePath), "SECRET_VAULT_STORE_INVALID_JSON");
   });
 });
 
@@ -431,28 +497,28 @@ describe("createLocalSecretVault — symlink guard", () => {
 });
 
 describe("createLocalSecretVault — additional isStoreFile branches", () => {
-  it("a store file containing JSON null is treated as empty", () => {
+  it("a store file containing JSON null fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
     writeFileSync(storePath, "null");
 
     const vault = vaultAt(storePath);
-    expect(vault.list()).toEqual([]);
+    expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_SCHEMA");
   });
 
-  it("a store file with entries=[] (array, not an object) is treated as empty", () => {
+  it("a store file with entries=[] (array, not an object) fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
     writeFileSync(storePath, JSON.stringify({ version: 1, entries: [] }));
 
     const vault = vaultAt(storePath);
-    expect(vault.list()).toEqual([]);
+    expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_SCHEMA");
   });
 
-  it("a store file with entries=null is treated as empty", () => {
+  it("a store file with entries=null fails closed", () => {
     const storePath = join(dir, "vault.enc.json");
     writeFileSync(storePath, JSON.stringify({ version: 1, entries: null }));
 
     const vault = vaultAt(storePath);
-    expect(vault.list()).toEqual([]);
+    expectStoreFault(() => vault.list(), "SECRET_VAULT_STORE_INVALID_SCHEMA");
   });
 });
 

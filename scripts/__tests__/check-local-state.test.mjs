@@ -210,6 +210,16 @@ describe("auditLocalState — focused class behaviour", () => {
     expect(classById(result, "credentials").status).toBe("fail");
   });
 
+  it("fails when keiko.config.json is present but corrupt", () => {
+    const stateDir = join(root, "corrupt-config", ".keiko");
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(stateDir, "keiko.config.json"), "{not-json", { mode: 0o600 });
+    const result = auditLocalState(stateDir);
+    expect(result.ok).toBe(false);
+    expect(classById(result, "credentials").status).toBe("fail");
+    expect(classById(result, "credentials").findings.join(" ")).toContain("not valid JSON");
+  });
+
   it("fails when a sensitive artifact is group/world-readable", () => {
     if (process.platform === "win32") return;
     const stateDir = join(root, "loose", ".keiko");
@@ -621,7 +631,7 @@ describe("auditLocalState — per-class failure detection", () => {
     expect(cls.findings.join(" ")).toContain("QI retention audit file");
   });
 
-  it("evidence-qi: includes quarantined QI manifests as protected state", () => {
+  it("runtime-integrity: reports quarantined QI manifests as unresolved integrity residue", () => {
     const stateDir = freshStateDir("qi-quarantined-manifest");
     const qiDir = join(stateDir, "evidence", "qi");
     mkdirSync(qiDir, { recursive: true, mode: 0o700 });
@@ -631,6 +641,29 @@ describe("auditLocalState — per-class failure detection", () => {
     const cls = auditLocalState(stateDir).classes.find((c) => c.id === "evidence-qi");
     expect(cls.status).toBe("pass");
     expect(cls.findings.join(" ")).toContain("1 quarantined QI manifest");
+    const integrity = classById(auditLocalState(stateDir), "runtime-integrity");
+    expect(integrity.status).toBe("fail");
+    expect(integrity.findings.join(" ")).toContain("unresolved quarantined QI manifest");
+  });
+
+  it("runtime-integrity: reports quarantined SQLite artifacts and diagnostics", () => {
+    const stateDir = freshStateDir("sqlite-quarantine-marker");
+    const memoryDir = join(stateDir, "memory");
+    mkdirSync(memoryDir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(memoryDir, "keiko-memory.db.corrupt.2026-07-02T00-00-00-000Z"), "", {
+      mode: 0o600,
+    });
+    writeFileSync(
+      join(memoryDir, "keiko-memory.db.corrupt.2026-07-02T00-00-00-000Z.diagnostic.json"),
+      JSON.stringify({ store: "memory-vault" }),
+      { mode: 0o600 },
+    );
+    const result = auditLocalState(stateDir);
+    const integrity = classById(result, "runtime-integrity");
+    expect(result.ok).toBe(false);
+    expect(integrity.status).toBe("fail");
+    expect(integrity.findings.join(" ")).toContain("unresolved quarantined SQLite artifact");
+    expect(integrity.findings.join(" ")).toContain("SQLite quarantine diagnostic record");
   });
 
   it("evidence-qi: refuses a symlinked tool-results sub-store without reporting its target", () => {

@@ -368,6 +368,45 @@ describe("KeikoSelect interactions", () => {
     expect(trigger).toHaveFocus();
   });
 
+  // GEN-UI-A11Y-008 / test-plan #32 — aria-selected must track the roving focus
+  // (activeIndex), and a labelled section must expose role=group with its label so
+  // listbox->option ownership and group semantics survive.
+  it("moves aria-selected with roving focus and exposes labelled sections as named groups", async () => {
+    render(
+      <KeikoSelect
+        ariaLabel="Strategy"
+        menuTitle="Strategy"
+        onValueChange={vi.fn()}
+        sections={sections}
+        value="model"
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Strategy" });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "ArrowDown" });
+
+    // Menu opens with the committed value (Model only) as the roving focus.
+    const modelOption = await screen.findByRole("option", { name: "Model only" });
+    expect(modelOption).toHaveAttribute("aria-selected", "true");
+
+    // A labelled section is a named group so its options stay owned by the listbox.
+    const group = screen.getByRole("group", { name: "Strategy" });
+    expect(group).toBeInTheDocument();
+    expect(group).toContainElement(modelOption);
+
+    // ArrowDown moves the roving focus — aria-selected follows it to the next
+    // enabled option, and the previously selected option clears.
+    fireEvent.keyDown(modelOption, { key: "ArrowDown" });
+    const filesOption = screen.getByRole("option", { name: "Live Files context" });
+    expect(filesOption).toHaveFocus();
+    expect(filesOption).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("option", { name: "Model only" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
+  });
+
   it("ignores disabled triggers and disabled option commits", async () => {
     const user = userEvent.setup();
     const onValueChange = vi.fn();

@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ChunkId, DocumentId } from "@oscharko-dev/keiko-contracts";
-import type {
-  GatewayRequest,
-  NormalizedResponse,
-} from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   CONTEXTUAL_RETRIEVAL_DISABLED_KEY,
@@ -88,12 +85,12 @@ describe("boundedDocumentContext", () => {
     expect(bounded).toContain("TARGET");
     expect(bounded.length).toBeLessThanOrEqual(20);
 
-    expect(
-      boundedDocumentContext(source, 60, 66, { documentContextMaxChars: Number.NaN }),
-    ).toBe(source);
-    expect(boundedDocumentContext(source, 5, 2, { documentContextMaxChars: 10 }).length).toBeLessThanOrEqual(
-      10,
+    expect(boundedDocumentContext(source, 60, 66, { documentContextMaxChars: Number.NaN })).toBe(
+      source,
     );
+    expect(
+      boundedDocumentContext(source, 5, 2, { documentContextMaxChars: 10 }).length,
+    ).toBeLessThanOrEqual(10);
   });
 });
 

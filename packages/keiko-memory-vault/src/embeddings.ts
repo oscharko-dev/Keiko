@@ -70,9 +70,9 @@ LIMIT 2
 `;
 const BULK_SELECT_CHUNK_SIZE = 500;
 
-const BYTES_PER_FLOAT32 = 4;
+export const BYTES_PER_FLOAT32 = 4;
 
-function encodeVectorLE(vector: Float32Array): Buffer {
+export function encodeVectorLE(vector: Float32Array): Buffer {
   const buf = Buffer.alloc(vector.length * BYTES_PER_FLOAT32);
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   for (let i = 0; i < vector.length; i += 1) {
@@ -84,7 +84,7 @@ function encodeVectorLE(vector: Float32Array): Buffer {
   return buf;
 }
 
-function decodeVectorLE(bytes: Uint8Array, dimensions: number): Float32Array {
+export function decodeVectorLE(bytes: Uint8Array, dimensions: number): Float32Array {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const out = new Float32Array(dimensions);
   for (let i = 0; i < dimensions; i += 1) {

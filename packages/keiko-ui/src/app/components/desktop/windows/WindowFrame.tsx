@@ -28,8 +28,13 @@ import {
   isTextEntryTarget,
   isWindowDragPointer,
 } from "../interactionGuards";
-import { hasConnectablePeer, subText } from "./connectionUtils";
-import { CHAT_MINI_W, WIN_TYPES, type WindowType } from "./WindowsRegistry";
+import {
+  hasConnectablePeer,
+  receivesFilesContext,
+  receivesFocusedFileContext,
+  subText,
+} from "./connectionUtils";
+import { CHAT_MINI_W, WIN_TYPES, type WindowCfgByType, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 
@@ -121,7 +126,7 @@ function selectBody(
   type: WindowType,
   ew: number,
   eh: number,
-  cfg: Record<string, unknown>,
+  cfg: AppWindow["cfg"],
   linkedRoot: string | null,
   linkedFilePath: string | undefined,
   linkedRoots: readonly string[],
@@ -140,6 +145,7 @@ function selectBody(
   openEditorFile: WorkspaceApi["openEditorFile"],
 ): BodySelection {
   const def = WIN_TYPES[type];
+  const typedCfg = cfg as WindowCfgByType[typeof type];
   if (type === "chat") {
     const compact = ew < 640;
     const barCompact = ew < 520;
@@ -150,7 +156,7 @@ function selectBody(
     const mini = ew < CHAT_MINI_W;
     return {
       mode: mini ? "mini" : "full",
-      node: def.render(cfg, {
+      node: def.render(typedCfg, {
         windowId,
         mini,
         minimalChat,
@@ -182,7 +188,7 @@ function selectBody(
   }
   return {
     mode: "full",
-    node: def.render(cfg, {
+    node: def.render(typedCfg, {
       windowId,
       linkedRoot,
       linkedFilePath,
@@ -202,6 +208,25 @@ function selectBody(
       openEditorFile,
     }),
   };
+}
+
+// GEN-PERF-RENDER-003 — selectBody only ever branches on DISCRETE breakpoint flags
+// derived from the continuous ew/eh (chat: compact<640, barCompact/footer<520,
+// minimalChat<360||<320, mini<CHAT_MINI_W; generic: tiny<def.tiny.w||<def.tiny.h).
+// Keying the body memo on raw ew/eh rebuilt the whole body subtree every resize
+// frame; this signature changes ONLY when a breakpoint is actually crossed, so the
+// body memo holds through a same-band resize and rebuilds on a band crossing.
+function bodyBreakpointSignature(type: WindowType, ew: number, eh: number): string {
+  if (type === "chat") {
+    const compact = ew < 640 ? 1 : 0;
+    const barCompact = ew < 520 ? 1 : 0;
+    const minimalChat = ew < 360 || eh < 320 ? 1 : 0;
+    const mini = ew < CHAT_MINI_W ? 1 : 0;
+    return `chat:${String(compact)}${String(barCompact)}${String(minimalChat)}${String(mini)}`;
+  }
+  const def = WIN_TYPES[type];
+  const tiny = ew < def.tiny.w || eh < def.tiny.h ? 1 : 0;
+  return `gen:${String(tiny)}`;
 }
 
 function shouldAutoGrowWindow(type: WindowType, cfg: Record<string, unknown>): boolean {
@@ -463,17 +488,11 @@ function isEmptyLinkedContext(c: LinkedContext): boolean {
 // revision — the resolvers each scan conns+wins, so re-running them on every
 // geometry/pan/zoom frame was a per-window O(conns) tax (issue #1580).
 function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): LinkedContext {
-  const receivesFilesContext =
-    type === "chat" ||
-    type === "agents" ||
-    type === "quality" ||
-    type === "editor" ||
-    type === "promptEnhancer";
-  const receivesFocusedFileContext =
-    type === "agents" || type === "quality" || type === "editor" || type === "promptEnhancer";
+  const readsFilesContext = receivesFilesContext(type);
+  const readsFocusedFileContext = receivesFocusedFileContext(type);
   const receivesConnectorContext = type === "quality" || type === "editor";
-  const linkedRoot = receivesFilesContext ? api.linkedFilesRoot(id) : null;
-  const linkedFilePath = receivesFocusedFileContext
+  const linkedRoot = readsFilesContext ? api.linkedFilesRoot(id) : null;
+  const linkedFilePath = readsFocusedFileContext
     ? api.linkedFilesContext(id)?.activeFilePath
     : undefined;
   const linkedRoots =
@@ -545,11 +564,17 @@ function WindowFrameImpl({
   );
   const ew = Math.round((win.w / zoom) * 1000) / 1000;
   const eh = Math.round((win.h / zoom) * 1000) / 1000;
+  // Read the live cfg through a ref so `updateCfg` keeps a STABLE identity across cfg changes
+  // (GEN-PERF-WIDGET-001): consumers that pass updateCfg into an effect's dep array (e.g. the PDF
+  // citation preview's document-load effect) no longer see a new identity on every view-only cfg
+  // write. The merge result is identical — cfgRef.current is the latest rendered win.cfg.
+  const cfgRef = useRef(win.cfg);
+  cfgRef.current = win.cfg;
   const updateCfg = useCallback(
     (patch: AppWindow["cfg"]): void => {
-      api.update(win.id, { cfg: { ...win.cfg, ...patch } });
+      api.update(win.id, { cfg: { ...cfgRef.current, ...patch } });
     },
-    [api, win.cfg, win.id],
+    [api, win.id],
   );
   const openWindow = useCallback(
     (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
@@ -566,9 +591,12 @@ function WindowFrameImpl({
     [api],
   );
   // Build the body element tree only when an input that actually shapes it changes.
-  // `linked` is now a stable object, ew/eh drive the chat/tiny breakpoints, and
-  // win.cfg is the content source — so a drag (x/y only) no longer rebuilds the
-  // chat/Monaco subtree of the dragged window (issue #1580).
+  // `linked` is now a stable object and win.cfg is the content source — so a drag
+  // (x/y only) no longer rebuilds the chat/Monaco subtree (issue #1580). ew/eh drive
+  // the chat/tiny breakpoints, but only their DISCRETE crossings matter, so the memo
+  // keys on bodyBreakpointSignature (GEN-PERF-RENDER-003) rather than the continuous
+  // ew/eh — a sub-pixel resize within the same band no longer rebuilds the body.
+  const bodyBreakpoints = bodyBreakpointSignature(win.type, ew, eh);
   const { mode: bodyMode, node: body } = useMemo(
     () =>
       selectBody(
@@ -594,12 +622,12 @@ function WindowFrameImpl({
         updateWindow,
         openEditorFile,
       ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- ew/eh intentionally excluded; bodyBreakpoints is their discrete-crossing proxy (GEN-PERF-RENDER-003) so a same-band resize does not rebuild the body
     [
       win.id,
       win.type,
       win.cfg,
-      ew,
-      eh,
+      bodyBreakpoints,
       linked,
       activeRoot,
       activeBinding,
@@ -879,30 +907,60 @@ function WindowFrameImpl({
     [startPortConnect, connState, api, win.id],
   );
 
-  // Audit C148 — closing a window removed the focused Close button from the DOM
-  // and dropped keyboard focus to <body>; the user had to re-tab from the top of
-  // the document. Move focus deterministically to the next top window (focusable
-  // via tabIndex={-1} on the section) or the New-window FAB once React committed
-  // the close. preventScroll guards against any residual scroll-on-focus.
+  // Audit C148 / GEN-UI-FOCUS-012 — closing or minimizing a window removed the
+  // focused control from the DOM and dropped keyboard focus to <body>; the user had
+  // to re-tab from the top of the document. After the mutation commits, move focus
+  // deterministically to a still-connected window section (focusable via
+  // tabIndex={-1}) or the New-window FAB, and never leave it on <body>.
+  //
+  // Common case (this window is the TOP window): re-query the new frontmost window
+  // after the close — the window beneath rises to data-top and receives focus.
+  //
+  // Non-top case: this window is NOT the frontmost, so closing it does not change
+  // which window is on top. Capture that frontmost window at interaction time and
+  // prefer restoring focus to it — re-querying after the mutation can transiently
+  // miss it while React re-commits data-top. Fall back to the post-mutation
+  // next-top / .ws-fab chain, and finally to any surviving window, so focus can
+  // never land on <body>.
+  const restoreFocusAfterRemoval = useCallback((): void => {
+    const priorTop = top ? null : document.querySelector<HTMLElement>('.window[data-top="true"]');
+    requestAnimationFrame(() => {
+      const target =
+        (priorTop !== null && priorTop.isConnected ? priorTop : null) ??
+        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
+        document.querySelector<HTMLElement>(".ws-fab") ??
+        document.querySelector<HTMLElement>(".window[data-window-id]");
+      target?.focus({ preventScroll: true });
+    });
+  }, [top]);
+
   const closeWithFocusRestore = useCallback((): void => {
     api.close(win.id);
-    requestAnimationFrame(() => {
-      const next =
-        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
-        document.querySelector<HTMLElement>(".ws-fab");
-      next?.focus({ preventScroll: true });
-    });
-  }, [api, win.id]);
+    restoreFocusAfterRemoval();
+  }, [api, win.id, restoreFocusAfterRemoval]);
 
   const minimizeWithFocusRestore = useCallback((): void => {
     api.minimize(win.id);
-    requestAnimationFrame(() => {
-      const next =
-        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
-        document.querySelector<HTMLElement>(".ws-fab");
-      next?.focus({ preventScroll: true });
-    });
-  }, [api, win.id]);
+    restoreFocusAfterRemoval();
+  }, [api, win.id, restoreFocusAfterRemoval]);
+
+  // GEN-UI-KEYBOARD-011 — complete an in-flight connect from the keyboard when the
+  // window SECTION itself holds focus (Tabbed to a highlighted valid target) and
+  // Enter is pressed. The connection ports still own Enter/Space when focus is on a
+  // port (their handler stops propagation), so this only fires for the section
+  // itself — mirroring the section's pointer-down confirm path.
+  const onSectionKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLElement>): void => {
+      if (e.target !== e.currentTarget) return;
+      if (connState !== "valid") return;
+      if (e.key !== "Enter") return;
+      api.confirmConnect(win.id, {
+        preventDefault: () => e.preventDefault(),
+        stopPropagation: () => e.stopPropagation(),
+      } as ReactPointerEvent<Element>);
+    },
+    [api, win.id, connState],
+  );
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const showHeaderZoom = bodyMode === "full" && ew >= HEADER_ZOOM_MIN_WIDTH_PX;
@@ -947,6 +1005,11 @@ function WindowFrameImpl({
   );
 
   return (
+    // GEN-UI-KEYBOARD-011 / WCAG 2.1.1 — this focusable (tabIndex=-1) named window
+    // region carries pointer AND keyboard connect-confirm handlers so a keyboard
+    // user has full parity with the pointer confirm path; the connection ports own
+    // Enter/Space when a port itself is focused.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WCAG 2.1.1 keyboard parity on the focusable window region
     <section
       className="window"
       // Audit C408 — a name turns the section into a named region, so AT users
@@ -965,6 +1028,10 @@ function WindowFrameImpl({
         if (connState === "valid") api.confirmConnect(win.id, e);
         focusWindowForTarget(e.target);
       }}
+      // GEN-UI-KEYBOARD-011 — Enter on a focused, highlighted valid target window
+      // completes the connect (the section's keyboard counterpart to the pointer
+      // confirm above); ports keep owning Enter/Space when a port is focused.
+      onKeyDown={onSectionKeyDown}
       // Audit C061 / WCAG 2.4.11 — tabbing into a lower, overlapped window must
       // raise it, or the focused control (and its focus ring) stays fully hidden
       // behind the top window; Cmd/Alt+Arrows also only act on the topZ window.
@@ -1098,7 +1165,15 @@ function WindowFrameImpl({
       </div>
       {!win.max
         ? HANDLES.map((d: Handle) => (
-            <div key={d} className={`wz wz-${d}`} onPointerDown={startResize(d)} />
+            // GEN-UI-INTERACTION-007 — the resize handles are pointer-only affordances;
+            // keyboard resize is the Alt+Arrow chord (useKeyboardCtrls). aria-hidden
+            // formalizes that they expose no separate keyboard/AT operation.
+            <div
+              key={d}
+              className={`wz wz-${d}`}
+              aria-hidden="true"
+              onPointerDown={startResize(d)}
+            />
           ))
         : null}
       {!win.max && canStartConnection

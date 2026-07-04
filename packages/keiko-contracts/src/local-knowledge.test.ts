@@ -685,8 +685,7 @@ describe("validateKnowledgeCapsule", () => {
     expect(
       validateCapsuleContextualRetrievalSettings({
         enabled: true,
-        documentContextMaxChars:
-          CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX + 1,
+        documentContextMaxChars: CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX + 1,
       }).ok,
     ).toBe(false);
   });

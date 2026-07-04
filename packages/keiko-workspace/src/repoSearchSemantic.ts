@@ -1,3 +1,4 @@
+import { clampUnit } from "@oscharko-dev/keiko-contracts";
 import type {
   CandidateSignal,
   RetrievalQuery,
@@ -51,10 +52,6 @@ interface RankedPath {
 
 function quantize(value: number): number {
   return Math.round(value * 1_000_000) / 1_000_000;
-}
-
-function clampUnit(value: number): number {
-  return Math.max(0, Math.min(1, value));
 }
 
 function contribution(rank: number | undefined): number {

@@ -38,6 +38,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
+import type { ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
   assertUiDbOutsideProject,
   buildUiStoreOverDatabase,
@@ -74,10 +75,7 @@ import {
   createMemoryAuditDeleteCommitHandler,
   createMemoryAuditHandler,
 } from "./memory-audit-handler.js";
-import {
-  createEditorHotExitStore,
-  type EditorHotExitStore,
-} from "./editor/hotExitStore.js";
+import { createEditorHotExitStore, type EditorHotExitStore } from "./editor/hotExitStore.js";
 import {
   createConsolidationJobRegistry,
   type ConsolidationJobRegistry,
@@ -211,6 +209,11 @@ export interface UiHandlerDeps {
   readonly egress?: GatewayEgressConfig | undefined;
   // Live-payload redactor (D9). Applied to run reports, projections, and SSE event data.
   readonly redactor: Redactor;
+  // RB-6 (GEN-OBS-DIAGNOSTICS-901/602/603) — operator diagnostic sink for server-side error causes.
+  // Optional: when undefined the server falls back to the default stderr sink. Tests inject a
+  // capturing sink to assert that a handler throw / mid-stream failure emits a correlation-keyed,
+  // redacted diagnostic record. Never receives raw content that reaches the browser.
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
   // The in-memory, bounded run registry. Injectable so tests never share global state.
   readonly registry: RunRegistry;
   // Builds the ModelPort a run uses. Default = GatewayModelPort from config; tests inject a fake.
@@ -317,8 +320,7 @@ export interface UiHandlerDeps {
   // Production builds this over the configured Gateway; tests inject a deterministic chat gateway
   // so the normal indexing route can prove contextual text reaches embedding/FTS without network IO.
   readonly localKnowledgeContextualRetrievalChatGateway?:
-    | ContextualRetrievalChatGateway
-    | undefined;
+    ContextualRetrievalChatGateway | undefined;
   // Optional production OCR seam for Local Knowledge extraction. Production resolves from env when
   // absent; tests inject a deterministic adapter without requiring Tesseract or a local OCR service.
   readonly localKnowledgeOcrAdapter?: OcrAdapter | undefined;
@@ -379,7 +381,7 @@ export interface UiHandlerDeps {
   // Issue #1736 — file-backed, runtime-state workspace index provider for production repository
   // search paths. Tests may omit it; search falls back to the existing live scan.
   readonly workspaceIndexForRoot?: WorkspaceIndexProvider | undefined;
-  // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0058 D4). Lets the BFF
+  // Issue #494 (Epic #491) — voice speech-to-text dictation seam (ADR-0100 D4). Lets the BFF
   // dictation route call the provider-neutral STT adapter without touching global fetch in tests.
   // Production leaves this undefined and uses requestSpeechToText, so the audio is forwarded once to
   // the configured provider through the Model Gateway egress seam (gatewayFetch) and never persisted.
@@ -397,7 +399,7 @@ export interface UiHandlerDeps {
   // undefined and uses requestTextToSpeechStream; raw audio is streamed through, never persisted.
   readonly voiceSpeechStreamRequest?:
     ((request: TextToSpeechRequest) => Promise<TextToSpeechStreamOutcome>) | undefined;
-  // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0058 D3/D6). Lets the
+  // Issue #497 (Epic #491) — realtime voice proxied-SDP negotiation seam (ADR-0100 D3/D6). Lets the
   // WebSocket control plane perform the browser↔provider SDP exchange through the provider-neutral
   // realtime adapter without touching global fetch in tests. Production leaves this undefined and
   // uses requestRealtimeNegotiation, so the offer is forwarded once to the configured provider

@@ -55,6 +55,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import {
@@ -331,7 +332,21 @@ function deriveAgentPatchTextEdits(
   try {
     const edit = deriveSingleFilePostImage(file, snapshot);
     return edit === null ? null : [edit];
-  } catch {
+  } catch (error) {
+    // GEN-SYNTH-COVERAGE-004 / W8 observability: a filesystem/derivation failure here previously
+    // vanished into a bare `catch {}` — the action failed with an opaque "patch could not be prepared"
+    // and the operator had no trace. Route the (redacted) cause to the diagnostic sink, keyed by the
+    // actionId, before failing the action. Never rethrows: derivation failure must still fail closed.
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: action.actionId,
+        operation: `editor.agent.applyPatch ${normalizeWorkspaceRelativePath(file.path)}`,
+        source: "editor.agent.derivePatch",
+        error,
+        redact: (message) => message,
+      }),
+    );
     return null;
   }
 }
@@ -597,10 +612,7 @@ function connectEditorAgentSessions(
 // `?sessionId=` is present) or a global observer. The disposer drops the subscription — and thus the
 // bridge-liveness contribution — when the response closes (AC1: a dropped bridge makes the session
 // unavailable again).
-function openAgentSseStream(
-  ctx: RouteContext,
-  sessionIds: readonly string[] | undefined,
-): void {
+function openAgentSseStream(ctx: RouteContext, sessionIds: readonly string[] | undefined): void {
   const res: ServerResponse = ctx.res;
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);

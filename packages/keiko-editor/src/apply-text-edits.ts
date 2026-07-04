@@ -8,11 +8,21 @@
  * a list of `{range, newText}` edits). This module is the small browser-safe helper that performs
  * that text transform; it parses nothing.
  *
- * Positions are zero-based with UTF-16 code-unit columns (the {@link EditorPosition} contract) and
- * lines are delimited by `\n` (Monaco's normalised EOL). The transform is offset-based and applies
- * edits left-to-right; overlapping edits are a malformed patch and surface as a typed error so the
- * adapter can mark the file unrenderable rather than emit a silently corrupted preview.
+ * Positions are zero-based with UTF-16 code-unit columns (the {@link EditorPosition} contract). Line
+ * starts and position→offset resolution come from the shared, DOM-free {@link computeLineStarts} /
+ * {@link positionToOffset} leaf (`@oscharko-dev/keiko-contracts/line-offsets`), which the server language service also uses
+ * (GEN-DUP-SEMANTIC-017); it is LF, CRLF, AND lone-CR aware, so a generated patch or a
+ * non-normalised buffer that carries CRLF no longer mis-offsets by one per preceding CR. Editor
+ * `{ line, column }` positions cross into the leaf's `{ line, character }` wire shape through the
+ * {@link toLanguagePosition} adapter (GEN-MAINT-NAMING-002). The transform is offset-based and
+ * applies edits left-to-right; overlapping edits are a malformed patch and surface as a typed error
+ * so the adapter can mark the file unrenderable rather than emit a silently corrupted preview.
  */
+import {
+  computeLineStarts,
+  positionToOffset as positionToOffsetLeaf,
+} from "@oscharko-dev/keiko-contracts/line-offsets";
+import { toLanguagePosition } from "./position-adapters.js";
 import type { EditorPosition, EditorTextEdit } from "./types.js";
 
 /** Thrown when two edits in the same file overlap; a malformed patch cannot be previewed safely. */
@@ -29,25 +39,14 @@ export function isOverlappingPatchEditError(value: unknown): value is Overlappin
 }
 
 /**
- * The absolute character offset at which each line of `text` starts. `lineStarts[0]` is always `0`;
- * `lineStarts[i]` is the offset just past the `i-1`th `\n`. There is always one more conceptual line
- * than there are newlines, matching `text.split("\n")`.
- */
-function buildLineStarts(text: string): readonly number[] {
-  const starts: number[] = [0];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text.charCodeAt(index) === 10 /* \n */) {
-      starts.push(index + 1);
-    }
-  }
-  return starts;
-}
-
-/**
- * Resolve a {@link EditorPosition} to an absolute character offset in `text`, clamping defensively:
- * a line past the end maps to `text.length`, and a column past a line's end maps to that line's end
- * (the next `\n`, or `text.length` for the final line). Clamping keeps a preview render-safe for a
- * slightly out-of-range generated position instead of throwing.
+ * Resolve a {@link EditorPosition} to an absolute character offset in `text` via the shared,
+ * CRLF/lone-CR-aware {@link positionToOffsetLeaf} primitive, converting the editor `{ line, column }`
+ * spelling to the leaf's `{ line, character }` wire shape with {@link toLanguagePosition}. Clamping
+ * keeps a preview render-safe for a slightly out-of-range generated position instead of throwing: a
+ * column past a line's content end maps to that line's content end (excluding its terminator, so a
+ * CRLF/lone-CR buffer no longer mis-offsets — GEN-DUP-SEMANTIC-017). A line past the end maps to the
+ * end of the buffer (append), preserving the patch-preview contract: an over-large generated line
+ * appends rather than snapping back to the last existing line's start.
  */
 function positionToOffset(
   text: string,
@@ -60,11 +59,7 @@ function positionToOffset(
   if (position.line >= lineStarts.length) {
     return text.length;
   }
-  const lineStart = lineStarts[position.line] ?? text.length;
-  const nextLineStart = lineStarts[position.line + 1];
-  const lineEnd = nextLineStart === undefined ? text.length : nextLineStart - 1;
-  const column = position.column < 0 ? 0 : position.column;
-  return Math.min(lineStart + column, lineEnd);
+  return positionToOffsetLeaf(text, lineStarts, toLanguagePosition(position));
 }
 
 interface ResolvedEdit {
@@ -104,7 +99,7 @@ export function applyTextEditsToText(original: string, edits: readonly EditorTex
   if (edits.length === 0) {
     return original;
   }
-  const lineStarts = buildLineStarts(original);
+  const lineStarts = computeLineStarts(original);
   const resolved = edits
     .map((edit) => resolveEdit(original, lineStarts, edit))
     .sort((a, b) => (a.start !== b.start ? a.start - b.start : a.end - b.end));
@@ -186,7 +181,7 @@ export function applyTextEditsToTextWithinLimit(
     return { text: out.join(""), truncated: state.truncated };
   }
 
-  const lineStarts = buildLineStarts(original);
+  const lineStarts = computeLineStarts(original);
   const resolved = edits
     .map((edit) => resolveEdit(original, lineStarts, edit))
     .sort((a, b) => (a.start !== b.start ? a.start - b.start : a.end - b.end));

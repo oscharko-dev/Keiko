@@ -12,7 +12,11 @@
 // success, 1 on a runtime error (vault open / maintenance fault), 2 on usage (unknown/missing
 // subcommand).
 
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  resolveMemoryDir,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import {
   createMemoryEmbedder,
   exportMemoryDiagnostics,
@@ -190,6 +194,7 @@ function runDiagnostics(
   deps: MemoryCliDeps,
 ): number {
   const vault = resolveVault(args, env, deps);
+  const memoryDir = resolveMemoryDir(flagValue(args, "--memory-dir"), env);
   const evidenceDir = resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
   const evidenceStore = deps.evidenceStore ?? createNodeEvidenceStore(evidenceDir);
   const redactString = deps.redactString ?? createAuditRedactor({}, env);
@@ -204,6 +209,7 @@ function runDiagnostics(
       evidenceStore,
       redactString,
       evidenceDir,
+      memoryDir,
       ...(lastNAuditEvents === undefined ? {} : { lastNAuditEvents }),
     });
     io.out(`${JSON.stringify(diagnostics, null, 2)}\n`);
@@ -276,10 +282,6 @@ async function backfillEmbeddings(
   });
   const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
   for (const record of accepted) {
-    if (vault.getEmbedding(record.id) !== undefined) {
-      counts.skipped += 1;
-      continue;
-    }
     const input = await embed(record.body);
     if (input === null) {
       counts.failed += 1;

@@ -1,4 +1,4 @@
-// Issue #498, Epic #491 (ADR-0061) — the Voice timing engine (timebase). It is the deterministic,
+// Issue #498, Epic #491 (ADR-0103) — the Voice timing engine (timebase). It is the deterministic,
 // content-free core that turns an out-of-order, jittery stream of #496 voice control messages into an
 // ordered, bounded, replayable timeline the UI can render and a reconnect can catch up against. It
 // owns NO transport, NO clock, NO audio: time enters through the injectable `VoiceClock` seam (D2) and
@@ -218,7 +218,7 @@ function freshState(profile: VoiceProfile): VoiceTimebaseState {
 // The phase each kind drives to; `"keep"` leaves the phase unchanged. `media.track.state` and
 // `playback.state` carry their own sub-state tables (in `applyKindEffects`) so they map to `"keep"`.
 // Keying by `VoiceControlMessageKind` makes an unclassified kind a compile error (totality) and keeps
-// the lookup branch-free — the pattern ADR-0061 prefers over a long switch (cf. the contract's table).
+// the lookup branch-free — the pattern ADR-0103 prefers over a long switch (cf. the contract's table).
 const KIND_PHASE: Record<VoiceControlMessageKind, VoiceTimebasePhase | "keep"> = {
   "session.created": "idle",
   "session.closed": "closed",

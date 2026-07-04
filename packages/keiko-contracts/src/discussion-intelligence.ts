@@ -1,5 +1,5 @@
 // Discussion Intelligence contract for colleague-like discussion behavior (Epic #491, Issue #502,
-// ADR-0065). This leaf module DEFINES the provider-neutral, text-first semantics that let Keiko run the
+// ADR-0107). This leaf module DEFINES the provider-neutral, text-first semantics that let Keiko run the
 // five discussion modes (Challenge / Review / Decide / Brainstorm / Evidence-check), disagree
 // professionally grounded in evidence + assumptions + uncertainty, surface confidence, and recover an
 // interrupted spoken discussion turn without losing the active question or decision context.

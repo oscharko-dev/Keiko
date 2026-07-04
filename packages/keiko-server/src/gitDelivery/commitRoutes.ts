@@ -286,13 +286,7 @@ export const createHandleCommitExecute = (
     if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
     let result;
     try {
-      result = await executeGovernedMutation(
-        command,
-        verifiedApproval,
-        workspace,
-        deps,
-        seams,
-      );
+      result = await executeGovernedMutation(command, verifiedApproval, workspace, deps, seams);
     } catch {
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     }

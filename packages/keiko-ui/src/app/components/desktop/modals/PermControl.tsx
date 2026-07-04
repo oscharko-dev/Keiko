@@ -31,7 +31,11 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         type="button"
         className="perm-toggle"
         data-on={keiko}
-        aria-pressed={keiko}
+        // A binary on/off master control is a switch, not a toggle button
+        // (GEN-UI-A11Y-021): role="switch" + aria-checked conveys the on/off state,
+        // where aria-pressed only conveys "activated".
+        role="switch"
+        aria-checked={keiko}
         onClick={() => set("keikoMode", !keiko)}
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
@@ -45,14 +49,18 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         </span>
       </button>
       {!keiko && (
-        <div className="perm-legacy">
+        // Two mutually-exclusive access modes are a single-select radio group, not two
+        // independent toggle buttons (GEN-UI-A11Y-021): role="radiogroup" + labelled,
+        // children role="radio" + aria-checked.
+        <div className="perm-legacy" role="radiogroup" aria-label="Legacy access mode">
           {LEGACY_OPTIONS.map(([a, lbl]) => (
             <button
               type="button"
               key={a}
               className="perm-opt"
               data-on={access === a}
-              aria-pressed={access === a}
+              role="radio"
+              aria-checked={access === a}
               onClick={() => set("access", a)}
             >
               {lbl}
