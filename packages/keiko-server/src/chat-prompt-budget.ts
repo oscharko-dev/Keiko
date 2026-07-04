@@ -89,6 +89,28 @@ function renderMemoryContextText(
   return lines.join("\n");
 }
 
+function systemScopedCompactionContextMessage(
+  compactionContextText: string | undefined,
+): GatewayPromptAssembly["messages"] {
+  return compactionContextText === undefined
+    ? []
+    : [{ role: "system" as const, content: compactionContextText }];
+}
+
+function insertSystemScopedCompactionContext(
+  messages: GatewayPromptAssembly["messages"],
+  compactionContextText: string | undefined,
+): GatewayPromptAssembly["messages"] {
+  const compactionMessages = systemScopedCompactionContextMessage(compactionContextText);
+  if (compactionMessages.length === 0) {
+    return messages;
+  }
+  const [first, ...rest] = messages;
+  return first?.role === "system"
+    ? [first, ...compactionMessages, ...rest]
+    : [...compactionMessages, ...messages];
+}
+
 function scoreForIndex(total: number, index: number): number {
   return total - index;
 }
@@ -148,8 +170,7 @@ function allocatorUserTaskText(input: {
   readonly compactionContextText?: string | undefined;
   readonly documentContext: readonly ConversationDocumentContextWire[];
 }): string {
-  const hasMemoryContext =
-    input.memoryEntries.length > 0 || input.compactionContextText !== undefined;
+  const hasMemoryContext = input.memoryEntries.length > 0;
   const hasDocumentContext = input.documentContext.length > 0;
   if (!hasMemoryContext && !hasDocumentContext) {
     return composeConversationPrompt(
@@ -333,27 +354,58 @@ function compactHistoryForBudget(
   }
 }
 
+function buildLatestUserTurn(input: PromptAssemblyInput): string {
+  return composeConversationPrompt(
+    input.request.content,
+    input.documentContext,
+    renderMemoryContextText(input.memoryEntries, undefined),
+    input.request.discussionMode,
+  );
+}
+
+function promptScaffoldTokens(
+  latestTurn: string,
+  compactionContextText: string | undefined,
+  tokenAccounting: ContextProfile["tokenAccounting"],
+): number {
+  return countContextTokensForSegments(
+    [
+      ...systemScopedCompactionContextMessage(compactionContextText).map(
+        (message) => message.content,
+      ),
+      latestTurn,
+    ],
+    tokenAccounting,
+  );
+}
+
+function buildPromptMessages(
+  historyOutcome: ConversationCompactionOutcome,
+  latestTurn: string,
+  compactionContextText: string | undefined,
+): GatewayPromptAssembly["messages"] {
+  return [
+    ...insertSystemScopedCompactionContext(historyOutcome.messages, compactionContextText),
+    { role: "user" as const, content: latestTurn },
+  ];
+}
+
 function assembleGatewayPromptCandidate(
   input: PromptAssemblyInput,
 ): GatewayPromptAssembly | undefined {
-  const memoryText = renderMemoryContextText(input.memoryEntries, input.compactionContextText);
-  const latestTurn = composeConversationPrompt(
-    input.request.content,
-    input.documentContext,
-    memoryText,
-    input.request.discussionMode,
-  );
-  const latestTurnTokens = countContextTokensForSegments(
-    [latestTurn],
+  const latestTurn = buildLatestUserTurn(input);
+  const scaffoldTokens = promptScaffoldTokens(
+    latestTurn,
+    input.compactionContextText,
     input.profile.tokenAccounting,
   );
-  if (latestTurnTokens > input.profile.effectiveInputBudget) {
+  if (scaffoldTokens > input.profile.effectiveInputBudget) {
     return undefined;
   }
-  const historyBudget = input.profile.effectiveInputBudget - latestTurnTokens;
+  const historyBudget = input.profile.effectiveInputBudget - scaffoldTokens;
   const historyOutcome = compactHistoryForBudget(input, historyBudget);
   if (historyOutcome === undefined) return undefined;
-  const messages = [...historyOutcome.messages, { role: "user" as const, content: latestTurn }];
+  const messages = buildPromptMessages(historyOutcome, latestTurn, input.compactionContextText);
   if (
     countContextTokensForSegments(
       messages.map((message) => message.content),

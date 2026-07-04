@@ -15,6 +15,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
 
 const RUN_ID = "run-lock-persistence-007";
+const DEAD_LOCK_RECLAIM_BUDGET_MS = 250;
 const dirs: string[] = [];
 
 function freshEvidenceDir(): string {
@@ -46,14 +47,18 @@ afterEach(() => {
 });
 
 describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-007)", () => {
-  it("reclaims a fresh, ownerless lock instead of busy-waiting all attempts", () => {
+  it("reclaims a fresh, ownerless lock instantly instead of busy-waiting all attempts", () => {
     const evidenceDir = freshEvidenceDir();
     // A FRESH lock file with no PID inside — no live owner.
     const lockPath = reviewLockPath(evidenceDir);
     writeFileSync(lockPath, "");
 
+    const start = performance.now();
     approveRun(evidenceDir);
+    const elapsedMs = performance.now() - start;
 
+    // No 40x5ms busy-wait+conflict: reclaim stays comfortably below a user-visible stall.
+    expect(elapsedMs).toBeLessThan(DEAD_LOCK_RECLAIM_BUDGET_MS);
     expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
     expect(() => readFileSync(lockPath, "utf8")).toThrow();
   });
@@ -63,7 +68,9 @@ describe("withReviewArtifactLock — non-blocking reclaim (GEN-PERF-PERSISTENCE-
     const lockPath = reviewLockPath(evidenceDir);
     writeFileSync(lockPath, "2147483646\n");
 
+    const start = performance.now();
     approveRun(evidenceDir);
+    expect(performance.now() - start).toBeLessThan(DEAD_LOCK_RECLAIM_BUDGET_MS);
     expect(loadRunReviewState(RUN_ID, evidenceDir)?.runState).toBe("approved");
     expect(() => readFileSync(lockPath, "utf8")).toThrow();
   });

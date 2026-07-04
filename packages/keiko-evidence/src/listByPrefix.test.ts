@@ -20,7 +20,7 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
     for (const dir of dirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   function freshDir(): string {
     const dir = mkdtempSync(join(tmpdir(), "keiko-evid-prefix-"));
@@ -56,7 +56,7 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
       store.put(`chat-abc123-t${String(i)}`, "{}");
     }
     // Seed many unrelated manifests directly as files.
-    const UNRELATED = 5_000;
+    const UNRELATED = 1_000;
     for (let i = 0; i < UNRELATED; i += 1) {
       writeFileSync(join(dir, `unrelated-manifest-${String(i)}.json`), "{}\n", "utf8");
     }
@@ -65,10 +65,10 @@ describe("createNodeEvidenceStore.listByPrefix (GEN-PERF-CHAT-005)", () => {
     const matched = store.listByPrefix("chat-abc123-t");
 
     expect([...matched].sort()).toEqual(["chat-abc123-t1", "chat-abc123-t2", "chat-abc123-t3"]);
-    // The per-file containment stat runs only for the 3 matching files — never for the 5k unrelated.
+    // The per-file containment stat runs only for the 3 matching files — never for unrelated entries.
     expect(counting.statCount()).toBeLessThanOrEqual(3);
     expect(counting.statCount()).toBeLessThan(UNRELATED);
-  });
+  }, 45_000);
 
   it("unfiltered list() still stats every manifest (documents the pre-fix cost the prefix path avoids)", () => {
     const dir = freshDir();

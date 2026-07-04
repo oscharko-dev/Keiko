@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   DEFAULT_CONTEXT_PROFILE,
   validateContextAssemblyDiagnostics,
@@ -25,6 +26,7 @@ const NOW = 1_700_000_000_000;
 const SK_FAKE = ["sk", "-live-fakeCompactionSecret1234567890abcdef"].join("");
 const BEARER_FAKE = ["Bearer ", "fakeCompactionBearerToken1234567890abcdef"].join("");
 const ABS_PATH = "/Users/secretuser/Projects/Keiko/packages/keiko-evidence/src/secret.ts";
+const POSIX_SPACE_PATH = "/Users/Alice Smith/Secret Project/src/file.ts";
 const WIN_DRIVE_PATH = "C:\\Users\\secretuser\\Projects\\Keiko\\src\\secret.ts";
 const WIN_FORWARD_DRIVE_PATH = "D:/Users/secretuser/Projects/Keiko/src/secret.ts";
 const WIN_UNC_PATH = "\\\\server\\share\\secret\\file.ts";
@@ -286,6 +288,37 @@ describe("compaction evidence (ADR-0056 W2)", () => {
       `compaction-root-${sha256Hex(`[REDACTED]`).slice(0, 16)}`,
     );
     expect(manifest.compaction).toHaveLength(1);
+  });
+
+  it("redacts POSIX absolute paths containing spaces in model summaries", () => {
+    const store = createInMemoryEvidenceStore();
+    persistCompactionEvidence(
+      {
+        runId: "compaction-run-posix-space-path",
+        modelId: "example-model",
+        records: [
+          {
+            ...compactionRecord(),
+            modelSummary: {
+              promptVersion: CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
+              modelId: "summary-model",
+              status: "valid",
+              validationState: "accepted",
+              content: `Continue from ${POSIX_SPACE_PATH}`,
+              filesAndSymbols: [`${POSIX_SPACE_PATH} parseStructuredSummary`],
+            },
+          },
+        ],
+        startedAt: NOW,
+        finishedAt: NOW + 5,
+      },
+      { store, env: {} },
+    );
+
+    const serialized = store.get("compaction-run-posix-space-path") ?? "";
+    expect(serialized).toContain("[REDACTED_PATH]");
+    expect(serialized).not.toContain("/Users/Alice");
+    expect(serialized).not.toContain("Secret Project/src/file.ts");
   });
 
   it("loads back through loadEvidence with a defined compaction array", () => {
