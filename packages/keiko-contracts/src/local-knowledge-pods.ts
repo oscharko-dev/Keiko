@@ -185,7 +185,7 @@ const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
 const PRIVATE_PATH_RE = /(?:^|[\s("'`])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)/u;
 const SECRET_RE =
   /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
-const TOKEN_ENDPOINT_RE = /https?:\/\/\S*(?:token|api_key|apikey|access_token|secret)=/iu;
+const TOKEN_QUERY_KEYS = new Set(["token", "api_key", "apikey", "access_token", "secret"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -206,6 +206,52 @@ function onlyKeys(
   }
 }
 
+function nextUrlStart(value: string, from: number): number {
+  const httpStart = value.indexOf("http://", from);
+  const httpsStart = value.indexOf("https://", from);
+  if (httpStart === -1) return httpsStart;
+  if (httpsStart === -1) return httpStart;
+  return Math.min(httpStart, httpsStart);
+}
+
+function isUrlTerminator(char: string): boolean {
+  return char.trim().length === 0 || "\"'`()<>".includes(char);
+}
+
+function findUrlEnd(value: string, start: number): number {
+  let end = start;
+  while (end < value.length && !isUrlTerminator(value.charAt(end))) {
+    end += 1;
+  }
+  return end;
+}
+
+function hasTokenQueryKey(rawUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  for (const key of url.searchParams.keys()) {
+    if (TOKEN_QUERY_KEYS.has(key.toLowerCase())) return true;
+  }
+  return false;
+}
+
+function containsTokenEndpoint(value: string): boolean {
+  const lowerValue = value.toLowerCase();
+  let searchFrom = 0;
+  while (searchFrom < lowerValue.length) {
+    const start = nextUrlStart(lowerValue, searchFrom);
+    if (start === -1) return false;
+    const end = findUrlEnd(value, start);
+    if (hasTokenQueryKey(value.slice(start, end))) return true;
+    searchFrom = Math.max(end, start + 1);
+  }
+  return false;
+}
+
 function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
   if (typeof value !== "string") return false;
   if (!allowEmpty && value.trim().length === 0) return false;
@@ -213,7 +259,7 @@ function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
     isSafeDisplaySummary(value) &&
     !PRIVATE_PATH_RE.test(value) &&
     !SECRET_RE.test(value) &&
-    !TOKEN_ENDPOINT_RE.test(value)
+    !containsTokenEndpoint(value)
   );
 }
 

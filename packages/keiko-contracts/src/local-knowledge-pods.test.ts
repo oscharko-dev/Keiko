@@ -124,6 +124,14 @@ describe("validateKnowledgePodSummary", () => {
     );
   });
 
+  it("checks repeated URL-like text for token query keys without regex backtracking", () => {
+    const repeatedUrlText = `${"http://".repeat(200)}example.test/path`;
+    const repeatedTokenEndpoint = `${repeatedUrlText}?access_token=secret-value`;
+
+    expect(isKnowledgePodEvidenceSafeText(repeatedUrlText)).toBe(true);
+    expect(isKnowledgePodEvidenceSafeText(repeatedTokenEndpoint)).toBe(false);
+  });
+
   it("requires compatibility to keep persisted Local Knowledge state unmigrated", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),
