@@ -486,17 +486,19 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/delete capsule/i)).toBeInTheDocument();
+    expect(screen.getByText(/delete Knowledge Pod/i)).toBeInTheDocument();
   });
 
   it("opens the refresh modal when Refresh changed files is clicked", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeInTheDocument();
@@ -507,7 +509,9 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /repair failed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /repair failed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeInTheDocument();
@@ -518,7 +522,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /full rebuild capsule/i }));
+    await user.click(screen.getByRole("button", { name: /full rebuild Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     expect(dialog).toBeInTheDocument();
@@ -529,7 +533,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /cancel/i }));
@@ -540,7 +544,7 @@ describe("CapsuleActions — modal open and close", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
@@ -553,11 +557,11 @@ describe("CapsuleActions — modal open and close", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleActions — delete typed-name confirmation", () => {
-  it("confirm button is disabled until the capsule name is typed exactly", async () => {
+  it("confirm button is disabled until the pod name is typed exactly", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     const confirmBtn = within(dialog).getByRole("button", { name: /delete/i });
@@ -586,7 +590,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ deleteCapsuleImpl, onActionComplete })} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByRole("textbox"), DEFAULT_NAME);
@@ -613,7 +617,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
       <CapsuleActions {...defaultProps({ deleteCapsuleImpl, onActionComplete, onDeleted })} />,
     );
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByRole("textbox"), DEFAULT_NAME);
@@ -631,7 +635,7 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
     const deleteCapsuleImpl = vi.fn().mockRejectedValue(new Error("delete failed"));
     render(<CapsuleActions {...defaultProps({ deleteCapsuleImpl })} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     await user.type(within(dialog).getByRole("textbox"), DEFAULT_NAME);
@@ -675,7 +679,7 @@ describe("CapsuleActions — refresh action", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /index this capsule now/i }));
+    await user.click(screen.getByRole("button", { name: /index this Knowledge Pod now/i }));
 
     expect(await screen.findByText("Indexing documents")).toBeInTheDocument();
     expect(screen.getByText(/Still working/i)).toBeInTheDocument();
@@ -698,7 +702,9 @@ describe("CapsuleActions — refresh action", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ refreshCapsuleImpl, onActionComplete })} />);
 
-    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /refresh/i }));
@@ -727,7 +733,9 @@ describe("CapsuleActions — refresh action", () => {
       />,
     );
 
-    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /^refresh$/i }));
@@ -751,7 +759,9 @@ describe("CapsuleActions — refresh action", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     const confirmBtn = within(dialog).getByRole("button", { name: /refresh/i });
@@ -770,7 +780,9 @@ describe("CapsuleActions — repair action", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ repairCapsuleImpl, onActionComplete })} />);
 
-    await user.click(screen.getByRole("button", { name: /repair failed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /repair failed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /repair/i }));
@@ -834,7 +846,7 @@ describe("CapsuleActions — full rebuild action", () => {
     const onActionComplete = vi.fn();
     render(<CapsuleActions {...defaultProps({ rebuildCapsuleImpl, onActionComplete })} />);
 
-    await user.click(screen.getByRole("button", { name: /full rebuild capsule/i }));
+    await user.click(screen.getByRole("button", { name: /full rebuild Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /rebuild/i }));
@@ -855,7 +867,7 @@ describe("CapsuleActions — focus trap", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
 
     const dialog = screen.getByRole("dialog");
     // Focus should be inside dialog after opening
@@ -875,7 +887,9 @@ describe("CapsuleActions — focus trap", () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
+    );
 
     const dialog = screen.getByRole("dialog");
     const focusables = Array.from(
@@ -906,7 +920,7 @@ describe("CapsuleActions — a11y", () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /delete capsule/i }));
+    await user.click(screen.getByRole("button", { name: /delete Knowledge Pod/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     const results = await axe(container);
@@ -917,7 +931,9 @@ describe("CapsuleActions — a11y", () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /refresh changed files for Knowledge Pod/i }),
+    );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     const results = await axe(container);
@@ -928,7 +944,9 @@ describe("CapsuleActions — a11y", () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /repair failed files for capsule/i }));
+    await user.click(
+      screen.getByRole("button", { name: /repair failed files for Knowledge Pod/i }),
+    );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     const results = await axe(container);

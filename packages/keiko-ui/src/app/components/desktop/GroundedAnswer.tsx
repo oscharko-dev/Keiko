@@ -670,7 +670,7 @@ function LocalKnowledgeContextPackSummary({
       <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
       <dl className="grounded-context-pack-dl">
         <MetricRow label="Mode" value={humanizeToken(contextPack.scopeKind)} />
-        <MetricRow label="Capsules" value={String(contextPack.capsuleCount)} />
+        <MetricRow label="Knowledge Pods" value={String(contextPack.capsuleCount)} />
         <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
         <MetricRow label="Citations" value={String(contextPack.citationCount)} />
         <MetricRow
@@ -682,7 +682,7 @@ function LocalKnowledgeContextPackSummary({
   );
 }
 
-// Epic #189 Slice 3 M5 — hybrid context pack: folder + connector source summaries side-by-side.
+// Epic #189 Slice 3 M5 — hybrid context pack: folder + Knowledge Pod sources side-by-side.
 function HybridContextPackSummary({
   contextPack,
 }: {
@@ -691,7 +691,7 @@ function HybridContextPackSummary({
   return (
     <section className="grounded-context-pack" aria-label="Hybrid source summary">
       <div className="grounded-context-pack-headline">
-        {`Hybrid: ${String(contextPack.folderSourceCount)} folder source${contextPack.folderSourceCount === 1 ? "" : "s"} + ${String(contextPack.connectorSourceCount)} connector source${contextPack.connectorSourceCount === 1 ? "" : "s"}`}
+        {`Hybrid: ${String(contextPack.folderSourceCount)} folder source${contextPack.folderSourceCount === 1 ? "" : "s"} + ${String(contextPack.connectorSourceCount)} Knowledge Pod source${contextPack.connectorSourceCount === 1 ? "" : "s"}`}
       </div>
       <ContextPackSummary contextPack={contextPack.folder} />
       <LocalKnowledgeContextPackSummary contextPack={contextPack.knowledge} />
@@ -804,7 +804,7 @@ export function GroundedAnswer({
       </div>
     );
   }
-  // Epic #189 Slice 3 M5 — hybrid answer: merged content, folder citations, connector citations.
+  // Epic #189 Slice 3 M5 — hybrid answer: merged content, folder citations, Knowledge Pod citations.
   if (answer.groundingKind === "hybrid") {
     return (
       <div className="grounded-answer">
@@ -821,7 +821,7 @@ export function GroundedAnswer({
             repositoryRoots={repositoryRoots}
             openRepositoryReference={openRepositoryReference}
           />
-          {/* Connector evidence (source-tagged) */}
+          {/* Knowledge Pod evidence (source-tagged) */}
           <LocalKnowledgeCitationList
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}

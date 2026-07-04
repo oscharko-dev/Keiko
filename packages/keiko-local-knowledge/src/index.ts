@@ -186,6 +186,11 @@ export type {
   RetrievalSourceSummary,
 } from "./composition.js";
 export {
+  buildKnowledgePodSetSummary,
+  buildKnowledgePodSummary,
+  listKnowledgePodSummaries,
+} from "./knowledge-pods.js";
+export {
   SourceRoutingValidationError,
   validateAlwaysQuery,
   validateGlobPatterns,

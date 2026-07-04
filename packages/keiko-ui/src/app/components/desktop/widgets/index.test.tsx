@@ -299,10 +299,10 @@ vi.mock("./cards/ConnectorPickerWidget", () => ({
         type="button"
         onClick={() => onSelect({ selectedKind: "capsule", selectedId: "cap-1" })}
       >
-        Select connector
+        Select Knowledge Pod
       </button>
       <button type="button" onClick={onManageConnectors}>
-        Manage connectors
+        Manage Knowledge Pods
       </button>
     </div>
   ),
@@ -596,9 +596,9 @@ describe("workspace widget renderer registry", () => {
       </>,
     );
     expect(await screen.findByTestId("connector-widget")).toHaveTextContent("inline:cap-1");
-    fireEvent.click(screen.getByRole("button", { name: "Select connector" }));
+    fireEvent.click(screen.getByRole("button", { name: "Select Knowledge Pod" }));
     expect(ctx.updateCfg).toHaveBeenCalledWith({ selectedKind: "capsule", selectedId: "cap-1" });
-    fireEvent.click(screen.getByRole("button", { name: "Manage connectors" }));
+    fireEvent.click(screen.getByRole("button", { name: "Manage Knowledge Pods" }));
     expect(ctx.openWindow).toHaveBeenCalledWith("localKnowledge");
 
     view.rerender(<>{WIN_TYPES.figma.render({ snapshotRunId: "fs-1" }, ctx)}</>);

@@ -394,7 +394,9 @@ describe("GroundedAnswer", () => {
     expect(
       screen.getByText(/\[1\] Quasar Manual \/ Product Docs · manual\.pdf · p\.287/),
     ).toBeInTheDocument();
-    expect(screen.getByText("Hybrid: 2 folder sources + 1 connector source")).toBeInTheDocument();
+    expect(
+      screen.getByText("Hybrid: 2 folder sources + 1 Knowledge Pod source"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Knowledge scope: Quasar Manual")).toBeInTheDocument();
   });
 
