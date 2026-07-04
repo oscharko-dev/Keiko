@@ -11,40 +11,52 @@ import type {
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceScope,
-  CapsuleLifecycleState,
   CapsuleHealth,
   CapsuleLargeDocumentHealth,
   CapsuleReindexRequest,
   CapsuleDeleteRequest,
   ParserDiagnostic,
   IndexingJobRecord,
+  LocalKnowledgeCapsuleListEntry as CapsuleListEntry,
+  LocalKnowledgeCapsuleSetListEntry as CapsuleSetListEntry,
+  LocalKnowledgeCapsuleSetsResponse as CapsuleSetsResponse,
+  LocalKnowledgeCapsulesResponse as CapsulesResponse,
+  KnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
 // Wire shapes
 // ---------------------------------------------------------------------------
 
-export interface CapsuleListEntry {
-  readonly id: KnowledgeCapsuleId;
-  readonly displayName: string;
-  readonly lifecycleState: CapsuleLifecycleState;
-  readonly sourceCount: number;
-  readonly updatedAt: number;
+export type { CapsuleListEntry, CapsuleSetListEntry, CapsuleSetsResponse, CapsulesResponse };
+
+function summaryDisplayNames(
+  summaries: readonly KnowledgePodSummary[] | undefined,
+  kind: KnowledgePodSummary["kind"],
+): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const summary of summaries ?? []) {
+    if (summary.kind === kind) names.set(String(summary.id), summary.displayName);
+  }
+  return names;
 }
 
-export interface CapsulesResponse {
-  readonly capsules: readonly CapsuleListEntry[];
+export function capsulesForKnowledgePodUi(response: CapsulesResponse): readonly CapsuleListEntry[] {
+  const names = summaryDisplayNames(response.knowledgePods, "pod");
+  return response.capsules.map((capsule) => ({
+    ...capsule,
+    displayName: names.get(String(capsule.id)) ?? capsule.displayName,
+  }));
 }
 
-export interface CapsuleSetListEntry {
-  readonly id: CapsuleSetId;
-  readonly displayName: string;
-  readonly capsuleCount: number;
-  readonly composedAt: number;
-}
-
-export interface CapsuleSetsResponse {
-  readonly capsuleSets: readonly CapsuleSetListEntry[];
+export function capsuleSetsForKnowledgePodUi(
+  response: CapsuleSetsResponse,
+): readonly CapsuleSetListEntry[] {
+  const names = summaryDisplayNames(response.knowledgePods, "pod-set");
+  return response.capsuleSets.map((set) => ({
+    ...set,
+    displayName: names.get(String(set.id)) ?? set.displayName,
+  }));
 }
 
 export interface CapsuleDetailResponse {
@@ -102,12 +114,24 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 // GET /api/local-knowledge/capsules
 // ---------------------------------------------------------------------------
 
-export async function fetchCapsules(): Promise<CapsulesResponse> {
-  return fetchJson<CapsulesResponse>("/api/local-knowledge/capsules");
+export interface LocalKnowledgeListOptions {
+  readonly includeKnowledgePods?: boolean;
 }
 
-export async function fetchCapsuleSets(): Promise<CapsuleSetsResponse> {
-  return fetchJson<CapsuleSetsResponse>("/api/local-knowledge/capsule-sets");
+function listPath(path: string, options: LocalKnowledgeListOptions | undefined): string {
+  return options?.includeKnowledgePods === true ? `${path}?includeKnowledgePods=1` : path;
+}
+
+export async function fetchCapsules(
+  options?: LocalKnowledgeListOptions,
+): Promise<CapsulesResponse> {
+  return fetchJson<CapsulesResponse>(listPath("/api/local-knowledge/capsules", options));
+}
+
+export async function fetchCapsuleSets(
+  options?: LocalKnowledgeListOptions,
+): Promise<CapsuleSetsResponse> {
+  return fetchJson<CapsuleSetsResponse>(listPath("/api/local-knowledge/capsule-sets", options));
 }
 
 // ---------------------------------------------------------------------------

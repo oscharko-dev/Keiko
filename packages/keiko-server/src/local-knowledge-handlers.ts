@@ -20,6 +20,7 @@ import {
   listCapsuleSets,
   listCapsuleSources,
   listCapsules,
+  listKnowledgePodSummaries,
   listExtractionCheckpoints,
   listResumableDocuments,
   openKnowledgeStore,
@@ -51,6 +52,8 @@ import type {
   LargeDocumentResourcePolicy,
   ParserDiagnostic,
   KnowledgeSourceScope,
+  KnowledgePodSummary,
+  KnowledgePodSummaryKind,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
@@ -62,6 +65,7 @@ import {
   isSafeQualityWarning,
   validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
+  validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
@@ -1947,6 +1951,27 @@ function failedSourceIds(
   return rows.map((row) => row.source_id as KnowledgeSourceId);
 }
 
+function listValidatedKnowledgePodSummaries(
+  store: ReturnType<typeof openKnowledgeStore>,
+  kind?: KnowledgePodSummaryKind,
+): readonly KnowledgePodSummary[] {
+  return listKnowledgePodSummaries(store)
+    .filter((summary) => kind === undefined || summary.kind === kind)
+    .map((summary) => {
+      const validation = validateKnowledgePodSummary(summary);
+      if (!validation.ok) {
+        throw new KnowledgeStoreError("Knowledge Pod summary validation failed.");
+      }
+      return validation.value;
+    });
+}
+
+function shouldIncludeKnowledgePods(ctx: RouteContext): boolean {
+  const value =
+    ctx.url.searchParams.get("includeKnowledgePods") ?? ctx.url.searchParams.get("knowledgePods");
+  return value === "1" || value === "true";
+}
+
 async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await worker();
@@ -1971,7 +1996,7 @@ async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Pro
 }
 
 export async function handleListLocalKnowledgeCapsules(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(() => {
@@ -1984,7 +2009,9 @@ export async function handleListLocalKnowledgeCapsules(
         sourceCount: capsule.sourceIds.length,
         updatedAt: capsule.updatedAt,
       }));
-      return { status: 200, body: { capsules } };
+      if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsules } };
+      const knowledgePods = listValidatedKnowledgePodSummaries(env.store);
+      return { status: 200, body: { capsules, knowledgePods } };
     } finally {
       env.close();
     }
@@ -1992,7 +2019,7 @@ export async function handleListLocalKnowledgeCapsules(
 }
 
 export async function handleListLocalKnowledgeCapsuleSets(
-  _ctx: RouteContext,
+  ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(() => {
@@ -2004,7 +2031,9 @@ export async function handleListLocalKnowledgeCapsuleSets(
         capsuleCount: capsuleSet.capsuleIds.length,
         composedAt: capsuleSet.composedAt,
       }));
-      return { status: 200, body: { capsuleSets } };
+      if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsuleSets } };
+      const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod-set");
+      return { status: 200, body: { capsuleSets, knowledgePods } };
     } finally {
       env.close();
     }

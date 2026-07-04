@@ -1563,6 +1563,31 @@ export {
   validateCapsuleReindexRequest,
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
+export type {
+  KnowledgePodBackingKind,
+  KnowledgePodCompatibilitySummary,
+  KnowledgePodCounts,
+  KnowledgePodEvidenceMode,
+  KnowledgePodGovernanceSummary,
+  KnowledgePodLocationKind,
+  KnowledgePodPolicyPosture,
+  KnowledgePodPrivacySummary,
+  KnowledgePodReadiness,
+  KnowledgePodRetrievalCapabilities,
+  KnowledgePodSealingPosture,
+  KnowledgePodSourceKind,
+  KnowledgePodSummary,
+  KnowledgePodSummaryKind,
+  LocalKnowledgeCapsuleListEntry,
+  LocalKnowledgeCapsuleSetListEntry,
+  LocalKnowledgeCapsuleSetsResponse,
+  LocalKnowledgeCapsulesResponse,
+} from "./local-knowledge-pods.js";
+export {
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
+} from "./local-knowledge-pods.js";
 
 // ─── Bounded large-document ingestion (Epic #1160 / Issue #1286) ────────────────
 export type {

@@ -39,15 +39,13 @@ function scopeLabel(scope: ChatLocalKnowledgeScope, labels: ReadonlyMap<string, 
   const key = scopeKey(scope);
   const resolved = labels.get(key);
   if (resolved !== undefined && resolved.length > 0) return resolved;
-  // uiux-fix F041 (C173) — the entity is called "capsule" everywhere else
-  // (grounding select, Local Knowledge UI); the pill must not call it "Connector".
-  if (scope.kind === "capsule") return `Capsule: ${scope.capsuleId}`;
-  return `Capsule set: ${scope.capsuleSetId}`;
+  if (scope.kind === "capsule") return `Knowledge Pod: ${scope.capsuleId}`;
+  return `Knowledge Pod Set: ${scope.capsuleSetId}`;
 }
 
 function formatErrorMessage(error: unknown): string {
   // uiux-fix F041 (C171) — message first, machine code as trailing detail.
-  return formatUserError(error, "Unable to disconnect capsule.");
+  return formatUserError(error, "Unable to disconnect Knowledge Pod.");
 }
 
 interface ConnectorPillItemProps {
@@ -152,8 +150,8 @@ export function ConnectorScopePill({
       prevSignatureRef.current = signature;
       setAnnouncement(
         scopes.length === 0
-          ? "Connected capsule removed."
-          : `Connected capsules updated: ${String(scopes.length)} ${scopes.length === 1 ? "source" : "sources"}.`,
+          ? "Connected Knowledge Pod removed."
+          : `Connected Knowledge Pods updated: ${String(scopes.length)} ${scopes.length === 1 ? "source" : "sources"}.`,
       );
     }
   }, [signature, scopes.length]);

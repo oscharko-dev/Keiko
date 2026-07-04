@@ -34,10 +34,10 @@ describe("CapsuleRename — toggle and prefill", () => {
     const user = userEvent.setup();
     render(<CapsuleRename {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
 
-    expect(screen.getByLabelText(/capsule display name/i)).toHaveValue("Engineering Docs");
-    expect(screen.getByLabelText(/capsule description/i)).toHaveValue("Original description");
+    expect(screen.getByLabelText(/display name/i)).toHaveValue("Engineering Docs");
+    expect(screen.getByLabelText(/description/i)).toHaveValue("Original description");
   });
 });
 
@@ -48,8 +48,8 @@ describe("CapsuleRename — minimal patch", () => {
     const onRenamed = vi.fn();
     render(<CapsuleRename {...defaultProps({ renameImpl, onRenamed })} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
-    const nameInput = screen.getByLabelText(/capsule display name/i);
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
+    const nameInput = screen.getByLabelText(/display name/i);
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Docs");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -65,8 +65,8 @@ describe("CapsuleRename — minimal patch", () => {
     const renameImpl = vi.fn().mockResolvedValue(okRename());
     render(<CapsuleRename {...defaultProps({ renameImpl })} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
-    const descInput = screen.getByLabelText(/capsule description/i);
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
+    const descInput = screen.getByLabelText(/description/i);
     await user.clear(descInput);
     await user.type(descInput, "New description");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -82,13 +82,13 @@ describe("CapsuleRename — minimal patch", () => {
     const onRenamed = vi.fn();
     render(<CapsuleRename {...defaultProps({ renameImpl, onRenamed })} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(renameImpl).not.toHaveBeenCalled();
     expect(onRenamed).not.toHaveBeenCalled();
     // editor closed back to the Rename button
-    expect(screen.getByRole("button", { name: /rename capsule/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rename Knowledge Pod/i })).toBeInTheDocument();
   });
 });
 
@@ -98,8 +98,8 @@ describe("CapsuleRename — validation and errors", () => {
     const renameImpl = vi.fn().mockResolvedValue(okRename());
     render(<CapsuleRename {...defaultProps({ renameImpl })} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
-    await user.clear(screen.getByLabelText(/capsule display name/i));
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
+    await user.clear(screen.getByLabelText(/display name/i));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(/display name is required/i);
@@ -112,8 +112,8 @@ describe("CapsuleRename — validation and errors", () => {
     const onRenamed = vi.fn();
     render(<CapsuleRename {...defaultProps({ renameImpl, onRenamed })} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
-    const nameInput = screen.getByLabelText(/capsule display name/i);
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
+    const nameInput = screen.getByLabelText(/display name/i);
     await user.clear(nameInput);
     await user.type(nameInput, "Whatever");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -122,7 +122,7 @@ describe("CapsuleRename — validation and errors", () => {
       expect(screen.getByRole("alert")).toHaveTextContent(/bad name/i);
     });
     expect(onRenamed).not.toHaveBeenCalled();
-    expect(screen.getByLabelText(/capsule display name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/display name/i)).toBeInTheDocument();
   });
 });
 
@@ -131,12 +131,12 @@ describe("CapsuleRename — focus management (WCAG 2.4.3, audit C031)", () => {
     const user = userEvent.setup();
     render(<CapsuleRename {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
-    expect(screen.getByLabelText(/capsule display name/i)).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
+    expect(screen.getByLabelText(/display name/i)).toHaveFocus();
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByLabelText(/capsule display name/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /rename capsule/i })).toHaveFocus();
+    expect(screen.queryByLabelText(/display name/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rename Knowledge Pod/i })).toHaveFocus();
   });
 
   it("returns focus to the Rename button after Cancel and after a successful save", async () => {
@@ -144,18 +144,18 @@ describe("CapsuleRename — focus management (WCAG 2.4.3, audit C031)", () => {
     const renameImpl = vi.fn().mockResolvedValue(okRename());
     render(<CapsuleRename {...defaultProps({ renameImpl })} />);
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
-    expect(screen.getByRole("button", { name: /rename capsule/i })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /rename Knowledge Pod/i })).toHaveFocus();
 
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
-    const nameInput = screen.getByLabelText(/capsule display name/i);
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
+    const nameInput = screen.getByLabelText(/display name/i);
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Docs");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /rename capsule/i })).toHaveFocus();
+      expect(screen.getByRole("button", { name: /rename Knowledge Pod/i })).toHaveFocus();
     });
   });
 });
@@ -169,7 +169,7 @@ describe("CapsuleRename — accessibility", () => {
   it("has no axe violations in the editing state", async () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleRename {...defaultProps()} />);
-    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
     expect(await axe(container)).toHaveNoViolations();
   });
 });

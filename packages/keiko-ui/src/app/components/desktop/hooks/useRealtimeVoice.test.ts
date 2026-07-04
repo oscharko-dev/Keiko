@@ -221,7 +221,7 @@ describe("useRealtimeVoice — happy path (idle → requesting → negotiating �
           session: expect.objectContaining({
             type: "realtime",
             instructions: expect.stringContaining(
-              "connected repository, files, documents, knowledge capsules, or project context",
+              "connected repository, files, documents, Knowledge Pods, or project context",
             ),
             audio: expect.objectContaining({
               input: expect.objectContaining({
