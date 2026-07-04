@@ -74,7 +74,6 @@ import {
 } from "./grounded-qa-multi-source.js";
 import {
   LOCAL_KNOWLEDGE_RETRIEVAL_CANDIDATES,
-  buildKnowledgePodRetrievalActivity,
   buildSelectedScopeSourceLookup,
   createEmbeddingAdapter,
   openStoreForDeps,
@@ -82,6 +81,7 @@ import {
   retrievalActivityResultFromRetrieval,
   scopeStateFailure,
   selectedCapsulesForScope,
+  tryBuildKnowledgePodRetrievalActivity,
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
@@ -644,16 +644,14 @@ function buildHybridRetrievalActivity(
   connectors: readonly RetrievedConnector[],
   skipped: readonly SkippedConnector[],
   knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[],
-  reranker: GroundedRerankerDiagnostics,
 ): HybridGroundedAnswer["retrievalActivity"] {
-  return buildKnowledgePodRetrievalActivity({
+  return tryBuildKnowledgePodRetrievalActivity({
     store,
     sources: connectors.map((connector) => ({
       selected: connector.selected,
       result: retrievalActivityResultFromRetrieval(
         connector.result,
         knowledgeCitationsForConnector(knowledgeCitations, connector),
-        reranker,
       ),
     })),
     skipped: selectedConnectorSkips(skipped),
@@ -1103,7 +1101,6 @@ function assembleHybridAnswer(
     sources.connectors,
     sources.skipped,
     knowledgeCitations,
-    reranker,
   );
   const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
     ctx,

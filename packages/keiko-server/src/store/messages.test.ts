@@ -1,12 +1,17 @@
 // ADR-0013 — chat_messages CRUD. shortResult is redacted+truncated to ≤200 chars BEFORE persist.
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StoredPdfCitationPreviewCitation } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgePodRetrievalActivity,
+  StoredPdfCitationPreviewCitation,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createInMemoryUiStore,
+  createNodeUiStore,
   UiStoreError,
   type ChatRole,
   type GroundedAnswer,
@@ -88,6 +93,115 @@ function groundedAnswer(overrides: Partial<GroundedAnswer> = {}): GroundedAnswer
     },
   };
   return { ...base, ...overrides } as GroundedAnswer;
+}
+
+function retrievalActivity(): KnowledgePodRetrievalActivity {
+  return {
+    schemaVersion: "1",
+    summary: {
+      searchedCount: 1,
+      skippedCount: 0,
+      degradedCount: 0,
+      deniedCount: 0,
+      unavailableCount: 0,
+      notSelectedCount: 0,
+      denseCandidateCount: 2,
+      lexicalCandidateCount: 1,
+      fusedCandidateCount: 2,
+      referenceCount: 1,
+      citationCount: 0,
+    },
+    privacy: {
+      localFirst: true,
+      rawContentExposed: false,
+      rawQueryExposed: false,
+      privatePathsExposed: false,
+      directVectorScoreComparison: false,
+    },
+    pods: [
+      {
+        podId: "cap-1" as KnowledgePodRetrievalActivity["pods"][number]["podId"],
+        podKind: "pod",
+        displayName: "Knowledge Pod",
+        state: "searched",
+        modes: ["local-only", "vector"],
+        reasonCodes: ["searched"],
+        sourceIds: ["src-1" as KnowledgePodRetrievalActivity["pods"][number]["sourceIds"][number]],
+        counts: {
+          sourceCount: 1,
+          documentCount: 1,
+          chunkCount: 2,
+          vectorCount: 2,
+          referenceCount: 1,
+          citationCount: 0,
+        },
+      },
+    ],
+  };
+}
+
+function invalidRetrievalActivity(): KnowledgePodRetrievalActivity {
+  return {
+    ...retrievalActivity(),
+    privacy: { ...retrievalActivity().privacy, rawQueryExposed: true },
+  } as unknown as KnowledgePodRetrievalActivity;
+}
+
+function localKnowledgeAnswer(
+  overrides: Partial<Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }>> = {},
+): GroundedAnswer {
+  const base: Extract<GroundedAnswer, { readonly groundingKind: "local-knowledge" }> = {
+    groundingKind: "local-knowledge",
+    userMessageId: "user-1",
+    assistantMessageId: "assistant-1",
+    content: "Answer from a Knowledge Pod.",
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 12,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "lk-1",
+      scopeLabel: "Knowledge Pod",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: 0,
+      referenceBudget: 16,
+      referencesUsed: 1,
+    },
+    retrievalActivity: retrievalActivity(),
+  };
+  return { ...base, ...overrides };
+}
+
+function tamperGroundedAnswerJson(dbPath: string, messageId: string, raw: string): void {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.prepare("UPDATE chat_messages SET grounded_answer_json = ? WHERE id = ?").run(
+      raw,
+      messageId,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function createOnDiskStoreFixture(): {
+  readonly dbPath: string;
+  readonly chatId: string;
+  readonly store: UiStore;
+} {
+  const dbPath = join(tmp, "keiko-ui.db");
+  let now = 1;
+  const nodeStore = createNodeUiStore(dbPath, {
+    now: () => ++now,
+    redactString: makeRedactor("SECRET-TOKEN"),
+  });
+  nodeStore.createProject(proj);
+  const nodeChatId = nodeStore.createChat(proj, "node", "example-chat-model").id;
+  return { dbPath, chatId: nodeChatId, store: nodeStore };
 }
 
 beforeEach(() => {
@@ -188,6 +302,99 @@ describe("createMessage", () => {
       citations: [{ scopePath: "package-lock.json" }],
     });
     expect(reloaded?.groundedAnswer?.content).toBe("Answer includes [REDACTED].");
+  });
+
+  it("rejects invalid retrieval activity metadata before persistence", () => {
+    const assistant = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "Answer from a Knowledge Pod.",
+      timestamp: 213,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    expect(() =>
+      store.attachGroundedAnswer(
+        assistant.id,
+        localKnowledgeAnswer({
+          assistantMessageId: assistant.id,
+          retrievalActivity: invalidRetrievalActivity(),
+        }),
+      ),
+    ).toThrow("Grounded answer retrieval activity is invalid.");
+  });
+
+  it("refuses malformed stored grounded answer metadata on read", () => {
+    const fixture = createOnDiskStoreFixture();
+    const assistant = fixture.store.createMessage({
+      chatId: fixture.chatId,
+      role: "assistant",
+      content: "Answer from a Knowledge Pod.",
+      timestamp: 214,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    fixture.store.attachGroundedAnswer(
+      assistant.id,
+      localKnowledgeAnswer({ assistantMessageId: assistant.id }),
+    );
+    fixture.store.close();
+    tamperGroundedAnswerJson(fixture.dbPath, assistant.id, "{");
+
+    const reopened = createNodeUiStore(fixture.dbPath, { redactString: makeRedactor("SECRET") });
+    try {
+      expect(() => reopened.listMessages(fixture.chatId)).toThrow(
+        "Stored grounded answer metadata is invalid.",
+      );
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("refuses invalid stored retrieval activity metadata on read", () => {
+    const fixture = createOnDiskStoreFixture();
+    const assistant = fixture.store.createMessage({
+      chatId: fixture.chatId,
+      role: "assistant",
+      content: "Answer from a Knowledge Pod.",
+      timestamp: 214,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    fixture.store.attachGroundedAnswer(
+      assistant.id,
+      localKnowledgeAnswer({ assistantMessageId: assistant.id }),
+    );
+    fixture.store.close();
+    tamperGroundedAnswerJson(
+      fixture.dbPath,
+      assistant.id,
+      JSON.stringify(
+        localKnowledgeAnswer({
+          assistantMessageId: assistant.id,
+          retrievalActivity: invalidRetrievalActivity(),
+        }),
+      ),
+    );
+
+    const reopened = createNodeUiStore(fixture.dbPath, { redactString: makeRedactor("SECRET") });
+    try {
+      expect(() => reopened.listMessages(fixture.chatId)).toThrow(
+        "Stored grounded answer retrieval activity is invalid.",
+      );
+    } finally {
+      reopened.close();
+    }
   });
 
   it("persists preview citations server-side without projecting them on chat messages", () => {

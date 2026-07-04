@@ -35,12 +35,14 @@ import type {
   KnowledgePodRetrievalActivityPod,
   KnowledgePodRetrievalActivityReasonCode,
   KnowledgePodRetrievalActivityState,
+  KnowledgePodSummary,
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
+  isKnowledgePodRetrievalActivitySafeText,
   validateKnowledgePodRetrievalActivity,
 } from "@oscharko-dev/keiko-contracts";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
@@ -944,6 +946,10 @@ function buildLocalKnowledgeAnswer(
     sourceLookup ?? buildSelectedScopeSourceLookup(store, selected),
     redactLabel,
   );
+  const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
+    store,
+    sources: [{ selected, result: retrievalActivityResultFromScoped(result, citations) }],
+  });
   return {
     groundingKind: "local-knowledge",
     userMessageId: user.id,
@@ -956,10 +962,7 @@ function buildLocalKnowledgeAnswer(
     noEvidence: noEvidenceReason !== undefined,
     ...(noEvidenceReason !== undefined ? { noEvidenceReason } : {}),
     contextPack: buildLocalKnowledgeContextPack(chat, selected, result, citations, redactLabel),
-    retrievalActivity: buildKnowledgePodRetrievalActivity({
-      store,
-      sources: [{ selected, result: retrievalActivityResultFromScoped(result, citations) }],
-    }),
+    ...(retrievalActivity === undefined ? {} : { retrievalActivity }),
   };
 }
 
@@ -982,15 +985,16 @@ function buildStateFailureAnswer(
     stateFailure.reason,
     [{ kind: stateFailure.reason, claim: persisted[1].content }],
   );
+  const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
+    store,
+    sources: [],
+    skipped: [{ selected, reason: stateFailure.reason }],
+  });
   return {
     ...answer,
     userMessageId: user.id,
     assistantMessageId: assistant.id,
-    retrievalActivity: buildKnowledgePodRetrievalActivity({
-      store,
-      sources: [],
-      skipped: [{ selected, reason: stateFailure.reason }],
-    }),
+    ...(retrievalActivity === undefined ? {} : { retrievalActivity }),
   } satisfies GroundedAnswer;
 }
 
@@ -1161,6 +1165,8 @@ const UNAVAILABLE_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReason
   "indexing-in-progress",
   "embedding-unavailable",
 ]);
+const ACTIVITY_FALLBACK_DISPLAY_NAME = "Knowledge Pod";
+type ActivitySummaryCache = Map<string, KnowledgePodSummary>;
 
 export function retrievalActivityResultFromScoped(
   result: ScopedGroundedResult,
@@ -1293,23 +1299,63 @@ function countCitationsByCapsule(
   return counts;
 }
 
+function activityOpaqueId(prefix: "pod" | "source", value: string): string {
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return `${prefix}-${digest}`;
+}
+
+function activityPodId(value: string): KnowledgePodRetrievalActivityPod["podId"] {
+  return (
+    isKnowledgePodRetrievalActivitySafeText(value) ? value : activityOpaqueId("pod", value)
+  ) as KnowledgePodRetrievalActivityPod["podId"];
+}
+
+function activitySourceIds(
+  values: readonly string[],
+): KnowledgePodRetrievalActivityPod["sourceIds"] {
+  return values.map(
+    (value) =>
+      (isKnowledgePodRetrievalActivitySafeText(value)
+        ? value
+        : activityOpaqueId("source", value)) as KnowledgeSourceId,
+  );
+}
+
+function activityDisplayName(value: string): string {
+  return isKnowledgePodRetrievalActivitySafeText(value) ? value : ACTIVITY_FALLBACK_DISPLAY_NAME;
+}
+
+function cachedActivitySummary(
+  store: KnowledgeStore,
+  cache: ActivitySummaryCache,
+  capsule: KnowledgeCapsule,
+): KnowledgePodSummary {
+  const key = String(capsule.id);
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const summary = buildKnowledgePodSummary(store, capsule);
+  cache.set(key, summary);
+  return summary;
+}
+
 function activityPod(
   store: KnowledgeStore,
+  cache: ActivitySummaryCache,
   capsule: KnowledgeCapsule,
   state: KnowledgePodRetrievalActivityState,
   modes: readonly KnowledgePodRetrievalActivityMode[],
   reasonCodes: readonly KnowledgePodRetrievalActivityReasonCode[],
   counts: { readonly referenceCount: number; readonly citationCount: number },
 ): KnowledgePodRetrievalActivityPod {
-  const summary = buildKnowledgePodSummary(store, capsule);
+  const summary = cachedActivitySummary(store, cache, capsule);
   return {
-    podId: summary.id,
+    podId: activityPodId(String(summary.id)),
     podKind: "pod",
-    displayName: summary.displayName,
+    displayName: activityDisplayName(summary.displayName),
     state,
     modes,
     reasonCodes,
-    sourceIds: summary.compatibility.sourceIds,
+    sourceIds: activitySourceIds(summary.compatibility.sourceIds),
     counts: {
       sourceCount: summary.counts.sourceCount,
       documentCount: summary.counts.documentCount,
@@ -1323,6 +1369,7 @@ function activityPod(
 
 function podsForSource(
   store: KnowledgeStore,
+  cache: ActivitySummaryCache,
   source: KnowledgePodRetrievalActivitySourceInput,
 ): readonly KnowledgePodRetrievalActivityPod[] {
   const refCounts = countReferencesByCapsule(source.result.references);
@@ -1331,6 +1378,7 @@ function podsForSource(
     const citationCount = source.result.citationCounts.get(String(capsule.id)) ?? 0;
     return activityPod(
       store,
+      cache,
       capsule,
       stateForPod(source.result, referenceCount),
       activityModes(source.result),
@@ -1342,11 +1390,12 @@ function podsForSource(
 
 function podsForSkipped(
   store: KnowledgeStore,
+  cache: ActivitySummaryCache,
   source: KnowledgePodRetrievalActivitySkippedInput,
 ): readonly KnowledgePodRetrievalActivityPod[] {
   const reason = normaliseActivityReason(source.reason);
   return source.selected.capsules.map((capsule) =>
-    activityPod(store, capsule, stateForReason(reason), ["local-only"], [reason], {
+    activityPod(store, cache, capsule, stateForReason(reason), ["local-only"], [reason], {
       referenceCount: 0,
       citationCount: 0,
     }),
@@ -1389,9 +1438,10 @@ export function buildKnowledgePodRetrievalActivity(input: {
   readonly sources: readonly KnowledgePodRetrievalActivitySourceInput[];
   readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
 }): KnowledgePodRetrievalActivity {
+  const summaryCache: ActivitySummaryCache = new Map();
   const pods = [
-    ...input.sources.flatMap((source) => podsForSource(input.store, source)),
-    ...(input.skipped ?? []).flatMap((source) => podsForSkipped(input.store, source)),
+    ...input.sources.flatMap((source) => podsForSource(input.store, summaryCache, source)),
+    ...(input.skipped ?? []).flatMap((source) => podsForSkipped(input.store, summaryCache, source)),
   ];
   const activity: KnowledgePodRetrievalActivity = {
     schemaVersion: KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
@@ -1410,6 +1460,27 @@ export function buildKnowledgePodRetrievalActivity(input: {
     throw new Error("Knowledge Pod retrieval activity validation failed.");
   }
   return validation.value;
+}
+
+function isRetrievalActivityProjectionError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === "Knowledge Pod summary validation failed." ||
+      error.message === "Knowledge Pod retrieval activity validation failed.")
+  );
+}
+
+export function tryBuildKnowledgePodRetrievalActivity(input: {
+  readonly store: KnowledgeStore;
+  readonly sources: readonly KnowledgePodRetrievalActivitySourceInput[];
+  readonly skipped?: readonly KnowledgePodRetrievalActivitySkippedInput[] | undefined;
+}): KnowledgePodRetrievalActivity | undefined {
+  try {
+    return buildKnowledgePodRetrievalActivity(input);
+  } catch (error) {
+    if (!isRetrievalActivityProjectionError(error)) throw error;
+    return undefined;
+  }
 }
 
 function buildPreviewCitationInputs(

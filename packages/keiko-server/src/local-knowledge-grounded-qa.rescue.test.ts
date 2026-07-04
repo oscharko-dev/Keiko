@@ -34,6 +34,8 @@ import {
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   localKnowledgeNoEvidenceAnswer,
   renderCitationLabel,
+  tryBuildKnowledgePodRetrievalActivity,
+  type KnowledgePodRetrievalActivityResultInput,
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -128,6 +130,35 @@ function selectedActivityScope(capsuleValue: KnowledgeCapsule): SelectedLocalKno
     capsules: [capsuleValue],
     scopeKind: "capsule",
     scopeLabel: capsuleValue.displayName,
+  };
+}
+
+type KnowledgeDb = ReturnType<typeof openKnowledgeStore>["_internal"]["db"];
+type ActivityDiagnostics = NonNullable<
+  KnowledgePodRetrievalActivityResultInput["retrievalDiagnostics"]
+>;
+
+function countPrepareCalls(db: KnowledgeDb, onPrepare: () => void): () => void {
+  const originalPrepare: KnowledgeDb["prepare"] = db.prepare.bind(db);
+  const patchedPrepare: KnowledgeDb["prepare"] = (sql: string) => {
+    onPrepare();
+    return originalPrepare(sql);
+  };
+  db.prepare = patchedPrepare;
+  return (): void => {
+    db.prepare = originalPrepare;
+  };
+}
+
+function activityDiagnostics(mode: ActivityDiagnostics["mode"]): ActivityDiagnostics {
+  return {
+    mode,
+    denseCandidateCount: 4,
+    lexicalCandidateCount: 3,
+    fusedCandidateCount: 5,
+    denseIndex: "available",
+    lexicalIndex: "available",
+    vectorIndex: { provider: "brute-force", status: "available" },
   };
 }
 
@@ -754,6 +785,234 @@ describe("local-knowledge reranker diagnostics", () => {
 });
 
 describe("local-knowledge retrieval activity", () => {
+  it("omits activity instead of failing an answer when pod metadata cannot be projected safely", async () => {
+    const unsafeCapsuleId = "owner@example.com" as KnowledgeCapsuleId;
+    const unsafeSourceId = "source@example.com" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "owner@example.com",
+        capsuleId: unsafeCapsuleId,
+        sourceId: unsafeSourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, unsafeCapsuleId);
+      const input = {
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(unsafeCapsuleId, unsafeSourceId)],
+              citationCounts: new Map([[String(unsafeCapsuleId), 1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+      } as const;
+
+      expect(() => buildKnowledgePodRetrievalActivity(input)).toThrow(
+        "Knowledge Pod summary validation failed.",
+      );
+      expect(tryBuildKnowledgePodRetrievalActivity(input)).toBeUndefined();
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("returns the grounded answer when not-ready activity projection cannot be assembled", async () => {
+    const unsafeCapsuleId = "state-owner@example.com" as KnowledgeCapsuleId;
+    const unsafeSourceId = "state-source@example.com" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "state-owner@example.com",
+      capsuleId: unsafeCapsuleId,
+      sourceId: unsafeSourceId,
+    });
+    updateCapsuleState(knowledgeStore, unsafeCapsuleId, "indexing");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "unsafe-activity-project");
+    const created = rescueStore.createChat(project.path, "Unsafe activity", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: unsafeCapsuleId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => {
+        throw new Error("model must not be called for state-failure activity");
+      },
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "What is indexed?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.noEvidence).toBe(true);
+    expect(answer.retrievalActivity).toBeUndefined();
+  });
+
+  it("maps retrieval diagnostics modes to activity modes", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Activity Mode Capsule",
+        capsuleId: "cap-activity-modes",
+        sourceId: "src-activity-modes",
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const selected = selectedActivityScope(capsuleValue);
+      const cases = [
+        ["hybrid", ["local-only", "hybrid", "lexical", "vector"]],
+        ["dense-only", ["local-only", "vector"]],
+        ["lexical-only", ["local-only", "lexical"]],
+        ["lexical-degraded", ["local-only", "lexical"]],
+      ] as const;
+
+      for (const [mode, expectedModes] of cases) {
+        const activity = buildKnowledgePodRetrievalActivity({
+          store: knowledgeStore,
+          sources: [
+            {
+              selected,
+              result: {
+                references: [],
+                citationCounts: new Map(),
+                noEvidence: false,
+                retrievalDiagnostics: activityDiagnostics(mode),
+              },
+            },
+          ],
+        });
+        expect(activity.pods[0]?.modes).toEqual(expectedModes);
+      }
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("marks selected pods without retrieved references as not selected", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const first = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Selected Pod",
+        capsuleId: "cap-selected-activity",
+        sourceId: "src-selected-activity",
+      });
+      const second = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Filtered Pod",
+        capsuleId: "cap-filtered-activity",
+        sourceId: "src-filtered-activity",
+      });
+      const selected: SelectedLocalKnowledgeScope = {
+        capsules: [
+          requireCapsule(knowledgeStore, first.capsuleId),
+          requireCapsule(knowledgeStore, second.capsuleId),
+        ],
+        scopeKind: "capsule-set",
+        scopeLabel: "Activity Set",
+      };
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [retrievalActivityReference(first.capsuleId, first.sourceId)],
+              citationCounts: new Map([[String(first.capsuleId), 1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+      });
+
+      expect(activity.summary.notSelectedCount).toBe(1);
+      expect(activity.pods.find((pod) => pod.podId === second.capsuleId)).toMatchObject({
+        state: "not-selected",
+        reasonCodes: ["not-selected"],
+        counts: { referenceCount: 0, citationCount: 0 },
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("caches Knowledge Pod summaries across repeated activity scopes", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const capsules: KnowledgeCapsule[] = [];
+      for (let index = 0; index < 16; index += 1) {
+        const id = String(index).padStart(2, "0");
+        const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+          displayName: `Cached Activity Pod ${id}`,
+          capsuleId: `cap-cache-${id}`,
+          sourceId: `src-cache-${id}`,
+          documentId: `doc-cache-${id}`,
+          contentHash: id.repeat(32),
+        });
+        capsules.push(requireCapsule(knowledgeStore, seeded.capsuleId));
+      }
+      const selected: SelectedLocalKnowledgeScope = {
+        capsules,
+        scopeKind: "capsule-set",
+        scopeLabel: "Cached Activity Set",
+      };
+      let prepareCalls = 0;
+      const restorePrepare = countPrepareCalls(knowledgeStore._internal.db, () => {
+        prepareCalls += 1;
+      });
+      try {
+        const activity = buildKnowledgePodRetrievalActivity({
+          store: knowledgeStore,
+          sources: Array.from({ length: 16 }, () => ({
+            selected,
+            result: {
+              references: [],
+              citationCounts: new Map(),
+              noEvidence: false,
+              retrievalDiagnostics: activityDiagnostics("hybrid"),
+            },
+          })),
+        });
+        expect(activity.pods).toHaveLength(256);
+      } finally {
+        restorePrepare();
+      }
+      expect(prepareCalls).toBeLessThan(128);
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
   it("prioritizes denied and degraded activity states over searched references", async () => {
     const sourceId = "src-activity-states" as KnowledgeSourceId;
     const knowledgeStore = openKnowledgeStore({

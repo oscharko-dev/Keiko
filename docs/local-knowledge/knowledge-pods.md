@@ -178,6 +178,12 @@ Server consumers must validate every emitted activity object with
 safe counts and labels. If activity is absent, an answer remains valid and the existing
 grounded-evidence disclosure is still canonical.
 
+When a grounded answer is persisted in the UI message store, `retrievalActivity` remains
+answer metadata rather than a separate evidence manifest. The store validates the activity
+on write and again on read; malformed or unsafe stored metadata is rejected instead of
+being silently dropped. Canonical operator evidence still lives in the existing context
+packs, retrieval diagnostics, and redacted evidence manifests.
+
 ## Future remote or federated pods
 
 Remote, federated, shared, or cloud-backed pods are out of scope for Epic #1815. Any

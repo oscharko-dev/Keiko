@@ -94,6 +94,12 @@ function retrievalActivity(
   };
 }
 
+function retrievalActivityPod(): KnowledgePodRetrievalActivity["pods"][number] {
+  const pod = retrievalActivity().pods[0];
+  if (pod === undefined) throw new Error("expected retrieval activity pod");
+  return pod;
+}
+
 const OMITTED_COUNTS_ZERO = {
   "outside-scope": 0,
   binary: 0,
@@ -415,6 +421,53 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/Modes: local only, hybrid, lexical, vector/)).toBeInTheDocument();
     expect(screen.getByText(/Reasons: searched/)).toBeInTheDocument();
     expect(screen.queryByText(/\/Users\/|raw query|private path/i)).not.toBeInTheDocument();
+  });
+
+  it("omits Knowledge Pod retrieval activity when no activity or pod rows exist", () => {
+    const { rerender } = render(<GroundedAnswer answer={localKnowledgeAnswer()} busy={false} />);
+    expect(screen.queryByRole("region", { name: "Knowledge Pod retrieval activity" })).toBeNull();
+
+    rerender(
+      <GroundedAnswer
+        answer={{
+          ...localKnowledgeAnswer(),
+          retrievalActivity: retrievalActivity({ pods: [] }),
+        }}
+        busy={false}
+      />,
+    );
+    expect(screen.queryByRole("region", { name: "Knowledge Pod retrieval activity" })).toBeNull();
+  });
+
+  it("renders degraded, denied, unavailable, and not-selected activity states", () => {
+    const pod = retrievalActivityPod();
+    const activity = retrievalActivity({
+      summary: {
+        ...retrievalActivity().summary,
+        searchedCount: 0,
+        degradedCount: 1,
+        deniedCount: 1,
+        unavailableCount: 1,
+        notSelectedCount: 1,
+      },
+      pods: [
+        { ...pod, podId: "cap-degraded" as typeof pod.podId, state: "degraded" },
+        { ...pod, podId: "cap-denied" as typeof pod.podId, state: "denied" },
+        { ...pod, podId: "cap-unavailable" as typeof pod.podId, state: "unavailable" },
+        { ...pod, podId: "cap-filtered" as typeof pod.podId, state: "not-selected" },
+      ],
+    });
+    render(
+      <GroundedAnswer
+        answer={{ ...localKnowledgeAnswer(), retrievalActivity: activity }}
+        busy={false}
+      />,
+    );
+
+    expect(screen.getAllByText("Degraded").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Denied").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Not selected").length).toBeGreaterThan(0);
   });
 
   it("renders folder citations, connector citations, and the hybrid source summary for a hybrid answer", () => {

@@ -146,10 +146,35 @@ function invalidErrors(
   return result.errors;
 }
 
+function happyPod(): KnowledgePodRetrievalActivity["pods"][number] {
+  const pod = happyActivity().pods[0];
+  if (pod === undefined) throw new Error("expected happy retrieval activity pod");
+  return pod;
+}
+
+const UNSAFE_ACTIVITY_TEXTS = [
+  "/Users/alice/private/customer.pdf",
+  "https://gateway.example.test/v1",
+  "Bearer secret-token-value",
+  "alice@example.com",
+  "555-11-2222",
+] as const;
+
 describe("validateKnowledgePodRetrievalActivity", () => {
   it("accepts every retrieval activity state and future participation posture token", () => {
     const result = validateKnowledgePodRetrievalActivity(happyActivity());
     expect(result.ok).toBe(true);
+  });
+
+  it("accepts reserved sealed, remote, and federated mode tokens", () => {
+    for (const mode of ["sealed", "remote", "federated"] as const) {
+      const pod = happyPod();
+      const result = validateKnowledgePodRetrievalActivity({
+        ...happyActivity(),
+        pods: [{ ...pod, modes: [mode] }],
+      });
+      expect(result.ok).toBe(true);
+    }
   });
 
   it("rejects unexpected raw-content fields", () => {
@@ -161,7 +186,7 @@ describe("validateKnowledgePodRetrievalActivity", () => {
   });
 
   it("rejects malformed unknown states, modes, and reason codes", () => {
-    const [pod] = happyActivity().pods;
+    const pod = happyPod();
     const result = validateKnowledgePodRetrievalActivity({
       ...happyActivity(),
       pods: [
@@ -183,7 +208,7 @@ describe("validateKnowledgePodRetrievalActivity", () => {
   });
 
   it("rejects raw body and query fields by allowlist", () => {
-    const [pod] = happyActivity().pods;
+    const pod = happyPod();
     const result = validateKnowledgePodRetrievalActivity({
       ...happyActivity(),
       pods: [
@@ -198,14 +223,8 @@ describe("validateKnowledgePodRetrievalActivity", () => {
   });
 
   it("rejects path, endpoint, token, and PII-like display strings", () => {
-    for (const displayName of [
-      "/Users/alice/private/customer.pdf",
-      "https://gateway.example.test/v1",
-      "Bearer secret-token-value",
-      "alice@example.com",
-      "555-11-2222",
-    ]) {
-      const [pod] = happyActivity().pods;
+    for (const displayName of UNSAFE_ACTIVITY_TEXTS) {
+      const pod = happyPod();
       const result = validateKnowledgePodRetrievalActivity({
         ...happyActivity(),
         pods: [{ ...pod, displayName }],
@@ -220,17 +239,45 @@ describe("validateKnowledgePodRetrievalActivity", () => {
     expect(isKnowledgePodRetrievalActivitySafeText("alice@example.com")).toBe(false);
   });
 
-  it("requires privacy flags to stay fail-closed", () => {
-    const result = validateKnowledgePodRetrievalActivity({
-      ...happyActivity(),
-      privacy: {
-        ...happyActivity().privacy,
-        rawQueryExposed: true,
-      },
-    });
-    expect(invalidErrors(result)).toContain(
-      "privacy must preserve the retrieval activity redaction posture",
-    );
+  it("rejects path, endpoint, token, and PII-like pod and source identifiers", () => {
+    for (const unsafeText of UNSAFE_ACTIVITY_TEXTS) {
+      const pod = happyPod();
+      expect(
+        invalidErrors(
+          validateKnowledgePodRetrievalActivity({
+            ...happyActivity(),
+            pods: [{ ...pod, podId: unsafeText as KnowledgeCapsuleId }],
+          }),
+        ),
+      ).toContain("pod.podId must be evidence-safe");
+      expect(
+        invalidErrors(
+          validateKnowledgePodRetrievalActivity({
+            ...happyActivity(),
+            pods: [{ ...pod, sourceIds: [unsafeText as KnowledgeSourceId] }],
+          }),
+        ),
+      ).toContain("pod.sourceIds entries must be evidence-safe strings");
+    }
+  });
+
+  it("requires every privacy flag to stay fail-closed", () => {
+    const cases = [
+      ["localFirst", false],
+      ["rawContentExposed", true],
+      ["rawQueryExposed", true],
+      ["privatePathsExposed", true],
+      ["directVectorScoreComparison", true],
+    ] as const;
+    for (const [key, value] of cases) {
+      const result = validateKnowledgePodRetrievalActivity({
+        ...happyActivity(),
+        privacy: { ...happyActivity().privacy, [key]: value },
+      });
+      expect(invalidErrors(result)).toContain(
+        "privacy must preserve the retrieval activity redaction posture",
+      );
+    }
   });
 
   it("requires non-negative counts", () => {
@@ -243,6 +290,28 @@ describe("validateKnowledgePodRetrievalActivity", () => {
     });
     expect(invalidErrors(result)).toContain(
       "summary.referenceCount must be a non-negative integer",
+    );
+  });
+
+  it("rejects unknown nested summary, privacy, and count fields", () => {
+    const pod = happyPod();
+    const result = validateKnowledgePodRetrievalActivity({
+      ...happyActivity(),
+      summary: { ...happyActivity().summary, rawQuery: "alpha" },
+      privacy: { ...happyActivity().privacy, endpoint: "https://example.test" },
+      pods: [
+        {
+          ...pod,
+          counts: { ...pod.counts, rawVectorScore: 0.91 },
+        },
+      ],
+    });
+    expect(invalidErrors(result)).toEqual(
+      expect.arrayContaining([
+        "summary must not include rawQuery",
+        "privacy must not include endpoint",
+        "pod.counts must not include rawVectorScore",
+      ]),
     );
   });
 });
