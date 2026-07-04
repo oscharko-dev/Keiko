@@ -236,7 +236,7 @@ describe("runMemoryCli reembed", () => {
     expect(vault.getEmbedding(mid("b"))).toBeDefined();
   });
 
-  it("skips memories that already have an embedding", async () => {
+  it("refreshes memories that already have an embedding so stale vectors are repairable", async () => {
     const vault = makeVault();
     insert(vault, { id: "a", status: "accepted" });
     insert(vault, { id: "b", status: "accepted" });
@@ -249,8 +249,11 @@ describe("runMemoryCli reembed", () => {
     const cap = capture();
     const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: fakeEmbedder() });
     expect(code).toBe(0);
-    expect(cap.out()).toContain("embedded: 1");
-    expect(cap.out()).toContain("skipped:  1");
+    expect(cap.out()).toContain("embedded: 2");
+    expect(cap.out()).toContain("skipped:  0");
+    expect(Array.from(vault.getEmbedding(mid("a"))?.vector ?? [])).toEqual(
+      Array.from(Float32Array.from({ length: 8 }, (_, i) => (i + 1) / 8)),
+    );
   });
 
   it("does not embed non-accepted memories", async () => {

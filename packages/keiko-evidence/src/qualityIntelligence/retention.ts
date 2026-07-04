@@ -312,9 +312,7 @@ export interface QualityIntelligenceRetentionDeletionFailure {
 }
 
 export type QualityIntelligenceRetentionSkippedReason =
-  | "manifest-load-failed"
-  | "manifest-missing"
-  | "timestamp-unparseable";
+  "manifest-load-failed" | "manifest-missing" | "timestamp-unparseable";
 
 export interface QualityIntelligenceRetentionSkippedRun {
   readonly runId: string;
@@ -351,9 +349,7 @@ function snapshotEntryForRun(
   return { entry: { runId, recordedAt, retentionPolicyId: manifest.retentionPolicyId } };
 }
 
-function buildRetentionSnapshot(
-  store: QualityIntelligenceLocalStore,
-): {
+function buildRetentionSnapshot(store: QualityIntelligenceLocalStore): {
   readonly snapshot: readonly QualityIntelligenceRunSnapshotEntry[];
   readonly skipped: readonly QualityIntelligenceRetentionSkippedRun[];
 } {
@@ -446,7 +442,15 @@ export interface QualityIntelligenceQuarantineRetentionResult {
 const DEFAULT_QI_QUARANTINE_RETAINED_DAYS = 30;
 const DEFAULT_QI_QUARANTINE_MAX_MANIFESTS = 100;
 const QI_QUARANTINE_FILE_RE =
-  /^(.+)\.qi\.json\.corrupt\.(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)$/u;
+  /^(.+)\.qi\.json\.corrupt\.(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)$/u;
+
+function safeTimestamp(timestampMs: number): string {
+  return new Date(timestampMs).toISOString().replace(/[:.]/g, "-");
+}
+
+function safeTimestampToIso(value: string): string {
+  return value.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/u, "T$1:$2:$3.$4Z");
+}
 
 export function quarantineCorruptQualityIntelligenceManifest(
   evidenceDir: string,
@@ -460,7 +464,7 @@ export function quarantineCorruptQualityIntelligenceManifest(
   if (!stat?.isFile()) {
     return { originalPath, quarantinedPath: originalPath, status: "absent" };
   }
-  const ts = new Date(options.now?.() ?? Date.now()).toISOString();
+  const ts = safeTimestamp(options.now?.() ?? Date.now());
   const quarantinedPath = `${originalPath}.corrupt.${ts}`;
   renameSync(originalPath, quarantinedPath);
   return { originalPath, quarantinedPath, status: "quarantined" };
@@ -480,8 +484,9 @@ function quarantinedManifestInfo(
   const match = QI_QUARANTINE_FILE_RE.exec(fileName);
   if (match === null) return undefined;
   const runId = match[1];
-  const quarantinedAt = match[2];
-  if (runId === undefined || quarantinedAt === undefined) return undefined;
+  const quarantinedAtSafe = match[2];
+  if (runId === undefined || quarantinedAtSafe === undefined) return undefined;
+  const quarantinedAt = safeTimestampToIso(quarantinedAtSafe);
   try {
     assertValidRunId(runId);
   } catch {
@@ -595,7 +600,13 @@ export function snapshotQualityIntelligenceRunsForRecovery(
   const loaded: string[] = [];
   const skipped: string[] = [];
   for (const runId of store.list()) {
-    const manifest = store.load(runId);
+    let manifest: QualityIntelligenceEvidenceManifest | undefined;
+    try {
+      manifest = store.load(runId);
+    } catch {
+      skipped.push(runId);
+      continue;
+    }
     if (manifest === undefined) {
       skipped.push(runId);
       continue;

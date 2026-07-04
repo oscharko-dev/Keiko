@@ -20,7 +20,6 @@
 import { randomUUID } from "node:crypto";
 
 import {
-  isSafeDisplaySummary,
   validateKnowledgeSourceScope,
   type CapsuleSet,
   type CapsuleSetId,
@@ -32,6 +31,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule } from "./capsule-lifecycle.js";
+import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import {
   getCapsuleSet,
   createCapsuleSet,
@@ -246,16 +246,10 @@ export function addSourcesToCapsule(
 
 function assertSafeSourceInputs(inputs: readonly AddCapsuleSourceInput[]): void {
   for (const input of inputs) {
-    if (input.displayName.trim().length === 0 || !isSafeDisplaySummary(input.displayName)) {
-      throw new KnowledgeStoreError("displayName must be a browser-safe non-empty string");
-    }
-    if (input.description !== undefined && !isSafeDisplaySummary(input.description)) {
-      throw new KnowledgeStoreError("description must be browser-safe when set");
-    }
+    assertSafeDisplayField("displayName", input.displayName);
+    assertSafeOptionalDisplayField("description", input.description);
     for (const tag of input.tags) {
-      if (tag.trim().length === 0 || !isSafeDisplaySummary(tag)) {
-        throw new KnowledgeStoreError("tag must be a browser-safe non-empty string");
-      }
+      assertSafeDisplayField("tag", tag);
     }
     const result = validateKnowledgeSourceScope(input.scope);
     if (!result.ok) {

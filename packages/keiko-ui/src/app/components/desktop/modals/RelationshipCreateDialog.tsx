@@ -248,6 +248,14 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
     serverDenial === null &&
     !submitting;
 
+  // Dirty when the user has typed into any free-text field. A backdrop click
+  // must not silently discard that work (mirrors the canSubmit non-empty
+  // tracking; the kind/type selects have defaults and are not user data).
+  const isDirty =
+    form.sourceId.trim().length > 0 ||
+    form.targetId.trim().length > 0 ||
+    form.summary.trim().length > 0;
+
   // ─── Submit ───────────────────────────────────────────────────────────────
 
   const handleSubmit = useCallback(async () => {
@@ -320,7 +328,13 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
   const dialogTree = (
     <div
       className="cmdk-overlay"
-      onPointerDown={() => onClose(null)}
+      onPointerDown={() => {
+        // Only dismiss on a backdrop click when there is nothing to lose. A
+        // dirty form keeps the dialog open so typed data is not discarded by an
+        // accidental outside click (GEN-UI-INTERACTION-005). Escape and the
+        // explicit Cancel/Close controls still close unconditionally.
+        if (!isDirty) onClose(null);
+      }}
       data-testid="rel-create-overlay"
     >
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- dialog needs keydown handling */}
@@ -468,7 +482,6 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   fontSize: 12,
                 }}
                 aria-label="Source endpoint ID"
-                aria-describedby="rel-src-kind"
               />
             </div>
           </div>
@@ -541,7 +554,6 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   fontSize: 12,
                 }}
                 aria-label="Target endpoint ID"
-                aria-describedby="rel-tgt-kind"
               />
             </div>
           </div>

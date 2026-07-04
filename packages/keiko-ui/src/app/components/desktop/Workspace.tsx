@@ -238,7 +238,13 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
     if (was === null && connecting !== null) {
       const from = wins?.find((w) => w.id === connecting.from);
       const title = from !== undefined ? WIN_TYPES[from.type].title : "window";
-      setMessage(`Connecting from ${title} — select a highlighted window, press Escape to cancel`);
+      // GEN-UI-KEYBOARD-011 — spell out the keyboard completion path so it is
+      // discoverable to screen-reader/keyboard users: Tab to a highlighted target
+      // window, then Enter (on the window or one of its connection ports) to
+      // complete, or Escape to cancel. Sighted users get the ws-connect-hint below.
+      setMessage(
+        `Connecting from ${title}. Tab to a highlighted window and press Enter on it or one of its connection ports to connect. Press Escape to cancel.`,
+      );
       return;
     }
     if (was !== null && connecting === null) {
@@ -337,6 +343,13 @@ export function Workspace({
   children,
 }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
+  // GEN-PERF-WORKSPACE-003 — the four drop-handler add*Node callbacks read the live
+  // `view` for drop-point→world conversion. Closing over `view` forced it into their
+  // dep arrays, so each pan/zoom rAF frame re-created the callbacks and tore down +
+  // re-added all four window-level drop listeners. Read `view` through a ref instead
+  // so the callbacks (and their listener effects) stay identity-stable across frames.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
   const handToolRef = useRef(false);
@@ -515,12 +528,12 @@ export function Workspace({
           clientX,
           clientY,
           rect,
-          view,
+          view: viewRef.current,
         }),
         ...KNOWLEDGE_CONNECTOR_NODE_SIZE,
       });
     },
-    [api, view],
+    [api],
   );
 
   const addFigmaViewNode = useCallback(
@@ -536,13 +549,13 @@ export function Workspace({
           clientX,
           clientY,
           rect,
-          view,
+          view: viewRef.current,
           size: FIGMA_VIEW_NODE_SIZE,
         }),
         ...FIGMA_VIEW_NODE_SIZE,
       });
     },
-    [api, view],
+    [api],
   );
 
   const qualityConnectionsForSource = useCallback(
@@ -579,7 +592,7 @@ export function Workspace({
           clientX,
           clientY,
           rect,
-          view,
+          view: viewRef.current,
           size: FIGMA_JSON_NODE_SIZE,
         }),
         ...FIGMA_JSON_NODE_SIZE,
@@ -592,7 +605,7 @@ export function Workspace({
         for (const edge of migrated) api.connect(id, edge.qualityId);
       }, 0);
     },
-    [api, qualityConnectionsForSource, view],
+    [api, qualityConnectionsForSource],
   );
 
   const addFigmaImageNode = useCallback(
@@ -609,7 +622,7 @@ export function Workspace({
           clientX,
           clientY,
           rect,
-          view,
+          view: viewRef.current,
           size: FIGMA_IMAGE_NODE_SIZE,
         }),
         ...FIGMA_IMAGE_NODE_SIZE,
@@ -622,7 +635,7 @@ export function Workspace({
         for (const edge of migrated) api.connect(id, edge.qualityId);
       }, 0);
     },
-    [api, qualityConnectionsForSource, view],
+    [api, qualityConnectionsForSource],
   );
 
   useEffect(() => {
@@ -717,9 +730,30 @@ export function Workspace({
     };
   }, [addFigmaImageNode, wsRef]);
 
+  // GEN-PERF-WORKSPACE-002 — the pdf-citation registry only reads the fields it keys
+  // on (window id+type, plus a chat window's chatId and minimized flag), yet keying
+  // this effect on the whole `ws.wins` array re-ran it on every drag rAF frame (wins
+  // identity churns per geometry commit). Key on a cheap signature of exactly those
+  // fields so a geometry-only drag frame no longer re-syncs the registry; it runs
+  // only when membership / a read field actually changes.
+  const winMembershipSignature = useMemo(
+    () =>
+      wins === null
+        ? ""
+        : wins
+            .map(
+              (w) =>
+                `${w.id}:${w.type}:${w.minimized === true ? "1" : "0"}:${
+                  typeof w.cfg["chatId"] === "string" ? w.cfg["chatId"] : ""
+                }`,
+            )
+            .join("|"),
+    [wins],
+  );
   useEffect(() => {
-    syncPdfCitationPreviewWindowRegistry(ws.wins);
-  }, [ws.wins]);
+    syncPdfCitationPreviewWindowRegistry(wins);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- winMembershipSignature is the stable membership key; wins is read fresh
+  }, [winMembershipSignature]);
 
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
     if (

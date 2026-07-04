@@ -600,6 +600,122 @@ reported package or network error as the stable identifier; the
 
 ---
 
+### 10. A local SQLite store was quarantined (memory vault, UI DB, or Local Knowledge)
+
+| Field             | Value                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| Severity          | High                                                             |
+| Surface           | Memory vault, UI/relationship DB, Local Knowledge store          |
+| Stable identifier | a `*.corrupt.<timestamp>` file with a `.diagnostic.json` sidecar |
+
+**Symptom**
+
+Previously remembered facts, chats/relationships, or an indexed Local
+Knowledge corpus appear empty after a restart, and a sibling file named
+`<db>.corrupt.<timestamp>` plus `<db>.corrupt.<timestamp>.diagnostic.json`
+has appeared next to the database file (for example under `~/.keiko/`).
+
+**Root Cause**
+
+Each store opens its SQLite database behind a shared corruption classifier
+and quarantines the file **only** on confirmed corruption
+(`SQLITE_CORRUPT`/`SQLITE_NOTADB`, errcode 11/26, or a failed
+integrity/quick check), then boots a fresh empty store so the app still
+starts. A routine app **downgrade**, a schema-version guard, `SQLITE_BUSY`
+lock contention, or a migration logic error is rethrown **without**
+quarantine, so a healthy store is never wiped by a transient fault. Every
+real quarantine now writes an observable diagnostic sidecar
+(`{ incidentId, store, timestamp, dbPath, quarantinedPath, sidecarQuarantinePaths, cause }`)
+— the previous behaviour was a silent, unattributable wipe.
+
+**Diagnostic Steps**
+
+```bash
+# Find the quarantine sidecar and read the recorded cause (errcode + message).
+ls -1 ~/.keiko/*.corrupt.* 2>/dev/null
+cat ~/.keiko/<db>.corrupt.<timestamp>.diagnostic.json
+```
+
+The `store` field names which store was quarantined (`memory-vault`,
+`ui-db`, or `local-knowledge`); `cause.errcode` `11` or `26` confirms
+genuine on-disk corruption. If no `.diagnostic.json` sidecar exists, the
+store was **not** quarantined and the empty state has a different cause
+(for example first-run, or a relocated data directory).
+
+**Resolution**
+
+- Corruption confirmed (`errcode` 11/26): the quarantined
+  `*.corrupt.<timestamp>` file is preserved for forensics; you may attempt
+  recovery with `sqlite3 <quarantined> ".recover"` into a new file, then
+  restore it in place. The freshly booted empty store is safe to keep
+  using in the meantime.
+- No sidecar / empty store without a quarantine file: confirm the data
+  directory (`~/.keiko/`) has not moved and that the process has read/write
+  access; do not delete the live database.
+- Recurring quarantine of the same store: capture the `.diagnostic.json`
+  (it is already redaction-safe) and open a finding — a repeated
+  quarantine indicates a hardware or filesystem fault, not a Keiko defect.
+
+---
+
+### 11. A request failed with an opaque 500 and a correlation id
+
+| Field             | Value                                                                     |
+| ----------------- | ------------------------------------------------------------------------- |
+| Severity          | Medium                                                                    |
+| Surface           | Loopback BFF (any API route), chat streaming                              |
+| Stable identifier | `{ "code": "INTERNAL", "correlationId": "…" }` + `X-Keiko-Correlation-Id` |
+
+**Symptom**
+
+An API call or a streamed chat turn fails. The UI surfaces a generic error
+carrying a copyable support id; the JSON body is
+`{ "error": { "code": "INTERNAL", "message": "An unexpected error occurred.", "correlationId": "<id>" } }`
+and the response carries an `X-Keiko-Correlation-Id: <id>` header. A
+mid-stream chat failure arrives as an SSE `error` frame whose data includes
+the same `correlationId`.
+
+**Root Cause**
+
+An unexpected handler error reached the BFF's top-level catch. The response
+body is intentionally opaque (no stack, class name, or raw provider message
+is ever surfaced to the browser), but the underlying cause is **not**
+discarded: it is written — redacted — to the server's diagnostic channel,
+keyed by the correlation id. The same id is honoured when the UI supplies
+it, so a single id ties the browser failure to exactly one server-side
+record and, for a failed model call, to the gateway request id.
+
+**Diagnostic Steps**
+
+```bash
+# Foreground the UI to capture the structured diagnostic line, then reproduce.
+npx keiko ui --port 1983 2>&1 | tee keiko-foreground.log
+
+# Locate the operator record for the failure by its correlation id.
+grep '"correlationId":"<id>"' keiko-foreground.log
+grep 'keiko-server:diagnostic' keiko-foreground.log | tail -n 20
+```
+
+The diagnostic record includes `correlationId`, `source`
+(`server.top-level-catch` or `chat.stream`), `operation` (method + path),
+`errorClass`, the redacted `message`, and — for a gateway failure — the
+`gatewayRequestId`.
+
+**Resolution**
+
+- Use the `errorClass` and redacted `message` in the diagnostic record to
+  identify the underlying fault (for example a store error, a gateway TLS
+  failure — see entry 3 — or a filesystem error). Resolve that root cause.
+- When filing a finding, include the correlation id and the redacted
+  diagnostic line only; the diagnostic channel is already scrubbed of known
+  secrets, but review paths before sharing. Do not attach raw request or
+  response bodies.
+- A single `INTERNAL` 500 does not take the server down: the process
+  isolates the failure and keeps serving. A **repeated** `INTERNAL` on the
+  same `operation` indicates a reproducible defect worth a finding.
+
+---
+
 ## Related documentation
 
 - [README](../../README.md) — installation, daily use, and configuration.

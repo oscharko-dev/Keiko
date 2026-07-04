@@ -3,6 +3,7 @@ import {
   applyContentWheelZoom,
   fitWorkspaceViewToWindows,
   fitWindowToViewport,
+  fitWindowsToViewport,
   normalizeWheelDelta,
   nextContentZoomFromWheel,
 } from "./useWorkspace";
@@ -77,6 +78,28 @@ describe("fitWindowToViewport — capture windows on viewport shrink (audit C132
     expect(right).toMatchObject({ x: 280, y: compact.y + compact.h - 38 });
     expect(left.x).not.toBe(right.x);
     expect(left.y).not.toBe(right.y);
+  });
+});
+
+describe("fitWindowsToViewport — array-identity preservation (GEN-PERF-WORKSPACE-001)", () => {
+  it("returns the SAME array when no window changed (no-op resize)", () => {
+    const wins = [appWindow({ id: "a", x: 100, y: 100 }), appWindow({ id: "b", x: 200, y: 120 })];
+    // All windows already fit vp → every element identity is preserved → the whole
+    // array reference must be preserved so React bails the state update (no re-render,
+    // no persist chain, no server PUT for a no-op viewport resize).
+    expect(fitWindowsToViewport(wins, vp)).toBe(wins);
+  });
+
+  it("returns a NEW array (and moves the stranded window) when a window changes", () => {
+    const stranded = appWindow({ id: "stranded", x: 5000, y: 100 });
+    const fine = appWindow({ id: "fine", x: 100, y: 100 });
+    const wins = [stranded, fine];
+    const next = fitWindowsToViewport(wins, vp);
+    expect(next).not.toBe(wins);
+    // The unchanged window keeps its identity; only the stranded one is a new object.
+    expect(next.find((w) => w.id === "fine")).toBe(fine);
+    expect(next.find((w) => w.id === "stranded")).not.toBe(stranded);
+    expect(next.find((w) => w.id === "stranded")?.x).toBe(vp.x + vp.w - 120);
   });
 });
 

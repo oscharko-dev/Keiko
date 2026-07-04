@@ -5,7 +5,7 @@ describes the user-facing speech-to-text dictation experience in the chat compos
 capability metadata from [#493](capability-configuration.md) and the BFF speech-to-text route from
 [#494](dictation-endpoint.md). It is **STT dictation only** — it never offers full Voice Digital Twin
 conversation, assistant speech playback, or realtime transport (those remain out of scope per
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md)).
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md)).
 
 ## Capability gating
 
@@ -64,7 +64,7 @@ Browser microphone access is governed by the `Permissions-Policy` response heade
 default `microphone=()` and relaxes it to `microphone=(self)` **only** when the resolved voice capability
 advertises speech-to-text (and voice is not disabled by policy). A no-voice deployment therefore keeps the
 microphone fully disabled at the platform level — the relaxation is scoped to exactly the deployments that
-need it (ADR-0058 D6; see [privacy-contract.md](privacy-contract.md)). The directive is never widened beyond
+need it (ADR-0100 D6; see [privacy-contract.md](privacy-contract.md)). The directive is never widened beyond
 `(self)`.
 
 ## Accessibility

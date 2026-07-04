@@ -2,7 +2,15 @@
 // reference scheme, env-credential classification, plaintext detection, the seal transform, and the
 // store-existence-gated resolver that the gateway/CLI inject.
 
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -267,6 +275,24 @@ describe("sealProviderApiKeys", () => {
     expect(openProviderCredentialVault({ configPath, env }).get("cred:m2")).toBe("k2");
   });
 
+  it("refuses to re-seal over an unreadable existing vault index", () => {
+    const configPath = tempConfigPath();
+    const env = envWith(KEY1);
+    const storePath = join(credentialVaultDir(configPath), "provider-credentials.vault");
+    mkdirSync(credentialVaultDir(configPath), { recursive: true, mode: 0o700 });
+    writeFileSync(storePath, "{not valid json", "utf8");
+
+    expect(() =>
+      sealProviderApiKeys({
+        raw: { providers: [{ modelId: "m2", baseUrl: "https://gw", apiKey: "k2" }] },
+        env,
+        configPath,
+      }),
+    ).toThrow("secret vault store is unreadable");
+
+    expect(readFileSync(storePath, "utf8")).toBe("{not valid json");
+  });
+
   it("preserves a vaulted credential when the provider is overridden by a per-model env var (#1320 blocker)", () => {
     const configPath = tempConfigPath();
     // m1 was previously vaulted with its durable key.
@@ -313,7 +339,11 @@ describe("sealProviderApiKeys", () => {
     const prepared = prepareSealedProviderApiKeys({
       raw: {
         providers: [],
-        reranker: { modelId: "rerank", baseUrl: "https://gw", apiKeySecretRef: RERANKER_SECRET_REF },
+        reranker: {
+          modelId: "rerank",
+          baseUrl: "https://gw",
+          apiKeySecretRef: RERANKER_SECRET_REF,
+        },
       },
       env: envWith(KEY1),
       configPath,
@@ -359,7 +389,11 @@ describe("sealProviderApiKeys", () => {
     const prepared = prepareSealedProviderApiKeys({
       raw: {
         providers: [],
-        reranker: { modelId: "rerank", baseUrl: "https://gw", apiKeySecretRef: RERANKER_SECRET_REF },
+        reranker: {
+          modelId: "rerank",
+          baseUrl: "https://gw",
+          apiKeySecretRef: RERANKER_SECRET_REF,
+        },
       },
       env,
       configPath,

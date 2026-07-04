@@ -9,6 +9,7 @@
 //
 // Visible product text says "Git" only — never "Governed Git", "Governance", or "Delivery path"
 // (contract §7). Styling composes existing globals.css tokens via inline styles (ADR-0051); no new CSS.
+// See ADR-0098 for the git-client window conventions (layout contract, vocabulary, seam boundaries).
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -52,8 +53,6 @@ export interface GitClientWindowProps {
   readonly projectId?: string | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
-  /** Compatibility seam for callers that still provide standalone window launchers. */
-  readonly openWindow?: ((key: string, cfg?: Record<string, WindowCfgValue>) => void) | undefined;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
   readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
   /** DI seam; defaults to the real BFF client. */
@@ -565,6 +564,21 @@ export function GitClientWindow({
     setSyncBusy(true);
     setSyncOutcome(null);
     setSyncError(null);
+    // GEN-PERF-WIDGET-006 — surface sync duration + the ahead/behind repository-state
+    // delta in the outcome so a slow round-trip is observable and the user sees what the
+    // sync accomplished. The pre-sync counts come from the summary the widget already
+    // holds; the post-sync summary refresh (statusRevision bump below) updates the panel.
+    const startedAt = performance.now();
+    const aheadBefore = activeSummary?.ahead ?? 0;
+    const behindBefore = activeSummary?.behind ?? 0;
+    const withMetrics = (label: string): string => {
+      const elapsedSeconds = Math.round((performance.now() - startedAt) / 100) / 10;
+      const delta =
+        aheadBefore > 0
+          ? ` (ahead ${aheadBefore.toString()})`
+          : ` (behind ${behindBefore.toString()})`;
+      return `${label} in ${elapsedSeconds.toString()}s${delta}`;
+    };
     const done = (message: string): void => {
       if (syncSeqRef.current !== seq) return;
       setSyncBusy(false);
@@ -597,7 +611,7 @@ export function GitClientWindow({
         })
         .then((res) => {
           if (res === undefined) return;
-          done(`${operation === "fetch" ? "Fetch" : "Pull"}: ${res.status}`);
+          done(withMetrics(`${operation === "fetch" ? "Fetch" : "Pull"}: ${res.status}`));
         }, fail);
       return;
     }
@@ -628,10 +642,14 @@ export function GitClientWindow({
         })
         .then((res) => {
           if (res === undefined) return;
-          done(`${syncView.action === "push" ? "Push" : "Publish upstream"}: ${res.status}`);
+          done(
+            withMetrics(
+              `${syncView.action === "push" ? "Push" : "Publish upstream"}: ${res.status}`,
+            ),
+          );
         }, fail);
     }
-  }, [client, selectedPath, syncView]);
+  }, [activeSummary, client, selectedPath, syncView]);
 
   const openRightPane = useCallback(
     (mode: Exclude<RightPaneMode, "diff">): void => {

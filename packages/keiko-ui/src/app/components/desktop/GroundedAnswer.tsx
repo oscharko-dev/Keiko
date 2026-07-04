@@ -20,6 +20,7 @@ import type {
   GroundedAnswerContextPackSummary,
   GroundedAnswerRankingSummary,
   GroundedEvidenceCitation,
+  GroundedRerankerDiagnostics,
   GroundedUncertainty,
   HybridGroundedAnswerContextSummary,
   LocalKnowledgeEvidenceCitation,
@@ -698,6 +699,77 @@ function HybridContextPackSummary({
   );
 }
 
+// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback (RRF/lexical) order.
+const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
+  "unavailable",
+  "invalid-response",
+  "not-configured",
+]);
+
+function rerankerDegradationNote(
+  reranker: GroundedRerankerDiagnostics | undefined,
+): string | undefined {
+  if (reranker === undefined || !DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
+    return undefined;
+  }
+  return "Ranking: reranker unavailable — showing fallback (lexical) order.";
+}
+
+// GEN-AI-GROUNDING-007 (RB-4): compute the SUMMARY-LEVEL warnings that must be visible without
+// expanding the evidence disclosure — abstention, unsupported (fabricated) citations, a truncated
+// answer, and silent reranker degradation. Returns [] when the answer is fully grounded.
+function groundedSummaryWarnings(answer: GroundedAnswer): readonly string[] {
+  const warnings: string[] = [];
+  const markers = answer.uncertainty;
+  const noEvidence =
+    markers.some((m) => m.kind === "no-evidence") ||
+    (answer.groundingKind === "local-knowledge" && answer.noEvidence);
+  if (noEvidence) {
+    warnings.push("No supporting evidence was found — this answer is not grounded.");
+  }
+  const unsupported = markers.filter((m) => m.kind === "unsupported-citation").length;
+  if (unsupported > 0) {
+    warnings.push(
+      `${String(unsupported)} unsupported citation${unsupported === 1 ? "" : "s"} — the answer ` +
+        `references sources that were not in the retrieved evidence.`,
+    );
+  }
+  if (markers.some((m) => m.kind === "incomplete-answer")) {
+    warnings.push("The answer was cut off before completion and may be partial.");
+  }
+  const reranker =
+    answer.groundingKind === "local-knowledge" || answer.groundingKind === "hybrid"
+      ? answer.contextPack.reranker
+      : undefined;
+  const rerankNote = rerankerDegradationNote(reranker);
+  if (rerankNote !== undefined) {
+    warnings.push(rerankNote);
+  }
+  return warnings;
+}
+
+// A visible, non-collapsed banner so uncertainty/degradation is never hidden behind the disclosure
+// (GEN-AI-GROUNDING-007 / GEN-AI-RETRIEVAL-001). Reuses existing grounded CSS classes so it does not
+// touch the SHA-pinned globals.css surface.
+function GroundedAnswerWarnings({ answer }: { readonly answer: GroundedAnswer }): ReactNode {
+  const warnings = groundedSummaryWarnings(answer);
+  if (warnings.length === 0) {
+    return null;
+  }
+  return (
+    <div className="grounded-uncertainty" role="alert">
+      <div>
+        <span className="grounded-evidence-summary-badge">Needs review</span>
+      </div>
+      <ul className="grounded-uncertainty-list">
+        {warnings.map((warning, index) => (
+          <li key={`grounded-warning-${String(index)}`}>{warning}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function GroundedAnswer({
   answer,
   busy,
@@ -717,6 +789,7 @@ export function GroundedAnswer({
   if (answer.groundingKind === "local-knowledge") {
     return (
       <div className="grounded-answer">
+        <GroundedAnswerWarnings answer={answer} />
         <GroundedEvidenceDisclosure
           title="Knowledge evidence"
           summary={knowledgeEvidenceSummary(answer)}
@@ -735,6 +808,7 @@ export function GroundedAnswer({
   if (answer.groundingKind === "hybrid") {
     return (
       <div className="grounded-answer">
+        <GroundedAnswerWarnings answer={answer} />
         <GroundedEvidenceDisclosure
           title="Grounding evidence"
           summary={hybridEvidenceSummary(answer)}
@@ -765,6 +839,7 @@ export function GroundedAnswer({
   }
   return (
     <div className="grounded-answer">
+      <GroundedAnswerWarnings answer={answer} />
       <GroundedEvidenceDisclosure
         title="Evidence"
         summary={connectedEvidenceSummary(answer)}

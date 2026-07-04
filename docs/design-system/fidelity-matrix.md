@@ -7,6 +7,11 @@ This matrix covers **every visible product surface**, maps it to its rendering f
 and assigns an **owner child issue or a documented deferral** (acceptance criterion A). Paths are relative to
 the repository root.
 
+> **Snapshot note:** The counts below (16,191-line `globals.css`, 31 `WindowType`s, 32 `registerWindowRender`
+> call sites, 77 `.lk-*` rules) are as of the **2026-06-21 audit snapshot (release/0.2.0)**; current counts have
+> grown (e.g. `globals.css` is now ~22,658 lines and `registerWindowRender` call sites are 39). They are
+> retained as a point-in-time architecture baseline.
+
 ## 0. Surface model (read this first)
 
 Keiko-UI is a single-route governed desktop, so a naive route enumeration misses almost every surface:

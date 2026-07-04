@@ -1,4 +1,4 @@
-// Issue #502 — Pure renderer for the discussion-mode directive block (ADR-0065).
+// Issue #502 — Pure renderer for the discussion-mode directive block (ADR-0107).
 //
 // When a discussion mode is selected, the model receives the mode's directives as an ADDITIVE,
 // labeled prompt block. This module turns the content-free contract plan

@@ -6,7 +6,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
-import type { AppWindow } from "./types";
+import type { AppWindow, WindowCfgValue } from "./types";
 
 export type WindowType =
   | "chat"
@@ -82,6 +82,69 @@ export type WindowType =
   // merge gateway.
   | "governedMerge";
 
+export type WindowCfgRecord = Record<string, WindowCfgValue>;
+
+interface ChatWindowCfg extends WindowCfgRecord {
+  readonly chatId?: string;
+  readonly title?: string;
+  readonly modelId?: string;
+}
+
+interface FilesWindowCfg extends WindowCfgRecord {
+  readonly root?: string;
+  readonly activeFilePath?: string;
+  readonly activeDirectoryPath?: string;
+  readonly resolvedRoot?: string;
+}
+
+interface EditorWindowCfg extends WindowCfgRecord {
+  readonly root?: string;
+  readonly file?: string;
+  readonly openFiles?: readonly string[];
+  readonly layoutJson?: string;
+}
+
+interface FigmaSourceWindowCfg extends WindowCfgRecord {
+  readonly snapshotRunId?: string;
+  readonly screenId?: string;
+  readonly selectedScreenIdsJson?: string;
+  readonly selectedScreenName?: string;
+  readonly imageSrc?: string;
+}
+
+interface ProjectRootWindowCfg extends WindowCfgRecord {
+  readonly projectPath?: string;
+  readonly root?: string;
+}
+
+export type WindowCfgByType = {
+  readonly [K in WindowType]: WindowCfgRecord;
+} & {
+  readonly chat: ChatWindowCfg;
+  readonly files: FilesWindowCfg;
+  readonly editor: EditorWindowCfg;
+  readonly figma: FigmaSourceWindowCfg;
+  readonly figmaView: FigmaSourceWindowCfg;
+  readonly figmaJson: FigmaSourceWindowCfg;
+  readonly figmaImage: FigmaSourceWindowCfg;
+  readonly terminal: ProjectRootWindowCfg & { readonly cwd?: string };
+  readonly runtime: ProjectRootWindowCfg;
+  readonly governedGit: ProjectRootWindowCfg;
+  readonly governedPullRequest: ProjectRootWindowCfg & { readonly headBranchName?: string };
+  readonly governedMerge: ProjectRootWindowCfg & { readonly headBranchName?: string };
+  readonly qiRun: WindowCfgRecord & { readonly runId?: string };
+  readonly connector: WindowCfgRecord & {
+    readonly selectedKind?: string;
+    readonly selectedId?: string;
+  };
+  readonly pdfCitationPreview: WindowCfgRecord & {
+    readonly currentPage?: number;
+    readonly pageNumber?: number;
+    readonly sourceLabel?: string;
+    readonly documentLabel?: string;
+  };
+};
+
 export interface WindowSize {
   readonly w: number;
   readonly h: number;
@@ -143,6 +206,11 @@ export interface WindowRenderContext {
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
 }
 
+export type WindowRender<T extends WindowType = WindowType> = (
+  cfg: WindowCfgByType[T],
+  ctx: WindowRenderContext,
+) => ReactNode;
+
 export interface WindowTypeDef {
   readonly title: string;
   readonly icon: IconName;
@@ -156,7 +224,7 @@ export interface WindowTypeDef {
   readonly singleton?: boolean;
   readonly config?: readonly ConfigField[];
   readonly cta?: string;
-  readonly render: (cfg: Record<string, unknown>, ctx: WindowRenderContext) => ReactNode;
+  readonly render: WindowRender;
 }
 
 export const CHAT_MINI_W = 430;
@@ -191,6 +259,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 480,
     h: 480,
     min: { w: 300, h: 260 },
+    singleton: true,
     config: [
       {
         key: "title",
@@ -677,18 +746,29 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
 
 const RENDER_REGISTRY = new Map<
   WindowType,
-  (cfg: Record<string, unknown>, ctx: WindowRenderContext) => ReactNode
+  (cfg: WindowCfgRecord, ctx: WindowRenderContext) => ReactNode
 >();
 
-export function registerWindowRender(
-  type: WindowType,
-  render: (cfg: Record<string, unknown>, ctx: WindowRenderContext) => ReactNode,
-): void {
-  RENDER_REGISTRY.set(type, render);
+export function registerWindowRender<T extends WindowType>(type: T, render: WindowRender<T>): void {
+  RENDER_REGISTRY.set(
+    type,
+    render as (cfg: WindowCfgRecord, ctx: WindowRenderContext) => ReactNode,
+  );
+}
+
+export function missingWindowRenderTypes(): readonly WindowType[] {
+  return (Object.keys(PARTIAL) as WindowType[]).filter((type) => !RENDER_REGISTRY.has(type));
+}
+
+export function assertWindowRenderRegistryComplete(): void {
+  const missing = missingWindowRenderTypes();
+  if (missing.length > 0) {
+    throw new Error(`Missing window render registration for: ${missing.join(", ")}`);
+  }
 }
 
 function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
-  const render = (cfg: Record<string, unknown>, ctx: WindowRenderContext): ReactNode => {
+  const render = (cfg: WindowCfgRecord, ctx: WindowRenderContext): ReactNode => {
     const fn = RENDER_REGISTRY.get(type);
     if (fn !== undefined) return fn(cfg, ctx);
     return null;

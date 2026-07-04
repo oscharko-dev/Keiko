@@ -26,9 +26,9 @@ import {
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
   isSafeStorageReference,
-  isSafeDisplaySummary,
 } from "@oscharko-dev/keiko-contracts";
 
+import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
@@ -165,18 +165,6 @@ function parseTags(json: string): readonly string[] {
   const parsed = JSON.parse(json) as unknown;
   if (!Array.isArray(parsed)) return [];
   return parsed.filter((entry): entry is string => typeof entry === "string");
-}
-
-function assertSafeDisplayField(field: string, value: string): void {
-  if (value.trim().length === 0 || !isSafeDisplaySummary(value)) {
-    throw new KnowledgeStoreError(`${field} must be a browser-safe non-empty string`);
-  }
-}
-
-function assertSafeOptionalDisplayField(field: string, value: string | undefined): void {
-  if (value !== undefined && !isSafeDisplaySummary(value)) {
-    throw new KnowledgeStoreError(`${field} must be browser-safe when set`);
-  }
 }
 
 function assertPositiveIntegerLimit(field: string, value: number | undefined, max: number): void {
@@ -515,8 +503,7 @@ function assignContextualRetrievalSettings(
   params.contextual_retrieval_prompt_version = settings.promptVersion ?? null;
   params.contextual_retrieval_strict = strictFlag(settings.strict);
   params.contextual_retrieval_max_context_chars = settings.maxContextChars ?? null;
-  params.contextual_retrieval_document_context_max_chars =
-    settings.documentContextMaxChars ?? null;
+  params.contextual_retrieval_document_context_max_chars = settings.documentContextMaxChars ?? null;
 }
 
 function markStaleWhenContextualRetrievalChanged(

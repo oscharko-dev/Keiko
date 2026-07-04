@@ -431,9 +431,7 @@ function lineForItem(
 ): number {
   const y = itemY(item);
   const x = itemX(item);
-  const index = lines.findIndex(
-    (line) => Math.abs(line.y - y) <= 3 && Math.abs(line.x - x) <= 180,
-  );
+  const index = lines.findIndex((line) => Math.abs(line.y - y) <= 3 && Math.abs(line.x - x) <= 180);
   return index;
 }
 
@@ -450,7 +448,10 @@ function positionedLines(items: readonly PdfTextItem[]): readonly PositionedLine
   return mutable.map((line) => {
     const ordered = [...line.items].sort((a, b) => itemX(a) - itemX(b));
     return {
-      text: ordered.map((item) => item.str ?? "").join(" ").trim(),
+      text: ordered
+        .map((item) => item.str ?? "")
+        .join(" ")
+        .trim(),
       x: Math.min(...ordered.map(itemX)),
       y: line.y,
     };
@@ -476,11 +477,13 @@ function orderedPositionedText(items: readonly PdfTextItem[]): string {
   const gap = largestColumnGap(lines);
   if (gap.index >= 0 && gap.gap >= 80) {
     const orderedByX = [...lines].sort((a, b) => a.x - b.x);
-    const splitX =
-      ((orderedByX[gap.index]?.x ?? 0) + (orderedByX[gap.index + 1]?.x ?? 0)) / 2;
+    const splitX = ((orderedByX[gap.index]?.x ?? 0) + (orderedByX[gap.index + 1]?.x ?? 0)) / 2;
     const left = lines.filter((line) => line.x <= splitX).sort((a, b) => b.y - a.y || a.x - b.x);
     const right = lines.filter((line) => line.x > splitX).sort((a, b) => b.y - a.y || a.x - b.x);
-    return [...left, ...right].map((line) => line.text).join("\n").trim();
+    return [...left, ...right]
+      .map((line) => line.text)
+      .join("\n")
+      .trim();
   }
   return [...lines]
     .sort((a, b) => b.y - a.y || a.x - b.x)

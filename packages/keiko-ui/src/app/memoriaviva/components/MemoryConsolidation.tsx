@@ -6,12 +6,14 @@ import Link from "next/link";
 import {
   cancelMemoryConsolidationJob,
   fetchMemoryConsolidationJob,
+  resolveMemoryConflict,
   startMemoryConsolidation,
   type MemoryConsolidationJobEnvelope,
   type MemoryConsolidationJob,
   type MemoryConsolidationResult,
   type MemoryConsolidationReviewItem,
   type MemoryConsolidationStaleFlag,
+  type ResolveMemoryConflictInput,
   type StartMemoryConsolidationInput,
 } from "@/lib/memory-api";
 import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
@@ -132,6 +134,66 @@ function ReviewAction({
       {t("memoria.consolidation.with")}{" "}
       <MemoryIdLink id={item.proposedAction.newer} onOpenDetail={onOpenDetail} />.
     </>
+  );
+}
+
+function conflictResolutionForItem(
+  item: MemoryConsolidationReviewItem,
+): ResolveMemoryConflictInput | null {
+  if (item.proposedAction === undefined) return null;
+  if (item.proposedAction.kind === "merge") {
+    if (item.proposedAction.losers.length === 0) return null;
+    return {
+      winner: item.proposedAction.winner,
+      losers: item.proposedAction.losers,
+      reason: `resolved from consolidation review item ${item.id}`,
+    };
+  }
+  return {
+    winner: item.proposedAction.newer,
+    losers: [item.proposedAction.older],
+    reason: `resolved from consolidation review item ${item.id}`,
+  };
+}
+
+function ConflictResolutionControl({
+  item,
+  busy,
+  disabled,
+  error,
+  onResolve,
+  t,
+}: {
+  readonly item: MemoryConsolidationReviewItem;
+  readonly busy: boolean;
+  readonly disabled: boolean;
+  readonly error: string | null;
+  readonly onResolve: (item: MemoryConsolidationReviewItem) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (conflictResolutionForItem(item) === null) return null;
+  return (
+    <div style={{ display: "grid", gap: "var(--space-2)", justifyItems: "start" }}>
+      <button
+        type="button"
+        className="lk-btn lk-btn-ghost"
+        aria-disabled={disabled}
+        aria-busy={busy}
+        onClick={() => {
+          if (disabled) return;
+          onResolve(item);
+        }}
+      >
+        {busy
+          ? t("memoria.consolidation.resolvingConflict")
+          : t("memoria.consolidation.resolveConflict")}
+      </button>
+      {error !== null ? (
+        <p role="alert" className="mc-action-error">
+          {error}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -302,6 +364,7 @@ interface MemoryConsolidationProps {
   readonly startJobImpl?: typeof startMemoryConsolidation;
   readonly fetchJobImpl?: typeof fetchMemoryConsolidationJob;
   readonly cancelJobImpl?: typeof cancelMemoryConsolidationJob;
+  readonly resolveConflictImpl?: typeof resolveMemoryConflict;
   readonly pollIntervalMs?: number;
   readonly onBack?: (() => void) | undefined;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
@@ -311,6 +374,7 @@ export function MemoryConsolidation({
   startJobImpl = startMemoryConsolidation,
   fetchJobImpl = fetchMemoryConsolidationJob,
   cancelJobImpl = cancelMemoryConsolidationJob,
+  resolveConflictImpl = resolveMemoryConflict,
   pollIntervalMs = 2_000,
   onBack,
   onOpenDetail,
@@ -323,21 +387,31 @@ export function MemoryConsolidation({
   const [canceling, setCanceling] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [jobError, setJobError] = useState<string | null>(null);
+  const [resolvingConflictId, setResolvingConflictId] = useState<string | null>(null);
+  const [resolvedReviewIds, setResolvedReviewIds] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [resolveErrorsById, setResolveErrorsById] = useState<Partial<Record<string, string>>>({});
+  const [actionStatus, setActionStatus] = useState("");
 
   const activeJob = jobRecord?.job ?? null;
   const canCancel = activeJob !== null && !isTerminalState(activeJob.state);
   const hasActiveRun = canCancel;
+  const visibleReviewItems = useMemo(
+    () => activeJob?.result?.reviewItems.filter((item) => !resolvedReviewIds.has(item.id)) ?? [],
+    [activeJob?.result?.reviewItems, resolvedReviewIds],
+  );
 
   const summary = useMemo(() => {
     if (activeJob === null) return null;
     const result = activeJob.result;
     return {
-      reviewCount: result?.reviewItems.length ?? 0,
+      reviewCount: result === undefined ? 0 : visibleReviewItems.length,
       staleCount: result?.staleFlags.length ?? 0,
       edgeCount: result?.edgesProposed.length ?? 0,
       updateCount: result?.updatesProposed.length ?? 0,
     };
-  }, [activeJob]);
+  }, [activeJob, visibleReviewItems]);
 
   const updateSetting = useCallback(
     (name: keyof StartMemoryConsolidationInput, value: number): void => {
@@ -381,6 +455,10 @@ export function MemoryConsolidation({
       setSubmitting(true);
       setFormError(null);
       setJobError(null);
+      setResolvingConflictId(null);
+      setResolvedReviewIds(new Set<string>());
+      setResolveErrorsById({});
+      setActionStatus("");
       try {
         const res = await startJobImpl(settings);
         setJobRecord(res.job);
@@ -391,6 +469,33 @@ export function MemoryConsolidation({
       }
     },
     [settings, startJobImpl, submitting, hasActiveRun],
+  );
+
+  const handleResolveConflict = useCallback(
+    async (item: MemoryConsolidationReviewItem): Promise<void> => {
+      const input = conflictResolutionForItem(item);
+      if (input === null || resolvingConflictId !== null) return;
+      setResolvingConflictId(item.id);
+      setResolveErrorsById((prev) => {
+        const next = { ...prev };
+        delete next[item.id];
+        return next;
+      });
+      try {
+        await resolveConflictImpl(input);
+        setResolvedReviewIds((prev) => {
+          const next = new Set(prev);
+          next.add(item.id);
+          return next;
+        });
+        setActionStatus(t("memoria.consolidation.conflictResolved"));
+      } catch (err) {
+        setResolveErrorsById((prev) => ({ ...prev, [item.id]: formatError(err) }));
+      } finally {
+        setResolvingConflictId(null);
+      }
+    },
+    [resolveConflictImpl, resolvingConflictId, t],
   );
 
   const handleCancel = useCallback(async (): Promise<void> => {
@@ -438,6 +543,10 @@ export function MemoryConsolidation({
           </Link>
         )}
       </header>
+
+      <p aria-live="polite" className="visually-hidden">
+        {actionStatus}
+      </p>
 
       {/* Scroll container (uiux-fix F005): html,body clip overflow globally —
           result cards below the fold were unreachable without it. */}
@@ -750,7 +859,7 @@ export function MemoryConsolidation({
               <h2 className="lk-section-head" style={{ margin: 0 }}>
                 {t("memoria.consolidation.reviewItems")}
               </h2>
-              {activeJob.result.reviewItems.length === 0 ? (
+              {visibleReviewItems.length === 0 ? (
                 <p style={{ margin: 0, color: "var(--fg-muted)" }}>
                   {t("memoria.consolidation.noReviewItems")}
                 </p>
@@ -764,7 +873,7 @@ export function MemoryConsolidation({
                     gap: "var(--space-5)",
                   }}
                 >
-                  {activeJob.result.reviewItems.map((item) => (
+                  {visibleReviewItems.map((item) => (
                     <li key={item.id} style={{ display: "grid", gap: "var(--space-2)" }}>
                       <strong style={{ textTransform: "capitalize" }}>
                         {item.reason.replaceAll("-", " ")}
@@ -775,6 +884,16 @@ export function MemoryConsolidation({
                       <span style={{ color: "var(--fg-muted)" }}>
                         <ReviewAction item={item} onOpenDetail={onOpenDetail} t={t} />
                       </span>
+                      <ConflictResolutionControl
+                        item={item}
+                        busy={resolvingConflictId === item.id}
+                        disabled={resolvingConflictId !== null}
+                        error={resolveErrorsById[item.id] ?? null}
+                        onResolve={(target) => {
+                          void handleResolveConflict(target);
+                        }}
+                        t={t}
+                      />
                     </li>
                   ))}
                 </ul>

@@ -42,7 +42,7 @@ Per the epic's required implementation order, no downstream #518 issue may begin
 
 - A workspace root component (`KeikoDesktop` → `AppShell`) that already composes Header, LeftRail, RightRail, Footer, and a draggable/resizable `Workspace` canvas of windows.
 - A typed window-type registry (`windows/WindowsRegistry.ts`) declaring 20 first-class object types — `chat`, `connector`, `files`, `editor`, `browser`, `terminal`, `review`, `agents`, `integ`, `keiko`, `settings`, `project`, `search`, `plugins`, `automations`, `mobile`, `inspector`, `activity`, `notifications`, `resources` — each with title, icon, default size, min/tiny sizes, config schema, render function, optional singleton flag, and an `accent`/`tool` classifier.
-- A `registerWindowRender(type, render)` extension point used by `widgets/index.tsx` to bind 20 window types to React renderers in `widgets/cards/**` and `widgets/panels/**`, without modifying the registry.
+- A `registerWindowRender(type, render)` extension point used by `widgets/index.tsx` to bind the registered window types to React renderers in `widgets/cards/**` and `widgets/panels/**`, without modifying the registry.
 - A `CommandPalette` modal in `modals/CommandPalette.tsx` with discoverable commands generated from the registry, plus a separate `Palette` modal and a `NewWindowDialog`.
 - A `useWorkspace` hook (`hooks/useWorkspace.ts`) that owns workspace pan/zoom, window placement, focus, z-ordering, and a `WorkspaceApi` contract consumed by the shell and the command system.
 - A `ConnectionsLayer` and `connectionUtils` for object-to-object connections inside the workspace.

@@ -396,10 +396,7 @@ interface SearchTextCollection {
   readonly state: RunState;
 }
 
-function effectiveScanCandidateLimit(
-  runner: SearchTextRunner,
-  candidateCount: number,
-): number {
+function effectiveScanCandidateLimit(runner: SearchTextRunner, candidateCount: number): number {
   if (runner.policy.intent !== "project-metadata") {
     return candidateCount;
   }
@@ -1125,7 +1122,11 @@ async function collectSearchTextAtoms(
   const candidates: CandidateFile[] = [];
   await runScanLoop(runner, candidateSet, state, atoms, candidates);
   const lexicalAtoms = [...atoms];
-  const semanticMatches = await runSemanticSearchSession(runner.semantic, runner.query, runner.signal);
+  const semanticMatches = await runSemanticSearchSession(
+    runner.semantic,
+    runner.query,
+    runner.signal,
+  );
   const semanticAtoms = semanticMatches.map((match) => semanticAtom(runner, match));
   const cap = Math.min(runner.limits.maxMatchesReturned, runner.query.maxResults);
   const mergedAtoms = mergeSearchAtoms(lexicalAtoms, semanticAtoms, cap);
@@ -1166,10 +1167,7 @@ function hasLowValueEvidenceSkipped(
   );
 }
 
-function remainingScanLimit(
-  runner: SearchTextRunner,
-  primary: SearchTextCollection,
-): number {
+function remainingScanLimit(runner: SearchTextRunner, primary: SearchTextCollection): number {
   return Math.max(0, runner.limits.maxFilesScanned - primary.state.filesScanned);
 }
 
@@ -1185,10 +1183,7 @@ function lowValueOnlyCandidateSet(
   };
 }
 
-function rescueRunner(
-  runner: SearchTextRunner,
-  maxFilesScanned: number,
-): SearchTextRunner {
+function rescueRunner(runner: SearchTextRunner, maxFilesScanned: number): SearchTextRunner {
   return {
     ...runner,
     limits: { ...runner.limits, maxFilesScanned },
@@ -1267,10 +1262,11 @@ async function rescueLowValueEvidence(
   if (lowValueSet.files.length === 0) {
     return emptyLowValueRescue(primarySet, primary);
   }
-  const rescue = await collectSearchTextAtoms(lowValueRunner, lowValueSet, lowValueRescueState(
+  const rescue = await collectSearchTextAtoms(
+    lowValueRunner,
     lowValueSet,
-    primary,
-  ));
+    lowValueRescueState(lowValueSet, primary),
+  );
   return {
     collection: mergeCollections(runner, primary, rescue),
     candidateSet: rescueCandidateSet(primarySet, lowValueSet, rescue),
@@ -1534,10 +1530,7 @@ function semanticAtomLineRange(
   return match.line === undefined ? undefined : { startLine: match.line, endLine: match.line };
 }
 
-function semanticAtom(
-  runner: SearchTextRunner,
-  match: SemanticSearchMatch,
-): EvidenceAtom {
+function semanticAtom(runner: SearchTextRunner, match: SemanticSearchMatch): EvidenceAtom {
   const tool = semanticSearchTool(runner.semantic?.provider.name ?? "disabled");
   return buildAtom({
     scopeId: runner.scope.scopeId,

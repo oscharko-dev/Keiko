@@ -100,6 +100,7 @@ function completedJob(): MemoryConsolidationJobResponse {
             },
           ],
           clustersInspected: 3,
+          conflictPairsDetected: 1,
           recordsInspected: 2,
           truncated: false,
           elapsedMs: 250,
@@ -212,6 +213,47 @@ describe("MemoryConsolidation", () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText("Consolidation results")).toHaveAttribute("aria-live", "polite");
+    });
+  });
+
+  it("resolves a proposed supersede conflict through the conflict-resolution route", async () => {
+    const startJobImpl = vi.fn().mockResolvedValue(runningJob());
+    const fetchJobImpl = vi.fn().mockResolvedValue(completedJob());
+    const cancelJobImpl = vi.fn();
+    const resolveConflictImpl = vi.fn().mockResolvedValue({
+      resolved: true,
+      winner: memoryId("mem-new"),
+      losers: [memoryId("mem-old")],
+      supersessionEdgeIds: ["edge-1"],
+      transitions: [],
+    });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryConsolidation
+        startJobImpl={startJobImpl}
+        fetchJobImpl={fetchJobImpl}
+        cancelJobImpl={cancelJobImpl}
+        resolveConflictImpl={resolveConflictImpl}
+        pollIntervalMs={5}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /start consolidation/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /resolve conflict/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /resolve conflict/i }));
+
+    await waitFor(() => {
+      expect(resolveConflictImpl).toHaveBeenCalledWith({
+        winner: memoryId("mem-new"),
+        losers: [memoryId("mem-old")],
+        reason: "resolved from consolidation review item rv-1",
+      });
+      expect(screen.queryByText(/potential conflict/i)).not.toBeInTheDocument();
+      expect(screen.getByText(/no review items returned/i)).toBeInTheDocument();
     });
   });
 

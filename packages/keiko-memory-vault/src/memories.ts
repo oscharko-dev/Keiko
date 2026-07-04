@@ -133,13 +133,24 @@ export function insertMemoryRow(
   cachedPrepare(db, INSERT_SQL).run(...bindValues(record, cipher));
 }
 
+function decodeMemoryRow(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
+  try {
+    return rowToMemoryRecord(row, cipher);
+  } catch {
+    throw new MemoryStorageError(
+      "internal",
+      `Memory row ${row.id} is unreadable; run memory diagnostics or repair before continuing.`,
+    );
+  }
+}
+
 export function getMemoryRow(
   db: DatabaseSync,
   id: MemoryId,
   cipher: MemoryContentCipher,
 ): MemoryRecord | undefined {
   const row = cachedPrepare(db, SELECT_BY_ID_SQL).get(id) as unknown as MemoryRow | undefined;
-  return row === undefined ? undefined : rowToMemoryRecord(row, cipher);
+  return row === undefined ? undefined : decodeMemoryRow(row, cipher);
 }
 
 export function updateMemoryRow(
@@ -149,31 +160,31 @@ export function updateMemoryRow(
 ): void {
   const r = memoryRecordToRow(record, cipher);
   const info = cachedPrepare(db, UPDATE_SQL).run(
-      r.type,
-      r.body,
-      r.payload_json,
-      r.status,
-      r.sensitivity,
-      r.pinned,
-      r.confidence,
-      r.valid_from,
-      r.valid_until,
-      r.stale_reason,
-      r.tags_json,
-      r.source_kind,
-      r.source_conversation_id,
-      r.source_workflow_run_id,
-      r.source_evidence_manifest_id,
-      r.captured_at,
-      r.capture_rationale,
-      r.model_provider,
-      r.model_id,
-      r.model_revision,
-      r.retention_policy_key,
-      r.retention_retain_until,
-      r.retention_notes,
-      r.updated_at,
-      r.id,
+    r.type,
+    r.body,
+    r.payload_json,
+    r.status,
+    r.sensitivity,
+    r.pinned,
+    r.confidence,
+    r.valid_from,
+    r.valid_until,
+    r.stale_reason,
+    r.tags_json,
+    r.source_kind,
+    r.source_conversation_id,
+    r.source_workflow_run_id,
+    r.source_evidence_manifest_id,
+    r.captured_at,
+    r.capture_rationale,
+    r.model_provider,
+    r.model_id,
+    r.model_revision,
+    r.retention_policy_key,
+    r.retention_retain_until,
+    r.retention_notes,
+    r.updated_at,
+    r.id,
   );
   if (info.changes === 0) {
     throw new MemoryStorageError("not-found", "Memory not found.");
@@ -368,7 +379,7 @@ export function listMemoriesAcrossScopeRows(
   const rows = cachedPrepare(db, buildListSql(where, options)).all(
     ...params,
   ) as unknown as readonly MemoryRow[];
-  return rows.map((row) => rowToMemoryRecord(row, cipher));
+  return rows.map((row) => decodeMemoryRow(row, cipher));
 }
 
 export function listMemoriesByScopeRows(
@@ -396,7 +407,7 @@ export function listMemoriesByScopeRows(
   const rows = cachedPrepare(db, buildListSql(where, options)).all(
     ...params,
   ) as unknown as readonly MemoryRow[];
-  return rows.map((row) => rowToMemoryRecord(row, cipher));
+  return rows.map((row) => decodeMemoryRow(row, cipher));
 }
 
 export function listMemoryMetadataByScopeRows(

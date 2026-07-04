@@ -223,7 +223,7 @@ function auditCredentials(stateDir) {
   const configPath = join(stateDir, GATEWAY_CONFIG);
   if (!existsSync(configPath)) return skip(id, title, "no keiko.config.json present");
   const config = readJsonFile(configPath);
-  if (config === undefined) return skip(id, title, "keiko.config.json is not valid JSON");
+  if (config === undefined) return fail(id, title, ["keiko.config.json is not valid JSON"]);
   const findings = [];
   if (hasPlaintextCredentials(config)) {
     findings.push(
@@ -704,9 +704,7 @@ function scanForSecretFindings(text) {
 }
 
 function isTextArtifact(path) {
-  return (
-    /\.(?:json|jsonl|txt|vault)$/u.test(path) || path.includes(QI_QUARANTINED_MANIFEST_MARKER)
-  );
+  return /\.(?:json|jsonl|txt|vault)$/u.test(path) || path.includes(QI_QUARANTINED_MANIFEST_MARKER);
 }
 
 function scanForSecrets(path) {
@@ -1157,6 +1155,35 @@ function auditEvidence(stateDir) {
   ]);
 }
 
+function collectRuntimeIntegrityResidue(stateDir) {
+  const findings = [];
+  walk(
+    stateDir,
+    "",
+    (_abs, rel, name) => {
+      if (/\.db(?:-wal|-shm)?\.corrupt\./u.test(name)) {
+        findings.push(`${rel} is an unresolved quarantined SQLite artifact`);
+      }
+      if (name.endsWith(".diagnostic.json") && /\.db(?:-wal|-shm)?\.corrupt\./u.test(name)) {
+        findings.push(`${rel} is a SQLite quarantine diagnostic record`);
+      }
+      if (name.includes(QI_QUARANTINED_MANIFEST_MARKER)) {
+        findings.push(`${rel} is an unresolved quarantined QI manifest`);
+      }
+    },
+    () => undefined,
+  );
+  return findings;
+}
+
+function auditRuntimeIntegrity(stateDir) {
+  const id = "runtime-integrity";
+  const title = "Runtime store integrity residue";
+  const findings = collectRuntimeIntegrityResidue(stateDir);
+  if (findings.length > 0) return fail(id, title, findings);
+  return pass(id, title, ["no unresolved DB or QI quarantine artifacts were found"]);
+}
+
 // Runs every confidentiality-class check over `stateDir`. The overall result is ok unless a class
 // fails; a skipped class (an absent store) never fails the audit.
 export function auditLocalState(stateDir) {
@@ -1174,6 +1201,7 @@ export function auditLocalState(stateDir) {
     auditMemoryEncryption(stateDir),
     auditKnowledgeEncryption(stateDir),
     auditEvidence(stateDir),
+    auditRuntimeIntegrity(stateDir),
   ];
   return { ok: classes.every((c) => c.status !== "fail"), stateDir, classes };
 }

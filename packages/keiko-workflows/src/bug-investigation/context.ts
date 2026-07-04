@@ -21,6 +21,7 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { toPosix } from "./path-utils.js";
 import type { BugWorkflowLimits, FailureEvidence } from "./types.js";
 
 export interface BugContextDeps {
@@ -36,10 +37,6 @@ function taskHint(description: string | undefined, evidence: FailureEvidence): s
       : "investigate failing test and locate the root cause";
   const files = Array.from(new Set(evidence.frames.map((frame) => frame.file)));
   return files.length === 0 ? base : `${base} ${files.join(" ")}`;
-}
-
-function toPosix(path: string): string {
-  return path.split("\\").join("/");
 }
 
 function basename(path: string): string {

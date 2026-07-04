@@ -80,7 +80,10 @@ function normalizedEndpointHost(baseUrl: string): string | undefined {
 
 function isPrivateIpv4(host: string): boolean {
   const parts = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+  if (
+    parts.length !== 4 ||
+    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
+  ) {
     return false;
   }
   const [first, second] = parts as [number, number, number, number];
@@ -374,7 +377,9 @@ function shouldComputeSemanticScores(
   queryText: string | undefined,
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
 ): queryText is string {
-  return semanticGate.allowed && queryText !== undefined && queryText.length > 0 && embeddings.size > 0;
+  return (
+    semanticGate.allowed && queryText !== undefined && queryText.length > 0 && embeddings.size > 0
+  );
 }
 
 export async function buildConversationRetrievalSignals(

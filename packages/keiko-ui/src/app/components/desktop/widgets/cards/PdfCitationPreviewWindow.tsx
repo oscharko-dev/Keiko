@@ -736,6 +736,13 @@ export function PdfCitationPreviewWindow({
     [citationContext, updateCfg, windowId],
   );
 
+  // GEN-PERF-WIDGET-001 — the document-load effect below must reload ONLY when the session
+  // handle (or an explicit retry) changes, never merely because a view-only cfg write (scroll
+  // page-crossing, zoom, rotate, fit) churned updateCfg -> reopenPreview identity. Hold the
+  // latest reopenPreview in a ref so the effect can call it without listing it as a dependency.
+  const reopenPreviewRef = useRef(reopenPreview);
+  reopenPreviewRef.current = reopenPreview;
+
   useEffect(() => {
     currentPageRef.current = currentPage;
     setPageInput(String(currentPage));
@@ -850,7 +857,7 @@ export function PdfCitationPreviewWindow({
           autoReopenAttemptedKeyRef.current !== reopenAttemptKey
         ) {
           autoReopenAttemptedKeyRef.current = reopenAttemptKey;
-          void reopenPreview(failure);
+          void reopenPreviewRef.current(failure);
           return;
         }
         setFailure(failure);
@@ -868,7 +875,10 @@ export function PdfCitationPreviewWindow({
       window.clearTimeout(slowTimer);
       window.clearTimeout(deadlineTimer);
     };
-  }, [failureOverride, reopenAttemptKey, reopenPreview, retryToken, sessionEntry]);
+    // GEN-PERF-WIDGET-001 — reopenPreview is intentionally read through a ref (above) rather
+    // than listed here, so view-only cfg writes that churn its identity no longer re-run this
+    // document-load effect. The document reloads only on a genuine session/retry change.
+  }, [failureOverride, reopenAttemptKey, retryToken, sessionEntry]);
 
   useEffect(() => {
     return () => {
@@ -1252,6 +1262,10 @@ export function PdfCitationPreviewWindow({
         <div
           ref={scrollRef}
           className="pdfv-scroll"
+          // Scrollable page region: tabIndex makes the overflow region keyboard-scrollable
+          // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
+          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+          tabIndex={0}
           role="region"
           aria-label={`${display.documentLabel} PDF preview`}
         >

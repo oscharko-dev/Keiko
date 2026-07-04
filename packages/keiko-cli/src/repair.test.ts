@@ -454,6 +454,28 @@ describe("runRepairCli — credential storage", () => {
     expect(c.out()).toContain("no encrypted entry");
   });
 
+  it("reports action-required when the credential vault index is unreadable", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const cfg = join(root, "corrupt-vault.json");
+    writeFileSync(
+      cfg,
+      JSON.stringify({
+        providers: [{ modelId: "claude-3", apiKeySecretRef: "cred:claude-3" }],
+      }),
+      "utf8",
+    );
+    mkdirSync(join(root, "credentials"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(root, "credentials", "provider-credentials.vault"), "not-json", "utf8");
+
+    const c = makeIo();
+    const code = runRepairCli(["--config", cfg], c.io, {}, healthyDeps(root));
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("[action] Credential storage");
+    expect(c.out()).toContain("encrypted credential vault is unreadable");
+  });
+
   it("reports action-required when a reranker secret reference has no matching vault entry", () => {
     const root = makeRoot();
     seedInstalledLayout(root);

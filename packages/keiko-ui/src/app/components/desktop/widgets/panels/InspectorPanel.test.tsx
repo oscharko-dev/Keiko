@@ -86,3 +86,26 @@ describe("InspectorPanel — governance section (epic #518 #528 / ADR-0029)", ()
     expect(lifecycleRow).toBeInTheDocument();
   });
 });
+
+describe("InspectorPanel — config value truncation affordance (GEN-UI-VISUAL-004)", () => {
+  it("truncates a long value with an ellipsis but exposes the full value in a title", () => {
+    const longValue = "this-is-a-very-long-config-value-well-over-twenty-chars";
+    renderWithFocus(makeWindow({ id: "w-cfg", type: "review", cfg: { path: longValue } }));
+
+    // The displayed text is truncated to 20 chars plus a single-character ellipsis.
+    const valueCell = screen.getByText(`${longValue.slice(0, 20)}…`);
+    expect(valueCell).toBeInTheDocument();
+    // The full, untruncated value is available on hover and to AT via the title attribute.
+    expect(valueCell).toHaveAttribute("title", longValue);
+  });
+
+  it("does not append an ellipsis to a short value and still carries the full title", () => {
+    const shortValue = "short";
+    renderWithFocus(makeWindow({ id: "w-cfg2", type: "review", cfg: { path: shortValue } }));
+
+    const valueCell = screen.getByText(shortValue);
+    expect(valueCell).toBeInTheDocument();
+    expect(valueCell.textContent).not.toContain("…");
+    expect(valueCell).toHaveAttribute("title", shortValue);
+  });
+});

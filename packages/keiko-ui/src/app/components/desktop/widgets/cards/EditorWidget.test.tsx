@@ -35,7 +35,11 @@ import {
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
-import { deleteEditorHotExitSnapshot, readEditorHotExitSnapshot } from "./editorHotExitStore";
+import {
+  deleteEditorHotExitSnapshot,
+  readEditorHotExitSnapshot,
+  writeEditorHotExitSnapshot,
+} from "./editorHotExitStore";
 
 vi.mock("../../../../../lib/api", async () => {
   const actual =
@@ -316,11 +320,37 @@ describe("EditorWidget — load", () => {
     expect(surface.props?.buffer.content.relativePath).toBe("src/app.ts");
     expect(surface.props?.fileModel.identity.language).toBe("typescript");
     expect(surface.props?.fileModel.identity.uri).toMatch(
-      /^keiko-editor:\/\/workspace\/[0-9a-f]{8}\/src\/app\.ts$/,
+      /^keiko-editor:\/\/workspace\/editor-test\/[0-9a-f]{8}\/src\/app\.ts$/,
     );
     expect(surface.props?.ariaLabel).toBe("Editor: src/app.ts in /repo");
     expect(surface.props?.modifiedAt).toBe(1);
     expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("uses a distinct Monaco model identity for two editor windows on the same file", async () => {
+    vi.mocked(fetchFilesContent).mockResolvedValue(fileResponse());
+    const loadedUris: string[] = [];
+    const { unmount } = render(
+      <EditorRuntimeWidget windowId="editor-a" root="/repo" file="src/app.ts" />,
+    );
+    await waitFor(() => {
+      const uri = surface.props?.fileModel.identity.uri;
+      expect(uri).toContain("/editor-a/");
+      loadedUris[0] = uri ?? "";
+    });
+    unmount();
+
+    render(<EditorRuntimeWidget windowId="editor-b" root="/repo" file="src/app.ts" />);
+    await waitFor(() => {
+      const uri = surface.props?.fileModel.identity.uri;
+      expect(uri).toContain("/editor-b/");
+      loadedUris[1] = uri ?? "";
+    });
+
+    expect(loadedUris[0]).toMatch(/^keiko-editor:\/\/workspace\/editor-a\//);
+    expect(loadedUris[1]).toMatch(/^keiko-editor:\/\/workspace\/editor-b\//);
+    expect(loadedUris[0]).not.toBe(loadedUris[1]);
+    expect(fetchFilesContent).toHaveBeenCalledWith("/repo", "src/app.ts");
   });
 
   it("surfaces a load failure in the card", async () => {
@@ -555,6 +585,26 @@ describe("EditorWidget — edit and save", () => {
     // Issue #1205: the dirty state is communicated by the status bar save field (and the tab dot).
     const statusBar = screen.getByTestId("editor-status-bar");
     expect(statusBar.querySelector('[data-field="save"]')).toHaveTextContent("Unsaved");
+  });
+
+  it("contains rejected background hot-exit writes without breaking editing", async () => {
+    vi.mocked(writeEditorHotExitSnapshot).mockRejectedValueOnce(new Error("hot-exit unavailable"));
+    await renderLoaded();
+
+    act(() => {
+      surface.props?.onContentChange({ text: "dirty content\n", sizeBytes: 14 }, "human");
+    });
+
+    await waitFor(() => {
+      expect(writeEditorHotExitSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceRoot: "/repo",
+          relativePath: "src/app.ts",
+          content: "dirty content\n",
+        }),
+      );
+    });
+    expect(surface.props?.fileModel.dirty).toBe(true);
   });
 
   it("saves with the version-aware token and clears dirty on success", async () => {
@@ -2311,7 +2361,9 @@ describe("EditorWidget — agent bridge", () => {
       .mock.calls.map(([snapshot]) => snapshot.sessionId);
 
     await waitFor(() => {
-      const liveSources = FakeSource.instances.filter((source) => source.close.mock.calls.length === 0);
+      const liveSources = FakeSource.instances.filter(
+        (source) => source.close.mock.calls.length === 0,
+      );
       expect(liveSources).toHaveLength(1);
       const [source] = liveSources;
       for (const sessionId of sessionIds) {
@@ -3133,5 +3185,60 @@ describe("EditorWidget — hot-exit recovery", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Reload" }));
     await screen.findByRole("dialog", { name: "Discard unsaved changes?" });
     expect(await axe(view.container)).toHaveNoViolations();
+  });
+});
+
+describe("EditorWidget — stale-load discard on rapid file switch (GEN-TEST-MISSING-006)", () => {
+  it("discards a stale load landing after a file switch", async () => {
+    // File A's fetch is held open and never resolves until we release it *after* the user has
+    // already switched to file B. File B resolves normally. The host's file-content load effect
+    // marks the superseded load's signal cancelled on cleanup, so A's late landing must be
+    // discarded and must not clobber B's buffer, identity, or load state.
+    let resolveA: (response: FilesContentResponse) => void = () => {};
+    vi.mocked(fetchFilesContent)
+      .mockReturnValueOnce(
+        new Promise<FilesContentResponse>((resolve) => {
+          resolveA = resolve;
+        }),
+      )
+      .mockResolvedValueOnce(
+        fileResponse({ path: "src/b.ts", name: "b.ts", content: "const b = 1;\n" }),
+      );
+
+    const { rerender } = render(
+      <EditorRuntimeWidget root="/repo" file="src/a.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+    // A is still loading (its fetch never resolved): no editor surface yet.
+    expect(await screen.findByText(/loading file/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("editor-surface")).toBeNull();
+
+    // The user switches to file B before A ever lands; B settles into the editor.
+    rerender(
+      <EditorRuntimeWidget root="/repo" file="src/b.ts" openFiles={["src/a.ts", "src/b.ts"]} />,
+    );
+    await screen.findByTestId("editor-surface");
+    await waitFor(() => {
+      expect(surface.props?.buffer.content.text).toBe("const b = 1;\n");
+    });
+    expect(surface.props?.buffer.content.relativePath).toBe("src/b.ts");
+    expect(surface.props?.fileModel.identity.uri).toMatch(/\/src\/b\.ts$/);
+
+    // Now A's slow fetch finally lands, out of order. The superseded signal is cancelled, so this
+    // late landing is discarded — it must NOT overwrite B's buffer/identity or reopen a load state.
+    await act(async () => {
+      resolveA(fileResponse({ path: "src/a.ts", name: "a.ts", content: "const a = 1;\n" }));
+    });
+
+    // B's content survives; A's stale content never reached the surface.
+    expect(surface.props?.buffer.content.text).toBe("const b = 1;\n");
+    expect(surface.props?.buffer.content.relativePath).toBe("src/b.ts");
+    expect(surface.props?.fileModel.identity.uri).toMatch(/\/src\/b\.ts$/);
+    expect(surface.props?.buffer.content.text).not.toBe("const a = 1;\n");
+    // The editor stayed ready throughout — the discarded landing did not error or re-enter loading.
+    expect(surface.props?.fileLoadState.status).toBe("ready");
+    expect(screen.getByTestId("editor-surface")).toBeInTheDocument();
+    // The always-present status-bar live region carries no error text; the stale landing was a
+    // silent no-op rather than a surfaced load failure.
+    expect(screen.getByTestId("editor-status-bar-alert")).toHaveTextContent("");
   });
 });

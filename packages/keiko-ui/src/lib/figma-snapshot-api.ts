@@ -7,37 +7,15 @@
  * and returns a token-free summary. No secret ever reaches this module.
  */
 
-import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 
 // ─── Shared internal helpers ───────────────────────────────────────────────────
 
+// Thin wrapper over the shared BFF scaffold (GEN-DUP-NEAR-004): CSRF + JSON content-type on
+// state-changing methods, error-envelope parse, and the 204 → undefined short-circuit (the last
+// folded in from the shared helper — a safe-forward improvement over the former non-204 path).
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as { error: { code: string; message: string } };
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic message
-    }
-    throw new ApiError(code, message, res.status);
-  }
-
-  return res.json() as Promise<T>;
+  return bffFetchJson<T>(path, init);
 }
 
 // ─── Response types (mirror BFF FigmaSnapshotSummary / FigmaScreenSummary) ──────

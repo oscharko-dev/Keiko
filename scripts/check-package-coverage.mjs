@@ -22,7 +22,15 @@ const VALUE_OPTION_HANDLERS = new Map([
   ["json", (parsed, value) => (parsed.json = value)],
   ["target", (parsed, value) => (parsed.target = Number(value))],
   ["metric", (parsed, value) => (parsed.metric = value)],
+  // GEN-TEST-COVERAGE-003: per-file floor governance. When writing a baseline, record a lines-floor
+  // for every measured file below this threshold; --enforce-file-floors then fails if any recorded
+  // file regresses below its floor (critical files hiding behind green package averages).
+  ["file-floor-threshold", (parsed, value) => (parsed.fileFloorThreshold = Number(value))],
 ]);
+
+// GEN-TEST-COVERAGE-003: headroom (percentage points) a floored file may drift below its recorded
+// value before the per-file gate fails. Matches the package ratchet's platform-noise allowance.
+const FILE_FLOOR_EPSILON = 0.5;
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
@@ -41,6 +49,8 @@ function defaultOptions() {
     target: DEFAULT_TARGET,
     metric: DEFAULT_METRIC,
     strict: false,
+    enforceFileFloors: false,
+    fileFloorThreshold: undefined,
   };
 }
 
@@ -85,6 +95,14 @@ function validateOptions(parsed) {
   if (!METRICS.includes(parsed.metric)) {
     throw new Error(`Invalid --metric value: ${parsed.metric}`);
   }
+  if (
+    parsed.fileFloorThreshold !== undefined &&
+    (!Number.isFinite(parsed.fileFloorThreshold) ||
+      parsed.fileFloorThreshold < 0 ||
+      parsed.fileFloorThreshold > 100)
+  ) {
+    throw new Error(`Invalid --file-floor-threshold value: ${String(parsed.fileFloorThreshold)}`);
+  }
 }
 
 function parseArgs(argv) {
@@ -95,6 +113,10 @@ function parseArgs(argv) {
     const { name } = parseOptionToken(arg);
     if (name === "strict") {
       parsed.strict = true;
+      continue;
+    }
+    if (name === "enforce-file-floors") {
+      parsed.enforceFileFloors = true;
       continue;
     }
     const option = readOptionArg(argv, i);
@@ -131,7 +153,7 @@ function emptyPackage(name) {
   };
 }
 
-function listPackages(root) {
+export function listPackages(root) {
   const packagesDir = join(root, "packages");
   return readdirSync(packagesDir)
     .filter((name) => existsSync(join(packagesDir, name, "package.json")))
@@ -292,7 +314,57 @@ function loadCoverageSummaries(root, paths) {
   });
 }
 
-export function buildCoverageBaseline({ target, metric, packages }) {
+// GEN-TEST-COVERAGE-003: flatten every measured file's line coverage from the raw v8 summaries,
+// keyed by repo-relative path. This is the substrate for per-file floor enforcement (package
+// averages hide 0-8% critical files behind a green mean).
+export function collectFileLinePercents(root, coverageSummaries) {
+  const percents = {};
+  for (const summary of coverageSummaries) {
+    for (const [file, metrics] of Object.entries(summary)) {
+      if (file === "total") continue;
+      if (metrics?.lines === undefined) continue;
+      percents[normalizeCoverageFile(root, file)] = round(pct(metrics.lines));
+    }
+  }
+  return percents;
+}
+
+// GEN-TEST-COVERAGE-003: build a per-file floor map from the current measurement — every measured
+// file at or below `threshold` line% is pinned at (current - FILE_FLOOR_EPSILON), rounded, floored
+// at 0. Files above the threshold are left ungoverned (the package ratchet already protects them).
+export function buildFileFloors(fileLinePercents, threshold) {
+  const floors = {};
+  for (const [file, current] of Object.entries(fileLinePercents)) {
+    if (current <= threshold) {
+      floors[file] = Math.max(0, round(current - FILE_FLOOR_EPSILON));
+    }
+  }
+  return floors;
+}
+
+// GEN-TEST-COVERAGE-003: evaluate current per-file line coverage against recorded floors. A file
+// that dropped below its floor (beyond epsilon) fails; a floored file that has since VANISHED from
+// the summary also fails (it was likely renamed/deleted without updating the floor map — surface it
+// rather than silently pass).
+export function evaluateFileFloors({ fileLinePercents, fileFloors }) {
+  return Object.entries(fileFloors ?? {})
+    .map(([file, floor]) => {
+      const current = fileLinePercents[file];
+      if (current === undefined) {
+        return { file, floor, current: null, passes: false, reason: "missing" };
+      }
+      return {
+        file,
+        floor,
+        current,
+        passes: current + FILE_FLOOR_EPSILON >= floor,
+        reason: current + FILE_FLOOR_EPSILON >= floor ? "ok" : "regressed",
+      };
+    })
+    .sort((left, right) => (left.current ?? -1) - (right.current ?? -1));
+}
+
+export function buildCoverageBaseline({ target, metric, packages, fileFloors }) {
   return {
     schemaVersion: 1,
     target,
@@ -312,6 +384,9 @@ export function buildCoverageBaseline({ target, metric, packages }) {
         },
       ]),
     ),
+    // GEN-TEST-COVERAGE-003: optional per-file line floors for critical files hiding behind green
+    // package averages. Present only when a baseline is (re)generated with --file-floor-threshold.
+    ...(fileFloors !== undefined && Object.keys(fileFloors).length > 0 ? { fileFloors } : {}),
   };
 }
 
@@ -377,6 +452,26 @@ function printCoverageOutcome(options, results) {
   process.exitCode = 1;
 }
 
+function printFileFloorOutcome(evaluations) {
+  const violations = evaluations.filter((entry) => !entry.passes);
+  console.log(
+    `file-floors: ${String(evaluations.length)} governed file(s) checked; ${String(violations.length)} violation(s).`,
+  );
+  if (violations.length === 0) {
+    console.log(
+      "file-floors: PASS — no governed critical file regressed below its recorded floor.",
+    );
+    return;
+  }
+  for (const violation of violations) {
+    const current = violation.current === null ? "missing" : `${String(violation.current)}%`;
+    console.error(
+      `file-floors: FAIL — ${violation.file} is ${current} (floor ${String(violation.floor)}%, ${violation.reason}).`,
+    );
+  }
+  process.exitCode = 1;
+}
+
 export async function runCli(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -388,14 +483,20 @@ export async function runCli(argv = process.argv.slice(2)) {
     coverageSummaries,
     packages: selectPackages(allPackages, options),
   });
+  const fileLinePercents = collectFileLinePercents(root, coverageSummaries);
   const generatedBaseline = buildCoverageBaseline({
     target: options.target,
     metric: options.metric,
     packages: aggregated,
+    fileFloors:
+      options.fileFloorThreshold === undefined
+        ? undefined
+        : buildFileFloors(fileLinePercents, options.fileFloorThreshold),
   });
+  const baseline = loadBaseline(root, options, generatedBaseline);
   const results = evaluatePackageCoverage({
     packages: aggregated,
-    baseline: loadBaseline(root, options, generatedBaseline),
+    baseline,
     target: options.target,
     metric: options.metric,
     strict: options.strict,
@@ -403,6 +504,15 @@ export async function runCli(argv = process.argv.slice(2)) {
 
   writeReportOutputs(root, options, results, generatedBaseline);
   printCoverageOutcome(options, results);
+
+  // GEN-TEST-COVERAGE-003: per-file floor enforcement runs alongside the package ratchet so a
+  // critical file (e.g. a 0-8% requirements-ingestion or verification-monitor module) cannot regress
+  // further while its package average stays green.
+  if (options.enforceFileFloors) {
+    printFileFloorOutcome(
+      evaluateFileFloors({ fileLinePercents, fileFloors: baseline?.fileFloors ?? {} }),
+    );
+  }
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

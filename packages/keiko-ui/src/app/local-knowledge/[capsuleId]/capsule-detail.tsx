@@ -30,6 +30,7 @@ import {
   resumeCapsuleLargeDocuments,
   updateCapsuleContextualRetrieval,
 } from "@/lib/local-knowledge-api";
+import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
 import Link from "next/link";
 import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
@@ -40,12 +41,6 @@ import { SourceRebindControl } from "./source-rebind-control";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes.toString()} B`;
-  if (bytes < 1_048_576) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1_048_576).toFixed(1)} MB`;
-}
 
 function formatTs(epochMs: number): string {
   // Explicit en-US: the surrounding UI copy is English; an OS-locale date
@@ -60,15 +55,6 @@ function formatTs(epochMs: number): string {
 function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100).toString()}%`;
-}
-
-function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return "0s";
-  const totalSeconds = Math.round(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds.toString()}s`;
-  return `${minutes.toString()}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
 function scopeLocation(scope: SourceIndexStats["scope"]): string {
@@ -109,7 +95,10 @@ function formatEmbeddingIdentity(identity: CapsuleHealth["embeddingIdentity"]): 
 }
 
 function compatibilityStatus(data: CapsuleDetailData): EmbeddingCompatibility["status"] {
-  return data.health.embeddingCompatibility?.status ?? (data.health.vectorCompatible ? "compatible" : "incompatible");
+  return (
+    data.health.embeddingCompatibility?.status ??
+    (data.health.vectorCompatible ? "compatible" : "incompatible")
+  );
 }
 
 function compatibilityTone(status: EmbeddingCompatibility["status"]): "ok" | "warn" | "danger" {
@@ -341,8 +330,7 @@ function EmbeddingCompatibilitySection({ data }: { data: CapsuleDetailData }): R
     compatibility === undefined
       ? formatEmbeddingIdentity(data.health.embeddingIdentity)
       : `${compatibility.pinnedModelId} (${compatibility.pinnedVectorDimensions.toString()}d, ${compatibility.pinnedVectorMetric})`;
-  const pinnedProvider =
-    compatibility?.pinnedProvider ?? data.health.embeddingIdentity.provider;
+  const pinnedProvider = compatibility?.pinnedProvider ?? data.health.embeddingIdentity.provider;
   const currentModel = compatibility?.currentModelId ?? "Not configured";
   const currentProvider = compatibility?.currentProvider ?? "No embedding provider";
   const message =
@@ -431,10 +419,7 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
             </span>
           }
         />
-        <OverviewRow
-          label="Embedding model"
-          value={formatEmbeddingIdentity(embId)}
-        />
+        <OverviewRow label="Embedding model" value={formatEmbeddingIdentity(embId)} />
         <OverviewRow label="Storage size" value={formatBytes(health.storageSizeBytes)} />
         <OverviewRow label="Unsupported documents" value={health.unsupportedDocuments.toString()} />
         {health.lastIndexedAt !== undefined ? (
@@ -744,7 +729,11 @@ function SourcesSection({
                   />
                 </div>
               </div>
-              <div className="lkd-source-coverage" role="img" aria-label="Source document coverage">
+              <div
+                className="lkd-source-coverage"
+                role="img"
+                aria-label={`Source document coverage: ${src.indexedCount.toString()} indexed, ${src.failedCount.toString()} failed, ${src.skippedCount.toString()} skipped`}
+              >
                 <span
                   className="lkd-source-segment lkd-source-segment-ok"
                   style={progressStyle(total > 0 ? src.indexedCount / total : 0)}
@@ -1276,11 +1265,7 @@ export function CapsuleDetail({
       ) : null}
       <OverviewSection data={data} />
       <PrivacySection />
-      <SourcesSection
-        capsuleId={capsuleId}
-        sources={data.sources}
-        onActionComplete={reload}
-      />
+      <SourcesSection capsuleId={capsuleId} sources={data.sources} onActionComplete={reload} />
       <HealthDiagnosticsSection diagnostics={data.parserDiagnostics} />
       <IndexingJobsSection jobs={data.indexingJobs} />
     </div>

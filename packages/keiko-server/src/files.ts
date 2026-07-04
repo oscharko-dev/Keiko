@@ -5,7 +5,8 @@
 import type { IncomingMessage } from "node:http";
 import type { Dirent, Stats } from "node:fs";
 import { constants, createReadStream } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { TextDecoder } from "node:util";
 import {
   cp,
   lstat,
@@ -59,6 +60,7 @@ const STABLE_CONTENT_READ_ATTEMPTS = 3;
 const TREE_CLASSIFY_CONCURRENCY = 32;
 const FILE_SEARCH_CANDIDATE_CONCURRENCY = 32;
 const STABLE_CONTENT_RETRY_DELAY_MS = 25;
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 type FilesMetadataRedactor = UiHandlerDeps["redactor"];
 
 const staticFilesMetadataRedactor: FilesMetadataRedactor = (value: unknown): unknown =>
@@ -1274,17 +1276,34 @@ function isKnownTextExtension(extension: string | null): boolean {
   return extension !== null && TEXT_EXTENSIONS.has(extension);
 }
 
-function isLikelyUtf8Text(buffer: Buffer): boolean {
-  if (buffer.length === 0) return true;
-  if (buffer.includes(0)) return false;
-  const decoded = buffer.toString("utf8");
-  if (decoded.includes("\uFFFD")) return false;
+function decodeUtf8(buffer: Buffer): string | null {
+  try {
+    return UTF8_DECODER.decode(buffer);
+  } catch {
+    return null;
+  }
+}
+
+function decodedTextLooksPrintable(decoded: string): boolean {
+  if (decoded.length === 0) return true;
   let printable = 0;
   for (const char of decoded) {
     const code = char.charCodeAt(0);
     if (code === 9 || code === 10 || code === 13 || code >= 32) printable += 1;
   }
   return printable / decoded.length > 0.85;
+}
+
+function isLikelyUtf8Text(buffer: Buffer): boolean {
+  if (buffer.includes(0)) return false;
+  const decoded = decodeUtf8(buffer);
+  return decoded !== null && decodedTextLooksPrintable(decoded);
+}
+
+function isEditableUtf8File(extension: string | null, buffer: Buffer): boolean {
+  const decoded = decodeUtf8(buffer);
+  if (decoded === null || buffer.includes(0)) return false;
+  return isKnownTextExtension(extension) || isLikelyUtf8Text(buffer);
 }
 
 async function readPrefix(
@@ -1402,7 +1421,10 @@ async function textPreview(
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
   const prefix = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
-  const content = prefix.buffer.toString("utf8");
+  const content = decodeUtf8(prefix.buffer);
+  if (content === null || prefix.buffer.includes(0)) {
+    return { ...base, kind: "binary", reason: "unsupported" };
+  }
   const redacted = redactor(content);
   return {
     ...base,
@@ -1449,7 +1471,11 @@ async function readStableEditableContent(
         `This file is too large to edit here (limit ${String(MAX_TEXT_PREVIEW_BYTES)} bytes).`,
       );
     }
-    const content = await readFile(target.path, "utf8");
+    const buffer = await readFile(target.path);
+    const content = decodeUtf8(buffer);
+    if (content === null || buffer.includes(0)) {
+      throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
+    }
     const after = await stat(target.path);
     if (statsMatch(before, after)) return { content, stats: after };
     before = after;
@@ -1478,8 +1504,12 @@ async function assertSessionNotStale(
     // Bounded re-read (mirrors the content-classification read): if the file grew past the editable
     // limit between the stat and this read, treat the truncated result as a mismatch.
     const current = await readPrefix(target.path, MAX_TEXT_PREVIEW_BYTES);
+    const currentContent = decodeUtf8(current.buffer);
     hashMatches =
-      !current.truncated && sha256Hex(current.buffer.toString("utf8")) === baseVersion.contentHash;
+      !current.truncated &&
+      currentContent !== null &&
+      !current.buffer.includes(0) &&
+      sha256Hex(currentContent) === baseVersion.contentHash;
   }
   if (!sizeMatches || !mtimeMatches || !hashMatches) {
     throw new FilesError(
@@ -1534,7 +1564,7 @@ export async function readFilesContent(
   }
   const base = basePreview(target);
   const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
-  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   return editableTextContent(target);
@@ -1551,7 +1581,7 @@ async function writeResolvedFilesContent(args: {
   }
   const base = basePreview(args.target);
   const prefix = await readPrefix(args.target.path, Math.min(args.target.stats.size, 4096));
-  if (!isKnownTextExtension(base.extension) && !isLikelyUtf8Text(prefix.buffer)) {
+  if (!isEditableUtf8File(base.extension, prefix.buffer)) {
     throw new FilesError(400, "UNSUPPORTED_FILE", "This file cannot be edited in the workspace.");
   }
   await assertNoWriteConflict(args.target, args.baseVersion, args.expectedModifiedAt);
@@ -1849,27 +1879,49 @@ async function assertCopiedTreeContainsNoSymlinks(
   }
 }
 
-const NOFOLLOW_WRITE_FLAG =
-  typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+const NOFOLLOW_WRITE_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
 
-async function writeExistingResolvedFile(
-  target: ResolvedTarget,
-  content: string,
-): Promise<Stats> {
-  await assertResolvedTargetStillCurrent(target);
+async function writeExistingResolvedFile(target: ResolvedTarget, content: string): Promise<Stats> {
+  const tempPath = join(
+    dirname(target.path),
+    `.${basename(target.path)}.keiko-save.${String(process.pid)}.${randomUUID()}.tmp`,
+  );
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    handle = await open(target.path, constants.O_WRONLY | NOFOLLOW_WRITE_FLAG);
-    const current = await handle.stat();
-    if (!current.isFile() || !sameFileIdentity(target.stats, current)) {
-      throw stalePathError();
-    }
-    await handle.truncate(0);
+    await assertResolvedTargetStillCurrent(target);
+    const mode = target.stats.mode & 0o777 || 0o666;
+    handle = await open(
+      tempPath,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW_WRITE_FLAG,
+      mode,
+    );
     await handle.writeFile(content, "utf8");
-    return await handle.stat();
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await assertResolvedTargetStillCurrent(target);
+    await rename(tempPath, target.path);
+    await fsyncDirectory(dirname(target.path));
+    const updated = await stat(target.path);
+    if (!updated.isFile()) throw stalePathError();
+    return updated;
   } catch (error) {
     if (error instanceof FilesError) throw error;
     throw mapNodeFsError(error);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await rm(tempPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function fsyncDirectory(dir: string): Promise<void> {
+  if (process.platform === "win32") return;
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(dir, constants.O_RDONLY);
+    await handle.sync();
+  } catch {
+    // Directory fsync is not supported by every filesystem. The temp file is still fsynced.
   } finally {
     await handle?.close().catch(() => undefined);
   }
@@ -2002,9 +2054,7 @@ async function executeContainedRename(
   }
 }
 
-export async function renameFilesEntry(
-  args: RenameFilesEntryArgs,
-): Promise<FilesMutationResponse> {
+export async function renameFilesEntry(args: RenameFilesEntryArgs): Promise<FilesMutationResponse> {
   const { source, target, kind } = await resolveRenameFilesPlan(args);
   await executeContainedRename(source, target, kind);
   return {
@@ -2131,7 +2181,7 @@ export async function readFilesPreview(
   const base = basePreview(target);
   if (isImageExtension(base.extension)) return imagePreview(target, base);
   const prefix = await readPrefix(target.path, Math.min(target.stats.size, 4096));
-  if (isKnownTextExtension(base.extension) || isLikelyUtf8Text(prefix.buffer)) {
+  if (isEditableUtf8File(base.extension, prefix.buffer)) {
     return textPreview(target, base, redactor);
   }
   return { ...base, kind: "binary", reason: "unsupported" };

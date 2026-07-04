@@ -8,12 +8,7 @@ import {
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 export type GitDeliveryApprovalOperation =
-  | "local-mutation"
-  | "commit"
-  | "push"
-  | "pr"
-  | "merge"
-  | "action-sheet";
+  "local-mutation" | "commit" | "push" | "pr" | "merge" | "action-sheet";
 
 export interface GitDeliveryApprovalBinding {
   readonly projectId: string;
@@ -48,8 +43,7 @@ export interface GitDeliveryApprovalStore {
 }
 
 export type ParsedGitDeliveryApprovalRequest =
-  | { readonly kind: "none" }
-  | { readonly kind: "claim"; readonly claim: GitDeliveryApprovalClaim };
+  { readonly kind: "none" } | { readonly kind: "claim"; readonly claim: GitDeliveryApprovalClaim };
 
 interface StoredApprovalRecord {
   readonly bindingHash: string;
@@ -91,10 +85,12 @@ function pruneExpired(
 }
 
 // eslint-disable-next-line max-lines-per-function -- approval issue/consume state machine is intentionally co-located.
-export function createInMemoryGitDeliveryApprovalStore(options: {
-  readonly maxRecords?: number | undefined;
-  readonly ttlMs?: number | undefined;
-} = {}): GitDeliveryApprovalStore {
+export function createInMemoryGitDeliveryApprovalStore(
+  options: {
+    readonly maxRecords?: number | undefined;
+    readonly ttlMs?: number | undefined;
+  } = {},
+): GitDeliveryApprovalStore {
   const maxRecords = options.maxRecords ?? DEFAULT_MAX_RECORDS;
   const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
   const records = new Map<string, StoredApprovalRecord>();

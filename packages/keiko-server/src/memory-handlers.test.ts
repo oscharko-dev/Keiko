@@ -566,7 +566,8 @@ describe("memory handlers", () => {
         "/api/memory/memory-forget-sensitive-reason/forget",
         {
           acknowledged: true,
-          reason: "forget customer-id CUST-SECRET-123 and token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          reason:
+            "forget customer-id CUST-SECRET-123 and token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         },
         { id: "memory-forget-sensitive-reason" },
       ),

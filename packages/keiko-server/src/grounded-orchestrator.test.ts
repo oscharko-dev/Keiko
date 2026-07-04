@@ -49,6 +49,7 @@ import {
   type GroundedAnswerer,
   type OrchestratorInput,
 } from "./grounded-orchestrator.js";
+import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
 
 const NOW = 1_700_000_000_000;
@@ -879,9 +880,7 @@ describe("runGroundedExploration", () => {
       },
     );
     expect(out.pack.files.some((file) => file.scopePath === "generated/client.ts")).toBe(true);
-    expect(out.pack.omitted.some((entry) => entry.scopePath === "generated/client.ts")).toBe(
-      false,
-    );
+    expect(out.pack.omitted.some((entry) => entry.scopePath === "generated/client.ts")).toBe(false);
     expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesDiscovered).toBe(1);
     expect(out.pack.diagnostics?.coverage?.lowValueRescueFilesScanned).toBe(1);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
@@ -1376,6 +1375,83 @@ describe("runGroundedExploration", () => {
     expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
     expect(out.pack.uncertainty.some((marker) => marker.claim.includes("matched"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-002/-003): abstains BEFORE the model call on empty evidence", async () => {
+    let answererCalled = false;
+    const trackingAnswerer: GroundedAnswerer = {
+      answer: () => {
+        answererCalled = true;
+        return Promise.resolve("A confident but ungrounded fabricated answer.");
+      },
+    };
+    const out = await runGroundedExploration(
+      input({
+        scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
+        query: happyQuery({ text: "Investigate `CompletelyMissingSymbol`" }),
+      }),
+      {
+        answerer: trackingAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(answererCalled).toBe(false);
+    expect(out.noEvidence).toBe(true);
+    expect(out.assistantContent).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
+    expect(out.pack.files).toEqual([]);
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-001/-008): flags an inline citation not present in the pack", async () => {
+    const fabricatingAnswerer: GroundedAnswerer = {
+      answer: (_question, pack) => {
+        const realPath = pack.files[0]?.scopePath ?? "src/foo.ts";
+        return Promise.resolve(
+          `Grounded in [${realPath}:1-2], but also cites [src/secret/keys.ts:40-55] which was never retrieved.`,
+        );
+      },
+    };
+    const out = await runGroundedExploration(input(), {
+      answerer: fabricatingAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    const marker = out.pack.uncertainty.find((m) => m.kind === "unsupported-citation");
+    expect(marker).toBeDefined();
+    expect(marker?.claim).toContain("secret/keys.ts");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-001): does NOT flag when every inline citation is in the pack", async () => {
+    const faithfulAnswerer: GroundedAnswerer = {
+      answer: (_question, pack) => {
+        const realPath = pack.files[0]?.scopePath ?? "src/foo.ts";
+        return Promise.resolve(`The behaviour is defined in [${realPath}].`);
+      },
+    };
+    const out = await runGroundedExploration(input(), {
+      answerer: faithfulAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(out.pack.uncertainty.some((m) => m.kind === "unsupported-citation")).toBe(false);
+  });
+
+  it("RB-4 (GEN-AI-GATEWAY-001): surfaces an incomplete-answer marker for a truncated completion", async () => {
+    const truncatedAnswerer: GroundedAnswerer = {
+      answer: () =>
+        Promise.resolve({
+          content: "A partial answer that was cut off",
+          usage: { promptTokens: 10, completionTokens: 5 },
+          finishReason: "length",
+        }),
+    };
+    const out = await runGroundedExploration(input(), {
+      answerer: truncatedAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(out.pack.uncertainty.some((m) => m.kind === "incomplete-answer")).toBe(true);
   });
 
   it("throws ClarificationNeededError when the planner asks for clarification", async () => {

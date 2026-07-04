@@ -1,4 +1,4 @@
-// Issue #499 (ADR-0062) — the Voice turn manager. Drives the manager with a deterministic SCRIPTED
+// Issue #499 (ADR-0104) — the Voice turn manager. Drives the manager with a deterministic SCRIPTED
 // clock (an injected `{ now }` advanced by hand — no fake timers, no performance.now) and the semantic
 // signal union, exercising the full matrix: capability gating (none / speech-to-text / speech-output /
 // full-realtime), the eight-state floor-control machine, barge-in overlap synthesis, the commit-vs-
@@ -345,7 +345,7 @@ describe("voice-turn-manager — backchannel no floor change (AC3)", () => {
     expect(onBackchannel.mock.calls[0]?.[0]).toMatchObject({ state: "speaking", backchannels: 1 });
   });
 
-  // ADR-0062 D6 specifies backchannel from *(any active state)* with no state change. Asserting it in a
+  // ADR-0104 D6 specifies backchannel from *(any active state)* with no state change. Asserting it in a
   // non-speaking active state (idle, the fresh full-realtime state) proves the handler is state-blind and
   // kills a mutation that would gate the acknowledgement to `speaking` only.
   it("backchannel in a non-speaking active state (idle) still acknowledges without a floor change", () => {

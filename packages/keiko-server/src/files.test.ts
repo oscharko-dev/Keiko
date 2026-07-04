@@ -911,6 +911,29 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("refuses invalid UTF-8 even for known text extensions and preserves bytes on save", async () => {
+    const badBytes = Buffer.from([0xff, 0xfe, 0x61, 0x0a]);
+    await writeFile(join(root, "bad.txt"), badBytes);
+
+    const preview = await readFilesPreview(store, root, "bad.txt", buildRedactor({}));
+    expect(preview).toMatchObject({ kind: "binary", reason: "unsupported", extension: "txt" });
+
+    await expect(readFilesContent(store, root, "bad.txt")).rejects.toMatchObject({
+      status: 400,
+      code: "UNSUPPORTED_FILE",
+    });
+    await expect(
+      writeFilesContent({
+        store,
+        rootInput: root,
+        pathInput: "bad.txt",
+        content: "replacement\n",
+      }),
+    ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED_FILE" });
+
+    expect(await readFile(join(root, "bad.txt"))).toEqual(badBytes);
+  });
+
   it("caps large text previews", async () => {
     const content = `${"a".repeat(1_000_050)}tail`;
     await writeFile(join(root, "large.txt"), content);

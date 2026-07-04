@@ -646,11 +646,7 @@ interface JudgeOutcome {
   readonly qualityVerdict?: CandidateQualityVerdict | undefined;
   readonly needsReview: boolean;
   readonly diagnosticKind?:
-    | "budget-skipped"
-    | "judge-error"
-    | "parse-failed"
-    | "prompt-too-large"
-    | undefined;
+    "budget-skipped" | "judge-error" | "parse-failed" | "prompt-too-large" | undefined;
   readonly modelParameters?: Record<string, unknown> | undefined;
 }
 
@@ -769,13 +765,7 @@ async function judgeOneCandidate(
   } catch (error) {
     if (isCancellationError(ctx, error)) throw new StageCancelledError();
     ctx.modelGatewayCallCount += 1;
-    return buildUnjudgedJudgeOutcome(
-      ctx,
-      candidate,
-      ordinal,
-      JUDGE_ERROR_RATIONALE,
-      "judge-error",
-    );
+    return buildUnjudgedJudgeOutcome(ctx, candidate, ordinal, JUDGE_ERROR_RATIONALE, "judge-error");
   }
   const unjudged = unjudgedOutcomeForStatus(ctx, candidate, ordinal, verdict.judgeStatus);
   if (unjudged !== null) {
@@ -1078,9 +1068,7 @@ function analyzeRequirementQualityFailSoft(
   }
 }
 
-function judgeIsSelfModel(
-  modelRouting: QI.QualityIntelligenceModelRouting | undefined,
-): boolean {
+function judgeIsSelfModel(modelRouting: QI.QualityIntelligenceModelRouting | undefined): boolean {
   const generation = modelRouting?.resolved.testDesignModelId;
   const judge = modelRouting?.resolved.judgeModelId;
   return generation !== undefined && judge !== undefined && generation === judge;

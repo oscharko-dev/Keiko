@@ -22,6 +22,7 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { makeMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
 
 // Per-brand cast helpers. The lint rule `no-unnecessary-type-parameters` rejects a single
 // generic `brand<T>(s)` because T is used only once; per-brand helpers are clearer at the
@@ -103,16 +104,21 @@ function resolveCore(options: BuildRecordOptions): BuildRecordCore {
   };
 }
 
+// Wraps the sanctioned contracts fixture builder (`makeMemoryRecord`, GEN-DX-001). This suite
+// DELIBERATELY diverges from the shared majority defaults — semantic-fact / public
+// sensitivity / confidence 0.8 / timestamps 1000 / body "default body text" — so every
+// divergent field is resolved explicitly by `resolveCore`/`buildProvenance`/`buildValidity`
+// and passed as an override; the shared builder only contributes `schemaVersion` and the
+// canonical shape. Effective records stay byte-identical to the pre-migration fixtures.
 export function buildRecord(options: BuildRecordOptions = {}): MemoryRecord {
   const core = resolveCore(options);
   const staleReason = options.staleReason;
-  return {
+  return makeMemoryRecord({
     ...core,
-    schemaVersion: "1",
     provenance: buildProvenance(options),
     validity: buildValidity(options),
     ...(staleReason === undefined ? {} : { staleReason }),
-  };
+  });
 }
 
 export interface BuildEdgeOptions {

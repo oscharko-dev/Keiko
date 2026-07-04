@@ -18,6 +18,8 @@ const MAX_PDF_PREVIEW_MESSAGE_LENGTH = 360;
 const MAX_PDF_PREVIEW_PAGE = 100_000;
 const MAX_PDF_PREVIEW_ZOOM = 2;
 const MIN_PDF_PREVIEW_ZOOM = 0.5;
+const MIN_WINDOW_CONTENT_ZOOM = 0.5;
+const MAX_WINDOW_CONTENT_ZOOM = 2;
 
 const CREDENTIAL_KEY_MARKERS = [
   "apikey",
@@ -76,6 +78,10 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampWindowContentZoom(value: number): number {
+  return Math.max(MIN_WINDOW_CONTENT_ZOOM, Math.min(MAX_WINDOW_CONTENT_ZOOM, value));
 }
 
 function isJsonScalar(value: unknown): value is JsonScalar {
@@ -169,7 +175,10 @@ function looksLikeLocalPath(value: string): boolean {
 }
 
 function containsTraversalSegment(value: string): boolean {
-  return value.replace(/\\/gu, "/").split("/").some((segment) => segment === "..");
+  return value
+    .replace(/\\/gu, "/")
+    .split("/")
+    .some((segment) => segment === "..");
 }
 
 function isAllowedReferenceChar(char: string): boolean {
@@ -555,7 +564,7 @@ function sanitizeWindow(win: unknown): AppWindow | null {
     ...next,
     ...(win["minimized"] === true ? { minimized: true } : {}),
     ...(prev !== undefined ? { prev } : {}),
-    ...(isFiniteNumber(win["zoom"]) ? { zoom: win["zoom"] } : {}),
+    ...(isFiniteNumber(win["zoom"]) ? { zoom: clampWindowContentZoom(win["zoom"]) } : {}),
   };
 }
 
@@ -584,16 +593,25 @@ function migrateLegacyFigmaWindow(win: AppWindow): AppWindow {
   };
 }
 
+function dedupeSingletonWindows(wins: readonly AppWindow[]): AppWindow[] {
+  const keepers = new Map<WindowType, AppWindow>();
+  for (const win of wins) {
+    if (WIN_TYPES[win.type].singleton !== true) continue;
+    const current = keepers.get(win.type);
+    if (current === undefined || win.z > current.z) keepers.set(win.type, win);
+  }
+  return wins.filter(
+    (win) => WIN_TYPES[win.type].singleton !== true || keepers.get(win.type) === win,
+  );
+}
+
 export function sanitizePersistedWindows(wins: readonly AppWindow[]): AppWindow[] {
   const out: AppWindow[] = [];
   for (const win of wins) {
     const next = sanitizeWindow(win);
     if (next !== null) out.push(migrateLegacyFigmaWindow(next));
   }
-  const figmaManagers = out.filter((win) => win.type === "figma");
-  if (figmaManagers.length <= 1) return out;
-  const keeper = figmaManagers.reduce((best, next) => (next.z > best.z ? next : best));
-  return out.filter((win) => win.type !== "figma" || win.id === keeper.id);
+  return dedupeSingletonWindows(out);
 }
 
 export function parsePersistedWindows(raw: string | null): AppWindow[] | null {

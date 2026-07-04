@@ -15,7 +15,14 @@
  * `sideEffects:false`). No loader/worker bootstrap happens here; that is the host's job (#1196).
  */
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
-import { useCallback, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+} from "react";
 
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { PatchPreviewFile, PatchPreviewFileStatus } from "../patch-preview.js";
@@ -79,37 +86,61 @@ function TruncationNotice({ note }: { readonly note: string | null }): ReactElem
   );
 }
 
+/** The small square colour swatch that indicates a changed file's status (decorative). */
+function DiffStatusDot({ status }: { readonly status: PatchPreviewFile["status"] }): ReactElement {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: "inline-block",
+        width: 8,
+        height: 8,
+        borderRadius: 2,
+        backgroundColor: STATUS_INDICATOR_COLOR[status],
+      }}
+    />
+  );
+}
+
 interface FileRowProps {
   readonly file: PatchPreviewFile;
   readonly selected: boolean;
   readonly onSelect: (uri: string) => void;
   readonly onOpenFile?: ((uri: string) => void) | undefined;
+  /** Roving tabindex: only the active row's select button is a tab stop (0), the rest are -1. */
+  readonly rovingTabIndex: 0 | -1;
+  /** Register the select button so the list can move focus imperatively during arrow-key roving. */
+  readonly registerSelectButton: (node: HTMLButtonElement | null) => void;
+  /** ArrowUp/ArrowDown/Home/End roving handled by the owning list. */
+  readonly onSelectKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>) => void;
 }
 
-function FileRow({ file, selected, onSelect, onOpenFile }: FileRowProps): ReactElement {
+function FileRow({
+  file,
+  selected,
+  onSelect,
+  onOpenFile,
+  rovingTabIndex,
+  registerSelectButton,
+  onSelectKeyDown,
+}: FileRowProps): ReactElement {
   const statusLabel = diffFileStatusLabel(file.status);
   const fileLabel = `${file.displayPath} ${statusLabel}${file.truncated ? " truncated" : ""}`;
   return (
     <li data-diff-status={file.status} data-truncated={file.truncated ? "true" : undefined}>
       <button
+        ref={registerSelectButton}
         type="button"
         data-testid="keiko-diff-file"
         aria-label={fileLabel}
         aria-current={selected ? "true" : undefined}
+        tabIndex={rovingTabIndex}
+        onKeyDown={onSelectKeyDown}
         onClick={(): void => {
           onSelect(file.uri);
         }}
       >
-        <span
-          aria-hidden="true"
-          style={{
-            display: "inline-block",
-            width: 8,
-            height: 8,
-            borderRadius: 2,
-            backgroundColor: STATUS_INDICATOR_COLOR[file.status],
-          }}
-        />
+        <DiffStatusDot status={file.status} />
         <span>{file.displayPath}</span>
         <span>{statusLabel}</span>
         {file.truncated ? <span>(truncated)</span> : null}
@@ -137,20 +168,101 @@ interface FileListProps {
   readonly onOpenFile?: ((uri: string) => void) | undefined;
 }
 
+/** Wrap an index into the valid row range so Home/End and step moves never fall off the ends. */
+function clampRowIndex(index: number, count: number): number {
+  if (count === 0) {
+    return 0;
+  }
+  if (index < 0) {
+    return 0;
+  }
+  if (index >= count) {
+    return count - 1;
+  }
+  return index;
+}
+
+/** Map a roving-navigation key to the next row index, or null when the key is not a nav key. */
+function nextRovingIndex(key: string, index: number, rowCount: number): number | null {
+  switch (key) {
+    case "ArrowDown":
+      return clampRowIndex(index + 1, rowCount);
+    case "ArrowUp":
+      return clampRowIndex(index - 1, rowCount);
+    case "Home":
+      return 0;
+    case "End":
+      return rowCount - 1;
+    default:
+      return null;
+  }
+}
+
+interface RovingFileList {
+  readonly activeIndex: number;
+  readonly registerButton: (index: number) => (node: HTMLButtonElement | null) => void;
+  readonly onSelectKeyDown: (event: ReactKeyboardEvent<HTMLButtonElement>, index: number) => void;
+}
+
+/**
+ * Roving-tabindex composite (WAI-ARIA APG): the list is one Tab stop and ArrowUp/ArrowDown/Home/End
+ * move focus between the per-row select buttons. focusedIndex is clamped on read so a shrinking list
+ * can never leave the Tab stop pointing past the last row.
+ */
+function useRovingFileList(rowCount: number): RovingFileList {
+  const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
+  const [focusedIndex, setFocusedIndex] = useState(0);
+  const activeIndex = clampRowIndex(focusedIndex, rowCount);
+  const onSelectKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
+      if (rowCount === 0) {
+        return;
+      }
+      const next = nextRovingIndex(event.key, index, rowCount);
+      if (next === null) {
+        return;
+      }
+      // Own the navigation keys so the surrounding scroll region does not also page.
+      event.preventDefault();
+      setFocusedIndex(next);
+      buttonsRef.current[next]?.focus();
+    },
+    [rowCount],
+  );
+  const registerButton = useCallback(
+    (index: number) =>
+      (node: HTMLButtonElement | null): void => {
+        buttonsRef.current[index] = node;
+      },
+    [],
+  );
+  return { activeIndex, registerButton, onSelectKeyDown };
+}
+
+/**
+ * The changed-file list. Click/Enter/Space selection and the per-row Open button keep working
+ * unchanged; keyboard roving is provided by useRovingFileList (this is an a11y enhancement only).
+ */
 function FileList(props: FileListProps): ReactElement {
+  const { activeIndex, registerButton, onSelectKeyDown } = useRovingFileList(props.files.length);
   return (
     <ul
       aria-label="Changed files"
       data-testid="keiko-diff-file-list"
       style={{ flex: "0 0 auto", margin: 0, padding: 0, listStyle: "none", overflowY: "auto" }}
     >
-      {props.files.map((file) => (
+      {props.files.map((file, index) => (
         <FileRow
           key={file.uri}
           file={file}
           selected={file.uri === props.selectedUri}
           onSelect={props.onSelect}
           onOpenFile={props.onOpenFile}
+          rovingTabIndex={index === activeIndex ? 0 : -1}
+          registerSelectButton={registerButton(index)}
+          onSelectKeyDown={(event): void => {
+            onSelectKeyDown(event, index);
+          }}
         />
       ))}
     </ul>

@@ -12,7 +12,12 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
-import { QualityIntelligenceGeneration } from "@oscharko-dev/keiko-quality-intelligence";
+// Import the module under test via its relative source path (not the package barrel) so the coverage
+// instrumenter credits src/generation/requirementsIngestion.ts — matching every other keiko-quality-
+// intelligence test. Importing via `@oscharko-dev/keiko-quality-intelligence` resolves to the compiled
+// dist, leaving this well-tested 343-line module recorded at 0% and depressing the package branch
+// ratchet. The public surface is identical: `QualityIntelligenceGeneration` re-exports these symbols.
+import * as QualityIntelligenceGeneration from "../../generation/requirementsIngestion.js";
 
 type SplitOptions = QualityIntelligenceGeneration.SplitRequirementsOptions;
 

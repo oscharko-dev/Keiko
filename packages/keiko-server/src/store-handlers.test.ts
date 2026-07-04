@@ -95,9 +95,7 @@ function customModelConfig(modelId = "example-private-chat"): GatewayConfig {
   };
 }
 
-function testCapsuleInput(
-  overrides: Partial<CreateCapsuleInput> = {},
-): CreateCapsuleInput {
+function testCapsuleInput(overrides: Partial<CreateCapsuleInput> = {}): CreateCapsuleInput {
   const id = overrides.id ?? ("cap-stale-lifecycle" as KnowledgeCapsuleId);
   return {
     id,
@@ -299,7 +297,7 @@ describe("POST /api/projects", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("invalid_path");
+    expect(body.error.code).toBe("INVALID_PATH");
   });
 
   it("returns 400 path_not_found for a missing directory", async () => {
@@ -310,7 +308,7 @@ describe("POST /api/projects", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("path_not_found");
+    expect(body.error.code).toBe("PATH_NOT_FOUND");
   });
 
   it("rejects a project when the configured UI DB is inside that project", async () => {
@@ -324,7 +322,7 @@ describe("POST /api/projects", () => {
 
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
     expect(body.error.message).toMatch(/UI database path/i);
     expect(store.listProjects()).toHaveLength(0);
   });
@@ -356,7 +354,7 @@ describe("POST /api/projects", () => {
 
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
     expect(body.error.message).toMatch(/UI database directory/i);
     expect(store.listProjects()).toHaveLength(0);
   });
@@ -369,7 +367,7 @@ describe("POST /api/projects", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
   });
 
   it("returns 400 invalid_request for malformed JSON", async () => {
@@ -380,7 +378,7 @@ describe("POST /api/projects", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
   });
 
   it("returns 403 DENIED for a deny-listed path (e.g. ~/.ssh)", async () => {
@@ -550,7 +548,7 @@ describe("GET /api/chats", () => {
     const res = await fetch(url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&limit=999`));
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
     expect(body.error.message).toMatch(/limit/i);
   });
 
@@ -602,7 +600,7 @@ describe("POST /api/chats", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
     expect(body.error.message).toBe("Project path is unavailable.");
   });
 
@@ -629,7 +627,7 @@ describe("POST /api/chats", () => {
     });
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
   });
 
   it("returns 400 invalid_request for a non-chat registry model", async () => {
@@ -1624,7 +1622,7 @@ describe("GET /api/chats/messages", () => {
     );
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
-    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.code).toBe("INVALID_REQUEST");
     expect(body.error.message).toMatch(/limit/i);
   });
 
@@ -2157,6 +2155,6 @@ describe("cross-cutting", () => {
     });
     expect(res.status).toBe(413);
     const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("payload_too_large");
+    expect(body.error.code).toBe("PAYLOAD_TOO_LARGE");
   });
 });

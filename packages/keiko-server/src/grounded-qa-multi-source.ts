@@ -64,6 +64,14 @@ import {
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
 import {
+  GROUNDED_NO_EVIDENCE_ANSWER,
+  buildPackCitationIndex,
+  incompleteAnswerMarker,
+  packsHaveUsableEvidence,
+  reconcileInlineCitations,
+  unsupportedCitationMarker,
+} from "./grounded-faithfulness.js";
+import {
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
@@ -271,19 +279,13 @@ function isCoverageSummary(
   return coverage !== undefined;
 }
 
-function sumCoverage(
-  summaries: readonly CoverageSummary[],
-  field: SummableCoverageField,
-): number {
+function sumCoverage(summaries: readonly CoverageSummary[], field: SummableCoverageField): number {
   return summaries.reduce((sum, coverage) => sum + coverage[field], 0);
 }
 
 function mergeCoverageLimits(summaries: readonly CoverageSummary[]): CoverageSummary["limits"] {
   return {
-    maxFilesScanned: summaries.reduce(
-      (sum, coverage) => sum + coverage.limits.maxFilesScanned,
-      0,
-    ),
+    maxFilesScanned: summaries.reduce((sum, coverage) => sum + coverage.limits.maxFilesScanned, 0),
     maxMatchesReturned: summaries.reduce(
       (sum, coverage) => sum + coverage.limits.maxMatchesReturned,
       0,
@@ -685,14 +687,7 @@ async function retrieveAllSources(
       const i = nextIndex;
       nextIndex += 1;
       if (i >= ctx.scopes.length) return;
-      await retrieveOneSource(
-        ctx,
-        query,
-        perScopeBudgets,
-        labels,
-        acc,
-        i,
-      );
+      await retrieveOneSource(ctx, query, perScopeBudgets, labels, acc, i);
     }
   }
 
@@ -800,51 +795,91 @@ function assembleMultiSourceAnswer(
   sources: readonly RetrievedSource[],
   skipped: readonly SkippedScope[],
   assistant: GroundedAnswerResult,
-  ids: { readonly userMessageId: string; readonly assistantMessageId: string },
+  ids: {
+    readonly userMessageId: string;
+    readonly assistantMessageId: string;
+    // GEN-AI-GROUNDING-002/-003 (RB-4): the multi-source path abstained (no usable evidence across
+    // any source). Suppress citations and skip per-source evidence persistence.
+    readonly abstained: boolean;
+  },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
   const citationBundles = sourceCitationBundles(sources, redactor);
-  const citations = mergedCitations(citationBundles);
+  const citations = ids.abstained ? [] : mergedCitations(citationBundles);
   const summaries = citationBundles.map(({ source: src, citations: sourceCitations }) =>
     buildGroundedAnswerContextPackSummary(
       src.pack,
-      sourceCitations.length,
+      ids.abstained ? 0 : sourceCitations.length,
       src.elapsedMs,
       groundedContextSummaryInput({ contextProfile: ctx.contextProfile }, src.pack),
     ),
   );
   const mergedSummary = mergeContextPackSummaries(summaries);
-  const { firstRunId, runIds } = persistPerSourceEvidence(ctx, citationBundles);
+  const { firstRunId, runIds } = ids.abstained
+    ? { firstRunId: undefined, runIds: [] as readonly string[] }
+    : persistPerSourceEvidence(ctx, citationBundles);
+  // GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the model's inline citations against the merged
+  // evidence packs the model actually received; flag references to un-retrieved files.
+  const reconciliationUncertainty = ids.abstained
+    ? []
+    : buildMultiSourceReconciliationUncertainty(assistant, sources, redactor);
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,
     assistantMessageId: ids.assistantMessageId,
-    evidenceRunId: firstRunId,
+    ...(firstRunId === undefined ? {} : { evidenceRunId: firstRunId }),
     evidenceRunIds: runIds,
     content: redactString(redactor, assistant.content),
     citations,
-    uncertainty: mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
+    uncertainty: [
+      ...mergedUncertainty(sources, skipped, ctx.preSkipped ?? [], redactor),
+      ...reconciliationUncertainty,
+    ],
     omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
-    contextPack: {
-      ...mergedSummary,
-      usage: {
-        ...mergedSummary.usage,
-        modelInputTokens: mergedSummary.usage.modelInputTokens + assistant.usage.promptTokens,
-        modelOutputTokens: mergedSummary.usage.modelOutputTokens + assistant.usage.completionTokens,
-      },
+    contextPack: withMergedAssistantUsage(mergedSummary, assistant),
+  };
+}
+
+// Folds the answer's model-token usage into the merged multi-source context-pack summary.
+function withMergedAssistantUsage(
+  mergedSummary: ReturnType<typeof mergeContextPackSummaries>,
+  assistant: GroundedAnswerResult,
+): ReturnType<typeof mergeContextPackSummaries> {
+  return {
+    ...mergedSummary,
+    usage: {
+      ...mergedSummary.usage,
+      modelInputTokens: mergedSummary.usage.modelInputTokens + assistant.usage.promptTokens,
+      modelOutputTokens: mergedSummary.usage.modelOutputTokens + assistant.usage.completionTokens,
     },
   };
+}
+
+// Wire-projected reconciliation markers (unsupported-citation + incomplete-answer) for the
+// multi-source path. Mirrors the single-source reconciliation in runGroundedExploration.
+function buildMultiSourceReconciliationUncertainty(
+  assistant: GroundedAnswerResult,
+  sources: readonly RetrievedSource[],
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  const nowMs = Date.now();
+  const reconciliation = reconcileInlineCitations(
+    assistant.content,
+    buildPackCitationIndex(sources.map((s) => s.pack)),
+  );
+  const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
+  const markers = [
+    ...(unsupported === undefined ? [] : [unsupported]),
+    ...(assistant.finishReason === "length" ? [incompleteAnswerMarker(nowMs)] : []),
+  ];
+  return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
 }
 
 export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<RouteResult> {
   const query = buildQuery(ctx.content, () => Date.now());
   const labels = sourceLabels(ctx.scopes);
-  const perScopeBudgets = splitExplorationBudgets(
-    DEFAULT_EXPLORATION_BUDGET,
-    ctx.scopes,
-    query,
-  );
+  const perScopeBudgets = splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, ctx.scopes, query);
   let outcome: RetrievalOutcome | RouteResult;
   try {
     outcome = await retrieveAllSources(ctx, query, perScopeBudgets, labels);
@@ -855,17 +890,13 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     return outcome;
   }
   const { retrieved, skipped } = outcome;
-  let assistant: GroundedAnswerResult;
-  try {
-    assistant = normalizeGroundedAnswerPayload(
-      await ctx.answerer(
-        ctx.content,
-        retrieved.map((s) => ({ label: s.label, pack: s.pack })),
-      ),
-    );
-    ensureNotCancelled(ctx.signal);
-  } catch (error) {
-    return mapMultiSourceError(error, ctx.deps);
+  // GEN-AI-GROUNDING-002/-003 (RB-4): abstain BEFORE the model call when no source carries usable
+  // evidence — the folders path must not answer confidently over zero evidence, and no grounded
+  // evidence manifest may be persisted.
+  const abstained = !packsHaveUsableEvidence(retrieved.map((s) => s.pack));
+  const assistant = await answerMultiSource(ctx, retrieved, abstained);
+  if (isRouteResult(assistant)) {
+    return assistant;
   }
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
@@ -876,20 +907,53 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   const answer = assembleMultiSourceAnswer(ctx, retrieved, skipped, assistant, {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
+    abstained,
   });
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer);
-  rememberGroundedTurn({
-    assistantMessageId: assistantMessage.id,
-    chatId: ctx.chat.id,
-    workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
-    evidenceRunId: answer.evidenceRunId,
-    packs: retrieved.map((source) => source.pack),
-  });
+  if (!abstained) {
+    rememberGroundedTurn({
+      assistantMessageId: assistantMessage.id,
+      chatId: ctx.chat.id,
+      workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
+      ...(answer.evidenceRunId === undefined ? {} : { evidenceRunId: answer.evidenceRunId }),
+      packs: retrieved.map((source) => source.pack),
+    });
+  }
   return { status: 200, body: answer };
 }
 
-function isRouteResult(value: RetrievalOutcome | RouteResult): value is RouteResult {
+function isRouteResult(
+  value: RetrievalOutcome | RouteResult | GroundedAnswerResult,
+): value is RouteResult {
   return "status" in value;
+}
+
+// Produces the multi-source answer: a deterministic no-evidence answer when abstaining (no model
+// call), otherwise the model answer over the merged packs. Returns a RouteResult on failure so
+// runMultiSourceAsk stays under the LOC bound (GEN-AI-GROUNDING-002/-003, RB-4).
+async function answerMultiSource(
+  ctx: MultiSourceAskInput,
+  retrieved: readonly RetrievedSource[],
+  abstained: boolean,
+): Promise<GroundedAnswerResult | RouteResult> {
+  if (abstained) {
+    return {
+      content: GROUNDED_NO_EVIDENCE_ANSWER,
+      usage: { promptTokens: 0, completionTokens: 0 },
+    };
+  }
+  try {
+    const assistant = normalizeGroundedAnswerPayload(
+      await ctx.answerer(
+        ctx.content,
+        retrieved.map((s) => ({ label: s.label, pack: s.pack })),
+      ),
+    );
+    ensureNotCancelled(ctx.signal);
+    return assistant;
+  } catch (error) {
+    return mapMultiSourceError(error, ctx.deps);
+  }
 }
 
 function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {

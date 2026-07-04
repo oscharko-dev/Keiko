@@ -1,4 +1,4 @@
-// Voice Digital Twin profile × environment model (Epic #491, Issue #505; ADR-0068).
+// Voice Digital Twin profile × environment model (Epic #491, Issue #505; ADR-0110).
 //
 // The two orthogonal axes the capstone evaluates: the contract `VoiceProfile` capability axis and the
 // deployment ENVIRONMENT axis (`docs/voice/deployment-profile-matrix.md` §1). `effectiveVoiceProfile`

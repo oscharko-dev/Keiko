@@ -6,6 +6,7 @@ import {
   type LocalSecretVault,
   type LocalVaultKeychainAccess,
 } from "@oscharko-dev/keiko-security/secret-vault";
+import { SecretboxError } from "@oscharko-dev/keiko-security/errors";
 import {
   EDITOR_HOT_EXIT_TTL_MS,
   type EditorDocumentVersion,
@@ -50,11 +51,23 @@ export interface CreateEditorHotExitStoreOptions {
   readonly stateDir: string;
   readonly env: EnvSource;
   readonly keychainAccess?: LocalVaultKeychainAccess | undefined;
+  // Test/DI seam: supply a pre-built vault (or an instrumented wrapper) instead of resolving the
+  // on-disk vault key. Production callers omit this; the vault is memoized on first use as usual.
+  readonly vault?: LocalSecretVault | undefined;
 }
 
 interface StoredItem {
   readonly ref: string;
   readonly snapshot: EditorHotExitStoredSnapshot;
+}
+
+// Non-secret eviction metadata cached in-process so prune() does not have to decrypt every stored
+// snapshot on the 400ms keystroke-flush hot path. Only size + timestamp (both non-secret and already
+// surfaced in write results) are cached; snapshot content stays AES-GCM sealed at rest and is never
+// materialized here.
+interface HotExitMeta {
+  readonly contentSizeBytes: number;
+  readonly updatedAt: number;
 }
 
 function contentSizeBytes(content: string): number {
@@ -120,6 +133,27 @@ function parseStoredSnapshot(raw: string | undefined): EditorHotExitStoredSnapsh
   }
 }
 
+function readStoredSnapshot(
+  vault: LocalSecretVault,
+  ref: string,
+): EditorHotExitStoredSnapshot | null {
+  let raw: string | undefined;
+  try {
+    raw = vault.get(ref);
+  } catch (error) {
+    if (error instanceof SecretboxError) {
+      vault.delete(ref);
+      return null;
+    }
+    throw error;
+  }
+  const snapshot = parseStoredSnapshot(raw);
+  if (raw !== undefined && snapshot === null) {
+    vault.delete(ref);
+  }
+  return snapshot;
+}
+
 function expired(snapshot: EditorHotExitStoredSnapshot, nowMs: number): boolean {
   return snapshot.updatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs;
 }
@@ -142,66 +176,109 @@ function listHotExitItems(vault: LocalSecretVault): readonly StoredItem[] {
   const out: StoredItem[] = [];
   for (const ref of vault.list()) {
     if (!isSnapshotRef(ref)) continue;
-    const snapshot = parseStoredSnapshot(vault.get(ref));
+    const snapshot = readStoredSnapshot(vault, ref);
     if (snapshot !== null) out.push({ ref, snapshot });
   }
   return out;
 }
 
-function prune(vault: LocalSecretVault, nowMs: number, incoming: StoredItem): void {
-  const retained: StoredItem[] = [];
-  for (const item of listHotExitItems(vault)) {
-    if (expired(item.snapshot, nowMs)) {
-      vault.delete(item.ref);
-    } else if (item.ref !== incoming.ref) {
-      retained.push(item);
-    }
-  }
-  let total =
-    incoming.snapshot.contentSizeBytes +
-    retained.reduce((sum, item) => sum + item.snapshot.contentSizeBytes, 0);
-  if (total <= MAX_TOTAL_BYTES) return;
-  for (const item of retained.sort(
-    (left, right) => left.snapshot.updatedAt - right.snapshot.updatedAt,
-  )) {
-    if (total <= MAX_TOTAL_BYTES) break;
-    vault.delete(item.ref);
-    total -= item.snapshot.contentSizeBytes;
-  }
-}
-
+// eslint-disable-next-line max-lines-per-function -- factory closes over the private vault + metaIndex state that getVault/getMetaIndex/prune and the returned write/read/list/delete methods must all share; extracting them would either leak that mutable state or force it through parameters, so the closure is kept whole.
 export function createEditorHotExitStore(
   options: CreateEditorHotExitStoreOptions,
 ): EditorHotExitStore {
   let vault: LocalSecretVault | undefined;
+  // Lazily built once on cold start (one decrypt pass), then maintained purely on write/delete so no
+  // subsequent prune decrypts anything. Keyed by ref -> {contentSizeBytes, updatedAt}.
+  let metaIndex: Map<string, HotExitMeta> | undefined;
+
   const getVault = (): LocalSecretVault => {
-    vault ??= hotExitVault(options);
+    vault ??= options.vault ?? hotExitVault(options);
     return vault;
   };
+
+  const getMetaIndex = (activeVault: LocalSecretVault): Map<string, HotExitMeta> => {
+    if (metaIndex === undefined) {
+      metaIndex = new Map<string, HotExitMeta>();
+      // Cold-start build: decrypt each stored snapshot exactly once to seed non-secret metadata.
+      // Corrupt/undecodable snapshots are dropped by readStoredSnapshot and simply omitted here.
+      for (const item of listHotExitItems(activeVault)) {
+        metaIndex.set(item.ref, {
+          contentSizeBytes: item.snapshot.contentSizeBytes,
+          updatedAt: item.snapshot.updatedAt,
+        });
+      }
+    }
+    return metaIndex;
+  };
+
+  // Evict expired entries and (if still over budget) the oldest retained entries, all from the
+  // in-memory metadata index — never decrypting snapshot content on the write hot path.
+  const prune = (activeVault: LocalSecretVault, nowMs: number, incomingRef: string): void => {
+    const index = getMetaIndex(activeVault);
+    const retained: { ref: string; meta: HotExitMeta }[] = [];
+    for (const [ref, meta] of index) {
+      if (meta.updatedAt + EDITOR_HOT_EXIT_TTL_MS < nowMs) {
+        activeVault.delete(ref);
+        index.delete(ref);
+      } else if (ref !== incomingRef) {
+        retained.push({ ref, meta });
+      }
+    }
+    const incomingSize = index.get(incomingRef)?.contentSizeBytes ?? 0;
+    let total = incomingSize + retained.reduce((sum, item) => sum + item.meta.contentSizeBytes, 0);
+    if (total <= MAX_TOTAL_BYTES) return;
+    for (const item of retained.sort((left, right) => left.meta.updatedAt - right.meta.updatedAt)) {
+      if (total <= MAX_TOTAL_BYTES) break;
+      activeVault.delete(item.ref);
+      index.delete(item.ref);
+      total -= item.meta.contentSizeBytes;
+    }
+  };
+
   return {
     snapshotRefFor,
     write(snapshot): EditorHotExitWriteResult {
       const ref = snapshotRefFor(snapshot.workspaceRoot, snapshot.relativePath);
       const payload = payloadFor(snapshot);
       const activeVault = getVault();
-      prune(activeVault, snapshot.updatedAt, { ref, snapshot: payload });
-      activeVault.set(ref, JSON.stringify(payload));
+      const index = getMetaIndex(activeVault);
+      // Record the incoming entry's non-secret metadata BEFORE prune so the budget math sees it.
+      index.set(ref, {
+        contentSizeBytes: payload.contentSizeBytes,
+        updatedAt: payload.updatedAt,
+      });
+      prune(activeVault, snapshot.updatedAt, ref);
+      // prune may have evicted the incoming ref if it alone exceeds the budget; only persist and keep
+      // the metadata entry when it survived pruning.
+      if (index.has(ref)) {
+        activeVault.set(ref, JSON.stringify(payload));
+      }
       return { snapshotRef: ref, contentSizeBytes: payload.contentSizeBytes };
     },
     read(snapshotRef, nowMs = Date.now()): EditorHotExitStoredSnapshot | null {
       if (!isSnapshotRef(snapshotRef)) return null;
       const activeVault = getVault();
-      const snapshot = parseStoredSnapshot(activeVault.get(snapshotRef));
-      if (snapshot === null) return null;
-      if (expired(snapshot, nowMs)) {
-        activeVault.delete(snapshotRef);
+      const snapshot = readStoredSnapshot(activeVault, snapshotRef);
+      if (snapshot === null) {
+        metaIndex?.delete(snapshotRef);
         return null;
       }
+      if (expired(snapshot, nowMs)) {
+        activeVault.delete(snapshotRef);
+        metaIndex?.delete(snapshotRef);
+        return null;
+      }
+      // Keep the metadata index consistent with what was actually observed on disk.
+      metaIndex?.set(snapshotRef, {
+        contentSizeBytes: snapshot.contentSizeBytes,
+        updatedAt: snapshot.updatedAt,
+      });
       return snapshot;
     },
     delete(snapshotRef): void {
       if (!isSnapshotRef(snapshotRef)) return;
       getVault().delete(snapshotRef);
+      metaIndex?.delete(snapshotRef);
     },
   };
 }

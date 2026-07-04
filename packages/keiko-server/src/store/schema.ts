@@ -298,6 +298,13 @@ function setUserVersion(db: DatabaseSync, v: number): void {
 // Applies pending migrations inside a single transaction. Throws (and rolls back) on any failure.
 export function runMigrations(db: DatabaseSync): void {
   const start = currentUserVersion(db);
+  if (start > SCHEMA_VERSION) {
+    throw new Error(
+      `UI store schema version ${String(start)} is newer than this binary supports (${String(
+        SCHEMA_VERSION,
+      )}).`,
+    );
+  }
   const pending = MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
   db.exec("BEGIN");

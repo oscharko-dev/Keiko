@@ -15,7 +15,7 @@ export const CONVERSATION_CAPABILITY_CONTRACT_VERSION = 3 as const;
 
 // ─── Modality discriminant ────────────────────────────────────────────────────
 
-// "voice" (Issue #493, ADR-0058 D5) is the modality discriminant for speech-to-text,
+// "voice" (Issue #493, ADR-0100 D5) is the modality discriminant for speech-to-text,
 // speech-output, and realtime-speech endpoints (the Voice Digital Twin). It is deliberately a
 // distinct kind, NOT a flag on "chat", so a transcription/realtime endpoint can never be elected
 // for chat completion, is never conversation-eligible, and is filtered out of the chat smoke-test
@@ -57,7 +57,7 @@ export const INFILLING_ALIGNMENTS: readonly InfillingAlignment[] = [
   "edit-tuned",
 ] as const;
 
-// ─── Voice provider locality (Issue #493, ADR-0058 D7) ─────────────────────────
+// ─── Voice provider locality (Issue #493, ADR-0100 D7) ─────────────────────────
 // Where a configured voice provider runs. Provider-neutral: the locality is declared explicitly
 // per capability, never inferred from an endpoint URL, environment name, or package availability
 // (the epic invariant). Azure Foundry is ONE valid provider, never a required destination.
@@ -147,11 +147,11 @@ export interface ModelCapability {
   /**
    * Whether the voice provider advertises realtime, full-duplex speech (interruptible,
    * colleague-like conversation / speech-in-speech-out). Only meaningful for `kind: "voice"`.
-   * Realtime is the gate for the full-conversation profile (Issue #493 AC3, ADR-0058 D2).
+   * Realtime is the gate for the full-conversation profile (Issue #493 AC3, ADR-0100 D2).
    */
   readonly supportsRealtimeVoice?: boolean | undefined;
   /**
-   * Where a `kind: "voice"` provider runs (Issue #493, ADR-0058 D7). Declared explicitly, never
+   * Where a `kind: "voice"` provider runs (Issue #493, ADR-0100 D7). Declared explicitly, never
    * inferred from the endpoint URL or environment name. Required when `kind === "voice"`.
    */
   readonly voiceProviderLocality?: VoiceProviderLocality | undefined;
@@ -233,7 +233,7 @@ export interface CompletionModelSelection {
   readonly degradeReason?: CompletionDegradeReason | undefined;
 }
 
-// ─── Voice capability predicates (Issue #493, ADR-0058 D2/D5) ──────────────────
+// ─── Voice capability predicates (Issue #493, ADR-0100 D2/D5) ──────────────────
 // Pure, total predicates over a capability. They live in contracts (not keiko-model-gateway) so
 // the browser-tier keiko-ui can value-import them without crossing ADR-0019 trust rule 3 (UI →
 // model-gateway/src forbidden at error), mirroring `modelSupportsInfilling`. Every predicate is
@@ -266,7 +266,7 @@ export function modelSupportsRealtimeVoice(capability: ModelCapability): boolean
 // provider base URL, credential, model id, audio buffer, or transcript — so it is safe to
 // serialise across the host/server boundary and safe to log (Issue #493 AC4/AC5, by construction).
 
-// The effective voice profile, ordered by the graceful-degradation ladder (ADR-0058 D2/architecture
+// The effective voice profile, ordered by the graceful-degradation ladder (ADR-0100 D2/architecture
 // §5). `none` means no voice affordance is rendered at all.
 export type VoiceProfile = "none" | "speech-to-text" | "speech-output" | "full-realtime";
 
@@ -277,7 +277,7 @@ export type VoiceProfile = "none" | "speech-to-text" | "speech-output" | "full-r
 export type VoiceUnavailableReason =
   "no-voice-provider" | "policy-disabled" | "provider-unreachable";
 
-// Transport posture for the resolved profile (ADR-0058 D3). The control/signaling plane
+// Transport posture for the resolved profile (ADR-0100 D3). The control/signaling plane
 // ("WebSocket is authoritative") is realized today on the loopback HTTP + SSE seam, so
 // `websocketControl` reflects the control-plane role being active for any non-`none` profile.
 // `webrtcMedia` (the preferred media plane) is indicated only for the full-realtime profile.

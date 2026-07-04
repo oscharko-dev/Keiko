@@ -61,10 +61,38 @@ export function useCapsuleDetail(
       latestJob?.status === "queued" ||
       latestJob?.status === "running";
     if (!isActive) return;
-    const timer = window.setInterval(() => {
-      void load({ quiet: true });
-    }, 2_000);
-    return () => window.clearInterval(timer);
+    // GEN-PERF-RENDER-005 — pause the 2s poll while the tab is hidden (it kept
+    // fetching every 2s in a background tab for the whole job, which can run for
+    // minutes on large ingestion). Resume with an immediate catch-up on return to
+    // visible so a job that finished while hidden reflects promptly.
+    let timer: number | null = null;
+    const isHidden = (): boolean =>
+      typeof document !== "undefined" && document.visibilityState === "hidden";
+    const startPolling = (): void => {
+      if (timer !== null) return;
+      timer = window.setInterval(() => {
+        void load({ quiet: true });
+      }, 2_000);
+    };
+    const stopPolling = (): void => {
+      if (timer === null) return;
+      window.clearInterval(timer);
+      timer = null;
+    };
+    const sync = (): void => {
+      if (isHidden()) {
+        stopPolling();
+      } else {
+        void load({ quiet: true });
+        startPolling();
+      }
+    };
+    if (!isHidden()) startPolling();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", sync);
+    };
   }, [data?.capsule.lifecycleState, data?.indexingJobs, load]);
 
   function reload(): void {

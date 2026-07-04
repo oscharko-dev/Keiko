@@ -9,9 +9,10 @@
 //   B2  Lazy editor + Monaco runtime gzip total                          — ≤ 2,621,440 B (2.5 MB)
 //   B3  Per Monaco worker chunk gzip                                     — ≤ 768,000 B  (750 KB)
 //
-// This script measures B1/B2/B3 against the production static export produced by `npm run build:ui`
-// (`packages/keiko-ui/out`). It is deterministic (gzip level 9), read-only, and emits both a human
-// table and a machine-readable JSON record (with `--json`) for the closure-evidence document.
+// This script measures B1/B2/B3 against the production static export copied into the published
+// product by `npm run build:ui` (`dist/ui/static`). Normal check mode compares the freshly measured
+// bundle to the committed JSON evidence so source-only or stale static-export inference cannot pass.
+// Use `--json` after a real `build:ui` run to update the committed evidence.
 //
 // Worker-loading nuance (D4): the keiko-ui host disables every built-in Monaco TypeScript/JavaScript
 // language-service feature (`editorMonacoRuntime.ts` `setModeConfiguration(GOVERNED_LANGUAGE_SERVICE
@@ -19,6 +20,7 @@
 // B2/B3 against what SHIPS in the production static export. Loaded-worker diagnostics are kept as
 // runtime evidence, but they cannot turn an oversized shipped export into a pass.
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { URL } from "node:url";
@@ -33,10 +35,17 @@ import {
 export const RELEASE_EVIDENCE_BUDGETS = {
   // B2: lazy editor + Monaco runtime total, gzip. 2.5 MiB, matching
   // scripts/editor-bundle-size.budget.json `lazyEditorPlusMonacoRuntimeGzipBytesBudget`.
-  lazyEditorPlusMonacoRuntimeGzipBytesBudget: 2_621_440,
+  lazyEditorPlusMonacoRuntimeGzipBytesBudget: JSON.parse(
+    readFileSync(new URL("./editor-bundle-size.budget.json", import.meta.url), "utf8"),
+  ).lazyEditorPlusMonacoRuntimeGzipBytesBudget,
   // B3: per Monaco worker chunk, gzip. 750 KB.
-  perWorkerChunkGzipBytesBudget: 768_000,
+  perWorkerChunkGzipBytesBudget: JSON.parse(
+    readFileSync(new URL("./editor-bundle-size.budget.json", import.meta.url), "utf8"),
+  ).perWorkerChunkGzipBytesBudget,
 };
+
+const RELEASE_EVIDENCE_VERSION = 1;
+const RELEASE_EVIDENCE_PATH = join("docs", "release", "1209-bundle-evidence.json");
 
 // ─── Pure classification helpers (no I/O) ───────────────────────────────────────────────────────────
 
@@ -164,17 +173,78 @@ export function evaluateBundleBudgets(chunks, budgets = RELEASE_EVIDENCE_BUDGETS
 
 // ─── Runner (I/O) ─────────────────────────────────────────────────────────────────────────────────
 
-function walkJsFiles(dir) {
+function walkFiles(dir, predicate) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...walkJsFiles(full));
-    } else if (entry.name.endsWith(".js")) {
+      out.push(...walkFiles(full, predicate));
+    } else if (predicate(entry.name, full)) {
       out.push(full);
     }
   }
   return out;
+}
+
+function walkJsFiles(dir) {
+  return walkFiles(dir, (name) => name.endsWith(".js"));
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function staticExportSummary(repoRoot, outDir) {
+  const files = walkFiles(outDir, () => true)
+    .map((file) => relative(outDir, file).split(sep).join("/"))
+    .sort();
+  return {
+    root: relative(repoRoot, outDir).split(sep).join("/"),
+    fileCount: files.length,
+  };
+}
+
+function measureChunkInventory(repoRoot, chunkDir) {
+  return walkJsFiles(chunkDir).map((path) => {
+    const buffer = readFileSync(path);
+    const source = buffer.toString("utf8");
+    return {
+      path: relative(repoRoot, path).split(sep).join("/"),
+      rawBytes: buffer.length,
+      gzipBytes: gzipSizeBytes(buffer),
+      isEditorRuntime: isEditorRuntimeChunk(source),
+      workerLabel: classifyWorkerLabel(source),
+    };
+  });
+}
+
+function measurementFingerprint(record) {
+  const stableMeasurement = {
+    b1: record.b1,
+    b2: record.b2,
+    b3: record.b3,
+    disabledLanguageWorkers: record.disabledLanguageWorkers,
+    editorRuntimeChunkCount: record.editorRuntimeChunkCount,
+    editorRuntimeChunks: record.editorRuntimeChunks.map((chunk) => ({
+      gzipBytes: chunk.gzipBytes,
+      rawBytes: chunk.rawBytes,
+      workerLabel: chunk.workerLabel,
+    })),
+    workers: record.workers.map((worker) => ({
+      gzipBytes: worker.gzipBytes,
+      label: worker.label,
+    })),
+  };
+  return createHash("sha256").update(stableJson(stableMeasurement)).digest("hex");
 }
 
 function measureFirstLoad(repoRoot, outDir) {
@@ -199,29 +269,25 @@ function measureFirstLoad(repoRoot, outDir) {
 }
 
 export function measureReleaseEvidence(repoRoot) {
-  const outDir = join(repoRoot, "packages", "keiko-ui", "out");
+  const outDir = join(repoRoot, "dist", "ui", "static");
   if (!existsSync(outDir)) {
     throw new Error(
       `Static export ${relative(repoRoot, outDir)} not found. Run \`npm run build:ui\` first.`,
     );
   }
   const chunkDir = join(outDir, "_next", "static", "chunks");
-  const chunkFiles = walkJsFiles(chunkDir);
-  const chunks = chunkFiles.map((path) => {
-    const buffer = readFileSync(path);
-    const source = buffer.toString("utf8");
-    return {
-      path: relative(repoRoot, path).split(sep).join("/"),
-      rawBytes: buffer.length,
-      gzipBytes: gzipSizeBytes(buffer),
-      isEditorRuntime: isEditorRuntimeChunk(source),
-      workerLabel: classifyWorkerLabel(source),
-    };
-  });
+  if (!existsSync(chunkDir)) {
+    throw new Error(
+      `Static export chunks ${relative(repoRoot, chunkDir)} not found. Run \`npm run build:ui\` first.`,
+    );
+  }
+  const chunks = measureChunkInventory(repoRoot, chunkDir);
 
   const firstLoad = measureFirstLoad(repoRoot, outDir);
   const budgets = evaluateBundleBudgets(chunks);
-  return {
+  const record = {
+    releaseEvidenceVersion: RELEASE_EVIDENCE_VERSION,
+    staticExport: staticExportSummary(repoRoot, outDir),
     b1: {
       firstLoadScriptCount: firstLoad.firstLoadScriptCount,
       monacoMarkersInFirstLoad: firstLoad.monacoMarkerFindings.length,
@@ -238,6 +304,10 @@ export function measureReleaseEvidence(repoRoot) {
         workerLabel: c.workerLabel,
       })),
   };
+  return {
+    ...record,
+    measurementSha256: measurementFingerprint(record),
+  };
 }
 
 function fmtKiB(bytes) {
@@ -251,6 +321,9 @@ function verdict(ok) {
 function printReport(record) {
   const lines = [];
   lines.push("Keiko Editor release-evidence bundle measurement (Issue #1209, ADR-0042 D3.6)");
+  lines.push(
+    `Static export: ${record.staticExport.root} (${String(record.staticExport.fileCount)} files; measurement ${record.measurementSha256})`,
+  );
   lines.push("");
   lines.push(
     `B1  first-load Monaco/editor bytes: ${verdict(record.b1.ok)} ` +
@@ -286,13 +359,56 @@ function printReport(record) {
   return lines.join("\n");
 }
 
+function evidenceDiffMessage(expected, actual) {
+  if (expected.measurementSha256 !== actual.measurementSha256) {
+    return (
+      `measurement fingerprint differs: committed ${String(expected.measurementSha256)} ` +
+      `but current ${actual.measurementSha256}`
+    );
+  }
+  for (const path of [
+    ["b1", "monacoMarkersInFirstLoad"],
+    ["b2", "shipsTotalBytes"],
+    ["b3", "largestWorkerBytes"],
+    ["b3", "largestWorkerLabel"],
+    ["editorRuntimeChunkCount"],
+  ]) {
+    const expectedValue = path.reduce((value, key) => value?.[key], expected);
+    const actualValue = path.reduce((value, key) => value?.[key], actual);
+    if (expectedValue !== actualValue) {
+      return `${path.join(".")} differs: committed ${String(expectedValue)} but current ${String(actualValue)}`;
+    }
+  }
+  return "committed evidence JSON differs from the current static export";
+}
+
+function assertCommittedEvidenceFresh(repoRoot, record) {
+  const evidencePath = join(repoRoot, RELEASE_EVIDENCE_PATH);
+  if (!existsSync(evidencePath)) {
+    throw new Error(
+      `Committed editor release evidence ${RELEASE_EVIDENCE_PATH} not found. ` +
+        "Run `npm run build:ui && node scripts/editor-release-evidence.mjs --json`.",
+    );
+  }
+  const committed = JSON.parse(readFileSync(evidencePath, "utf8"));
+  if (stableJson(committed) !== stableJson(record)) {
+    throw new Error(
+      `Committed editor release evidence is stale (${evidenceDiffMessage(committed, record)}). ` +
+        "Run `npm run build:ui && node scripts/editor-release-evidence.mjs --json` and commit the result.",
+    );
+  }
+}
+
 if (process.argv[1] && process.argv[1].endsWith("editor-release-evidence.mjs")) {
   const repoRoot = process.cwd();
   const record = measureReleaseEvidence(repoRoot);
-  if (process.argv.includes("--json")) {
-    const outPath = join(repoRoot, "docs", "release", "1209-bundle-evidence.json");
+  const writeJson = process.argv.includes("--json");
+  if (writeJson) {
+    const outPath = join(repoRoot, RELEASE_EVIDENCE_PATH);
     writeFileSync(outPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     console.log(`Wrote ${relative(repoRoot, outPath)}`);
+  } else {
+    assertCommittedEvidenceFresh(repoRoot, record);
   }
   console.log(printReport(record));
   const failed = !record.b1.ok || !record.b2.ok || !record.b3.ok;

@@ -60,21 +60,22 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
 // so architecture violations cannot bypass the release hook; Epic #423 post-closure audit
 // added `arch:check:negative` immediately after `arch:check` so rule deletions are caught in
 // the publish path, not only in CI. Release fix #895 adds native optional dependency pruning
-  // before architecture/package-surface checks so publisher-machine canvas payloads cannot leak
-  // into the bundled artifact. Security release hardening adds `check:workspace-supply-chain` before
-  // package-surface checks so SBOM/license drift blocks packaging. Release hardening for 0.2.0 adds
-  // `check:publish-manifests` so workspace packages cannot reach npm with private runtime packages or
-  // wildcard internal dependency specs. Issue #1690 adds `check:release-impact` so packed packages
-  // carry reviewed update-impact metadata, and makes `prepublishOnly` use the stricter publish-mode
-  // approval variant. The pin stays "exact" against the live `package.json`; it does not lock the
-  // chain to a particular historical length. The security remediation audit adds generated build
-  // artifact pruning, shell-spawn guardrails, and the 42-finding regression matrix before package
-  // surface checks.
+// before architecture/package-surface checks so publisher-machine canvas payloads cannot leak
+// into the bundled artifact. Security release hardening adds `check:workspace-supply-chain` before
+// package-surface checks so SBOM/license drift blocks packaging. Release hardening for 0.2.0 adds
+// `check:publish-manifests` so workspace packages cannot reach npm with private runtime packages or
+// wildcard internal dependency specs. Issue #1690 adds `check:release-impact` so packed packages
+// carry reviewed update-impact metadata, and makes `prepublishOnly` use the stricter publish-mode
+// approval variant. The pin stays "exact" against the live `package.json`; it does not lock the
+// chain to a particular historical length. The security remediation audit adds generated build
+// artifact pruning, shell-spawn guardrails, and the 42-finding regression matrix before package
+// surface checks.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
   "npm run build:ui",
+  "npm run check:editor-release-evidence",
   "npm run prune:package-build-artifacts",
   "npm run prune:package-native-optionals",
   "npm run check:shell-spawn-guardrails",

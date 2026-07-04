@@ -39,6 +39,8 @@ function FooterImpl({
 }: FooterProps): ReactNode {
   const t = useTranslate();
   const windowPaletteRef = useRef<HTMLSpanElement | null>(null);
+  const windowTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const windowPanelRef = useRef<HTMLDivElement | null>(null);
   const [installedVersion, setInstalledVersion] = useState(t("footer.versionLoading"));
   const windowLabel =
     winCount === 1
@@ -79,7 +81,13 @@ function FooterImpl({
       }
     };
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onCloseWindowPalette();
+      if (event.key === "Escape") {
+        // GEN-UI-FOCUS-011 — Escape closes the palette AND returns focus to the trigger button
+        // (mirrors TaskWorkspaceSwitcher's Escape→triggerRef.focus()), so a keyboard user is never
+        // stranded on a removed palette element after dismissal.
+        onCloseWindowPalette();
+        windowTriggerRef.current?.focus();
+      }
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -88,6 +96,17 @@ function FooterImpl({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [onCloseWindowPalette, winCount, windowPaletteOpen]);
+
+  // GEN-UI-FOCUS-011 — when the palette opens, move focus into it (first window card, or the group
+  // container as a fallback) so keyboard users land on the freshly revealed controls instead of
+  // staying on the trigger with the panel invisible to their focus.
+  useEffect(() => {
+    if (!windowPaletteOpen || winCount === 0) return;
+    const panel = windowPanelRef.current;
+    if (panel === null) return;
+    const firstCard = panel.querySelector<HTMLElement>(".ft-window-card");
+    (firstCard ?? panel).focus();
+  }, [windowPaletteOpen, winCount]);
 
   return (
     // SH-02: tabIndex={-1} is intentional — this footer is a programmatic focus target
@@ -107,6 +126,7 @@ function FooterImpl({
       </span>
       <span className="ft-window-wrap" ref={windowPaletteRef}>
         <button
+          ref={windowTriggerRef}
           type="button"
           className="ft-seg ft-accent ft-window-trigger"
           aria-atomic="true"
@@ -119,10 +139,15 @@ function FooterImpl({
         </button>
         {windowPaletteOpen && winCount > 0 ? (
           <div
+            ref={windowPanelRef}
             id="footer-window-palette"
             className="ft-window-palette"
             role="group"
             aria-label={t("footer.openWindows")}
+            // GEN-UI-FOCUS-011 — focusable fallback target so focus can move into the palette on open
+            // even when no window card exists to receive it.
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.4.3 focus target for the open palette
+            tabIndex={-1}
           >
             <div className="ft-window-palette-head">{t("footer.openWindows")}</div>
             <div className="ft-window-list">

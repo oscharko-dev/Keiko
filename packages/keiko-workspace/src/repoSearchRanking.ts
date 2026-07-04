@@ -13,11 +13,7 @@ export interface PathLexicalSignals {
 }
 
 type PathBoostSignal =
-  | "exactPathBoost"
-  | "basenameBoost"
-  | "segmentBoost"
-  | "tokenBoost"
-  | "substringBoost";
+  "exactPathBoost" | "basenameBoost" | "segmentBoost" | "tokenBoost" | "substringBoost";
 
 interface LexicalPathContext {
   readonly path: string;
@@ -139,9 +135,7 @@ export function lexicalPathSignals(
     if (match !== undefined) addPathTermMatch(signals, match);
   }
   const coverageBonus =
-    signals.matchedTerms === 0
-      ? 0
-      : Math.round((signals.matchedTerms / queryTerms.length) * 24);
+    signals.matchedTerms === 0 ? 0 : Math.round((signals.matchedTerms / queryTerms.length) * 24);
   return {
     score:
       signals.exactPathBoost +

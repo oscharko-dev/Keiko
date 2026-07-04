@@ -135,6 +135,14 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
       closeAndRestoreFocus();
       return;
     }
+    if (event.key === "Tab") {
+      // Focus containment (GEN-UI-FOCUS-004): a role=menu has no focus trap, so Tab would otherwise
+      // move focus to an element behind the menu while it stays open and orphaned. Close the menu and
+      // let the Tab proceed (no preventDefault) so focus lands on the next element in reading order.
+      // Focus stays on the trigger's DOM position, so tabbing continues naturally from there.
+      setOpen(false);
+      return;
+    }
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     const menu = menuRef.current;
     if (menu === null) return;

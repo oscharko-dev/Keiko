@@ -104,6 +104,50 @@ describe("OpenAiAdapter.call", () => {
     expect(seenCustom).toBe(CONFIG.apiKey);
   });
 
+  it("RB-4 (GEN-AI-GATEWAY-002): routes an OpenAI-compatible provider to /chat/completions", async () => {
+    let seenUrl = "";
+    const adapter = adapterWith((url) => {
+      if (typeof url === "string") seenUrl = url;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, CONFIG);
+    expect(seenUrl).toBe("https://provider.example/v1/chat/completions");
+  });
+
+  it("RB-4 (GEN-AI-GATEWAY-002): routes an Azure-configured chat provider to its deployment URL", async () => {
+    let seenUrl = "";
+    const adapter = adapterWith((url) => {
+      if (typeof url === "string") seenUrl = url;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, {
+      ...CONFIG,
+      baseUrl: "https://my-azure.openai.azure.com",
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2024-06-01",
+    });
+    expect(seenUrl).toBe(
+      "https://my-azure.openai.azure.com/openai/deployments/example-chat-model/chat/completions?api-version=2024-06-01",
+    );
+  });
+
+  it("RB-4 (GEN-AI-GATEWAY-001): preserves a truncated finishReason so callers can detect an incomplete answer", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { content: "partial" }, finish_reason: "length" }],
+          usage: { prompt_tokens: 3, completion_tokens: 4 },
+        }),
+      ),
+    );
+    const result = await adapter.call(REQUEST, CONFIG);
+    expect(result.finishReason).toBe("length");
+  });
+
   it("serializes image content parts in OpenAI-compatible message payloads", async () => {
     let seenBody: unknown;
     const adapter = adapterWith((_url, init) => {

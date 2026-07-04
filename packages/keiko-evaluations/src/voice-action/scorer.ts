@@ -1,4 +1,4 @@
-// Voice Action Governance security scorer (Epic #491, Issue #503; ADR-0066).
+// Voice Action Governance security scorer (Epic #491, Issue #503; ADR-0108).
 //
 // Pure per-dimension scoring + suite aggregation for the six security dimensions. Each dimension is a
 // pure function (fixture, observation) -> VoiceActionDimensionResult. A dimension a fixture does not

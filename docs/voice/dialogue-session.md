@@ -14,7 +14,7 @@ optional, **capability-gated** `keiko-ui` controller — it adds no server route
 and no contract change. The authoritative decision record is
 [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md).
 
-This issue is the deferred hook wiring that [ADR-0062](../adr/ADR-0062-voice-turn-manager.md) (D11) called
+This issue is the deferred hook wiring that [ADR-0104](../adr/ADR-0104-voice-turn-manager.md) (D11) called
 out: it drives the existing deterministic turn manager **live** rather than building a second state
 machine.
 
@@ -122,7 +122,7 @@ realtime transcript provider behind the same controller seam.
 ## Related
 
 - [ADR-0096](../adr/ADR-0096-voice-dialogue-session-orchestration.md) — the orchestration decision record.
-- [ADR-0062](../adr/ADR-0062-voice-turn-manager.md) — the deterministic turn manager this controller drives live.
+- [ADR-0104](../adr/ADR-0104-voice-turn-manager.md) — the deterministic turn manager this controller drives live.
 - [ADR-0095](../adr/ADR-0095-voice-assistant-speech-synthesis.md) / [assistant-speech-synthesis.md](assistant-speech-synthesis.md) — the speech engine and its `turnManager` / `interrupt` seam.
 - [dictation-ui.md](dictation-ui.md) — the STT capture path the loop drives.
 - [privacy-contract.md](privacy-contract.md) — content-free and committed-only invariants.

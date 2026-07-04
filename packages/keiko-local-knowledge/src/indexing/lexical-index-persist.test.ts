@@ -64,8 +64,7 @@ function exactTextFor(chunkId: string): string | undefined {
       "SELECT exact_text FROM chunk_lexical_index WHERE capsule_id = :capsule_id AND chunk_id = :chunk_id",
     )
     .get({ capsule_id: String(seeded.capsuleId), chunk_id: chunkId }) as
-    | { readonly exact_text: string }
-    | undefined;
+    { readonly exact_text: string } | undefined;
   return record?.exact_text;
 }
 
@@ -83,18 +82,18 @@ describe("lexical index persistence", () => {
       throw new Error("fixture produced fewer than two chunks");
     }
 
-    expect(countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
-      0,
-    );
+    expect(
+      countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+    ).toBe(0);
 
     replaceLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId, [
       row(String(chunkA)),
       row(String(chunkB), { exactText: "Exact B" }),
     ]);
 
-    expect(countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
-      2,
-    );
+    expect(
+      countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+    ).toBe(2);
     expect(countLexicalRowsForCapsule(store._internal.db, seeded.capsuleId)).toBe(2);
     expect(exactTextFor(String(chunkA))).toBe(`Raw text ${String(chunkA)}\n${String(chunkA)}`);
     expect(exactTextFor(String(chunkB))).toBe("Exact B");
@@ -106,9 +105,9 @@ describe("lexical index persistence", () => {
     expect(exactTextFor(String(chunkA))).toBe("Updated exact text");
 
     deleteLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId);
-    expect(countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
-      0,
-    );
+    expect(
+      countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+    ).toBe(0);
 
     upsertLexicalRows(store._internal.db, [row(String(chunkA))]);
     deleteLexicalRowsForCapsule(store._internal.db, seeded.capsuleId);
@@ -135,9 +134,9 @@ describe("lexical index persistence", () => {
       1_700_000_000_123,
     );
 
-    expect(countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
-      chunks.length,
-    );
+    expect(
+      countLexicalRowsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
+    ).toBe(chunks.length);
     expect(exactTextFor(String(chunks[0]))).toContain("alpha");
   });
 });

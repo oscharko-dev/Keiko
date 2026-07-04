@@ -348,8 +348,7 @@ export function replaceAssistantMessageContent(
 ): ChatMessage {
   if (content.length === 0) throw invalidRequest("Content is required.");
   const row = db.prepare(SQL_REPLACE_ASSISTANT_CONTENT).get(content, timestamp, id) as unknown as
-    | MessageRow
-    | undefined;
+    MessageRow | undefined;
   if (row === undefined) throw notFound("Message");
   return rowToMessage(row);
 }

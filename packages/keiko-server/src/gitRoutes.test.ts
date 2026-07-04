@@ -1,8 +1,6 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildRedactor,
@@ -12,6 +10,7 @@ import {
 } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { UiStore } from "./store/index.js";
+import { mockRequest, mockResponse } from "./_support.js";
 import {
   handleGitBranches,
   handleGitDiff,
@@ -38,8 +37,8 @@ function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandler
 
 function ctx(path: string): RouteContext {
   return {
-    req: Readable.from([]) as unknown as IncomingMessage,
-    res: {} as unknown as ServerResponse,
+    req: mockRequest(),
+    res: mockResponse().res,
     params: {},
     url: new URL(`http://localhost${path}`),
   };

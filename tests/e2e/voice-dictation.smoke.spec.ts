@@ -12,6 +12,7 @@
 // Playwright; the executable AC coverage that runs in `ci` lives in the keiko-ui vitest suites.
 
 import { expect, test, type Page } from "@playwright/test";
+import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const STT_CAPABILITY = {
   voice: {
@@ -120,7 +121,10 @@ async function dictateInsertFlow(page: Page): Promise<void> {
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toHaveValue(
     /dictated hello, edited/u,
   );
-  await page.screenshot({ path: "docs/voice/evidence/495-dictation-insert.png", fullPage: true });
+  await page.screenshot({
+    path: evidenceScreenshotPath("docs/voice/evidence/495-dictation-insert.png"),
+    fullPage: true,
+  });
 }
 
 async function deniedPermissionFlow(page: Page): Promise<void> {

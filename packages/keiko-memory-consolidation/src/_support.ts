@@ -11,6 +11,7 @@ import type {
   MemoryScope,
   UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { makeMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
 
 // Non-null assertion helper used by tests under noUncheckedIndexedAccess. Throws (not asserts)
 // so a missing fixture index is a loud test failure, not a silent undefined.
@@ -84,17 +85,20 @@ function buildCoreFields(overrides: RecordOverrides): CoreFields {
   };
 }
 
+// Wraps the sanctioned contracts fixture builder (`makeMemoryRecord`, GEN-DX-001) while
+// preserving this suite's flat override API and its `createdAt`-derived defaults
+// (`capturedAt`/`validFrom`/`updatedAt` all fall back to `createdAt`) plus its historical
+// body default ("prefers dark mode"), which the shared builder spells more verbosely.
 export function makeRecord(overrides: RecordOverrides = {}): MemoryRecord {
   const createdAt = overrides.createdAt ?? FIXED_NOW_MS;
   const core = buildCoreFields(overrides);
-  return {
+  return makeMemoryRecord({
     ...core,
-    schemaVersion: "1",
     provenance: buildProvenance(overrides, createdAt),
     validity: buildValidity(overrides, createdAt),
     createdAt,
     updatedAt: overrides.updatedAt ?? createdAt,
-  };
+  });
 }
 
 // Deterministic id factories used by tests. Each call returns the next "edge-N" / "rv-N" id.

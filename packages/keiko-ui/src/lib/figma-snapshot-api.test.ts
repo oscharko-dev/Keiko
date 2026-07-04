@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
+  deleteFigmaSnapshot,
   figmaSnapshotScreenImageUrl,
   generateFigmaCode,
   listFigmaSnapshots,
@@ -321,5 +322,18 @@ describe("revokeFigmaToken — HTTP request shape (#758)", () => {
       code: "FIGMA_TOKEN_MISSING",
       status: 404,
     });
+  });
+});
+
+describe("shared BFF scaffold — 204 no-content receipts (GEN-DUP-NEAR-004)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // The former figma-local fetchJson had no 204 short-circuit and would call res.json() on an empty
+  // body (throwing). Routing through the shared bffFetchJson folds in 204 → undefined (safe-forward).
+  it("resolves undefined when the DELETE route returns 204 No Content", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
+    await expect(deleteFigmaSnapshot("fs-204")).resolves.toBeUndefined();
   });
 });

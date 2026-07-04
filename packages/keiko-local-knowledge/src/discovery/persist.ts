@@ -145,9 +145,19 @@ const SELECT_DOCUMENTS_FOR_SOURCE_SQL = [
 ].join(" ");
 const DELETE_DOCUMENT_SQL = "DELETE FROM documents WHERE capsule_id = :c AND id = :d";
 const DELETE_DOCUMENT_BY_ID_SQL = "DELETE FROM documents WHERE id = :id";
-const SELECT_DOCUMENT_CAPSULE_BY_ID_SQL = "SELECT capsule_id FROM documents WHERE id = :id";
+const SELECT_DOCUMENT_CAPSULE_BY_ID_SQL =
+  "SELECT capsule_id, content_hash FROM documents WHERE id = :id";
 const UPDATE_DOCUMENT_STATUS_SQL =
   "UPDATE documents SET status = :status WHERE capsule_id = :c AND id = :d";
+const DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL = [
+  "DELETE FROM document_blobs",
+  "WHERE capsule_id = :c",
+  "  AND NOT EXISTS (",
+  "    SELECT 1 FROM documents",
+  "    WHERE documents.capsule_id = document_blobs.capsule_id",
+  "      AND documents.blob_ref = document_blobs.content_hash",
+  "  )",
+].join(" ");
 
 type SqlValue = string | number | null | Uint8Array;
 type SqlParams = Record<string, SqlValue>;
@@ -174,6 +184,7 @@ interface DiscoveryStatements {
   readonly deleteDiagnostics: RunStatement;
   readonly deleteDocument: RunStatement;
   readonly deleteDocumentById: RunStatement;
+  readonly deleteUnreferencedDocumentBlobs: RunStatement;
   readonly selectDocumentCapsuleById: GetStatement;
   readonly selectDocumentText: GetStatement;
   readonly insertDocumentTextWindow: RunStatement;
@@ -208,6 +219,9 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
     deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
     deleteDocumentById: db.prepare(DELETE_DOCUMENT_BY_ID_SQL) as RunStatement,
+    deleteUnreferencedDocumentBlobs: db.prepare(
+      DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL,
+    ) as RunStatement,
     selectDocumentCapsuleById: db.prepare(SELECT_DOCUMENT_CAPSULE_BY_ID_SQL) as GetStatement,
     selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
     insertDocumentTextWindow: db.prepare(INSERT_DOCUMENT_TEXT_WINDOW_SQL) as RunStatement,
@@ -242,13 +256,14 @@ export interface DocumentInsertRow {
 export function insertDocumentRow(db: DatabaseSync, row: DocumentInsertRow): void {
   const prepared = statements(db);
   const existing = prepared.selectDocumentCapsuleById.get({ id: row.id }) as
-    { readonly capsule_id: string } | undefined;
+    { readonly capsule_id: string; readonly content_hash: string } | undefined;
   if (existing !== undefined && existing.capsule_id !== row.capsuleId) {
     // Document ids are globally primary-keyed in the current schema. Production ids include the
     // capsule/source lineage, but older tests and seeds can collide across capsules; preserve the
     // legacy replacement behavior for that impossible production state while keeping same-capsule
     // re-extraction non-destructive for document_blobs.
     prepared.deleteDocumentById.run({ id: row.id });
+    prepared.deleteUnreferencedDocumentBlobs.run({ c: existing.capsule_id });
   }
   prepared.insertDocument.run({
     id: row.id,
@@ -423,6 +438,11 @@ export function deleteDocumentRow(
 ): void {
   deleteDependentRows(db, capsuleId, documentId);
   statements(db).deleteDocument.run({ c: capsuleId, d: documentId });
+  collectGarbageDocumentBlobs(db, capsuleId);
+}
+
+export function collectGarbageDocumentBlobs(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): void {
+  statements(db).deleteUnreferencedDocumentBlobs.run({ c: capsuleId });
 }
 
 export function updateDocumentStatusRow(

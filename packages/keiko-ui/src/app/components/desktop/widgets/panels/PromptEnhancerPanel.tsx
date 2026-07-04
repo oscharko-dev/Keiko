@@ -20,6 +20,7 @@ import type {
 } from "@/lib/types";
 import { Icons } from "../../Icons";
 import KeikoSelect from "../../KeikoSelect";
+import { humanizeToken } from "../../GroundedAnswer";
 import { buildConnectedRunSources } from "../quality-intelligence/connectedSources";
 
 const PROFILE_OPTIONS: readonly { readonly value: string; readonly label: string }[] = [
@@ -73,10 +74,6 @@ function describeError(error: unknown): string {
     return "Request cancelled.";
   }
   return "Prompt enhancement failed. Please try again.";
-}
-
-function humanizeToken(value: string): string {
-  return value.replaceAll("-", " ");
 }
 
 function summarizeConnectedContext({
@@ -500,6 +497,7 @@ export function PromptEnhancerPanel({
   const [copyState, setCopyState] = useState<CopyState>("idle");
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const draftInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const resultTitleRef = useRef<HTMLHeadingElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const draftId = useId();
@@ -542,6 +540,15 @@ export function PromptEnhancerPanel({
       window.clearTimeout(timeout);
     };
   }, [copyState]);
+
+  // After a successful enhance the result artifact renders below the form. Move focus to its heading so
+  // keyboard and screen-reader users are taken to the freshly generated output instead of being left on
+  // the submit button with a silent DOM change (GEN-UI-FOCUS-009). Keyed on the result identity so every
+  // regenerate re-focuses; the pe-result-title heading carries tabIndex={-1} to accept programmatic focus.
+  useEffect(() => {
+    if (result === null) return;
+    resultTitleRef.current?.focus();
+  }, [result]);
 
   const handleEnhance = useCallback(async (): Promise<void> => {
     const text = draft.trim();
@@ -778,7 +785,9 @@ export function PromptEnhancerPanel({
           <div className="pe-result-head">
             <div>
               <p className="pe-eyebrow">Review artifact</p>
-              <h4 className="pe-result-title">Enhanced prompt</h4>
+              <h4 className="pe-result-title" ref={resultTitleRef} tabIndex={-1}>
+                Enhanced prompt
+              </h4>
             </div>
             <ModelRoutingBanner routing={result.modelRouting} />
           </div>

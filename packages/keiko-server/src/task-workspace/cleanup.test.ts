@@ -604,6 +604,39 @@ describe("orphan cleanup", () => {
       cleanup().cleanupOrphans({ requestedBy: "u", operatorApproved: false }),
     ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
   });
+
+  it("calls store.listAll() at most once for a sweep with many orphan candidates (GEN-PERF-PERSISTENCE-016)", async () => {
+    // Materialize several orphan directories in one repository (records deleted, dirs kept).
+    const orphans: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      const instance = await provisionTask(`t-many-orphan-${String(i)}`);
+      store.delete(instance.workspaceId);
+      orphans.push(instance.managedWorktreePath);
+    }
+    for (const path of orphans) expect(existsSync(path)).toBe(true);
+
+    // Wrap the real store to count listAll() invocations during the sweep.
+    let listAllCalls = 0;
+    const countingStore: WorkspaceInstanceStore = {
+      ...store,
+      listAll: (): readonly WorkspaceInstance[] => {
+        listAllCalls += 1;
+        return store.listAll();
+      },
+    };
+
+    const result = await cleanup(countingStore).cleanupOrphans({
+      requestedBy: "u",
+      operatorApproved: true,
+    });
+
+    // Correctness preserved: all orphans removed.
+    expect(result.removed).toBe(orphans.length);
+    for (const path of orphans) expect(existsSync(path)).toBe(false);
+    // Pre-fix: listAll() ran once per candidate (>= 6). Fixed: the single buildKnownPathsByRepo
+    // snapshot is reused for every candidate, so listAll() runs at most once for the whole sweep.
+    expect(listAllCalls).toBeLessThanOrEqual(1);
+  });
 });
 
 describe("safelyRemoveManagedPath choke point (SC1 — the only filesystem deletion)", () => {

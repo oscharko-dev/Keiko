@@ -956,8 +956,7 @@ async function runProbe(
 ): Promise<GatewayReadinessProbeResult> {
   if (name === "chat") return probeChat(deps, selection.config, selection.provider);
   if (name === "streaming") return probeStreaming(deps, selection.config, selection.provider);
-  if (name === "tool_calling")
-    return probeToolCalling(deps, selection.config, selection.provider);
+  if (name === "tool_calling") return probeToolCalling(deps, selection.config, selection.provider);
   if (name === "json_schema") return probeJsonSchema(deps, selection.config, selection.provider);
   if (name === "embedding") return probeEmbedding(deps, selection.config);
   if (name === "reranker") return probeReranker(deps, selection.config, selection.config.reranker);
@@ -965,7 +964,13 @@ async function runProbe(
   if (name === "image_input") return probeImageInput(deps, selection.config, selection.provider);
   if (name === "document_input")
     return probeDocumentInput(deps, selection.config, selection.provider);
-  return probeLongContext(deps, selection.config, selection.provider, selection.capability, options);
+  return probeLongContext(
+    deps,
+    selection.config,
+    selection.provider,
+    selection.capability,
+    options,
+  );
 }
 
 function reportStatus(

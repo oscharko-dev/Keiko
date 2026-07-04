@@ -125,21 +125,14 @@ function germanSpellingVariants(token: string): readonly string[] {
     .replace(/ü/gu, "ue")
     .replace(/ß/gu, "ss");
   out.add(umlautToAscii);
-  const asciiToUmlaut = token
-    .replace(/ae/gu, "ä")
-    .replace(/oe/gu, "ö")
-    .replace(/ue/gu, "ü");
+  const asciiToUmlaut = token.replace(/ae/gu, "ä").replace(/oe/gu, "ö").replace(/ue/gu, "ü");
   out.add(asciiToUmlaut);
   if (token.includes("ss")) out.add(token.replace(/ss/gu, "ß"));
   return [...out].filter((term) => term.length > 0);
 }
 
 function deUmlautStemVariant(token: string): string {
-  return token
-    .replace(/äu/gu, "au")
-    .replace(/ä/gu, "a")
-    .replace(/ö/gu, "o")
-    .replace(/ü/gu, "u");
+  return token.replace(/äu/gu, "au").replace(/ä/gu, "a").replace(/ö/gu, "o").replace(/ü/gu, "u");
 }
 
 function addSuffixStem(out: Set<string>, token: string, suffix: string, replacement = ""): void {
@@ -207,7 +200,9 @@ function isExactTerm(value: string): boolean {
   if (DIGIT_PATTERN.test(value)) return true;
   if (EXACT_SYMBOL_PATTERN.test(value)) return true;
   if (CAMEL_CASE_PATTERN.test(value)) return true;
-  return value.length >= 3 && value === value.toLocaleUpperCase("und") && LETTER_PATTERN.test(value);
+  return (
+    value.length >= 3 && value === value.toLocaleUpperCase("und") && LETTER_PATTERN.test(value)
+  );
 }
 
 export function lexicalExactTerms(value: string): readonly string[] {

@@ -38,7 +38,7 @@ See [deployment-profile-matrix.md §5](deployment-profile-matrix.md#5-credential
 
 ## 3. Configuring a voice provider safely
 
-Voice providers are registered through the Model Gateway configuration file (typically a JSON file pointed to by `KEIKO_CONFIG_PATH` or an inline capability in the provider definition).
+Voice providers are registered through the Model Gateway configuration file (typically a JSON file pointed to by `KEIKO_CONFIG_FILE` or an inline capability in the provider definition).
 
 ### 3.1 Credential placement (sealed vault, never plaintext)
 
@@ -308,7 +308,7 @@ If a provider API key is suspected compromised (e.g., accidentally logged, sent 
 - **Threat model:** [dialogue-mode-threat-model.md](dialogue-mode-threat-model.md) — security review requirements and known limitations.
 - **Source:** `packages/keiko-server/src/headers.ts` (Permissions-Policy implementation), `packages/keiko-server/src/read-handlers.ts` (voice capability resolution and kill-switch), `packages/keiko-model-gateway/src/config.ts` (configuration parsing).
 - **Tests:** `packages/keiko-server/src/voice-handlers.test.ts`, `packages/keiko-server/src/voice-handlers.speak.test.ts`, `packages/keiko-server/src/headers.test.ts` (secret redaction assertions).
-- **ADR-0058:** [Voice Digital Twin capability architecture](../adr/ADR-0058-voice-digital-twin-capability-architecture.md).
+- **ADR-0100:** [Voice Digital Twin capability architecture](../adr/ADR-0100-voice-digital-twin-capability-architecture.md).
 - **ADR-0094:** [Voice provider capability registry extension (personas)](../adr/ADR-0094-voice-provider-capability-registry-extension.md).
 - **ADR-0095:** [Voice assistant speech synthesis](../adr/ADR-0095-voice-assistant-speech-synthesis.md).
 - **ADR-0096:** [Voice dialogue session orchestration](../adr/ADR-0096-voice-dialogue-session-orchestration.md).

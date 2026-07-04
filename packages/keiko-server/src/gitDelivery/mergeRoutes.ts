@@ -1,4 +1,4 @@
-// Governed merge routes (Issue #478, Epic #470, ADR-0065).
+// Governed merge routes (Issue #478, Epic #470, ADR-0087).
 //
 //   * POST /api/git-delivery/merge/preview  — READ-ONLY. Reads the provider's content-free merge-readiness
 //       facts and builds the pre-merge context: the readiness summary (mergeable + severity-ranked
@@ -15,9 +15,7 @@
 // ledger. CSRF + JSON content type are enforced centrally by server.ts.
 
 import type { IncomingMessage } from "node:http";
-import {
-  isGitDeliveryMergeStrategyHint,
-} from "@oscharko-dev/keiko-contracts";
+import { isGitDeliveryMergeStrategyHint } from "@oscharko-dev/keiko-contracts";
 import type { GitMergeCommand } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

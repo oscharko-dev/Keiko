@@ -17,7 +17,16 @@ const ITEMS: NotificationItem[] = [
 
 export function NotificationsPanel(): ReactNode {
   return (
-    <ul className={`tw-list ${styles.lazyWidgetScope}`}>
+    // GEN-UI-A11Y-014 — annotate as a polite log so future dynamic notifications are announced
+    // to assistive tech (mirrors TerminalWidget's role=log usage). Data is static today.
+    <ul
+      className={`tw-list ${styles.lazyWidgetScope}`}
+      role="log"
+      aria-live="polite"
+      aria-relevant="additions text"
+      aria-atomic="false"
+      aria-label="Notifications"
+    >
       {ITEMS.map((n, i) => (
         <li className="nt-row" key={i}>
           <span className="dot" style={{ background: n.c, marginTop: 6 }} aria-hidden="true" />

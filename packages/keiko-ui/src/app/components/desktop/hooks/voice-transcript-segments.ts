@@ -1,4 +1,4 @@
-// Issue #500, Epic #491 (ADR-0063) — the Voice transcript segment store. It is the deterministic,
+// Issue #500, Epic #491 (ADR-0105) — the Voice transcript segment store. It is the deterministic,
 // synchronous reducer / state machine that turns a stream of transcript inputs (mapped from #496 wire
 // messages in full-realtime, or from the #495 dictation lifecycle in STT-only) into the provider-neutral
 // segment model defined by the leaf contract `voice-transcript.ts`: partial, stable, committed,

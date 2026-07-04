@@ -904,4 +904,50 @@ describe("GroundedAnswer", () => {
     expect(container.textContent).not.toContain("<script>alert(1)</script>");
     expect(container.querySelectorAll("script")).toHaveLength(0);
   });
+
+  it("RB-4 (GEN-AI-GROUNDING-007): surfaces a summary-level warning on empty evidence, not hidden in the disclosure", () => {
+    const a = answer({
+      uncertainty: [{ kind: "no-evidence", claim: "No repository evidence matched." }],
+    });
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning).not.toBeNull();
+    expect(warning?.textContent).toContain("Needs review");
+    expect(warning?.textContent?.toLowerCase()).toContain("not grounded");
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-007): flags unsupported (fabricated) citations at the summary level", () => {
+    const a = answer({
+      uncertainty: [
+        { kind: "unsupported-citation", claim: "The answer cited a source not retrieved." },
+      ],
+    });
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("unsupported citation");
+  });
+
+  it("RB-4 (GEN-AI-GROUNDING-007): shows no warning banner for a fully grounded answer", () => {
+    const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
+    expect(container.querySelector(".grounded-uncertainty[role='alert']")).toBeNull();
+  });
+
+  it("RB-4 (GEN-AI-RETRIEVAL-001): surfaces silent reranker degradation to the user", () => {
+    const base = localKnowledgeAnswer();
+    const a = {
+      ...base,
+      contextPack: {
+        ...base.contextPack,
+        reranker: {
+          status: "unavailable" as const,
+          candidateCount: 3,
+          documentCount: 3,
+          keptCount: 3,
+        },
+      },
+    } as GroundedAnswerType;
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent?.toLowerCase()).toContain("reranker unavailable");
+  });
 });

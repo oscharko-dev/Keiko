@@ -74,10 +74,7 @@ describe("deriveIntent", () => {
 
   it("recognises German modal verbs and negated requirement phrases", () => {
     const summary = deriveIntent([], bankingDefault, {
-      evidenceTexts: [
-        "Der Kunde muss die TAN eingeben.",
-        "Der Kunde darf keine Zahlung auslösen.",
-      ],
+      evidenceTexts: ["Der Kunde muss die TAN eingeben.", "Der Kunde darf keine Zahlung auslösen."],
     });
 
     expect(summary.requirementCandidates).toContain("Der Kunde muss die TAN eingeben.");

@@ -260,8 +260,10 @@ function indexSeedLexicalRows(
         "ORDER BY order_index ASC",
       ].join(" "),
     )
-    .all({ c: String(seed.capsuleId), d: String(seed.documentId) }) as unknown as
-    readonly SeedChunkSpanRow[];
+    .all({
+      c: String(seed.capsuleId),
+      d: String(seed.documentId),
+    }) as unknown as readonly SeedChunkSpanRow[];
   replaceLexicalRowsForDocument(
     store._internal.db,
     seed.capsuleId,

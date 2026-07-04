@@ -34,6 +34,13 @@ import {
   isEditorAgentEvent,
 } from "../../../../../lib/types";
 
+/**
+ * GEN-PERF-EDITOR-002 — trailing debounce (ms) for the agent-session snapshot POST. Long
+ * enough to collapse a cursor/selection burst into one POST, short enough that the agent
+ * sees the settled state promptly.
+ */
+export const EDITOR_SNAPSHOT_DEBOUNCE_MS = 300;
+
 /** A content-free agent selection-reveal request the host merges into the editor surface. */
 export interface EditorAgentSelectionRequest {
   readonly actionId: string;
@@ -275,10 +282,20 @@ const editorAgentSubscribersBySession = new Map<string, Set<EditorAgentSessionHa
 let editorAgentEventSource: EventSource | null = null;
 let editorAgentActionListener: EventListener | null = null;
 let editorAgentResultListener: EventListener | null = null;
+// GEN-PERF-EDITOR-008 — the effective session-id SET (not membership churn) is what the
+// EventSource URL encodes. Remember the last connected set so subscribe/unsubscribe events
+// that do not change the set (duplicate handlers, extra panes on the same session) do not
+// tear down and re-open the stream. `null` means "no stream is currently open".
+let editorAgentConnectedSessionKey: string | null = null;
+let editorAgentRestartScheduled = false;
+
+function currentSessionKey(): string {
+  return [...editorAgentSubscribersBySession.keys()].sort().join(" ");
+}
 
 function editorAgentEventUrl(): string {
   const params = new URLSearchParams();
-  for (const sessionId of editorAgentSubscribersBySession.keys()) {
+  for (const sessionId of [...editorAgentSubscribersBySession.keys()].sort()) {
     params.append("sessionId", sessionId);
   }
   const query = params.toString();
@@ -334,11 +351,28 @@ function closeEditorAgentEventSource(): void {
   editorAgentEventSource = null;
   editorAgentActionListener = null;
   editorAgentResultListener = null;
+  editorAgentConnectedSessionKey = null;
 }
 
-function restartEditorAgentEventSource(): void {
+/**
+ * Reconcile the live EventSource with the current subscriber set. Behavior-preserving but
+ * idempotent: when the effective session-id set is unchanged from the last connection it
+ * returns without touching the stream (GEN-PERF-EDITOR-008), so duplicate-handler churn and
+ * extra panes on an already-subscribed session no longer force a reconnect.
+ */
+function reconcileEditorAgentEventSource(): void {
+  const nextKey = currentSessionKey();
+  if (editorAgentSubscribersBySession.size === 0) {
+    // Last subscriber left — tear the stream down.
+    closeEditorAgentEventSource();
+    return;
+  }
+  if (editorAgentEventSource !== null && editorAgentConnectedSessionKey === nextKey) {
+    // The connected set already matches; nothing to do.
+    return;
+  }
   closeEditorAgentEventSource();
-  if (editorAgentSubscribersBySession.size === 0 || typeof EventSource === "undefined") return;
+  if (typeof EventSource === "undefined") return;
   const source = createSameOriginApiEventSource(editorAgentEventUrl());
   if (source === null) return;
   editorAgentActionListener = handleEditorAgentFrame;
@@ -346,6 +380,25 @@ function restartEditorAgentEventSource(): void {
   source.addEventListener("editor-agent:action", editorAgentActionListener);
   source.addEventListener("editor-agent:result", editorAgentResultListener);
   editorAgentEventSource = source;
+  editorAgentConnectedSessionKey = nextKey;
+}
+
+/**
+ * Debounce reconciliation to a microtask so a burst of N pane mounts/unmounts in one tick
+ * collapses into a single stream (re)connect instead of N restarts (GEN-PERF-EDITOR-008).
+ */
+function scheduleEditorAgentReconcile(): void {
+  if (editorAgentRestartScheduled) return;
+  editorAgentRestartScheduled = true;
+  const flush = (): void => {
+    editorAgentRestartScheduled = false;
+    reconcileEditorAgentEventSource();
+  };
+  if (typeof queueMicrotask === "function") {
+    queueMicrotask(flush);
+  } else {
+    setTimeout(flush, 0);
+  }
 }
 
 function subscribeEditorAgentSession(
@@ -355,13 +408,21 @@ function subscribeEditorAgentSession(
   const existing = editorAgentSubscribersBySession.get(sessionId) ?? new Set();
   existing.add(handlers);
   editorAgentSubscribersBySession.set(sessionId, existing);
-  restartEditorAgentEventSource();
+  scheduleEditorAgentReconcile();
   return (): void => {
     const subscribers = editorAgentSubscribersBySession.get(sessionId);
     if (subscribers === undefined) return;
     subscribers.delete(handlers);
     if (subscribers.size === 0) editorAgentSubscribersBySession.delete(sessionId);
-    restartEditorAgentEventSource();
+    if (editorAgentSubscribersBySession.size === 0) {
+      // Last subscriber left — tear the stream down synchronously so unmount closes the
+      // connection deterministically (no deferred socket lingering after the pane is gone).
+      closeEditorAgentEventSource();
+      return;
+    }
+    // The set only shrank (a pane left but others remain) — reconcile on a microtask so a
+    // burst of unsubscribes collapses; a no-op set change won't restart the stream.
+    scheduleEditorAgentReconcile();
   };
 }
 
@@ -408,8 +469,21 @@ export function useEditorAgentBridge(
   const dispatchControllersRef = useRef(dispatchControllers);
   dispatchControllersRef.current = dispatchControllers;
 
+  // GEN-PERF-EDITOR-002 — the host wraps registerSnapshot in a useCallback whose deps
+  // include cursor/selection, so its identity churns on every cursor/selection delta
+  // (tens/sec during drag-select or key-repeat). Post the snapshot on a trailing debounce
+  // so a burst collapses into a single POST while the settled state is still delivered.
+  const registerSnapshotRef = useRef(registerSnapshot);
+  registerSnapshotRef.current = registerSnapshot;
   useEffect(() => {
-    registerSnapshot();
+    // `registerSnapshot` is a dependency so a new snapshot dimension re-arms the timer;
+    // the ref indirection means we always invoke the latest closure on the trailing edge.
+    const handle = setTimeout(() => {
+      registerSnapshotRef.current();
+    }, EDITOR_SNAPSHOT_DEBOUNCE_MS);
+    return (): void => {
+      clearTimeout(handle);
+    };
   }, [registerSnapshot]);
 
   useEffect(() => {

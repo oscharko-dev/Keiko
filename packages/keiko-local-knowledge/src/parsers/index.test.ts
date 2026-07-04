@@ -126,9 +126,9 @@ describe("createDefaultParserRegistry", () => {
     const withoutOcr = parsers.createDefaultParserRegistry();
     const withOcr = parsers.createDefaultParserRegistry({ ocrAdapter: parsers.nullOcrAdapter });
 
-    expect(withoutOcr.list().some((adapter) => adapter.capability.parserId === "ocr-pipeline")).toBe(
-      false,
-    );
+    expect(
+      withoutOcr.list().some((adapter) => adapter.capability.parserId === "ocr-pipeline"),
+    ).toBe(false);
     expect(withOcr.list().some((adapter) => adapter.capability.parserId === "ocr-pipeline")).toBe(
       true,
     );

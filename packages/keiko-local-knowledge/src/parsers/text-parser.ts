@@ -209,8 +209,7 @@ function matchSetextUnderline(line: string): 1 | 2 | null {
 
 function splitMarkdownTableRow(line: string): readonly string[] {
   const trimmed = line.trim();
-  const body =
-    trimmed.startsWith("|") && trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed;
+  const body = trimmed.startsWith("|") && trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed;
   return body.split("|").map((part) => part.trim());
 }
 

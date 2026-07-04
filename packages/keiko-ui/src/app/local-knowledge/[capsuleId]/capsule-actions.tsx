@@ -29,7 +29,7 @@ import type {
   ConnectCapsuleSourceScope,
 } from "@/lib/local-knowledge-api";
 import type { FilesTreeEntry } from "@/lib/types";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatDurationCompact as formatDuration } from "@/lib/format";
 import {
   LOCAL_KNOWLEDGE_MAX_FILE_BYTES,
   LOCAL_KNOWLEDGE_MAX_OBJECTS_PER_DOCUMENT,
@@ -99,15 +99,6 @@ function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
 function formatPercent(value: number): string {
   if (!Number.isFinite(value)) return "0%";
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100).toString()}%`;
-}
-
-function formatDuration(ms: number): string {
-  if (!Number.isFinite(ms) || ms <= 0) return "0s";
-  const totalSeconds = Math.round(ms / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes === 0) return `${seconds.toString()}s`;
-  return `${minutes.toString()}m ${seconds.toString().padStart(2, "0")}s`;
 }
 
 function completedDocuments(job: CapsuleDetail["indexingJobs"][number] | undefined): number {
@@ -483,9 +474,9 @@ function ActionProgress({
       ? "Indexing documents"
       : kind === "reembed"
         ? "Re-indexing for current embedding model"
-      : kind === "refresh"
-        ? "Refreshing changed files"
-        : "Repairing failed files";
+        : kind === "refresh"
+          ? "Refreshing changed files"
+          : "Repairing failed files";
   const etaLabel =
     docsPerMs > 0 && totalDocuments > completed
       ? `Estimated remaining ${formatDuration(etaMs)}`

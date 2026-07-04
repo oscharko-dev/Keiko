@@ -231,7 +231,7 @@ describe("API BFF boundary helpers", () => {
             "event: token",
             'data: {"text":"Hel"}',
             "event: token",
-            "data: not-json",
+            'data: {"text":"lo"}',
             "event: done",
             'data: {"chat":{"id":"chat-1"},"messages":[]}',
             "event: error",
@@ -267,7 +267,8 @@ describe("API BFF boundary helpers", () => {
         }),
       }),
     );
-    expect(handlers.onToken).toHaveBeenCalledWith("Hel");
+    expect(handlers.onToken).toHaveBeenNthCalledWith(1, "Hel");
+    expect(handlers.onToken).toHaveBeenNthCalledWith(2, "lo");
     expect(handlers.onDone).toHaveBeenCalledWith({ chat: { id: "chat-1" }, messages: [] });
     expect(handlers.onError).toHaveBeenCalledWith({ code: "MODEL", message: "model failed" });
     expect(handlers.onCancelled).toHaveBeenCalledTimes(1);

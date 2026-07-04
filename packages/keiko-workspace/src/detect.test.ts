@@ -127,12 +127,15 @@ describe("detectWorkspace", () => {
     ["Go", "go.mod", "cmd/api/main.go", "go"],
     ["Rust", "Cargo.toml", "src/lib.rs", "rust"],
     ["C#", "Service.csproj", "Program.cs", "csharp"],
-  ] as const)("detects %s from registered manifests and source extensions", (_label, manifest, source, language) => {
-    writeRel(dir, manifest, "");
-    writeRel(dir, source, "");
+  ] as const)(
+    "detects %s from registered manifests and source extensions",
+    (_label, manifest, source, language) => {
+      writeRel(dir, manifest, "");
+      writeRel(dir, source, "");
 
-    expect(detectWorkspace(dir).languages).toContain(language);
-  });
+      expect(detectWorkspace(dir).languages).toContain(language);
+    },
+  );
   it("detects source languages that are legal in the workspace contract", () => {
     mkdirSync(join(dir, ".git"), { recursive: true });
     mkdirSync(join(dir, "src"), { recursive: true });

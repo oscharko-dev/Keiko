@@ -350,8 +350,7 @@ function contentQueryTerms(query: RetrievalQuery): readonly string[] {
   return normalizedQueryTerms(query).filter((term) => {
     const lower = term.toLowerCase();
     return (
-      !CONTENT_SCORE_STOP_TERMS.has(lower) &&
-      (term.length >= 3 || SHORT_CODE_TERMS.has(lower))
+      !CONTENT_SCORE_STOP_TERMS.has(lower) && (term.length >= 3 || SHORT_CODE_TERMS.has(lower))
     );
   });
 }
@@ -414,8 +413,7 @@ function contentTermScore(
   const coverage = (hits.exactHits + hits.substringHits * 0.5) / Math.max(termCount, 1);
   const intentMultiplier =
     intent === "targeted-code-search" || intent === "diagnostic-search" ? 1.15 : 1;
-  const rawScore =
-    hits.exactHits * 14 + hits.substringHits * 6 + coverage * 45 + exactSymbolBonus;
+  const rawScore = hits.exactHits * 14 + hits.substringHits * 6 + coverage * 45 + exactSymbolBonus;
   return Math.min(140, Math.round(rawScore * intentMultiplier));
 }
 

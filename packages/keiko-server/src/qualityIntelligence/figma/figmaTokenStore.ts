@@ -19,19 +19,17 @@
 //   3. Keyfile          — <vaultDir>/figma-vault.key, mode 0600. Weakest tier (key next to store).
 
 import { execFileSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { userInfo } from "node:os";
 import { dirname, resolve } from "node:path";
 import { isSealed, openString, sealString } from "@oscharko-dev/keiko-security";
+// Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
+import {
+  chmodIfPresent,
+  ensureDirHardened,
+  FILE_MODE,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 
 const KEY_BYTES = 32;
@@ -74,16 +72,6 @@ function keyFromEnv(env: Readonly<Record<string, string | undefined>>): Buffer |
   const raw = env.KEIKO_FIGMA_KEY;
   if (raw === undefined || raw.length === 0) return undefined;
   return decodeKeyOrThrow(raw);
-}
-
-function ensureDirHardened(dir: string): void {
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  if (process.platform === "win32") return;
-  try {
-    chmodSync(dir, 0o700);
-  } catch {
-    // Best-effort: a parent-owned directory we cannot chmod beats a hard failure.
-  }
 }
 
 function assertNoSymlinkedPathSegments(resolvedPath: string): void {
@@ -145,18 +133,9 @@ function keyFromKeyfile(vaultDir: string): Buffer {
     return decodeKeyOrThrow(readFileSync(keyfile, "utf8").trim());
   }
   const key = randomBytes(KEY_BYTES);
-  writeFileSync(keyfile, key.toString("base64"), { mode: 0o600 });
-  chmodIfPresent(keyfile, 0o600);
+  writeFileSync(keyfile, key.toString("base64"), { mode: FILE_MODE });
+  chmodIfPresent(keyfile, FILE_MODE);
   return key;
-}
-
-function chmodIfPresent(path: string, mode: number): void {
-  if (process.platform === "win32") return;
-  try {
-    chmodSync(path, mode);
-  } catch {
-    // Best-effort hardening.
-  }
 }
 
 export const NO_FIGMA_KEYCHAIN: FigmaKeychainAccess = () => undefined;
@@ -181,8 +160,8 @@ export function createFigmaTokenStore(deps: FigmaTokenStoreDeps): FigmaTokenStor
     assertNoSymlinkedPathSegments(storePath);
     ensureDirHardened(dirname(storePath));
     assertNoSymlinkedPathSegments(storePath);
-    writeFileSync(storePath, sealString(key, token), { mode: 0o600 });
-    chmodIfPresent(storePath, 0o600);
+    writeFileSync(storePath, sealString(key, token), { mode: FILE_MODE });
+    chmodIfPresent(storePath, FILE_MODE);
   };
 
   const read = (): string | undefined => {

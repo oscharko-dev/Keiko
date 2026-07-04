@@ -4,7 +4,7 @@
  * methods, no response-body logging.
  */
 
-import { ApiError } from "./api";
+import { bffFetchJson } from "./http";
 import type {
   ContainerCapabilityResponse,
   ContainerRunRequest,
@@ -12,38 +12,10 @@ import type {
   ContainerTaskCatalog,
 } from "./types";
 
-interface BffError {
-  readonly error: { readonly code: string; readonly message: string };
-}
-
+// Thin wrapper over the shared BFF scaffold (GEN-DUP-NEAR-004): CSRF + JSON content-type on
+// state-changing methods, error-envelope parse, and the 204 → undefined short-circuit.
 async function containerFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method ?? "GET").toUpperCase();
-  const isStateChanging = method !== "GET" && method !== "HEAD";
-  const res = await fetch(path, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(isStateChanging ? { "Content-Type": "application/json" } : {}),
-      ...(isStateChanging ? { "X-Keiko-CSRF": "1" } : {}),
-      ...(init?.headers ?? {}),
-    },
-  });
-
-  if (!res.ok) {
-    let code = "INTERNAL";
-    let message = `HTTP ${res.status.toString()}`;
-    try {
-      const envelope = (await res.json()) as BffError;
-      code = envelope.error.code;
-      message = envelope.error.message;
-    } catch {
-      // parse failure — keep generic, never log
-    }
-    throw new ApiError(code, message, res.status);
-  }
-
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+  return bffFetchJson<T>(path, init);
 }
 
 export async function fetchContainerCapability(root: string): Promise<ContainerCapabilityResponse> {

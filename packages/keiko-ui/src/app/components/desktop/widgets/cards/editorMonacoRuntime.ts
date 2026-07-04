@@ -22,17 +22,13 @@ import "monaco-editor/esm/vs/basic-languages/python/python.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/rust/rust.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution.js";
-// Register the language id + Monarch grammar for css/scss/less/html so they tokenize and Monaco's
-// bundled `language/{css,html}` workers can attach their document formatter on `onLanguage` (ADR-0068
-// D5). The rich-worker contributions below only call `onLanguage(...)`; without these basic-languages
-// contributions the language is never registered, so it neither tokenizes nor gets a formatter.
+// Register language ids + Monarch grammars without importing Monaco's rich language-service
+// contributions. Those contributions pull TS/JSON/CSS/HTML worker chunks into the static export;
+// Keiko's governed language intelligence and formatting stay host/server-owned under ADR-0042 D3.6.
 import "monaco-editor/esm/vs/basic-languages/css/css.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/scss/scss.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/less/less.contribution.js";
 import "monaco-editor/esm/vs/basic-languages/html/html.contribution.js";
-import "monaco-editor/esm/vs/language/css/monaco.contribution.js";
-import "monaco-editor/esm/vs/language/html/monaco.contribution.js";
-import "monaco-editor/esm/vs/language/json/monaco.contribution.js";
 import {
   configureMonacoLoader,
   createMonacoEnvironment,

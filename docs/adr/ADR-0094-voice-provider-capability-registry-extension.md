@@ -11,7 +11,7 @@ Proposed (Issue #1557, Epic #1556, 2026-06-26)
 ## Context
 
 Epic #1556 builds a **colleague-like voice dialogue mode** on top of the completed Epic #491 voice foundation
-(ADR-0058..0069, merged to `dev`). Issue #1557 is the first child: it extends the **provider capability
+(ADR-0100..0111, merged to `dev`). Issue #1557 is the first child: it extends the **provider capability
 registry** so the gateway can (a) represent the deployment classes that back voice dialogue, (b) map a
 **product-level voice persona** (male / female / neutral) to a provider-specific voice id **server-side**, and
 (c) present already-configured voice providers in model lists as *available*, not as a chat-ineligibility
@@ -63,7 +63,7 @@ A read-first mapping of the current capability surface establishes the starting 
   present-only so a record round-trips exactly (`parseVoiceCapabilityFields`, lines 642–654).
 - **Readiness is a live, chat-only probe.** `gateway-readiness.ts` runs a real network probe and rejects any
   non-chat model (`isConversationEligibleModel`,
-  [`gateway-readiness.ts`](../../packages/keiko-server/src/gateway-readiness.ts) lines 193–209). ADR-0058 D1
+  [`gateway-readiness.ts`](../../packages/keiko-server/src/gateway-readiness.ts) lines 193–209). ADR-0100 D1
   forbids voice capability probing from calling external endpoints during ordinary startup; voice resolution is
   deterministic and probe-free by construction.
 - **Brand-new scope.** Male / female / neutral **product voice profiles** are absent from every ADR, every
@@ -111,7 +111,7 @@ across the two existing tiers, exactly along the existing apiKey boundary:
    ```
 
    where `VoicePersonaVoice = { readonly persona: VoicePersona; readonly voiceId: string }`. `voiceId` is a
-   **provider-sensitive** string (ADR-0058 D6 Engineering Notes treat provider voice identifiers as sensitive
+   **provider-sensitive** string (ADR-0100 D6 Engineering Notes treat provider voice identifiers as sensitive
    provider metadata). It sits beside `apiKey` and is governed by the same physical boundary.
 
 2. **Only the content-free persona enums cross to the browser**, as a derived field on `ModelCapability`
@@ -171,7 +171,7 @@ branches" the Engineering Notes mandate.
 
 We **explicitly reject** adding a live voice probe to readiness:
 
-- It violates ADR-0058 D1 (voice capability probing must not call external endpoints during ordinary startup).
+- It violates ADR-0100 D1 (voice capability probing must not call external endpoints during ordinary startup).
 - It violates the deterministic-verification quality gate that the whole epic preserves — a network probe makes
   readiness non-deterministic and order/timing dependent.
 - `gateway-readiness.ts` is **architecturally chat-only** (`isConversationEligibleModel` rejects non-chat at
@@ -274,7 +274,7 @@ hard-coded deployment names** anywhere — confirmed: those names appear only in
 ### Alternative 2: Add a live voice readiness probe to `gateway-readiness.ts`
 
 - **Pros**: "readiness" would reflect a real round-trip to the voice endpoint.
-- **Cons**: violates ADR-0058 D1 (no startup probing of voice endpoints), makes readiness non-deterministic,
+- **Cons**: violates ADR-0100 D1 (no startup probing of voice endpoints), makes readiness non-deterministic,
   and forces the chat-only readiness path to accept non-chat models.
 - **Why rejected**: D3 — the "working vs. non-chat" distinction is a *capability* question answerable
   deterministically from parsed config; a probe adds nondeterminism and gate-weakening for no real signal.
@@ -298,9 +298,9 @@ hard-coded deployment names** anywhere — confirmed: those names appear only in
 
 ## Related
 
-- ADR-0058: Capability-gated Voice Digital Twin architecture (D1 probe-free, D5 `ModelKind: "voice"`, D6
+- ADR-0100: Capability-gated Voice Digital Twin architecture (D1 probe-free, D5 `ModelKind: "voice"`, D6
   provider-credential/voice-id sensitivity, D7 locality) — this ADR extends it.
-- ADR-0059..0069: Epic #491 voice transport, protocol, turn-manager, and governance ADRs.
+- ADR-0101..0111: Epic #491 voice transport, protocol, turn-manager, and governance ADRs.
 - ADR-0019: package trust direction (contracts is a leaf; UI may value-import from contracts but not from
   `model-gateway/src`).
 - `docs/voice/capability-configuration.md`, `docs/voice/deployment-profile-matrix.md` — extended with the

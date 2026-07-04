@@ -9,10 +9,14 @@ interface RightRailProps {
 }
 
 function RightRailImpl(_props: RightRailProps): ReactNode {
+  // GEN-UI-A11Y-025 — this is currently an empty layout spacer. Exposing it as a labelled
+  // <aside> named landmark ("Workspace utilities") advertised a complementary region with no
+  // content, which is noise for AT. Render a plain <div> with no landmark role/name until real
+  // utilities live here again.
   return (
-    <aside className="rail rail-right" aria-label="Workspace utilities">
+    <div className="rail rail-right">
       <span className="spacer" />
-    </aside>
+    </div>
   );
 }
 

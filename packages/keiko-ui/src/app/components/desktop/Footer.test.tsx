@@ -4,7 +4,8 @@
 // restore/focus palette. Other shell status indicators are intentionally hidden
 // from this surface.
 
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import { useState } from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -213,5 +214,58 @@ describe("Footer — window status trigger", () => {
     renderFooter();
     const footer = screen.getByRole("contentinfo", { name: "Workspace status" });
     expect(footer).toHaveAttribute("tabindex", "-1");
+  });
+
+  // GEN-UI-FOCUS-011 (WCAG 2.4.3) — the open-windows palette is a self-managed keyboard surface: it
+  // moves focus into itself on open and restores focus to the trigger when Escape dismisses it.
+  describe("open-windows palette focus management", () => {
+    function ControlledFooter(props: Partial<ComponentProps<typeof Footer>> = {}): ReactNode {
+      const [open, setOpen] = useState(false);
+      fetchHealthMock.mockResolvedValue({ status: "ok", version: "0.2.0-test" });
+      return (
+        <Footer
+          winCount={1}
+          windows={[footerWindow({ id: "files-1", type: "files", cfg: { root: "/repo" } })]}
+          windowPaletteOpen={open}
+          onToggleWindowPalette={() => setOpen((value) => !value)}
+          onSelectWindow={vi.fn()}
+          onCloseWindowPalette={() => setOpen(false)}
+          mode="manual"
+          selectedModel={undefined}
+          projectName="Keiko"
+          branchLabel="main"
+          shellStatusLabel="Ready"
+          evidenceStatusLabel="No review open"
+          {...props}
+        />
+      );
+    }
+
+    it("moves focus into the palette when it opens", async () => {
+      const user = userEvent.setup();
+      render(<ControlledFooter />);
+
+      await user.click(screen.getByRole("button", { name: /1 window/ }));
+
+      const card = screen.getByRole("button", { name: "Focus Files window - /repo" });
+      expect(card).toHaveFocus();
+    });
+
+    it("returns focus to the trigger when Escape closes the palette", async () => {
+      const user = userEvent.setup();
+      render(<ControlledFooter />);
+
+      const trigger = screen.getByRole("button", { name: /1 window/ });
+      await user.click(trigger);
+      // Focus is inside the palette after opening.
+      expect(screen.getByRole("button", { name: "Focus Files window - /repo" })).toHaveFocus();
+
+      await user.keyboard("{Escape}");
+
+      expect(
+        screen.queryByRole("button", { name: "Focus Files window - /repo" }),
+      ).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+    });
   });
 });

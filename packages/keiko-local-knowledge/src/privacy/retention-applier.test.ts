@@ -25,10 +25,16 @@ interface SeedDocOptions {
   readonly vectorId: string;
   readonly lastExtractedAt: number;
   readonly vectorCreatedAt: number;
+  readonly contentHash?: string | undefined;
+  readonly mediaType?: string | undefined;
+  readonly sizeBytes?: number | undefined;
 }
 
 function seedDocWithVector(store: KnowledgeStore, opts: SeedDocOptions): void {
   const db = store._internal.db;
+  const contentHash = opts.contentHash ?? `sha256-${opts.documentId}`;
+  const mediaType = opts.mediaType ?? "text/plain";
+  const sizeBytes = opts.sizeBytes ?? 100;
   db.prepare(
     "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES (:id, :c, :s, :p, :sz, :m, :h, :pid, :pv, :le, :st, :sdn)",
   ).run({
@@ -36,9 +42,9 @@ function seedDocWithVector(store: KnowledgeStore, opts: SeedDocOptions): void {
     c: opts.capsuleId,
     s: opts.sourceId,
     p: `/srv/docs/${opts.documentId}.txt`,
-    sz: 100,
-    m: "text/plain",
-    h: "sha256-abc",
+    sz: sizeBytes,
+    m: mediaType,
+    h: contentHash,
     pid: "text",
     pv: "1.0",
     le: opts.lastExtractedAt,
@@ -78,6 +84,77 @@ function seedDocWithVector(store: KnowledgeStore, opts: SeedDocOptions): void {
   });
 }
 
+function seedDerivedContentForDocument(
+  store: KnowledgeStore,
+  opts: {
+    readonly capsuleId: KnowledgeCapsuleId;
+    readonly sourceId: KnowledgeSourceId;
+    readonly documentId: string;
+    readonly chunkId: string;
+    readonly contentHash: string;
+  },
+): void {
+  const db = store._internal.db;
+  db.prepare(
+    "UPDATE chunks SET contextual_retrieval_key = 'ctx-v1', context_prefix = 'prefix', augmented_text = :augmented, context_status = 'ready', context_updated_at = 1 WHERE capsule_id = :c AND id = :chunk_id",
+  ).run({
+    c: opts.capsuleId,
+    chunk_id: opts.chunkId,
+    augmented: `augmented ${opts.documentId}`,
+  });
+  db.prepare(
+    "INSERT INTO chunk_lexical_index (capsule_id, source_id, document_id, chunk_id, text, exact_text, updated_at) VALUES (:c, :s, :d, :chunk_id, :text, :exact, 1)",
+  ).run({
+    c: opts.capsuleId,
+    s: opts.sourceId,
+    d: opts.documentId,
+    chunk_id: opts.chunkId,
+    text: `lexical ${opts.documentId}`,
+    exact: `Lexical ${opts.documentId}`,
+  });
+  db.prepare(
+    "INSERT INTO document_text_windows (capsule_id, document_id, window_index, character_start, character_end, normalized_text) VALUES (:c, :d, 0, 0, 12, :text)",
+  ).run({
+    c: opts.capsuleId,
+    d: opts.documentId,
+    text: `window ${opts.documentId}`,
+  });
+  db.prepare(
+    [
+      "INSERT INTO extraction_checkpoints (",
+      "  capsule_id, document_id, job_id, strategy, phase, page_cursor, section_cursor,",
+      "  object_cursor, extracted_text_bytes, chunk_cursor, embedded_chunk_cursor,",
+      "  last_embedded_chunk_id, retry_count, coverage, source_content_hash, parser_version,",
+      "  policy_fingerprint, chunking_strategy_version, embedding_identity_json,",
+      "  terminal_diagnostics_json, created_at, updated_at",
+      ") VALUES (",
+      "  :c, :d, 'job-1', 'progressive-pdf', 'completed', 1, 0,",
+      "  0, 12, 1, 1, :chunk_id, 0, '{}', :h, '1.0',",
+      "  'policy', 'chunk-v1', '{}', '[]', 1, 1",
+      ")",
+    ].join(" "),
+  ).run({
+    c: opts.capsuleId,
+    d: opts.documentId,
+    h: opts.contentHash,
+    chunk_id: opts.chunkId,
+  });
+  db.prepare(
+    "INSERT OR IGNORE INTO document_blobs (capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version, blob_bytes, created_at, created_source_id, created_document_id) VALUES (:c, :h, 3, 'application/pdf', 'plaintext', NULL, :bytes, 1, :s, :d)",
+  ).run({
+    c: opts.capsuleId,
+    h: opts.contentHash,
+    bytes: Buffer.from("pdf"),
+    s: opts.sourceId,
+    d: opts.documentId,
+  });
+  db.prepare("UPDATE documents SET blob_ref = :h WHERE capsule_id = :c AND id = :d").run({
+    c: opts.capsuleId,
+    d: opts.documentId,
+    h: opts.contentHash,
+  });
+}
+
 function vectorIdsForCapsule(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): string[] {
   const rows = store._internal.db
     .prepare("SELECT id FROM vectors WHERE capsule_id = :c ORDER BY id ASC")
@@ -99,6 +176,15 @@ function documentTextIdsForCapsule(store: KnowledgeStore, capsuleId: KnowledgeCa
     )
     .all({ c: capsuleId }) as unknown as readonly { readonly document_id: string }[];
   return rows.map((r) => r.document_id);
+}
+
+function countRows(
+  store: KnowledgeStore,
+  sql: string,
+  params: Record<string, string | number | null | Uint8Array>,
+): number {
+  const row = store._internal.db.prepare(sql).get(params) as { readonly n: number };
+  return row.n;
 }
 
 describe("applyRetentionToCapsule", () => {
@@ -264,6 +350,119 @@ describe("applyRetentionToCapsule", () => {
     expect(result.deletedExtractedTextCount).toBe(1);
     expect(parsedUnitIdsForCapsule(env.store, capsuleId)).toEqual(["pu-new"]);
     expect(documentTextIdsForCapsule(env.store, capsuleId)).toEqual(["doc-new"]);
+  });
+
+  it("retires derived text, lexical, checkpoint, augmented chunk, vector, and PDF blob content for old documents", () => {
+    const now = 30 * DAY_MS;
+    const capsuleId = "cap-derived" as KnowledgeCapsuleId;
+    createCapsule(env.store, sampleCapsuleInput({ id: capsuleId }));
+    const source = sampleSourceInput("src-derived");
+    addSourceToCapsule(env.store, capsuleId, source);
+
+    seedDocWithVector(env.store, {
+      capsuleId,
+      sourceId: source.id,
+      documentId: "doc-old",
+      parsedUnitId: "pu-old",
+      chunkId: "ch-old",
+      vectorId: "vec-old",
+      lastExtractedAt: now - 100 * DAY_MS,
+      vectorCreatedAt: now - 100 * DAY_MS,
+      contentHash: "hash-old",
+      mediaType: "application/pdf",
+      sizeBytes: 3,
+    });
+    seedDerivedContentForDocument(env.store, {
+      capsuleId,
+      sourceId: source.id,
+      documentId: "doc-old",
+      chunkId: "ch-old",
+      contentHash: "hash-old",
+    });
+    seedDocWithVector(env.store, {
+      capsuleId,
+      sourceId: source.id,
+      documentId: "doc-new",
+      parsedUnitId: "pu-new",
+      chunkId: "ch-new",
+      vectorId: "vec-new",
+      lastExtractedAt: now - 1 * DAY_MS,
+      vectorCreatedAt: now - 1 * DAY_MS,
+      contentHash: "hash-new",
+      mediaType: "application/pdf",
+      sizeBytes: 3,
+    });
+    seedDerivedContentForDocument(env.store, {
+      capsuleId,
+      sourceId: source.id,
+      documentId: "doc-new",
+      chunkId: "ch-new",
+      contentHash: "hash-new",
+    });
+
+    const result = applyRetentionToCapsule(
+      env.store,
+      capsuleId,
+      { retainExtractedTextDays: 30 },
+      now,
+    );
+
+    expect(result.deletedExtractedTextCount).toBe(2);
+    expect(parsedUnitIdsForCapsule(env.store, capsuleId)).toEqual(["pu-new"]);
+    expect(vectorIdsForCapsule(env.store, capsuleId)).toEqual(["vec-new"]);
+    expect(documentTextIdsForCapsule(env.store, capsuleId)).toEqual(["doc-new"]);
+    expect(
+      countRows(
+        env.store,
+        "SELECT COUNT(*) AS n FROM document_text_windows WHERE document_id = :d",
+        {
+          d: "doc-old",
+        },
+      ),
+    ).toBe(0);
+    expect(
+      countRows(
+        env.store,
+        "SELECT COUNT(*) AS n FROM extraction_checkpoints WHERE document_id = :d",
+        {
+          d: "doc-old",
+        },
+      ),
+    ).toBe(0);
+    expect(
+      countRows(env.store, "SELECT COUNT(*) AS n FROM chunk_lexical_index WHERE document_id = :d", {
+        d: "doc-old",
+      }),
+    ).toBe(0);
+    expect(
+      countRows(env.store, "SELECT COUNT(*) AS n FROM chunks WHERE document_id = :d", {
+        d: "doc-old",
+      }),
+    ).toBe(0);
+    expect(
+      countRows(env.store, "SELECT COUNT(*) AS n FROM document_blobs WHERE content_hash = :h", {
+        h: "hash-old",
+      }),
+    ).toBe(0);
+    expect(
+      countRows(env.store, "SELECT COUNT(*) AS n FROM document_blobs WHERE content_hash = :h", {
+        h: "hash-new",
+      }),
+    ).toBe(1);
+    expect(
+      countRows(env.store, "SELECT COUNT(*) AS n FROM chunk_lexical_index WHERE document_id = :d", {
+        d: "doc-new",
+      }),
+    ).toBe(1);
+    expect(
+      countRows(
+        env.store,
+        "SELECT COUNT(*) AS n FROM chunks WHERE document_id = :d AND augmented_text IS NOT NULL",
+        {
+          d: "doc-new",
+        },
+      ),
+    ).toBe(1);
   });
 
   it("rejects negative or non-finite retention policy values before mutating data", () => {

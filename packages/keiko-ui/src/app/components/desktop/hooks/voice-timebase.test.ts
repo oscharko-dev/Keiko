@@ -1,4 +1,4 @@
-// Issue #498 (ADR-0061) — the Voice timing engine. Drives the engine with a deterministic SCRIPTED
+// Issue #498 (ADR-0103) — the Voice timing engine. Drives the engine with a deterministic SCRIPTED
 // clock (an injected `{ now }` advanced by hand — no fake timers, no performance.now) and synthetic
 // #496 control envelopes, exercising the full matrix: capability gating (none/STT/realtime),
 // the phase state machine, jitter / packet-delay / duplicate / out-of-order / correction / interrupt

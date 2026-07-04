@@ -2,7 +2,7 @@
 // the workflow form and the fully-populated result MUST emit zero violations, because the panel is the
 // primary governed UI surface for the enhancer (AC: keyboard-accessible controls + accessible result).
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { PromptEnhancerPanel } from "./PromptEnhancerPanel";
@@ -114,5 +114,25 @@ describe("PromptEnhancerPanel a11y", () => {
     fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
     await screen.findByTestId("pe-result");
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("moves focus to the result heading after a successful enhance (GEN-UI-FOCUS-009)", async () => {
+    render(
+      <PromptEnhancerPanel
+        enhanceImpl={vi.fn().mockResolvedValue(response())}
+        fetchModelsImpl={noModels}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Raw prompt"), { target: { value: "Summarize." } });
+    fireEvent.click(screen.getByRole("button", { name: /Enhance prompt/ }));
+    const result = await screen.findByTestId("pe-result");
+    const title = await screen.findByRole("heading", { name: "Enhanced prompt" });
+    // The heading is programmatically focusable and receives focus so keyboard/SR users land on the
+    // freshly rendered artifact instead of the (now-stale) submit button.
+    expect(title).toHaveAttribute("tabindex", "-1");
+    await waitFor(() => {
+      expect(document.activeElement).toBe(title);
+    });
+    expect(result.contains(document.activeElement)).toBe(true);
   });
 });

@@ -1,19 +1,22 @@
 {
-  "measuredAtIso": "2026-06-27T15:29:19.123Z",
+  "measuredAtIso": "2026-07-04T05:09:18.834Z",
+  "commit": "6c3d061ebfd937f427c093652124f42bed3e8836",
   "harness": "packaged CLI serving the production static UI via tests/e2e/config/playwright.workspace-performance.config.ts",
   "runs": {
     "chromium": {
       "project": "chromium",
       "windowCount": 12,
       "connectionCount": 11,
+      "measuredAtIso": "2026-07-04T05:09:15.102Z",
       "gestures": [
         {
           "label": "workspace pan",
           "frameGapBudgetP75Ms": 34,
           "frameGapBudgetMaxMs": 120,
-          "frameGapSamples": 72,
+          "frameGapSamples": 16,
+          "frameGapTotalSamples": 71,
           "frameGapP75Ms": 8,
-          "frameGapMaxMs": 17,
+          "frameGapMaxMs": 34,
           "longTaskObserverInstalled": true,
           "longTaskCount": 0,
           "maxLongTaskMs": 0,
@@ -25,9 +28,10 @@
           "label": "workspace zoom",
           "frameGapBudgetP75Ms": 34,
           "frameGapBudgetMaxMs": 120,
-          "frameGapSamples": 74,
+          "frameGapSamples": 20,
+          "frameGapTotalSamples": 75,
           "frameGapP75Ms": 8,
-          "frameGapMaxMs": 9,
+          "frameGapMaxMs": 10,
           "longTaskObserverInstalled": true,
           "longTaskCount": 0,
           "maxLongTaskMs": 0,
@@ -39,9 +43,10 @@
           "label": "window drag",
           "frameGapBudgetP75Ms": 34,
           "frameGapBudgetMaxMs": 120,
-          "frameGapSamples": 67,
+          "frameGapSamples": 31,
+          "frameGapTotalSamples": 141,
           "frameGapP75Ms": 8,
-          "frameGapMaxMs": 9,
+          "frameGapMaxMs": 10,
           "longTaskObserverInstalled": true,
           "longTaskCount": 0,
           "maxLongTaskMs": 0,
@@ -49,20 +54,26 @@
           "workspaceWrites": 1,
           "workspacePuts": 1
         }
-      ]
+      ],
+      "verdict": {
+        "passed": true,
+        "failures": []
+      }
     },
     "webkit": {
       "project": "webkit",
       "windowCount": 12,
       "connectionCount": 11,
+      "measuredAtIso": "2026-07-04T05:09:18.834Z",
       "gestures": [
         {
           "label": "workspace pan",
           "frameGapBudgetP75Ms": 50,
           "frameGapBudgetMaxMs": 150,
-          "frameGapSamples": 32,
-          "frameGapP75Ms": 18,
-          "frameGapMaxMs": 26,
+          "frameGapSamples": 7,
+          "frameGapTotalSamples": 35,
+          "frameGapP75Ms": 19,
+          "frameGapMaxMs": 27,
           "longTaskObserverInstalled": true,
           "longTaskCount": 0,
           "maxLongTaskMs": 0,
@@ -74,7 +85,8 @@
           "label": "workspace zoom",
           "frameGapBudgetP75Ms": 50,
           "frameGapBudgetMaxMs": 150,
-          "frameGapSamples": 40,
+          "frameGapSamples": 13,
+          "frameGapTotalSamples": 40,
           "frameGapP75Ms": 17,
           "frameGapMaxMs": 23,
           "longTaskObserverInstalled": true,
@@ -88,9 +100,10 @@
           "label": "window drag",
           "frameGapBudgetP75Ms": 50,
           "frameGapBudgetMaxMs": 150,
-          "frameGapSamples": 31,
+          "frameGapSamples": 8,
+          "frameGapTotalSamples": 36,
           "frameGapP75Ms": 18,
-          "frameGapMaxMs": 24,
+          "frameGapMaxMs": 25,
           "longTaskObserverInstalled": true,
           "longTaskCount": 0,
           "maxLongTaskMs": 0,
@@ -98,7 +111,11 @@
           "workspaceWrites": 1,
           "workspacePuts": 1
         }
-      ]
+      ],
+      "verdict": {
+        "passed": true,
+        "failures": []
+      }
     }
   }
 }

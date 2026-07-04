@@ -1,5 +1,18 @@
 "use client";
 
+/**
+ * ChatWindow — the desktop chat surface (composer + conversation thread + voice/attachment controls).
+ *
+ * Ownership boundary: this component owns chat UI state and orchestration only. The domain contracts
+ * (chat/message/grounding wire types, connected-scope semantics) live in `@oscharko-dev/keiko-contracts`
+ * and `@/lib/types`; all BFF calls go through `@/lib/api`; chat session state is provided by
+ * `ChatSessionContext`; and the pure, DOM-free repository-reference string helpers (root/path
+ * normalization, `@path` mention insertion/removal, mention detection) live in the sibling leaf module
+ * `./chatRepositoryReference` and are imported back here. `copyableMessageText` stays in this file as
+ * an exported, test-referenced helper. This file is intentionally large because it composes many
+ * controls, but the reusable pure logic is factored out to keep those pieces independently testable.
+ */
+
 import Image from "next/image";
 import {
   memo,
@@ -19,7 +32,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import type { VoiceSessionGroundingContext } from "@oscharko-dev/keiko-contracts";
-import { useChatSessionContext } from "./context/ChatSessionContext";
+import { useChatSessionCatalog, useChatSessionContext } from "./context/ChatSessionContext";
 import { ErrorNoticeFromError } from "./ErrorNotice";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
@@ -32,6 +45,14 @@ import {
   type OpenRepositoryReference,
   type RepositoryReferenceRoot,
 } from "./repositoryReferences";
+import {
+  appendRepositoryReference,
+  normalizedRepositoryPath,
+  omitAncestorRepositoryRoots,
+  removeRepositoryReferenceFromDraft,
+  repositoryReferenceId,
+  repositoryReferenceMentionPaths,
+} from "./chatRepositoryReference";
 import {
   AttachButton,
   AttachDropZone,
@@ -114,6 +135,15 @@ const SEND_HINT_ID = "cmp-send-hint";
 
 // Stable id for the loading status so blocked actions can reference it.
 const LOADING_STATUS_ID = "cmp-loading-status";
+
+// Stable ids wiring the composer textarea (role="combobox") to the repository
+// @-mention results (role="listbox"). aria-controls references the listbox and
+// aria-activedescendant references the highlighted option while the picker is
+// open, so the combobox keeps DOM focus on the textarea (WCAG combobox pattern).
+const REPO_FILE_PICKER_LISTBOX_ID = "repo-file-picker-listbox";
+function repositoryFilePickerOptionId(index: number): string {
+  return `repo-file-picker-option-${index}`;
+}
 
 const CHAT_TURN_WINDOW_THRESHOLD = 120;
 const CHAT_TURN_WINDOW_SIZE = 80;
@@ -414,7 +444,11 @@ function ChatBubbleImpl({
   readonly layout?: "stack" | "turn";
 }): ReactNode {
   const t = useTranslate();
-  const { activeChat } = useChatSessionContext();
+  // GEN-PERF-CHAT-002 — settled bubbles only need activeChat (a low-frequency field). Reading it
+  // from the catalog context (whose useMemo excludes draft/streamingAssistantMessage/sendStatus)
+  // instead of the full-state context stops every settled bubble from re-rendering on each
+  // keystroke or streamed token.
+  const { activeChat } = useChatSessionCatalog();
   const contentId = useId();
   const bubbleRef = useRef<HTMLElement | null>(null);
   const [collapsed, setCollapsed] = useState(false);
@@ -777,7 +811,7 @@ function ConversationThreadImpl({
   );
 }
 
-interface ConversationQuestionMapItem {
+export interface ConversationQuestionMapItem {
   readonly id: string;
   readonly index: number;
   readonly preview: string;
@@ -790,7 +824,8 @@ function setQuestionMapButtonWave(button: HTMLButtonElement, wave: number, peak:
   button.dataset.peak = peak ? "true" : "false";
 }
 
-function ConversationQuestionMap({
+// Exported for the GEN-PERF-CHAT-012 two-phase read/write regression test.
+export function ConversationQuestionMap({
   items,
   onJump,
 }: {
@@ -799,26 +834,63 @@ function ConversationQuestionMap({
 }): ReactNode {
   const t = useTranslate();
   const buttonRefs = useRef(new Map<string, HTMLButtonElement>());
-  const setWaveFromPointer = useCallback((clientY: number): void => {
+  // GEN-PERF-CHAT-012 — last pointer Y and a single pending frame handle, so a burst of pointermove
+  // events collapses to one rAF (last-event-wins) instead of one layout pass per event.
+  const pendingWaveYRef = useRef<number | null>(null);
+  const waveFrameRef = useRef<number | null>(null);
+
+  // Applies the wave to every button in TWO phases: read ALL rects first, THEN write ALL
+  // --wave-width values. Interleaving reads and writes (the pre-fix loop) forced a synchronous
+  // reflow on every iteration because --wave-width drives a transitioned width; batching the reads
+  // ahead of the writes collapses that to one read pass + one write pass.
+  const applyWave = useCallback((clientY: number): void => {
     const buttons = Array.from(buttonRefs.current.values());
     if (buttons.length === 0) return;
     const sigmaPx = 23;
-    let nearest: HTMLButtonElement | undefined;
+    // Phase 1 — read all geometry.
+    let nearestIndex = -1;
     let nearestDistance = Number.POSITIVE_INFINITY;
-    for (const button of buttons) {
+    const waves = buttons.map((button, index) => {
       const rect = button.getBoundingClientRect();
       const centerY = rect.top + rect.height / 2;
       const distance = Math.abs(clientY - centerY);
       if (distance < nearestDistance) {
         nearestDistance = distance;
-        nearest = button;
+        nearestIndex = index;
       }
-      const wave = Math.exp(-(distance * distance) / (2 * sigmaPx * sigmaPx));
-      setQuestionMapButtonWave(button, wave, false);
-    }
-    if (nearest !== undefined) setQuestionMapButtonWave(nearest, 1, true);
+      return Math.exp(-(distance * distance) / (2 * sigmaPx * sigmaPx));
+    });
+    // Phase 2 — write all custom properties (no reads in between).
+    buttons.forEach((button, index) => {
+      const isPeak = index === nearestIndex;
+      setQuestionMapButtonWave(button, isPeak ? 1 : (waves[index] ?? 0), isPeak);
+    });
   }, []);
+
+  const setWaveFromPointer = useCallback(
+    (clientY: number): void => {
+      pendingWaveYRef.current = clientY;
+      if (typeof requestAnimationFrame !== "function") {
+        applyWave(clientY);
+        return;
+      }
+      if (waveFrameRef.current !== null) return;
+      waveFrameRef.current = requestAnimationFrame(() => {
+        waveFrameRef.current = null;
+        const y = pendingWaveYRef.current;
+        if (y !== null) applyWave(y);
+      });
+    },
+    [applyWave],
+  );
+
   const resetWave = useCallback((): void => {
+    // Cancel any pending wave frame so a stale pointer position does not fight the reset.
+    if (waveFrameRef.current !== null && typeof cancelAnimationFrame === "function") {
+      cancelAnimationFrame(waveFrameRef.current);
+    }
+    waveFrameRef.current = null;
+    pendingWaveYRef.current = null;
     for (const button of buttonRefs.current.values()) {
       setQuestionMapButtonWave(button, 0, false);
     }
@@ -928,31 +1000,6 @@ function connectedRepositoryRoots(
   return roots;
 }
 
-function normalizedRepositoryRoot(root: string): string {
-  return root.replace(/\\/gu, "/").replace(/\/+$/u, "");
-}
-
-function repositoryRootContains(parentRoot: string, childRoot: string): boolean {
-  const parent = normalizedRepositoryRoot(parentRoot);
-  const child = normalizedRepositoryRoot(childRoot);
-  return parent.length > 0 && child.length > parent.length && child.startsWith(`${parent}/`);
-}
-
-function omitAncestorRepositoryRoots(roots: readonly string[]): readonly string[] {
-  const seen = new Set<string>();
-  const unique: string[] = [];
-  for (const root of roots) {
-    const trimmed = root.trim();
-    if (trimmed.length === 0 || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
-  return unique.filter(
-    (root) =>
-      !unique.some((candidate) => candidate !== root && repositoryRootContains(root, candidate)),
-  );
-}
-
 function repositoryReferenceRootPaths(args: {
   readonly chat: Chat | undefined;
   readonly activeProjectPath: string | undefined;
@@ -970,21 +1017,6 @@ function repositoryReferenceRootPaths(args: {
   return omitAncestorRepositoryRoots(roots);
 }
 
-function normalizedRepositoryPath(path: string): string {
-  return path.replace(/\\/gu, "/").replace(/^\/+/u, "").replace(/\/+$/u, "");
-}
-
-function appendRepositoryReference(draft: string, path: string): string {
-  const mention = `@${path}`;
-  if (draft.split(/\s+/u).includes(mention)) return draft;
-  const trimmed = draft.trimEnd();
-  return trimmed.length === 0 ? mention : `${trimmed} ${mention}`;
-}
-
-function repositoryReferenceId(root: string, path: string): string {
-  return `${root}\u0001${path}`;
-}
-
 function repositoryReferenceFromResult(
   result: FilesSearchResult,
   source: ComposerRepositoryReference["source"] = "picker",
@@ -998,39 +1030,6 @@ function repositoryReferenceFromResult(
     verified: true,
     source,
   };
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-}
-
-function repositoryReferenceMentionPattern(path: string): RegExp {
-  return new RegExp(`(^|\\s)@${escapeRegExp(path)}(?=$|\\s)`, "gu");
-}
-
-function removeRepositoryReferenceFromDraft(draft: string, path: string): string {
-  const next = draft
-    .replace(repositoryReferenceMentionPattern(path), "$1")
-    .replace(/[ \t]{2,}/gu, " ");
-  return next.trim().length === 0 ? "" : next;
-}
-
-const COMPOSER_REPOSITORY_REFERENCE_PATTERN =
-  /(^|\s)@((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9][A-Za-z0-9]{0,15})(?=$|\s)/gu;
-
-function repositoryReferenceMentionPaths(draft: string): readonly string[] {
-  const seen = new Set<string>();
-  const paths: string[] = [];
-  COMPOSER_REPOSITORY_REFERENCE_PATTERN.lastIndex = 0;
-  for (;;) {
-    const match = COMPOSER_REPOSITORY_REFERENCE_PATTERN.exec(draft);
-    if (match === null) break;
-    const path = normalizedRepositoryPath(match[2] ?? "");
-    if (path.length === 0 || seen.has(path)) continue;
-    seen.add(path);
-    paths.push(path);
-  }
-  return paths;
 }
 
 function syntheticRepositoryReferenceFromPath(
@@ -1327,6 +1326,7 @@ function RepositoryFilePickerPanel({
 }: RepositoryFilePickerPanelProps): ReactNode {
   const activeRoot = roots.find((root) => root.root === selectedRoot) ?? roots[0];
   const displayedError = pickError ?? search.error;
+  const resultsRef = useRef<HTMLDivElement | null>(null);
   const stopPickerPointer = (event: SyntheticEvent): void => {
     event.stopPropagation();
   };
@@ -1336,14 +1336,23 @@ function RepositoryFilePickerPanel({
     event.stopPropagation();
     onPick(result);
   };
+  // Keep the highlighted option visible as ArrowUp/ArrowDown move the selection.
+  // Focus stays on the textarea (combobox), so we scroll the option manually.
+  useEffect(() => {
+    const list = resultsRef.current;
+    if (list === null) return;
+    const option = list.querySelector<HTMLElement>(
+      `#${repositoryFilePickerOptionId(highlightedIndex)}`,
+    );
+    option?.scrollIntoView({ block: "nearest" });
+  }, [highlightedIndex, search.results]);
   return (
-    // The dialog must be a pointer boundary inside draggable workspace windows.
-    // Actual selection controls remain semantic buttons below.
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+    // A combobox popup is not a modal dialog; keep it a plain container. It must
+    // still be a pointer boundary inside draggable workspace windows, and the
+    // selection controls below remain semantic buttons.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div
       className="repo-focus-popover"
-      role="dialog"
-      aria-label="Reference repository file"
       onPointerDown={stopPickerPointer}
       onMouseDown={stopPickerPointer}
     >
@@ -1384,10 +1393,17 @@ function RepositoryFilePickerPanel({
         {displayedError ?? (search.searching ? "Searching repository files..." : search.message)}
       </div>
       {search.results.length > 0 ? (
-        <div className="repo-focus-results" role="listbox" aria-label="Repository file results">
+        <div
+          className="repo-focus-results"
+          id={REPO_FILE_PICKER_LISTBOX_ID}
+          role="listbox"
+          aria-label="Repository file results"
+          ref={resultsRef}
+        >
           {search.results.map((result, index) => (
             <button
               key={`${result.root}:${result.path}`}
+              id={repositoryFilePickerOptionId(index)}
               type="button"
               className={fileSearchResultClassName(result)}
               role="option"
@@ -1650,6 +1666,10 @@ function VoiceDialogComposerControls({
   voiceDialogButtonRef,
   compact = false,
 }: VoiceDialogComposerControlsProps): ReactNode {
+  // Stable id for the interrupt sr-only hint so the button can stay in the tab
+  // order via aria-disabled (instead of the native disabled attribute, which
+  // removes it from the tab sequence and hides the reason from assistive tech).
+  const interruptHintId = useId();
   return (
     <div className="cmp-bar cmp-bar-voice-dialog">
       <ComposerContextControls
@@ -1677,10 +1697,17 @@ function VoiceDialogComposerControls({
             className={`cmp-voice-btn${compact ? " cmp-mode-compact" : ""}`}
             aria-label="Interrupt the assistant"
             data-tip="Interrupt the assistant"
-            disabled={!canInterrupt}
-            onClick={onInterrupt}
+            aria-disabled={!canInterrupt}
+            aria-describedby={interruptHintId}
+            onClick={() => {
+              if (!canInterrupt) return;
+              onInterrupt?.();
+            }}
           >
             Interrupt
+            <span id={interruptHintId} className="sr-only">
+              Available while Keiko is speaking.
+            </span>
           </button>
         ) : null}
       </div>
@@ -2325,21 +2352,53 @@ function ComposerCore({
       >
         {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
         <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-        <textarea
-          className="cmp-input"
-          ref={taRef}
-          rows={2}
-          value={draft}
-          aria-label={t("chat.messageLabel")}
-          placeholder={placeholder}
-          onChange={handleDraftChange}
-          onSelect={handleDraftSelect}
-          onKeyDown={handleDraftKeyDown}
-          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
-          // fully editable while a send is in flight so the next message can be
-          // pre-typed during streaming. Re-submit stays blocked by the isInFlight
-          // guard in useChatSession, and the primary button is "Cancel" meanwhile.
-        />
+        {/* ARIA combobox wrapper: while the @-mention repository picker is open
+            this container exposes role="combobox" and owns the results listbox
+            (aria-expanded / aria-controls). A multi-line <textarea> may not carry
+            role="combobox" itself (ARIA 1.2), so the wrapper holds the combobox
+            role while the textarea keeps DOM focus and conveys the highlighted
+            option via aria-activedescendant (WAI-ARIA 1.1 combobox pattern). When
+            the picker is closed the wrapper is an inert container and the
+            textarea is a plain textbox. */}
+        <div
+          className="cmp-input-combobox"
+          role={repositoryPickerOpen ? "combobox" : undefined}
+          aria-label={repositoryPickerOpen ? t("chat.messageLabel") : undefined}
+          aria-expanded={repositoryPickerOpen ? true : undefined}
+          aria-haspopup={repositoryPickerOpen ? "listbox" : undefined}
+          // aria-controls references the listbox, which only exists once results
+          // have loaded — guarding keeps the idref resolvable (aria-valid-attr-value).
+          aria-controls={
+            repositoryPickerOpen && repositorySearch.results.length > 0
+              ? REPO_FILE_PICKER_LISTBOX_ID
+              : undefined
+          }
+        >
+          <textarea
+            className="cmp-input"
+            ref={taRef}
+            rows={2}
+            value={draft}
+            aria-label={t("chat.messageLabel")}
+            placeholder={placeholder}
+            // aria-autocomplete + aria-activedescendant are valid on the textbox
+            // and communicate the autocomplete behavior and highlighted option
+            // without moving DOM focus off the textarea.
+            aria-autocomplete={repositoryPickerOpen ? "list" : undefined}
+            aria-activedescendant={
+              repositoryPickerOpen && repositorySearch.results.length > 0
+                ? repositoryFilePickerOptionId(repositoryHighlightedIndex)
+                : undefined
+            }
+            onChange={handleDraftChange}
+            onSelect={handleDraftSelect}
+            onKeyDown={handleDraftKeyDown}
+            // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
+            // fully editable while a send is in flight so the next message can be
+            // pre-typed during streaming. Re-submit stays blocked by the isInFlight
+            // guard in useChatSession, and the primary button is "Cancel" meanwhile.
+          />
+        </div>
         {repositoryPickerOpen ? (
           <div className="repo-focus repo-focus-inline">
             <span className="sr-only" role="status" aria-live="polite">

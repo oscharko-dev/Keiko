@@ -238,7 +238,8 @@
   background: color-mix(in oklch, var(--surface-accent-subtle) 72%, var(--surface-primary));
 }
 
-.lazyWidgetScope :global(.pdfv-context-citation[data-active="true"] .grounded-citation-action-label) {
+.lazyWidgetScope
+  :global(.pdfv-context-citation[data-active="true"] .grounded-citation-action-label) {
   color: var(--text-accent);
 }
 
@@ -274,6 +275,47 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+}
+
+/* GEN-UI-FOCUS-001 + GEN-UI-VISUAL-001 — the .tm-action chrome and its :focus-visible ring
+   live in TerminalWidget.module.css scoped to THAT module's own .lazyWidgetScope hash, which
+   cannot match this PDF window. Re-declare the chrome and focus ring under this module's own
+   scope so PDF toolbar/action buttons render correctly and remain keyboard-focus-visible.
+   Mirrors TerminalWidget.module.css :global(.tm-action). Do NOT move this to globals.css. */
+.lazyWidgetScope :global(.tm-action) {
+  padding: 6px 14px;
+  min-height: 28px;
+  min-width: 56px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--button-secondary-border);
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+}
+
+.lazyWidgetScope :global(.tm-action):hover:not(:disabled) {
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
+  border-color: var(--border-strong);
+}
+
+.lazyWidgetScope :global(.tm-action):disabled,
+.lazyWidgetScope :global(.tm-action[aria-disabled="true"]) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lazyWidgetScope :global(.tm-action[aria-disabled="true"]):hover {
+  background: var(--button-secondary-surface);
+  color: var(--text-secondary);
+  border-color: var(--button-secondary-border);
+}
+
+.lazyWidgetScope :global(.tm-action):focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .lazyWidgetScope :global(.pdfv-page-field) {

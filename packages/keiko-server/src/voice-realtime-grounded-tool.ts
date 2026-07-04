@@ -62,6 +62,12 @@ interface RealtimeGroundedToolOutput {
     readonly assistantMessageId: string;
   };
   readonly instruction: string;
+  // GEN-AI-GROUNDING-005 (RB-4): forward the grounded answer's abstention / uncertainty state so the
+  // realtime voice layer never speaks unverified grounded content as fact. `noEvidence` is true when
+  // the grounded path abstained (empty evidence); `uncertainty` carries the markers (no-evidence,
+  // unsupported-citation, incomplete-answer, ...) surfaced by faithfulness reconciliation.
+  readonly noEvidence: boolean;
+  readonly uncertainty: readonly { readonly kind: string; readonly claim: string }[];
 }
 
 export interface RealtimeGroundedToolResponse {
@@ -289,6 +295,36 @@ function summarizeCitations(answer: GroundedAnswer): RealtimeGroundedToolOutput[
   return folder;
 }
 
+// GEN-AI-GROUNDING-005 (RB-4): true when the grounded answer abstained on empty evidence. The
+// local-knowledge path carries an explicit `noEvidence` boolean; every path also emits a
+// `no-evidence` uncertainty marker, which the folder/hybrid paths use as the abstention signal.
+function isGroundedNoEvidence(answer: GroundedAnswer): boolean {
+  if (answer.groundingKind === "local-knowledge" && answer.noEvidence) {
+    return true;
+  }
+  return answer.uncertainty.some((marker) => marker.kind === "no-evidence");
+}
+
+// Voice must never speak unverified grounded content as confirmed fact. On empty evidence it states
+// that nothing was found; when reconciliation flagged unsupported/incomplete claims it speaks with
+// an explicit uncertainty caveat; otherwise it speaks the answer faithfully.
+function voiceInstructionFor(answer: GroundedAnswer): string {
+  if (isGroundedNoEvidence(answer)) {
+    return (
+      "State clearly that no supporting repository evidence was found for this question and that " +
+      "you cannot answer it from the connected sources. Do not invent or guess an answer."
+    );
+  }
+  if (answer.uncertainty.length > 0) {
+    return (
+      "Speak this answer faithfully and concisely, but it contains unverified or incomplete claims " +
+      "(see the uncertainty notes). Make clear which parts are uncertain and do not present them " +
+      "as confirmed fact. Do not add facts that are not in the answer."
+    );
+  }
+  return "Speak this answer faithfully in a concise voice-friendly way. Do not add facts that are not in the answer.";
+}
+
 function buildToolOutput(answer: GroundedAnswer): RealtimeGroundedToolOutput {
   return {
     status: "ok",
@@ -301,8 +337,9 @@ function buildToolOutput(answer: GroundedAnswer): RealtimeGroundedToolOutput {
       userMessageId: answer.userMessageId,
       assistantMessageId: answer.assistantMessageId,
     },
-    instruction:
-      "Speak this answer faithfully in a concise voice-friendly way. Do not add facts that are not in the answer.",
+    instruction: voiceInstructionFor(answer),
+    noEvidence: isGroundedNoEvidence(answer),
+    uncertainty: answer.uncertainty.map((marker) => ({ kind: marker.kind, claim: marker.claim })),
   };
 }
 

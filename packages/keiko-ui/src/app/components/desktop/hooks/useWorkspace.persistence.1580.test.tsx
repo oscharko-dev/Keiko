@@ -37,6 +37,10 @@ function Harness(): ReactElement {
   const ws = useWorkspace(wsRef);
   return (
     <main ref={wsRef} className="workspace" data-testid="ws">
+      <output data-testid="wins">{ws.wins?.map((win) => win.id).join(",") ?? "loading"}</output>
+      <output data-testid="view">
+        {JSON.stringify({ zoom: ws.view.zoom, x: ws.view.x, y: ws.view.y })}
+      </output>
       <button type="button" data-testid="minimize" onClick={() => ws.api.minimize("agents-1")}>
         minimize
       </button>
@@ -156,6 +160,19 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     });
     setItemSpy.mockRestore();
   });
+
+  it("clamps invalid persisted view state on hydrate", () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    window.localStorage.setItem(VIEW_LS, JSON.stringify({ x: Number.NaN, y: Infinity, zoom: 99 }));
+
+    const { getByTestId } = render(<Harness />);
+
+    expect(JSON.parse(getByTestId("view").textContent ?? "null")).toEqual({
+      zoom: 2.5,
+      x: 0,
+      y: 0,
+    });
+  });
 });
 
 describe("Issue #1580 — visibility-gated server poll", () => {
@@ -199,8 +216,16 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     >;
   }
 
+  function putCalls(): [unknown, RequestInit | undefined][] {
+    return fetchMock.mock.calls.filter(
+      ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
+    ) as [unknown, RequestInit | undefined][];
+  }
+
   async function flushAsyncEffects(): Promise<void> {
     await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
     });
   }
@@ -238,5 +263,74 @@ describe("Issue #1580 — visibility-gated server poll", () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     expect(getPolls()).toBe(beforeHidden + 1);
+  });
+
+  it("sends workspace PUTs with If-Match and skips a no-op keepalive flush", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-1"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 1, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return { status: 304, ok: true, headers: new Headers() } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    expect(putCalls()).toHaveLength(1);
+    expect((putCalls()[0]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-0"',
+    );
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"));
+    });
+    await flushAsyncEffects();
+    expect(putCalls()).toHaveLength(1);
+  });
+
+  it("does not apply a polled server snapshot over a locally dirty workspace", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ ETag: '"workspace-state-7"' }),
+      json: async () =>
+        Promise.resolve({
+          workspace: {
+            revision: 7,
+            windows: [
+              {
+                id: "foreign-1",
+                type: "files",
+                x: 1,
+                y: 2,
+                w: 320,
+                h: 240,
+                z: 9,
+                cfg: {},
+                max: false,
+              },
+            ],
+            connections: [],
+          },
+        }),
+    } as unknown as Response);
+
+    const { getByTestId } = render(<Harness />);
+    await flushAsyncEffects();
+
+    expect(getByTestId("wins")).toHaveTextContent("agents-1");
+    expect(getByTestId("wins")).not.toHaveTextContent("foreign-1");
   });
 });

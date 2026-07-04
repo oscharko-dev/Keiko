@@ -12,7 +12,11 @@ import type {
   QualityIntelligenceUiAtomCoverage,
 } from "@oscharko-dev/keiko-contracts";
 
-function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidate {
+function makeCandidate(
+  id: string,
+  title: string,
+  reviewState: QualityIntelligenceUiCandidate["reviewState"] = "open",
+): QualityIntelligenceUiCandidate {
   return {
     id,
     title,
@@ -23,7 +27,7 @@ function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidat
     riskClass: "regression",
     tags: ["smoke"],
     status: "proposed",
-    reviewState: "open",
+    reviewState,
     derivedFromAtomIds: [],
   };
 }
@@ -584,6 +588,69 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-d3" fetchDetailImpl={fetchOk(detail)} connectedSources={[]} />);
     await screen.findByText("A test");
     expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
+  });
+
+  // GEN-DUP-SEMANTIC-009: the review-announce string is derived from the shared contracts
+  // action→state projection (reviewActionResultState) mapped through REVIEW_LABEL, replacing an
+  // ad-hoc ternary. This matrix pins the announced label for every reviewer action. The four
+  // actions the old ternary handled (approve/reject/request-changes/reopen) keep byte-identical
+  // labels; "withdraw" — which the old ternary mislabelled "Open" — now correctly announces
+  // "Withdrawn" (the else-branch defect that motivated the shared projection).
+  describe("announces the resulting state label for each reviewer action (SEMANTIC-009)", () => {
+    const cases = [
+      { action: "approve", buttonName: /^approve$/i, initial: "open", label: "Approved" },
+      { action: "reject", buttonName: /^reject$/i, initial: "open", label: "Rejected" },
+      {
+        action: "request-changes",
+        buttonName: /^request changes$/i,
+        initial: "open",
+        label: "Changes requested",
+      },
+      { action: "withdraw", buttonName: /^withdraw$/i, initial: "open", label: "Withdrawn" },
+      { action: "reopen", buttonName: /^reopen$/i, initial: "approved", label: "Open" },
+    ] as const;
+
+    for (const { action, buttonName, initial, label } of cases) {
+      it(`announces "${label}" after ${action}`, async () => {
+        const user = userEvent.setup();
+        window.sessionStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+        const detail = makeDetail(`qi-run-announce-${action}`, [
+          makeCandidate("tc-a1", "Verify checkout flow", initial),
+        ]);
+        const reviewImpl = vi.fn().mockResolvedValue({
+          runState: "open",
+          candidateStates: { "tc-a1": initial },
+          auditCount: 1,
+        }) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+        render(
+          <QiRunCard
+            runId={`qi-run-announce-${action}`}
+            fetchDetailImpl={fetchOk(detail)}
+            reviewImpl={reviewImpl}
+          />,
+        );
+        const button = await screen.findByRole("button", { name: buttonName });
+        await waitFor(() => {
+          expect(button).toBeEnabled();
+        });
+        await user.click(button);
+
+        await waitFor(() => {
+          expect(reviewImpl).toHaveBeenCalledWith(
+            `qi-run-announce-${action}`,
+            action,
+            "tc-a1",
+            "Alice",
+          );
+        });
+        await waitFor(() => {
+          const region = screen.getByTestId("qi-review-announce");
+          expect(region).toHaveTextContent(`marked ${label}.`);
+          expect(region).toHaveTextContent(/Verify checkout flow/i);
+        });
+      });
+    }
   });
 });
 

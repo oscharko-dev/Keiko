@@ -52,7 +52,9 @@ function isReinforcedAgainstAge(record: MemoryRecord, options: StaleOptions): bo
   const minCount =
     options.staleAccessReinforcementCount ?? STALE_ACCESS_REINFORCEMENT_COUNT_DEFAULT;
   if (stats.accessCount >= minCount) return true;
-  return stats.lastAccessedAt !== undefined && stats.lastAccessedAt + options.maxAgeMs > options.nowMs;
+  return (
+    stats.lastAccessedAt !== undefined && stats.lastAccessedAt + options.maxAgeMs > options.nowMs
+  );
 }
 
 function collectReasonsFor(record: MemoryRecord, options: StaleOptions): readonly StaleReason[] {

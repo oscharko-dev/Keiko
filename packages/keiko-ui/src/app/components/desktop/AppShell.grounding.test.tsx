@@ -381,7 +381,46 @@ describe("AppShell grounding connections", () => {
     );
     expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(updated);
     expect(mocks.recordReadsContextRelationship).toHaveBeenCalledWith("chat-1", "/repo");
-    expect(screen.queryByRole("alert")).toBeNull();
+    // The app-level announcer mounts a permanent (empty) role="alert" region, so scope the
+    // "no notice" assertion to the inline source-limit alert specifically.
+    expect(document.querySelector(".source-limit-alert")).toBeNull();
+  });
+
+  // GEN-PERF-RENDER-001 — the four scope-bind callbacks passed to useWorkspace depend on the stable
+  // `session.replaceChat` slice, not the whole `session` object. So when the session's identity
+  // changes (as it does on every draft/streaming state change) but replaceChat stays stable, the
+  // callbacks — and therefore the workspace `api` binding — must keep their identity. Pre-fix
+  // (dep on the whole `session`) every session change re-created all four callbacks.
+  it("keeps scope-bind callback identity stable across a session identity change (replaceChat stable)", async () => {
+    await renderMounted();
+
+    const before = mocks.state.workspaceOptions;
+    const firstScopeBind = before?.onScopeBind;
+    const firstScopeUnbind = before?.onScopeUnbind;
+    const firstConnectorBind = before?.onConnectorBind;
+    const firstConnectorUnbind = before?.onConnectorUnbind;
+    expect(firstScopeBind).toBeDefined();
+
+    // Simulate real session churn: a NEW session object (new identity) sharing the SAME replaceChat.
+    const stableReplaceChat = mocks.state.session?.replaceChat;
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      // A field that changes on every keystroke in the real hook; only its identity matters here.
+      error: "typing…",
+      replaceChat: stableReplaceChat as (chat: Chat) => void,
+    };
+
+    // Force AppShell to re-render (and re-read useChatSession) via a modality state change.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab" }));
+    });
+
+    const after = mocks.state.workspaceOptions;
+    // Callback identities are unchanged despite the session object identity changing.
+    expect(after?.onScopeBind).toBe(firstScopeBind);
+    expect(after?.onScopeUnbind).toBe(firstScopeUnbind);
+    expect(after?.onConnectorBind).toBe(firstConnectorBind);
+    expect(after?.onConnectorUnbind).toBe(firstConnectorUnbind);
   });
 
   it("rejects the seventeenth mixed Files/Knowledge source with a visible notice", async () => {
@@ -410,9 +449,9 @@ describe("AppShell grounding connections", () => {
 
     expect(accepted).toBe(false);
     expect(mocks.updateChatLocalKnowledgeScopes).not.toHaveBeenCalled();
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "already has 16 of 16 connected sources",
-    );
+    // Scope to the inline source-limit alert (the always-mounted announcer also carries role="alert").
+    const notice = await screen.findByText(/already has 16 of 16 connected sources/u);
+    expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
   });
 
   it("lets the user dismiss the inline source-limit notice", async () => {
@@ -435,13 +474,13 @@ describe("AppShell grounding connections", () => {
       await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", capsuleScope("cap-17"));
     });
 
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("already has 16 of 16 connected sources");
+    const notice = await screen.findByText(/already has 16 of 16 connected sources/u);
+    expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
 
     await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.querySelector(".source-limit-alert")).toBeNull();
     });
   });
 
@@ -465,13 +504,13 @@ describe("AppShell grounding connections", () => {
     });
 
     expect(accepted).toBe(false);
-    const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Open a ready chat window before connecting a source.");
+    const notice = await screen.findByText("Open a ready chat window before connecting a source.");
+    expect(notice.closest(".source-limit-alert")).toHaveAttribute("role", "alert");
 
     await user.click(screen.getByRole("button", { name: "Dismiss source connection notice" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("alert")).toBeNull();
+      expect(document.querySelector(".source-limit-alert")).toBeNull();
     });
   });
 
@@ -519,8 +558,7 @@ describe("AppShell grounding connections", () => {
     await renderMounted();
 
     const keyboardProps = mocks.useKeyboardShortcuts.mock.calls[0]?.[0] as
-      | { readonly dispatch?: (commandId: string) => void }
-      | undefined;
+      { readonly dispatch?: (commandId: string) => void } | undefined;
     expect(keyboardProps?.dispatch).toBeTypeOf("function");
 
     const statusSpy = vi.spyOn(HTMLElement.prototype, "focus");
@@ -547,5 +585,47 @@ describe("AppShell grounding connections", () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "K", metaKey: true }));
     });
     expect(screen.queryByTestId("command-palette")).toBeNull();
+  });
+
+  // GEN-UI-A11Y-004 — the shell always mounts one app-level status live-region pair (polite +
+  // assertive) so any surface can post an outcome for AT, even after its originating surface unmounts.
+  it("always mounts the app-level polite status and assertive alert live regions", async () => {
+    await renderMounted();
+
+    const polite = document.querySelector('[role="status"][aria-live="polite"]');
+    expect(polite).not.toBeNull();
+    expect(polite).toHaveAttribute("aria-atomic", "true");
+
+    const assertive = document.querySelector('[role="alert"][aria-live="assertive"]');
+    expect(assertive).not.toBeNull();
+    expect(assertive).toHaveAttribute("aria-atomic", "true");
+  });
+
+  // GEN-UI-A11Y-003 — the background window layer (`#main` / `.stage`) is NOT inert while no modal is
+  // open, and becomes inert + aria-hidden while a modal dialog (here: first-run gateway setup) is open.
+  it("does not inert the window layer while no modal dialog is open", async () => {
+    await renderMounted();
+
+    const stage = document.getElementById("main");
+    expect(stage).not.toBeNull();
+    expect(stage?.hasAttribute("inert")).toBe(false);
+    expect(stage?.hasAttribute("aria-hidden")).toBe(false);
+  });
+
+  it("inerts and aria-hides the window layer while the gateway-setup modal is open", async () => {
+    mocks.state.session = {
+      ...(mocks.state.session as TestSession),
+      models: [],
+      noEligibleModels: true,
+      selectedModel: "",
+    };
+
+    await renderMounted();
+
+    expect(screen.getByRole("dialog", { name: "Gateway setup" })).toBeInTheDocument();
+    const stage = document.getElementById("main");
+    expect(stage).not.toBeNull();
+    expect(stage?.hasAttribute("inert")).toBe(true);
+    expect(stage).toHaveAttribute("aria-hidden", "true");
   });
 });

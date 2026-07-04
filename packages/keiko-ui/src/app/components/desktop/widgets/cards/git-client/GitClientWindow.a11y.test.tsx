@@ -15,6 +15,7 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import type { GitClientSeam } from "./git-client-seam";
+import { SIDEBAR_STYLE, TOOLBAR_STYLE } from "./git-client-styles";
 import { GitClientWindow } from "./GitClientWindow";
 
 // ─── ResizeObserver stub (no global shim in vitest.setup.ts) ──────────────────
@@ -459,11 +460,18 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
       expect(diffRegion).toHaveAttribute("tabindex", "0");
     });
 
-    it("sync state is exposed through a polite status role", async () => {
+    it("sync state is exposed through a polite status region carrying its visible text", async () => {
       const client = makeClient();
       render(<GitClientWindow projectId={REPO_A.path} client={client} />);
-      await waitFor(() => expect(client.getStatus).toHaveBeenCalled());
-      expect(screen.getByRole("status", { name: /^Sync/ })).toBeInTheDocument();
+      // GEN-UI-A11Y-017: the live region no longer duplicates its text in an aria-label. A
+      // role=status region takes its announcement from its own content, so the visible copy is now
+      // the single source of truth — assert the text renders inside a polite status region with no
+      // competing aria-label.
+      const text = await screen.findByText(/Up to date with origin\/main/);
+      const status = text.closest('[role="status"]');
+      expect(status).not.toBeNull();
+      expect(status).toHaveAttribute("aria-live", "polite");
+      expect(status).not.toHaveAttribute("aria-label");
     });
 
     it("branch selector exposes searchable listbox controls", async () => {
@@ -493,6 +501,73 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
 
       fireEvent.keyDown(screen.getByRole("option", { name: /main/ }), { key: "Escape" });
       await waitFor(() => expect(trigger).toHaveFocus());
+    });
+
+    it("branch popup dismisses on an outside pointerdown (GEN-UI-INTERACTION-002)", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+
+      await user.click(trigger);
+      expect(screen.getByRole("listbox", { name: "Branches" })).toBeInTheDocument();
+
+      // A pointerdown anywhere outside the selector wrapper closes the popup (mirrors KeikoSelect).
+      fireEvent.pointerDown(document.body);
+      await waitFor(() =>
+        expect(screen.queryByRole("listbox", { name: "Branches" })).not.toBeInTheDocument(),
+      );
+    });
+
+    it("branch popup dismisses when Tab leaves the search input (GEN-UI-INTERACTION-002)", async () => {
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      const trigger = await screen.findByRole("combobox", { name: "Branch: main" });
+
+      await user.click(trigger);
+      const search = screen.getByRole("searchbox", { name: "Search branches" });
+      fireEvent.keyDown(search, { key: "Tab" });
+
+      await waitFor(() =>
+        expect(screen.queryByRole("listbox", { name: "Branches" })).not.toBeInTheDocument(),
+      );
+    });
+
+    it("staging checkbox focus toggles a visible focus ring on the aria-hidden box (GEN-UI-FOCUS-007)", async () => {
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      const checkbox = await screen.findByRole("checkbox", { name: "Unstage src/foo.ts" });
+      // The visual box is the checkbox input's aria-hidden sibling inside the shared <label>.
+      const label = checkbox.closest("label");
+      expect(label).not.toBeNull();
+      const box = label!.querySelector<HTMLElement>('[aria-hidden="true"]');
+      expect(box).not.toBeNull();
+
+      expect(box!.getAttribute("data-focus-visible")).toBeNull();
+      act(() => {
+        fireEvent.focus(checkbox);
+      });
+      expect(box!.getAttribute("data-focus-visible")).toBe("true");
+      // The ring is rendered on the visible box, not the invisible input.
+      expect(box!.style.boxShadow).toContain("var(--focus-ring)");
+
+      act(() => {
+        fireEvent.blur(checkbox);
+      });
+      expect(box!.getAttribute("data-focus-visible")).toBeNull();
+    });
+
+    it("narrow layout lets the toolbar wrap and keeps a diff-pane floor (GEN-UI-LAYOUT-003)", async () => {
+      // jsdom has no layout, so assert the style contract that keeps controls reachable and the
+      // diff pane usable when the window is narrowed to ~360px: the toolbar wraps and the sidebar
+      // width is capped so the flexing diff pane cannot be squeezed to zero.
+      expect(TOOLBAR_STYLE.flexWrap).toBe("wrap");
+      expect(String(SIDEBAR_STYLE.width)).toMatch(/min\(/);
+
+      // Sanity: with a repository connected, the toolbar controls and diff region are all present
+      // and reachable regardless of width.
+      render(<GitClientWindow projectId={REPO_A.path} client={makeClient()} />);
+      expect(await screen.findByRole("combobox", { name: "Repository" })).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: "Branch: main" })).toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Diff" })).toBeInTheDocument();
     });
 
     it("new-branch dialog is modal, initially focuses the branch-name input, and traps Tab", async () => {

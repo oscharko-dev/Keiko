@@ -11,8 +11,7 @@ import { nullOcrAdapter } from "./null-ocr-adapter.js";
 import type { OcrAdapter, OcrPageResult } from "./types.js";
 
 export const LOCAL_KNOWLEDGE_OCR_ENGINE_ENV = "KEIKO_LOCAL_KNOWLEDGE_OCR_ENGINE";
-export const LOCAL_KNOWLEDGE_OCR_TESSERACT_BIN_ENV =
-  "KEIKO_LOCAL_KNOWLEDGE_OCR_TESSERACT_BIN";
+export const LOCAL_KNOWLEDGE_OCR_TESSERACT_BIN_ENV = "KEIKO_LOCAL_KNOWLEDGE_OCR_TESSERACT_BIN";
 export const LOCAL_KNOWLEDGE_OCR_LANG_ENV = "KEIKO_LOCAL_KNOWLEDGE_OCR_LANG";
 export const LOCAL_KNOWLEDGE_OCR_TIMEOUT_MS_ENV = "KEIKO_LOCAL_KNOWLEDGE_OCR_TIMEOUT_MS";
 export const LOCAL_KNOWLEDGE_OCR_MAX_BYTES_ENV = "KEIKO_LOCAL_KNOWLEDGE_OCR_MAX_BYTES";
@@ -77,7 +76,10 @@ function ocrDisabled(raw: string | undefined): boolean {
   return ["0", "false", "off", "none", "disabled"].includes(raw.toLowerCase());
 }
 
-function tesseractArgs(language: string | undefined, extraArgs: readonly string[]): readonly string[] {
+function tesseractArgs(
+  language: string | undefined,
+  extraArgs: readonly string[],
+): readonly string[] {
   const args = ["stdin", "stdout"];
   if (language !== undefined && language.length > 0) args.push("-l", language);
   args.push(...extraArgs);
@@ -139,8 +141,7 @@ export function createTesseractOcrAdapter(options: TesseractOcrAdapterOptions = 
 function misconfiguredOcrAdapter(): OcrAdapter {
   return Object.freeze({
     kind: "ocr" as const,
-    ocrPage: (): Promise<OcrPageResult> =>
-      Promise.resolve({ ok: false, reason: "engine-error" }),
+    ocrPage: (): Promise<OcrPageResult> => Promise.resolve({ ok: false, reason: "engine-error" }),
   });
 }
 

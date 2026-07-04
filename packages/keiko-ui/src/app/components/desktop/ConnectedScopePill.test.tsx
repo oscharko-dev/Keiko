@@ -90,7 +90,7 @@ describe("ConnectedScopePill", () => {
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Repository scope");
+    expect(screen.getByText("Repository scope")).toBeInTheDocument();
     expect(screen.getByText(/Keiko may inspect only the connected repository/i)).toHaveTextContent(
       /safe-read exclusions and context budget limits apply/i,
     );
@@ -101,7 +101,7 @@ describe("ConnectedScopePill", () => {
       connectedScope: { kind: "files", relativePaths: ["src/lib/api.ts"], connectedAtMs: 1 },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByRole("status")).toHaveTextContent("File: api.ts");
+    expect(screen.getByText("File: api.ts")).toBeInTheDocument();
   });
 
   it("renders a folder label when the scope is a directory", () => {
@@ -109,7 +109,7 @@ describe("ConnectedScopePill", () => {
       connectedScope: { kind: "directory", relativePaths: ["src/lib"], connectedAtMs: 1 },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Folder: lib");
+    expect(screen.getByText("Folder: lib")).toBeInTheDocument();
   });
 
   it("renders canonical list-only folder and file boundary copy", () => {
@@ -120,10 +120,9 @@ describe("ConnectedScopePill", () => {
       ],
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    const statuses = screen.getAllByRole("status");
-    expect(statuses).toHaveLength(2);
-    expect(statuses[0]).toHaveTextContent("Folder: lib");
-    expect(statuses[1]).toHaveTextContent("File: README.md");
+    // GEN-UI-STATE-001: labels are plain spans now — assert by visible text.
+    expect(screen.getByText("Folder: lib")).toBeInTheDocument();
+    expect(screen.getByText("File: README.md")).toBeInTheDocument();
     expect(screen.getByText(/Keiko may inspect only the connected folder/i)).toHaveTextContent(
       /safe-read exclusions and context budget limits apply/i,
     );
@@ -142,7 +141,7 @@ describe("ConnectedScopePill", () => {
       },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Folder: marketing");
+    expect(screen.getByText("Folder: marketing")).toBeInTheDocument();
   });
 
   it("renders one pill per connected source for a 1+N binding (#532)", () => {
@@ -152,10 +151,9 @@ describe("ConnectedScopePill", () => {
     ];
     const chat = makeChat({ connectedScopes: scopes, connectedScope: scopes[0] });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    const statuses = screen.getAllByRole("status");
-    expect(statuses).toHaveLength(2);
-    expect(statuses[0]).toHaveTextContent("Folder: alpha");
-    expect(statuses[1]).toHaveTextContent("Folder: beta");
+    // GEN-UI-STATE-001: labels are plain spans now — assert by visible text.
+    expect(screen.getByText("Folder: alpha")).toBeInTheDocument();
+    expect(screen.getByText("Folder: beta")).toBeInTheDocument();
   });
 
   it("removes only the clicked source from a multi-source binding (#532)", async () => {
@@ -192,9 +190,10 @@ describe("ConnectedScopePill", () => {
       },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(
-      screen.getByRole("status", { name: "Folder: docs (/Users/me/kunde-a/docs)" }),
-    ).toHaveAttribute("title", "/Users/me/kunde-a/docs");
+    // GEN-UI-STATE-001: the label is a plain span carrying the disambiguated aria-label + full-path
+    // title (no longer role="status"); query it by that title.
+    const labelSpan = screen.getByTitle("/Users/me/kunde-a/docs");
+    expect(labelSpan).toHaveAttribute("aria-label", "Folder: docs (/Users/me/kunde-a/docs)");
     expect(
       screen.getByRole("button", {
         name: "Disconnect Folder: docs (/Users/me/kunde-a/docs) from chat",
@@ -220,13 +219,14 @@ describe("ConnectedScopePill", () => {
     const chat = makeChat({ connectedScopes: scopes, connectedScope: scopes[0] });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
 
-    expect(screen.getByRole("status", { name: "Folder: docs (/team-a/docs)" })).toHaveAttribute(
-      "title",
-      "/team-a/docs",
+    // GEN-UI-STATE-001: plain label spans disambiguated by aria-label + full-path title.
+    expect(screen.getByTitle("/team-a/docs")).toHaveAttribute(
+      "aria-label",
+      "Folder: docs (/team-a/docs)",
     );
-    expect(screen.getByRole("status", { name: "Folder: docs (/team-b/docs)" })).toHaveAttribute(
-      "title",
-      "/team-b/docs",
+    expect(screen.getByTitle("/team-b/docs")).toHaveAttribute(
+      "aria-label",
+      "Folder: docs (/team-b/docs)",
     );
     expect(
       screen.getByRole("button", {
@@ -319,5 +319,69 @@ describe("ConnectedScopePill", () => {
     );
     expect(screen.getByText("Moderate")).toBeInTheDocument();
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
+  });
+
+  // GEN-UI-STATE-001 (WCAG 4.1.3): the visible pill label must NOT be a live region — that re-announced
+  // the unchanged label on every routine re-render / chat switch. A single always-mounted sr-only
+  // polite announcer must stay silent across a routine re-render (e.g. switching to a different chat
+  // whose binding has the same shape) and update only on a genuine connect/disconnect.
+  describe("sr-only binding-change announcer (GEN-UI-STATE-001)", () => {
+    it("does not re-announce when switching to a different chat with same-shaped scopes", () => {
+      const scopes: ChatConnectedScope[] = [
+        { kind: "workspace-root", relativePaths: [], connectedAtMs: 1, root: "/data/alpha" },
+        { kind: "workspace-root", relativePaths: [], connectedAtMs: 2, root: "/data/beta" },
+      ];
+      const chatA = makeChat({ id: "chat-A", connectedScopes: scopes, connectedScope: scopes[0] });
+      const { rerender } = render(<ConnectedScopePill chat={chatA} updateScopes={vi.fn()} />);
+      const announcer = screen.getByTestId("connected-scope-announcer");
+      // On first mount there is no prior binding, so nothing is announced.
+      expect(announcer).toHaveTextContent("");
+
+      // A different chat id carrying the SAME-shaped scopes (different connectedAtMs timestamps, but
+      // identical visible labels) is a routine re-render — the announcer must stay silent.
+      const chatB = makeChat({
+        id: "chat-B",
+        connectedScopes: [
+          { kind: "workspace-root", relativePaths: [], connectedAtMs: 99, root: "/data/alpha" },
+          { kind: "workspace-root", relativePaths: [], connectedAtMs: 100, root: "/data/beta" },
+        ],
+      });
+      rerender(<ConnectedScopePill chat={chatB} updateScopes={vi.fn()} />);
+      expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent("");
+    });
+
+    it("announces a genuine binding change (a source is disconnected)", () => {
+      const scopes: ChatConnectedScope[] = [
+        { kind: "workspace-root", relativePaths: [], connectedAtMs: 1, root: "/data/alpha" },
+        { kind: "workspace-root", relativePaths: [], connectedAtMs: 2, root: "/data/beta" },
+      ];
+      const chat = makeChat({ connectedScopes: scopes, connectedScope: scopes[0] });
+      const { rerender } = render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
+      expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent("");
+
+      // Disconnect /data/beta: the scope set genuinely changes shape → the announcer updates.
+      const afterDisconnect = makeChat({
+        connectedScopes: [scopes[0]!],
+        connectedScope: scopes[0],
+      });
+      rerender(<ConnectedScopePill chat={afterDisconnect} updateScopes={vi.fn()} />);
+      expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent(
+        "Connected scope updated: 1 source.",
+      );
+    });
+
+    it("announces when the last source is removed", () => {
+      const chat = makeChat({
+        connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+      });
+      const { rerender } = render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
+      expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent("");
+
+      // Clearing the binding still keeps the announcer mounted so the removal is announced.
+      rerender(<ConnectedScopePill chat={makeChat()} updateScopes={vi.fn()} />);
+      expect(screen.getByTestId("connected-scope-announcer")).toHaveTextContent(
+        "Connected scope removed.",
+      );
+    });
   });
 });

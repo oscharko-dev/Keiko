@@ -272,6 +272,14 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
     }
   }, [session, clearError]);
 
+  // GEN-PERF-WIDGET-007 — the screenshot base64 can be ~13 MB; building the data: URL
+  // inline in JSX reallocated the whole string on every unrelated re-render (SSE event,
+  // busyLabel, error). Memoize on the pending shot so unrelated renders reuse it.
+  const pendingShotSrc = useMemo(
+    () => (pendingShot === null ? null : `data:image/png;base64,${pendingShot.dataBase64}`),
+    [pendingShot],
+  );
+
   const openDisabled = useMemo(() => working || session !== null, [working, session]);
   const sessionRequiredDisabled = useMemo(() => working || session === null, [working, session]);
   const checkDisabled = working || session !== null;
@@ -462,7 +470,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           // eslint-disable-next-line @next/next/no-img-element
           <img
             className="bw-screenshot"
-            src={`data:image/png;base64,${pendingShot.dataBase64}`}
+            src={pendingShotSrc ?? undefined}
             alt="Pending screenshot preview"
           />
         ) : (

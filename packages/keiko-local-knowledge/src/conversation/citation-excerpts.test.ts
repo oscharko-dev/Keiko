@@ -111,11 +111,7 @@ describe("readCitationExcerpt", () => {
 
   it("returns an empty fallback excerpt when the document text row is missing", () => {
     expect(
-      readCitationExcerpt(
-        getFixture().store,
-        "missing-cap" as KnowledgeCapsuleId,
-        citation(),
-      ),
+      readCitationExcerpt(getFixture().store, "missing-cap" as KnowledgeCapsuleId, citation()),
     ).toBe("");
   });
 });

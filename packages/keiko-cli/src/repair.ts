@@ -48,7 +48,10 @@ import {
   credentialStorePath,
   hasPlaintextGatewayCredentials,
 } from "@oscharko-dev/keiko-server/credential-vault";
-import { readLocalVaultReferences } from "@oscharko-dev/keiko-security/secret-vault";
+import {
+  SecretVaultStoreError,
+  readLocalVaultReferences,
+} from "@oscharko-dev/keiko-security/secret-vault";
 
 const USAGE = `Usage:
   keiko repair [--state-dir PATH] [--config PATH] [--dry-run]
@@ -423,7 +426,18 @@ function checkCredentialStorage(
       "plaintext credentials present in config — start `keiko ui` to migrate them into encrypted storage",
     );
   }
-  const orphaned = orphanedSecretRefs(raw, configPath);
+  let orphaned: number;
+  try {
+    orphaned = orphanedSecretRefs(raw, configPath);
+  } catch (error) {
+    if (error instanceof SecretVaultStoreError) {
+      return action(
+        "Credential storage",
+        "encrypted credential vault is unreadable — refusing to treat it as empty; restore the vault file or move it aside intentionally",
+      );
+    }
+    throw error;
+  }
   if (orphaned > 0) {
     return action(
       "Credential storage",

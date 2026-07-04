@@ -390,6 +390,14 @@ export interface RelationshipEdgeBadgeProps {
   readonly onClick?: (() => void) | undefined;
   /** Additional CSS class names. */
   readonly className?: string;
+  /**
+   * When true, the outer wrapper is a plain decorative span — it drops
+   * role="status"/aria-live/aria-atomic and hides its content from the
+   * accessibility tree (aria-hidden). Use inside an interactive row whose own
+   * aria-label already carries the activity; this avoids nesting a live region
+   * inside a button (GEN-UI-A11Y-012). Defaults to false (self-announcing).
+   */
+  readonly presentational?: boolean | undefined;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
@@ -403,6 +411,7 @@ export function RelationshipEdgeBadge({
   highContrast,
   onClick,
   className = "",
+  presentational = false,
 }: RelationshipEdgeBadgeProps): ReactNode {
   const [prefersMoreContrast, setPrefersMoreContrast] = useState(false);
 
@@ -454,12 +463,20 @@ export function RelationshipEdgeBadge({
         border: visual.borderColor !== undefined ? `1px solid ${visual.borderColor}` : undefined,
       };
 
+  // Presentational mode (GEN-UI-A11Y-012): inside an interactive row the badge must
+  // NOT be a live region (up to 25 nested role="status" inside buttons) and must not
+  // leak duplicate text into the row button's accessible name — the row aria-label
+  // already carries the activity. So drop role="status"/aria-live and aria-hide the
+  // decorative content. Default keeps the self-announcing inspector/Activity badge.
+  const wrapperAria = presentational
+    ? ({ "aria-hidden": true } as const)
+    : ({ role: "status", "aria-live": "polite", "aria-atomic": "true" } as const);
+
   return (
-    // role="status" aria-live="polite" aria-atomic="true" per activity-visualization.md §"Per-state ARIA wiring"
+    // Default: role="status" aria-live="polite" aria-atomic="true" per
+    // activity-visualization.md §"Per-state ARIA wiring". presentational strips them.
     <span
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
+      {...wrapperAria}
       className={`rb-edge-badge ${className}`.trim()}
       data-activity-state={activity}
       data-high-contrast={effectiveHighContrast ? "true" : undefined}

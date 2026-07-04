@@ -40,9 +40,9 @@ function renderBanner(
 // ─── Structure & ARIA ────────────────────────────────────────────────────────
 
 describe("AgentConflictBanner — structure", () => {
-  it("renders role=alert so screen readers announce the conflict", () => {
+  it("renders role=alertdialog so screen readers announce the conflict and expect an action", () => {
     renderBanner("DIRTY");
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 
   it("has data-testid=agent-conflict-banner for test targeting", () => {
@@ -70,7 +70,7 @@ describe("AgentConflictBanner — structure", () => {
 
   it("renders without crashing for an empty message", () => {
     renderBanner("NO_ACTIVE_SESSION", { message: "" });
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
 });
 
@@ -233,6 +233,39 @@ describe("AgentConflictBanner — PRECONDITION_REQUIRED affordances", () => {
     const onDismiss = vi.fn();
     renderBanner("PRECONDITION_REQUIRED", { onDismiss });
     await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Focus + Escape (GEN-UI-A11Y-005) ────────────────────────────────────────
+
+describe("AgentConflictBanner — focus + keyboard (GEN-UI-A11Y-005)", () => {
+  it("focuses Save on mount for DIRTY (primary recovery action)", () => {
+    renderBanner("DIRTY", { onSave: vi.fn() });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" }));
+  });
+
+  it("focuses Reload on mount for VERSION_MISMATCH (primary recovery action)", () => {
+    renderBanner("VERSION_MISMATCH", { onReload: vi.fn() });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Reload" }));
+  });
+
+  it("focuses Dismiss on mount when it is the sole action (INVALID_EDITS)", () => {
+    renderBanner("INVALID_EDITS");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Dismiss" }));
+  });
+
+  it("calls onDismiss when Escape is pressed inside the banner", async () => {
+    const onDismiss = vi.fn();
+    renderBanner("DIRTY", { onSave: vi.fn(), onDismiss });
+    await userEvent.keyboard("{Escape}");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onDismiss on Escape for a dismiss-only conflict (VERSION_MISMATCH omitted onReload)", async () => {
+    const onDismiss = vi.fn();
+    renderBanner("OUT_OF_SCOPE", { onDismiss });
+    await userEvent.keyboard("{Escape}");
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 });

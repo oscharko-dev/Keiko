@@ -69,7 +69,7 @@ describe("jsonParser", () => {
     );
     expect(pointers(result.units)).toEqual([""]);
     expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
-      '/: a/b=1 | c~d=2',
+      "/: a/b=1 | c~d=2",
     );
   });
 
@@ -81,9 +81,7 @@ describe("jsonParser", () => {
       buildParserOptions({ now: () => 0 }),
     );
     expect(pointers(result.units)).toEqual([""]);
-    expect((result as { readonly normalizedText?: string }).normalizedText).toContain(
-      "/: a~/b=1",
-    );
+    expect((result as { readonly normalizedText?: string }).normalizedText).toContain("/: a~/b=1");
   });
 
   it("emits a single root-pointer leaf for a primitive root", () => {

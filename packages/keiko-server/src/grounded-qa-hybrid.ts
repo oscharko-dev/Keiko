@@ -89,6 +89,12 @@ import {
   type GroundedAnswerPayload,
   type GroundedAnswerResult,
 } from "./grounded-answer.js";
+import {
+  buildPackCitationIndex,
+  incompleteAnswerMarker,
+  reconcileInlineCitations,
+  unsupportedCitationMarker,
+} from "./grounded-faithfulness.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { requestConfiguredRerank } from "./grounded-model-reranker.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
@@ -270,12 +276,7 @@ function buildUnifiedSelection(
   const { redactor } = ctx.deps;
   const inputs: RerankInput<HybridPayload>[] = [
     ...folderRerankInputs(folders, redactor),
-    ...connectorRerankInputs(
-      connectors,
-      store,
-      redactor,
-      limits.maxExcerptChars,
-    ),
+    ...connectorRerankInputs(connectors, store, redactor, limits.maxExcerptChars),
   ];
   return rerankAndSelect(inputs, {
     maxCandidates: limits.hybridMaxCandidates,
@@ -549,6 +550,7 @@ export function createHybridAnswerer(
         promptTokens: response.usage.promptTokens,
         completionTokens: response.usage.completionTokens,
       },
+      finishReason: response.finishReason,
     };
   };
 }
@@ -748,6 +750,28 @@ function folderUncertainty(
       claim: redactString(redactor, u.claim),
     })),
   );
+}
+
+// GEN-AI-GROUNDING-001/-008 (RB-4): reconcile the hybrid answer's inline `[path:line]` citations
+// against the FOLDER evidence packs the model actually received. Connector citations use marker
+// labels rather than repo paths, so path-shaped inline references are validated against folder
+// evidence (where the [path:line] format applies). Mirrors the single/multi-source reconciliation.
+function hybridReconciliationUncertainty(
+  assistant: GroundedAnswerResult,
+  folders: readonly RetrievedFolder[],
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  const nowMs = Date.now();
+  const reconciliation = reconcileInlineCitations(
+    assistant.content,
+    buildPackCitationIndex(folders.map((f) => f.pack)),
+  );
+  const unsupported = unsupportedCitationMarker(reconciliation.unsupported, nowMs);
+  const markers = [
+    ...(unsupported === undefined ? [] : [unsupported]),
+    ...(assistant.finishReason === "length" ? [incompleteAnswerMarker(nowMs)] : []),
+  ];
+  return markers.map((m) => ({ kind: m.kind, claim: redactString(redactor, m.claim) }));
 }
 
 // ─── Evidence persistence ─────────────────────────────────────────────────────
@@ -972,6 +996,24 @@ function noEvidenceUncertainty(
     : [];
 }
 
+// Assembles the hybrid answer's uncertainty markers: per-source pack markers, skipped-source
+// notices, empty-selection no-evidence, and citation reconciliation (RB-4). Split out to keep
+// assembleHybridAnswer under the LOC bound.
+function hybridAnswerUncertainty(
+  sources: RetrievedSources,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  assistant: GroundedAnswerResult,
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  return [
+    ...folderUncertainty(sources.folders, redactor),
+    ...skippedUncertainty(sources.skippedFolders, redactor),
+    ...skippedUncertainty(sources.skipped, redactor),
+    ...noEvidenceUncertainty(selected, redactor),
+    ...hybridReconciliationUncertainty(assistant, sources.folders, redactor),
+  ];
+}
+
 function assembleHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
@@ -1002,12 +1044,7 @@ function assembleHybridAnswer(
     content: redactString(redactor, assistant.content),
     citations,
     knowledgeCitations,
-    uncertainty: [
-      ...folderUncertainty(sources.folders, redactor),
-      ...skippedUncertainty(sources.skippedFolders, redactor),
-      ...skippedUncertainty(sources.skipped, redactor),
-      ...noEvidenceUncertainty(selected, redactor),
-    ],
+    uncertainty: hybridAnswerUncertainty(sources, selected, assistant, redactor),
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,
     contextPack: buildHybridContextPack(

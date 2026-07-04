@@ -12,6 +12,7 @@ import {
   loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence";
+import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
@@ -20,6 +21,7 @@ import {
   loadRunReviewState,
   QualityIntelligenceReviewCandidateNotFound,
   QualityIntelligenceReviewGovernanceRejected,
+  QualityIntelligenceReviewIntegrityError,
   QualityIntelligenceReviewRunApprovalRejected,
   QualityIntelligenceReviewTransitionRejected,
   QualityIntelligenceReviewWriteConflict,
@@ -29,13 +31,6 @@ import { resolveQualityIntelligenceReviewPrincipal } from "./reviewPrincipal.js"
 
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_REASON_LEN = 512;
-const ACTIONS: ReadonlySet<string> = new Set<QiReviewAction>([
-  "approve",
-  "reject",
-  "request-changes",
-  "reopen",
-  "withdraw",
-]);
 
 class BodyTooLargeError extends Error {}
 
@@ -81,14 +76,14 @@ interface ParsedDecision {
 
 function parseDecision(body: Record<string, unknown>): ParsedDecision | undefined {
   const action = body.action;
-  if (typeof action !== "string" || !ACTIONS.has(action)) return undefined;
+  if (!QualityIntelligence.isQualityIntelligenceReviewAction(action)) return undefined;
   const candidateId = typeof body.candidateId === "string" ? body.candidateId : undefined;
   const scope = candidateId !== undefined ? "candidate" : "run";
   const rawLabel =
     typeof body.reviewerLabel === "string" ? normaliseCandidateText(body.reviewerLabel) : "";
   const rawReason = typeof body.reason === "string" ? normaliseCandidateText(body.reason) : "";
   return {
-    action: action as QiReviewAction,
+    action,
     scope,
     ...(rawLabel.length > 0 ? { reviewerLabel: rawLabel.slice(0, 80) } : {}),
     ...(rawReason.length > 0 ? { reason: rawReason.slice(0, MAX_REASON_LEN) } : {}),
@@ -246,6 +241,13 @@ export async function handleQiReview(ctx: RouteContext, deps: UiHandlerDeps): Pr
         409,
         "QI_REVIEW_WRITE_CONFLICT",
         "Another review update is in progress. Retry the review action.",
+      );
+    }
+    if (error instanceof QualityIntelligenceReviewIntegrityError) {
+      return errorResult(
+        409,
+        "QI_REVIEW_TAMPERED",
+        "The review artifact failed integrity validation.",
       );
     }
     return errorResult(500, "QI_REVIEW_FAILED", "Failed to record the review decision.");

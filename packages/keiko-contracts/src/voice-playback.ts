@@ -1,5 +1,5 @@
 // Public type contract for the optional Voice Digital Twin assistant speech-output playback lifecycle
-// (Epic #491, Issue #501, ADR-0064). This module DEFINES the provider-neutral semantics that let Keiko
+// (Epic #491, Issue #501, ADR-0106). This module DEFINES the provider-neutral semantics that let Keiko
 // render and control an *optional* spoken assistant response — preparing, speaking, pausing, resuming,
 // interrupting (barge-in), stopping, failing, and completing — WITHOUT deploying any new text-to-speech
 // model and WITHOUT making speech a precondition for using Keiko. It is pure data + pure functions only:
@@ -15,7 +15,7 @@
 // natural end (`complete`). Only the phases that have a wire counterpart project onto the wire
 // (`mapVoicePlaybackPhaseToWireState`); `unavailable`, `preparing`, `failed`, and `complete` are derived
 // or local phases, exactly as the #500 transcript lifecycle and the #499 turn manager map a richer
-// semantic set onto the same coarse wire catalog (ADR-0062, ADR-0063). The stateful reducer that drives
+// semantic set onto the same coarse wire catalog (ADR-0104, ADR-0105). The stateful reducer that drives
 // these phases lives in keiko-ui (`voice-playback-state.ts`) as a synchronous deterministic engine; this
 // leaf contract holds the phase catalog, the classification tables, the legal-transition table, the
 // capability-gating predicates, the effect vocabulary, the validators, and the content-free turn summary

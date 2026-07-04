@@ -206,7 +206,9 @@ function createNpmEnvironment(registry) {
   const token = process.env.NODE_AUTH_TOKEN ?? process.env.NPM_TOKEN ?? loadDotEnvToken();
   const strictSsl = process.env.NPM_CONFIG_STRICT_SSL ?? readNpmStrictSsl();
   if (strictSsl !== "true") {
-    fail("npm strict-ssl=false is not allowed for release publishing; configure a CA bundle instead.");
+    fail(
+      "npm strict-ssl=false is not allowed for release publishing; configure a CA bundle instead.",
+    );
   }
   const tempDir = mkdtempSync(join(tmpdir(), "keiko-release-npm-"));
   const userConfig = join(tempDir, ".npmrc");

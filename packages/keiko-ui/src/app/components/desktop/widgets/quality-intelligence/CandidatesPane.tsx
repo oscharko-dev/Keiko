@@ -12,7 +12,9 @@ import type {
   QualityIntelligenceUiCandidate,
   QualityIntelligenceReviewState,
   QualityIntelligenceCandidateEditableFields,
+  QualityIntelligenceReviewAction,
 } from "@oscharko-dev/keiko-contracts";
+import { isTerminalReviewState } from "@oscharko-dev/keiko-contracts";
 import { CandidateEditForm } from "./CandidateEditForm";
 import {
   CandidateQualityVerdictNote,
@@ -47,7 +49,7 @@ type CandidateWithQualityVerdict = QualityIntelligenceUiCandidate & {
   readonly qualityVerdict?: CandidateQualityVerdict;
 };
 
-export type QiReviewAction = "approve" | "reject" | "request-changes" | "reopen";
+export type QiReviewAction = QualityIntelligenceReviewAction;
 
 export type QiCandidateEdit = (
   candidateId: string,
@@ -59,16 +61,6 @@ export interface QiPendingReview {
   readonly candidateId: string;
   readonly action: QiReviewAction;
 }
-
-// Terminal states: once a candidate reaches one of these, the ONLY legal action is "reopen".
-// The server enforces this with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED; the UI pre-empts the
-// error by disabling Approve/Reject/Request-changes and surfacing a Reopen button instead
-// (Issue #282 FIX A-UI / A11y-4).
-const TERMINAL_STATES = new Set<QualityIntelligenceReviewState>([
-  "approved",
-  "rejected",
-  "withdrawn",
-]);
 
 function StringList({
   items,
@@ -234,9 +226,12 @@ function ReviewControls({
   const isSaving = (action: QiReviewAction): boolean =>
     reviewBusy && pendingReview.candidateId === candidateId && pendingReview.action === action;
 
-  // Terminal states: Approve/Reject/Request-changes are governance-illegal; only Reopen is legal.
-  // Render a final-note that explains WHY so keyboard/SR users can understand via aria-describedby.
-  const isTerminal = TERMINAL_STATES.has(state);
+  // Terminal states (approved/rejected/withdrawn, per the shared contracts predicate): once a
+  // candidate reaches one, Approve/Reject/Request-changes are governance-illegal and only Reopen is
+  // legal. The server enforces this with 409 QI_REVIEW_TRANSITION_NOT_ALLOWED; the UI pre-empts the
+  // error by disabling those buttons and rendering a final-note that explains WHY so keyboard/SR
+  // users can understand via aria-describedby (Issue #282 FIX A-UI / A11y-4).
+  const isTerminal = isTerminalReviewState(state);
   const finalNoteId = useId();
 
   // Compose the describedBy for the three primary buttons: terminal reason takes precedence when
@@ -280,6 +275,16 @@ function ReviewControls({
         describedBy={primaryDescribedBy}
         onActivate={() => {
           onReview(candidateId, "request-changes");
+        }}
+      />
+      <GovernedActionButton
+        className="qi-btn qi-btn-secondary"
+        label={isSaving("withdraw") ? "Saving…" : "Withdraw"}
+        pressed={state === "withdrawn"}
+        disabled={disabled || reviewBusy || isTerminal}
+        describedBy={primaryDescribedBy}
+        onActivate={() => {
+          onReview(candidateId, "withdraw");
         }}
       />
       {/* Reopen: rendered only in terminal states — the one legal action to return to "open".

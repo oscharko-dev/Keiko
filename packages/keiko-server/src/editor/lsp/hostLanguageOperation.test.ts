@@ -8,7 +8,7 @@ import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { LspSpawnFn } from "./lspNodeAdapter.js";
 import { createFakeLspProcess } from "./testing/fakeLspProcess.js";
-import { runHostLanguageOperation } from "./hostLanguageOperation.js";
+import { runHostLanguageOperation, shutdownHostLspPool } from "./hostLanguageOperation.js";
 
 let binDir = "";
 let workspaceRoot = "";
@@ -18,7 +18,9 @@ beforeEach(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-host-lsp-op-ws-"));
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Release any warm pooled LSP processes so state never leaks across tests.
+  await shutdownHostLspPool();
   rmSync(binDir, { recursive: true, force: true });
   rmSync(workspaceRoot, { recursive: true, force: true });
 });

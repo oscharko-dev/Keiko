@@ -43,7 +43,7 @@ function pin<T>(_value?: T): T | undefined {
 
 describe("public barrel", () => {
   it("exports the version constant", () => {
-    expect(KEIKO_MEMORY_CONSOLIDATION_VERSION).toBe("0.1.0");
+    expect(KEIKO_MEMORY_CONSOLIDATION_VERSION).toBe("0.2.11");
   });
 
   it("exports runConsolidation as a function", () => {

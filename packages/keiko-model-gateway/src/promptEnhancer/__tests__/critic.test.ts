@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   asEnhancedPromptId,
+  estimateTokens,
   PROMPT_CRITIC_DIMENSIONS,
   validatePromptCandidateScorecard,
   type PromptCriticDimension,
@@ -9,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import { planPromptEnhancement } from "../planner.js";
 import { generateEnhancedPrompt } from "../generator.js";
+import { renderEnhancedPromptText } from "../rendering.js";
 import {
   estimatePromptTokens,
   PROMPT_CRITIC_DIMENSION_WEIGHTS,
@@ -90,6 +92,15 @@ describe("scorePromptCandidate", () => {
     const card = scorePromptCandidate(context);
     expect(card.estimatedTokens).toBe(estimatePromptTokens(context.prompt));
     expect(card.estimatedTokens).toBeGreaterThan(0);
+  });
+
+  it("estimates prompt tokens with the canonical contracts estimator (GEN-DUP-SEMANTIC-002)", () => {
+    // The critic must budget in the same token currency the optimizer reserves against, so
+    // estimatePromptTokens is the canonical contracts estimateTokens over the rendered prompt — not a
+    // divergent chars/4 heuristic. Pinning equality guards against a re-introduced local estimator.
+    const context = contextFor({ recommendedProfile: "research" });
+    const rendered = renderEnhancedPromptText(context.prompt);
+    expect(estimatePromptTokens(context.prompt)).toBe(estimateTokens(rendered));
   });
 
   it("rewards a thorough profile on completeness over a lean profile", () => {

@@ -19,9 +19,7 @@ describe("grounded answer prompts", () => {
   });
 
   it("mirrors the user's question language for grounded answers", () => {
-    expect(GROUNDED_SYSTEM_PROMPT).toContain(
-      "Respond in the same language as the user's question",
-    );
+    expect(GROUNDED_SYSTEM_PROMPT).toContain("Respond in the same language as the user's question");
     expect(LOCAL_KNOWLEDGE_SYSTEM_PROMPT).toContain(
       "Respond in the same language as the user's question",
     );

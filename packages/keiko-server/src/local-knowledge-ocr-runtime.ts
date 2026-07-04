@@ -63,7 +63,12 @@ function attachSpawnHandlers(ctx: SpawnHandlerContext): void {
     ctx.state.error = error;
   });
   ctx.child.stdout.on("data", (chunk: Buffer) => {
-    ctx.state.stdoutBytes = appendLimited(ctx.stdout, ctx.state.stdoutBytes, chunk, MAX_STDOUT_BYTES);
+    ctx.state.stdoutBytes = appendLimited(
+      ctx.stdout,
+      ctx.state.stdoutBytes,
+      chunk,
+      MAX_STDOUT_BYTES,
+    );
   });
   ctx.child.stdout.on("error", (error: unknown) => {
     ctx.state.error = error;

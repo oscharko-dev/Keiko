@@ -731,7 +731,14 @@ async function readRawTextForScan(
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
   if (sizeBytes > runner.limits.maxBytesPerFileScanned) {
-    return await readOversizedRawText(runner, relativePath, absolutePath, sizeBytes, state, candidates);
+    return await readOversizedRawText(
+      runner,
+      relativePath,
+      absolutePath,
+      sizeBytes,
+      state,
+      candidates,
+    );
   }
   try {
     return await readBoundedRawText(runner, relativePath, absolutePath, sizeBytes, candidates);
@@ -844,7 +851,14 @@ async function readOversizedUtf8Text(
   state: RunState,
   candidates: CandidateFile[],
 ): Promise<string | undefined> {
-  return await readOversizedRawText(runner, relativePath, absolutePath, sizeBytes, state, candidates);
+  return await readOversizedRawText(
+    runner,
+    relativePath,
+    absolutePath,
+    sizeBytes,
+    state,
+    candidates,
+  );
 }
 
 async function readForScan(

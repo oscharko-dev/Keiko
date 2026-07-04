@@ -141,6 +141,45 @@ describe("Editor command palette + keybindings", () => {
     );
   });
 
+  it("traps Tab and Shift+Tab inside the dialog (GEN-UI-FOCUS-005)", async () => {
+    renderEditor();
+
+    pressChord({ key: "p", ctrlKey: true });
+    const input = await screen.findByRole("combobox");
+    const dialog = screen.getByRole("dialog");
+    // The mount effect moves focus into the combobox input.
+    await waitFor(() => expect(document.activeElement).toBe(input));
+
+    // Forward Tab: focus must stay inside the dialog subtree (never escape to the editor behind it).
+    fireEvent.keyDown(input, { key: "Tab" });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // Backward Tab (Shift+Tab): still contained.
+    fireEvent.keyDown(document.activeElement ?? input, { key: "Tab", shiftKey: true });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // The dialog is still open (Tab did not dismiss it).
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("restores focus to the opener when the palette closes (GEN-UI-FOCUS-006)", async () => {
+    renderEditor();
+
+    // Focus a known trigger before opening so we can assert focus returns to it.
+    const runtime = screen.getAllByTestId("pane-runtime")[0]!;
+    runtime.setAttribute("tabindex", "-1");
+    runtime.focus();
+    expect(document.activeElement).toBe(runtime);
+
+    pressChord({ key: "p", ctrlKey: true });
+    await screen.findByRole("combobox");
+
+    // Close via Escape — focus must return to the opener, not be lost to <body>.
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("combobox")).toBeNull());
+    expect(document.activeElement).toBe(runtime);
+  });
+
   it("cycles tabs with Ctrl/Cmd+Alt+Arrow", async () => {
     const { onWorkspaceChange } = renderEditor();
     onWorkspaceChange.mockClear();

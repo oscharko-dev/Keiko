@@ -37,6 +37,27 @@ const DELETE_OLD_DOCUMENT_TEXTS_SQL =
   "DELETE FROM document_texts WHERE capsule_id = :capsule_id AND document_id IN " +
   "(SELECT id FROM documents WHERE capsule_id = :capsule_id AND last_extracted_at < :cutoff)";
 
+const DELETE_OLD_DOCUMENT_TEXT_WINDOWS_SQL =
+  "DELETE FROM document_text_windows WHERE capsule_id = :capsule_id AND document_id IN " +
+  "(SELECT id FROM documents WHERE capsule_id = :capsule_id AND last_extracted_at < :cutoff)";
+
+const DELETE_OLD_EXTRACTION_CHECKPOINTS_SQL =
+  "DELETE FROM extraction_checkpoints WHERE capsule_id = :capsule_id AND document_id IN " +
+  "(SELECT id FROM documents WHERE capsule_id = :capsule_id AND last_extracted_at < :cutoff)";
+
+const CLEAR_OLD_DOCUMENT_BLOB_REFS_SQL =
+  "UPDATE documents SET blob_ref = NULL WHERE capsule_id = :capsule_id AND last_extracted_at < :cutoff";
+
+const DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL = [
+  "DELETE FROM document_blobs",
+  "WHERE capsule_id = :capsule_id",
+  "  AND NOT EXISTS (",
+  "    SELECT 1 FROM documents",
+  "    WHERE documents.capsule_id = document_blobs.capsule_id",
+  "      AND documents.blob_ref = document_blobs.content_hash",
+  "  )",
+].join(" ");
+
 interface ChangesRow {
   readonly changes: number;
 }
@@ -76,6 +97,31 @@ function runDelete(
   return row?.changes ?? 0;
 }
 
+function runCapsuleDelete(
+  store: KnowledgeStore,
+  sql: string,
+  capsuleId: KnowledgeCapsuleId,
+): number {
+  const stmt = store._internal.db.prepare(sql);
+  stmt.run({ capsule_id: capsuleId });
+  const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
+    ChangesRow | undefined;
+  return row?.changes ?? 0;
+}
+
+function runUpdate(
+  store: KnowledgeStore,
+  sql: string,
+  capsuleId: KnowledgeCapsuleId,
+  cutoff: number,
+): number {
+  const stmt = store._internal.db.prepare(sql);
+  stmt.run({ capsule_id: capsuleId, cutoff });
+  const row = store._internal.db.prepare("SELECT changes() AS changes").get() as
+    ChangesRow | undefined;
+  return row?.changes ?? 0;
+}
+
 function sourceIdsForCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -84,6 +130,53 @@ function sourceIdsForCapsule(
     .prepare("SELECT id FROM capsule_sources WHERE capsule_id = :capsule_id ORDER BY id ASC")
     .all({ capsule_id: capsuleId }) as unknown as readonly SourceIdRow[];
   return rows.map((row) => row.id as KnowledgeSourceId);
+}
+
+// Runs the retention DELETEs inside a single transaction. Extracted from applyRetentionToCapsule to
+// keep both functions under the LOC bound.
+function deleteExpiredCapsuleData(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  retain: {
+    readonly retainVectorsDays: number | undefined;
+    readonly retainExtractedTextDays: number | undefined;
+  },
+  now: number,
+): { readonly deletedVectorCount: number; readonly deletedExtractedTextCount: number } {
+  const db = store._internal.db;
+  let deletedVectorCount = 0;
+  let deletedExtractedTextCount = 0;
+  db.exec("BEGIN");
+  try {
+    if (retain.retainVectorsDays !== undefined) {
+      const vectorCutoff = cutoffFor(now, retain.retainVectorsDays);
+      deletedVectorCount = runDelete(store, DELETE_OLD_VECTORS_SQL, capsuleId, vectorCutoff);
+    }
+    if (retain.retainExtractedTextDays !== undefined) {
+      const textCutoff = cutoffFor(now, retain.retainExtractedTextDays);
+      deletedExtractedTextCount = runDelete(
+        store,
+        DELETE_OLD_DOCUMENT_TEXTS_SQL,
+        capsuleId,
+        textCutoff,
+      );
+      deletedExtractedTextCount += runDelete(
+        store,
+        DELETE_OLD_DOCUMENT_TEXT_WINDOWS_SQL,
+        capsuleId,
+        textCutoff,
+      );
+      runDelete(store, DELETE_OLD_EXTRACTION_CHECKPOINTS_SQL, capsuleId, textCutoff);
+      runUpdate(store, CLEAR_OLD_DOCUMENT_BLOB_REFS_SQL, capsuleId, textCutoff);
+      runCapsuleDelete(store, DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL, capsuleId);
+      runDelete(store, DELETE_OLD_PARSED_UNITS_SQL, capsuleId, textCutoff);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return { deletedVectorCount, deletedExtractedTextCount };
 }
 
 export function applyRetentionToCapsule(
@@ -102,30 +195,12 @@ export function applyRetentionToCapsule(
     return { capsuleId, deletedVectorCount: 0, deletedExtractedTextCount: 0, appliedAt: now };
   }
 
-  const db = store._internal.db;
-  let deletedVectorCount = 0;
-  let deletedExtractedTextCount = 0;
-  db.exec("BEGIN");
-  try {
-    if (retainVectorsDays !== undefined) {
-      const vectorCutoff = cutoffFor(now, retainVectorsDays);
-      deletedVectorCount = runDelete(store, DELETE_OLD_VECTORS_SQL, capsuleId, vectorCutoff);
-    }
-    if (retainExtractedTextDays !== undefined) {
-      const textCutoff = cutoffFor(now, retainExtractedTextDays);
-      deletedExtractedTextCount = runDelete(
-        store,
-        DELETE_OLD_DOCUMENT_TEXTS_SQL,
-        capsuleId,
-        textCutoff,
-      );
-      runDelete(store, DELETE_OLD_PARSED_UNITS_SQL, capsuleId, textCutoff);
-    }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  const { deletedVectorCount, deletedExtractedTextCount } = deleteExpiredCapsuleData(
+    store,
+    capsuleId,
+    { retainVectorsDays, retainExtractedTextDays },
+    now,
+  );
   const result = { capsuleId, deletedVectorCount, deletedExtractedTextCount, appliedAt: now };
   auditSink?.emit({
     kind: "retention-applied",

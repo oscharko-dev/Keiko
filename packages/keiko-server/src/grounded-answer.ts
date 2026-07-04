@@ -6,6 +6,10 @@ export interface GroundedAnswerUsage {
 export interface GroundedAnswerResult {
   readonly content: string;
   readonly usage: GroundedAnswerUsage;
+  // GEN-AI-GATEWAY-001 (RB-4): the provider finishReason for the completion. When "length" the
+  // answer was truncated and must be surfaced (incomplete-answer marker) rather than consumed as a
+  // complete grounded answer. Optional/absent on deterministic test answerers and legacy payloads.
+  readonly finishReason?: string | undefined;
 }
 
 export type GroundedAnswerPayload = string | GroundedAnswerResult;
@@ -95,5 +99,11 @@ export function normalizeGroundedAnswerPayload(
         ? payload.usage.completionTokens
         : 0,
     },
+    ...(payload.finishReason === undefined ? {} : { finishReason: payload.finishReason }),
   };
+}
+
+/** True when the payload string produced only the safe fallback (no clean grounded answer). */
+export function isSafeGroundedFallback(content: string): boolean {
+  return content === SAFE_GROUNDED_FALLBACK;
 }

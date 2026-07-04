@@ -1,7 +1,7 @@
 # Voice Digital Twin — capability-gated architecture
 
 Detailed architecture for Epic #491, expanding
-[ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md). This document is provider-neutral:
+[ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md). This document is provider-neutral:
 Azure Foundry is treated as one valid provider profile, never as a required destination. WebRTC is treated as
 a browser platform capability, never as an npm dependency.
 
@@ -13,7 +13,7 @@ Users in development or academic contexts may have Azure Foundry voice deploymen
 and insurance environments may have only customer-hosted LLM endpoints and no voice model. Keiko must detect
 this at runtime and expose exactly the capabilities that are safe and available.
 
-The architecture is bound by the Epic #491 invariants and by the existing Keiko seams mapped in ADR-0058:
+The architecture is bound by the Epic #491 invariants and by the existing Keiko seams mapped in ADR-0100:
 the Model Gateway is the single seam for productive model calls; `gatewayFetch` is the single outbound HTTP
 entrypoint; the browser↔BFF seam is loopback HTTP + Server-Sent Events; the BFF currently hard-rejects
 WebSocket upgrades; and the local-first confidentiality stack already exists.
@@ -25,7 +25,7 @@ Voice capability is **advertised, detected, then gated** — never assumed.
 1. **Advertise.** A configured provider declares voice capability through the existing `ModelCapability`
    metadata (`packages/keiko-contracts/src/gateway.ts`). The precise extension — additive optional flags
    (`supportsRealtimeVoice?`, `supportsSpeechInput?`, `supportsSpeechOutput?`) or a new `ModelKind` literal —
-   is decided in #493 (see ADR-0058 D5). Because `CAPABILITY_DATA` ships empty, capability is local
+   is decided in #493 (see ADR-0100 D5). Because `CAPABILITY_DATA` ships empty, capability is local
    configuration or runtime discovery; no cloud provider is required for Keiko to reason about availability.
 2. **Detect.** At runtime, Keiko resolves the effective voice profile from: advertised provider capability ×
    browser support (native WebRTC / `getUserMedia` availability, secure-context) × policy (deployment may
@@ -49,7 +49,7 @@ be elected (`packages/keiko-model-gateway/src/model-selection.ts`).
 are selected by session configuration at the provider, but in Keiko they are distinct authority levels with
 different data-handling, residency, latency, and governance surfaces. A regulated deployment may permit
 dictation while gating or disabling full conversation. STT-only must never present itself as conversational
-voice (ADR-0058 D2).
+voice (ADR-0100 D2).
 
 ## 4. Transport architecture
 
@@ -145,7 +145,7 @@ Deterministic verification stays model-free.
 
 ## 8. References
 
-- [ADR-0058](../adr/ADR-0058-voice-digital-twin-capability-architecture.md) — authoritative decision record.
+- [ADR-0100](../adr/ADR-0100-voice-digital-twin-capability-architecture.md) — authoritative decision record.
 - [privacy-contract.md](privacy-contract.md), [deployment-profile-matrix.md](deployment-profile-matrix.md),
   [supply-chain-policy.md](supply-chain-policy.md), [implementation-sequencing.md](implementation-sequencing.md).
 - Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491).

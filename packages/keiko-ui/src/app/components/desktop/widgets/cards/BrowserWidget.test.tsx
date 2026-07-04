@@ -321,4 +321,47 @@ describe("BrowserWidget", () => {
       expect(browserContent).toHaveBeenCalledWith("session-1");
     });
   });
+
+  // GEN-PERF-WIDGET-007 — the pending-screenshot data: URL must be memoized so an
+  // unrelated re-render (an incoming SSE event) does not reallocate the (up to ~13 MB)
+  // data URL. We assert the <img> src node is identity-stable across such a render.
+  it("keeps the screenshot data URL identity-stable across an unrelated re-render", async () => {
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    vi.mocked(browserScreenshot).mockResolvedValueOnce({
+      seq: 1,
+      viewportPx: { width: 1280, height: 800 },
+      dataBase64: "QUJD",
+      persisted: false,
+    });
+    render(<BrowserWidget />);
+    await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Screenshot$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
+    });
+    await userEvent.click(screen.getByRole("button", { name: /^Screenshot$/i }));
+    const img = await screen.findByRole("img", { name: /Pending screenshot/i });
+    const srcBefore = img.getAttribute("src");
+    expect(srcBefore).toBe("data:image/png;base64,QUJD");
+
+    // Fire an unrelated SSE event to force a re-render without changing pendingShot.
+    expect(FakeEventSource.last).not.toBeNull();
+    act(() => {
+      FakeEventSource.last?.dispatch(
+        "browser:page-content-captured",
+        JSON.stringify({
+          kind: "page-content-captured",
+          sessionId: "session-1",
+          payload: { byteLength: 5 },
+        }),
+      );
+    });
+    const imgAfter = await screen.findByRole("img", { name: /Pending screenshot/i });
+    // Same DOM node instance and unchanged src => the memoized string was reused,
+    // React did not reassign the attribute.
+    expect(imgAfter).toBe(img);
+    expect(imgAfter.getAttribute("src")).toBe(srcBefore);
+  });
 });

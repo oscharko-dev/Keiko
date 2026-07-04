@@ -17,6 +17,7 @@ import { ContainerRunnerError } from "./containerRunner-errors.js";
 import type { ContainerRunInput, ContainerRunnerManager } from "./containerRunner.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { writeOrDestroy, type SseBackpressureSignal } from "../sse-write.js";
 import {
   errorBody,
   STREAMING,
@@ -222,21 +223,38 @@ export function handleContainerEvents(ctx: RouteContext, deps: UiHandlerDeps): H
   return STREAMING;
 }
 
-function openContainerSseStream(
+// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
+// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
+// because the client is not draining, before the socket is destroyed.
+export function openContainerSseStream(
   res: ServerResponse,
   manager: ContainerRunnerManager,
   redactor: UiHandlerDeps["redactor"],
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
+  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
+  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
+  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
+  // (hence no abort) can occur before `unsubscribe` is assigned.
+  const controller = new AbortController();
   let seq = 0;
   const unsubscribe = manager.subscribe((event) => {
     seq += 1;
-    writeContainerEvent(res, event, seq, redactor);
+    writeContainerEvent(res, event, seq, redactor, controller, onBackpressure);
   });
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
+    unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
   res.write(readyMessage());
   res.on("close", () => {
-    unsubscribe();
+    stop();
   });
 }
 
@@ -245,11 +263,11 @@ function writeContainerEvent(
   event: ContainerRunnerEvent,
   seq: number,
   redactor: UiHandlerDeps["redactor"],
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
   const redacted = redactor(event);
   const data = JSON.stringify(redacted);
   const frame = `id: ${String(seq)}\nevent: container:${event.kind}\ndata: ${data}\n\n`;
-  if (!res.write(frame)) {
-    res.destroy();
-  }
+  writeOrDestroy(res, frame, controller, onBackpressure);
 }

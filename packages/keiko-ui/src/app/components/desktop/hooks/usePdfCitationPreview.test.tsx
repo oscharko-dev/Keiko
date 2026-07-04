@@ -91,6 +91,55 @@ describe("usePdfCitationPreviewController", () => {
     clearPdfCitationPreviewStatusCacheForTests();
   });
 
+  // GEN-PERF-CHAT-009 — many settled bubbles instantiate their own controller for the same
+  // assistant message; the shared status cache must collapse those repeated passive reads to a
+  // single fetch. The pre-fix 2 s TTL let the storm re-arm on any re-render burst that outlived it;
+  // the raised TTL keeps the dedup effective across a much longer window.
+  it("serves repeated controllers for one message from a single cached status fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const citations = [citation("[1]", "stable-1")];
+      const groundedAnswer = answer(citations);
+      vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({
+        citations: [
+          {
+            stableId: "stable-1",
+            marker: "[1]",
+            markerIndex: 1,
+            state: "available",
+            display: { documentLabel: "policy.pdf", pageNumber: 3, anchorQuality: "page-only" },
+          },
+        ],
+      });
+
+      const windows = { add: vi.fn(), focus: vi.fn(), update: vi.fn() };
+      // Render 25 controllers for the SAME assistant message (msg-a) — the same bubble re-rendered
+      // across the transcript. All must share one status fetch.
+      const views = Array.from({ length: 25 }, () =>
+        renderHook(() =>
+          usePdfCitationPreviewController({ answer: groundedAnswer, chatId: "chat-1", windows }),
+        ),
+      );
+
+      await vi.waitFor(() => {
+        expect(fetchPdfCitationPreviewStatus).toHaveBeenCalledTimes(1);
+      });
+
+      // Advance PAST the old 2 s TTL and re-mount another controller — still no second fetch,
+      // proving the raised TTL keeps the cache warm well beyond the pre-fix window.
+      await vi.advanceTimersByTimeAsync(10_000);
+      renderHook(() =>
+        usePdfCitationPreviewController({ answer: groundedAnswer, chatId: "chat-1", windows }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchPdfCitationPreviewStatus).toHaveBeenCalledTimes(1);
+
+      for (const view of views) view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("batches passive status by answer and maps only actionable citation states", async () => {
     const citations = [citation("[1]", "stable-1"), citation("[2]", "stable-2", "notes.txt")];
     const groundedAnswer = answer(citations);

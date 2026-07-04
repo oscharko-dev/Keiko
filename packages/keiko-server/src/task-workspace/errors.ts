@@ -31,6 +31,7 @@ export type TaskWorkspaceErrorCode =
   | "CLEANUP_NOT_ELIGIBLE"
   | "CLEANUP_FAILED";
 
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFailureClass } from "@oscharko-dev/keiko-contracts";
 
 // The content-free outcome recorded in lifecycle evidence. `blocked` = a precondition/safety/conflict
@@ -60,6 +61,30 @@ const ERROR_SPECS: Readonly<Record<TaskWorkspaceErrorCode, TaskWorkspaceErrorSpe
   REPAIR_FAILED: { status: 500, outcome: "failed" },
   CLEANUP_NOT_ELIGIBLE: { status: 409, outcome: "blocked" },
   CLEANUP_FAILED: { status: 500, outcome: "failed" },
+};
+
+// The status half of the taxonomy, lifted so TaskWorkspaceError derives its HTTP status through the
+// shared CodedHttpError mechanism (GEN-DUP-NEAR-008). The domain code list + the richer `outcome` /
+// `failureClass` axes stay LOCAL — only the status derivation is shared. Kept exhaustive-by-type
+// (`Record<TaskWorkspaceErrorCode, number>`) so a new code without a status is a compile error, and
+// pinned to ERROR_SPECS so the two can never drift.
+const STATUS_MAP: Readonly<Record<TaskWorkspaceErrorCode, number>> = {
+  INVALID_REQUEST: ERROR_SPECS.INVALID_REQUEST.status,
+  MISSING_REPOSITORY: ERROR_SPECS.MISSING_REPOSITORY.status,
+  INVALID_BASE_BRANCH: ERROR_SPECS.INVALID_BASE_BRANCH.status,
+  UNSAFE_PATH: ERROR_SPECS.UNSAFE_PATH.status,
+  BRANCH_CONFLICT: ERROR_SPECS.BRANCH_CONFLICT.status,
+  EXISTING_UNMANAGED_PATH: ERROR_SPECS.EXISTING_UNMANAGED_PATH.status,
+  LOCK_CONTENTION: ERROR_SPECS.LOCK_CONTENTION.status,
+  POINTER_DRIFT: ERROR_SPECS.POINTER_DRIFT.status,
+  PROVISIONING_FAILED: ERROR_SPECS.PROVISIONING_FAILED.status,
+  WORKSPACE_NOT_FOUND: ERROR_SPECS.WORKSPACE_NOT_FOUND.status,
+  ILLEGAL_TRANSITION: ERROR_SPECS.ILLEGAL_TRANSITION.status,
+  OPERATOR_APPROVAL_REQUIRED: ERROR_SPECS.OPERATOR_APPROVAL_REQUIRED.status,
+  REPAIR_NOT_APPLICABLE: ERROR_SPECS.REPAIR_NOT_APPLICABLE.status,
+  REPAIR_FAILED: ERROR_SPECS.REPAIR_FAILED.status,
+  CLEANUP_NOT_ELIGIBLE: ERROR_SPECS.CLEANUP_NOT_ELIGIBLE.status,
+  CLEANUP_FAILED: ERROR_SPECS.CLEANUP_FAILED.status,
 };
 
 // The caller-facing failure classification (Issue #449, ADR-0093 D3). This is a DISTINCT axis from the
@@ -99,9 +124,8 @@ export function classifyTaskWorkspaceError(code: TaskWorkspaceErrorCode): Worksp
   return WORKSPACE_FAILURE_CLASS_BY_CODE[code];
 }
 
-export class TaskWorkspaceError extends Error {
+export class TaskWorkspaceError extends CodedHttpError {
   public readonly code: TaskWorkspaceErrorCode;
-  public readonly status: number;
   public readonly outcome: WorkspaceFailureOutcome;
   public readonly reasons: readonly string[];
 
@@ -110,10 +134,8 @@ export class TaskWorkspaceError extends Error {
     message: string,
     reasons: readonly string[] = [],
   ) {
-    super(message);
-    this.name = "TaskWorkspaceError";
+    super(message, httpStatusFor(STATUS_MAP, code));
     this.code = code;
-    this.status = ERROR_SPECS[code].status;
     this.outcome = ERROR_SPECS[code].outcome;
     this.reasons = reasons;
   }

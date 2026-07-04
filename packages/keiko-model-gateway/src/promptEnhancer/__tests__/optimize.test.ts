@@ -214,15 +214,18 @@ describe("optimizePromptCandidates", () => {
     // loser and several budget-skipped candidates in the same selection. (safety-floor rejections
     // cannot co-occur with losers: an agentic/critical baseline collapses to a single candidate, which
     // is covered separately above — together the two tests exercise all three rejection pathways.)
+    // GEN-DUP-SEMANTIC-002: estimatePromptTokens now uses the canonical byte-based estimator, so the
+    // per-candidate estimate is larger than the old chars/4 heuristic; the budget is sized to admit
+    // exactly two candidates (cumulatively ~1.5K tokens) but not the remaining, richer candidates.
     const selection = optimizeFor(
       { recommendedProfile: "technical" },
-      { candidateCount: 6, maxIterations: 6, tokenBudget: 1_200 },
+      { candidateCount: 6, maxIterations: 6, tokenBudget: 2_000 },
     );
     const reasons = new Set(selection.rejected.map((entry) => entry.reason));
     expect(reasons.has("lower-aggregate-score")).toBe(true);
     expect(reasons.has("exceeded-token-budget")).toBe(true);
     expect(selection.candidatesConsidered).toBeGreaterThanOrEqual(2);
-    expect(selection.tokensConsumed).toBeLessThanOrEqual(1_200);
+    expect(selection.tokensConsumed).toBeLessThanOrEqual(2_000);
   });
 });
 

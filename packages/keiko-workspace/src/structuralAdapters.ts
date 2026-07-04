@@ -245,7 +245,9 @@ export async function runStructuralAdapters(
     .filter((error): error is AdapterError => error !== undefined);
   const coverage = outcomes
     .map((outcome) => outcome.coverage)
-    .filter((diagnostics): diagnostics is StructuralCoverageDiagnostics => diagnostics !== undefined);
+    .filter(
+      (diagnostics): diagnostics is StructuralCoverageDiagnostics => diagnostics !== undefined,
+    );
   const cap = Math.min(limits.maxMatchesReturned, query.maxResults);
   const atoms = mergeAtoms(outcomes, cap);
   return {

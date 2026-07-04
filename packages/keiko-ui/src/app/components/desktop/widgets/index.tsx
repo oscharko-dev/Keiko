@@ -1,7 +1,7 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { registerWindowRender } from "../windows/WindowsRegistry";
-import type { WindowRenderContext, WindowType } from "../windows/WindowsRegistry";
+import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { useChatSessionContext } from "../context/ChatSessionContext";
 import { requestGatewaySetup } from "./shared/gatewaySetupBus";
 import {
@@ -606,7 +606,6 @@ registerWindowRender("governedGit", (cfg, ctx) => {
       projectId={projectId}
       onOpenFiles={(root) => ctx.openWindow("files", { root })}
       onOpenEditor={(root) => ctx.openWindow("editor", { root })}
-      openWindow={(key, windowCfg) => ctx.openWindow(key as WindowType, windowCfg)}
       updateCfg={(patch) => ctx.updateCfg(patch)}
     />
   );

@@ -1,4 +1,4 @@
-// Voice Action Governance evaluation runner (Epic #491, Issue #503; ADR-0066).
+// Voice Action Governance evaluation runner (Epic #491, Issue #503; ADR-0108).
 //
 // Derives a deterministic observation for each fixture from the frozen keiko-contracts spoken-action
 // governance functions, scores the six security dimensions, aggregates a scorecard, and derives the

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
+import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
@@ -21,6 +22,10 @@ interface FilePreviewProps {
 const DENIED_PREVIEW_MESSAGE =
   "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).";
 const MAX_HIGHLIGHT_BYTES = 200_000;
+// GEN-PERF-WIDGET-005 — the server caps a text preview at ~1 MB (~25k lines). Rendering every
+// line eagerly produced ~75k–100k DOM nodes in one synchronous commit. Window the initial
+// render to this many lines and reveal more on demand; the full content stays reachable.
+const PREVIEW_LINE_BATCH = 500;
 // Issue #1285 — Repository Search now extracts bounded text from small DOCX/XLSX/text-layer-PDF
 // documents that are explicitly connected to a chat. The preview pane still shows no inline preview
 // for these binary formats, but the copy reflects that they are searchable (within limits) rather
@@ -56,19 +61,6 @@ function classifyError(error: unknown): PreviewError {
     return { message, denied: false };
   }
   return { message: "Unable to read this file.", denied: false };
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB"];
-  let size = bytes;
-  let idx = 0;
-  while (size >= 1024 && idx < units.length - 1) {
-    size /= 1024;
-    idx += 1;
-  }
-  const value = idx === 0 ? size.toFixed(0) : size.toFixed(size >= 10 ? 1 : 2);
-  return `${value} ${units[idx]}`;
 }
 
 function formatDate(timestamp: number): string {
@@ -275,6 +267,18 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
     [preview, shouldHighlight],
   );
 
+  // GEN-PERF-WIDGET-005 — bounded initial render window over `lines`. Reset whenever the
+  // underlying content changes so a new file always starts at the first batch.
+  const [visibleLineCount, setVisibleLineCount] = useState(PREVIEW_LINE_BATCH);
+  useEffect(() => {
+    setVisibleLineCount(PREVIEW_LINE_BATCH);
+  }, [lines]);
+  const visibleLines = useMemo(
+    () => (lines.length > visibleLineCount ? lines.slice(0, visibleLineCount) : lines),
+    [lines, visibleLineCount],
+  );
+  const hiddenLineCount = Math.max(0, lines.length - visibleLineCount);
+
   return (
     // The keydown listener is a keyboard shortcut for the Back/Close buttons inside this
     // container, not a standalone interaction — static-element-interactions does not apply.
@@ -416,7 +420,7 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
               } as CSSProperties
             }
           >
-            {lines.map((toks, i) => (
+            {visibleLines.map((toks, i) => (
               <div className="fpv-line" key={i}>
                 <span className="fpv-num">{i + 1}</span>
                 <span className="fpv-src">
@@ -428,6 +432,17 @@ export function FilePreview({ root, path, onClose, onOpenInEditor }: FilePreview
                 </span>
               </div>
             ))}
+            {hiddenLineCount > 0 ? (
+              <button
+                type="button"
+                className="fpv-retry fpv-show-more"
+                onClick={() =>
+                  setVisibleLineCount((count) => Math.min(lines.length, count + PREVIEW_LINE_BATCH))
+                }
+              >
+                Show {Math.min(PREVIEW_LINE_BATCH, hiddenLineCount)} more lines
+              </button>
+            ) : null}
           </div>
         </>
       ) : null}

@@ -265,9 +265,19 @@ function ReadyEditorSurface(props: {
       loading={<EditorLoadingBox />}
       options={props.options}
       keepCurrentModel={false}
-      // Scroll/fold/cursor view state is restored per `path` by `@monaco-editor/react`'s default
-      // `saveViewState` mechanism as the host swaps files within a mounted editor; the package's
-      // own view-state seam (use-editor-handlers.ts) is a secondary, host-injectable hook.
+      // Monaco model lifecycle (GEN-PERF-MEMORY-002): the host does NOT swap `path` on a live,
+      // mounted `<Editor>`. Each file switch goes through the host's buffer-null loading branch
+      // (EditorRuntimeWidget renders <EditorLoadingBox> while the next buffer loads in a useEffect),
+      // which UNMOUNTS this `<Editor>`. `@monaco-editor/react` disposes the current Monaco model in
+      // its unmount cleanup (`getModel()?.dispose()`) precisely because `keepCurrentModel={false}`;
+      // with `keepCurrentModel={true}` the library would instead KEEP (not dispose) the current
+      // Monaco model on unmount, orphaning and leaking it across each file switch. So the no-leak
+      // invariant (getModels().length stays bounded by mounted panes) rests on the unmount-per-switch
+      // contract + `keepCurrentModel={false}`, NOT on any path-swap-while-mounted path (which would
+      // leave the prior model undisposed). View-state persistence is a SEPARATE concern the library
+      // default does not carry across this unmount: the package restores scroll/fold/cursor across
+      // mounts through the `use-editor-handlers.ts` viewStateRef seam (capture on dispose, apply on
+      // mount). See editor-memory-lifecycle.test.ts for the model-count regression proof.
       onChange={props.handlers.onChange}
       onMount={props.handlers.onMount}
     />

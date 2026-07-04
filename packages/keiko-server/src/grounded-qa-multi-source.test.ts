@@ -323,9 +323,9 @@ describe("splitExplorationBudget", () => {
     if (firstScope === undefined) {
       throw new Error("expected first scope fixture");
     }
-    expect(splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, [firstScope], query)).toStrictEqual(
-      [DEFAULT_EXPLORATION_BUDGET],
-    );
+    expect(splitExplorationBudgets(DEFAULT_EXPLORATION_BUDGET, [firstScope], query)).toStrictEqual([
+      DEFAULT_EXPLORATION_BUDGET,
+    ]);
   });
 
   it("weights fan-out budgets toward query-relevant sources while preserving total caps", () => {
@@ -852,9 +852,7 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(seenBudgets.get("apps/web")?.filesReadMax).toBeGreaterThanOrEqual(
       seenBudgets.get("docs")?.filesReadMax ?? 0,
     );
-    expect([...seenBudgets.values()].filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(
-      1,
-    );
+    expect([...seenBudgets.values()].filter((budget) => budget.rerankCallsMax > 0)).toHaveLength(1);
   });
 
   it("does not persist a merged answer when the client disconnects after answering", async () => {

@@ -242,12 +242,16 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
           />
         </div>
         <div className="tm-actions">
+          {/* GEN-UI-FOCUS-014: aria-disabled instead of HTML disabled while running —
+              disabling the focused submit button throws keyboard focus to <body>.
+              onSubmit already guards re-entry; the no-selection condition stays
+              hard-disabled (pre-interaction state), mirroring TerminalWidget. */}
           <button
             type="submit"
             className="tm-action"
             data-primary="true"
             ref={runBtnRef}
-            disabled={runDisabled}
+            disabled={!runnableTaskSelected}
             aria-disabled={runDisabled}
           >
             {running ? "Running…" : "Run task"}
@@ -311,8 +315,30 @@ export function CommandsWidget(props: CommandsWidgetProps): ReactNode {
             {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
             {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
           </div>
-          {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
-          {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
+          {/* GEN-UI-KEYBOARD-005 — overflow:auto scroll containers exposed as focusable
+              named regions so keyboard-only users can scroll them (WCAG 2.1.1). */}
+          {result.stdout.length > 0 ? (
+            <pre
+              className="tm-stdout"
+              role="region"
+              aria-label="Task stdout"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stdout}
+            </pre>
+          ) : null}
+          {result.stderr.length > 0 ? (
+            <pre
+              className="tm-stderr"
+              role="region"
+              aria-label="Task stderr"
+              // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
+              tabIndex={0}
+            >
+              {result.stderr}
+            </pre>
+          ) : null}
         </div>
       ) : null}
 

@@ -246,12 +246,17 @@ function writeEvidence(
   }
 }
 
-function buildHarnessToolShaper(flags: EvidenceFlags, env: EnvSource): ReturnType<typeof createHarnessToolShaper> {
+function buildHarnessToolShaper(
+  flags: EvidenceFlags,
+  env: EnvSource,
+): ReturnType<typeof createHarnessToolShaper> {
   if (!flags.write) {
     return createHarnessToolShaper();
   }
   return createHarnessToolShaper({
-    artifactWriter: createNodeToolResultArtifactStore(resolveEvidenceDir(flags.evidenceDirFlag, env)),
+    artifactWriter: createNodeToolResultArtifactStore(
+      resolveEvidenceDir(flags.evidenceDirFlag, env),
+    ),
   });
 }
 

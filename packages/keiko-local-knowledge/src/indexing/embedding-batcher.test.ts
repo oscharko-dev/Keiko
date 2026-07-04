@@ -776,9 +776,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(requests[0]?.apiKeyHeaderName).toBe("X-Embedding-Key");
       expect(requests[0]?.dimensions).toBe(DEFAULT_EMBEDDING.vectorDimensions);
       expect(requests[0]?.signal).toBe(controller.signal);
-      expect(
-        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
-      ).toBe(selected.length);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        selected.length,
+      );
     } finally {
       cleanup();
     }
@@ -846,9 +846,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(result.vectors).toEqual([]);
       expect(result.errors).toHaveLength(selected.length);
       expect(result.errors.every((error) => error.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
-      expect(
-        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
-      ).toBe(0);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        0,
+      );
     } finally {
       cleanup();
     }
@@ -861,13 +861,14 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       endpoint: "https://example.test/v1",
       apiKey: ["sk-", "test"].join(""),
       request: () => Promise.resolve({ ok: false, kind: "transport" }),
-      requestBatch: (request) => Promise.resolve({
-        ok: true as const,
-        value: request.inputs.slice(0, 1).map((input) => ({
-          vector: deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        })),
-      }),
+      requestBatch: (request) =>
+        Promise.resolve({
+          ok: true as const,
+          value: request.inputs.slice(0, 1).map((input) => ({
+            vector: deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          })),
+        }),
     };
 
     try {
@@ -883,9 +884,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(result.vectors).toHaveLength(1);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]?.message).toContain("invalid-response");
-      expect(
-        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
-      ).toBe(1);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        1,
+      );
     } finally {
       cleanup();
     }
@@ -897,16 +898,17 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       endpoint: "https://example.test/v1",
       apiKey: ["sk-", "test"].join(""),
       request: () => Promise.resolve({ ok: false, kind: "transport" }),
-      requestBatch: (request) => Promise.resolve({
-        ok: true as const,
-        value: request.inputs.map((input, index) => ({
-          vector: deterministicVector(
-            input,
-            index === 0 ? 32 : DEFAULT_EMBEDDING.vectorDimensions,
-          ),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        })),
-      }),
+      requestBatch: (request) =>
+        Promise.resolve({
+          ok: true as const,
+          value: request.inputs.map((input, index) => ({
+            vector: deterministicVector(
+              input,
+              index === 0 ? 32 : DEFAULT_EMBEDDING.vectorDimensions,
+            ),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          })),
+        }),
     };
 
     try {
@@ -923,9 +925,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(result.errors.some((error) => error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY")).toBe(
         true,
       );
-      expect(
-        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
-      ).toBe(0);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        0,
+      );
     } finally {
       cleanup();
     }
@@ -967,9 +969,9 @@ describe("embedChunkBatch — array-batch port (#189 GRD-004)", () => {
       expect(calls).toBe(1);
       expect(result.vectors).toEqual([]);
       expect(result.errors.some((error) => error.code === "CANCELLED")).toBe(true);
-      expect(
-        countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId),
-      ).toBe(0);
+      expect(countVectorsForDocument(store._internal.db, seeded.capsuleId, seeded.documentId)).toBe(
+        0,
+      );
     } finally {
       cleanup();
     }

@@ -2,7 +2,7 @@
 
 Provider-neutral specification for Epic #491, the deliverable of Issue
 [#500](https://github.com/oscharko-dev/Keiko/issues/500) and the authoritative companion to
-[ADR-0063](../adr/ADR-0063-voice-transcript-segment-semantics.md). It **defines** the segment
+[ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md). It **defines** the segment
 lifecycle and integration boundary; the reducer that drives state changes lives in
 [`packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts`](../../packages/keiko-ui/src/app/components/desktop/hooks/voice-transcript-segments.ts).
 The contract lives in
@@ -66,7 +66,7 @@ against using uncommitted, discarded, redacted, or failed text (AC3 / AC5).
 
 ## 3. Wire-message kinds and state mapping
 
-The wire protocol (#496, [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md))
+The wire protocol (#496, [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md))
 defines three transcript message kinds. Each maps to an initial segment state:
 
 | Wire Kind              | Maps to State | Meaning                                                    |
@@ -87,7 +87,7 @@ Four states have **no wire kind** and are derived by the reducer in response to 
 This asymmetry is load-bearing: a strict 1:1 wire-to-state map would make deterministic provider
 corrections (AC4) and error handling (AC6) impossible without either doubling the wire catalog or
 storing raw provider metadata in the UI. The semantic input union decouples the state machine from the
-wire encoding, exactly as [ADR-0062](../adr/ADR-0062-voice-turn-manager.md) (turn manager) decouples
+wire encoding, exactly as [ADR-0104](../adr/ADR-0104-voice-turn-manager.md) (turn manager) decouples
 its eight floor states from the wire's control-message kinds.
 
 ## 4. Complete state-transition table
@@ -140,7 +140,7 @@ When the voice profile is `"none"` or `"speech-output"`, the predicate `voiceTra
 returns `false`. The reducer initializes with `active = false`. Every call to `apply(input)` short-circuits
 before reading the clock, mutating any segment, or calling the observer: it returns
 `{ outcome: "not-allowed-for-profile", snapshot }` silently. The store is **dormant**: no state changes,
-no observer fires, no resource is consumed. This is identical to the [ADR-0061](../adr/ADR-0061-voice-timing-engine.md)
+no observer fires, no resource is consumed. This is identical to the [ADR-0103](../adr/ADR-0103-voice-timing-engine.md)
 dormancy pattern (AC1).
 
 ## 7. Committed-only integration boundary (AC3 / AC5)
@@ -226,7 +226,7 @@ the reducer via the explicit `selectCommittedVoiceTranscript()` call.
 
 ## 9. Capability gating alignment
 
-The reducer uses `voiceMessageAllowedForProfile` from [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md)
+The reducer uses `voiceMessageAllowedForProfile` from [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md)
 to derive two predicates:
 
 ```typescript
@@ -265,7 +265,7 @@ Repeated `discard` inputs on the same segment id are no-ops (the segment is alre
 
 ### Integration with turn manager (#499)
 
-The turn manager ([ADR-0062](../adr/ADR-0062-voice-turn-manager.md)) owns floor control and emits a
+The turn manager ([ADR-0104](../adr/ADR-0104-voice-turn-manager.md)) owns floor control and emits a
 `turnIndex` for deduplication of delayed transcripts. When the turn manager transitions to `idle` after
 a user turn or when the user confirms `dictation-commit` in STT mode, `turnIndex` increments. The
 consuming hook uses `turnIndex` together with segment `seq` to discard stale `transcript.committed`
@@ -273,7 +273,7 @@ messages that arrive after `turnIndex` has advanced.
 
 ### Integration with timing engine (#498)
 
-The timing engine ([ADR-0061](../adr/ADR-0061-voice-timing-engine.md)) orders and buffers the wire
+The timing engine ([ADR-0103](../adr/ADR-0103-voice-timing-engine.md)) orders and buffers the wire
 control stream, including transcript message kinds. It exposes `lastCommittedSeq`, the maximum sequence
 number of a committed transcript received. The consuming hook can use this to determine a safe `sinceSeq`
 for replay-eligible-only catch-up.
@@ -318,12 +318,12 @@ model behavior analysis without retaining reviewable transcript text.
 
 ## Related
 
-- [ADR-0063](../adr/ADR-0063-voice-transcript-segment-semantics.md): the authoritative decision record
-- [ADR-0059](../adr/ADR-0059-voice-control-media-capability-replay-protocol.md): the wire protocol kinds
+- [ADR-0105](../adr/ADR-0105-voice-transcript-segment-semantics.md): the authoritative decision record
+- [ADR-0101](../adr/ADR-0101-voice-control-media-capability-replay-protocol.md): the wire protocol kinds
   and `VOICE_PROFILE_ALLOWED_MESSAGE_KINDS`
-- [ADR-0061](../adr/ADR-0061-voice-timing-engine.md): the timing engine; the `VoiceClock` and replay
+- [ADR-0103](../adr/ADR-0103-voice-timing-engine.md): the timing engine; the `VoiceClock` and replay
   semantics this spec aligns to
-- [ADR-0062](../adr/ADR-0062-voice-turn-manager.md): the turn manager; the semantic signal pattern and
+- [ADR-0104](../adr/ADR-0104-voice-turn-manager.md): the turn manager; the semantic signal pattern and
   `turnIndex` deduplication
 - Epic [#491](https://github.com/oscharko-dev/Keiko/issues/491); Issue
   [#500](https://github.com/oscharko-dev/Keiko/issues/500)

@@ -1,11 +1,11 @@
-// Issue #499, Epic #491 (ADR-0062) — the Voice turn manager. It is the deterministic, content-free
+// Issue #499, Epic #491 (ADR-0104) — the Voice turn manager. It is the deterministic, content-free
 // semantic layer that sits ABOVE the #498 timing engine's ordered control stream and BELOW the UI
 // hook that drives rendering. Where the timing engine decides ordering, buffering, and replay, the
 // turn manager decides who holds the conversational floor, when a turn has ended, how a barge-in must
 // alter both playback and the next-turn state, and what the difference is between "end-of-turn
 // detected" and "user confirms dictation commit" in speech-to-text mode. It owns NO transport, NO
 // clock, NO audio: time enters through the injectable `VoiceClock` seam reused from `voice-timebase.ts`
-// (the convention ADR-0061 established), and every signal arrives already mapped from a decoded
+// (the convention ADR-0103 established), and every signal arrives already mapped from a decoded
 // control message or a local UI event by the consuming hook.
 //
 // Capability gating is delegated wholesale to the contract's `voiceMessageAllowedForProfile` (AC1/AC2/

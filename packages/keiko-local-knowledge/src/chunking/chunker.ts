@@ -87,7 +87,14 @@ export function resolveChunkingOptions(
     DEFAULT_MAX_CHUNKS,
   );
   const tokenizer = resolveTokenizer(options);
-  return { maxTokens, minTokens, overlapTokens, maxChunks, tokenizer, tokenEstimator: tokenizer.countTokens };
+  return {
+    maxTokens,
+    minTokens,
+    overlapTokens,
+    maxChunks,
+    tokenizer,
+    tokenEstimator: tokenizer.countTokens,
+  };
 }
 
 function resolveTokenizer(options: ChunkingOptions | undefined): LocalKnowledgeTokenizer {
@@ -198,8 +205,10 @@ function tokenBudgetEnd(
     start + 1,
     Math.min(limit, start + Math.max(1, charsForTokenBudget(resolved.maxTokens))),
   );
-  if (estimateSliceTokens(sourceText, start, initialEnd, resolved.tokenEstimator) <=
-    resolved.maxTokens) {
+  if (
+    estimateSliceTokens(sourceText, start, initialEnd, resolved.tokenEstimator) <=
+    resolved.maxTokens
+  ) {
     return initialEnd;
   }
 
@@ -208,8 +217,9 @@ function tokenBudgetEnd(
   let best = lo;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
-    if (estimateSliceTokens(sourceText, start, mid, resolved.tokenEstimator) <=
-      resolved.maxTokens) {
+    if (
+      estimateSliceTokens(sourceText, start, mid, resolved.tokenEstimator) <= resolved.maxTokens
+    ) {
       best = mid;
       lo = mid + 1;
     } else {
@@ -302,7 +312,13 @@ function chooseChunkEnd(
   if (paragraph !== undefined) return paragraph;
   const heading = lastBoundaryAtOrAfter(
     [
-      ...collectBoundaryMatches(sourceText, start, maxEnd, MARKDOWN_HEADING_PATTERN, "before-match"),
+      ...collectBoundaryMatches(
+        sourceText,
+        start,
+        maxEnd,
+        MARKDOWN_HEADING_PATTERN,
+        "before-match",
+      ),
       ...collectBoundaryMatches(sourceText, start, maxEnd, HTML_HEADING_PATTERN, "before-match"),
     ].sort((a, b) => a - b),
     minBoundaryEnd,

@@ -4,11 +4,13 @@
 
 import { render } from "@testing-library/react";
 import { axe } from "jest-axe";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
+import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type {
   GroundedAnswer as GroundedAnswerType,
   GroundedAnswerContextPackSummary,
+  LocalKnowledgeEvidenceCitation,
 } from "@/lib/types";
 
 const OMITTED_COUNTS_ZERO = {
@@ -89,11 +91,159 @@ function answer(): GroundedAnswerType {
   };
 }
 
+// GEN-UI-TEST-GAP-005 (test-plan #5) — local-knowledge and hybrid answers, plus the interactive
+// KnowledgeCitationChip recovery/blocked affordances, are distinct render paths from the
+// connected-context answer above and were previously unguarded by axe.
+function knowledgeCitation(
+  overrides: Partial<LocalKnowledgeEvidenceCitation> = {},
+): LocalKnowledgeEvidenceCitation {
+  return {
+    stableId: "lk-1",
+    marker: "[1]",
+    label: "manual.pdf · p.12",
+    score: 0.91,
+    lineage: {
+      capsuleId: "cap-1" as LocalKnowledgeEvidenceCitation["lineage"]["capsuleId"],
+      sourceId: "src-1" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+      documentId: "doc-1" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+      chunkId: "chunk-1" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+    },
+    ...overrides,
+  };
+}
+
+function localKnowledgeAnswer(
+  citations: readonly LocalKnowledgeEvidenceCitation[] = [knowledgeCitation()],
+): GroundedAnswerType {
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: "lk-u",
+    assistantMessageId: "lk-a",
+    content: "Answer grounded in the connected capsule [1].",
+    citations,
+    uncertainty: [{ kind: "no-evidence", claim: "excerpt unavailable" }],
+    omittedCount: 1,
+    elapsedMs: 12,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "lk-scope-1",
+      scopeLabel: "Product Manual",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: citations.length,
+      referenceBudget: 10,
+      referencesUsed: citations.length,
+    },
+  };
+}
+
+function hybridAnswer(
+  knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[] = [knowledgeCitation()],
+): GroundedAnswerType {
+  return {
+    groundingKind: "hybrid",
+    userMessageId: "hy-u",
+    assistantMessageId: "hy-a",
+    content: "Merged folder and connector evidence.",
+    citations: [
+      {
+        scopePath: "src/foo.ts",
+        lineRange: { startLine: 1, endLine: 4 },
+        score: 0.9,
+        stableId: "atom-a",
+      },
+      {
+        scopePath: "docs/report.docx",
+        lineRange: { startLine: 1, endLine: 3 },
+        score: 0.4,
+        stableId: "atom-b",
+        documentFormat: "docx",
+      },
+    ],
+    knowledgeCitations,
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 33,
+    contextPack: {
+      kind: "hybrid",
+      folderSourceCount: 2,
+      connectorSourceCount: 1,
+      folder: contextPack(),
+      knowledge: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-scope-9",
+        scopeLabel: "Quasar Manual",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: knowledgeCitations.length,
+        referenceBudget: 10,
+        referencesUsed: knowledgeCitations.length,
+      },
+    },
+  };
+}
+
+// A CitationPreviewController stub that reports a fixed affordance state for the given citation, so
+// the KnowledgeCitationChip renders as an interactive Recover / unavailable button (mirrors the
+// controller stub in GroundedAnswer.test.tsx).
+function citationPreviewController(
+  state: "available" | "recoverable" | "blocked",
+  citationValue: LocalKnowledgeEvidenceCitation,
+): CitationPreviewController {
+  return {
+    forCitation: vi.fn((candidate) =>
+      candidate.stableId === citationValue.stableId ? { citation: candidate, state } : undefined,
+    ),
+    forMarker: vi.fn(() => undefined),
+    isOpening: vi.fn(() => false),
+    openCitation: vi
+      .fn<CitationPreviewController["openCitation"]>()
+      .mockResolvedValue("pdf-window-1"),
+  };
+}
+
 describe("GroundedAnswer a11y", () => {
   it("jest-axe: a fully populated grounded answer has no violations", async () => {
     const { container } = render(<GroundedAnswer answer={answer()} busy={false} />);
     const results = await axe(container);
     expect(results).toHaveNoViolations();
+  });
+
+  it("jest-axe: a local-knowledge answer has no violations", async () => {
+    const { container } = render(<GroundedAnswer answer={localKnowledgeAnswer()} busy={false} />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("jest-axe: a hybrid answer has no violations", async () => {
+    const { container } = render(<GroundedAnswer answer={hybridAnswer()} busy={false} />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("jest-axe: a KnowledgeCitationChip in the recoverable state has no violations", async () => {
+    const citation = knowledgeCitation();
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([citation])}
+        busy={false}
+        citationPreview={citationPreviewController("recoverable", citation)}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("jest-axe: a KnowledgeCitationChip in the blocked state has no violations", async () => {
+    const citation = knowledgeCitation();
+    const { container } = render(
+      <GroundedAnswer
+        answer={localKnowledgeAnswer([citation])}
+        busy={false}
+        citationPreview={citationPreviewController("blocked", citation)}
+      />,
+    );
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   // Issue #1296 — citation chips now consume the --ai-source-* component tokens (which

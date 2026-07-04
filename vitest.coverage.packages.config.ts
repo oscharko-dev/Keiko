@@ -15,9 +15,17 @@ export default defineConfig({
     ],
     exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
+    // GEN-TEST-FLAKE-001: keep the CI-gated coverage run's per-test timeout aligned with the root
+    // suite (vitest.config.ts) at 15s. v8 instrumentation + forked workers make this the run MOST
+    // likely to exceed vitest's 5s default under scheduler load, so a drift here false-REDs the
+    // release-blocking coverage gate. scripts/__tests__/vitest-config-parity.test.mjs enforces parity.
+    testTimeout: 15_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary"],
+      // Emit the coverage summary even when some tests fail, so the ratchet gate can still be
+      // computed and regenerated (the reality-guard tests depend on a fresh summary existing).
+      reportOnFailure: true,
       reportsDirectory: "coverage/packages",
       include: ["packages/*/src/**/*.{ts,tsx}"],
       exclude: [

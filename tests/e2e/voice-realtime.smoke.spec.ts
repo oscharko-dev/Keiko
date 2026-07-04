@@ -16,6 +16,7 @@
 // (the gated WS upgrade integration test boots the real BFF and a real `ws` client).
 
 import { expect, test, type Page } from "@playwright/test";
+import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const FULL_REALTIME_CAPABILITY = {
   voice: {
@@ -199,7 +200,10 @@ async function realtimeConnectFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("combobox", { name: /^Voice profile/u })).toHaveCount(0);
-  await page.screenshot({ path: "docs/voice/evidence/497-realtime-connected.png", fullPage: true });
+  await page.screenshot({
+    path: evidenceScreenshotPath("docs/voice/evidence/497-realtime-connected.png"),
+    fullPage: true,
+  });
 
   // The composer remains fully text-capable while a voice session is live.
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
