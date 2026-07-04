@@ -54,7 +54,7 @@ const IMPORT_POLICY_RULES = [
     matchesSpecifier: (specifier) => LOCAL_KNOWLEDGE_EGRESS_PATTERN.test(specifier),
   },
   {
-    name: "adr-0100-provider-runtime-no-internal-bypass",
+    name: "adr-0112-provider-runtime-no-internal-bypass",
     matchesFile: (path, mode) =>
       mode === "fixtures"
         ? path.startsWith(`${FIXTURE_ROOT}/provider-runtime-internal-bypass/`)

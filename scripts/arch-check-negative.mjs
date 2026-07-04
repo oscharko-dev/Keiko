@@ -77,7 +77,7 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-9-local-knowledge-no-egress": 1,
-  "adr-0100-provider-runtime-no-internal-bypass": 3,
+  "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without

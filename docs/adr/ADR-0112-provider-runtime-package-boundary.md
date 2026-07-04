@@ -1,4 +1,4 @@
-# ADR-0100: Provider runtime package boundary
+# ADR-0112: Provider runtime package boundary
 
 ## Status
 
@@ -72,7 +72,7 @@ Extraction into a dedicated package is deferred until one of these concrete cond
 - `.dependency-cruiser.cjs` keeps `@oscharko-dev/keiko-contracts` as a leaf and keeps
   `@oscharko-dev/keiko-model-gateway` limited to `contracts` + `security`.
 - `scripts/check-package-graph.mjs` keeps the package dependency allowlist aligned with the same decision.
-- `scripts/check-import-policy.mjs` adds `adr-0100-provider-runtime-no-internal-bypass`, forbidding
+- `scripts/check-import-policy.mjs` adds `adr-0112-provider-runtime-no-internal-bypass`, forbidding
   non-gateway packages from importing provider-runtime internal subpaths such as
   `@oscharko-dev/keiko-model-gateway/internal/openai-adapter`.
 - `scripts/arch-check-negative.mjs` proves that enforcement with
