@@ -14,20 +14,30 @@ type Listener = (event: unknown) => void;
 
 class FakeMediaRecorder {
   static isTypeSupported = vi.fn((type: string): boolean => type === "audio/webm;codecs=opus");
+  static instances: FakeMediaRecorder[] = [];
   public state: "inactive" | "recording" = "inactive";
   public readonly mimeType: string;
+  public startTimeslice: number | undefined;
+  public requestDataCalls = 0;
   private readonly listeners: Record<string, Listener[]> = {};
 
   constructor(_stream: unknown, options?: { mimeType?: string }) {
     this.mimeType = options?.mimeType ?? "";
+    FakeMediaRecorder.instances.push(this);
   }
 
   addEventListener(type: string, cb: Listener): void {
     (this.listeners[type] ??= []).push(cb);
   }
 
-  start(): void {
+  start(timeslice?: number): void {
+    this.startTimeslice = timeslice;
     this.state = "recording";
+    this.emit("start", {});
+  }
+
+  requestData(): void {
+    this.requestDataCalls += 1;
   }
 
   stop(): void {
@@ -63,6 +73,8 @@ function fakeStream(track: { stop: () => void }): MediaStream {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  FakeMediaRecorder.instances = [];
+  FakeMediaRecorder.isTypeSupported.mockClear();
   // Remove the navigator.mediaDevices stub so support probes in other suites are unaffected.
   Reflect.deleteProperty(navigator as unknown as Record<string, unknown>, "mediaDevices");
 });
@@ -88,12 +100,36 @@ describe("createBrowserDictationRecorder", () => {
     const track = { stop: vi.fn() };
     stubMedia(async () => fakeStream(track), track);
     const recorder = createBrowserDictationRecorder();
-    const session = await recorder.start();
+    const session = await recorder.start({ timesliceMs: 125 });
     const capture = await session.stop();
     expect(capture.audioBase64).toBe("AQID"); // base64 of [1,2,3]
     expect(capture.mimeType).toBe("audio/webm;codecs=opus");
     expect(capture.durationMs).toBeGreaterThan(0);
+    expect(FakeMediaRecorder.instances[0]?.startTimeslice).toBe(125);
+    expect(FakeMediaRecorder.instances[0]?.requestDataCalls).toBeGreaterThan(0);
     expect(track.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses incremental chunks and surfaces encoded chunk callbacks without persisting them", async () => {
+    const onChunk = vi.fn();
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const recorder = createBrowserDictationRecorder();
+    const session = await recorder.start({ onChunk });
+    await session.stop();
+    expect(FakeMediaRecorder.instances[0]?.startTimeslice).toBe(250);
+    expect(onChunk).toHaveBeenCalledTimes(1);
+    expect(onChunk.mock.calls[0]?.[0]).toBeInstanceOf(Blob);
+  });
+
+  it("signals onReady once capture is live (immediate fallback when no analyser is available)", async () => {
+    const onReady = vi.fn();
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const recorder = createBrowserDictationRecorder();
+    const session = await recorder.start({ onReady });
+    // No AudioContext in this environment → readiness is signalled immediately after the start event
+    // rather than blocking on an analyser sample that will never arrive, so the UI never sticks.
+    expect(onReady).toHaveBeenCalledTimes(1);
+    await session.stop();
   });
 
   it("negotiates the first supported MIME type", async () => {

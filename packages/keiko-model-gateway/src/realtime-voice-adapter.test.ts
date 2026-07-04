@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+  DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
   DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
   DEFAULT_REALTIME_TURN_DETECTION,
   DEFAULT_REALTIME_VOICE,
@@ -196,6 +198,35 @@ describe("requestRealtimeNegotiation", () => {
     });
   });
 
+  it("forwards an opt-in safety_identifier into the ephemeral session body when supplied", async () => {
+    let clientSecretBody = "{}";
+    const fetchImpl = mockFetch((url, init) => {
+      if (url.endsWith("/realtime/client_secrets")) {
+        clientSecretBody = bodyToText(init);
+        return new Response(JSON.stringify({ value: "ephemeral-session-token" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sdp(ANSWER_SDP);
+    });
+
+    await requestRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      apiKeyHeaderName: "api-key",
+      realtimeAuthMode: "ephemeral-session",
+      modelId: "keiko-realtime",
+      instructions: "You are Keiko.",
+      safetyIdentifier: "keiko-voice-abc123",
+      offerSdp: OFFER_SDP,
+      fetchImpl,
+    });
+
+    const parsed = JSON.parse(clientSecretBody) as { session: { safety_identifier?: unknown } };
+    expect(parsed.session.safety_identifier).toBe("keiko-voice-abc123");
+  });
+
   it("includes realtime function tools and tool_choice in the ephemeral session body", async () => {
     let clientSecretBody = "{}";
     const fetchImpl = mockFetch((url, init) => {
@@ -283,6 +314,73 @@ describe("requestRealtimeNegotiation", () => {
       model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
     });
     expect(parsed.session.audio.input.turn_detection).toEqual(DEFAULT_REALTIME_TURN_DETECTION);
+  });
+
+  it("builds transcription-only ephemeral sessions for live dictation", async () => {
+    let clientSecretBody = "{}";
+    const fetchImpl = mockFetch((url, init) => {
+      if (url.endsWith("/realtime/client_secrets")) {
+        clientSecretBody = bodyToText(init);
+        return new Response(JSON.stringify({ value: "tok" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return sdp(ANSWER_SDP);
+    });
+
+    await requestRealtimeNegotiation({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      realtimeAuthMode: "ephemeral-session",
+      modelId: "keiko-realtime",
+      sessionType: "transcription",
+      transcriptionLanguage: "en",
+      offerSdp: OFFER_SDP,
+      instructions: "must not be forwarded",
+      voiceId: "shimmer",
+      tools: [
+        {
+          type: "function",
+          name: "search_keiko_grounding",
+          parameters: { type: "object" },
+        },
+      ],
+      safetyIdentifier: "must-not-be-forwarded",
+      fetchImpl,
+    });
+
+    const parsed = JSON.parse(clientSecretBody) as {
+      session: {
+        type: unknown;
+        output_modalities?: unknown;
+        instructions?: unknown;
+        voice?: unknown;
+        audio: { input: { transcription: Record<string, unknown> }; output?: unknown };
+        tools?: unknown;
+        safety_identifier?: unknown;
+      };
+    };
+    expect(parsed).toEqual({
+      session: {
+        type: "transcription",
+        model: "keiko-realtime",
+        audio: {
+          input: {
+            transcription: {
+              model: DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+              language: "en",
+              delay: DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+            },
+          },
+        },
+      },
+    });
+    expect(parsed.session.output_modalities).toBeUndefined();
+    expect(parsed.session.instructions).toBeUndefined();
+    expect(parsed.session.audio.output).toBeUndefined();
+    expect(parsed.session.tools).toBeUndefined();
+    expect(parsed.session.safety_identifier).toBeUndefined();
   });
 
   it("can disable automatic server-VAD responses while keeping transcription enabled", async () => {

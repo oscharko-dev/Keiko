@@ -63,6 +63,23 @@ describe("VoiceActivityState", () => {
     expect(s.feed(0.0, 100)).toBeUndefined();
     expect(s.feed(0.0, 100)).toBe("end-of-turn"); // a full 300ms pause finally ends it
   });
+
+  it("uses adaptive noise floor to reject stationary room noise above the static gate", () => {
+    const s = new VoiceActivityState({
+      rmsThreshold: 0.014,
+      onsetMs: 100,
+      trailingSilenceMs: 300,
+      adaptiveNoiseFloor: true,
+      noiseFloorMultiplier: 2.2,
+      noiseFloorMinRms: 0.004,
+      noiseFloorMaxRms: 0.05,
+    });
+    for (let i = 0; i < 10; i += 1) {
+      expect(s.feed(0.02, 50)).toBeUndefined();
+    }
+    expect(s.feed(0.08, 50)).toBeUndefined();
+    expect(s.feed(0.08, 50)).toBe("speech-onset");
+  });
 });
 
 describe("createBrowserVoiceActivityDetector", () => {

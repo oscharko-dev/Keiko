@@ -24,6 +24,7 @@ import { CORRELATION_RESPONSE_HEADER, resolveCorrelationId } from "./correlation
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers.js";
 import { createVoiceControlPlane } from "./voice-realtime.js";
+import { createVoiceLiveDictationPlane } from "./voice-live-dictation.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
@@ -252,6 +253,25 @@ async function handle(
   await serveStatic(req, res, deps.staticRoot, url.pathname);
 }
 
+function createVoicePlanes(
+  port: number,
+  handlerDeps: UiHandlerDeps,
+): {
+  readonly voiceControl: ReturnType<typeof createVoiceControlPlane>;
+  readonly liveDictation: ReturnType<typeof createVoiceLiveDictationPlane>;
+} {
+  return {
+    voiceControl: createVoiceControlPlane({
+      port,
+      handlerDeps: () => handlerDeps,
+    }),
+    liveDictation: createVoiceLiveDictationPlane({
+      port,
+      handlerDeps: () => handlerDeps,
+    }),
+  };
+}
+
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
 // listens on a non-loopback interface. The previous PTY WebSocket upgrade handler is removed — the
 // terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8). Issue #497 (ADR-0100 D3,
@@ -259,10 +279,7 @@ async function handle(
 // ONLY when the deployment is full-realtime voice capable; every other upgrade keeps the hard reject.
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
-  const voiceControl = createVoiceControlPlane({
-    port: deps.port,
-    handlerDeps: () => handlerDeps,
-  });
+  const { voiceControl, liveDictation } = createVoicePlanes(deps.port, handlerDeps);
   const server = createServer((req, res) => {
     // RB-6: mint (or reuse a well-formed UI-supplied) correlation id at request entry and echo it on
     // every response BEFORE handling, so even a streamed/committed response and a top-level failure
@@ -300,12 +317,16 @@ export function createUiServer(deps: UiServerDeps): Server {
     if (voiceControl.handleUpgrade(req, socket, head)) {
       return;
     }
+    if (liveDictation.handleUpgrade(req, socket, head)) {
+      return;
+    }
     // Default: every non-voice-control or ungated upgrade is hard-rejected, as before.
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();
   });
   server.on("close", () => {
     voiceControl.closeAll();
+    liveDictation.closeAll();
   });
   return server;
 }

@@ -50,6 +50,8 @@ export const REALTIME_VOICES = [
 export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
 export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
 export const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = "whisper-1";
+export const DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL = "gpt-realtime-whisper";
+export const DEFAULT_REALTIME_TRANSCRIPTION_DELAY = "low" as const;
 export const DEFAULT_REALTIME_VAD_THRESHOLD = 0.5;
 export const DEFAULT_REALTIME_VAD_PREFIX_PADDING_MS = 300;
 export const DEFAULT_REALTIME_VAD_SILENCE_DURATION_MS = 500;
@@ -77,6 +79,10 @@ export interface RealtimeNegotiationRequest {
   readonly apiKeyHeaderName?: string;
   readonly realtimeAuthMode?: RealtimeAuthMode;
   readonly modelId: string;
+  // The realtime session shape to mint when using ephemeral-session auth. Dialogue is the existing
+  // speech-in/speech-out Keiko session. Transcription is the P3 live-dictation path: speech-in/text-out
+  // only, no assistant output, no tools, and no spoken instructions.
+  readonly sessionType?: RealtimeSessionType | undefined;
   // Grounded session configuration applied server-side at ephemeral-session mint time so the realtime
   // assistant speaks as Keiko (not the provider's default demo persona) and emits user-utterance
   // transcripts. These never reach the browser as anything other than the session's own behavior.
@@ -90,12 +96,19 @@ export interface RealtimeNegotiationRequest {
   readonly instructions?: string;
   readonly voiceId?: string;
   readonly transcriptionModel?: string;
+  readonly transcriptionLanguage?: string | undefined;
+  readonly transcriptionDelay?: RealtimeTranscriptionDelay | undefined;
   readonly tools?: readonly RealtimeSessionTool[] | undefined;
   readonly toolChoice?: RealtimeSessionToolChoice | undefined;
   // Used for grounded sessions when the provider does not support realtime function calls. Server VAD
   // should still detect turn boundaries and emit transcription, but the provider must not auto-answer
   // from its own context before Keiko retrieves a grounded response through the BFF.
   readonly disableAutomaticResponse?: boolean | undefined;
+  // Optional content-free abuse-monitoring identifier (OpenAI `safety_identifier`). A stable, pseudonymous
+  // token — never PII, never a raw chat id — so the provider can rate-limit / flag abuse per end user.
+  // Only forwarded when the caller supplies it (opt-in), so providers that reject unknown session fields
+  // are never sent it by default.
+  readonly safetyIdentifier?: string | undefined;
   // The browser's opaque SDP offer (already validated for length by the caller). Never persisted or
   // logged by this module; forwarded verbatim to the provider's realtime SDP-exchange endpoint.
   readonly offerSdp: string;
@@ -104,6 +117,10 @@ export interface RealtimeNegotiationRequest {
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
 }
+
+export type RealtimeSessionType = "dialogue" | "transcription";
+
+export type RealtimeTranscriptionDelay = "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export interface RealtimeFunctionTool {
   readonly type: "function";
@@ -306,14 +323,27 @@ function realtimeTurnDetection(
 // top-level `voice`/`input_audio_transcription` shape is rejected with HTTP 500). `instructions` and
 // `audio.output.voice` are only included when supplied, while input transcription is fail-safe for the
 // dialogue path so a minted realtime session always emits user-utterance transcripts.
-function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
+// True for a present, non-empty string. Factored out so buildClientSecretBody's optional-field guards
+// read as a single predicate each (keeps its cyclomatic complexity within the gate).
+function nonEmptyString(value: string | undefined): value is string {
+  return value !== undefined && value.length > 0;
+}
+
+function buildDialogueClientSecretSession(
+  request: RealtimeNegotiationRequest,
+): Record<string, unknown> {
   const session: Record<string, unknown> = {
     type: "realtime",
     model: request.modelId,
     output_modalities: ["audio"],
   };
-  if (request.instructions !== undefined && request.instructions.length > 0) {
+  if (nonEmptyString(request.instructions)) {
     session.instructions = request.instructions;
+  }
+  if (nonEmptyString(request.safetyIdentifier)) {
+    // OpenAI's abuse-monitoring identifier. Opt-in (see RealtimeNegotiationRequest.safetyIdentifier), so
+    // a session config that omits it is byte-for-byte the prior shape and cannot regress strict providers.
+    session.safety_identifier = request.safetyIdentifier;
   }
   if (request.tools !== undefined && request.tools.length > 0) {
     session.tools = request.tools;
@@ -326,16 +356,44 @@ function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
     turn_detection: realtimeTurnDetection(request.disableAutomaticResponse),
   };
   audioInput.transcription = {
-    model:
-      request.transcriptionModel !== undefined && request.transcriptionModel.length > 0
-        ? request.transcriptionModel
-        : DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+    model: nonEmptyString(request.transcriptionModel)
+      ? request.transcriptionModel
+      : DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
   };
   const audio: Record<string, unknown> = { input: audioInput };
-  if (request.voiceId !== undefined && request.voiceId.length > 0) {
+  if (nonEmptyString(request.voiceId)) {
     audio.output = { voice: request.voiceId };
   }
   session.audio = audio;
+  return session;
+}
+
+function buildTranscriptionClientSecretSession(
+  request: RealtimeNegotiationRequest,
+): Record<string, unknown> {
+  const transcription: Record<string, unknown> = {
+    model: nonEmptyString(request.transcriptionModel)
+      ? request.transcriptionModel
+      : DEFAULT_REALTIME_STREAMING_TRANSCRIPTION_MODEL,
+    delay: request.transcriptionDelay ?? DEFAULT_REALTIME_TRANSCRIPTION_DELAY,
+  };
+  if (nonEmptyString(request.transcriptionLanguage)) {
+    transcription.language = request.transcriptionLanguage;
+  }
+  return {
+    type: "transcription",
+    model: request.modelId,
+    audio: {
+      input: { transcription },
+    },
+  };
+}
+
+function buildClientSecretBody(request: RealtimeNegotiationRequest): string {
+  const session =
+    request.sessionType === "transcription"
+      ? buildTranscriptionClientSecretSession(request)
+      : buildDialogueClientSecretSession(request);
   return JSON.stringify({ session });
 }
 
