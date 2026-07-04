@@ -1,7 +1,8 @@
 // GEN-PERF-PERSISTENCE-009 regression: handleListQiRuns re-parses + SHA-256-re-hashes up to 100
 // manifests per request. QI manifests are write-once (only an export append bumps mtime+size), so
-// a positive verification is memoised keyed by path + mtimeMs + size. This proves:
-//   - a second list of unchanged manifests performs ZERO additional parse+verify passes;
+// a positive verification is memoised keyed by path + mtimeMs + size. Writes prime the same cache
+// with the already-built manifest, so immediate post-write lists do not re-read/re-hash. This proves:
+//   - unchanged manifests perform ZERO additional parse+verify passes after write-cache priming;
 //   - modifying a manifest on disk (export append / tamper) forces a re-verify (cache miss);
 //   - 100 manifests list + re-list stays well under the finding's 150ms budget.
 // The verification counter (__qiVerificationStats) increments once per full parse+integrity pass,
@@ -69,14 +70,14 @@ describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
         evidenceDir,
       });
     }
-    // recordQualityIntelligenceRun does not read/verify, so the first list is the priming pass.
+    // recordQualityIntelligenceRun builds and writes the manifest, then primes the verification cache
+    // with that already-built object. A following list must not re-read/re-verify unchanged manifests.
     __qiVerificationStats.verifications = 0;
 
     const firstStart = performance.now();
     listAll();
     const firstMs = performance.now() - firstStart;
-    // First list verifies every manifest exactly once.
-    expect(__qiVerificationStats.verifications).toBe(count);
+    expect(__qiVerificationStats.verifications).toBe(0);
 
     const before = __qiVerificationStats.verifications;
     const secondStart = performance.now();
@@ -95,17 +96,17 @@ describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
     __qiVerificationStats.verifications = 0;
 
     loadQualityIntelligenceRun(runId, { evidenceDir });
-    expect(__qiVerificationStats.verifications).toBe(1);
+    expect(__qiVerificationStats.verifications).toBe(0);
 
     // Warm hit: no new verification.
     loadQualityIntelligenceRun(runId, { evidenceDir });
-    expect(__qiVerificationStats.verifications).toBe(1);
+    expect(__qiVerificationStats.verifications).toBe(0);
 
     // Bump mtime (simulating an export append / at-rest touch) -> cache miss -> re-verify.
     const target = join(evidenceDir, QI_SUBDIR, `${runId}.qi.json`);
     const future = new Date(Date.now() + 5_000);
     await utimes(target, future, future);
     loadQualityIntelligenceRun(runId, { evidenceDir });
-    expect(__qiVerificationStats.verifications).toBe(2);
+    expect(__qiVerificationStats.verifications).toBe(1);
   });
 });
