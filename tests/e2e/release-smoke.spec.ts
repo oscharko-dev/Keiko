@@ -635,8 +635,13 @@ test("memory and local-knowledge navigation surfaces load without client errors 
 
   await page.goto("/");
   await page.getByRole("button", { name: "Local Knowledge" }).click();
-  await expect(page.getByRole("heading", { name: "Local Knowledge Connector" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Create a new knowledge capsule" })).toBeVisible();
+  const localKnowledgeWindow = page.getByRole("region", { name: "Local Knowledge" });
+  await expect(
+    localKnowledgeWindow.getByRole("heading", { level: 1, name: "Knowledge Pods" }),
+  ).toBeVisible();
+  await expect(
+    localKnowledgeWindow.getByRole("button", { name: "Create a new Knowledge Pod" }),
+  ).toBeVisible();
 
   assertNoPageErrors();
 });
