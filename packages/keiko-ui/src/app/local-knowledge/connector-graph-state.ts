@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
+  capsulesForKnowledgePodUi,
   fetchCapsules,
   createCapsule,
   startIndexing,
@@ -35,8 +36,8 @@ function useCapsuleLoader(fetchCapsulesImpl: typeof fetchCapsules): {
     setLoadStatus("loading");
     setLoadError(null);
     try {
-      const response = await fetchCapsulesImpl();
-      setCapsules(response.capsules);
+      const response = await fetchCapsulesImpl({ includeKnowledgePods: true });
+      setCapsules(capsulesForKnowledgePodUi(response));
       setLoadStatus("ready");
     } catch (error) {
       setLoadError(formatError(error));

@@ -70,12 +70,12 @@ describe("CapsuleSetComposeDialog — validation", () => {
     const createImpl = vi.fn().mockResolvedValue(okSet());
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
-    await user.click(screen.getByRole("button", { name: /^create pod set$/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
     const alert = screen.getByRole("alert");
-    const input = screen.getByLabelText(/pod set name/i);
-    expect(alert).toHaveTextContent(/pod set name is required/i);
+    const input = screen.getByLabelText(/Knowledge Pod Set name/i);
+    expect(alert).toHaveTextContent(/Knowledge Pod Set name is required/i);
     expect(input).toHaveAttribute("aria-invalid", "true");
-    expect(input).toHaveAccessibleDescription(/pod set name is required/i);
+    expect(input).toHaveAccessibleDescription(/Knowledge Pod Set name is required/i);
     expect(createImpl).not.toHaveBeenCalled();
   });
 
@@ -83,8 +83,8 @@ describe("CapsuleSetComposeDialog — validation", () => {
     const user = userEvent.setup();
     const createImpl = vi.fn().mockResolvedValue(okSet());
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl })} />);
-    await user.type(screen.getByLabelText(/pod set name/i), "My Set");
-    await user.click(screen.getByRole("button", { name: /^create pod set$/i }));
+    await user.type(screen.getByLabelText(/Knowledge Pod Set name/i), "My Set");
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
     const alert = screen.getByRole("alert");
     const group = screen.getByRole("group", { name: /Knowledge Pods/i });
     expect(alert).toHaveTextContent(/at least one Knowledge Pod/i);
@@ -101,10 +101,10 @@ describe("CapsuleSetComposeDialog — submit", () => {
     const onCreated = vi.fn();
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl, onCreated })} />);
 
-    await user.type(screen.getByLabelText(/pod set name/i), "Combined");
+    await user.type(screen.getByLabelText(/Knowledge Pod Set name/i), "Combined");
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
     await user.click(screen.getByRole("checkbox", { name: /gamma/i }));
-    await user.click(screen.getByRole("button", { name: /^create pod set$/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
 
     await waitFor(() => {
       expect(createImpl).toHaveBeenCalledWith({
@@ -123,9 +123,9 @@ describe("CapsuleSetComposeDialog — submit", () => {
     const onCreated = vi.fn();
     render(<CapsuleSetComposeDialog {...defaultProps({ createImpl, onCreated })} />);
 
-    await user.type(screen.getByLabelText(/pod set name/i), "Combined");
+    await user.type(screen.getByLabelText(/Knowledge Pod Set name/i), "Combined");
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
-    await user.click(screen.getByRole("button", { name: /^create pod set$/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod Set$/i }));
 
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent(/incompatible embedding identity/i);

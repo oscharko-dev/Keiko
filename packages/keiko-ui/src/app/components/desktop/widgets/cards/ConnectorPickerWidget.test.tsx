@@ -1,7 +1,7 @@
 // Epic #189 Slice 3 M2 — unit tests for the ConnectorPickerWidget.
 //
 // Tests cover: loading state, error state, empty state, capsule/capsule-set rendering,
-// selection dispatch (onSelect called with correct kind+id), "create connector" management action.
+// selection dispatch (onSelect called with correct kind+id), and the Knowledge Pod management action.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -13,6 +13,8 @@ import type { CapsulesResponse, CapsuleSetsResponse } from "@/lib/local-knowledg
 // ─── Mock the local-knowledge-api module ──────────────────────────────────────
 
 vi.mock("@/lib/local-knowledge-api", () => ({
+  capsulesForKnowledgePodUi: vi.fn((response: CapsulesResponse) => response.capsules),
+  capsuleSetsForKnowledgePodUi: vi.fn((response: CapsuleSetsResponse) => response.capsuleSets),
   fetchCapsules: vi.fn(),
   fetchCapsuleSets: vi.fn(),
   ApiError: class ApiError extends Error {
@@ -94,7 +96,7 @@ describe("ConnectorPickerWidget", () => {
     mockFetchCapsules.mockReturnValue(new Promise(() => undefined));
     mockFetchCapsuleSets.mockReturnValue(new Promise(() => undefined));
     render(<ConnectorPickerWidget onSelect={vi.fn()} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading connectors");
+    expect(screen.getByRole("status")).toHaveTextContent("Loading Knowledge Pods");
   });
 
   it("renders a capsule and capsule-set in the select after load", async () => {
@@ -107,6 +109,8 @@ describe("ConnectorPickerWidget", () => {
     await user.click(screen.getByRole("combobox"));
     expect(screen.getByRole("option", { name: /My Docs/i })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: /All Sources/i })).toBeInTheDocument();
+    expect(mockFetchCapsules).toHaveBeenCalledWith({ includeKnowledgePods: true });
+    expect(mockFetchCapsuleSets).toHaveBeenCalledWith({ includeKnowledgePods: true });
   });
 
   it("calls onSelect with kind=capsule when user selects a capsule", async () => {
@@ -140,7 +144,7 @@ describe("ConnectorPickerWidget", () => {
     expect(badge).not.toBeUndefined();
   });
 
-  it("shows an empty state with a 'Create' action when no connectors exist", async () => {
+  it("shows an empty state with a 'Create' action when no Knowledge Pods exist", async () => {
     mockFetchCapsules.mockResolvedValue({ capsules: [] });
     mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
     const onManageConnectors = vi.fn();
@@ -149,21 +153,21 @@ describe("ConnectorPickerWidget", () => {
     await waitFor(() => {
       expect(screen.queryByRole("status", { name: /loading/i })).toBeNull();
     });
-    expect(screen.queryByText(/No ready connectors/i)).toBeNull();
-    expect(screen.getByRole("button", { name: /Create a connector/i })).toHaveClass(
+    expect(screen.queryByText(/No ready Knowledge Pods/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /Create a Knowledge Pod/i })).toHaveClass(
       "lk-btn-primary",
     );
-    await user.click(screen.getByRole("button", { name: /Create a connector/i }));
+    await user.click(screen.getByRole("button", { name: /Create a Knowledge Pod/i }));
     expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });
 
-  it("shows a 'Create or manage connectors' action in normal state", async () => {
+  it("shows a 'Create or manage Knowledge Pods' action in normal state", async () => {
     defaultMocks();
     const onManageConnectors = vi.fn();
     const user = userEvent.setup();
     render(<ConnectorPickerWidget onSelect={vi.fn()} onManageConnectors={onManageConnectors} />);
     await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: /Create or manage connectors/i }));
+    await user.click(screen.getByRole("button", { name: /Create or manage Knowledge Pods/i }));
     expect(onManageConnectors).toHaveBeenCalledTimes(1);
   });
 
@@ -225,7 +229,7 @@ describe("ConnectorPickerWidget — a11y (GEN-UI-A11Y-018 / test-plan #28)", () 
     mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
     const { container } = render(<ConnectorPickerWidget onSelect={vi.fn()} />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Create a connector/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Create a Knowledge Pod/i })).toBeInTheDocument();
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();

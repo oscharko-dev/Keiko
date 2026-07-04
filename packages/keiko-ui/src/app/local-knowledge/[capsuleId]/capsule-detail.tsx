@@ -779,11 +779,11 @@ function PrivacySection(): ReactNode {
         </li>
         <li className="lkd-source-row">
           Selected chunks may be sent through the configured Model Gateway for embeddings during
-          indexing and for grounded answers when you ask questions against this capsule.
+          indexing and for grounded answers when you ask questions against this Knowledge Pod.
         </li>
         <li className="lkd-source-row">
-          Deleting a capsule removes its local index data and capsule-set memberships. Source files
-          on disk are not deleted.
+          Deleting a Knowledge Pod removes its local index data and Knowledge Pod Set memberships.
+          Source files on disk are not deleted.
         </li>
       </ul>
     </section>

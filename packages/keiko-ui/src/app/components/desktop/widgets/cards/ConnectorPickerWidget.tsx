@@ -15,6 +15,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import styles from "./ConnectorPickerWidget.module.css";
 import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   fetchCapsules,
   fetchCapsuleSets,
   type CapsuleListEntry,
@@ -64,7 +66,7 @@ function formatLoadError(error: unknown): string {
   // parenthesised detail instead of a bold "INTERNAL:" prefix.
   if (error instanceof ApiError) return `${error.message} (${error.code})`;
   if (error instanceof Error) return error.message;
-  return "Failed to load connectors.";
+  return "Failed to load Knowledge Pods.";
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -72,7 +74,7 @@ function formatLoadError(error: unknown): string {
 function LoadingState(): ReactNode {
   return (
     <div className="connector-picker-status" role="status" aria-live="polite">
-      Loading connectors…
+      Loading Knowledge Pods…
     </div>
   );
 }
@@ -106,7 +108,7 @@ function EmptyState({
         className="lk-btn lk-btn-primary connector-picker-create-link"
         onClick={onManageConnectors}
       >
-        Create a connector
+        Create a Knowledge Pod
       </button>
     </div>
   );
@@ -190,7 +192,7 @@ function KnowledgeConnectorNode({
       </div>
       <div className="connector-node-copy">
         <p className="connector-node-kicker">{connectorNodeStateLabel(selectedState)}</p>
-        {/* Non-heading element: this compact connector node is a leaf card with no
+        {/* Non-heading element: this compact Knowledge Pod node is a leaf card with no
             sectioning context, so a real <h2> was an orphan heading (GEN-UI-A11Y-018). */}
         <p className="connector-node-title" title={label}>
           {label}
@@ -239,17 +241,21 @@ export function ConnectorPickerWidget({
       setSetsFailed(false);
       try {
         const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
-          fetchCapsules(),
-          fetchCapsuleSets(),
+          fetchCapsules({ includeKnowledgePods: true }),
+          fetchCapsuleSets({ includeKnowledgePods: true }),
         ]);
         if (cancelled) return;
         if (capsuleResult.status === "fulfilled") {
-          setCapsules(capsuleResult.value.capsules.filter((c) => c.lifecycleState === "ready"));
+          setCapsules(
+            capsulesForKnowledgePodUi(capsuleResult.value).filter(
+              (capsule) => capsule.lifecycleState === "ready",
+            ),
+          );
         } else {
           setError(formatLoadError(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
-          setCapsuleSets(capsuleSetResult.value.capsuleSets);
+          setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResult.value));
         } else {
           setSetsFailed(true);
         }
@@ -315,13 +321,13 @@ export function ConnectorPickerWidget({
         selectedId={selectedId}
       />
 
-      <div className="connector-picker-label">Select a connector</div>
+      <div className="connector-picker-label">Select Knowledge Pod source</div>
       <KeikoSelect
         triggerClassName="connector-picker-select"
         value={currentValue}
-        ariaLabel="Select a connector"
-        placeholder="— choose a connector —"
-        menuTitle="Available connectors"
+        ariaLabel="Select Knowledge Pod source"
+        placeholder="— choose a Knowledge Pod source —"
+        menuTitle="Available Knowledge Pod sources"
         sections={[
           ...(hasCapsules
             ? [
@@ -359,7 +365,7 @@ export function ConnectorPickerWidget({
 
       <div className="connector-picker-footer">
         <button type="button" className="connector-picker-create-link" onClick={onManageConnectors}>
-          Create or manage connectors
+          Create or manage Knowledge Pods
         </button>
       </div>
     </div>

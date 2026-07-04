@@ -203,6 +203,12 @@ function baseCtx(_tmp: string, method: string, body?: Record<string, unknown>): 
   };
 }
 
+function knowledgePodsCtx(tmp: string, method: string): RouteContext {
+  const ctx = baseCtx(tmp, method);
+  ctx.url.searchParams.set("includeKnowledgePods", "1");
+  return ctx;
+}
+
 function seedStore(tmp: string): {
   readonly store: ReturnType<typeof openKnowledgeStore>;
   readonly capId: KnowledgeCapsuleId;
@@ -1022,13 +1028,38 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).toContain("embedding-capable");
   });
 
-  it("lists persisted capsules", async () => {
+  it("lists persisted capsules without pod projection by default", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const { store } = seedStore(tmp);
     store.close();
 
     const result = await handleListLocalKnowledgeCapsules(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsules: [
+        {
+          id: "cap-1",
+          displayName: "Audit Capsule",
+          lifecycleState: "ready",
+          sourceCount: 0,
+        },
+      ],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("knowledgePods");
+    expect(JSON.stringify(result.body)).not.toContain(tmp);
+  });
+
+  it("lists persisted capsules with opt-in additive pod summaries", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsules(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       capsules: [
@@ -1068,7 +1099,26 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain(tmp);
   });
 
-  it("lists persisted capsule sets with additive pod-set summaries", async () => {
+  it("fails closed when capsule pod summary validation rejects corrupt state", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    store._internal.db
+      .prepare("UPDATE capsules SET lifecycle_state = 'published' WHERE id = :c")
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsules(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(503);
+    expect(JSON.stringify(result.body)).toContain("Local knowledge storage is unavailable.");
+    expect(JSON.stringify(result.body)).not.toContain("published");
+  });
+
+  it("lists persisted capsule sets without pod projection by default", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const { store, capId } = seedStore(tmp);
@@ -1081,6 +1131,35 @@ describe("local-knowledge handlers", () => {
     store.close();
 
     const result = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsuleSets: [
+        {
+          id: "set-1",
+          displayName: "Audit Pod Set",
+          capsuleCount: 1,
+        },
+      ],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("knowledgePods");
+  });
+
+  it("lists persisted capsule sets with opt-in additive pod-set summaries", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: ["audit"],
+      capsuleIds: [capId],
+    });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       capsuleSets: [
@@ -1106,6 +1185,59 @@ describe("local-knowledge handlers", () => {
         },
       ],
     });
+  });
+
+  it("fails closed when pod-set summary validation rejects corrupt set state", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: [],
+      capsuleIds: [capId],
+    });
+    store._internal.db
+      .prepare("UPDATE schema_meta SET key = 'capsule_set:/tmp/set-1' WHERE key = :k")
+      .run({ k: "capsule_set:set-1" });
+    store._internal.db
+      .prepare("UPDATE capsule_set_members SET set_id = '/tmp/set-1' WHERE set_id = :s")
+      .run({ s: "set-1" });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(503);
+    expect(JSON.stringify(result.body)).toContain("Local knowledge storage is unavailable.");
+    expect(JSON.stringify(result.body)).not.toContain("/tmp/set-1");
+  });
+
+  it("fails closed when pod-set member summary validation rejects corrupt state", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: [],
+      capsuleIds: [capId],
+    });
+    store._internal.db
+      .prepare("UPDATE capsules SET vector_metric = 'manhattan' WHERE id = :c")
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(503);
+    expect(JSON.stringify(result.body)).toContain("Local knowledge storage is unavailable.");
+    expect(JSON.stringify(result.body)).not.toContain("manhattan");
   });
 
   it("returns capsule detail with health, source stats, diagnostics, and jobs", async () => {

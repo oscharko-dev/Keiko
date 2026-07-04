@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { KnowledgeCapsuleId, KnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  KnowledgePodSummary,
+  KnowledgeSourceScope,
+} from "@oscharko-dev/keiko-contracts";
 import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   cancelIndexing,
   connectCapsuleSource,
   createCapsule,
@@ -27,9 +35,90 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function podSummary(
+  id: KnowledgeCapsuleId | CapsuleSetId,
+  kind: KnowledgePodSummary["kind"],
+  displayName: string,
+): KnowledgePodSummary {
+  return {
+    schemaVersion: "1",
+    id,
+    kind,
+    displayName,
+    tags: [],
+    readiness: "ready",
+    counts: { capsuleCount: 1, sourceCount: 0, documentCount: 0, chunkCount: 0, vectorCount: 0 },
+    sourceKinds: [],
+    retrieval: {
+      lexicalIndex: false,
+      vectorIndex: false,
+      hybridGrounding: true,
+      crossSpaceScoreMixing: false,
+    },
+    privacy: {
+      localFirst: true,
+      modelOpen: true,
+      rawContentExposed: false,
+      privatePathsExposed: false,
+      evidenceMode: "counts-hashes-and-status",
+      storageLocation: "local-runtime-state",
+    },
+    governance: {
+      locationKind: "local",
+      sealingPosture: "local-store-policy",
+      policyPosture: "none",
+      managedServiceDependency: false,
+    },
+    compatibility: {
+      backingKind: kind === "pod" ? "knowledge-capsule" : "capsule-set",
+      capsuleIds: kind === "pod" ? [id as KnowledgeCapsuleId] : [],
+      sourceIds: [],
+      localKnowledgeSchemaVersion: LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+      migrationRequired: false,
+      persistedStateRenamed: false,
+    },
+    updatedAt: 1,
+    degradationReasons: [],
+  };
+}
+
 describe("local knowledge BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("uses redacted Knowledge Pod summary names for UI list labels when available", () => {
+    const capsuleId = "cap-private" as KnowledgeCapsuleId;
+    const setId = "set-private" as CapsuleSetId;
+
+    expect(
+      capsulesForKnowledgePodUi({
+        capsules: [
+          {
+            id: capsuleId,
+            displayName: "/Users/alice/private/customer.pdf",
+            lifecycleState: "ready",
+            sourceCount: 1,
+            updatedAt: 1,
+          },
+        ],
+        knowledgePods: [podSummary(capsuleId, "pod", "Knowledge Pod")],
+      })[0]?.displayName,
+    ).toBe("Knowledge Pod");
+
+    expect(
+      capsuleSetsForKnowledgePodUi({
+        capsuleSets: [
+          {
+            id: setId,
+            displayName: "https://gateway.example.test?client_secret=value",
+            capsuleCount: 1,
+            composedAt: 1,
+          },
+        ],
+        knowledgePods: [podSummary(setId, "pod-set", "Knowledge Pod Set")],
+      })[0]?.displayName,
+    ).toBe("Knowledge Pod Set");
   });
 
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {
@@ -47,6 +136,8 @@ describe("local knowledge BFF boundary helpers", () => {
 
     await fetchCapsules();
     await fetchCapsuleSets();
+    await fetchCapsules({ includeKnowledgePods: true });
+    await fetchCapsuleSets({ includeKnowledgePods: true });
     await createCapsule({ displayName: "Release corpus", description: "0.2.0 grounding" });
     await createCapsuleSet({
       displayName: "Mixed grounding set",
@@ -74,6 +165,14 @@ describe("local knowledge BFF boundary helpers", () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/local-knowledge/capsules",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules?includeKnowledgePods=1",
+      expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsule-sets?includeKnowledgePods=1",
       expect.objectContaining({ headers: expect.objectContaining({ Accept: "application/json" }) }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

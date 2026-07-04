@@ -84,7 +84,6 @@ function RenameFields({
           value={name}
           disabled={busy}
           autoComplete="off"
-          aria-label="Pod display name"
           onChange={(event) => onNameChange(event.target.value)}
         />
       </div>
@@ -99,7 +98,6 @@ function RenameFields({
           value={description}
           disabled={busy}
           autoComplete="off"
-          aria-label="Pod description"
           onChange={(event) => onDescriptionChange(event.target.value)}
         />
       </div>

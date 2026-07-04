@@ -19,10 +19,12 @@ import {
   type KnowledgePodSummary,
   type KnowledgeSource,
   isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule, listCapsules } from "./capsule-lifecycle.js";
 import { listCapsuleSets } from "./capsule-set-lifecycle.js";
+import { KnowledgeStoreError } from "./errors.js";
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -75,16 +77,18 @@ export function buildKnowledgePodSummary(
 ): KnowledgePodSummary {
   const sources = listCapsuleSources(store, capsule.id);
   const counts = capsuleCounts(store, capsule.id);
-  return capsuleProjection({
-    capsule,
-    sources,
-    counts: {
-      capsuleCount: 1,
-      sourceCount: sources.length,
-      ...counts,
-    },
-    degradationReasons: capsuleDegradationReasons(capsule, sources, counts),
-  });
+  return assertValidSummary(
+    capsuleProjection({
+      capsule,
+      sources,
+      counts: {
+        capsuleCount: 1,
+        sourceCount: sources.length,
+        ...counts,
+      },
+      degradationReasons: capsuleDegradationReasons(capsule, sources, counts),
+    }),
+  );
 }
 
 export function buildKnowledgePodSetSummary(
@@ -102,7 +106,7 @@ export function buildKnowledgePodSetSummary(
     ...missingMemberReasons(set, memberProjections),
     ...memberProjections.flatMap((projection) => projection.degradationReasons),
   ]);
-  return {
+  return assertValidSummary({
     schemaVersion: KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
     id: set.id,
     kind: "pod-set",
@@ -125,7 +129,15 @@ export function buildKnowledgePodSetSummary(
     },
     updatedAt: set.composedAt,
     degradationReasons,
-  };
+  });
+}
+
+function assertValidSummary(summary: KnowledgePodSummary): KnowledgePodSummary {
+  const validation = validateKnowledgePodSummary(summary);
+  if (!validation.ok) {
+    throw new KnowledgeStoreError("Knowledge Pod summary validation failed.");
+  }
+  return validation.value;
 }
 
 function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
@@ -164,7 +176,7 @@ function memberProjection(
   if (capsule === undefined) return undefined;
   const sources = listCapsuleSources(store, capsule.id);
   const counts = capsuleCounts(store, capsule.id);
-  return {
+  const projection = {
     capsule,
     sources,
     counts: {
@@ -174,6 +186,8 @@ function memberProjection(
     },
     degradationReasons: capsuleDegradationReasons(capsule, sources, counts),
   };
+  assertValidSummary(capsuleProjection(projection));
+  return projection;
 }
 
 function capsuleCounts(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): CapsuleCounts {

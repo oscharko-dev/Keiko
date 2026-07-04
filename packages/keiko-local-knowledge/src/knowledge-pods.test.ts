@@ -15,6 +15,7 @@ import {
 } from "./_support.js";
 import { createCapsule } from "./capsule-lifecycle.js";
 import { createCapsuleSet } from "./capsule-set-lifecycle.js";
+import { KnowledgeStoreError } from "./errors.js";
 import {
   buildKnowledgePodSetSummary,
   buildKnowledgePodSummary,
@@ -230,13 +231,14 @@ describe("Knowledge Pod compatibility projection", () => {
         env.store,
         sampleCapsuleInput({
           id: "cap-private" as KnowledgeCapsuleId,
-          displayName: "/Users/alice/private/customer.pdf",
-          description: "Gateway returned Bearer secret-token-value",
-          tags: ["safe", "ghp_123456789012345"],
+          displayName: String.raw`\\server\share\customer.pdf`,
+          description: "See ~/private/customer.pdf",
+          tags: ["safe", "/tmp/customer.pdf", "ghp_123456789012345"],
           embeddingModelIdentity: {
             ...DEFAULT_EMBEDDING,
-            provider: "https://example.test/embed?api_key=secret-value",
-            embeddingSpaceFingerprint: "/Users/alice/private/space",
+            provider: "gateway.internal/v1?api_key=secret-value",
+            modelId: "/private/var/customer-model",
+            embeddingSpaceFingerprint: "wss://example.test/embed?access_token=secret-value",
           },
         }),
       );
@@ -248,11 +250,16 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(summary).not.toHaveProperty("description");
       expect(summary.tags).toStrictEqual(["safe"]);
       expect(summary.retrieval).not.toHaveProperty("embeddingProvider");
+      expect(summary.retrieval).not.toHaveProperty("embeddingModelId");
       expect(summary.retrieval).not.toHaveProperty("embeddingSpaceFingerprint");
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
-      expect(wire).not.toContain("/Users/alice");
+      expect(wire).not.toContain("\\\\server");
+      expect(wire).not.toContain("~/");
+      expect(wire).not.toContain("/tmp");
+      expect(wire).not.toContain("/private/var");
       expect(wire).not.toContain("Bearer");
       expect(wire).not.toContain("api_key");
+      expect(wire).not.toContain("access_token");
       expect(wire).not.toContain("ghp_");
     } finally {
       env.cleanup();
@@ -275,6 +282,42 @@ describe("Knowledge Pod compatibility projection", () => {
         "pod",
         "pod-set",
       ]);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("fails closed when a capsule summary would carry corrupt lifecycle state", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-corrupt-state" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: capsuleId, lifecycleState: "ready" }));
+      env.store._internal.db
+        .prepare("UPDATE capsules SET lifecycle_state = 'published' WHERE id = :id")
+        .run({ id: capsuleId });
+
+      expect(() => listKnowledgePodSummaries(env.store)).toThrow(KnowledgeStoreError);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("fails closed when a pod-set member summary would carry corrupt state", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-corrupt-member" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: capsuleId, lifecycleState: "ready" }));
+      const set = createCapsuleSet(env.store, {
+        id: "set-corrupt-member" as CapsuleSetId,
+        displayName: "Corrupt Member Set",
+        tags: [],
+        capsuleIds: [capsuleId],
+      });
+      env.store._internal.db
+        .prepare("UPDATE capsules SET vector_metric = 'manhattan' WHERE id = :id")
+        .run({ id: capsuleId });
+
+      expect(() => buildKnowledgePodSetSummary(env.store, set)).toThrow(KnowledgeStoreError);
     } finally {
       env.cleanup();
     }

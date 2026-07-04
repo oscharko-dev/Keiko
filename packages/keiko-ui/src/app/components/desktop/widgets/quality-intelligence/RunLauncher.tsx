@@ -43,6 +43,8 @@ import {
   startQiRun,
 } from "@/lib/quality-intelligence-api";
 import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   fetchCapsules,
   fetchCapsuleSets,
   type CapsuleListEntry,
@@ -689,18 +691,22 @@ export function RunLauncher({
       setConnectorError(null);
       try {
         const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
-          fetchCapsulesImpl(),
-          fetchCapsuleSetsImpl(),
+          fetchCapsulesImpl({ includeKnowledgePods: true }),
+          fetchCapsuleSetsImpl({ includeKnowledgePods: true }),
         ]);
         if (cancelled) return;
         if (capsuleResult.status === "fulfilled") {
-          setCapsules(capsuleResult.value.capsules.filter((c) => c.lifecycleState === "ready"));
+          setCapsules(
+            capsulesForKnowledgePodUi(capsuleResult.value).filter(
+              (capsule) => capsule.lifecycleState === "ready",
+            ),
+          );
         } else {
           setCapsules([]);
           if (sourceKind === "capsule") setConnectorError(formatError(capsuleResult.reason));
         }
         if (capsuleSetResult.status === "fulfilled") {
-          setCapsuleSets(capsuleSetResult.value.capsuleSets);
+          setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResult.value));
         } else {
           setCapsuleSets([]);
           if (sourceKind === "capsule-set") setConnectorError(formatError(capsuleSetResult.reason));
@@ -981,7 +987,7 @@ export function RunLauncher({
             else setCapsuleSetId(e.target.value);
           }}
         >
-          {connectorLoading ? <option value="">Loading connectors...</option> : null}
+          {connectorLoading ? <option value="">Loading Knowledge Pods...</option> : null}
           {!connectorLoading && options.length === 0 ? (
             <option value="">
               {isCapsule ? "No ready Knowledge Pods" : "No Knowledge Pod Sets"}

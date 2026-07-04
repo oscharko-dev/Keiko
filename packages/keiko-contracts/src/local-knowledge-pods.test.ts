@@ -101,6 +101,23 @@ describe("validateKnowledgePodSummary", () => {
     expect(invalidErrors(result)).toContain("summary.displayName must be an evidence-safe string");
   });
 
+  it("rejects absolute, home-relative, UNC, and temporary path variants", () => {
+    for (const displayName of [
+      "~/customer/private.pdf",
+      String.raw`\\server\share\customer.pdf`,
+      String.raw`C:\Users\alice\customer\private.pdf`,
+      "C:/Users/alice/customer/private.pdf",
+      "/tmp/customer/private.pdf",
+      "/private/var/folders/customer/private.pdf",
+      "file:///Users/alice/customer/private.pdf",
+    ]) {
+      const result = validateKnowledgePodSummary({ ...happySummary(), displayName });
+      expect(invalidErrors(result)).toContain(
+        "summary.displayName must be an evidence-safe string",
+      );
+    }
+  });
+
   it("rejects secret-shaped strings in degradation reasons", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),
@@ -111,25 +128,44 @@ describe("validateKnowledgePodSummary", () => {
     );
   });
 
-  it("rejects token-bearing endpoint values in retrieval metadata", () => {
-    const result = validateKnowledgePodSummary({
-      ...happySummary(),
-      retrieval: {
-        ...happySummary().retrieval,
-        embeddingProvider: "https://example.test/embed?api_key=secret-value",
-      },
-    });
-    expect(invalidErrors(result)).toContain(
-      "retrieval.embeddingProvider must be an evidence-safe string when set",
-    );
+  it("rejects endpoint-like values in retrieval metadata", () => {
+    for (const embeddingProvider of [
+      "https://example.test/embed",
+      "//gateway.example.test/embed",
+      "gateway.internal/v1",
+      "localhost:11434/v1",
+      "127.0.0.1:11434/v1",
+      "https://example.test/embed?api_key=secret-value",
+      "gateway.internal/v1?api_key=secret-value",
+      "wss://gateway.example.test/embed?access_token=secret-value",
+      "https://example.test/embed?client_secret=secret-value",
+      "https://example.test/embed?refresh_token=secret-value",
+      "https://example.test/embed?auth[x-access-token]=secret-value",
+      "https://user:secret@example.test/embed",
+      "user:secret@example.test/embed",
+    ]) {
+      const result = validateKnowledgePodSummary({
+        ...happySummary(),
+        retrieval: { ...happySummary().retrieval, embeddingProvider },
+      });
+      expect(invalidErrors(result)).toContain(
+        "retrieval.embeddingProvider must be an evidence-safe string when set",
+      );
+    }
   });
 
-  it("checks repeated URL-like text for token query keys without regex backtracking", () => {
-    const repeatedUrlText = `${"http://".repeat(200)}example.test/path`;
-    const repeatedTokenEndpoint = `${repeatedUrlText}?access_token=secret-value`;
+  it("checks endpoint and token parameter text without regex backtracking", () => {
+    const repeatedSafeText = `${"pod-reference ".repeat(200)}example`;
+    const repeatedEndpoint = `${"http://".repeat(200)}example.test/path`;
+    const encodedTokenEndpoint = "gateway.internal/v1?%61ccess_token=secret-value";
+    const encodedSecretEndpoint = "gateway.internal/v1?%63lient_secret=secret-value";
+    const fragmentTokenText = "pod metadata #access_token=secret-value";
 
-    expect(isKnowledgePodEvidenceSafeText(repeatedUrlText)).toBe(true);
-    expect(isKnowledgePodEvidenceSafeText(repeatedTokenEndpoint)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(repeatedSafeText)).toBe(true);
+    expect(isKnowledgePodEvidenceSafeText(repeatedEndpoint)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(encodedTokenEndpoint)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(encodedSecretEndpoint)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(fragmentTokenText)).toBe(false);
   });
 
   it("requires compatibility to keep persisted Local Knowledge state unmigrated", () => {
@@ -156,5 +192,54 @@ describe("validateKnowledgePodSummary", () => {
       },
     });
     expect(invalidErrors(result)).toContain("governance.locationKind is invalid");
+  });
+
+  it("rejects invalid lifecycle and retrieval enum metadata", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      lifecycleState: "published",
+      retrieval: {
+        ...happySummary().retrieval,
+        vectorDimensions: 0,
+        vectorMetric: "jaccard",
+      },
+    });
+
+    expect(invalidErrors(result)).toEqual(
+      expect.arrayContaining([
+        "summary.lifecycleState is invalid",
+        "retrieval.vectorDimensions must be a positive integer when set",
+        "retrieval.vectorMetric is invalid when set",
+      ]),
+    );
+  });
+
+  it("rejects negative timestamps", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      updatedAt: -1,
+    });
+
+    expect(invalidErrors(result)).toContain(
+      "summary.updatedAt must be a finite non-negative number",
+    );
+  });
+
+  it("rejects non-primitive retrieval metadata values", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      retrieval: {
+        ...happySummary().retrieval,
+        vectorDimensions: { leak: "/tmp/x" },
+        vectorMetric: { leak: "/tmp/x" },
+      },
+    });
+
+    expect(invalidErrors(result)).toEqual(
+      expect.arrayContaining([
+        "retrieval.vectorDimensions must be a positive integer when set",
+        "retrieval.vectorMetric is invalid when set",
+      ]),
+    );
   });
 });

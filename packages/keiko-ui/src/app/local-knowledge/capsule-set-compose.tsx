@@ -119,10 +119,10 @@ function MemberCheckbox({
 }
 
 function validateSelection(name: string, count: number): string | null {
-  if (name.trim().length === 0) return "Pod set name is required.";
+  if (name.trim().length === 0) return "Knowledge Pod Set name is required.";
   if (count === 0) return "Select at least one Knowledge Pod to combine.";
   if (count > CAPSULE_SET_MAX_MEMBERS) {
-    return `A pod set can hold at most ${CAPSULE_SET_MAX_MEMBERS.toString()} Knowledge Pods.`;
+    return `A Knowledge Pod Set can hold at most ${CAPSULE_SET_MAX_MEMBERS.toString()} Knowledge Pods.`;
   }
   return null;
 }
@@ -180,7 +180,7 @@ export function CapsuleSetComposeDialog({
     }
   }
 
-  const nameInvalid = error === "Pod set name is required.";
+  const nameInvalid = error === "Knowledge Pod Set name is required.";
   const selectionInvalid = error === "Select at least one Knowledge Pod to combine.";
 
   return createPortal(
@@ -198,7 +198,7 @@ export function CapsuleSetComposeDialog({
         </h2>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={nameId}>
-            <span className="mc-dialog-label">Pod set name</span>
+            <span className="mc-dialog-label">Knowledge Pod Set name</span>
             <input
               id={nameId}
               className="mc-dialog-input"
@@ -258,7 +258,7 @@ export function CapsuleSetComposeDialog({
               disabled={busy}
               aria-busy={busy}
             >
-              {busy ? "Creating pod set…" : "Create pod set"}
+              {busy ? "Creating Knowledge Pod Set…" : "Create Knowledge Pod Set"}
             </button>
           </div>
         </form>

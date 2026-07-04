@@ -300,6 +300,11 @@ describe("CapsuleDetail — overview section", () => {
     expect(
       screen.getByText(/may be sent through the configured Model Gateway/i),
     ).toBeInTheDocument();
+    expect(screen.getByText(/questions against this Knowledge Pod/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Knowledge Pod removes its local index data and Knowledge Pod Set/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/against this capsule/i)).toBeNull();
     expect(screen.getByText(/source files on disk are not deleted/i)).toBeInTheDocument();
   });
 });

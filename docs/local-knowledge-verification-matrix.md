@@ -13,10 +13,11 @@ Epic [#1815](https://github.com/oscharko-dev/Keiko/issues/1815) introduces
 Local Knowledge capsule and capsule-set capabilities. The compatibility note lives at
 [`docs/local-knowledge/knowledge-pods.md`](local-knowledge/knowledge-pods.md).
 
-The compatibility rule is intentionally additive: existing `capsules` and `capsuleSets`
-responses stay in place, while BFF list responses also expose redacted `knowledgePods`
-summaries. Persisted Local Knowledge state remains in `capsules.db`; no state migration,
-store repair, reindex, vector copy, or persisted field rename is required.
+The compatibility rule is intentionally additive and opt-in: existing `capsules` and
+`capsuleSets` responses stay in place, while callers that request `includeKnowledgePods=1`
+or `knowledgePods=1` also receive redacted `knowledgePods` summaries. Persisted Local
+Knowledge state remains in `capsules.db`; no state migration, store repair, reindex, vector
+copy, or persisted field rename is required.
 
 ## Acceptance Criteria
 

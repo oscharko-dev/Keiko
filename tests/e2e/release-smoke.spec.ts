@@ -640,7 +640,7 @@ test("memory and local-knowledge navigation surfaces load without client errors 
     localKnowledgeWindow.getByRole("heading", { level: 1, name: "Knowledge Pods" }),
   ).toBeVisible();
   await expect(
-    localKnowledgeWindow.getByRole("button", { name: "Create a new Knowledge Pod" }),
+    localKnowledgeWindow.getByRole("button", { exact: true, name: "Create Knowledge Pod" }),
   ).toBeVisible();
 
   assertNoPageErrors();

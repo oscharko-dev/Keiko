@@ -10,15 +10,15 @@ capability. **Knowledge Pod Set** is the user-facing name for an existing capsul
 The rename is a product and contract projection only. It does not rename persisted
 tables, route parameters, internal discriminants, issue-era source kinds, or stored ids:
 
-| User-facing term  | Existing internal term | Persisted state                                 |
-| ----------------- | ---------------------- | ----------------------------------------------- |
-| Knowledge Pod     | capsule                | `<runtime-state>/local-knowledge/*/capsules.db` |
-| Knowledge Pod Set | capsule set            | `capsule_sets`, membership rows, existing ids   |
-| Pod source        | `KnowledgeSource`      | existing source rows and scope records          |
-| Pod readiness     | capsule lifecycle      | existing lifecycle state and indexing jobs      |
-| Pod evidence      | counts/status summary  | derived from existing local metadata            |
+| User-facing term  | Existing internal term | Persisted state                                       |
+| ----------------- | ---------------------- | ----------------------------------------------------- |
+| Knowledge Pod     | capsule                | `<runtime-state>/local-knowledge/*/capsules.db`       |
+| Knowledge Pod Set | capsule set            | `schema_meta` payload plus `capsule_set_members` rows |
+| Pod source        | `KnowledgeSource`      | existing source rows and scope records                |
+| Pod readiness     | capsule lifecycle      | existing lifecycle state and indexing jobs            |
+| Pod evidence      | counts/status summary  | derived from existing local metadata                  |
 
-Keeping the internal terms stable avoids a state migration, keeps existing connector
+Keeping the internal terms stable avoids a state migration, keeps existing Local Knowledge
 payloads compatible, and preserves older clients that still consume `capsules` and
 `capsuleSets` response fields.
 
@@ -33,7 +33,7 @@ The first release does not add a second app area or a second registry.
   the hood. Creating a pod set still creates a capsule set over existing pod ids.
 - **Inspect** — the detail page shows pod readiness, connected sources, document
   counts, indexing state, diagnostics, and actions through the current BFF routes.
-- **Attach** — Conversation Center, Connector Picker, Quality Intelligence, and voice
+- **Attach** — Conversation Center, the existing source picker, Quality Intelligence, and voice
   grounding surfaces refer to selected local knowledge as Knowledge Pods while keeping
   existing `capsule` and `capsule-set` wire discriminants.
 - **Remove** — deleting a pod deletes the local pod index only; source files on disk
@@ -47,12 +47,13 @@ Vocabulary rules for current and future variants:
 | Knowledge Pod Set    | A logical composition over existing local pods                              | Supported                           |
 | Sealed Knowledge Pod | A pod whose reconstructive content follows the Local Knowledge store policy | Documented posture; no new UI badge |
 | Policy-backed Pod    | A future pod constrained by an explicit policy pack                         | Reserved vocabulary                 |
-| Remote/Federated Pod | A future non-local pod exposed through a governed connector boundary        | Out of scope                        |
+| Remote/Federated Pod | A future non-local pod exposed through a governed source boundary           | Out of scope                        |
 
 Private local documents, project documentation, and policy packs fit the same product
 vocabulary by changing the source or policy posture, not by changing the retrieval
-registry. Private documents and project docs are local pod sources today. Policy packs
-and remote/federated pods require future governed designs before implementation.
+registry. Supported local pod sources are the current `folder`, `repository`, and
+`files` source kinds. Policy packs and remote/federated pods require future governed
+designs before implementation.
 
 ## Compatibility contract
 
@@ -60,8 +61,17 @@ The additive compatibility surface is:
 
 - `KnowledgePodSummary` in `@oscharko-dev/keiko-contracts`.
 - `listKnowledgePodSummaries()` in `@oscharko-dev/keiko-local-knowledge`.
-- `knowledgePods` fields on the BFF list responses, returned alongside the existing
+- Optional `knowledgePods` fields on the BFF list responses when callers pass
+  `includeKnowledgePods=1` or `knowledgePods=1`, returned alongside the existing
   `capsules` and `capsuleSets` fields.
+- Primary Knowledge Pod list and selection surfaces request those opt-in summaries and
+  prefer the summary display name for user-facing labels, so path-shaped or secret-shaped
+  legacy display metadata falls back to redacted Knowledge Pod names.
+
+This additive package and route direction follows
+[ADR-0019](../adr/ADR-0019-modular-package-architecture.md): contract types live in
+`keiko-contracts`, summary production reuses `keiko-local-knowledge`, and the BFF emits
+only redacted contract-owned wire shapes.
 
 The summary contract records compatibility explicitly:
 
@@ -145,9 +155,13 @@ plan before any `capsule` storage term is renamed.
 
 ## Release impact and limits
 
-Release-note category: `improvements` for terminology, `state-or-compatibility-changes`
-for the additive summary contract, and `ui-polish` for visible copy updates. Priority is
-high because the change affects primary Local Knowledge selection language.
+Advisory release-note categories for the release owner to encode in governed
+[ADR-0099](../adr/ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
+metadata are `improvements` for terminology, `state-or-compatibility-changes` for the
+additive summary contract, and `ui-polish` for visible copy updates. Priority is high
+because the change affects primary Local Knowledge selection language. The structured
+release-impact catalog remains the authoritative release source once release-owner
+review evidence is recorded.
 
 Known limits:
 

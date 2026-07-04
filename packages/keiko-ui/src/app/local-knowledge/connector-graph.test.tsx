@@ -98,7 +98,7 @@ describe("ConnectorGraph — empty state", () => {
     expect(screen.queryByRole("button", { name: /connect to an existing capsule/i })).toBeNull();
 
     // Header button still present
-    expect(screen.getByRole("button", { name: /create a new Knowledge Pod/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
   });
 
   it("does not render the former pipeline visualization", async () => {
@@ -431,14 +431,16 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
 
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /create a new Knowledge Pod/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole("button", { name: /create a new Knowledge Pod/i }));
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
     await user.type(screen.getByLabelText(/pod display name/i), "  Treasury Docs  ");
-    await user.click(screen.getByRole("button", { name: /^create pod$/i }));
+    await user.click(
+      within(screen.getByRole("dialog", { name: /create Knowledge Pod/i })).getByRole("button", {
+        name: /^create Knowledge Pod$/i,
+      }),
+    );
 
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({ displayName: "Treasury Docs" });
@@ -788,11 +790,9 @@ describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26
     const user = userEvent.setup();
     render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /create a new Knowledge Pod/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
     });
-    const trigger = screen.getByRole("button", { name: /create a new Knowledge Pod/i });
+    const trigger = screen.getByRole("button", { name: /^create Knowledge Pod$/i });
     trigger.focus();
     await user.click(trigger);
     await screen.findByRole("dialog", { name: /create Knowledge Pod/i });
@@ -807,7 +807,7 @@ describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26
   it("traps Tab within the dialog, wrapping last -> first", async () => {
     await openCreateDialog();
     const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
-    const submitBtn = within(dialog).getByRole("button", { name: /^create pod$/i });
+    const submitBtn = within(dialog).getByRole("button", { name: /^create Knowledge Pod$/i });
     submitBtn.focus();
     // Tab off the last focusable wraps back to the first (the input).
     fireEvent.keyDown(dialog, { key: "Tab" });
@@ -821,7 +821,7 @@ describe("ConnectorGraph — CreateCapsuleDialog focus management (test-plan #26
     input.focus();
     fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
     expect(document.activeElement).toBe(
-      within(dialog).getByRole("button", { name: /^create pod$/i }),
+      within(dialog).getByRole("button", { name: /^create Knowledge Pod$/i }),
     );
   });
 

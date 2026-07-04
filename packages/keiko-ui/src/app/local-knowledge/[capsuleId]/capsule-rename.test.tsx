@@ -36,8 +36,8 @@ describe("CapsuleRename — toggle and prefill", () => {
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
 
-    expect(screen.getByLabelText(/pod display name/i)).toHaveValue("Engineering Docs");
-    expect(screen.getByLabelText(/pod description/i)).toHaveValue("Original description");
+    expect(screen.getByLabelText(/display name/i)).toHaveValue("Engineering Docs");
+    expect(screen.getByLabelText(/description/i)).toHaveValue("Original description");
   });
 });
 
@@ -49,7 +49,7 @@ describe("CapsuleRename — minimal patch", () => {
     render(<CapsuleRename {...defaultProps({ renameImpl, onRenamed })} />);
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
-    const nameInput = screen.getByLabelText(/pod display name/i);
+    const nameInput = screen.getByLabelText(/display name/i);
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Docs");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -66,7 +66,7 @@ describe("CapsuleRename — minimal patch", () => {
     render(<CapsuleRename {...defaultProps({ renameImpl })} />);
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
-    const descInput = screen.getByLabelText(/pod description/i);
+    const descInput = screen.getByLabelText(/description/i);
     await user.clear(descInput);
     await user.type(descInput, "New description");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -99,7 +99,7 @@ describe("CapsuleRename — validation and errors", () => {
     render(<CapsuleRename {...defaultProps({ renameImpl })} />);
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
-    await user.clear(screen.getByLabelText(/pod display name/i));
+    await user.clear(screen.getByLabelText(/display name/i));
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(/display name is required/i);
@@ -113,7 +113,7 @@ describe("CapsuleRename — validation and errors", () => {
     render(<CapsuleRename {...defaultProps({ renameImpl, onRenamed })} />);
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
-    const nameInput = screen.getByLabelText(/pod display name/i);
+    const nameInput = screen.getByLabelText(/display name/i);
     await user.clear(nameInput);
     await user.type(nameInput, "Whatever");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
@@ -122,7 +122,7 @@ describe("CapsuleRename — validation and errors", () => {
       expect(screen.getByRole("alert")).toHaveTextContent(/bad name/i);
     });
     expect(onRenamed).not.toHaveBeenCalled();
-    expect(screen.getByLabelText(/pod display name/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/display name/i)).toBeInTheDocument();
   });
 });
 
@@ -132,10 +132,10 @@ describe("CapsuleRename — focus management (WCAG 2.4.3, audit C031)", () => {
     render(<CapsuleRename {...defaultProps()} />);
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
-    expect(screen.getByLabelText(/pod display name/i)).toHaveFocus();
+    expect(screen.getByLabelText(/display name/i)).toHaveFocus();
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByLabelText(/pod display name/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/display name/i)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /rename Knowledge Pod/i })).toHaveFocus();
   });
 
@@ -149,7 +149,7 @@ describe("CapsuleRename — focus management (WCAG 2.4.3, audit C031)", () => {
     expect(screen.getByRole("button", { name: /rename Knowledge Pod/i })).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: /rename Knowledge Pod/i }));
-    const nameInput = screen.getByLabelText(/pod display name/i);
+    const nameInput = screen.getByLabelText(/display name/i);
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Docs");
     await user.click(screen.getByRole("button", { name: /^save$/i }));

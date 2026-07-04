@@ -195,11 +195,12 @@ function CreateCapsuleDialog({
             creates a Draft; indexing is a separate step on the capsule page
             (uiux-fix F032, C232). */}
         <p id={descriptionId} className="mc-dialog-body">
-          Name the pod. After creating it, connect a source and start indexing from the pod page.
+          Name this Knowledge Pod. After creating it, connect a source and start indexing from the
+          pod page.
         </p>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={inputId}>
-            <span className="mc-dialog-label">Pod display name</span>
+            <span className="mc-dialog-label">Knowledge Pod display name</span>
             <input
               id={inputId}
               ref={inputRef}
@@ -231,7 +232,7 @@ function CreateCapsuleDialog({
               Cancel
             </button>
             <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-              {busy ? "Creating…" : "Create pod"}
+              {busy ? "Creating…" : "Create Knowledge Pod"}
             </button>
           </div>
         </form>
@@ -727,17 +728,16 @@ function EmptyState({
       <div>
         <p className="lk-empty-title">No Knowledge Pods yet</p>
         <p className="lk-empty-body">
-          Create a pod to start indexing governed local knowledge sources.
+          Create a Knowledge Pod to start indexing governed local knowledge sources.
         </p>
       </div>
       <button
         type="button"
         disabled={creating}
-        aria-label="Create your first Knowledge Pod"
         onClick={onCreateCapsule}
         className="lk-btn lk-btn-primary lk-btn-xl"
       >
-        {creating ? "Creating…" : "Create your first pod"}
+        {creating ? "Creating…" : "Create your first Knowledge Pod"}
       </button>
       {/* The permanently-disabled "Connect to existing Knowledge Pod" button (with a
           dev-jargon title tooltip nobody could reach by keyboard) is removed
@@ -882,32 +882,34 @@ function GraphPageHeader({
             type="button"
             aria-disabled={combineDisabled}
             aria-describedby={combineDisabled ? combineHintId : undefined}
-            aria-label="Create a Knowledge Pod Set"
             aria-haspopup="dialog"
             aria-expanded={combineDialogOpen}
-            title={combineDisabled ? "Create pods first, then combine them into a set." : undefined}
+            title={
+              combineDisabled
+                ? "Create Knowledge Pods first, then combine them into a set."
+                : undefined
+            }
             onClick={() => {
               if (!combineDisabled) onCombineCapsules();
             }}
             className="lk-btn lk-btn-ghost lk-btn-lg"
           >
-            Create pod set
+            Create Knowledge Pod Set
           </button>
           {combineDisabled ? (
             <span id={combineHintId} className="visually-hidden">
-              Create pods first, then combine them into a set.
+              Create Knowledge Pods first, then combine them into a set.
             </span>
           ) : null}
           <button
             type="button"
             disabled={creating}
-            aria-label="Create a new Knowledge Pod"
             aria-haspopup="dialog"
             aria-expanded={createDialogOpen}
             onClick={onCreateCapsule}
             className="lk-btn lk-btn-primary lk-btn-lg"
           >
-            {creating ? "Creating…" : "Create pod"}
+            {creating ? "Creating…" : "Create Knowledge Pod"}
           </button>
         </div>
       </header>

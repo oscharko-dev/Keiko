@@ -1578,6 +1578,10 @@ export type {
   KnowledgePodSourceKind,
   KnowledgePodSummary,
   KnowledgePodSummaryKind,
+  LocalKnowledgeCapsuleListEntry,
+  LocalKnowledgeCapsuleSetListEntry,
+  LocalKnowledgeCapsuleSetsResponse,
+  LocalKnowledgeCapsulesResponse,
 } from "./local-knowledge-pods.js";
 export {
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
