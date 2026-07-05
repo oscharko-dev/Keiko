@@ -275,6 +275,72 @@ describe("local knowledge BFF boundary helpers", () => {
     });
   });
 
+  it("uses Knowledge Pod Set copy for embedding guidance", () => {
+    const setId = "set-embedding-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Embedding guidance set",
+          capsuleCount: 2,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Embedding guidance set", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "incompatible",
+            embeddingCompatibilityReason: "fingerprint-mismatch",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding mismatch",
+      description:
+        "Semantic retrieval is disabled for affected set members until they are reindexed locally.",
+    });
+  });
+
+  it("uses Knowledge Pod Set copy for policy guidance", () => {
+    const setId = "set-policy-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Policy guidance set",
+          capsuleCount: 2,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Policy guidance set", {
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Policy denied",
+      description: expect.stringContaining("This Knowledge Pod Set blocks"),
+    });
+    expect(capsuleSet?.knowledgePod?.guidance?.description).toContain("affected members");
+  });
+
   it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {
     const capsuleId = "cap-legacy-policy" as KnowledgeCapsuleId;
     const legacySummary = podSummary(capsuleId, "pod", "Legacy policy");

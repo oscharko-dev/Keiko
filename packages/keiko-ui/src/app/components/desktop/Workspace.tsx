@@ -103,7 +103,8 @@ function isLocalKnowledgeConnectorDropDetail(
   if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
   if (typeof payload !== "object" || payload === null) return false;
   const payloadRecord = payload as Record<string, unknown>;
-  return payloadRecord["kind"] === "capsule" && typeof payloadRecord["id"] === "string";
+  const kind = payloadRecord["kind"];
+  return (kind === "capsule" || kind === "capsule-set") && typeof payloadRecord["id"] === "string";
 }
 
 function isFigmaViewDropDetail(detail: unknown): detail is FigmaViewDropDetail {

@@ -116,6 +116,93 @@ describe("validateKnowledgePodSummary", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts future pod-set placeholders only as non-functional readiness evidence", () => {
+    const cases = [
+      ["remote", "future-remote-member"],
+      ["federated", "future-federated-member"],
+      ["ephemeral", "future-ephemeral-member"],
+    ] as const;
+
+    for (const [placeholderKind, reasonCode] of cases) {
+      const base = happySummary();
+      const result = validateKnowledgePodSummary({
+        ...base,
+        kind: "pod-set",
+        readiness: "unavailable",
+        counts: { ...base.counts, capsuleCount: 1 },
+        setReadiness: {
+          readyCount: 0,
+          draftCount: 0,
+          degradedCount: 0,
+          unavailableCount: 1,
+          deniedCount: 0,
+          indexingCount: 0,
+          staleCount: 0,
+          errorCount: 0,
+          missingCount: 0,
+          reasonCodes: [reasonCode],
+        },
+        sourceKinds: [placeholderKind],
+        retrieval: {
+          ...base.retrieval,
+          lexicalIndex: false,
+          vectorIndex: false,
+          hybridGrounding: false,
+        },
+        governance: { ...base.governance, locationKind: placeholderKind },
+        compatibility: { ...base.compatibility, backingKind: "capsule-set" },
+      });
+
+      expect(result.ok).toBe(true);
+    }
+  });
+
+  it("rejects future pod placeholders that claim ready retrieval or omit set reasons", () => {
+    const readyRemote = validateKnowledgePodSummary({
+      ...happySummary(),
+      sourceKinds: ["remote"],
+      governance: { ...happySummary().governance, locationKind: "remote" },
+      readiness: "ready",
+    });
+    const missingSetReason = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      readiness: "unavailable",
+      counts: { ...happySummary().counts, capsuleCount: 1 },
+      setReadiness: {
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 1,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: [],
+      },
+      sourceKinds: ["federated"],
+      retrieval: {
+        ...happySummary().retrieval,
+        lexicalIndex: false,
+        vectorIndex: false,
+        hybridGrounding: false,
+      },
+      governance: { ...happySummary().governance, locationKind: "federated" },
+      compatibility: { ...happySummary().compatibility, backingKind: "capsule-set" },
+    });
+
+    expect(invalidErrors(readyRemote)).toEqual(
+      expect.arrayContaining([
+        "future pod placeholders must be degraded or unavailable",
+        "future pod placeholders must not advertise retrieval capabilities",
+      ]),
+    );
+    expect(invalidErrors(missingSetReason)).toContain(
+      "setReadiness.reasonCodes must include future-federated-member for future placeholders",
+    );
+  });
+
   it("rejects malformed pod-set readiness metadata", () => {
     const invalidCode = validateKnowledgePodSummary({
       ...happySummary(),

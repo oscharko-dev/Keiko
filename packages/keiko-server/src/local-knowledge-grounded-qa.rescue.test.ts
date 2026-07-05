@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   ChunkId,
+  CapsuleSetId,
   DocumentId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
@@ -20,6 +21,7 @@ import {
   standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  createCapsuleSet,
   getCapsule,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -1515,12 +1517,20 @@ describe("local-knowledge retrieval activity", () => {
         capsuleId: "cap-indexing-set-member",
         sourceId: "src-indexing-set-member",
       });
+      const sealed = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Sealed During Indexing Member",
+        capsuleId: "cap-sealed-during-indexing-member",
+        sourceId: "src-sealed-during-indexing-member",
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      });
       updateCapsuleState(knowledgeStore, ready.capsuleId, "ready");
       updateCapsuleState(knowledgeStore, indexing.capsuleId, "indexing");
+      updateCapsuleState(knowledgeStore, sealed.capsuleId, "ready");
       const selected: SelectedLocalKnowledgeScope = {
         capsules: [
           requireCapsule(knowledgeStore, ready.capsuleId),
           requireCapsule(knowledgeStore, indexing.capsuleId),
+          requireCapsule(knowledgeStore, sealed.capsuleId),
         ],
         scopeKind: "capsule-set",
         scopeLabel: "Mixed Readiness Set",
@@ -1540,9 +1550,103 @@ describe("local-knowledge retrieval activity", () => {
         state: "unavailable",
         reasonCodes: ["indexing-in-progress"],
       });
+      expect(activity.pods.find((pod) => pod.podId === sealed.capsuleId)).toMatchObject({
+        state: "denied",
+        reasonCodes: ["policy-denied"],
+      });
     } finally {
       knowledgeStore.close();
     }
+  });
+
+  it("preserves distinct member skip reasons for real capsule-set grounded asks", async () => {
+    const setId = "set-mixed-grounded-activity" as CapsuleSetId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const ready = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Ready Grounded Set Member",
+      capsuleId: "cap-ready-grounded-set-member",
+      sourceId: "src-ready-grounded-set-member",
+    });
+    const indexing = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Indexing Grounded Set Member",
+      capsuleId: "cap-indexing-grounded-set-member",
+      sourceId: "src-indexing-grounded-set-member",
+    });
+    const sealed = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Sealed Grounded Set Member",
+      capsuleId: "cap-sealed-grounded-set-member",
+      sourceId: "src-sealed-grounded-set-member",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+    updateCapsuleState(knowledgeStore, ready.capsuleId, "ready");
+    updateCapsuleState(knowledgeStore, indexing.capsuleId, "indexing");
+    updateCapsuleState(knowledgeStore, sealed.capsuleId, "ready");
+    createCapsuleSet(knowledgeStore, {
+      id: setId,
+      displayName: "Mixed Grounded Activity Set",
+      tags: [],
+      capsuleIds: [ready.capsuleId, indexing.capsuleId, sealed.capsuleId],
+    });
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "mixed-grounded-activity-project");
+    const created = rescueStore.createChat(project.path, "Mixed grounded activity", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule-set", capsuleSetId: setId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => {
+        throw new Error("model must not be called for set state-failure activity");
+      },
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "Which set members can answer?", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.noEvidenceReason).toBe("indexing-in-progress");
+    expect(
+      answer.retrievalActivity?.pods.find((pod) => pod.podId === ready.capsuleId),
+    ).toMatchObject({
+      state: "skipped",
+      reasonCodes: ["source-skipped"],
+    });
+    expect(
+      answer.retrievalActivity?.pods.find((pod) => pod.podId === indexing.capsuleId),
+    ).toMatchObject({
+      state: "unavailable",
+      reasonCodes: ["indexing-in-progress"],
+    });
+    expect(
+      answer.retrievalActivity?.pods.find((pod) => pod.podId === sealed.capsuleId),
+    ).toMatchObject({
+      state: "denied",
+      reasonCodes: ["policy-denied"],
+    });
+    expect(JSON.stringify(answer.retrievalActivity)).not.toContain("Which set members can answer?");
   });
 
   it("keeps set-level policy denial on the sealed member instead of every member", async () => {

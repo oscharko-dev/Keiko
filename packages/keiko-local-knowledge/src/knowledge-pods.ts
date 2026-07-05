@@ -136,7 +136,7 @@ export function buildKnowledgePodSetSummary(
   const memberProjections = set.capsuleIds
     .map((id) => memberProjection(store, id))
     .filter((projection): projection is CapsuleProjectionInput => projection !== undefined);
-  const counts = sumCounts(memberProjections);
+  const counts = sumCounts(memberProjections, set.capsuleIds.length);
   const sourceKinds = uniqueSourceKinds(
     memberProjections.flatMap((projection) => projection.sources),
   );
@@ -567,9 +567,12 @@ function missingMemberReasons(
   return missing > 0 ? [`${missing.toString()} member pod could not be loaded.`] : [];
 }
 
-function sumCounts(members: readonly CapsuleProjectionInput[]): KnowledgePodCounts {
+function sumCounts(
+  members: readonly CapsuleProjectionInput[],
+  declaredCapsuleCount: number,
+): KnowledgePodCounts {
   return {
-    capsuleCount: members.length,
+    capsuleCount: declaredCapsuleCount,
     sourceCount: uniqueSourceIds(members).length,
     documentCount: members.reduce((sum, member) => sum + member.counts.documentCount, 0),
     chunkCount: members.reduce((sum, member) => sum + member.counts.chunkCount, 0),

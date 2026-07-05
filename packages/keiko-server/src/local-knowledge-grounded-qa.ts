@@ -1694,9 +1694,21 @@ function skippedReasonForCapsule(
 ): KnowledgePodRetrievalActivityReasonCode {
   const normalised = normaliseActivityReason(reason);
   if (selected.scopeKind !== "capsule-set") return normalised;
+  const memberReason = memberSkippedReason(capsule);
+  if (memberReason !== undefined) return memberReason;
   const rule = SET_SKIPPED_REASON_RULES.find((entry) => entry.reason === normalised);
   if (rule === undefined) return normalised;
   return rule.matches(capsule) ? normalised : "source-skipped";
+}
+
+function memberSkippedReason(
+  capsule: KnowledgeCapsule,
+): KnowledgePodRetrievalActivityReasonCode | undefined {
+  if (capsule.lifecycleState === "indexing") return "indexing-in-progress";
+  if (capsule.lifecycleState === "stale") return "stale-capsule";
+  if (capsule.lifecycleState === "error") return "retrieval-failure";
+  if (capsule.lifecycleState !== "ready") return "scope-not-ready";
+  return capsuleBlocksAnswerSynthesis(capsule) ? "policy-denied" : undefined;
 }
 
 const SET_SKIPPED_REASON_RULES: readonly {

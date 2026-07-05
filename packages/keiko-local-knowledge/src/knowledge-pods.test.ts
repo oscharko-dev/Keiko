@@ -376,6 +376,47 @@ describe("Knowledge Pod compatibility projection", () => {
     }
   });
 
+  it("keeps missing pod-set members visible as degraded redacted counts", () => {
+    const env = freshStore();
+    try {
+      const presentId = "cap-present-member" as KnowledgeCapsuleId;
+      const missingId = "cap-missing-member" as KnowledgeCapsuleId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: presentId,
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+
+      const summary = buildKnowledgePodSetSummary(env.store, {
+        id: "set-missing-member" as CapsuleSetId,
+        displayName: "Missing Member Set",
+        tags: [],
+        capsuleIds: [presentId, missingId],
+        composedAt: 1,
+      });
+
+      expect(summary).toMatchObject({
+        readiness: "degraded",
+        counts: {
+          capsuleCount: 2,
+        },
+        setReadiness: {
+          degradedCount: 1,
+          missingCount: 1,
+        },
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["missing-member", "no-sources"]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
   it("keeps draft pods with no sources explicit and evidence-safe", () => {
     const env = freshStore();
     try {

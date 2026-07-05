@@ -40,6 +40,22 @@ The first release does not add a second app area or a second registry.
 - **Remove** — deleting a pod deletes the local pod index only; source files on disk
   are not deleted. Removing a pod from a set preserves the underlying pod.
 
+Synthetic task examples:
+
+- **Vendor Review** — create local pods for security questionnaire answers, signed
+  architecture notes, and approved legal responses, then compose them into a Vendor
+  Review Knowledge Pod Set for grounded answer drafting.
+- **Project Architecture** — group ADRs, design-system guidance, and package-boundary
+  notes into one Knowledge Pod Set so engineering review prompts attach the same local
+  evidence without copying vectors or documents.
+- **Compliance Pack** — collect audit procedure notes, control-mapping references, and
+  release-readiness criteria as separate local pods, then attach the composed set to a
+  review chat or Quality Intelligence run.
+
+These examples use only local pods over the existing `capsules.db` store. Remote,
+federated, ephemeral, hosted, or managed-service members remain placeholders for future
+governed designs and must not claim active retrieval in this release.
+
 Vocabulary rules for current and future variants:
 
 | Product vocabulary   | Meaning in the initial release                                              | Current behavior                    |
@@ -49,12 +65,13 @@ Vocabulary rules for current and future variants:
 | Sealed Knowledge Pod | A pod whose reconstructive content follows the Local Knowledge store policy | Documented posture; no new UI badge |
 | Policy-backed Pod    | A future pod constrained by an explicit policy pack                         | Reserved vocabulary                 |
 | Remote/Federated Pod | A future non-local pod exposed through a governed source boundary           | Out of scope                        |
+| Ephemeral Pod        | A future short-lived pod whose backing evidence is not persisted as a pod   | Out of scope                        |
 
 Private local documents, project documentation, and policy packs fit the same product
 vocabulary by changing the source or policy posture, not by changing the retrieval
 registry. Supported local pod sources are the current `folder`, `repository`, and
-`files` source kinds. Policy packs and remote/federated pods require future governed
-designs before implementation.
+`files` source kinds. Policy packs and remote/federated/ephemeral pods require
+future governed designs before implementation.
 
 ## Compatibility contract
 
@@ -104,7 +121,8 @@ Allowed summary evidence:
 - stable ids and safe display names;
 - pod kind, legacy compatibility kind, readiness, and lifecycle;
 - counts for documents, chunks, vectors, sources, and pod-set members;
-- source kinds such as `folder`, `repository`, `files`, `policy`, `remote`, or `unknown`;
+- source kinds such as `folder`, `repository`, `files`, `policy`, `remote`,
+  `federated`, `ephemeral`, or `unknown`;
 - retrieval capability booleans and embedding identity metadata after safety checks;
 - privacy flags that describe whether raw bodies, vectors, source paths, or diagnostics
   are included;
@@ -257,11 +275,11 @@ on write and again on read; malformed or unsafe stored metadata is rejected inst
 being silently dropped. Canonical operator evidence still lives in the existing context
 packs, retrieval diagnostics, and redacted evidence manifests.
 
-## Future remote or federated pods
+## Future remote, federated, or ephemeral pods
 
-Remote, federated, shared, or cloud-backed pods are out of scope for Epic #1815. Any
-future non-local pod design must add or update an ADR before implementation and must
-define:
+Remote, federated, ephemeral, shared, or cloud-backed pods are out of scope for
+Epic #1815. Any future non-local or short-lived pod design must add or update an
+ADR before implementation and must define:
 
 - ownership and human-control boundaries;
 - egress and model-provider policy;
@@ -290,8 +308,8 @@ Known limits:
 
 - Existing API discriminants and route parameters still use `capsule` and
   `capsule-set` for compatibility.
-- No remote, hosted, managed-service, policy-pack, or federated pod retrieval is
-  implemented.
+- No remote, hosted, managed-service, policy-pack, federated, or ephemeral pod
+  retrieval is implemented.
 - No persisted Local Knowledge migration is performed.
 - Linux CI remains authoritative for release evidence when platform-specific bundle
   fingerprints differ from a local developer machine.

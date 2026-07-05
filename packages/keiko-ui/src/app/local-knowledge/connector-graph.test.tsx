@@ -237,23 +237,29 @@ describe("ConnectorGraph — with capsules", () => {
       knowledgePod: {
         readiness: "degraded",
         counts: {
-          capsuleCount: 2,
+          capsuleCount: 3,
           sourceCount: 3,
           documentCount: 4,
           chunkCount: 5,
           vectorCount: 6,
         },
         setReadiness: {
-          readyCount: 1,
+          readyCount: 0,
           draftCount: 0,
           degradedCount: 1,
           unavailableCount: 0,
           deniedCount: 1,
-          indexingCount: 0,
+          indexingCount: 1,
           staleCount: 0,
           errorCount: 0,
-          missingCount: 0,
-          reasonCodes: ["member-degraded", "policy-denied"],
+          missingCount: 1,
+          reasonCodes: [
+            "member-indexing",
+            "missing-member",
+            "policy-denied",
+            "embedding-incompatible",
+            "no-vectors",
+          ],
         },
         sourceKinds: ["files"],
         degradationReasons: ["legacy-unverified-profile"],
@@ -298,15 +304,16 @@ describe("ConnectorGraph — with capsules", () => {
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).getByText("Reindex recommended")).toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
-      /2 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 1 ready \/ 1 degraded \/ 1 policy denied \/ 0 missing/i,
+      /3 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 0 ready \/ 1 degraded \/ 1 policy denied \/ 1 missing \/ reasons: indexing, missing, policy denied, embedding mismatch, no vectors/i,
     );
     expect(screen.getByRole("status")).toHaveTextContent("1 Knowledge Pod, 1 Knowledge Pod Set");
 
-    await user.click(
-      screen.getByRole("button", {
-        name: /add Knowledge Pod Set Release Readiness to workspace/i,
-      }),
-    );
+    const addButton = screen.getByRole("button", {
+      name: /add Knowledge Pod Set Release Readiness to workspace/i,
+    });
+    expect(addButton).toHaveAccessibleDescription(/embedding mismatch, no vectors/i);
+
+    await user.click(addButton);
 
     expect(dropListener).toHaveBeenCalledTimes(1);
     const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;

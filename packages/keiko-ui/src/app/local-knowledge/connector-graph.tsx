@@ -21,7 +21,11 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+  KnowledgePodSetReadinessReasonCode,
+} from "@oscharko-dev/keiko-contracts";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import type {
@@ -409,6 +413,34 @@ function readinessLabel(
   return "Draft";
 }
 
+type CapsuleSetReadinessSummary = NonNullable<
+  NonNullable<CapsuleSetListEntry["knowledgePod"]>["setReadiness"]
+>;
+
+const SET_READINESS_REASON_LABELS: Record<KnowledgePodSetReadinessReasonCode, string> = {
+  "member-draft": "draft",
+  "member-indexing": "indexing",
+  "member-stale": "stale",
+  "member-error": "error",
+  "member-unavailable": "unavailable",
+  "member-degraded": "degraded",
+  "missing-member": "missing",
+  "policy-denied": "policy denied",
+  "embedding-unknown": "embedding unknown",
+  "embedding-incompatible": "embedding mismatch",
+  "embedding-unavailable": "embedding unavailable",
+  "embedding-opaque": "embedding opaque",
+  "no-sources": "no sources",
+  "no-vectors": "no vectors",
+  "future-remote-member": "remote placeholder",
+  "future-federated-member": "federated placeholder",
+  "future-ephemeral-member": "ephemeral placeholder",
+};
+
+function setReasonLabels(setReadiness: CapsuleSetReadinessSummary): readonly string[] {
+  return setReadiness.reasonCodes.map((code) => SET_READINESS_REASON_LABELS[code]);
+}
+
 function setCountsLine(set: CapsuleSetListEntry): string {
   const counts = set.knowledgePod?.counts;
   if (counts === undefined) return `${set.capsuleCount.toString()} Knowledge Pods`;
@@ -421,12 +453,14 @@ function setCountsLine(set: CapsuleSetListEntry): string {
   ];
   const setReadiness = set.knowledgePod?.setReadiness;
   if (setReadiness === undefined) return base.join(" / ");
+  const reasonLabels = setReasonLabels(setReadiness);
   return [
     ...base,
     `${setReadiness.readyCount.toString()} ready`,
     `${setReadiness.degradedCount.toString()} degraded`,
     `${setReadiness.deniedCount.toString()} policy denied`,
     `${setReadiness.missingCount.toString()} missing`,
+    ...(reasonLabels.length > 0 ? [`reasons: ${reasonLabels.join(", ")}`] : []),
   ].join(" / ");
 }
 
@@ -996,6 +1030,7 @@ function CapsuleSetRow({
           className="lk-btn lk-btn-ghost"
           onClick={onAddToWorkspace}
           aria-label={`Add Knowledge Pod Set ${capsuleSet.displayName} to workspace`}
+          aria-describedby={describedBy}
         >
           Add to workspace
         </button>
