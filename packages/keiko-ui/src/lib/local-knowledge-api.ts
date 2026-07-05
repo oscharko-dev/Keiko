@@ -25,7 +25,10 @@ import type {
   KnowledgePodModelUseOperation,
   KnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
-import { KNOWLEDGE_POD_MODEL_USE_OPERATIONS } from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+  resolveKnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
 // Wire shapes
@@ -73,8 +76,6 @@ function summariesById(
 }
 
 function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
-  const policyGuidance = guidanceForPolicy(summary);
-  if (policyGuidance !== undefined) return policyGuidance;
   const status = summary.retrieval.embeddingCompatibilityStatus;
   if (status === "incompatible") {
     return {
@@ -108,22 +109,27 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
 }
 
 function deniedModelOperations(
-  summary: KnowledgePodSummary,
+  modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
 ): readonly KnowledgePodModelUseOperation[] {
   return KNOWLEDGE_POD_MODEL_USE_OPERATIONS.filter(
-    (operation) => summary.modelUsePolicy.operations[operation] === "deny",
+    (operation) => modelUsePolicy.operations[operation] === "deny",
   );
 }
 
-function isSealedPolicy(summary: KnowledgePodSummary): boolean {
+function isSealedPolicy(
+  summary: KnowledgePodSummary,
+  modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
+): boolean {
   return (
     summary.governance.sealingPosture === "sealed-pod-policy" ||
-    summary.modelUsePolicy.mode === "sealed-local"
+    modelUsePolicy.mode === "sealed-local"
   );
 }
 
-function guidanceForPolicy(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
-  const operations = summary.modelUsePolicy.operations;
+function guidanceForPolicy(
+  modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
+): KnowledgePodUiGuidance | undefined {
+  const operations = modelUsePolicy.operations;
   if (operations.answerSynthesis === "deny" || operations.rawContentRelease === "deny") {
     return {
       label: "Policy denied",
@@ -143,16 +149,26 @@ function guidanceForPolicy(summary: KnowledgePodSummary): KnowledgePodUiGuidance
   return undefined;
 }
 
+function resolvedModelUsePolicyForSummary(
+  summary: KnowledgePodSummary,
+): KnowledgePodSummary["modelUsePolicy"] {
+  const raw = (summary as { readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"] })
+    .modelUsePolicy;
+  return raw ?? resolveKnowledgePodModelUsePolicy(undefined);
+}
+
 function metadataForSummary(
   summary: KnowledgePodSummary | undefined,
 ): KnowledgePodUiMetadata | undefined {
   if (summary === undefined) return undefined;
+  const modelUsePolicy = resolvedModelUsePolicyForSummary(summary);
   const guidance = guidanceForSummary(summary);
-  const deniedOperations = deniedModelOperations(summary);
+  const policyGuidance = guidanceForPolicy(modelUsePolicy);
+  const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,
-    modelUsePolicy: summary.modelUsePolicy,
-    sealed: isSealedPolicy(summary),
+    modelUsePolicy,
+    sealed: isSealedPolicy(summary, modelUsePolicy),
     deniedModelOperations: deniedOperations,
     ...(summary.retrieval.embeddingCompatibilityStatus !== undefined
       ? { embeddingCompatibilityStatus: summary.retrieval.embeddingCompatibilityStatus }
@@ -162,7 +178,8 @@ function metadataForSummary(
       : {}),
     reindexRecommended: summary.retrieval.reindexRecommended === true,
     queryEmbeddingAllowed: summary.retrieval.queryEmbeddingAllowed === true,
-    ...(guidance !== undefined ? { guidance } : {}),
+    ...(policyGuidance !== undefined ? { guidance: policyGuidance } : {}),
+    ...(policyGuidance === undefined && guidance !== undefined ? { guidance } : {}),
   };
 }
 

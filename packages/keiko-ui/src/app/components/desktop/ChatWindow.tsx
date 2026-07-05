@@ -2729,6 +2729,8 @@ function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
 interface ScopeOption {
   readonly value: string;
   readonly label: string;
+  readonly badge?: string;
+  readonly description?: string;
 }
 
 function capsuleOptions(
@@ -2739,6 +2741,12 @@ function capsuleOptions(
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
     label: t("chat.grounding.capsule", { name: capsule.displayName }),
+    ...(capsule.knowledgePod?.guidance !== undefined
+      ? {
+          badge: capsule.knowledgePod.guidance.label,
+          description: capsule.knowledgePod.guidance.description,
+        }
+      : {}),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule:")) {
@@ -2769,6 +2777,12 @@ function capsuleSetOptions(
   const options = capsuleSets.map((capsuleSet) => ({
     value: `capsule-set:${capsuleSet.id}`,
     label: t("chat.grounding.capsuleSet", { name: capsuleSet.displayName }),
+    ...(capsuleSet.knowledgePod?.guidance !== undefined
+      ? {
+          badge: capsuleSet.knowledgePod.guidance.label,
+          description: capsuleSet.knowledgePod.guidance.description,
+        }
+      : {}),
   }));
   const selectedValue = groundedModeValue(chat);
   if (!selectedValue.startsWith("capsule-set:")) {
@@ -3024,10 +3038,16 @@ function LocalKnowledgeScopeControl({
               ...capsuleChoices.map((capsule) => ({
                 value: capsule.value,
                 label: capsule.label,
+                ...(capsule.badge !== undefined ? { badge: capsule.badge } : {}),
+                ...(capsule.description !== undefined ? { description: capsule.description } : {}),
               })),
               ...capsuleSetChoices.map((capsuleSet) => ({
                 value: capsuleSet.value,
                 label: capsuleSet.label,
+                ...(capsuleSet.badge !== undefined ? { badge: capsuleSet.badge } : {}),
+                ...(capsuleSet.description !== undefined
+                  ? { description: capsuleSet.description }
+                  : {}),
               })),
             ],
           },

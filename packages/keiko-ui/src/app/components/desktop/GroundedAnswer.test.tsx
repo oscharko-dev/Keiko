@@ -452,7 +452,13 @@ describe("GroundedAnswer", () => {
       },
       pods: [
         { ...pod, podId: "cap-degraded" as typeof pod.podId, state: "degraded" },
-        { ...pod, podId: "cap-denied" as typeof pod.podId, state: "denied" },
+        {
+          ...pod,
+          podId: "cap-denied" as typeof pod.podId,
+          state: "denied",
+          modes: ["local-only", "sealed"],
+          reasonCodes: ["policy-denied"],
+        },
         { ...pod, podId: "cap-unavailable" as typeof pod.podId, state: "unavailable" },
         { ...pod, podId: "cap-filtered" as typeof pod.podId, state: "not-selected" },
       ],
@@ -468,6 +474,9 @@ describe("GroundedAnswer", () => {
     expect(screen.getAllByText("Denied").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Not selected").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/Modes: local only, sealed · Reasons: policy denied/u),
+    ).toBeInTheDocument();
   });
 
   it("bounds long Knowledge Pod activity lists behind a disclosure control", () => {

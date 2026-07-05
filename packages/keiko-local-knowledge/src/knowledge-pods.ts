@@ -200,14 +200,26 @@ function setModelUsePolicySummary(
   }
   const memberPolicies = members.map((member) => capsuleModelUsePolicySummary(member.capsule));
   return {
-    source: memberPolicies.every((policy) => policy.source === "explicit")
-      ? "explicit"
-      : "legacy-default",
-    mode: memberPolicies.some((policy) => policy.mode === "sealed-local")
-      ? "sealed-local"
-      : "custom",
+    source: aggregatePolicySource(memberPolicies),
+    mode: aggregatePolicyMode(memberPolicies),
     operations: aggregatePolicyOperations(memberPolicies),
   };
+}
+
+function aggregatePolicySource(
+  policies: readonly KnowledgePodModelUsePolicySummary[],
+): KnowledgePodModelUsePolicySummary["source"] {
+  if (policies.every((policy) => policy.source === "explicit")) return "explicit";
+  if (policies.every((policy) => policy.source === "sealed-default")) return "sealed-default";
+  return "legacy-default";
+}
+
+function aggregatePolicyMode(
+  policies: readonly KnowledgePodModelUsePolicySummary[],
+): KnowledgePodModelUsePolicySummary["mode"] {
+  if (policies.some((policy) => policy.mode === "sealed-local")) return "sealed-local";
+  if (policies.every((policy) => policy.mode === "standard")) return "standard";
+  return "custom";
 }
 
 function aggregatePolicyOperations(

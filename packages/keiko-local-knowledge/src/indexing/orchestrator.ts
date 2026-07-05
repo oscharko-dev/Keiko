@@ -1831,13 +1831,31 @@ async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobErr
   }
 }
 
-function modelUsePolicyPreflightFailure(state: RunState): IndexingJobError | undefined {
-  const policy = resolveCapsuleModelUsePolicy(state.capsule);
-  if (policy.operations.externalEmbeddings === "allow") return undefined;
-  return {
-    code: "POLICY_DENIED",
-    message: "Knowledge Pod policy denies external embeddings for indexing.",
-  };
+function modelUsePolicyPreflightFailure(
+  capsule: KnowledgeCapsule,
+  options: IndexingOptions,
+): IndexingJobError | undefined {
+  const policy = resolveCapsuleModelUsePolicy(capsule);
+  if (policy.operations.externalEmbeddings === "deny") {
+    return {
+      code: "POLICY_DENIED",
+      message: "Knowledge Pod policy denies external embeddings for indexing.",
+    };
+  }
+  if (options.contextualRetrieval?.enabled !== true) return undefined;
+  if (policy.operations.rawContentRelease === "deny") {
+    return {
+      code: "POLICY_DENIED",
+      message: "Knowledge Pod policy denies raw content release for contextual indexing.",
+    };
+  }
+  if (policy.operations.answerSynthesis === "deny") {
+    return {
+      code: "POLICY_DENIED",
+      message: "Knowledge Pod policy denies answer synthesis for contextual indexing.",
+    };
+  }
+  return undefined;
 }
 
 function persistStartedJob(state: RunState, sources: readonly KnowledgeSource[]): void {
@@ -1890,6 +1908,10 @@ async function resolveIndexingTokenizer(
   return loaded.tokenizer;
 }
 
+function resolvePolicyFailureTokenizer(options: IndexingOptions): LocalKnowledgeTokenizer {
+  return resolveChunkingOptions(options.chunkingOptions).tokenizer;
+}
+
 async function* runSourcesWithProgress(
   state: RunState,
   sources: readonly KnowledgeSource[],
@@ -1912,7 +1934,11 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   const startedAt = (options.now ?? options.store._internal.now)();
   const idSource = options.idSource ?? ((): string => randomUUID());
   const jobId = idSource();
-  const tokenizer = await resolveIndexingTokenizer(options);
+  const policyFailure = modelUsePolicyPreflightFailure(capsule, options);
+  const tokenizer =
+    policyFailure === undefined
+      ? await resolveIndexingTokenizer(options)
+      : resolvePolicyFailureTokenizer(options);
   const state = buildInitialState(options, capsule, sources, jobId, startedAt, tokenizer);
   persistStartedJob(state, sources);
   yield emitJobStarted(state, sources);
@@ -1921,7 +1947,6 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
     yield* finalize(state, undefined);
     return;
   }
-  const policyFailure = modelUsePolicyPreflightFailure(state);
   if (policyFailure !== undefined) {
     state.lastError = policyFailure;
     yield* finalize(state, policyFailure);

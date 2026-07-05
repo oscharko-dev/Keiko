@@ -18,8 +18,10 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
+  type KnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -57,6 +59,17 @@ const ROOT = "/srv/orchestrator";
 
 function isEmbeddingCapabilityProbe(input: string): boolean {
   return input === "ping" || input.startsWith("Keiko embedding space probe:");
+}
+
+function contextualRawReleaseDeniedPolicy(): KnowledgePodModelUsePolicy {
+  return {
+    schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+    mode: "custom",
+    operations: {
+      ...standardPodModelUsePolicy().operations,
+      rawContentRelease: "deny",
+    },
+  };
 }
 
 type FixtureFiles = Record<string, string | Uint8Array>;
@@ -269,6 +282,53 @@ describe("runIndexingJob — source preconditions", () => {
         },
       });
       expect(calls).toStrictEqual([]);
+      expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails closed before contextual retrieval when raw content release is denied", async () => {
+    const fixture = buildFixture({ "raw-denied.txt": "Raw confidential text. ".repeat(64) });
+    const embeddingCalls: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    updateCapsuleDetails(fixture.store, fixture.capsuleId, {
+      modelUsePolicy: contextualRawReleaseDeniedPolicy(),
+    });
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        embeddingCalls.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const gateway = contextGateway(() => "context must not be generated", contextCalls);
+
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: adapter,
+            contextualRetrieval: { enabled: true, chatGateway: gateway, modelId: "context-model" },
+          }),
+        ),
+      );
+
+      expect(events.map((event) => event.kind)).toStrictEqual(["job-started", "job-failed"]);
+      expect(events[1]).toMatchObject({
+        kind: "job-failed",
+        error: {
+          code: "POLICY_DENIED",
+          message: "Knowledge Pod policy denies raw content release for contextual indexing.",
+        },
+      });
+      expect(contextCalls).toEqual([]);
+      expect(embeddingCalls).toEqual([]);
       expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
     } finally {
       fixture.cleanup();

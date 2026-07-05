@@ -73,14 +73,27 @@ describe("Knowledge Pod model-use policy", () => {
   });
 
   it("rejects unsafe extension fields instead of carrying provider material", () => {
-    const result = validateKnowledgePodModelUsePolicy({
-      ...standardPodModelUsePolicy(),
-      endpoint: "https://provider.example.test/v1?api_key=secret",
-    });
+    const unsafeFields = [
+      "endpoint",
+      "apiKey",
+      "credentials",
+      "baseUrl",
+      "rawContent",
+      "privatePath",
+      "providerConfig",
+      "metadata",
+    ] as const;
 
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error("expected invalid model-use policy");
-    expect(result.errors).toContain("modelUsePolicy must not include endpoint");
+    for (const field of unsafeFields) {
+      const result = validateKnowledgePodModelUsePolicy({
+        ...standardPodModelUsePolicy(),
+        [field]: "https://provider.example.test/v1?api_key=secret",
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("expected invalid model-use policy");
+      expect(result.errors).toContain(`modelUsePolicy must not include ${field}`);
+    }
   });
 
   it("rejects missing operations and non-decision values", () => {

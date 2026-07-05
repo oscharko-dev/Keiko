@@ -275,6 +275,40 @@ describe("local knowledge BFF boundary helpers", () => {
     });
   });
 
+  it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {
+    const capsuleId = "cap-legacy-policy" as KnowledgeCapsuleId;
+    const legacySummary = podSummary(capsuleId, "pod", "Legacy policy");
+    const legacyWire = { ...legacySummary } as Record<string, unknown>;
+    delete legacyWire.modelUsePolicy;
+
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Legacy policy",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [legacyWire as unknown as KnowledgePodSummary],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
+      deniedModelOperations: [
+        "externalEmbeddings",
+        "externalReranking",
+        "answerSynthesis",
+        "rawContentRelease",
+      ],
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
+    });
+  });
+
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(jsonResponse({ ok: true, capsule: { id: "cap 1" } })),

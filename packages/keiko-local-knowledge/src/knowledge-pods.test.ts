@@ -278,6 +278,44 @@ describe("Knowledge Pod compatibility projection", () => {
     }
   });
 
+  it("projects all-standard pod-set model-use policy as standard", () => {
+    const env = freshStore();
+    try {
+      const aId = "cap-standard-set-a" as KnowledgeCapsuleId;
+      const bId = "cap-standard-set-b" as KnowledgeCapsuleId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({ id: aId, modelUsePolicy: standardPodModelUsePolicy() }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({ id: bId, modelUsePolicy: standardPodModelUsePolicy() }),
+      );
+      const set = createCapsuleSet(env.store, {
+        id: "set-standard-policy" as CapsuleSetId,
+        displayName: "Standard Policy Set",
+        tags: [],
+        capsuleIds: [aId, bId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.modelUsePolicy).toMatchObject({
+        source: "explicit",
+        mode: "standard",
+        operations: {
+          externalEmbeddings: "allow",
+          externalReranking: "allow",
+          answerSynthesis: "allow",
+          rawContentRelease: "allow",
+        },
+      });
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
   it("keeps draft pods with no sources explicit and evidence-safe", () => {
     const env = freshStore();
     try {

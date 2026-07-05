@@ -12,6 +12,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   createSqliteAuditSink,
+  getCapsule,
   readCitationExcerpt,
   resolveScopeModelUsePolicy,
   runLocalKnowledgeRetrieval,
@@ -19,6 +20,7 @@ import {
   type RetrievalResult,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
+  KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   RetrievalReference,
@@ -225,6 +227,12 @@ type HybridPayload = FolderPayload | ConnectorPayload;
 // Builds a single RRF-selected set that covers both folder and connector candidates. The selected
 // set is the SOLE source of truth for both the prompt and the citations; the two paths must not
 // diverge from this point forward.
+function isConnectorCandidate(
+  candidate: SelectedCandidate<HybridPayload>,
+): candidate is SelectedCandidate<ConnectorPayload> {
+  return candidate.kind === "connector";
+}
+
 function folderRerankInputs(
   folders: readonly RetrievedFolder[],
   redactor: Redactor,
@@ -254,15 +262,15 @@ function connectorRerankInputs(
   store: KnowledgeStore,
   redactor: Redactor,
   maxExcerptChars: number,
+  includeExcerptText: boolean,
 ): RerankInput<HybridPayload>[] {
   return connectors.flatMap((src) => {
     const lookup = buildSelectedScopeSourceLookup(store, src.selected);
     return src.references.map((reference) => ({
       kind: "connector" as const,
-      redactedText: redactString(
-        redactor,
-        readCitationExcerpt(store, reference.capsuleId, reference.citation, maxExcerptChars),
-      ),
+      redactedText: includeExcerptText
+        ? connectorRedactedText(store, reference, redactor, maxExcerptChars)
+        : "",
       engineScore: reference.score,
       sourceLabel: redactString(redactor, src.label),
       tieKey: String(reference.chunkId),
@@ -271,22 +279,68 @@ function connectorRerankInputs(
   });
 }
 
+function connectorRedactedText(
+  store: KnowledgeStore,
+  reference: RetrievalReference,
+  redactor: Redactor,
+  maxExcerptChars: number,
+): string {
+  return redactString(
+    redactor,
+    readCitationExcerpt(store, reference.capsuleId, reference.citation, maxExcerptChars),
+  );
+}
+
 function buildUnifiedSelection(
   ctx: HybridGroundedAskCtx,
   folders: readonly RetrievedFolder[],
   connectors: readonly RetrievedConnector[],
   store: KnowledgeStore,
+  includeConnectorExcerptText: boolean,
 ): readonly SelectedCandidate<HybridPayload>[] {
   const limits = currentGroundingLimits(ctx.deps);
   const { redactor } = ctx.deps;
   const inputs: RerankInput<HybridPayload>[] = [
     ...folderRerankInputs(folders, redactor),
-    ...connectorRerankInputs(connectors, store, redactor, limits.maxExcerptChars),
+    ...connectorRerankInputs(
+      connectors,
+      store,
+      redactor,
+      limits.maxExcerptChars,
+      includeConnectorExcerptText,
+    ),
   ];
   return rerankAndSelect(inputs, {
     maxCandidates: limits.hybridMaxCandidates,
     maxExcerptBytes: limits.hybridMaxExcerptBytes,
   });
+}
+
+function hydrateConnectorSelection(
+  store: KnowledgeStore,
+  candidate: SelectedCandidate<HybridPayload>,
+  redactor: Redactor,
+  maxExcerptChars: number,
+): SelectedCandidate<HybridPayload> {
+  if (!isConnectorCandidate(candidate)) return candidate;
+  const redactedText = connectorRedactedText(
+    store,
+    candidate.payload.reference,
+    redactor,
+    maxExcerptChars,
+  );
+  return { ...candidate, redactedText, bytes: Buffer.byteLength(redactedText, "utf8") };
+}
+
+function hydrateConnectorSelections(
+  store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  redactor: Redactor,
+  maxExcerptChars: number,
+): readonly SelectedCandidate<HybridPayload>[] {
+  return selected.map((candidate) =>
+    hydrateConnectorSelection(store, candidate, redactor, maxExcerptChars),
+  );
 }
 
 interface HybridRerankedSelection {
@@ -370,6 +424,18 @@ function connectorsDenyExternalReranking(connectors: readonly RetrievedConnector
       resolveScopeModelUsePolicy(connector.selected.capsules).operations.externalReranking ===
       "deny",
   );
+}
+
+function capsuleAllowsEvidencePersistence(capsule: KnowledgeCapsule | undefined): boolean {
+  if (capsule === undefined) return false;
+  return resolveScopeModelUsePolicy([capsule]).operations.evidencePersistence === "allow";
+}
+
+function referenceAllowsEvidencePersistence(
+  store: KnowledgeStore,
+  reference: RetrievalReference,
+): boolean {
+  return capsuleAllowsEvidencePersistence(getCapsule(store, reference.capsuleId));
 }
 
 // ─── Folder retrieval (mirrors runMultiSourceAsk's loop) ──────────────────────
@@ -635,6 +701,7 @@ function selectedConnectorPreviewCitations(
     store,
     selected
       .filter((s): s is SelectedCandidate<ConnectorPayload> => s.kind === "connector")
+      .filter((s) => referenceAllowsEvidencePersistence(store, s.payload.reference))
       .map((s) => {
         const sourceLabel = s.payload.lookup(s.payload.reference);
         return {
@@ -945,6 +1012,7 @@ function emitRetrievalAuditForConnector(
   const usage = summariseReferenceUsage(src.references);
   if (usage.length === 0) {
     for (const capsule of src.selected.capsules) {
+      if (!capsuleAllowsEvidencePersistence(capsule)) continue;
       sink.emit({
         kind: "retrieval-performed",
         capsuleId: capsule.id,
@@ -958,6 +1026,10 @@ function emitRetrievalAuditForConnector(
     return;
   }
   for (const entry of usage) {
+    const capsule = src.selected.capsules.find(
+      (item) => String(item.id) === String(entry.capsuleId),
+    );
+    if (!capsuleAllowsEvidencePersistence(capsule)) continue;
     sink.emit({
       kind: "retrieval-performed",
       capsuleId: entry.capsuleId,
@@ -972,11 +1044,13 @@ function emitRetrievalAuditForConnector(
 
 function emitAnswerContextAudit(
   sink: ReturnType<typeof createSqliteAuditSink>,
+  store: KnowledgeStore,
   selected: readonly SelectedCandidate<HybridPayload>[],
   modelId: string,
   occurredAt: number,
 ): void {
   for (const entry of summariseReferenceUsage(selectedConnectorReferences(selected))) {
+    if (!capsuleAllowsEvidencePersistence(getCapsule(store, entry.capsuleId))) continue;
     sink.emit({
       kind: "answer-context-assembled",
       capsuleId: entry.capsuleId,
@@ -1010,7 +1084,7 @@ function persistConnectorAudit(
   for (const src of connectors) {
     emitRetrievalAuditForConnector(sink, src, occurredAt);
   }
-  emitAnswerContextAudit(sink, selected, modelId, occurredAt);
+  emitAnswerContextAudit(sink, store, selected, modelId, occurredAt);
 }
 
 // ─── Assembly + public entry ──────────────────────────────────────────────────
@@ -1422,6 +1496,35 @@ async function runHybridWithStore(
   });
 }
 
+async function selectHybridPromptCandidates(
+  ctx: HybridGroundedAskCtx,
+  store: KnowledgeStore,
+  folders: readonly RetrievedFolder[],
+  connectors: readonly RetrievedConnector[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+): Promise<HybridRerankedSelection> {
+  const externalRerankingDenied = connectorsDenyExternalReranking(connectors);
+  const preliminary = buildUnifiedSelection(
+    ctx,
+    folders,
+    connectors,
+    store,
+    !externalRerankingDenied,
+  );
+  const { selected, diagnostics } = await rerankHybridSelection(
+    ctx,
+    preliminary,
+    limits,
+    externalRerankingDenied,
+  );
+  return {
+    selected: externalRerankingDenied
+      ? hydrateConnectorSelections(store, selected, ctx.deps.redactor, limits.maxExcerptChars)
+      : selected,
+    diagnostics,
+  };
+}
+
 async function answerAndAssemble(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
@@ -1430,12 +1533,12 @@ async function answerAndAssemble(
   const limits = currentGroundingLimits(ctx.deps);
   const { retrieved: folders } = meta.folderResult;
   const connectors = meta.connectorResult.retrieved;
-  const preliminary = buildUnifiedSelection(ctx, folders, connectors, store);
-  const { selected, diagnostics: reranker } = await rerankHybridSelection(
+  const { selected, diagnostics: reranker } = await selectHybridPromptCandidates(
     ctx,
-    preliminary,
+    store,
+    folders,
+    connectors,
     limits,
-    connectorsDenyExternalReranking(connectors),
   );
   if (selected.length === 0) {
     return assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits, reranker);

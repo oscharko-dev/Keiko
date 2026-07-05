@@ -526,6 +526,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     );
     const occurredAt = Date.now();
     for (const usage of summariseReferenceUsage(input.references)) {
+      if (!capsuleAllowsEvidencePersistence(getCapsule(this.store, usage.capsuleId))) continue;
       this.auditSink.emit({
         kind: "model-context-sent",
         capsuleId: usage.capsuleId,
@@ -736,6 +737,18 @@ function summariseReferenceUsage(
     }));
 }
 
+function capsuleAllowsEvidencePersistence(capsule: KnowledgeCapsule | undefined): boolean {
+  if (capsule === undefined) return false;
+  return resolveScopeModelUsePolicy([capsule]).operations.evidencePersistence === "allow";
+}
+
+function referenceAllowsEvidencePersistence(
+  store: KnowledgeStore,
+  reference: RetrievalReference,
+): boolean {
+  return capsuleAllowsEvidencePersistence(getCapsule(store, reference.capsuleId));
+}
+
 function emitRetrievalAudit(
   sink: ReturnType<typeof createSqliteAuditSink>,
   selected: SelectedLocalKnowledgeScope,
@@ -745,6 +758,7 @@ function emitRetrievalAudit(
   const usage = summariseReferenceUsage(result.references);
   if (usage.length === 0) {
     for (const capsule of selected.capsules) {
+      if (!capsuleAllowsEvidencePersistence(capsule)) continue;
       sink.emit({
         kind: "retrieval-performed",
         capsuleId: capsule.id,
@@ -758,6 +772,8 @@ function emitRetrievalAudit(
     return;
   }
   for (const entry of usage) {
+    const capsule = selected.capsules.find((item) => String(item.id) === String(entry.capsuleId));
+    if (!capsuleAllowsEvidencePersistence(capsule)) continue;
     sink.emit({
       kind: "retrieval-performed",
       capsuleId: entry.capsuleId,
@@ -772,10 +788,12 @@ function emitRetrievalAudit(
 
 function emitAnswerContextAudit(
   sink: ReturnType<typeof createSqliteAuditSink>,
+  store: KnowledgeStore,
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   occurredAt: number,
 ): void {
   for (const entry of summariseReferenceUsage(result.references)) {
+    if (!capsuleAllowsEvidencePersistence(getCapsule(store, entry.capsuleId))) continue;
     sink.emit({
       kind: "answer-context-assembled",
       capsuleId: entry.capsuleId,
@@ -1727,6 +1745,7 @@ export function tryBuildKnowledgePodRetrievalActivity(input: {
 
 function buildPreviewCitationInputs(
   deps: UiHandlerDeps,
+  store: KnowledgeStore,
   result: ScopedGroundedResult,
   sourceLookup: LocalKnowledgeCitationSourceLookup,
 ): readonly {
@@ -1738,14 +1757,16 @@ function buildPreviewCitationInputs(
     reference: entry.reference,
     marker: entry.marker,
   }));
-  return citedReferences.map((entry) => {
-    const label = sourceLookup(entry.reference);
-    return {
-      marker: entry.marker,
-      ...(label === undefined ? {} : { sourceLabel: redactText(deps, label) }),
-      reference: entry.reference,
-    };
-  });
+  return citedReferences
+    .filter((entry) => referenceAllowsEvidencePersistence(store, entry.reference))
+    .map((entry) => {
+      const label = sourceLookup(entry.reference);
+      return {
+        marker: entry.marker,
+        ...(label === undefined ? {} : { sourceLabel: redactText(deps, label) }),
+        reference: entry.reference,
+      };
+    });
 }
 
 function attachGroundedAnswerWithPreviewCitations(
@@ -1758,7 +1779,7 @@ function attachGroundedAnswerWithPreviewCitations(
 ): void {
   const previewCitations = buildStoredPreviewCitations(
     env.store,
-    buildPreviewCitationInputs(deps, result, sourceLookup),
+    buildPreviewCitationInputs(deps, env.store, result, sourceLookup),
   );
   deps.store.attachGroundedAnswer(assistantMessageId, answer, previewCitations);
 }
@@ -1776,7 +1797,8 @@ function persistScopedGroundedAnswer(
   const auditSink = createSqliteAuditSink(env.store);
   const occurredAt = Date.now();
   emitRetrievalAudit(auditSink, selected, result, occurredAt);
-  if (result.references.length > 0) emitAnswerContextAudit(auditSink, result, occurredAt);
+  if (result.references.length > 0)
+    emitAnswerContextAudit(auditSink, env.store, result, occurredAt);
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   const assistantContent =
     noEvidenceReason === undefined
