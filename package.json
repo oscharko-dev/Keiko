@@ -84,7 +84,7 @@
     "check:editor-release-evidence": "node scripts/editor-release-evidence.mjs",
     "check:perf-evidence": "node scripts/check-perf-evidence.mjs",
     "check:retrieval-latency": "node scripts/check-retrieval-latency.mjs",
-    "check:retrieval-quality": "node scripts/check-retrieval-quality.mjs",
+    "check:retrieval-quality": "node --disable-warning=ExperimentalWarning scripts/check-retrieval-quality.mjs",
     "check:grounded-retrieval-quality": "node scripts/check-grounded-retrieval-quality.mjs",
     "check:grounded-faithfulness": "node scripts/check-grounded-faithfulness.mjs",
     "check:context-quality": "node scripts/check-context-quality.mjs",

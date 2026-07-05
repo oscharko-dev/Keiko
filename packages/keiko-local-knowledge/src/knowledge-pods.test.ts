@@ -92,7 +92,7 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(summary).toMatchObject({
         kind: "pod",
         displayName: "Risk Controls",
-        readiness: "ready",
+        readiness: "degraded",
         counts: {
           capsuleCount: 1,
           sourceCount: 1,
@@ -107,6 +107,10 @@ describe("Knowledge Pod compatibility projection", () => {
           hybridGrounding: true,
           crossSpaceScoreMixing: false,
           embeddingProvider: "openai",
+          embeddingCompatibilityStatus: "unknown",
+          embeddingCompatibilityReason: "legacy-unverified-profile",
+          reindexRecommended: true,
+          queryEmbeddingAllowed: false,
         },
         privacy: {
           localFirst: true,
@@ -166,7 +170,7 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(summary).toMatchObject({
         kind: "pod-set",
         displayName: "Risk Set",
-        readiness: "ready",
+        readiness: "degraded",
         counts: {
           capsuleCount: 2,
           sourceCount: 2,
@@ -175,7 +179,15 @@ describe("Knowledge Pod compatibility projection", () => {
           vectorCount: 2,
         },
         sourceKinds: ["folder"],
-        retrieval: { lexicalIndex: true, vectorIndex: true, crossSpaceScoreMixing: false },
+        retrieval: {
+          lexicalIndex: true,
+          vectorIndex: true,
+          crossSpaceScoreMixing: false,
+          embeddingCompatibilityStatus: "unknown",
+          embeddingCompatibilityReason: "legacy-unverified-profile",
+          reindexRecommended: true,
+          queryEmbeddingAllowed: false,
+        },
         governance: {
           locationKind: "local",
           sealingPosture: "local-store-policy",
@@ -252,6 +264,7 @@ describe("Knowledge Pod compatibility projection", () => {
       expect(summary.retrieval).not.toHaveProperty("embeddingProvider");
       expect(summary.retrieval).not.toHaveProperty("embeddingModelId");
       expect(summary.retrieval).not.toHaveProperty("embeddingSpaceFingerprint");
+      expect(summary.retrieval).not.toHaveProperty("embeddingProfileKey");
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
       expect(wire).not.toContain("\\\\server");
       expect(wire).not.toContain("~/");

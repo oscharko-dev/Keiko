@@ -6,12 +6,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ALL_FIXTURES,
   ambiguousQueryFixture,
   broadQueryDiversityFixture,
   contextBudgetFixture,
+  exactTechnicalFixture,
+  mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
+  multilingualFixture,
   noEvidenceFixture,
+  semanticParaphraseFixture,
   singleTopicFixture,
   staleIndexFixture,
   structuredFileFixture,
@@ -71,6 +76,42 @@ describe("runRetrievalEval — broad-query diversity fixture", () => {
   });
 });
 
+describe("runRetrievalEval — exact technical fixture", () => {
+  it("recalls exact ADR ids, API names, and error codes with the exact strategy", async () => {
+    const scorecard = await runRetrievalEval(exactTechnicalFixture);
+    expect(scorecard.dimensions.recall).toBe(1);
+    expect(scorecard.dimensions.precision).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — semantic paraphrase fixture", () => {
+  it("keeps vector recall high when wording differs from the corpus", async () => {
+    const scorecard = await runRetrievalEval(semanticParaphraseFixture);
+    expect(scorecard.dimensions.recall).toBe(1);
+    expect(scorecard.dimensions.meanReciprocalRank).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — multilingual fixture", () => {
+  it("retrieves German evidence through the broad retrieval strategy", async () => {
+    const scorecard = await runRetrievalEval(multilingualFixture);
+    expect(scorecard.dimensions.recall).toBe(1);
+    expect(scorecard.dimensions.precision).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — mixed-strategy fixture", () => {
+  it("keeps exact, broad, and balanced queries stable in one fixture", async () => {
+    const scorecard = await runRetrievalEval(mixedStrategyFixture);
+    expect(scorecard.dimensions.recall).toBe(1);
+    expect(scorecard.dimensions.noEvidenceAccuracy).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
 describe("runRetrievalEval — source-isolation fixture", () => {
   it("source isolation stays at 1.0 when scope is bound to a single capsule", async () => {
     const scorecard = await runRetrievalEval(sourceIsolationFixture);
@@ -119,14 +160,7 @@ describe("runRetrievalEval — determinism", () => {
   });
 
   it("identical scorecards across every shipped fixture", async () => {
-    const fixtures: readonly RetrievalEvalFixture[] = [
-      singleTopicFixture,
-      multiCapsuleFixture,
-      noEvidenceFixture,
-      ambiguousQueryFixture,
-      sourceIsolationFixture,
-    ];
-    for (const fixture of fixtures) {
+    for (const fixture of ALL_FIXTURES) {
       const a = await runRetrievalEval(fixture);
       const b = await runRetrievalEval(fixture);
       expect(JSON.stringify(a)).toBe(JSON.stringify(b));
@@ -214,19 +248,7 @@ describe("runRetrievalEval — optional model judge", () => {
 
 describe("runRetrievalEval — pass threshold breakdown", () => {
   it("every shipped fixture meets every pass threshold", async () => {
-    const fixtures: readonly RetrievalEvalFixture[] = [
-      singleTopicFixture,
-      multiCapsuleFixture,
-      noEvidenceFixture,
-      ambiguousQueryFixture,
-      sourceIsolationFixture,
-      wrongScopeFixture,
-      multiPageFixture,
-      structuredFileFixture,
-      contextBudgetFixture,
-      staleIndexFixture,
-    ];
-    for (const fixture of fixtures) {
+    for (const fixture of ALL_FIXTURES) {
       const scorecard = await runRetrievalEval(fixture);
       expect(scorecard.dimensions.recall).toBeGreaterThanOrEqual(PASS_THRESHOLDS.recall);
       expect(scorecard.dimensions.precision).toBeGreaterThanOrEqual(PASS_THRESHOLDS.precision);

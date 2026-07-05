@@ -154,9 +154,14 @@ function countPrepareCalls(db: KnowledgeDb, onPrepare: () => void): () => void {
 function activityDiagnostics(mode: ActivityDiagnostics["mode"]): ActivityDiagnostics {
   return {
     mode,
+    strategy: "balanced",
     denseCandidateCount: 4,
     lexicalCandidateCount: 3,
     fusedCandidateCount: 5,
+    denseCandidateBudget: 40,
+    lexicalCandidateBudget: 50,
+    fusedCandidateBudget: 50,
+    queryVariantCount: 1,
     denseIndex: "available",
     lexicalIndex: "available",
     vectorIndex: { provider: "brute-force", status: "available" },
@@ -1123,6 +1128,80 @@ describe("local-knowledge retrieval activity", () => {
       expect(degraded.pods[0]).toMatchObject({
         state: "degraded",
         reasonCodes: ["searched", "embedding-failed"],
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("maps embedding lane diagnostics to the affected pod only", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seededA = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Lane Healthy Capsule",
+        capsuleId: "cap-lane-healthy",
+        sourceId: "src-lane-healthy",
+        documentId: "doc-lane-healthy",
+      });
+      const seededB = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Lane Incompatible Capsule",
+        capsuleId: "cap-lane-incompatible",
+        sourceId: "src-lane-incompatible",
+        documentId: "doc-lane-incompatible",
+      });
+      const capA = requireCapsule(knowledgeStore, seededA.capsuleId);
+      const capB = requireCapsule(knowledgeStore, seededB.capsuleId);
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: {
+              capsules: [capA, capB],
+              scopeKind: "capsule-set",
+              scopeLabel: "Lane Set",
+            },
+            result: {
+              references: [retrievalActivityReference(seededA.capsuleId, seededA.sourceId)],
+              citationCounts: new Map([[String(seededA.capsuleId), 1]]),
+              noEvidence: false,
+              embeddingDegraded: true,
+              retrievalDiagnostics: {
+                ...activityDiagnostics("lexical-degraded"),
+                embeddingLaneCount: 2,
+                embeddingLanes: [
+                  {
+                    laneId: "embedding-lane-healthy",
+                    capsuleIds: [seededA.capsuleId],
+                    status: "searched",
+                    queryEmbeddingRequested: true,
+                    vectorCount: 1,
+                    denseCandidateCount: 1,
+                  },
+                  {
+                    laneId: "embedding-lane-incompatible",
+                    capsuleIds: [seededB.capsuleId],
+                    status: "identity-incompatible",
+                    queryEmbeddingRequested: true,
+                    vectorCount: 1,
+                    denseCandidateCount: 0,
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      });
+
+      const healthy = activity.pods.find((pod) => String(pod.podId) === String(seededA.capsuleId));
+      const incompatible = activity.pods.find(
+        (pod) => String(pod.podId) === String(seededB.capsuleId),
+      );
+      expect(healthy).toMatchObject({ state: "searched", reasonCodes: ["searched"] });
+      expect(incompatible).toMatchObject({
+        state: "unavailable",
+        reasonCodes: ["not-selected", "incompatible-embedding-identity"],
       });
     } finally {
       knowledgeStore.close();

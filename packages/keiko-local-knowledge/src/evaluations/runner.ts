@@ -107,16 +107,16 @@ async function embedAllChunks(
   seeded: SeededFixture,
   now: () => number,
 ): Promise<void> {
-  const adapter = createScriptedEmbeddingAdapter({
-    identity: seeded.identity,
-    topicBoosts: seeded.topicBoosts,
-  });
   let storageCounter = 0;
   const idSource = (): string => {
     storageCounter += 1;
     return `eval-storage-${String(storageCounter)}`;
   };
   for (const capsule of fixture.capsules) {
+    const adapter = createScriptedEmbeddingAdapter({
+      identity: capsule.embeddingModelIdentity,
+      topicBoosts: seeded.topicBoosts,
+    });
     const chunks = collectCapsuleChunks(capsule);
     const result = await embedChunkBatch(chunks, {
       adapter,
@@ -167,6 +167,7 @@ function buildRetrievalQuery(
   const baseQuery = {
     text: queryText,
     ...(query.topK !== undefined ? { topK: query.topK } : {}),
+    ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
     // For the no-evidence fixture we apply a very high minScore so unrelated chunks are
     // dropped. The fixture's query carries no topic marker, so the cosine of its vector
     // with any topic-boosted chunk is far below 0.99.

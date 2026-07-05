@@ -49,8 +49,11 @@ export interface RetrievalQuery {
   readonly text: string;
   readonly topK?: number;
   readonly minScore?: number;
-  readonly strategy?: "auto" | "balanced" | "exact" | "broad";
+  readonly strategy?: RetrievalStrategy;
 }
+
+export type RetrievalStrategy = "auto" | "balanced" | "exact" | "broad";
+export type ResolvedRetrievalStrategy = Exclude<RetrievalStrategy, "auto">;
 
 export interface QueryTransformRequest {
   readonly query: string;
@@ -83,21 +86,40 @@ export interface RetrievalResult {
   readonly references: readonly RetrievalReference[];
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
-  // True when the embedding adapter failed for at least one capsule but lexical
-  // candidates kept the result non-empty. Observability signal for callers; does
-  // not change which references are returned or whether noEvidence fires.
+  // True when a dense embedding lane degraded but lexical candidates kept the
+  // result non-empty. Observability signal for callers; does not change which
+  // references are returned or whether noEvidence fires.
   readonly embeddingDegraded?: true;
   readonly diagnostics?: RetrievalDiagnostics;
 }
 
+export type RetrievalEmbeddingLaneStatus =
+  "searched" | "degraded" | "embedding-failed" | "identity-incompatible" | "no-vectors";
+
+export interface RetrievalEmbeddingLaneDiagnostics {
+  readonly laneId: string;
+  readonly capsuleIds: readonly KnowledgeCapsuleId[];
+  readonly status: RetrievalEmbeddingLaneStatus;
+  readonly queryEmbeddingRequested: boolean;
+  readonly vectorCount: number;
+  readonly denseCandidateCount: number;
+}
+
 export interface RetrievalDiagnostics {
   readonly mode: "hybrid" | "dense-only" | "lexical-only" | "lexical-degraded";
+  readonly strategy: ResolvedRetrievalStrategy;
   readonly denseCandidateCount: number;
   readonly lexicalCandidateCount: number;
   readonly fusedCandidateCount: number;
+  readonly denseCandidateBudget: number;
+  readonly lexicalCandidateBudget: number;
+  readonly fusedCandidateBudget: number;
+  readonly queryVariantCount: number;
   readonly denseIndex: "available" | "guided" | "ann" | "missing" | "skipped-too-large";
   readonly lexicalIndex: "available" | "missing" | "query-error";
   readonly vectorIndex: RetrievalVectorIndexDiagnostics;
+  readonly embeddingLaneCount?: number;
+  readonly embeddingLanes?: readonly RetrievalEmbeddingLaneDiagnostics[];
 }
 
 export interface RetrievalVectorIndexDiagnostics {

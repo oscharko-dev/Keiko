@@ -25,7 +25,11 @@ import type {
   KnowledgeSourceId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
-import type { RetrievalNoEvidenceReason, RetrievalReference } from "../retrieval/types.js";
+import type {
+  RetrievalNoEvidenceReason,
+  RetrievalReference,
+  RetrievalStrategy,
+} from "../retrieval/types.js";
 
 // ─── Fixture specs ───────────────────────────────────────────────────────────
 // A fixture is the deterministic seed for a single eval run. The runner materialises the
@@ -106,6 +110,9 @@ export interface RetrievalEvalQuery {
   readonly expectedChunkIds?: readonly ChunkId[];
   readonly expectedNoEvidence?: boolean;
   readonly expectedNoEvidenceReason?: RetrievalNoEvidenceReason;
+  // Optional override of the retrieval strategy. Fixtures use this to exercise broad,
+  // exact, and balanced retrieval through the production query options.
+  readonly strategy?: RetrievalStrategy;
   // Optional override of the retrieval `topK`. Used by the mutation-witness test.
   readonly topK?: number;
   // Optional budget for the retrieved context, measured in the fixture's synthetic token

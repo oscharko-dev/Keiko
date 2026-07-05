@@ -347,6 +347,27 @@ function StatusBadge({ state }: { state: CapsuleLifecycleState }): ReactNode {
   );
 }
 
+function guidanceBadgeState(tone: "warning" | "danger" | "muted"): CapsuleLifecycleState {
+  if (tone === "danger") return "error";
+  if (tone === "warning") return "stale";
+  return "draft";
+}
+
+function EmbeddingGuidanceBadge({ capsule }: { readonly capsule: CapsuleListEntry }): ReactNode {
+  const guidance = capsule.knowledgePod?.guidance;
+  if (guidance === undefined) return null;
+  return (
+    <span
+      className="lk-badge"
+      data-state={guidanceBadgeState(guidance.tone)}
+      title={guidance.description}
+      aria-label={`Embedding compatibility: ${guidance.label}. ${guidance.description}`}
+    >
+      {guidance.label}
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // CapsuleRowActions — each action is a named sub-function to keep line counts down
 // ---------------------------------------------------------------------------
@@ -676,6 +697,7 @@ function CapsuleRow({
               {capsule.displayName}
             </span>
             <StatusBadge state={capsule.lifecycleState} />
+            <EmbeddingGuidanceBadge capsule={capsule} />
           </span>
         </button>
         <CapsuleRowActions
