@@ -869,6 +869,341 @@ export const broadQueryDiversityFixture: RetrievalEvalFixture = {
   ],
 };
 
+export const exactTechnicalFixture: RetrievalEvalFixture = {
+  id: "exact-technical",
+  description: "Exact strategy recalls ADR ids, API names, policy clauses, and error codes.",
+  capsules: [
+    {
+      id: capsuleId("cap-exact-technical"),
+      displayName: "Exact Technical",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-exact-technical"),
+          documents: [
+            {
+              id: documentId("doc-exact-technical"),
+              safeDisplayName: "hybrid-retrieval-notes.md",
+              parsedUnits: [
+                {
+                  id: "section-exact",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Hybrid Retrieval", "Diagnostics"],
+                    characterStart: 0,
+                    characterEnd: 260,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-exact-technical"),
+                  text:
+                    "ADR-0036 preserves RRF_K=60 for runLocalKnowledgeRetrieval. " +
+                    "Policy clause LK-7 maps error E_RETRIEVAL_SCOPE_DENIED to a safe diagnostic.",
+                  parsedUnitId: "section-exact",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-exact-decoy"),
+              safeDisplayName: "search-overview.md",
+              parsedUnits: [
+                {
+                  id: "section-decoy",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Search", "Overview"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-exact-decoy"),
+                  text: "General search guidance discusses ranking quality without exact policy ids.",
+                  parsedUnitId: "section-decoy",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-exact-technical",
+      text: "Where are ADR-0036 RRF_K runLocalKnowledgeRetrieval and E_RETRIEVAL_SCOPE_DENIED documented?",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-exact-technical") },
+      expectedChunkIds: [chunkId("c-exact-technical")],
+      topK: 1,
+    },
+  ],
+};
+
+export const semanticParaphraseFixture: RetrievalEvalFixture = {
+  id: "semantic-paraphrase",
+  description: "Broad semantic query retrieves evidence when wording differs from the corpus.",
+  capsules: [
+    {
+      id: capsuleId("cap-semantic-paraphrase"),
+      displayName: "Semantic Paraphrase",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-semantic-paraphrase"),
+          documents: [
+            {
+              id: documentId("doc-semantic-paraphrase"),
+              safeDisplayName: "review-readiness.md",
+              parsedUnits: [
+                {
+                  id: "section-readiness",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Governance", "Review"],
+                    characterStart: 0,
+                    characterEnd: 200,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-semantic-review"),
+                  text: "Release governance requires evidence-backed checklist updates before handoff.",
+                  topic: "review-proof",
+                  parsedUnitId: "section-readiness",
+                },
+                {
+                  id: chunkId("c-semantic-noise"),
+                  text: "The packaging guide lists archive cleanup commands.",
+                  topic: "packaging",
+                  parsedUnitId: "section-readiness",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-semantic-review",
+      text: "How should a contributor prove a change is ready for review?",
+      topic: "review-proof",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-semantic-paraphrase") },
+      expectedChunkIds: [chunkId("c-semantic-review")],
+      topK: 1,
+    },
+  ],
+};
+
+export const multilingualFixture: RetrievalEvalFixture = {
+  id: "multilingual-retrieval",
+  description: "German question retrieves the matching Local Knowledge evidence.",
+  capsules: [
+    {
+      id: capsuleId("cap-multilingual"),
+      displayName: "Multilingual",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-multilingual"),
+          documents: [
+            {
+              id: documentId("doc-multilingual"),
+              safeDisplayName: "zahlungsfreigabe.md",
+              parsedUnits: [
+                {
+                  id: "section-zahlung",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Kontrollen", "Freigabe"],
+                    characterStart: 0,
+                    characterEnd: 200,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-multilingual-payment"),
+                  text: "Die Zahlungsfreigabe verlangt eine zweite Pruefung vor dem Monatsabschluss.",
+                  topic: "zahlung-freigabe",
+                  parsedUnitId: "section-zahlung",
+                },
+                {
+                  id: chunkId("c-multilingual-noise"),
+                  text: "Inventory receiving is reconciled weekly by operations.",
+                  topic: "inventory",
+                  parsedUnitId: "section-zahlung",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-zahlung",
+      text: "Welche Freigabe braucht eine zweite Pruefung?",
+      topic: "zahlung-freigabe",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-multilingual") },
+      expectedChunkIds: [chunkId("c-multilingual-payment")],
+      topK: 1,
+    },
+  ],
+};
+
+export const mixedStrategyFixture: RetrievalEvalFixture = {
+  id: "mixed-strategy",
+  description: "Exact, broad, and balanced strategies stay deterministic in one capsule.",
+  capsules: [
+    {
+      id: capsuleId("cap-mixed-strategy"),
+      displayName: "Mixed Strategy",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-mixed-strategy"),
+          documents: [
+            {
+              id: documentId("doc-mixed-exact"),
+              safeDisplayName: "control-catalog.md",
+              parsedUnits: [
+                {
+                  id: "section-control",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Controls", "Catalog"],
+                    characterStart: 0,
+                    characterEnd: 140,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-mixed-exact"),
+                  text: "Control CTRL-44-ALPHA records the exact approval evidence owner.",
+                  parsedUnitId: "section-control",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-mixed-broad-a"),
+              safeDisplayName: "access-review.md",
+              parsedUnits: [
+                {
+                  id: "section-access",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Access Reviews"],
+                    characterStart: 0,
+                    characterEnd: 180,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-mixed-broad-a"),
+                  text: "Access review rollout evidence covers approver sampling.",
+                  topic: "mixed-broad",
+                  parsedUnitId: "section-access",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-mixed-broad-b"),
+              safeDisplayName: "risk-monitoring.md",
+              parsedUnits: [
+                {
+                  id: "section-risk",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Risk Monitoring"],
+                    characterStart: 0,
+                    characterEnd: 180,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-mixed-broad-b"),
+                  text: "Risk monitoring evidence records rollout exceptions.",
+                  topic: "mixed-broad",
+                  parsedUnitId: "section-risk",
+                },
+              ],
+            },
+            {
+              id: documentId("doc-mixed-balanced"),
+              safeDisplayName: "handoff-note.md",
+              parsedUnits: [
+                {
+                  id: "section-handoff",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Handoff"],
+                    characterStart: 0,
+                    characterEnd: 160,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-mixed-balanced"),
+                  text: "Evidence handoff notes describe local gate outcomes and limitations.",
+                  topic: "mixed-balanced",
+                  parsedUnitId: "section-handoff",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-mixed-exact",
+      text: "Where is CTRL-44-ALPHA documented?",
+      strategy: "exact",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-mixed-strategy") },
+      expectedChunkIds: [chunkId("c-mixed-exact")],
+      topK: 1,
+    },
+    {
+      id: "q-mixed-broad",
+      text: "Summarize access review rollout risk monitoring evidence.",
+      topic: "mixed-broad",
+      strategy: "broad",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-mixed-strategy") },
+      expectedChunkIds: [chunkId("c-mixed-broad-a"), chunkId("c-mixed-broad-b")],
+      topK: 2,
+    },
+    {
+      id: "q-mixed-balanced",
+      text: "Which note covers evidence handoff outcomes?",
+      topic: "mixed-balanced",
+      strategy: "balanced",
+      scope: { kind: "capsule", capsuleId: capsuleId("cap-mixed-strategy") },
+      expectedChunkIds: [chunkId("c-mixed-balanced")],
+      topK: 1,
+    },
+  ],
+};
+
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
@@ -881,4 +1216,8 @@ export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   contextBudgetFixture,
   staleIndexFixture,
   broadQueryDiversityFixture,
+  exactTechnicalFixture,
+  semanticParaphraseFixture,
+  multilingualFixture,
+  mixedStrategyFixture,
 ] as const;

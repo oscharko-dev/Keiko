@@ -167,6 +167,7 @@ function buildRetrievalQuery(
   const baseQuery = {
     text: queryText,
     ...(query.topK !== undefined ? { topK: query.topK } : {}),
+    ...(query.strategy !== undefined ? { strategy: query.strategy } : {}),
     // For the no-evidence fixture we apply a very high minScore so unrelated chunks are
     // dropped. The fixture's query carries no topic marker, so the cosine of its vector
     // with any topic-boosted chunk is far below 0.99.

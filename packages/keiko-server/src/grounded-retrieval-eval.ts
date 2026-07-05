@@ -1,9 +1,9 @@
 // Production semantic-retrieval + RRF-fusion + model-reranker eval harness (RB-5,
 // GEN-AI-RELEASE-GATE-001 / GEN-AI-RETRIEVAL-006 / GEN-TEST-FIXTURE-002).
 //
-// The shipping `check:retrieval-quality` gate scores ONLY lexical `searchText` over toy repos with
-// every threshold = 1 — the production semantic + reranker + RRF path is gated by nothing. This
-// harness closes that gap by driving the REAL functions end-to-end over a distractor-dense corpus:
+// `check:retrieval-quality` covers workspace search and Local Knowledge fixture scorecards. This
+// harness covers the production semantic + reranker + RRF path by driving the REAL functions
+// end-to-end over a distractor-dense corpus:
 //
 //   1. `configuredRepoSemanticSearchProviderFor` (grounded-repo-semantic-search) with a scripted but
 //      SEMANTIC embedding port (topic vectors, not lexical overlap), so a paraphrased query matches
@@ -14,7 +14,7 @@
 //
 // Non-tautological by construction: the budget floors are < 1, and an injected ranking or reranker
 // regression (`reranker-reversed`, `embedding-flat`) provably drops the metrics BELOW the floors —
-// so the gate turns red on a real regression, which the lexical toy gate never could.
+// so the gate turns red on a real regression in this grounded-answer path.
 
 import type {
   GatewayConfig,

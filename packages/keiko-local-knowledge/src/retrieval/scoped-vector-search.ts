@@ -39,8 +39,10 @@ import { lexicalQueryTermGroups, type LexicalQueryTermGroup } from "./lexical-no
 import {
   RetrievalError,
   type QueryTransformer,
+  type ResolvedRetrievalStrategy,
   type RetrievalDiagnostics,
   type RetrievalNoEvidenceReason,
+  type RetrievalStrategy,
   type RetrievalVectorIndexDiagnostics,
 } from "./types.js";
 import {
@@ -59,6 +61,7 @@ const ANN_PROJECTION_WIDTH = 32;
 const ANN_RERANK_MAX_ROWS = 1_000;
 const DEFAULT_MAX_ANN_INDEX_ROWS = 250_000;
 const EXACT_TERM_PATTERN = /[\p{L}\p{N}][\p{L}\p{N}._:/#-]{2,}/gu;
+const EXACT_QUOTED_PHRASE_PATTERN = /"([^"\r\n]{3,})"/gu;
 const BROAD_QUERY_PATTERN =
   /\b(compare|comparez|summari[sz]e|overview|explain|describe|analyse|analyze|erkl[aä]re|ueberblick|überblick|vergleiche|zusammenfassung)\b/iu;
 const SEARCH_STOPWORDS = new Set([
@@ -118,7 +121,7 @@ export interface SearchOptions {
   readonly topK: number;
   readonly minScore?: number;
   readonly signal?: AbortSignal;
-  readonly strategy?: "auto" | "balanced" | "exact" | "broad";
+  readonly strategy?: RetrievalStrategy;
   readonly queryTransformer?: QueryTransformer;
   readonly queryTransformTimeoutMs?: number;
   readonly maxExactVectorScanRows?: number;
@@ -126,12 +129,19 @@ export interface SearchOptions {
 }
 
 interface QueryProfile {
-  readonly strategy: "balanced" | "exact" | "broad";
+  readonly strategy: ResolvedRetrievalStrategy;
   readonly tokens: readonly string[];
   readonly exactTerms: readonly string[];
+  readonly exactPhrases: readonly string[];
   readonly lexicalRecallTerms: readonly LexicalQueryTermGroup[];
   readonly documentDiversityPenalty: number;
   readonly sectionDiversityPenalty: number;
+}
+
+interface CandidateBudgets {
+  readonly denseCandidateBudget: number;
+  readonly lexicalCandidateBudget: number;
+  readonly fusedCandidateBudget: number;
 }
 
 // ─── Compose a scope object from either `ComposedRetrievalScope` or a single capsule ────
@@ -939,6 +949,7 @@ interface LexicalCandidate {
   readonly chunkId: string;
   readonly capsuleId: KnowledgeCapsuleId;
   readonly bm25Score: number;
+  readonly lexicalPriority: number;
 }
 
 interface FusedCandidate {
@@ -1037,6 +1048,10 @@ interface LexicalIndexCandidateRow {
 
 interface LexicalIndexCountRow {
   readonly n: number;
+}
+
+interface ExactLexicalIndexCandidateRow extends LexicalIndexCandidateRow {
+  readonly exact_match_count: number;
 }
 
 function sourceFilterClause(
@@ -1150,27 +1165,33 @@ function readFtsCandidatesForCapsule(
     chunkId: row.chunk_id,
     capsuleId: row.capsule_id as KnowledgeCapsuleId,
     bm25Score: row.bm25_score,
+    lexicalPriority: 0,
   }));
 }
 
 function exactLexicalSql(
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
-  exactTerms: readonly string[],
+  exactMatches: readonly string[],
 ): string {
-  const exactClause =
-    exactTerms.length === 0
+  const matchExpressions = exactMatches.map(
+    (_, i) => `instr(lower(li.exact_text), :exact${String(i)}) > 0`,
+  );
+  const exactClause = matchExpressions.length === 0 ? "0" : matchExpressions.join(" OR ");
+  const exactScore =
+    matchExpressions.length === 0
       ? "0"
-      : exactTerms
-          .map((_, i) => `instr(lower(li.exact_text), :exact${String(i)}) > 0`)
-          .join(" OR ");
+      : matchExpressions
+          .map((expression) => `CASE WHEN ${expression} THEN 1 ELSE 0 END`)
+          .join(" + ");
   return [
-    "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id, 0 AS bm25_score",
+    "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id, 0 AS bm25_score,",
+    `  (${exactScore}) AS exact_match_count`,
     "FROM chunk_lexical_index AS li",
     `WHERE li.capsule_id = :capsule_id${sourceFilterClause(
       sourceFilter,
       "li.",
     )} AND (${exactClause})`,
-    "ORDER BY li.chunk_id ASC",
+    "ORDER BY exact_match_count DESC, li.chunk_id ASC",
     "LIMIT :limit",
   ].join(" ");
 }
@@ -1191,11 +1212,12 @@ function readExactLexicalCandidatesForCapsule(
     limit,
     ...sourceParams(sourceFilter),
     ...exactParams,
-  }) as unknown as readonly LexicalIndexCandidateRow[];
+  }) as unknown as readonly ExactLexicalIndexCandidateRow[];
   return rows.map((row) => ({
     chunkId: row.chunk_id,
     capsuleId: row.capsule_id as KnowledgeCapsuleId,
     bm25Score: row.bm25_score,
+    lexicalPriority: Math.max(1, row.exact_match_count),
   }));
 }
 
@@ -1205,8 +1227,41 @@ interface LexicalCollection {
   readonly queryError: boolean;
 }
 
-function lexicalCandidateLimit(topK: number): number {
-  return Math.max(topK, Math.min(LEXICAL_CANDIDATE_LIMIT, topK * 10));
+function boundedCandidateBudget(topK: number, multiplier: number, extraCap: number): number {
+  const base = Math.max(1, topK);
+  return Math.max(base, Math.min(base * multiplier, base + extraCap));
+}
+
+function candidateBudgets(topK: number, profile: QueryProfile): CandidateBudgets {
+  if (profile.strategy === "exact") {
+    const dense = boundedCandidateBudget(topK, 12, 96);
+    const lexical = Math.min(LEXICAL_CANDIDATE_LIMIT, boundedCandidateBudget(topK, 14, 128));
+    return {
+      denseCandidateBudget: dense,
+      lexicalCandidateBudget: lexical,
+      fusedCandidateBudget: lexical,
+    };
+  }
+  if (profile.strategy === "broad") {
+    const dense = boundedCandidateBudget(topK, 10, 64);
+    const lexical = Math.min(LEXICAL_CANDIDATE_LIMIT, boundedCandidateBudget(topK, 8, 64));
+    return {
+      denseCandidateBudget: dense,
+      lexicalCandidateBudget: lexical,
+      fusedCandidateBudget: dense,
+    };
+  }
+  const dense = boundedCandidateBudget(topK, 8, 64);
+  const lexical = Math.min(LEXICAL_CANDIDATE_LIMIT, boundedCandidateBudget(topK, 10, 80));
+  return {
+    denseCandidateBudget: dense,
+    lexicalCandidateBudget: lexical,
+    fusedCandidateBudget: Math.max(dense, lexical),
+  };
+}
+
+function lexicalCandidateLimit(topK: number, profile: QueryProfile): number {
+  return candidateBudgets(topK, profile).lexicalCandidateBudget;
 }
 
 function collectLexicalCandidatesForCapsule(
@@ -1235,13 +1290,22 @@ function collectLexicalCandidatesForCapsule(
     store,
     capsule.id,
     sourceFilter,
-    profile.exactTerms.filter(isStrongLexicalRecallTerm),
+    uniqueStrings([
+      ...profile.exactTerms.filter(isStrongLexicalRecallTerm),
+      ...profile.exactPhrases,
+    ]),
     limit,
   )) {
     const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
-    if (!byKey.has(key)) byKey.set(key, candidate);
+    const existing = byKey.get(key);
+    if (existing === undefined || lexicalCandidateAsc(candidate, existing) < 0) {
+      byKey.set(key, candidate);
+    }
   }
-  return { candidates: [...byKey.values()].slice(0, limit), indexedRowCount };
+  return {
+    candidates: [...byKey.values()].sort(lexicalCandidateAsc).slice(0, limit),
+    indexedRowCount,
+  };
 }
 
 function collectLexicalCandidates(
@@ -1251,7 +1315,7 @@ function collectLexicalCandidates(
   profile: QueryProfile,
   topK: number,
 ): LexicalCollection {
-  const limit = lexicalCandidateLimit(topK);
+  const limit = lexicalCandidateLimit(topK, profile);
   const out: LexicalCandidate[] = [];
   let indexedRowCount = 0;
   try {
@@ -1270,13 +1334,15 @@ function collectLexicalCandidates(
   } catch {
     return { candidates: [], indexedRowCount, queryError: true };
   }
-  return { candidates: out.slice(0, limit), indexedRowCount, queryError: false };
+  return {
+    candidates: out.sort(lexicalCandidateAsc).slice(0, limit),
+    indexedRowCount,
+    queryError: false,
+  };
 }
 
 function oversampleTopK(topK: number, profile: QueryProfile): number {
-  const multiplier = profile.strategy === "exact" ? 12 : profile.strategy === "broad" ? 10 : 8;
-  const cap = profile.strategy === "exact" ? topK + 96 : topK + 64;
-  return Math.max(topK, Math.min(topK * multiplier, cap));
+  return candidateBudgets(topK, profile).denseCandidateBudget;
 }
 
 function scoreDesc(
@@ -1289,7 +1355,9 @@ function scoreDesc(
   return a.chunkId.localeCompare(b.chunkId);
 }
 
-function bm25Asc(a: LexicalCandidate, b: LexicalCandidate): number {
+function lexicalCandidateAsc(a: LexicalCandidate, b: LexicalCandidate): number {
+  const priority = b.lexicalPriority - a.lexicalPriority;
+  if (priority !== 0) return priority;
   if (a.bm25Score !== b.bm25Score) return a.bm25Score - b.bm25Score;
   return a.chunkId.localeCompare(b.chunkId);
 }
@@ -1361,7 +1429,7 @@ function fuseCandidates(
       rrf(rank),
     );
   });
-  const rankedLexical = [...dedupeLexicalCandidates(lexicalCandidates)].sort(bm25Asc);
+  const rankedLexical = [...dedupeLexicalCandidates(lexicalCandidates)].sort(lexicalCandidateAsc);
   rankedLexical.forEach((candidate, index) => {
     const rank = index + 1;
     const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
@@ -1397,7 +1465,7 @@ function dedupeLexicalCandidates(
   for (const candidate of candidates) {
     const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
     const existing = byKey.get(key);
-    if (existing === undefined || candidate.bm25Score < existing.bm25Score) {
+    if (existing === undefined || lexicalCandidateAsc(candidate, existing) < 0) {
       byKey.set(key, candidate);
     }
   }
@@ -1869,6 +1937,9 @@ function retrievalDiagnostics(
   state: SearchState,
   lexical: LexicalCollection,
   fused: readonly FusedCandidate[],
+  strategy: ResolvedRetrievalStrategy,
+  budgets: CandidateBudgets,
+  queryVariantCount: number,
 ): RetrievalDiagnostics {
   const lexicalIndex = lexical.queryError
     ? "query-error"
@@ -1897,9 +1968,14 @@ function retrievalDiagnostics(
           : "dense-only";
   return {
     mode,
+    strategy,
     denseCandidateCount: state.candidates.length,
     lexicalCandidateCount: lexical.candidates.length,
     fusedCandidateCount: fused.length,
+    denseCandidateBudget: budgets.denseCandidateBudget,
+    lexicalCandidateBudget: budgets.lexicalCandidateBudget,
+    fusedCandidateBudget: budgets.fusedCandidateBudget,
+    queryVariantCount,
     denseIndex,
     lexicalIndex,
     vectorIndex: vectorIndexDiagnostics(state.vectorIndexDiagnostics),
@@ -1916,14 +1992,21 @@ export async function searchVectorsForScope(
 ): Promise<SearchOutcome> {
   const capsules = loadCapsules(store, scope.capsuleIds);
   if (capsules.length === 0) {
+    const profile = profileQuery(query, options.strategy);
+    const budgets = candidateBudgets(options.topK, profile);
     return {
       references: [],
       noEvidenceReason: "no-vectors",
       diagnostics: {
         mode: "dense-only",
+        strategy: profile.strategy,
         denseCandidateCount: 0,
         lexicalCandidateCount: 0,
         fusedCandidateCount: 0,
+        denseCandidateBudget: budgets.denseCandidateBudget,
+        lexicalCandidateBudget: budgets.lexicalCandidateBudget,
+        fusedCandidateBudget: budgets.fusedCandidateBudget,
+        queryVariantCount: 0,
         denseIndex: "missing",
         lexicalIndex: "missing",
         vectorIndex: {
@@ -1937,6 +2020,7 @@ export async function searchVectorsForScope(
 
   const profile = profileQuery(query, options.strategy);
   const searchQueries = await searchQueriesFor(query, profile, options);
+  const budgets = candidateBudgets(options.topK, profile);
   const cache = new Map<string, EmbeddedQuery>();
   const preflightCache = new Map<string, IdentityPreflightResult>();
   const state = emptyState();
@@ -1968,12 +2052,15 @@ export async function searchVectorsForScope(
     }
   }
   const lexical = mergeLexicalCollections(lexicalCollections);
-  const fused = fuseCandidates(
-    state.candidates,
-    lexical.candidates,
-    oversampleTopK(options.topK, profile),
+  const fused = fuseCandidates(state.candidates, lexical.candidates, budgets.fusedCandidateBudget);
+  const diagnostics = retrievalDiagnostics(
+    state,
+    lexical,
+    fused,
+    profile.strategy,
+    budgets,
+    searchQueries.length,
   );
-  const diagnostics = retrievalDiagnostics(state, lexical, fused);
   const selection = selectTopCandidates(state, fused);
   if (!selection.ok) {
     return { references: [], noEvidenceReason: selection.reason, diagnostics };
@@ -2157,40 +2244,53 @@ function profileQuery(
 ): QueryProfile {
   const tokens = uniqueTokens(tokenise(query));
   const exactTerms = extractExactTerms(query);
-  const strategy = resolveQueryStrategy(query, tokens, exactTerms, requested);
-  if (strategy === "exact") return exactQueryProfile(tokens, exactTerms);
-  if (strategy === "broad") return broadQueryProfile(tokens, exactTerms);
-  return balancedQueryProfile(tokens, exactTerms);
+  const exactPhrases = extractExactPhrases(query);
+  const strategy = resolveQueryStrategy(query, tokens, exactTerms, exactPhrases, requested);
+  if (strategy === "exact") return exactQueryProfile(tokens, exactTerms, exactPhrases);
+  if (strategy === "broad") return broadQueryProfile(tokens, exactTerms, exactPhrases);
+  return balancedQueryProfile(tokens, exactTerms, exactPhrases);
 }
 
 function resolveQueryStrategy(
   query: string,
   tokens: readonly string[],
   exactTerms: readonly string[],
+  exactPhrases: readonly string[],
   requested: SearchOptions["strategy"] | undefined,
 ): QueryProfile["strategy"] {
   if (requested !== undefined && requested !== "auto") return requested;
+  if (exactPhrases.length > 0) return "exact";
   if (exactTerms.some(isStrongLexicalRecallTerm)) return "exact";
   if (tokens.length >= 8 || BROAD_QUERY_PATTERN.test(query)) return "broad";
   return "balanced";
 }
 
-function exactQueryProfile(tokens: readonly string[], exactTerms: readonly string[]): QueryProfile {
+function exactQueryProfile(
+  tokens: readonly string[],
+  exactTerms: readonly string[],
+  exactPhrases: readonly string[],
+): QueryProfile {
   return {
     strategy: "exact",
     tokens,
     exactTerms,
+    exactPhrases,
     lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
     documentDiversityPenalty: 0.0018,
     sectionDiversityPenalty: 0.001,
   };
 }
 
-function broadQueryProfile(tokens: readonly string[], exactTerms: readonly string[]): QueryProfile {
+function broadQueryProfile(
+  tokens: readonly string[],
+  exactTerms: readonly string[],
+  exactPhrases: readonly string[],
+): QueryProfile {
   return {
     strategy: "broad",
     tokens,
     exactTerms,
+    exactPhrases,
     lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
     documentDiversityPenalty: 0.003,
     sectionDiversityPenalty: 0.0015,
@@ -2200,11 +2300,13 @@ function broadQueryProfile(tokens: readonly string[], exactTerms: readonly strin
 function balancedQueryProfile(
   tokens: readonly string[],
   exactTerms: readonly string[],
+  exactPhrases: readonly string[],
 ): QueryProfile {
   return {
     strategy: "balanced",
     tokens,
     exactTerms,
+    exactPhrases,
     lexicalRecallTerms: buildLexicalRecallTerms(tokens, exactTerms),
     documentDiversityPenalty: 0.002,
     sectionDiversityPenalty: 0.001,
@@ -2219,6 +2321,17 @@ function extractExactTerms(value: string): readonly string[] {
     if (!isExactTerm(raw)) continue;
     const term = normaliseForSearch(raw);
     if (term.length > 0) out.push(term);
+  }
+  return uniqueTokens(out);
+}
+
+function extractExactPhrases(value: string): readonly string[] {
+  const out: string[] = [];
+  for (const match of value.matchAll(EXACT_QUOTED_PHRASE_PATTERN)) {
+    const phrase = normaliseForSearch(match[1] ?? "")
+      .replace(/\s+/gu, " ")
+      .trim();
+    if (phrase.split(/\s+/u).filter((token) => token.length >= 2).length >= 2) out.push(phrase);
   }
   return uniqueTokens(out);
 }

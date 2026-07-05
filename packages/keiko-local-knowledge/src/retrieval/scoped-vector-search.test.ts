@@ -1352,6 +1352,149 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
 
+  it("reports the selected retrieval strategy without exposing query text", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-strategy",
+      text: "ADR-0036 RRF retrieval policy evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const scope = { capsuleIds: ["cap-strategy" as KnowledgeCapsuleId] };
+
+    const balanced = await searchVectorsForScope(store, scriptedAdapter(), scope, "policy", {
+      topK: 1,
+    });
+    expect(balanced.diagnostics.strategy).toBe("balanced");
+
+    const exact = await searchVectorsForScope(store, scriptedAdapter(), scope, "ADR-0036", {
+      topK: 1,
+    });
+    expect(exact.diagnostics.strategy).toBe("exact");
+
+    const broad = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      "Summarize retrieval policy evidence across teams and compare risk signals",
+      { topK: 1 },
+    );
+    expect(broad.diagnostics.strategy).toBe("broad");
+
+    const explicit = await searchVectorsForScope(store, scriptedAdapter(), scope, "ADR-0036", {
+      topK: 1,
+      strategy: "balanced",
+    });
+    expect(explicit.diagnostics.strategy).toBe("balanced");
+    expect(JSON.stringify(explicit.diagnostics)).not.toContain("ADR-0036");
+  });
+
+  it("reports strategy-specific candidate budgets as redacted diagnostics", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-budget",
+      text: "ADR-0036 RRF retrieval policy evidence and multilingual strategy notes",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const scope = { capsuleIds: ["cap-budget" as KnowledgeCapsuleId] };
+
+    const balanced = await searchVectorsForScope(store, scriptedAdapter(), scope, "policy", {
+      topK: 2,
+    });
+    const exact = await searchVectorsForScope(store, scriptedAdapter(), scope, "ADR-0036", {
+      topK: 2,
+    });
+    const broad = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      "Summarize retrieval policy evidence across teams and compare strategy notes",
+      { topK: 2 },
+    );
+
+    expect(exact.diagnostics.lexicalCandidateBudget).toBeGreaterThan(
+      balanced.diagnostics.lexicalCandidateBudget,
+    );
+    expect(balanced.diagnostics.lexicalCandidateBudget).toBeGreaterThan(
+      broad.diagnostics.lexicalCandidateBudget,
+    );
+    expect(exact.diagnostics.fusedCandidateBudget).toBe(exact.diagnostics.lexicalCandidateBudget);
+    expect(broad.diagnostics.fusedCandidateBudget).toBe(broad.diagnostics.denseCandidateBudget);
+    expect(balanced.diagnostics.queryVariantCount).toBe(1);
+    expect(JSON.stringify(exact.diagnostics)).not.toContain("ADR-0036");
+  });
+
+  it("treats quoted phrases as exact lexical retrieval signals", async () => {
+    const { store } = getFixture();
+    const generic = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-phrase-generic",
+      sourceId: "src-phrase-generic",
+      documentId: "doc-phrase-generic",
+      safeDisplayName: "generic-recovery.txt",
+      text: "General recovery control overview for platform response planning.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const phrase = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-phrase-exact",
+      sourceId: "src-phrase-exact",
+      documentId: "doc-phrase-exact",
+      safeDisplayName: "exact-recovery.txt",
+      text: "The treasury recovery checklist must preserve redacted audit evidence.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    setCapsuleVector(store, generic.capsuleId, vectorBlob(1, 0));
+    setCapsuleVector(store, phrase.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [generic.capsuleId, phrase.capsuleId] },
+      '"treasury recovery checklist"',
+      { topK: 1 },
+    );
+
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("exact-recovery.txt");
+    expect(outcome.diagnostics.strategy).toBe("exact");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+    expect(JSON.stringify(outcome.diagnostics)).not.toContain("treasury recovery checklist");
+  });
+
+  it("keeps hostile lexical input scoped and redacted in diagnostics", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-hostile",
+      text: "treasury controls evidence with approved recovery notes",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [seeded.capsuleId] },
+      '"treasury" OR capsule_id:cap-hostile\'; DROP TABLE vectors; --',
+      { topK: 2, strategy: "exact" },
+    );
+
+    expect(outcome.references.every((ref) => String(ref.capsuleId) === "cap-hostile")).toBe(true);
+    expect(["available", "query-error"]).toContain(outcome.diagnostics.lexicalIndex);
+    const diagnostics = JSON.stringify(outcome.diagnostics);
+    expect(diagnostics).not.toContain("DROP TABLE");
+    expect(diagnostics).not.toContain("capsule_id");
+    expect(
+      store._internal.db.prepare("SELECT COUNT(*) AS n FROM vectors").get() as {
+        readonly n: number;
+      },
+    ).toMatchObject({ n: 1 });
+  });
+
   it("recalls exact text matches outside the raw vector oversampling window", async () => {
     const { store } = getFixture();
     const capsuleId = "cap-recall" as KnowledgeCapsuleId;

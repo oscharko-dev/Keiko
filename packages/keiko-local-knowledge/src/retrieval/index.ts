@@ -43,10 +43,13 @@ export {
   MAX_RETRIEVAL_TOP_K,
   RetrievalError,
   type RetrievalErrorCode,
+  type RetrievalDiagnostics,
   type RetrievalNoEvidenceReason,
   type QueryTransformer,
   type QueryTransformRequest,
   type RetrievalQuery,
   type RetrievalResult,
+  type RetrievalStrategy,
   type RetrievalVectorIndexDiagnostics,
+  type ResolvedRetrievalStrategy,
 } from "./types.js";

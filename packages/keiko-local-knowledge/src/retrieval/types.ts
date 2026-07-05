@@ -49,8 +49,11 @@ export interface RetrievalQuery {
   readonly text: string;
   readonly topK?: number;
   readonly minScore?: number;
-  readonly strategy?: "auto" | "balanced" | "exact" | "broad";
+  readonly strategy?: RetrievalStrategy;
 }
+
+export type RetrievalStrategy = "auto" | "balanced" | "exact" | "broad";
+export type ResolvedRetrievalStrategy = Exclude<RetrievalStrategy, "auto">;
 
 export interface QueryTransformRequest {
   readonly query: string;
@@ -92,9 +95,14 @@ export interface RetrievalResult {
 
 export interface RetrievalDiagnostics {
   readonly mode: "hybrid" | "dense-only" | "lexical-only" | "lexical-degraded";
+  readonly strategy: ResolvedRetrievalStrategy;
   readonly denseCandidateCount: number;
   readonly lexicalCandidateCount: number;
   readonly fusedCandidateCount: number;
+  readonly denseCandidateBudget: number;
+  readonly lexicalCandidateBudget: number;
+  readonly fusedCandidateBudget: number;
+  readonly queryVariantCount: number;
   readonly denseIndex: "available" | "guided" | "ann" | "missing" | "skipped-too-large";
   readonly lexicalIndex: "available" | "missing" | "query-error";
   readonly vectorIndex: RetrievalVectorIndexDiagnostics;

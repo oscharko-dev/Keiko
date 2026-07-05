@@ -19,6 +19,7 @@ import { createCapsule } from "../capsule-lifecycle.js";
 import { createCapsuleSet, getCapsuleSet } from "../capsule-set-lifecycle.js";
 import { insertChunkRow } from "../chunking/chunker-persist.js";
 import { insertDocumentRow, insertParsedUnitRow } from "../discovery/persist.js";
+import { upsertLexicalRows, type LexicalChunkIndexRow } from "../indexing/lexical-index-persist.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -152,6 +153,7 @@ function seedChunks(
   chunkTokenCounts: Map<string, number>,
 ): void {
   let orderIndex = 0;
+  const lexicalRows: LexicalChunkIndexRow[] = [];
   for (const chunk of doc.chunks) {
     const parsedUnit = resolveChunkUnit(doc, chunk);
     const composedUnit = composeParsedUnit(String(doc.id), parsedUnit);
@@ -170,10 +172,20 @@ function seedChunks(
       characterStart: 0,
       characterEnd: chunk.text.length,
     });
+    lexicalRows.push({
+      capsuleId: capsule.id,
+      sourceId: source.id,
+      documentId: doc.id,
+      chunkId: chunk.id,
+      text: chunk.text,
+      exactText: chunk.text,
+      updatedAt: 1_700_000_000_000,
+    });
     chunkUnitKinds.set(String(chunk.id), citationRequirementForUnit(composedUnit));
     chunkTokenCounts.set(String(chunk.id), chunk.text.length);
     orderIndex += 1;
   }
+  upsertLexicalRows(store._internal.db, lexicalRows);
 }
 
 function collectTopicBoosts(fixture: RetrievalEvalFixture): Record<string, number> {

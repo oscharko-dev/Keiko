@@ -10,9 +10,13 @@ import {
   ambiguousQueryFixture,
   broadQueryDiversityFixture,
   contextBudgetFixture,
+  exactTechnicalFixture,
+  mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
+  multilingualFixture,
   noEvidenceFixture,
+  semanticParaphraseFixture,
   singleTopicFixture,
   staleIndexFixture,
   structuredFileFixture,
@@ -53,6 +57,10 @@ describe("fixtures — registry", () => {
       contextBudgetFixture.id,
       staleIndexFixture.id,
       broadQueryDiversityFixture.id,
+      exactTechnicalFixture.id,
+      semanticParaphraseFixture.id,
+      multilingualFixture.id,
+      mixedStrategyFixture.id,
     ]);
   });
 

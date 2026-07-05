@@ -153,9 +153,14 @@ function countPrepareCalls(db: KnowledgeDb, onPrepare: () => void): () => void {
 function activityDiagnostics(mode: ActivityDiagnostics["mode"]): ActivityDiagnostics {
   return {
     mode,
+    strategy: "balanced",
     denseCandidateCount: 4,
     lexicalCandidateCount: 3,
     fusedCandidateCount: 5,
+    denseCandidateBudget: 40,
+    lexicalCandidateBudget: 50,
+    fusedCandidateBudget: 50,
+    queryVariantCount: 1,
     denseIndex: "available",
     lexicalIndex: "available",
     vectorIndex: { provider: "brute-force", status: "available" },
