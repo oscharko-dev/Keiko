@@ -1,8 +1,8 @@
 # Portable Runtime Artifact Contract
 
-Status: Contract baseline for Issue #1947. This document defines the release artifact shape that
-later portable delivery children must implement and verify. It does not build artifacts, publish
-assets, or change updater execution logic.
+Status: Contract baseline for Issue #1947 and staging baseline for Issue #1948. This document
+defines the release artifact shape that later portable delivery children must implement and verify.
+It does not publish assets or change updater execution logic.
 
 Governing decisions:
 
@@ -35,6 +35,20 @@ portable assets as a release-blocking set:
 
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
+
+## Current Staging Status
+
+Issue #1948 stages the packed Keiko package, acquires and verifies the target Node.js runtime
+archive, extracts that runtime into the portable payload, and validates redacted sidecar manifests.
+It does not perform production signing, macOS notarization, release upload, native launcher
+implementation, first-run setup, or updater swap.
+
+Generated #1948 staging manifests therefore use `signatureVerified: false`,
+`notarizationVerified: false`, and `platformSignatureLocallyVerified: false` under an explicit
+unverified-staging validation mode. Those artifacts are manual-only staging outputs until #1951
+replaces the metadata with verified signing/notarization evidence. The manifest example below
+remains the production-complete contract for artifacts that may be promoted as portable release
+assets.
 
 ## Archive And Evidence Layout
 
@@ -72,6 +86,7 @@ windows-x64/
           node.exe
           LICENSE
           NOTICE
+          NODE_RUNTIME_SOURCE.json
       support/
         keiko-support.cmd
 ```
@@ -106,6 +121,7 @@ macos-arm64/
                 bin/node
                 LICENSE
                 NOTICE
+                NODE_RUNTIME_SOURCE.json
       support/
         keiko-support.sh
 ```
@@ -118,8 +134,10 @@ Layout rules:
   referenced from default install/start copy.
 - `app/` contains the built root `@oscharko-dev/keiko` product surface from the same source package
   contract as npm publication, not ad hoc copied workspace source.
-- `runtime/node/` contains the pinned Node.js runtime for the exact platform target. It is private
-  to this Keiko artifact and must not be installed globally.
+- `runtime/node/` contains the extracted pinned Node.js runtime for the exact platform target, not
+  only the source archive. It is private to this Keiko artifact and must not be installed globally.
+- `runtime/node/NODE_RUNTIME_SOURCE.json` records the content-free source archive identity, target,
+  version, and SHA-256 digest used to populate the runtime payload.
 - `manifest/portable-manifest.json` is the sidecar artifact contract record for build, setup,
   release, and updater children.
 - `evidence/` contains sidecar release artifact evidence only. It must be content-free with

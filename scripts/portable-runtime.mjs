@@ -282,7 +282,7 @@ function validateStateExclusion(manifest, failures) {
   }
 }
 
-function validateSecurity(manifest, failures) {
+function validateSecurity(manifest, failures, options) {
   const security = recordAt(manifest, "security", "manifest", failures);
   const target = portableTargetByName(manifest.artifact?.platformTarget);
   const signatureKind = stringAt(security, "signatureKind", "security", failures);
@@ -292,18 +292,20 @@ function validateSecurity(manifest, failures) {
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, "security.signatureKind", `must be ${target.signatureKind}`);
   }
-  if (!signatureVerified) push(failures, "security.signatureVerified", "must be true");
-  validateTargetNotarization(target, notarizationRequired, notarizationVerified, failures);
+  if (!options.allowUnverified && !signatureVerified) {
+    push(failures, "security.signatureVerified", "must be true");
+  }
+  validateTargetNotarization(target, notarizationRequired, notarizationVerified, failures, options);
   relativePathAt(security, "verificationSummaryPath", "security", failures);
 }
 
-function validateTargetNotarization(target, required, verified, failures) {
+function validateTargetNotarization(target, required, verified, failures, options) {
   if (target === undefined) return;
   const macosTarget = target.nodePlatform === "darwin";
   if (required !== macosTarget) {
     push(failures, "security.notarizationRequired", `must be ${String(macosTarget)}`);
   }
-  if (macosTarget && !verified) {
+  if (macosTarget && !options.allowUnverified && !verified) {
     push(failures, "security.notarizationVerified", "must be true for macOS targets");
   }
   if (!macosTarget && verified) {
@@ -400,7 +402,7 @@ function nodeRuntimeIdentity(manifest, target) {
   return `node-v${manifest.runtime.nodeVersion}-${target.runtimeTarget}`;
 }
 
-function validateUpdateEligibility(manifest, failures) {
+function validateUpdateEligibility(manifest, failures, options) {
   const update = recordAt(manifest, "updateEligibility", "manifest", failures);
   if (!booleanAt(update, "stableOnly", "updateEligibility", failures))
     push(failures, "updateEligibility.stableOnly", "must be true");
@@ -408,6 +410,11 @@ function validateUpdateEligibility(manifest, failures) {
     push(failures, "updateEligibility.rollbackSupported", "must be false");
   if (!booleanAt(update, "eligibleAfterSetupOnly", "updateEligibility", failures))
     push(failures, "updateEligibility.eligibleAfterSetupOnly", "must be true");
+  validateUpdatePredicates(manifest, update, failures, options);
+  validateManualOnlyWhen(update, failures, options);
+}
+
+function validateUpdatePredicates(manifest, update, failures, options) {
   const predicates = recordAt(update, "requiredPredicates", "updateEligibility", failures);
   for (const key of [
     "managedRootAttested",
@@ -417,23 +424,49 @@ function validateUpdateEligibility(manifest, failures) {
     "sameVolumeCrashSafePromotionAvailable",
     "relaunchVersionVerificationAvailable",
   ]) {
-    if (!booleanAt(predicates, key, "updateEligibility.requiredPredicates", failures))
-      push(failures, `updateEligibility.requiredPredicates.${key}`, "must be true");
+    const value = booleanAt(predicates, key, "updateEligibility.requiredPredicates", failures);
+    if (!expectedUpdatePredicate(key, value, options)) {
+      push(
+        failures,
+        `updateEligibility.requiredPredicates.${key}`,
+        expectedUpdatePredicateMessage(key, options),
+      );
+    }
   }
-  if (!platformSignatureVerified(manifest)) {
+  if (!options.allowUnverified && !platformSignatureVerified(manifest)) {
     push(
       failures,
       "updateEligibility.requiredPredicates.platformSignatureLocallyVerified",
       "must be backed by verified platform signature evidence",
     );
   }
+}
+
+function validateManualOnlyWhen(update, failures, options) {
   if (!Array.isArray(update.manualOnlyWhen) || update.manualOnlyWhen.length === 0) {
     push(failures, "updateEligibility.manualOnlyWhen", "must list manual-only blockers");
   } else if (
     update.manualOnlyWhen.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
     push(failures, "updateEligibility.manualOnlyWhen", "must contain non-empty strings");
+  } else if (
+    options.allowUnverified &&
+    !update.manualOnlyWhen.includes("signature-or-notarization-cannot-be-verified")
+  ) {
+    push(failures, "updateEligibility.manualOnlyWhen", "must include signature blocker");
   }
+}
+
+function expectedUpdatePredicate(key, value, options) {
+  if (options.allowUnverified && key === "platformSignatureLocallyVerified") return !value;
+  return value;
+}
+
+function expectedUpdatePredicateMessage(key, options) {
+  if (options.allowUnverified && key === "platformSignatureLocallyVerified") {
+    return "must be false until platform signature evidence is verified";
+  }
+  return "must be true";
 }
 
 function platformSignatureVerified(manifest) {
@@ -494,10 +527,10 @@ export function validatePortableManifest(manifest, options = {}) {
   validateEntrypoints(manifest, failures);
   validateInstallLayout(manifest, failures);
   validateStateExclusion(manifest, failures);
-  validateSecurity(manifest, failures);
+  validateSecurity(manifest, failures, options);
   validateEvidence(manifest, failures);
   validateReleaseImpact(manifest, failures);
-  validateUpdateEligibility(manifest, failures);
+  validateUpdateEligibility(manifest, failures, options);
   scanForbidden(manifest, "manifest", failures);
   return failures;
 }

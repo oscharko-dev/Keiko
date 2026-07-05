@@ -7,6 +7,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -52,8 +53,6 @@ function parseArgs(argv) {
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     releaseId: Number(process.env.GITHUB_RUN_ID ?? 0),
     releaseTag: `v${rootPackage.version}`,
-    signatureVerified: false,
-    notarizationVerified: false,
     target: undefined,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -64,7 +63,6 @@ function parseArgs(argv) {
   if (target === undefined) fail(`unsupported target ${options.target}`);
   validateNodeRuntimeOptions(options);
   validateReleaseOptions(options);
-  validateSigningOptions(options, target);
   if (options.nodeArchive !== undefined) {
     assertNodeArchiveIdentity(options.nodeArchive, target, options.nodeVersion);
   }
@@ -75,14 +73,6 @@ function applyArg(argv, index, options) {
   const arg = argv[index];
   if (arg === "--dry-run") {
     options.dryRun = true;
-    return index;
-  }
-  if (arg === "--signature-verified") {
-    options.signatureVerified = true;
-    return index;
-  }
-  if (arg === "--notarization-verified") {
-    options.notarizationVerified = true;
     return index;
   }
   const fields = new Map([
@@ -136,15 +126,8 @@ function validateReleaseOptions(options) {
   if (typeof options.releaseTag !== "string" || options.releaseTag.length === 0) {
     fail("--release-tag must be a non-empty release tag");
   }
-}
-
-function validateSigningOptions(options, target) {
-  if (!options.signatureVerified) fail("--signature-verified is required for portable manifests");
-  if (target.nodePlatform === "darwin" && !options.notarizationVerified) {
-    fail("--notarization-verified is required for macOS portable manifests");
-  }
-  if (target.nodePlatform !== "darwin" && options.notarizationVerified) {
-    fail("--notarization-verified is only valid for macOS portable manifests");
+  if (rootPackage.version.includes("-") || options.releaseTag !== `v${rootPackage.version}`) {
+    fail("--release-tag must match the stable package version for portable v1");
   }
 }
 
@@ -172,31 +155,20 @@ function packRoot(packDir) {
   return tarball;
 }
 
-function installPackage(tarball, installRoot) {
-  run("npm", ["init", "-y"], { cwd: installRoot });
-  run(
-    "npm",
-    ["install", tarball, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
-    {
-      cwd: installRoot,
-      timeout: 180_000,
-    },
-  );
-}
-
-function stageInstalledPackage(installRoot, stageRoot) {
-  const installed = join(installRoot, "node_modules", "@oscharko-dev", "keiko");
-  if (!existsSync(installed)) fail(`installed Keiko package not found at ${installed}`);
-  cpSync(installed, join(stageRoot, "app"), { recursive: true, dereference: true });
+function stagePackedPackage(tarball, extractRoot, stageRoot) {
+  run("tar", ["-xzf", tarball, "-C", extractRoot]);
+  const extracted = join(extractRoot, "package");
+  if (!existsSync(extracted)) fail(`packed Keiko package not found at ${extracted}`);
+  cpSync(extracted, join(stageRoot, "app"), { recursive: true, dereference: true });
 }
 
 async function stageNodeRuntime(options, target, stageRoot) {
   const runtimeRoot = join(stageRoot, "runtime", "node");
-  const archiveRoot = join(runtimeRoot, "archive");
   mkdirSync(runtimeRoot, { recursive: true });
-  mkdirSync(archiveRoot, { recursive: true });
   const archive = await resolveNodeArchive(options, target);
-  copyFileSync(archive.path, join(archiveRoot, archive.fileName));
+  extractNodeRuntime(archive.path, target, options.nodeVersion, runtimeRoot);
+  ensureRuntimeNotice(runtimeRoot, archive);
+  validateExtractedNodeRuntime(target, runtimeRoot);
   writeFileSync(
     join(runtimeRoot, "NODE_RUNTIME_SOURCE.json"),
     JSON.stringify(
@@ -212,6 +184,70 @@ async function stageNodeRuntime(options, target, stageRoot) {
     ) + "\n",
   );
   return archive.sha256;
+}
+
+function extractNodeRuntime(archivePath, target, nodeVersion, runtimeRoot) {
+  const extractRoot = join(runtimeRoot, ".extract");
+  rmSync(extractRoot, { recursive: true, force: true });
+  mkdirSync(extractRoot, { recursive: true });
+  try {
+    extractNodeArchive(archivePath, target, extractRoot);
+    copyArchiveRootContents(
+      extractRoot,
+      expectedNodeArchiveRootName(target, nodeVersion),
+      runtimeRoot,
+    );
+  } finally {
+    rmSync(extractRoot, { recursive: true, force: true });
+  }
+}
+
+function extractNodeArchive(archivePath, target, extractRoot) {
+  if (target.nodeArchiveExtension === "zip") {
+    run("unzip", ["-q", archivePath, "-d", extractRoot]);
+    return;
+  }
+  run("tar", ["-xzf", archivePath, "-C", extractRoot]);
+}
+
+function copyArchiveRootContents(extractRoot, archiveRootName, runtimeRoot) {
+  const archiveRoot = join(extractRoot, archiveRootName);
+  if (!existsSync(archiveRoot)) fail(`Node archive root not found at ${archiveRootName}`);
+  for (const entry of readdirSync(archiveRoot)) {
+    cpSync(join(archiveRoot, entry), join(runtimeRoot, entry), {
+      recursive: true,
+      dereference: true,
+    });
+  }
+}
+
+function validateExtractedNodeRuntime(target, runtimeRoot) {
+  const launcherPath = target.nodePlatform === "win32" ? "node.exe" : "bin/node";
+  requireRuntimeFile(runtimeRoot, launcherPath);
+  requireRuntimeFile(runtimeRoot, "LICENSE");
+  requireRuntimeFile(runtimeRoot, "NOTICE");
+}
+
+function requireRuntimeFile(runtimeRoot, relativePath) {
+  const path = join(runtimeRoot, relativePath);
+  if (!existsSync(path) || !statSync(path).isFile()) {
+    fail(`Node runtime must include ${relativePath}`);
+  }
+}
+
+function ensureRuntimeNotice(runtimeRoot, archive) {
+  const noticePath = join(runtimeRoot, "NOTICE");
+  if (existsSync(noticePath)) return;
+  writeFileSync(
+    noticePath,
+    [
+      "Keiko bundled Node.js runtime notice.",
+      `Source archive: ${archive.fileName}`,
+      `Source archive SHA-256: ${archive.sha256}`,
+      "The upstream Node.js runtime license is included in LICENSE.",
+      "",
+    ].join("\n"),
+  );
 }
 
 function payloadResourceRoot(target, payloadRoot) {
@@ -332,7 +368,11 @@ function assertNodeArchiveName(fileName, target, nodeVersion) {
 }
 
 function expectedNodeArchiveFileName(target, nodeVersion) {
-  return `node-v${nodeVersion}-${target.nodeArchiveTarget}.${target.nodeArchiveExtension}`;
+  return `${expectedNodeArchiveRootName(target, nodeVersion)}.${target.nodeArchiveExtension}`;
+}
+
+function expectedNodeArchiveRootName(target, nodeVersion) {
+  return `node-v${nodeVersion}-${target.nodeArchiveTarget}`;
 }
 
 function assertNodeArchiveMagic(path, target) {
@@ -365,7 +405,7 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
         notarizationVerified: manifest.security.notarizationVerified,
         signatureKind: manifest.security.signatureKind,
         signatureVerified: manifest.security.signatureVerified,
-        status: manifest.security.signatureVerified ? "verified" : "not-verified",
+        status: "unverified-staging",
         target: manifest.artifact.platformTarget,
       },
       null,
@@ -535,12 +575,12 @@ function manifestStateExclusion() {
   };
 }
 
-function manifestSecurity(options, target) {
+function manifestSecurity(target) {
   return {
     signatureKind: target.signatureKind,
-    signatureVerified: options.signatureVerified,
+    signatureVerified: false,
     notarizationRequired: target.nodePlatform === "darwin",
-    notarizationVerified: target.nodePlatform === "darwin" && options.notarizationVerified,
+    notarizationVerified: false,
     verificationSummaryPath: "evidence/signing-verification.json",
   };
 }
@@ -593,7 +633,7 @@ function manifestUpdateEligibility() {
     requiredPredicates: {
       managedRootAttested: true,
       artifactShaVerified: true,
-      platformSignatureLocallyVerified: true,
+      platformSignatureLocallyVerified: false,
       manifestReleaseImpactBound: true,
       sameVolumeCrashSafePromotionAvailable: true,
       relaunchVersionVerificationAvailable: true,
@@ -611,7 +651,7 @@ function manifestUpdateEligibility() {
 function manifestFor(options, target, digests) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
-  const security = manifestSecurity(options, target);
+  const security = manifestSecurity(target);
   return {
     schemaVersion: 1,
     product: manifestProduct(),
@@ -647,15 +687,14 @@ async function assemble(options) {
   mkdirSync(tmp, { recursive: true });
   try {
     const tarball = packRoot(tmp);
-    const installRoot = join(tmp, "install");
+    const extractRoot = join(tmp, "extract");
     const stageRoot = join(tmp, "stage", target.platformTarget);
     const payloadContainer = join(stageRoot, "payload");
     const payloadRoot = join(payloadContainer, "Keiko");
     const resourceRoot = payloadResourceRoot(target, payloadRoot);
-    mkdirSync(installRoot, { recursive: true });
+    mkdirSync(extractRoot, { recursive: true });
     mkdirSync(resourceRoot, { recursive: true });
-    installPackage(tarball, installRoot);
-    stageInstalledPackage(installRoot, resourceRoot);
+    stagePackedPackage(tarball, extractRoot, resourceRoot);
     stageLauncher(target, payloadRoot);
     const nodeArchiveSha256 = await stageNodeRuntime(options, target, resourceRoot);
     const appTreeSha256 = hashDirectoryTree(join(resourceRoot, "app"));
@@ -675,7 +714,7 @@ async function assemble(options) {
     });
     writeEvidence(stageRoot, manifest, provenanceStatement);
     writeManifest(stageRoot, manifest);
-    const failures = validatePortableManifest(manifest);
+    const failures = validatePortableManifest(manifest, { allowUnverified: true });
     if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
     if (!options.dryRun) {
       mkdirSync(resolve(options.outDir), { recursive: true });
