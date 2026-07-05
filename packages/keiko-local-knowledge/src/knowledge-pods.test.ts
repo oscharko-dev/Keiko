@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
   validateKnowledgePodSummary,
   type CapsuleSetId,
@@ -310,6 +311,106 @@ describe("Knowledge Pod compatibility projection", () => {
           rawContentRelease: "allow",
         },
       });
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("projects pod-set member readiness as closed counts and reason codes", () => {
+    const env = freshStore();
+    try {
+      const readyId = "cap-readiness-ready" as KnowledgeCapsuleId;
+      const sealedId = "cap-readiness-sealed" as KnowledgeCapsuleId;
+      const indexingId = "cap-readiness-indexing" as KnowledgeCapsuleId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: readyId,
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: sealedId,
+          lifecycleState: "ready",
+          modelUsePolicy: sealedLocalPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: indexingId,
+          lifecycleState: "indexing",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      const set = createCapsuleSet(env.store, {
+        id: "set-readiness" as CapsuleSetId,
+        displayName: "Readiness Set",
+        tags: [],
+        capsuleIds: [readyId, sealedId, indexingId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      expect(summary.setReadiness).toMatchObject({
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 2,
+        unavailableCount: 0,
+        deniedCount: 1,
+        indexingCount: 1,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["member-indexing", "policy-denied", "no-sources"]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("keeps missing pod-set members visible as degraded redacted counts", () => {
+    const env = freshStore();
+    try {
+      const presentId = "cap-present-member" as KnowledgeCapsuleId;
+      const missingId = "cap-missing-member" as KnowledgeCapsuleId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: presentId,
+          lifecycleState: "ready",
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+
+      const summary = buildKnowledgePodSetSummary(env.store, {
+        id: "set-missing-member" as CapsuleSetId,
+        displayName: "Missing Member Set",
+        tags: [],
+        capsuleIds: [presentId, missingId],
+        composedAt: 1,
+      });
+
+      expect(summary).toMatchObject({
+        readiness: "degraded",
+        counts: {
+          capsuleCount: 2,
+        },
+        setReadiness: {
+          degradedCount: 1,
+          missingCount: 1,
+        },
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["missing-member", "no-sources"]),
+      );
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
     } finally {
       env.cleanup();

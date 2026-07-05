@@ -87,6 +87,182 @@ describe("validateKnowledgePodSummary", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts closed pod-set readiness counts and reason codes", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      compatibility: {
+        ...happySummary().compatibility,
+        backingKind: "capsule-set",
+      },
+      counts: {
+        ...happySummary().counts,
+        capsuleCount: 3,
+      },
+      setReadiness: {
+        readyCount: 1,
+        draftCount: 0,
+        degradedCount: 1,
+        unavailableCount: 0,
+        deniedCount: 1,
+        indexingCount: 1,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: ["member-indexing", "member-degraded", "policy-denied"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("accepts future pod-set placeholders only as non-functional readiness evidence", () => {
+    const cases = [
+      ["remote", "future-remote-member"],
+      ["federated", "future-federated-member"],
+      ["ephemeral", "future-ephemeral-member"],
+    ] as const;
+
+    for (const [placeholderKind, reasonCode] of cases) {
+      const base = happySummary();
+      const result = validateKnowledgePodSummary({
+        ...base,
+        kind: "pod-set",
+        readiness: "unavailable",
+        counts: { ...base.counts, capsuleCount: 1 },
+        setReadiness: {
+          readyCount: 0,
+          draftCount: 0,
+          degradedCount: 0,
+          unavailableCount: 1,
+          deniedCount: 0,
+          indexingCount: 0,
+          staleCount: 0,
+          errorCount: 0,
+          missingCount: 0,
+          reasonCodes: [reasonCode],
+        },
+        sourceKinds: [placeholderKind],
+        retrieval: {
+          ...base.retrieval,
+          lexicalIndex: false,
+          vectorIndex: false,
+          hybridGrounding: false,
+        },
+        governance: { ...base.governance, locationKind: placeholderKind },
+        compatibility: { ...base.compatibility, backingKind: "capsule-set" },
+      });
+
+      expect(result.ok).toBe(true);
+    }
+  });
+
+  it("rejects future pod placeholders that claim ready retrieval or omit set reasons", () => {
+    const readyRemote = validateKnowledgePodSummary({
+      ...happySummary(),
+      sourceKinds: ["remote"],
+      governance: { ...happySummary().governance, locationKind: "remote" },
+      readiness: "ready",
+    });
+    const missingSetReason = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      readiness: "unavailable",
+      counts: { ...happySummary().counts, capsuleCount: 1 },
+      setReadiness: {
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 1,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: [],
+      },
+      sourceKinds: ["federated"],
+      retrieval: {
+        ...happySummary().retrieval,
+        lexicalIndex: false,
+        vectorIndex: false,
+        hybridGrounding: false,
+      },
+      governance: { ...happySummary().governance, locationKind: "federated" },
+      compatibility: { ...happySummary().compatibility, backingKind: "capsule-set" },
+    });
+
+    expect(invalidErrors(readyRemote)).toEqual(
+      expect.arrayContaining([
+        "future pod placeholders must be degraded or unavailable",
+        "future pod placeholders must not advertise retrieval capabilities",
+      ]),
+    );
+    expect(invalidErrors(missingSetReason)).toContain(
+      "setReadiness.reasonCodes must include future-federated-member for future placeholders",
+    );
+  });
+
+  it("rejects malformed pod-set readiness metadata", () => {
+    const invalidCode = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      compatibility: { ...happySummary().compatibility, backingKind: "capsule-set" },
+      setReadiness: {
+        readyCount: 1,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: ["raw-provider-error"],
+      },
+    });
+    const nonSet = validateKnowledgePodSummary({
+      ...happySummary(),
+      setReadiness: {
+        readyCount: 1,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: [],
+      },
+    });
+    const mismatch = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      compatibility: { ...happySummary().compatibility, backingKind: "capsule-set" },
+      setReadiness: {
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: [],
+      },
+    });
+
+    expect(invalidErrors(invalidCode)).toContain(
+      "setReadiness.reasonCodes entries must be known reason codes",
+    );
+    expect(invalidErrors(nonSet)).toContain("setReadiness is only valid for pod-set summaries");
+    expect(invalidErrors(mismatch)).toContain(
+      "setReadiness member counts must match counts.capsuleCount",
+    );
+  });
+
   it("rejects unexpected raw-content fields", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),

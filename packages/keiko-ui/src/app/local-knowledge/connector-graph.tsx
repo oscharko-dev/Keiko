@@ -21,10 +21,19 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+  KnowledgePodSetReadinessReasonCode,
+} from "@oscharko-dev/keiko-contracts";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
-import type { CapsuleListEntry, ConnectorGraphProps, RowActionKind } from "./connector-graph-types";
+import type {
+  CapsuleListEntry,
+  CapsuleSetListEntry,
+  ConnectorGraphProps,
+  RowActionKind,
+} from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
 import { CapsuleSetComposeDialog } from "./capsule-set-compose";
@@ -379,6 +388,80 @@ function EmbeddingGuidanceDescription({
       Knowledge Pod guidance: {guidance.label}. {guidance.description}
     </small>
   );
+}
+
+function readinessBadgeState(
+  readiness: NonNullable<CapsuleSetListEntry["knowledgePod"]>["readiness"] | undefined,
+): CapsuleLifecycleState {
+  if (readiness === "ready") return "ready";
+  if (readiness === "indexing") return "indexing";
+  if (readiness === "error" || readiness === "unavailable") return "error";
+  if (readiness === "stale" || readiness === "degraded") return "stale";
+  return "draft";
+}
+
+function readinessLabel(
+  readiness: NonNullable<CapsuleSetListEntry["knowledgePod"]>["readiness"] | undefined,
+): string {
+  if (readiness === undefined) return "Unknown";
+  if (readiness === "ready") return "Ready";
+  if (readiness === "indexing") return "Indexing";
+  if (readiness === "stale") return "Stale";
+  if (readiness === "degraded") return "Degraded";
+  if (readiness === "unavailable") return "Unavailable";
+  if (readiness === "error") return "Failed";
+  return "Draft";
+}
+
+type CapsuleSetReadinessSummary = NonNullable<
+  NonNullable<CapsuleSetListEntry["knowledgePod"]>["setReadiness"]
+>;
+
+const SET_READINESS_REASON_LABELS: Record<KnowledgePodSetReadinessReasonCode, string> = {
+  "member-draft": "draft",
+  "member-indexing": "indexing",
+  "member-stale": "stale",
+  "member-error": "error",
+  "member-unavailable": "unavailable",
+  "member-degraded": "degraded",
+  "missing-member": "missing",
+  "policy-denied": "policy denied",
+  "embedding-unknown": "embedding unknown",
+  "embedding-incompatible": "embedding mismatch",
+  "embedding-unavailable": "embedding unavailable",
+  "embedding-opaque": "embedding opaque",
+  "no-sources": "no sources",
+  "no-vectors": "no vectors",
+  "future-remote-member": "remote placeholder",
+  "future-federated-member": "federated placeholder",
+  "future-ephemeral-member": "ephemeral placeholder",
+};
+
+function setReasonLabels(setReadiness: CapsuleSetReadinessSummary): readonly string[] {
+  return setReadiness.reasonCodes.map((code) => SET_READINESS_REASON_LABELS[code]);
+}
+
+function setCountsLine(set: CapsuleSetListEntry): string {
+  const counts = set.knowledgePod?.counts;
+  if (counts === undefined) return `${set.capsuleCount.toString()} Knowledge Pods`;
+  const base = [
+    `${counts.capsuleCount.toString()} pods`,
+    `${counts.sourceCount.toString()} sources`,
+    `${counts.documentCount.toString()} docs`,
+    `${counts.chunkCount.toString()} chunks`,
+    `${counts.vectorCount.toString()} vectors`,
+  ];
+  const setReadiness = set.knowledgePod?.setReadiness;
+  if (setReadiness === undefined) return base.join(" / ");
+  const reasonLabels = setReasonLabels(setReadiness);
+  return [
+    ...base,
+    `${setReadiness.readyCount.toString()} ready`,
+    `${setReadiness.degradedCount.toString()} degraded`,
+    `${setReadiness.deniedCount.toString()} policy denied`,
+    `${setReadiness.missingCount.toString()} missing`,
+    ...(reasonLabels.length > 0 ? [`reasons: ${reasonLabels.join(", ")}`] : []),
+  ].join(" / ");
 }
 
 // ---------------------------------------------------------------------------
@@ -871,6 +954,136 @@ function CapsuleSection({
   );
 }
 
+function CapsuleSetRow({
+  capsuleSet,
+  onAddToWorkspace,
+}: {
+  readonly capsuleSet: CapsuleSetListEntry;
+  readonly onAddToWorkspace: () => void;
+}): ReactNode {
+  const guidance = capsuleSet.knowledgePod?.guidance;
+  const guidanceDescriptionId = useId();
+  const countsId = useId();
+  const describedBy = [countsId, guidance === undefined ? undefined : guidanceDescriptionId]
+    .filter((id): id is string => id !== undefined)
+    .join(" ");
+  const readiness = capsuleSet.knowledgePod?.readiness;
+  const payload: LocalKnowledgeConnectorDragPayload = {
+    kind: "capsule-set",
+    id: capsuleSet.id,
+    label: capsuleSet.displayName,
+    lifecycleState: readiness ?? "unknown",
+  };
+  const onDragStart = (event: DragEvent<HTMLElement>): void => {
+    event.dataTransfer.effectAllowed = "copy";
+    event.dataTransfer.setData(
+      LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+      serializeLocalKnowledgeConnectorDrag(payload),
+    );
+    event.dataTransfer.setData("text/plain", capsuleSet.displayName);
+  };
+  const onDragEnd = (event: DragEvent<HTMLElement>): void => {
+    if (isWorkspaceDropTarget(event.clientX, event.clientY)) {
+      dispatchConnectorDrop(payload, event);
+    }
+  };
+  return (
+    <article
+      aria-label={`Knowledge Pod Set: ${capsuleSet.displayName}`}
+      aria-describedby={describedBy}
+      className="lk-capsule-row"
+    >
+      <button
+        type="button"
+        className="lk-capsule-drag-handle"
+        tabIndex={-1}
+        aria-label={`Drag Knowledge Pod Set ${capsuleSet.displayName} to the workspace`}
+        aria-describedby={describedBy}
+        title="Drag to the workspace to create a Knowledge Pod Set card"
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+      >
+        <span aria-hidden="true" className="lk-capsule-icon">
+          ▣
+        </span>
+        <span className="lk-capsule-info">
+          <span className="lk-capsule-name" title={capsuleSet.displayName}>
+            {capsuleSet.displayName}
+          </span>
+          <span className="lk-badge" data-state={readinessBadgeState(readiness)}>
+            {readinessLabel(readiness)}
+          </span>
+          <span className="lk-badge" data-state="draft">
+            {capsuleSet.capsuleCount.toString()} Pods
+          </span>
+          <EmbeddingGuidanceBadge guidance={guidance} />
+          <small id={countsId} style={{ display: "block", color: "var(--text-secondary)" }}>
+            Knowledge Pod Set readiness: {readinessLabel(readiness)}. {setCountsLine(capsuleSet)}.
+          </small>
+          <EmbeddingGuidanceDescription id={guidanceDescriptionId} guidance={guidance} />
+        </span>
+      </button>
+      <div className="lk-capsule-actions">
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          onClick={onAddToWorkspace}
+          aria-label={`Add Knowledge Pod Set ${capsuleSet.displayName} to workspace`}
+          aria-describedby={describedBy}
+        >
+          Add to workspace
+        </button>
+      </div>
+    </article>
+  );
+}
+
+function CapsuleSetSection({
+  capsuleSets,
+}: {
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
+}): ReactNode {
+  if (capsuleSets.length === 0) return null;
+  return (
+    <>
+      <h2 className="lk-section-head">Knowledge Pod Sets</h2>
+      <ul
+        aria-label="Knowledge Pod Set list"
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          listStyle: "none",
+          padding: 0,
+          margin: "0 0 12px",
+        }}
+      >
+        {capsuleSets.map((capsuleSet) => (
+          <li key={capsuleSet.id} style={{ display: "block" }}>
+            <CapsuleSetRow
+              capsuleSet={capsuleSet}
+              onAddToWorkspace={() => {
+                const center = getWorkspaceCenter();
+                if (center !== null)
+                  dispatchConnectorDrop(
+                    {
+                      kind: "capsule-set",
+                      id: capsuleSet.id,
+                      label: capsuleSet.displayName,
+                      lifecycleState: capsuleSet.knowledgePod?.readiness ?? "unknown",
+                    },
+                    center,
+                  );
+              }}
+            />
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // GraphPageHeader — title bar + create button + alert banners
 // ---------------------------------------------------------------------------
@@ -979,10 +1192,17 @@ function GraphPageHeader({
 
 // Summary for the single persistent live region (uiux-fix F032, C226):
 // announces reload results without re-reading every row.
-function capsuleAnnouncement(capsules: readonly CapsuleListEntry[]): string {
+function catalogAnnouncement(
+  capsules: readonly CapsuleListEntry[],
+  capsuleSets: readonly CapsuleSetListEntry[],
+): string {
   const indexing = capsules.filter((c) => c.lifecycleState === "indexing").length;
   const base = `${capsules.length.toString()} Knowledge Pod${capsules.length === 1 ? "" : "s"}`;
-  return indexing > 0 ? `${base}, ${indexing.toString()} indexing` : base;
+  const setBase = `${capsuleSets.length.toString()} Knowledge Pod Set${
+    capsuleSets.length === 1 ? "" : "s"
+  }`;
+  const catalog = capsuleSets.length > 0 ? `${base}, ${setBase}` : base;
+  return indexing > 0 ? `${catalog}, ${indexing.toString()} indexing` : catalog;
 }
 
 export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
@@ -1000,6 +1220,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   );
   const {
     capsules,
+    capsuleSets,
     loadStatus,
     loadError,
     actionBusy,
@@ -1083,7 +1304,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           re-announcing every row after each reload flooded screen readers
           (uiux-fix F032, C226; pattern of MemoryList). */}
       <p role="status" className="visually-hidden">
-        {!isLoading && loadError === null ? capsuleAnnouncement(capsules) : null}
+        {!isLoading && loadError === null ? catalogAnnouncement(capsules, capsuleSets) : null}
       </p>
       <section
         aria-label="Knowledge Pods"
@@ -1105,6 +1326,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           }
           onOpenHealth={handleOpenHealth}
         />
+        <CapsuleSetSection capsuleSets={capsuleSets} />
       </section>
       {createDialogOpen ? (
         <CreateCapsuleDialog

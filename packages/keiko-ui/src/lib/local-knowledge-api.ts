@@ -42,6 +42,10 @@ export interface KnowledgePodUiGuidance {
 
 export interface KnowledgePodUiMetadata {
   readonly readiness: KnowledgePodSummary["readiness"];
+  readonly counts?: KnowledgePodSummary["counts"];
+  readonly setReadiness?: KnowledgePodSummary["setReadiness"];
+  readonly sourceKinds?: KnowledgePodSummary["sourceKinds"];
+  readonly degradationReasons?: KnowledgePodSummary["degradationReasons"];
   readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"];
   readonly sealed?: boolean;
   readonly deniedModelOperations?: readonly KnowledgePodModelUseOperation[];
@@ -80,28 +84,40 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
   if (status === "incompatible") {
     return {
       label: "Embedding mismatch",
-      description: "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+      description:
+        summary.kind === "pod-set"
+          ? "Semantic retrieval is disabled for affected set members until they are reindexed locally."
+          : "Semantic retrieval is disabled for this pod until it is reindexed locally.",
       tone: "danger",
     };
   }
   if (status === "unavailable") {
     return {
       label: "Embedding unavailable",
-      description: "Semantic retrieval cannot run under the current local policy.",
+      description:
+        summary.kind === "pod-set"
+          ? "Semantic retrieval cannot run for affected set members under the current local policy."
+          : "Semantic retrieval cannot run under the current local policy.",
       tone: "danger",
     };
   }
   if (status === "unknown" || summary.retrieval.reindexRecommended === true) {
     return {
       label: "Reindex recommended",
-      description: "Compatibility is unverified; lexical fallback remains available.",
+      description:
+        summary.kind === "pod-set"
+          ? "Compatibility is unverified for affected set members; lexical fallback remains available."
+          : "Compatibility is unverified; lexical fallback remains available.",
       tone: "warning",
     };
   }
   if (status === "opaque") {
     return {
       label: "Embedding opaque",
-      description: "Semantic compatibility cannot be verified for this retrieval space.",
+      description:
+        summary.kind === "pod-set"
+          ? "Semantic compatibility cannot be verified for this Knowledge Pod Set."
+          : "Semantic compatibility cannot be verified for this retrieval space.",
       tone: "muted",
     };
   }
@@ -127,6 +143,7 @@ function isSealedPolicy(
 }
 
 function guidanceForPolicy(
+  summary: KnowledgePodSummary,
   modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
 ): KnowledgePodUiGuidance | undefined {
   const operations = modelUsePolicy.operations;
@@ -134,7 +151,9 @@ function guidanceForPolicy(
     return {
       label: "Policy denied",
       description:
-        "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+        summary.kind === "pod-set"
+          ? "This Knowledge Pod Set blocks grounded answer synthesis or raw-content release for affected members; Keiko will return a policy-denied state instead of sending excerpts to a model."
+          : "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
       tone: "danger",
     };
   }
@@ -142,7 +161,9 @@ function guidanceForPolicy(
     return {
       label: "Sealed local policy",
       description:
-        "External embedding or reranking calls are disabled for this Knowledge Pod; retrieval may use lexical or local fallback.",
+        summary.kind === "pod-set"
+          ? "External embedding or reranking calls are disabled for affected set members; retrieval may use lexical or local fallback."
+          : "External embedding or reranking calls are disabled for this Knowledge Pod; retrieval may use lexical or local fallback.",
       tone: "warning",
     };
   }
@@ -163,10 +184,14 @@ function metadataForSummary(
   if (summary === undefined) return undefined;
   const modelUsePolicy = resolvedModelUsePolicyForSummary(summary);
   const guidance = guidanceForSummary(summary);
-  const policyGuidance = guidanceForPolicy(modelUsePolicy);
+  const policyGuidance = guidanceForPolicy(summary, modelUsePolicy);
   const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,
+    counts: summary.counts,
+    ...(summary.setReadiness !== undefined ? { setReadiness: summary.setReadiness } : {}),
+    sourceKinds: summary.sourceKinds,
+    degradationReasons: summary.degradationReasons,
     modelUsePolicy,
     sealed: isSealedPolicy(summary, modelUsePolicy),
     deniedModelOperations: deniedOperations,

@@ -98,6 +98,9 @@ function MemberCheckbox({
   disabled: boolean;
   onToggle: (id: KnowledgeCapsuleId) => void;
 }): ReactNode {
+  const guidance = capsule.knowledgePod?.guidance;
+  const guidanceId = useId();
+  const describedBy = guidance === undefined ? undefined : guidanceId;
   return (
     <li className="lk-compose-member">
       <label className="lk-compose-member-label">
@@ -105,6 +108,7 @@ function MemberCheckbox({
           type="checkbox"
           checked={checked}
           disabled={disabled}
+          aria-describedby={describedBy}
           onChange={() => onToggle(capsule.id)}
         />
         <span className="lk-compose-member-name" title={capsule.displayName}>
@@ -113,7 +117,20 @@ function MemberCheckbox({
         <span className="lk-badge" data-state={capsule.lifecycleState}>
           {STATUS_LABELS[capsule.lifecycleState]}
         </span>
+        {guidance !== undefined ? (
+          <span className="lk-badge" data-state={guidance.tone === "danger" ? "error" : "stale"}>
+            {guidance.label}
+          </span>
+        ) : null}
       </label>
+      {guidance !== undefined ? (
+        <small
+          id={guidanceId}
+          style={{ display: "block", marginLeft: 24, color: "var(--text-secondary)" }}
+        >
+          {guidance.description}
+        </small>
+      ) : null}
     </li>
   );
 }
