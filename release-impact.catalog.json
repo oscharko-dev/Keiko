@@ -204,8 +204,8 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-07-05",
         "humanApproved": true,
-        "approvalReference": "github-issue:oscharko-dev/Keiko#1948",
-        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It records reviewed package/runtime binding semantics without promoting public portable release assets before signing and upload children complete."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.11 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
       }
     }
   ]
