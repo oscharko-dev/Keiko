@@ -276,6 +276,40 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("keeps the running version as target when it is ahead of the registry latest", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ "dist-tags": { latest: "0.2.12" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tag_name: "v0.2.13",
+          name: "Keiko 0.2.13",
+          html_url: "https://github.com/oscharko-dev/keiko/releases/tag/v0.2.13",
+          published_at: "2026-07-05T12:00:00.000Z",
+          body: "- Current development release note",
+        }),
+      ) as typeof fetch;
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.13",
+      bundledCatalog: baseCatalog(),
+    });
+
+    expect(report.status).toBe("current");
+    expect(report.updateAvailable).toBe(false);
+    expect(report.targetVersion).toBe("0.2.13");
+    expect(report.releaseMetadataStatus).toBe("live");
+    expect(report.release?.tag).toBe("v0.2.13");
+    expect(report.patchNotes?.summary).toBe("Current development release note");
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      2,
+      "https://api.github.com/repos/oscharko-dev/keiko/releases/tags/v0.2.13",
+      expect.anything(),
+    );
+    deps.store.close();
+  });
+
   it("returns live GitHub release metadata when an update is available", async () => {
     const fetchImpl = vi
       .fn()

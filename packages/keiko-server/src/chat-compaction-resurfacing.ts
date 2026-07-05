@@ -21,6 +21,18 @@ interface TimedRecord {
   readonly record: ContextCompactionRecord;
 }
 
+interface RunIdEntry {
+  readonly runId: string;
+  readonly index: number;
+  readonly turn: number | undefined;
+}
+
+interface TurnRunIdEntry {
+  readonly runId: string;
+  readonly index: number;
+  readonly turn: number;
+}
+
 interface ResurfacingBuckets {
   readonly modelSummaries: string[];
   readonly facts: string[];
@@ -81,11 +93,22 @@ function loadChatCompactionRecords(store: EvidenceStore, chatId: string): readon
 }
 
 function newestRunIds(runIds: readonly string[], prefix: string): readonly string[] {
-  return runIds
-    .map((runId, index) => ({ runId, index, turn: runIdTurn(runId, prefix) }))
-    .sort(compareRunIdRecency)
+  const entries = runIds.map((runId, index) => ({ runId, index, turn: runIdTurn(runId, prefix) }));
+  if (!allEntriesHaveTurns(entries)) {
+    // `chat-<hash>-t<turn>` is produced by chat-compaction-evidence. If that invariant is ever
+    // broken, preserve correctness by loading all matching records and letting manifest timestamps
+    // below decide recency instead of partially trusting filename order.
+    return runIds;
+  }
+
+  return [...entries]
+    .sort(compareRunIdTurnRecency)
     .slice(0, MAX_RECORDS)
     .map((entry) => entry.runId);
+}
+
+function allEntriesHaveTurns(entries: readonly RunIdEntry[]): entries is readonly TurnRunIdEntry[] {
+  return entries.every((entry) => entry.turn !== undefined);
 }
 
 function runIdTurn(runId: string, prefix: string): number | undefined {
@@ -97,20 +120,11 @@ function runIdTurn(runId: string, prefix: string): number | undefined {
   return Number.isSafeInteger(value) ? value : undefined;
 }
 
-function compareRunIdRecency(
-  left: { readonly index: number; readonly turn: number | undefined },
-  right: { readonly index: number; readonly turn: number | undefined },
+function compareRunIdTurnRecency(
+  left: { readonly index: number; readonly turn: number },
+  right: { readonly index: number; readonly turn: number },
 ): number {
-  if (left.turn !== undefined && right.turn !== undefined) {
-    return right.turn === left.turn ? right.index - left.index : right.turn - left.turn;
-  }
-  if (left.turn !== undefined) {
-    return -1;
-  }
-  if (right.turn !== undefined) {
-    return 1;
-  }
-  return right.index - left.index;
+  return right.turn === left.turn ? right.index - left.index : right.turn - left.turn;
 }
 
 function recordForResurfacing(

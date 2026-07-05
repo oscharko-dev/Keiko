@@ -63,7 +63,8 @@ export async function runUpdatePreflight(
   }
   const versionComparison = compareSemver(registry.latestVersion, currentVersion);
   if (versionComparison < 0) {
-    return currentVersionReport(base, registry.latestVersion, registry);
+    const github = await fetchGitHubRelease(deps, currentVersion);
+    return currentVersionReport(base, currentVersion, registry, github);
   }
   if (versionComparison === 0) {
     const github = await fetchGitHubRelease(deps, currentVersion);
