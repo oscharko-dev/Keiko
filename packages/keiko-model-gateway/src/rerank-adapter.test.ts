@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { requestLiteLLMRerank, type LiteLLMRerankRequest } from "./rerank-adapter.js";
+import { OutboundHttpEgressError } from "./http.js";
 
 const SECRET_API_KEY = "sk-rerank-secret-1234567890";
 const QUERY = "Which policy mentions alpha?";
@@ -122,6 +123,22 @@ describe("requestLiteLLMRerank", () => {
     );
 
     expect(outcome).toEqual({ ok: false, kind: "timeout" });
+  });
+
+  it.each([
+    ["PROXY_UNREACHABLE", "proxy-unreachable"],
+    ["PROXY_AUTH_REQUIRED", "proxy-auth-required"],
+    ["PROXY_EGRESS_FAILED", "proxy-egress-failed"],
+    ["PROXY_BLOCKED_BY_POLICY", "proxy-blocked-by-policy"],
+    ["TLS_CA_FAILURE", "tls-ca-failure"],
+  ] as const)("maps egress %s to %s", async (code, kind) => {
+    const outcome = await requestLiteLLMRerank(
+      baseRequest({
+        fetchImpl: () => Promise.reject(new OutboundHttpEgressError(code, "egress failed")),
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: false, kind });
   });
 
   it("returns invalid-response for ambiguous response shapes without guessing", async () => {

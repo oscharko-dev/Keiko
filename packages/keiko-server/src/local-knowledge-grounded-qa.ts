@@ -668,7 +668,7 @@ function buildNoEvidenceAnswer(
       capsuleCount,
       sourceCount,
       citationCount: 0,
-      referenceBudget: limits.referenceBudget,
+      referenceBudget: limits.maxPromptReferences,
       referencesUsed: 0,
       indexLifecycle: buildLocalKnowledgeIndexLifecycle(capsules),
     },
@@ -962,7 +962,7 @@ function buildLocalKnowledgeContextPack(
     capsuleCount: result.pack.scope.capsuleCount,
     sourceCount: result.pack.scope.sourceCount,
     citationCount: citations.length,
-    referenceBudget: limits.referenceBudget,
+    referenceBudget: limits.maxPromptReferences,
     referencesUsed: result.references.length,
     indexLifecycle: buildLocalKnowledgeIndexLifecycle(selected.capsules),
     ...(result.reranker === undefined ? {} : { reranker: result.reranker }),
@@ -1117,11 +1117,7 @@ function applyReferenceRerankResults(
     const reference = references[result.index];
     if (reference === undefined) return undefined;
     used.add(result.index);
-    reranked.push(
-      result.relevanceScore === undefined
-        ? reference
-        : { ...reference, score: result.relevanceScore },
-    );
+    reranked.push(reference);
   }
   return reranked.slice(0, limits.maxPromptReferences);
 }
@@ -1148,10 +1144,11 @@ function createReferenceReranker(
   return {
     rerank: async (input): Promise<ReferenceRerankerResult> => {
       const fallback = fallbackReferenceSelection(input.references, limits);
+      const candidates = input.references.slice(0, limits.maxPromptReferences);
       const attempt = await requestConfiguredRerank({
         deps,
         query: input.query.text,
-        documents: input.references.map((reference) =>
+        documents: candidates.map((reference) =>
           rerankerDocumentText(deps, store, reference, limits),
         ),
         topN: limits.maxPromptReferences,
@@ -1164,7 +1161,7 @@ function createReferenceReranker(
         };
       }
       const reranked = applyReferenceRerankResults(
-        input.references,
+        candidates,
         attempt.outcome.value.results,
         limits,
       );
@@ -1334,6 +1331,17 @@ export function retrievalActivityResultFromScoped(
   };
 }
 
+function rerankerForHybridRetrievalActivity(
+  reranker: GroundedRerankerDiagnostics | undefined,
+): GroundedRerankerDiagnostics | undefined {
+  // Hybrid answers expose no-reranker configuration at context-pack level; it should not degrade
+  // every otherwise-successful Knowledge Pod activity row.
+  if (reranker?.status === "disabled" && reranker.failureKind === "not-configured") {
+    return undefined;
+  }
+  return reranker;
+}
+
 export function retrievalActivityResultFromRetrieval(
   result: {
     readonly references: readonly RetrievalReference[];
@@ -1345,6 +1353,7 @@ export function retrievalActivityResultFromRetrieval(
   citations: readonly LocalKnowledgeEvidenceCitation[],
   reranker?: GroundedRerankerDiagnostics,
 ): KnowledgePodRetrievalActivityResultInput {
+  const activityReranker = rerankerForHybridRetrievalActivity(reranker);
   return {
     references: result.references,
     citationCounts: countCitationsByCapsule(citations),
@@ -1352,7 +1361,7 @@ export function retrievalActivityResultFromRetrieval(
     ...(result.reason !== undefined ? { reason: result.reason } : {}),
     ...(result.diagnostics !== undefined ? { retrievalDiagnostics: result.diagnostics } : {}),
     ...(result.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
-    ...(reranker !== undefined ? { reranker } : {}),
+    ...(activityReranker !== undefined ? { reranker: activityReranker } : {}),
   };
 }
 
@@ -1459,7 +1468,13 @@ function addRerankerReasonCode(
     codes.add("policy-denied");
     return;
   }
-  if (result.reranker === undefined || !RERANKER_DEGRADED.has(result.reranker.status)) return;
+  if (
+    result.reranker === undefined ||
+    (result.reranker.failureKind !== "not-configured" &&
+      !RERANKER_DEGRADED.has(result.reranker.status))
+  ) {
+    return;
+  }
   codes.add(
     result.reranker.status === "invalid-response"
       ? "reranker-invalid-response"

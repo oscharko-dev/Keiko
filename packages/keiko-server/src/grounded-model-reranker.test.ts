@@ -129,4 +129,31 @@ describe("requestConfiguredRerank", () => {
     expect(JSON.stringify(attempt.diagnostics)).not.toContain("sk-secret");
     deps.store.close();
   });
+
+  it.each(["rate-limited", "proxy-blocked-by-policy"] as const)(
+    "maps %s outcomes to redacted unavailable diagnostics",
+    async (kind) => {
+      const deps = depsWith(gatewayConfig(), () => Promise.resolve({ ok: false, kind }));
+
+      const attempt = await requestConfiguredRerank({
+        deps,
+        query: "alpha",
+        documents: ["alpha document", "beta document"],
+        topN: 1,
+      });
+
+      expect(attempt.outcome).toBeUndefined();
+      expect(attempt.diagnostics).toMatchObject({
+        status: "unavailable",
+        mode: "provider-backed",
+        candidateCount: 2,
+        documentCount: 2,
+        keptCount: 1,
+        failureKind: kind,
+      });
+      expect(JSON.stringify(attempt.diagnostics)).not.toContain("reranker.example");
+      expect(JSON.stringify(attempt.diagnostics)).not.toContain("reranker-test-key");
+      deps.store.close();
+    },
+  );
 });

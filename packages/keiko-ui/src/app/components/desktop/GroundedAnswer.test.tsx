@@ -1114,7 +1114,7 @@ describe("GroundedAnswer", () => {
       contextPack: {
         ...base.contextPack,
         reranker: {
-          status: "not-configured" as const,
+          status: "disabled" as const,
           mode: "none" as const,
           failureKind: "not-configured" as const,
           candidateCount: 3,
@@ -1126,6 +1126,7 @@ describe("GroundedAnswer", () => {
     const { container } = render(<GroundedAnswer answer={a} busy={false} />);
     const warning = container.querySelector(".grounded-uncertainty[role='alert']");
     expect(warning?.textContent).toContain("no reranker configured");
+    expect(warning?.textContent).toContain("fused retrieval order");
     expect(warning?.textContent).not.toContain("http");
   });
 });
