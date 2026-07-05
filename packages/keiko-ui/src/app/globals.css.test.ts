@@ -890,6 +890,13 @@ describe("Fix 4 — dense desktop text clarity", () => {
   });
 
   it("keeps Files root controls above the micro-text floor", () => {
+    expect(css).toContain(".files {\n  --files-root-action-reserve: 92px");
+
+    expect(css).toContain("padding: 2px var(--files-root-action-reserve) 8px 2px");
+
+    const sidebarBarBlock = cssBlock(".ed-sidebar .files-root-bar");
+    expect(sidebarBarBlock).not.toContain("padding-right");
+
     const inputBlock = cssBlock(".files-root-input");
     expect(inputBlock).toContain("height: 28px");
     expect(inputBlock).toContain("font-size: 12.5px");

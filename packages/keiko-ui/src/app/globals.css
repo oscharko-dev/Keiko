@@ -8334,7 +8334,6 @@ select.dlg-input {
   padding: 7px 7px 8px;
 }
 .ed-sidebar .files-root-bar {
-  padding-right: 34px;
   margin-bottom: 6px;
 }
 .ed-sidebar .files-root-input {
@@ -10391,6 +10390,7 @@ select.dlg-input {
 
 /* ---------- WIDGET: FILES ---------- */
 .files {
+  --files-root-action-reserve: 92px;
   position: relative;
   /* flex column + full height (uiux-fix F022 C203): makes the long-inert
      `.tr { flex:1; overflow:auto }` actually scroll the TREE ONLY, so the
@@ -10434,7 +10434,7 @@ select.dlg-input {
   /* GEN-UI-LAYOUT-001 — reserve the right edge for all three absolute action
      buttons (Refresh right:6, New folder right:34, New file right:62, each 24px
      wide → New file spans to ~86px) so they never overlap the root input. */
-  padding: 2px 92px 8px 2px;
+  padding: 2px var(--files-root-action-reserve) 8px 2px;
   border-bottom: 1px solid var(--line-soft);
   margin-bottom: 4px;
 }

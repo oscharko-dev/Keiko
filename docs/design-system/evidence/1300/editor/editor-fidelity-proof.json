@@ -2,20 +2,20 @@
   "issue": 1300,
   "epic": 1290,
   "surface": "editor",
-  "postCssSha256": "5081884b1f363e891ff92c6fc630def8874b2c90a55bdd55da164dcb7ddf9f35",
+  "postCssSha256": "3fb769ffc1447e71bf68a5b2be70b8090556a4015267272efdb1c0fc7643d92e",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
     "keiko-editor-tokens.css"
   ],
   "referenceFileSha256": {
-    "keiko-tokens.css": "1ba37b6b986c8dc1aaf0fd2c3dd3dc1db1ebf98f8afae08debee61a7aed55a76",
-    "keiko-semantic-tokens.css": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845",
-    "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
+    "keiko-tokens.css": "9d375c08c7fa2cd99587b95f190d5aaf9b61a83ec8d6e107910f597f3bb33dcd",
+    "keiko-semantic-tokens.css": "42e9e1d3cb86fc139ad97712c705f00d2df6f3261f94f20e0a2c18b727f3496b",
+    "keiko-editor-tokens.css": "99fadab685417fffea51b8c8fb179b8cd0862827fb7e7c003341f95a883b06a3"
   },
   "run": {
-    "generatedAt": "2026-07-04T15:28:55.989Z",
-    "repoHeadSha": "b18a905c2d19025d21be6ce87ce3fb5def959546"
+    "generatedAt": "2026-07-05T13:27:54.155Z",
+    "repoHeadSha": "dfbdb37f3c25907d66ed69652e079faa3b33e172"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {
