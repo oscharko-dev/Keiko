@@ -415,6 +415,10 @@ function findHostEnd(token: string): number {
 }
 
 function stripPort(hostWithPort: string): string {
+  if (hostWithPort.startsWith("[")) {
+    const bracketEnd = hostWithPort.indexOf("]");
+    if (bracketEnd > 0) return hostWithPort.slice(0, bracketEnd + 1);
+  }
   const colon = hostWithPort.lastIndexOf(":");
   if (colon === -1) return hostWithPort;
   const port = hostWithPort.slice(colon + 1);
@@ -426,7 +430,22 @@ function isPort(value: string): boolean {
 }
 
 function isRecognizedHost(host: string): boolean {
-  return host.toLowerCase() === "localhost" || isIpv4Host(host) || isDomainHost(host);
+  return (
+    host.toLowerCase() === "localhost" ||
+    isIpv4Host(host) ||
+    isDomainHost(host) ||
+    isBracketedIpv6Host(host)
+  );
+}
+
+function isBracketedIpv6Host(host: string): boolean {
+  if (!host.startsWith("[") || !host.endsWith("]")) return false;
+  const address = host.slice(1, -1);
+  return address.includes(":") && everyChar(address, isIpv6AddressChar);
+}
+
+function isIpv6AddressChar(char: string): boolean {
+  return isAsciiDigit(char) || "abcdefABCDEF:.".includes(char);
 }
 
 function isIpv4Host(host: string): boolean {
