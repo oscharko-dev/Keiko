@@ -10,7 +10,10 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const deniedWorkspaceExports = new Map([
-  ["@oscharko-dev/keiko-model-gateway", new Set(["./internal/openai-adapter"])],
+  [
+    "@oscharko-dev/keiko-model-gateway",
+    new Set(["./internal/openai-adapter", "./internal/normalize"]),
+  ],
 ]);
 const deniedPublicWorkspaceExports = new Map([
   ["@oscharko-dev/keiko-local-knowledge", new Set(["./testing"])],
@@ -63,7 +66,7 @@ function validateWorkspaceExports(relativePath, manifest, failures) {
     deniedWorkspaceExports.get(manifest.name),
     failures,
     (subpath) =>
-      `${relativePath}: ${manifest.name} must not export productive provider adapter subpath ${subpath}.`,
+      `${relativePath}: ${manifest.name} must not export productive provider-runtime subpath ${subpath}.`,
   );
   if (manifest.private === true) return;
   pushDeniedWorkspaceExportFailures(
