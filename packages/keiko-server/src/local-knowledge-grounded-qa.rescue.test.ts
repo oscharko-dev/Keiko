@@ -34,6 +34,7 @@ import {
   LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER,
   localKnowledgeNoEvidenceAnswer,
   renderCitationLabel,
+  retrievalActivityResultFromScoped,
   tryBuildKnowledgePodRetrievalActivity,
   type KnowledgePodRetrievalActivityResultInput,
   type SelectedLocalKnowledgeScope,
@@ -785,7 +786,7 @@ describe("local-knowledge reranker diagnostics", () => {
 });
 
 describe("local-knowledge retrieval activity", () => {
-  it("omits activity instead of failing an answer when pod metadata cannot be projected safely", async () => {
+  it("redacts unsafe pod metadata without dropping retrieval activity", async () => {
     const unsafeCapsuleId = "owner@example.com" as KnowledgeCapsuleId;
     const unsafeSourceId = "source@example.com" as KnowledgeSourceId;
     const knowledgeStore = openKnowledgeStore({
@@ -812,16 +813,22 @@ describe("local-knowledge retrieval activity", () => {
         ],
       } as const;
 
-      expect(() => buildKnowledgePodRetrievalActivity(input)).toThrow(
-        "Knowledge Pod summary validation failed.",
-      );
-      expect(tryBuildKnowledgePodRetrievalActivity(input)).toBeUndefined();
+      const activity = buildKnowledgePodRetrievalActivity(input);
+      expect(activity.pods[0]).toMatchObject({
+        displayName: "Knowledge Pod",
+        counts: { referenceCount: 1, citationCount: 1 },
+      });
+      expect(activity.pods[0]?.podId).toMatch(/^pod-[a-f0-9]{16}$/u);
+      expect(activity.pods[0]?.sourceIds[0]).toMatch(/^source-[a-f0-9]{16}$/u);
+      expect(JSON.stringify(activity)).not.toContain("owner@example.com");
+      expect(JSON.stringify(activity)).not.toContain("source@example.com");
+      expect(tryBuildKnowledgePodRetrievalActivity(input)).toEqual(activity);
     } finally {
       knowledgeStore.close();
     }
   });
 
-  it("returns the grounded answer when not-ready activity projection cannot be assembled", async () => {
+  it("returns redacted not-ready activity when unsafe state-failure metadata is present", async () => {
     const unsafeCapsuleId = "state-owner@example.com" as KnowledgeCapsuleId;
     const unsafeSourceId = "state-source@example.com" as KnowledgeSourceId;
     const knowledgeStore = openKnowledgeStore({
@@ -872,7 +879,14 @@ describe("local-knowledge retrieval activity", () => {
       { readonly groundingKind: "local-knowledge" }
     >;
     expect(answer.noEvidence).toBe(true);
-    expect(answer.retrievalActivity).toBeUndefined();
+    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+      displayName: "Knowledge Pod",
+      state: "unavailable",
+      reasonCodes: ["indexing-in-progress"],
+    });
+    expect(answer.retrievalActivity?.pods[0]?.podId).toMatch(/^pod-[a-f0-9]{16}$/u);
+    expect(JSON.stringify(answer.retrievalActivity)).not.toContain("state-owner@example.com");
+    expect(JSON.stringify(answer.retrievalActivity)).not.toContain("state-source@example.com");
   });
 
   it("maps retrieval diagnostics modes to activity modes", async () => {
@@ -911,6 +925,44 @@ describe("local-knowledge retrieval activity", () => {
         });
         expect(activity.pods[0]?.modes).toEqual(expectedModes);
       }
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("uses enforced no-evidence reasons in retrieval activity", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Empty Answer Activity Capsule",
+        capsuleId: "cap-empty-answer-activity",
+        sourceId: "src-empty-answer-activity",
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const selected = selectedActivityScope(capsuleValue);
+      const reference = retrievalActivityReference(seeded.capsuleId, seeded.sourceId);
+      const grounded = result({ answer: "   ", references: [reference] });
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: retrievalActivityResultFromScoped(
+              grounded,
+              [],
+              enforcedNoEvidenceReason(grounded),
+            ),
+          },
+        ],
+      });
+
+      expect(activity.pods[0]).toMatchObject({
+        state: "searched",
+        reasonCodes: ["searched", "empty-answer"],
+        counts: { referenceCount: 1, citationCount: 0 },
+      });
     } finally {
       knowledgeStore.close();
     }
@@ -1003,7 +1055,14 @@ describe("local-knowledge retrieval activity", () => {
             },
           })),
         });
-        expect(activity.pods).toHaveLength(256);
+        expect(activity.summary.searchedCount).toBe(256);
+        expect(activity.pods).toHaveLength(24);
+        expect(activity.pods.at(-1)).toMatchObject({
+          podKind: "pod-set",
+          displayName: "233 additional Knowledge Pods",
+          state: "skipped",
+          reasonCodes: ["max-sources-exceeded"],
+        });
       } finally {
         restorePrepare();
       }
