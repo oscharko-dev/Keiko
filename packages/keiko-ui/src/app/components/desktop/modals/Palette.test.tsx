@@ -129,6 +129,12 @@ describe("Palette", () => {
     }
   });
 
+  it("keeps palette chrome from inheriting the workspace drag cursor", () => {
+    renderPalette(PICKER_ORDER);
+
+    expect(screen.getByRole("dialog")).toHaveStyle({ cursor: "default" });
+  });
+
   it("moves focus with arrow keys in the 3-column grid (C363)", () => {
     renderPalette();
     const list = cards();
