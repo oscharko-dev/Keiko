@@ -1352,6 +1352,92 @@ describe("searchVectorsForScope — citation fields", () => {
     expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
 
+  it("does not promote exact identifier near-collisions", async () => {
+    const { store } = getFixture();
+    const decoy = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-exact-boundary",
+      sourceId: "src-exact-boundary",
+      documentId: "doc-decoy-boundary",
+      safeDisplayName: "adr-00360.txt",
+      text: "ADR-00360 describes a separate deployment review and adjacent identifier policy.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const target = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-exact-boundary",
+      sourceId: "src-exact-boundary",
+      documentId: "doc-target-boundary",
+      safeDisplayName: "adr-0036.txt",
+      text: "ADR-0036 documents the RRF hybrid retrieval evidence policy.",
+      skipCapsule: true,
+      skipSource: true,
+      contentHash: "b".repeat(64),
+      unitId: "unit-target-boundary",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const targetChunk = target.chunkIds[0];
+    if (targetChunk === undefined) throw new Error("expected target chunk");
+    setCapsuleVector(store, decoy.capsuleId, vectorBlob(1, 0));
+    setChunkVector(store, target.capsuleId, targetChunk, vectorBlob(0.95, 0.3122499));
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [decoy.capsuleId] },
+      "ADR-0036",
+      { topK: 1 },
+    );
+
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("adr-0036.txt");
+    expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
+  });
+
+  it("uses exact lookup for short acronyms and one-token quoted phrases", async () => {
+    const { store } = getFixture();
+    const decoy = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-short-exact",
+      sourceId: "src-short-exact",
+      documentId: "doc-short-decoy",
+      safeDisplayName: "general-platform.txt",
+      text: "General platform rollout notes and unrelated review guidance.",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const target = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-short-exact",
+      sourceId: "src-short-exact",
+      documentId: "doc-short-target",
+      safeDisplayName: "api-policy.txt",
+      text: "The API policy requires a second reviewer before publication.",
+      skipCapsule: true,
+      skipSource: true,
+      contentHash: "a".repeat(64),
+      unitId: "unit-short-target",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const targetChunk = target.chunkIds[0];
+    if (targetChunk === undefined) throw new Error("expected target chunk");
+    setCapsuleVector(store, decoy.capsuleId, vectorBlob(1, 0));
+    setChunkVector(store, target.capsuleId, targetChunk, vectorBlob(0.94, 0.3411747));
+
+    const acronym = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [decoy.capsuleId] },
+      "API",
+      { topK: 1 },
+    );
+    const quoted = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      { capsuleIds: [decoy.capsuleId] },
+      '"policy"',
+      { topK: 1 },
+    );
+
+    expect(acronym.references[0]?.citation.safeDisplayName).toBe("api-policy.txt");
+    expect(quoted.references[0]?.citation.safeDisplayName).toBe("api-policy.txt");
+    expect(quoted.diagnostics.strategy).toBe("exact");
+  });
+
   it("reports the selected retrieval strategy without exposing query text", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {

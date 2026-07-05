@@ -507,6 +507,32 @@ function formatCaseFailure(result) {
   return `${result.id}: ${parts.join("; ")}`;
 }
 
+async function runWorkspaceQualityCheck(workspaceCases, budgetPath, log) {
+  const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
+  const results = [];
+  for (const testCase of workspaceCases) {
+    results.push(await evaluateCase(testCase));
+  }
+  const summary = summarize(results);
+  const budgetResult = evaluateQualityBudget(summary, budget);
+  log(
+    `retrieval-quality: cases=${String(summary.cases)} top1=${formatPct(
+      summary.top1Rate,
+    )} recall@${String(EVAL_K)}=${formatPct(summary.recallAtK)} mrr=${summary.mrr.toFixed(
+      3,
+    )} ndcg@${String(EVAL_K)}=${summary.ndcgAtK.toFixed(3)} line-hit=${formatPct(
+      summary.lineHitRate,
+    )} generated-leaks=${String(summary.generatedLeakCount)}.`,
+  );
+  const failed = results.filter(
+    (result) => !result.topHit || !result.lineHit || result.generatedLeakCount > 0,
+  );
+  for (const result of failed) {
+    log(`retrieval-quality failure: ${formatCaseFailure(result)}`);
+  }
+  return { summary, results, budgetResult };
+}
+
 function localKnowledgeFailuresFor(scorecard) {
   const failures = [];
   for (const dimension of LOCAL_KNOWLEDGE_DIMENSIONS) {
@@ -546,10 +572,14 @@ function formatLocalKnowledgeFailure(scorecard) {
   )} ndcg=${scorecard.dimensions.ndcg.toFixed(3)}`;
 }
 
-async function runLocalKnowledgeQualityCheck(log) {
+export async function runLocalKnowledgeQualityCheck(
+  log,
+  fixtures = ALL_FIXTURES,
+  runner = runRetrievalEval,
+) {
   const scorecards = [];
-  for (const fixture of ALL_FIXTURES) {
-    scorecards.push(await runRetrievalEval(fixture));
+  for (const fixture of fixtures) {
+    scorecards.push(await runner(fixture));
   }
   const summary = summarizeLocalKnowledgeScorecards(scorecards);
   log(
@@ -577,6 +607,8 @@ export async function runRetrievalQualityCheck({
   budgetPath = DEFAULT_BUDGET_PATH,
   log,
   fail,
+  localKnowledgeQualityCheck = runLocalKnowledgeQualityCheck,
+  workspaceCases = CASES,
 } = {}) {
   const onLog = log ?? ((message) => console.log(message));
   const onFail =
@@ -585,29 +617,12 @@ export async function runRetrievalQualityCheck({
       console.error(`retrieval-quality check failed: ${message}`);
       process.exit(1);
     });
-  const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
-  const results = [];
-  for (const testCase of CASES) {
-    results.push(await evaluateCase(testCase));
-  }
-  const summary = summarize(results);
-  const budgetResult = evaluateQualityBudget(summary, budget);
-  onLog(
-    `retrieval-quality: cases=${String(summary.cases)} top1=${formatPct(
-      summary.top1Rate,
-    )} recall@${String(EVAL_K)}=${formatPct(summary.recallAtK)} mrr=${summary.mrr.toFixed(
-      3,
-    )} ndcg@${String(EVAL_K)}=${summary.ndcgAtK.toFixed(3)} line-hit=${formatPct(
-      summary.lineHitRate,
-    )} generated-leaks=${String(summary.generatedLeakCount)}.`,
+  const { summary, results, budgetResult } = await runWorkspaceQualityCheck(
+    workspaceCases,
+    budgetPath,
+    onLog,
   );
-  const failed = results.filter(
-    (result) => !result.topHit || !result.lineHit || result.generatedLeakCount > 0,
-  );
-  for (const result of failed) {
-    onLog(`retrieval-quality failure: ${formatCaseFailure(result)}`);
-  }
-  const localKnowledge = await runLocalKnowledgeQualityCheck(onLog);
+  const localKnowledge = await localKnowledgeQualityCheck(onLog);
   const failureMessages = [];
   if (!localKnowledge.ok) {
     failureMessages.push(

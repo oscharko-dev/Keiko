@@ -1007,7 +1007,7 @@ export const semanticParaphraseFixture: RetrievalEvalFixture = {
 
 export const multilingualFixture: RetrievalEvalFixture = {
   id: "multilingual-retrieval",
-  description: "German question retrieves the matching Local Knowledge evidence.",
+  description: "German question retrieves matching English evidence through vector recall.",
   capsules: [
     {
       id: capsuleId("cap-multilingual"),
@@ -1035,7 +1035,9 @@ export const multilingualFixture: RetrievalEvalFixture = {
               chunks: [
                 {
                   id: chunkId("c-multilingual-payment"),
-                  text: "Die Zahlungsfreigabe verlangt eine zweite Pruefung vor dem Monatsabschluss.",
+                  text:
+                    "Payment approval requires an independent secondary review before " +
+                    "monthly close.",
                   topic: "zahlung-freigabe",
                   parsedUnitId: "section-zahlung",
                 },

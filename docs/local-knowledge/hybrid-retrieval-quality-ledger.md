@@ -20,8 +20,9 @@ Fetched source-of-truth state on 2026-07-05:
 - GitHub sub-issues and the epic body agree on this order: #1837, #1838, #1839, #1840, #1841,
   #1842.
 - All six child issues were fetched from GitHub and are open.
-- No implementation PR for #1817 existed before the active branch.
-- Active branch: `codex/epic-1817-hybrid-retrieval`.
+- Existing implementation PR:
+  [#1908](https://github.com/oscharko-dev/Keiko/pull/1908), targeting `dev`.
+- Active PR branch: `codex/epic-1817-hybrid-retrieval`.
 
 Ledger status vocabulary:
 
@@ -194,21 +195,25 @@ Status after implementation and post-audit hardening on 2026-07-05:
   `exact`, or `broad`, plus dense/lexical/fused candidate budgets and query-variant counts. The
   diagnostics remain closed count/enum fields; no raw query text, candidate body, source path,
   endpoint, provider payload, or private content is added.
-- Exact lexical fallback now ranks candidates by exact identifier or quoted-phrase match count
-  before truncation, and cross-capsule lexical collection sorts by the same priority before applying
-  budgets. This strengthens exact technical and phrase-like retrieval without mixing raw dense,
-  BM25, or RRF scores.
+- Exact lexical fallback now prefilters a bounded exact-text candidate pool in SQLite, then applies
+  boundary-aware identifier and quoted-phrase matching in the retrieval layer before truncation.
+  This prevents near-collisions such as `ADR-0036` matching `ADR-00360`, avoids computed SQL
+  ranking over the full exact-text pool, and keeps dense, BM25, and RRF scores separated.
 - Quoted phrases now resolve `auto` retrieval to exact strategy and are searched through the
-  existing `chunk_lexical_index.exact_text` field.
+  existing `chunk_lexical_index.exact_text` field. One-token quoted phrases such as `"policy"` are
+  treated as exact lookup signals.
+- Short exact terms and acronyms recognized by the existing exact-term parser, such as `API` and
+  `ADR`, now reach the exact-text fallback instead of being filtered out before lookup.
 - The Local Knowledge eval runner now seeds `chunk_lexical_index` rows through
   `upsertLexicalRows`, so deterministic fixtures exercise the same SQLite FTS/BM25 lexical leg as
   production retrieval instead of vector-only scoring.
 - `RetrievalEvalQuery` now accepts the existing public retrieval `strategy` option and passes it to
-  `runLocalKnowledgeRetrieval`.
+  `runLocalKnowledgeRetrieval`; a focused module-mock regression test pins the forwarding contract.
 - Four new synthetic fixtures were added:
   - `exact-technical`: exact ADR id, API name, policy clause, and error-code retrieval.
   - `semantic-paraphrase`: broad semantic query with wording that differs from the corpus.
-  - `multilingual-retrieval`: German-language query/evidence coverage.
+  - `multilingual-retrieval`: German-language query with English evidence, proving deterministic
+    cross-lingual vector recall rather than same-language lexical overlap.
   - `mixed-strategy`: exact, broad, and balanced queries in one capsule.
 - Fixture registry, determinism, and threshold tests now iterate `ALL_FIXTURES`, preventing future
   registry drift.
@@ -247,6 +252,12 @@ Focused verification after post-audit hardening:
     budget diagnostics.
 - `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
   - PASS; 4 files and 82 tests after formatting.
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/runner-strategy.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+  - PASS; 5 files and 87 tests after the final audit-repair pass. This includes exact identifier
+    near-collision coverage, short acronym lookup, one-token quoted phrase lookup, strategy
+    forwarding, and Local Knowledge quality-gate failure tests.
+- `npm test -- --run scripts/__tests__/check-retrieval-quality.test.mjs`
+  - PASS; 1 file and 7 tests after extracting the workspace-quality helper for lint compliance.
 - `npm run typecheck`
   - PASS; package build, package graph, and root `tsc --noEmit` completed after the stricter
     diagnostics shape.
@@ -267,7 +278,7 @@ Final local verification on 2026-07-05:
 - `npm run format:check`
   - PASS; all matched files use Prettier style.
 - `npm test`
-  - PASS; 971 files passed, 16,424 tests passed, 1 skipped.
+  - PASS; 972 files passed, 16,431 tests passed, 1 skipped.
 - `npm run arch:check`
   - PASS; dependency-cruiser, import policy, and contract boundary checks completed.
 - `npm run arch:check:negative`
@@ -305,6 +316,9 @@ Final local verification on 2026-07-05:
 - `npm run clean && npm run build && npm run build:ui && npm run prune:package-build-artifacts && npm run prepare:bin && npm run check:package-surface`
   - PASS after post-audit hardening; editor bundle-size check passed and package-surface passed with
     4,165 files and `dist/ui/static` present.
+- `npm run typecheck`
+  - PASS after the final script extraction; package build, package graph, and root `tsc --noEmit`
+    completed.
 
 ## Release Evidence Summary
 
@@ -344,9 +358,20 @@ Final local verification on 2026-07-05:
   and query-transform variant counts. They do not yet expose per-capsule truncation counts; add a
   follow-up only if operators need that extra observability beyond the current #1817 acceptance
   criteria.
+- Performance audit follow-up: broad-query rewrite fan-out currently reruns lexical collection and
+  dense candidate processing for every unique query variant. Synthetic package-level measurement on
+  2026-07-05 showed a warm 25k-row broad query rising from 11.58 ms with one variant to 59.18 ms
+  with four variants. This is a bounded, diagnostics-visible cost (`queryVariantCount`), but a
+  future optimization should evaluate early-stop, lexical-only rewrite expansion, or safe
+  parallelism without reducing broad-query recall.
+- Performance audit disposition: exact lexical ranking no longer asks SQLite to compute and sort an
+  exact-match score across the filtered exact-text pool. The retrieval layer now boundary-filters and
+  ranks a bounded candidate pool after SQL prefiltering, addressing the measured temp B-tree cost
+  without adding schema or migration work.
 - The grounded retrieval and faithfulness gates still emit Node's experimental SQLite warning in this
   local environment. The warning is non-sensitive and pre-existing for those gates.
-- No follow-up issue is required for this implementation unless PR review or CI surfaces a new gap.
+- No additional follow-up issue is required for this implementation unless PR review or CI surfaces a
+  new acceptance-blocking gap.
 
 ## Operating Guidance
 

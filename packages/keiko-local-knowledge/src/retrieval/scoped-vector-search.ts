@@ -1051,7 +1051,7 @@ interface LexicalIndexCountRow {
 }
 
 interface ExactLexicalIndexCandidateRow extends LexicalIndexCandidateRow {
-  readonly exact_match_count: number;
+  readonly exact_text: string;
 }
 
 function sourceFilterClause(
@@ -1177,23 +1177,60 @@ function exactLexicalSql(
     (_, i) => `instr(lower(li.exact_text), :exact${String(i)}) > 0`,
   );
   const exactClause = matchExpressions.length === 0 ? "0" : matchExpressions.join(" OR ");
-  const exactScore =
-    matchExpressions.length === 0
-      ? "0"
-      : matchExpressions
-          .map((expression) => `CASE WHEN ${expression} THEN 1 ELSE 0 END`)
-          .join(" + ");
   return [
     "SELECT li.chunk_id AS chunk_id, li.capsule_id AS capsule_id, 0 AS bm25_score,",
-    `  (${exactScore}) AS exact_match_count`,
+    "  li.exact_text AS exact_text",
     "FROM chunk_lexical_index AS li",
     `WHERE li.capsule_id = :capsule_id${sourceFilterClause(
       sourceFilter,
       "li.",
     )} AND (${exactClause})`,
-    "ORDER BY exact_match_count DESC, li.chunk_id ASC",
+    "ORDER BY li.chunk_id ASC",
     "LIMIT :limit",
   ].join(" ");
+}
+
+function exactCandidateScanLimit(limit: number): number {
+  return Math.min(500, Math.max(LEXICAL_CANDIDATE_LIMIT, limit * 4));
+}
+
+function isAlphanumeric(value: string | undefined): boolean {
+  return value !== undefined && /^[\p{L}\p{N}]$/u.test(value);
+}
+
+function isExactContinuation(value: string, index: number, neighborIndex: number): boolean {
+  const char = value[index];
+  if (char === undefined) return false;
+  if (/^[\p{L}\p{N}_]$/u.test(char)) return true;
+  if (char === "." || char === "-" || char === "/" || char === "#" || char === ":") {
+    return isAlphanumeric(value[neighborIndex]);
+  }
+  return false;
+}
+
+function hasExactBoundaries(value: string, start: number, term: string): boolean {
+  const end = start + term.length;
+  const before = start - 1;
+  const after = end;
+  return (
+    !isExactContinuation(value, before, before - 1) && !isExactContinuation(value, after, after + 1)
+  );
+}
+
+function boundaryExactMatchCount(exactText: string, exactTerms: readonly string[]): number {
+  const haystack = normaliseForSearch(exactText);
+  let count = 0;
+  for (const term of exactTerms) {
+    let offset = haystack.indexOf(term);
+    while (offset >= 0) {
+      if (hasExactBoundaries(haystack, offset, term)) {
+        count += 1;
+        break;
+      }
+      offset = haystack.indexOf(term, offset + 1);
+    }
+  }
+  return count;
 }
 
 function readExactLexicalCandidatesForCapsule(
@@ -1209,16 +1246,24 @@ function readExactLexicalCandidatesForCapsule(
   );
   const rows = store._internal.db.prepare(exactLexicalSql(sourceFilter, exactTerms)).all({
     capsule_id: String(capsuleId),
-    limit,
+    limit: exactCandidateScanLimit(limit),
     ...sourceParams(sourceFilter),
     ...exactParams,
   }) as unknown as readonly ExactLexicalIndexCandidateRow[];
-  return rows.map((row) => ({
-    chunkId: row.chunk_id,
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    bm25Score: row.bm25_score,
-    lexicalPriority: Math.max(1, row.exact_match_count),
-  }));
+  return rows
+    .map((row): LexicalCandidate | undefined => {
+      const matchCount = boundaryExactMatchCount(row.exact_text, exactTerms);
+      if (matchCount === 0) return undefined;
+      return {
+        chunkId: row.chunk_id,
+        capsuleId: row.capsule_id as KnowledgeCapsuleId,
+        bm25Score: row.exact_text.length / 1_000_000,
+        lexicalPriority: matchCount,
+      };
+    })
+    .filter((candidate): candidate is LexicalCandidate => candidate !== undefined)
+    .sort(lexicalCandidateAsc)
+    .slice(0, limit);
 }
 
 interface LexicalCollection {
@@ -1290,16 +1335,20 @@ function collectLexicalCandidatesForCapsule(
     store,
     capsule.id,
     sourceFilter,
-    uniqueStrings([
-      ...profile.exactTerms.filter(isStrongLexicalRecallTerm),
-      ...profile.exactPhrases,
-    ]),
+    uniqueStrings([...profile.exactTerms, ...profile.exactPhrases]),
     limit,
   )) {
     const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
     const existing = byKey.get(key);
-    if (existing === undefined || lexicalCandidateAsc(candidate, existing) < 0) {
-      byKey.set(key, candidate);
+    const promoted =
+      existing === undefined
+        ? candidate
+        : {
+            ...candidate,
+            bm25Score: existing.bm25Score,
+          };
+    if (existing === undefined || lexicalCandidateAsc(promoted, existing) < 0) {
+      byKey.set(key, promoted);
     }
   }
   return {
@@ -2331,7 +2380,8 @@ function extractExactPhrases(value: string): readonly string[] {
     const phrase = normaliseForSearch(match[1] ?? "")
       .replace(/\s+/gu, " ")
       .trim();
-    if (phrase.split(/\s+/u).filter((token) => token.length >= 2).length >= 2) out.push(phrase);
+    const tokens = phrase.split(/\s+/u).filter((token) => token.length >= 2);
+    if (tokens.length >= 2 || (tokens.length === 1 && phrase.length >= 3)) out.push(phrase);
   }
   return uniqueTokens(out);
 }
