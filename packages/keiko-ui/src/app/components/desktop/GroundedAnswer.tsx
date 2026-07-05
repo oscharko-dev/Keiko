@@ -833,7 +833,7 @@ function HybridContextPackSummary({
   );
 }
 
-// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback (RRF/lexical) order.
+// GEN-AI-RETRIEVAL-001 (RB-4): the model reranker silently degraded to fallback retrieval order.
 const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
   "unavailable",
   "invalid-response",
@@ -843,10 +843,16 @@ const DEGRADED_RERANKER_STATUSES: ReadonlySet<string> = new Set([
 function rerankerDegradationNote(
   reranker: GroundedRerankerDiagnostics | undefined,
 ): string | undefined {
-  if (reranker === undefined || !DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
+  if (reranker === undefined) {
     return undefined;
   }
-  return "Ranking: reranker unavailable — showing fallback (lexical) order.";
+  if (reranker.status === "not-configured" || reranker.failureKind === "not-configured") {
+    return "Ranking: no reranker configured — showing fused retrieval order.";
+  }
+  if (!DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
+    return undefined;
+  }
+  return "Ranking: reranker unavailable — showing fused retrieval order.";
 }
 
 // GEN-AI-GROUNDING-007 (RB-4): compute the SUMMARY-LEVEL warnings that must be visible without

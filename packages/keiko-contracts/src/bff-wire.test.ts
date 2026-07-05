@@ -10,8 +10,10 @@ import {
   DEFAULT_GROUNDING_LIMITS,
   DESKTOP_CHAT_SEND_ABORT_CONTRACT,
   DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES,
+  GROUNDED_RERANKER_FAILURE_KINDS,
   eventIsDesktopChatStreamTerminal,
   GROUNDING_LIMIT_CEILINGS,
+  isGroundedRerankerFailureKind,
   isDesktopChatStreamEvent,
   MAX_ATTACHMENT_BYTES,
   MAX_CONNECTED_SOURCES,
@@ -24,6 +26,7 @@ import {
   type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type GroundedAnswerContextSummary,
+  type GroundedRerankerDiagnostics,
   type GroundingLimits,
   type HybridGroundedAnswer,
   type LocalKnowledgeEvidenceCitation,
@@ -692,6 +695,93 @@ describe("resolveGroundingLimits", () => {
       expect(typeof result[key]).toBe("number");
       expect(result[key]).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("GroundedRerankerDiagnostics", () => {
+  it("keeps failure kinds as a closed, browser-safe enum", () => {
+    expect(GROUNDED_RERANKER_FAILURE_KINDS).toEqual([
+      "not-configured",
+      "policy-denied",
+      "wrong-header",
+      "rate-limited",
+      "unsupported-model",
+      "timeout",
+      "cancelled",
+      "transport",
+      "proxy-unreachable",
+      "proxy-auth-required",
+      "proxy-egress-failed",
+      "proxy-blocked-by-policy",
+      "tls-ca-failure",
+      "invalid-response",
+    ]);
+    expect(isGroundedRerankerFailureKind("timeout")).toBe(true);
+  });
+
+  it("rejects raw provider, endpoint, path, query, and credential-shaped failure text", () => {
+    const unsafe = [
+      "https://reranker.example/v1",
+      "/Users/alice/private/pod.md",
+      "Question: payroll policy",
+      "sk-rerank-secret-1234567890",
+      "provider said quota exceeded for endpoint https://example.invalid",
+    ];
+    for (const value of unsafe) {
+      expect(isGroundedRerankerFailureKind(value)).toBe(false);
+    }
+  });
+
+  it("represents no-op, local-only, provider, denied, unavailable, and invalid states", () => {
+    const diagnostics: readonly GroundedRerankerDiagnostics[] = [
+      {
+        status: "disabled",
+        mode: "none",
+        failureKind: "not-configured",
+        candidateCount: 3,
+        documentCount: 0,
+        keptCount: 3,
+      },
+      {
+        status: "denied",
+        mode: "local-only",
+        failureKind: "policy-denied",
+        candidateCount: 3,
+        documentCount: 0,
+        keptCount: 3,
+      },
+      {
+        status: "applied",
+        mode: "provider-backed",
+        candidateCount: 3,
+        documentCount: 3,
+        keptCount: 2,
+      },
+      {
+        status: "unavailable",
+        mode: "provider-backed",
+        failureKind: "timeout",
+        candidateCount: 3,
+        documentCount: 3,
+        keptCount: 3,
+      },
+      {
+        status: "invalid-response",
+        mode: "provider-backed",
+        failureKind: "invalid-response",
+        candidateCount: 3,
+        documentCount: 3,
+        keptCount: 3,
+      },
+    ];
+
+    expect(diagnostics.map((entry) => entry.status)).toEqual([
+      "disabled",
+      "denied",
+      "applied",
+      "unavailable",
+      "invalid-response",
+    ]);
   });
 });
 
