@@ -96,6 +96,8 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   fetchCapsules,
   fetchCapsuleSets,
   type CapsuleListEntry,
@@ -2829,7 +2831,10 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
   if (cached !== undefined) return cached;
   if (knowledgeCatalogPending !== undefined) return knowledgeCatalogPending;
 
-  knowledgeCatalogPending = Promise.allSettled([fetchCapsules(), fetchCapsuleSets()])
+  knowledgeCatalogPending = Promise.allSettled([
+    fetchCapsules({ includeKnowledgePods: true }),
+    fetchCapsuleSets({ includeKnowledgePods: true }),
+  ])
     .then(([capsuleResult, capsuleSetResult]) => {
       if (capsuleResult.status !== "fulfilled") {
         return {
@@ -2837,10 +2842,16 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
           loadError: capsuleResult.reason,
         };
       }
+      const capsules = capsulesForKnowledgePodUi(capsuleResult.value).filter(
+        (entry) => entry.lifecycleState === "ready",
+      );
+      const capsuleSets =
+        capsuleSetResult.status === "fulfilled"
+          ? capsuleSetsForKnowledgePodUi(capsuleSetResult.value)
+          : [];
       const snapshot: KnowledgeCatalogSnapshot = {
-        capsules: capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
-        capsuleSets:
-          capsuleSetResult.status === "fulfilled" ? capsuleSetResult.value.capsuleSets : [],
+        capsules,
+        capsuleSets,
         loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
       };
       return snapshot;

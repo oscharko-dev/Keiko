@@ -1099,6 +1099,30 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain(tmp);
   });
 
+  it("redacts legacy capsule display names in opt-in pod list responses", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    updateCapsuleDetails(store, capId, {
+      displayName: "/Users/alice/private/customer.pdf?client_secret=value",
+    });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsules(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsules: [{ id: "cap-1", displayName: "Knowledge Pod" }],
+      knowledgePods: [{ id: "cap-1", displayName: "Knowledge Pod" }],
+    });
+    expect(body).not.toContain("/Users/alice");
+    expect(body).not.toContain("client_secret");
+  });
+
   it("fails closed when capsule pod summary validation rejects corrupt state", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -1185,6 +1209,33 @@ describe("local-knowledge handlers", () => {
         },
       ],
     });
+  });
+
+  it("redacts legacy capsule-set display names in opt-in pod-set list responses", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "https://gateway.example.test/v1?client_secret=value",
+      tags: ["audit"],
+      capsuleIds: [capId],
+    });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsuleSets: [{ id: "set-1", displayName: "Knowledge Pod Set" }],
+      knowledgePods: [{ id: "set-1", displayName: "Knowledge Pod Set" }],
+    });
+    expect(body).not.toContain("https://gateway.example.test");
+    expect(body).not.toContain("client_secret");
   });
 
   it("fails closed when pod-set summary validation rejects corrupt set state", async () => {
