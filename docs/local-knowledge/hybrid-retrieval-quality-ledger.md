@@ -24,6 +24,15 @@ Fetched source-of-truth state on 2026-07-05:
   [#1908](https://github.com/oscharko-dev/Keiko/pull/1908), targeting `dev`.
 - Active PR branch: `codex/epic-1817-hybrid-retrieval`.
 
+Post-merge audit note on 2026-07-05:
+
+- The opening fetched-state rows and initial ledger table are retained as historical coordination
+  evidence from the implementation branch.
+- Current GitHub state during the P0 audit: #1817 and child issues #1837-#1842 are closed with
+  `status: done`.
+- The implementation snapshot, verification log, and final quality summary below are the
+  authoritative closure evidence sections for the merged #1817 slice.
+
 Ledger status vocabulary:
 
 - `planned`: required and not implemented yet.

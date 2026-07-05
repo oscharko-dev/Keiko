@@ -275,9 +275,10 @@ describe("local-knowledge citation rescue (#189)", () => {
   });
 
   it("phrases incompatible embedding identity as an actionable re-index state", () => {
-    expect(localKnowledgeNoEvidenceAnswer("incompatible-embedding-identity")).toContain(
-      "Re-index it for the current embedding model",
-    );
+    const answer = localKnowledgeNoEvidenceAnswer("incompatible-embedding-identity");
+    expect(answer).toContain("Knowledge Pod");
+    expect(answer).toContain("Re-index it for the current embedding model");
+    expect(answer).not.toContain("connector");
   });
 
   it("mirrors German questions for server-generated no-evidence states", () => {
@@ -286,7 +287,7 @@ describe("local-knowledge citation rescue (#189)", () => {
         "incompatible-embedding-identity",
         "Warum findet der Connector keine Evidenz?",
       ),
-    ).toContain("Dieser Connector wurde");
+    ).toContain("Dieser Knowledge Pod wurde");
     expect(localKnowledgeNoEvidenceAnswer(undefined, "Welche Belege gibt es?")).toContain(
       "Keine Evidenz",
     );

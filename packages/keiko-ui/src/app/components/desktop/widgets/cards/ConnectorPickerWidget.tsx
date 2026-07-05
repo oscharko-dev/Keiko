@@ -21,6 +21,7 @@ import {
   fetchCapsuleSets,
   type CapsuleListEntry,
   type CapsuleSetListEntry,
+  type KnowledgePodUiGuidance,
 } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 import { Icons } from "../../Icons";
@@ -121,22 +122,42 @@ interface SelectedBadgeProps {
   readonly selectedId: string | undefined;
 }
 
+type KnowledgePodPickerEntry = CapsuleListEntry | CapsuleSetListEntry;
+
+function selectedEntry(
+  capsules: readonly CapsuleListEntry[],
+  capsuleSets: readonly CapsuleSetListEntry[],
+  kind: string | undefined,
+  id: string | undefined,
+): KnowledgePodPickerEntry | null {
+  if (kind === undefined || id === undefined || id.length === 0) return null;
+  if (kind === "capsule") {
+    return capsules.find((c) => c.id === id) ?? null;
+  }
+  if (kind === "capsule-set") {
+    return capsuleSets.find((s) => s.id === id) ?? null;
+  }
+  return null;
+}
+
 function selectedLabel(
   capsules: readonly CapsuleListEntry[],
   capsuleSets: readonly CapsuleSetListEntry[],
   kind: string | undefined,
   id: string | undefined,
 ): string | null {
+  const entry = selectedEntry(capsules, capsuleSets, kind, id);
+  if (entry !== null) return entry.displayName;
   if (kind === undefined || id === undefined || id.length === 0) return null;
-  if (kind === "capsule") {
-    const cap = capsules.find((c) => c.id === id);
-    return cap !== undefined ? cap.displayName : `Knowledge Pod ${id}`;
-  }
-  if (kind === "capsule-set") {
-    const set = capsuleSets.find((s) => s.id === id);
-    return set !== undefined ? set.displayName : `Knowledge Pod Set ${id}`;
-  }
+  if (kind === "capsule") return `Knowledge Pod ${id}`;
+  if (kind === "capsule-set") return `Knowledge Pod Set ${id}`;
   return null;
+}
+
+function guidanceForEntry(
+  entry: KnowledgePodPickerEntry | null,
+): KnowledgePodUiGuidance | undefined {
+  return entry?.knowledgePod?.guidance;
 }
 
 function SelectedBadge({
@@ -146,13 +167,38 @@ function SelectedBadge({
   selectedId,
 }: SelectedBadgeProps): ReactNode {
   const label = selectedLabel(capsules, capsuleSets, selectedKind, selectedId);
+  const guidance = guidanceForEntry(selectedEntry(capsules, capsuleSets, selectedKind, selectedId));
   if (label === null) return null;
   return (
-    <div className="connector-picker-selected" role="status" aria-live="polite">
-      <span aria-hidden="true">●</span>
-      <span>{label}</span>
-    </div>
+    <>
+      <div className="connector-picker-selected" role="status" aria-live="polite">
+        <span aria-hidden="true">●</span>
+        <span>{label}</span>
+        {guidance !== undefined ? (
+          <span className="connector-picker-guidance" data-tone={guidance.tone}>
+            {guidance.label}
+          </span>
+        ) : null}
+      </div>
+      {guidance !== undefined ? (
+        <p className="connector-picker-notice" data-tone={guidance.tone}>
+          {guidance.description}
+        </p>
+      ) : null}
+    </>
   );
+}
+
+function pickerOptionGuidance(entry: KnowledgePodPickerEntry): {
+  readonly description?: string;
+  readonly badge?: string;
+} {
+  const guidance = entry.knowledgePod?.guidance;
+  if (guidance === undefined) return {};
+  return {
+    description: guidance.description,
+    badge: guidance.label,
+  };
 }
 
 function connectorNodeStateLabel(state: string | undefined): string {
@@ -336,6 +382,7 @@ export function ConnectorPickerWidget({
                   options: capsules.map((cap) => ({
                     value: `capsule:${cap.id}`,
                     label: `${cap.displayName} (${lifecycleLabel(cap.lifecycleState)})`,
+                    ...pickerOptionGuidance(cap),
                   })),
                 },
               ]
@@ -347,6 +394,7 @@ export function ConnectorPickerWidget({
                   options: capsuleSets.map((set) => ({
                     value: `capsule-set:${set.id}`,
                     label: `${set.displayName} (${String(set.capsuleCount)} pods)`,
+                    ...pickerOptionGuidance(set),
                   })),
                 },
               ]

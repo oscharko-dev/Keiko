@@ -222,19 +222,19 @@ export function selectedCapsulesForScope(
   if (scope.kind === "capsule") {
     const capsule = getCapsule(store, scope.capsuleId);
     if (capsule === undefined) {
-      return conflict("The selected knowledge capsule no longer exists.");
+      return conflict("The selected Knowledge Pod no longer exists.");
     }
     return { capsules: [capsule], scopeKind: "capsule", scopeLabel: capsule.displayName };
   }
   const set = getCapsuleSet(store, scope.capsuleSetId);
   if (set === undefined) {
-    return conflict("The selected knowledge capsule set no longer exists.");
+    return conflict("The selected Knowledge Pod Set no longer exists.");
   }
   const capsules: KnowledgeCapsule[] = [];
   for (const capsuleId of set.capsuleIds) {
     const capsule = getCapsule(store, capsuleId);
     if (capsule === undefined) {
-      return conflict(`Capsule set ${set.displayName} references a missing capsule.`);
+      return conflict(`Knowledge Pod Set ${set.displayName} references a missing Knowledge Pod.`);
     }
     capsules.push(capsule);
   }
@@ -826,9 +826,9 @@ export function localKnowledgeNoEvidenceAnswer(
   const german = shouldUseGermanForSystemAnswer(question);
   if (reason === "incompatible-embedding-identity") {
     if (german) {
-      return "Dieser Connector wurde mit einem anderen Embedding-Modell indiziert. Indiziere ihn fuer das aktuelle Embedding-Modell neu.";
+      return "Dieser Knowledge Pod wurde mit einem anderen Embedding-Modell indiziert. Indiziere ihn fuer das aktuelle Embedding-Modell neu.";
     }
-    return "This connector was indexed with a different embedding model. Re-index it for the current embedding model.";
+    return "This Knowledge Pod was indexed with a different embedding model. Re-index it for the current embedding model.";
   }
   if (reason === "embedding-failed") {
     if (german) {
@@ -838,9 +838,9 @@ export function localKnowledgeNoEvidenceAnswer(
   }
   if (reason === "no-vectors") {
     if (german) {
-      return "Im ausgewaehlten Wissensumfang sind keine indexierten Vektoren verfuegbar. Indiziere den Connector, bevor du fragst.";
+      return "Im ausgewaehlten Wissensumfang sind keine indexierten Vektoren verfuegbar. Indiziere den Knowledge Pod, bevor du fragst.";
     }
-    return "No indexed vectors are available for the selected knowledge scope. Index the connector before asking.";
+    return "No indexed vectors are available for the selected knowledge scope. Index the Knowledge Pod before asking.";
   }
   if (reason === "dense-scan-too-large") {
     if (german) {
