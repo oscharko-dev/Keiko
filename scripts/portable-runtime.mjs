@@ -162,7 +162,10 @@ function validateArtifact(manifest, failures, options) {
   const targetName = stringAt(artifact, "platformTarget", "artifact", failures);
   const target = portableTargetByName(targetName);
   if (target === undefined) push(failures, "artifact.platformTarget", "is unsupported");
-  numberAt(artifact, "assetId", "artifact", failures);
+  const assetId = numberAt(artifact, "assetId", "artifact", failures);
+  if (assetId === 0 && !options.allowUnverified) {
+    push(failures, "artifact.assetId", "must be greater than 0");
+  }
   if (numberAt(artifact, "sizeBytes", "artifact", failures) === 0) {
     push(failures, "artifact.sizeBytes", "must be greater than 0");
   }

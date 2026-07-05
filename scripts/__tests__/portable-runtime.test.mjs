@@ -8,6 +8,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +23,7 @@ import {
   validatePortableManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
+import { appSurfaceFailures } from "../stage-portable-runtime.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -183,7 +185,7 @@ function portableTarget(platformTarget) {
   return target;
 }
 
-function createNodeArchiveFixture(dir, platformTarget) {
+function createNodeArchiveFixture(dir, platformTarget, options = {}) {
   const target = portableTarget(platformTarget);
   const rootName = `node-v${NODE_VERSION}-${target.nodeArchiveTarget}`;
   const sourceParent = join(dir, `node-fixture-${platformTarget}`);
@@ -191,8 +193,11 @@ function createNodeArchiveFixture(dir, platformTarget) {
   mkdirSync(sourceRoot, { recursive: true });
   writeFileSync(join(sourceRoot, "LICENSE"), "Node.js fixture license\n");
   writeFixtureNodeLauncher(target, sourceRoot);
+  if (options.unsafeSymlinkTarget !== undefined) {
+    symlinkSync(options.unsafeSymlinkTarget, join(sourceRoot, "unsafe-link"));
+  }
   const archivePath = join(dir, `${rootName}.${target.nodeArchiveExtension}`);
-  packNodeFixtureArchive(target, archivePath, sourceParent, rootName);
+  packNodeFixtureArchive(target, archivePath, sourceParent, rootName, options);
   return { path: archivePath, sha256: digestBuffer(readFileSync(archivePath)) };
 }
 
@@ -205,9 +210,13 @@ function writeFixtureNodeLauncher(target, sourceRoot) {
   writeFileSync(join(sourceRoot, "bin", "node"), "fixture-node\n");
 }
 
-function packNodeFixtureArchive(target, archivePath, sourceParent, rootName) {
+function packNodeFixtureArchive(target, archivePath, sourceParent, rootName, options) {
   if (target.nodeArchiveExtension === "zip") {
-    runFixtureCommand("zip", ["-qr", archivePath, rootName], sourceParent);
+    runFixtureCommand(
+      "zip",
+      [options.preserveSymlinks ? "-yqr" : "-qr", archivePath, rootName],
+      sourceParent,
+    );
     return;
   }
   runFixtureCommand("tar", ["-czf", archivePath, "-C", sourceParent, rootName], sourceParent);
@@ -329,6 +338,18 @@ describe("validatePortableManifest", () => {
     expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
   });
 
+  it("reserves missing release asset ids for explicit unverified staging mode", () => {
+    const candidate = manifest();
+    candidate.artifact.assetId = 0;
+    candidate.releaseImpact.reviewedBinding.assetId = 0;
+    candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = false;
+
+    expect(validatePortableManifest(candidate).join("\n")).toContain(
+      "artifact.assetId: must be greater than 0",
+    );
+    expect(validatePortableManifest(candidate, { allowUnverified: true })).toEqual([]);
+  });
+
   it("rejects reviewed binding drift from the manifest", () => {
     const candidate = manifest();
     candidate.releaseImpact.reviewedBinding.releaseId = 999;
@@ -365,6 +386,16 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain('"--ignore-scripts"');
     expect(source).toContain('"--pack-destination"');
     expect(source).not.toContain('["install"');
+  });
+
+  it("validates the staged app package surface before archive assembly", () => {
+    const dir = tempDir();
+    const appRoot = join(dir, "app");
+    mkdirSync(appRoot, { recursive: true });
+    writeFileSync(join(appRoot, "package.json"), JSON.stringify({ name: "@oscharko-dev/keiko" }));
+
+    expect(appSurfaceFailures(appRoot)).toContain("dist/cli/index.js is required");
+    expect(appSurfaceFailures(appRoot)).toContain("package.json version must match root");
   });
 });
 
@@ -410,6 +441,11 @@ describe("stage-portable-runtime", () => {
     );
     expect(manifest.security.signatureVerified).toBe(false);
     expect(manifest.security.notarizationVerified).toBe(false);
+    expect(manifest.artifact.assetId).toBe(0);
+    expect(manifest.releaseImpact.reviewedBinding.assetId).toBe(0);
+    expect(manifest.releaseImpact.entryId).toBe(
+      "2026-06-30-keiko-0.2.11-governed-release-impact-baseline",
+    );
     expect(manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified).toBe(
       false,
     );
@@ -422,6 +458,38 @@ describe("stage-portable-runtime", () => {
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "app")),
     ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          root,
+          "payload",
+          "Keiko",
+          "Keiko.app",
+          "Contents",
+          "Resources",
+          "app",
+          "dist",
+          "cli",
+          "index.js",
+        ),
+      ),
+    ).toBe(true);
+    const catalog = JSON.parse(
+      readFileSync(
+        join(
+          root,
+          "payload",
+          "Keiko",
+          "Keiko.app",
+          "Contents",
+          "Resources",
+          "app",
+          "release-impact.catalog.json",
+        ),
+        "utf8",
+      ),
+    );
+    expect(catalog.entries.some((entry) => entry.id === manifest.releaseImpact.entryId)).toBe(true);
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
     ).toBe(true);
@@ -569,6 +637,69 @@ describe("stage-portable-runtime", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("Node archive bytes do not match zip");
   });
+
+  it("fails closed when the Node archive contains an escaping symlink", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64", {
+      unsafeSymlinkTarget: "/etc/passwd",
+    });
+
+    const result = runStage([
+      "--target",
+      "macos-arm64",
+      "--node-archive",
+      nodeArchive.path,
+      "--node-sha256",
+      nodeArchive.sha256,
+      "--node-version",
+      NODE_VERSION,
+      "--commit-sha",
+      COMMIT_SHA,
+      "--release-id",
+      "123456789",
+      "--release-tag",
+      "v0.2.11",
+      "--node-cache-dir",
+      join(dir, "cache"),
+      "--out-dir",
+      join(dir, "out"),
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("archive symlink target escapes expected root");
+  }, 120_000);
+
+  it("fails closed when a ZIP Node archive stores a symlink entry", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64", {
+      preserveSymlinks: true,
+      unsafeSymlinkTarget: "/etc/passwd",
+    });
+
+    const result = runStage([
+      "--target",
+      "windows-x64",
+      "--node-archive",
+      nodeArchive.path,
+      "--node-sha256",
+      nodeArchive.sha256,
+      "--node-version",
+      NODE_VERSION,
+      "--commit-sha",
+      COMMIT_SHA,
+      "--release-id",
+      "123456789",
+      "--release-tag",
+      "v0.2.11",
+      "--node-cache-dir",
+      join(dir, "cache"),
+      "--out-dir",
+      join(dir, "out"),
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("archive contains unsupported special-file entries");
+  }, 120_000);
 
   it("fails closed when the release tag is not the stable package version", () => {
     const dir = tempDir();

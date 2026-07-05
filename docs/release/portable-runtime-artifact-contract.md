@@ -45,10 +45,11 @@ implementation, first-run setup, or updater swap.
 
 Generated #1948 staging manifests therefore use `signatureVerified: false`,
 `notarizationVerified: false`, and `platformSignatureLocallyVerified: false` under an explicit
-unverified-staging validation mode. Those artifacts are manual-only staging outputs until #1951
-replaces the metadata with verified signing/notarization evidence. The manifest example below
-remains the production-complete contract for artifacts that may be promoted as portable release
-assets.
+unverified-staging validation mode. They also use `artifact.assetId: 0` because GitHub Release
+asset ids do not exist until #1952 uploads the artifacts. Those artifacts are manual-only staging
+outputs until #1951 replaces the metadata with verified signing/notarization evidence and #1952
+binds real GitHub Release asset ids. The manifest example below remains the production-complete
+contract for artifacts that may be promoted as portable release assets.
 
 ## Archive And Evidence Layout
 
@@ -319,6 +320,8 @@ Validation rules:
 - `schemaVersion` is `1` until a later issue deliberately revises the schema.
 - `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
+- `artifact.assetId` must be a real non-zero GitHub Release asset id for production manifests.
+  `0` is reserved for #1948 unverified staging manifests only.
 - `artifact.sha256`, `runtime.nodeArchiveSha256`, and `release.commitSha` are digests, not paths.
 - `provenance.sourceCommitSha`, `provenance.rootPackageTarballSha256`,
   `provenance.packagedAppTreeSha256`, and `provenance.provenanceStatementSha256` bind the packaged

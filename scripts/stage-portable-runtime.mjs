@@ -3,8 +3,8 @@ import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
-  cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
@@ -29,12 +29,25 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+const releaseImpactCatalog = JSON.parse(
+  readFileSync(join(repoRoot, "release-impact.catalog.json"), "utf8"),
+);
 const ALLOWED_NODE_ARCHIVE_HOSTS = new Set(["nodejs.org", "dist.nodejs.org"]);
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const NODE_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
 const NODE_ARCHIVE_TIMEOUT_MS = 300_000;
 const NODE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const STAGING_ASSET_ID_UNAVAILABLE = 0;
+const REQUIRED_APP_SURFACE_FILES = Object.freeze([
+  "package.json",
+  "dist/index.js",
+  "dist/cli/index.js",
+  "release-impact.catalog.json",
+  "LICENSE",
+  "NOTICE",
+]);
+const TAR_LINK_POLICY_SKIP_SAFE = "skip-safe";
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -156,10 +169,11 @@ function packRoot(packDir) {
 }
 
 function stagePackedPackage(tarball, extractRoot, stageRoot) {
-  run("tar", ["-xzf", tarball, "-C", extractRoot]);
-  const extracted = join(extractRoot, "package");
-  if (!existsSync(extracted)) fail(`packed Keiko package not found at ${extracted}`);
-  cpSync(extracted, join(stageRoot, "app"), { recursive: true, dereference: true });
+  const appRoot = join(stageRoot, "app");
+  extractArchiveRoot(tarball, "tar.gz", "package", extractRoot, appRoot, {
+    tarLinkPolicy: TAR_LINK_POLICY_SKIP_SAFE,
+  });
+  validateStagedAppSurface(appRoot);
 }
 
 async function stageNodeRuntime(options, target, stageRoot) {
@@ -188,37 +202,163 @@ async function stageNodeRuntime(options, target, stageRoot) {
 
 function extractNodeRuntime(archivePath, target, nodeVersion, runtimeRoot) {
   const extractRoot = join(runtimeRoot, ".extract");
-  rmSync(extractRoot, { recursive: true, force: true });
-  mkdirSync(extractRoot, { recursive: true });
   try {
-    extractNodeArchive(archivePath, target, extractRoot);
-    copyArchiveRootContents(
-      extractRoot,
+    extractArchiveRoot(
+      archivePath,
+      target.nodeArchiveExtension,
       expectedNodeArchiveRootName(target, nodeVersion),
+      extractRoot,
       runtimeRoot,
+      { tarLinkPolicy: TAR_LINK_POLICY_SKIP_SAFE },
     );
   } finally {
     rmSync(extractRoot, { recursive: true, force: true });
   }
 }
 
-function extractNodeArchive(archivePath, target, extractRoot) {
-  if (target.nodeArchiveExtension === "zip") {
+function extractArchiveRoot(
+  archivePath,
+  archiveKind,
+  expectedRoot,
+  extractRoot,
+  destinationRoot,
+  policy,
+) {
+  rmSync(extractRoot, { recursive: true, force: true });
+  mkdirSync(extractRoot, { recursive: true });
+  const entries = safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy);
+  extractArchive(archivePath, archiveKind, extractRoot, entries);
+  copySafeTreeContents(join(extractRoot, expectedRoot), destinationRoot);
+}
+
+function extractArchive(archivePath, archiveKind, extractRoot, entries) {
+  if (archiveKind === "zip") {
     run("unzip", ["-q", archivePath, "-d", extractRoot]);
     return;
   }
-  run("tar", ["-xzf", archivePath, "-C", extractRoot]);
+  const includeFile = join(extractRoot, "portable-runtime-tar-include.txt");
+  writeFileSync(includeFile, `${entries.join("\n")}\n`);
+  run("tar", ["-xzf", archivePath, "-C", extractRoot, "-T", includeFile]);
+  rmSync(includeFile, { force: true });
 }
 
-function copyArchiveRootContents(extractRoot, archiveRootName, runtimeRoot) {
-  const archiveRoot = join(extractRoot, archiveRootName);
-  if (!existsSync(archiveRoot)) fail(`Node archive root not found at ${archiveRootName}`);
-  for (const entry of readdirSync(archiveRoot)) {
-    cpSync(join(archiveRoot, entry), join(runtimeRoot, entry), {
-      recursive: true,
-      dereference: true,
-    });
+function safeExtractionEntries(archivePath, archiveKind, expectedRoot, policy) {
+  const entries = archiveEntries(archivePath, archiveKind);
+  if (!entries.some((entry) => archiveEntryInsideRoot(entry, expectedRoot))) {
+    fail(`archive must contain ${expectedRoot}`);
   }
+  for (const entry of entries) {
+    if (!archiveEntryInsideRoot(entry, expectedRoot)) fail(`archive entry escapes ${expectedRoot}`);
+  }
+  if (archiveKind === "zip") {
+    assertZipEntryTypesSafe(archivePath);
+    return entries;
+  }
+  return tarExtractionEntries(archivePath, entries, expectedRoot, policy.tarLinkPolicy);
+}
+
+function archiveEntries(archivePath, archiveKind) {
+  const result =
+    archiveKind === "zip" ? run("unzip", ["-Z1", archivePath]) : run("tar", ["-tzf", archivePath]);
+  return result.stdout
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function archiveEntryInsideRoot(entry, expectedRoot) {
+  const normalized = normalizeArchiveEntry(entry);
+  return normalized === expectedRoot || normalized.startsWith(`${expectedRoot}/`);
+}
+
+function normalizeArchiveEntry(entry) {
+  const normalized = entry.replaceAll("\\", "/").replace(/\/+$/u, "");
+  if (normalized.length === 0 || normalized.startsWith("/") || /^[A-Za-z]:/u.test(normalized)) {
+    return "";
+  }
+  const parts = normalized.split("/");
+  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return "";
+  return normalized;
+}
+
+function tarExtractionEntries(archivePath, entries, expectedRoot, linkPolicy) {
+  const lines = run("tar", ["-tvzf", archivePath]).stdout.split(/\r?\n/u).filter(Boolean);
+  if (lines.length !== entries.length) fail("tar archive listing is inconsistent");
+  const extractable = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const entry = entries[index];
+    const type = line[0];
+    if (type === "-") {
+      extractable.push(entry);
+    } else if (type === "d") {
+      continue;
+    } else if (type === "l" && linkPolicy === TAR_LINK_POLICY_SKIP_SAFE) {
+      assertTarSymlinkTargetSafe(entry, line, expectedRoot);
+    } else {
+      fail("archive contains unsupported link or special-file entries");
+    }
+  }
+  return extractable;
+}
+
+function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
+  const marker = " -> ";
+  const markerIndex = line.lastIndexOf(marker);
+  if (markerIndex === -1) fail("tar symlink entry is missing target");
+  const target = line.slice(markerIndex + marker.length);
+  if (target.startsWith("/") || /^[A-Za-z]:/u.test(target)) {
+    fail("archive symlink target escapes expected root");
+  }
+  const normalizedTarget = normalizeArchiveEntry(posix.join(posix.dirname(entry), target));
+  if (!archiveEntryInsideRoot(normalizedTarget, expectedRoot)) {
+    fail("archive symlink target escapes expected root");
+  }
+}
+
+function assertZipEntryTypesSafe(archivePath) {
+  for (const line of run("unzip", ["-Z", "-l", archivePath])
+    .stdout.split(/\r?\n/u)
+    .filter(Boolean)) {
+    if (!/^[dl-][rwx-]/u.test(line)) continue;
+    const type = line[0];
+    if (type === "d" || type === "-") continue;
+    fail("archive contains unsupported special-file entries");
+  }
+}
+
+function copySafeTreeContents(sourceRoot, destinationRoot) {
+  if (!existsSync(sourceRoot)) fail(`archive root not found at ${basename(sourceRoot)}`);
+  mkdirSync(destinationRoot, { recursive: true });
+  for (const entry of readdirSync(sourceRoot)) {
+    copySafeEntry(join(sourceRoot, entry), join(destinationRoot, entry));
+  }
+}
+
+function copySafeEntry(sourcePath, destinationPath) {
+  const entry = lstatSync(sourcePath);
+  if (entry.isDirectory()) {
+    copySafeDirectory(sourcePath, destinationPath);
+    return;
+  }
+  if (entry.isFile()) {
+    copySafeFile(sourcePath, destinationPath, entry.nlink);
+    return;
+  }
+  fail("archive contains unsupported special-file entries");
+}
+
+function copySafeDirectory(sourcePath, destinationPath) {
+  mkdirSync(destinationPath, { recursive: true });
+  for (const entry of readdirSync(sourcePath)) {
+    copySafeEntry(join(sourcePath, entry), join(destinationPath, entry));
+  }
+}
+
+function copySafeFile(sourcePath, destinationPath, linkCount) {
+  if (linkCount > 1) fail("archive contains hardlinked file entries");
+  mkdirSync(dirname(destinationPath), { recursive: true });
+  copyFileSync(sourcePath, destinationPath);
 }
 
 function validateExtractedNodeRuntime(target, runtimeRoot) {
@@ -232,6 +372,33 @@ function requireRuntimeFile(runtimeRoot, relativePath) {
   const path = join(runtimeRoot, relativePath);
   if (!existsSync(path) || !statSync(path).isFile()) {
     fail(`Node runtime must include ${relativePath}`);
+  }
+}
+
+function validateStagedAppSurface(appRoot) {
+  const failures = appSurfaceFailures(appRoot);
+  if (failures.length > 0)
+    fail(`packed app surface is incomplete:\n  - ${failures.join("\n  - ")}`);
+}
+
+export function appSurfaceFailures(appRoot) {
+  const failures = [];
+  for (const file of REQUIRED_APP_SURFACE_FILES) {
+    if (!existsSync(join(appRoot, file)) || !statSync(join(appRoot, file)).isFile()) {
+      failures.push(`${file} is required`);
+    }
+  }
+  validateStagedPackageJson(appRoot, failures);
+  return failures;
+}
+
+function validateStagedPackageJson(appRoot, failures) {
+  const packagePath = join(appRoot, "package.json");
+  if (!existsSync(packagePath)) return;
+  const stagedPackage = JSON.parse(readFileSync(packagePath, "utf8"));
+  if (stagedPackage.name !== rootPackage.name) failures.push("package.json name must match root");
+  if (stagedPackage.version !== rootPackage.version) {
+    failures.push("package.json version must match root");
   }
 }
 
@@ -515,7 +682,7 @@ function manifestRelease(options) {
 function manifestArtifact(options, target, digests) {
   return {
     platformTarget: target.platformTarget,
-    assetId: options.releaseId,
+    assetId: STAGING_ASSET_ID_UNAVAILABLE,
     assetName: target.assetName,
     archiveFormat: "zip",
     sizeBytes: digests.sizeBytes,
@@ -597,7 +764,7 @@ function manifestReviewedBinding(options, target, digests, nodeIdentity, securit
   return {
     releaseId: options.releaseId,
     releaseTag: options.releaseTag,
-    assetId: options.releaseId,
+    assetId: STAGING_ASSET_ID_UNAVAILABLE,
     assetName: target.assetName,
     assetSizeBytes: digests.sizeBytes,
     platformTarget: target.platformTarget,
@@ -615,10 +782,17 @@ function manifestReviewedBinding(options, target, digests, nodeIdentity, securit
   };
 }
 
-function manifestReleaseImpact(options, target, digests, nodeIdentity, security) {
+function manifestReleaseImpact(
+  options,
+  target,
+  digests,
+  nodeIdentity,
+  security,
+  releaseImpactEntry,
+) {
   return {
     catalogPath: "app/release-impact.catalog.json",
-    entryId: `${rootPackage.name}@${rootPackage.version}`,
+    entryId: releaseImpactEntry.id,
     entryPackageVersion: rootPackage.version,
     entryReleaseTag: options.releaseTag,
     reviewedBinding: manifestReviewedBinding(options, target, digests, nodeIdentity, security),
@@ -652,6 +826,7 @@ function manifestFor(options, target, digests) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
   const security = manifestSecurity(target);
+  const releaseImpactEntry = reviewedReleaseImpactEntry(options);
   return {
     schemaVersion: 1,
     product: manifestProduct(),
@@ -674,9 +849,29 @@ function manifestFor(options, target, digests) {
       { ...digests, assetSha256: assetSha },
       nodeIdentity,
       security,
+      releaseImpactEntry,
     ),
     updateEligibility: manifestUpdateEligibility(),
   };
+}
+
+function reviewedReleaseImpactEntry(options) {
+  const entries = Array.isArray(releaseImpactCatalog.entries) ? releaseImpactCatalog.entries : [];
+  const entry = entries.find((candidate) => releaseImpactEntryMatches(candidate, options));
+  if (entry === undefined) {
+    fail("release-impact catalog must contain a reviewed entry for the staged package version");
+  }
+  return entry;
+}
+
+function releaseImpactEntryMatches(entry, options) {
+  return (
+    entry.packageName === rootPackage.name &&
+    entry.packageVersion === rootPackage.version &&
+    entry.releaseTag === options.releaseTag &&
+    entry.review?.status === "reviewed" &&
+    entry.review?.humanApproved === true
+  );
 }
 
 async function assemble(options) {
