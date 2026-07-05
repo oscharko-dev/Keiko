@@ -74,6 +74,8 @@ import type {
   MessageResponse,
   MessagesResponse,
   ModelCapability,
+  NativeFileDialogRequest,
+  NativeFileDialogResponse,
   PatchChatMessageBody,
   PatchMessageResponse,
   PromptEnhancementWireRequest,
@@ -1263,6 +1265,15 @@ export async function fetchFilesDirectories(
   params.set("root", root);
   if (path !== undefined && path.length > 0) params.set("path", path);
   return fetchJson(`/api/files/directories?${params.toString()}`);
+}
+
+export async function openNativeFileDialog(
+  input: NativeFileDialogRequest,
+): Promise<NativeFileDialogResponse> {
+  return fetchJson("/api/native-file-dialog/open", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {

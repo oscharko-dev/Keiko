@@ -1239,10 +1239,18 @@ export type {
   DesktopChatSendAbortContract,
   BffErrorCode,
   BffError,
+  NativeFileDialogMode,
+  NativeFileDialogSelectionKind,
+  NativeFileDialogFilter,
+  NativeFileDialogRequest,
+  NativeFileDialogSelection,
+  NativeFileDialogResponse,
+  NativeFileDialogRequestValidation,
   GroundingLimits,
 } from "./bff-wire.js";
 export {
   buildGroundedAnswerContextPackSummary,
+  validateNativeFileDialogRequest,
   DEFAULT_GROUNDING_LIMITS,
   GROUNDING_LIMIT_CEILINGS,
   DESKTOP_CHAT_STREAM_EVENT_TYPES,

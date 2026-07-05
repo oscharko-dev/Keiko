@@ -151,6 +151,7 @@ import {
   createServerWorkspaceIndexProvider,
   type WorkspaceIndexProvider,
 } from "./workspace-index-provider.js";
+import type { NativeFileDialogAdapter } from "./native-file-dialog.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -307,6 +308,9 @@ export interface UiHandlerDeps {
   // Test-only Git BFF seams. Production leaves this undefined so repository status/diff use the
   // fixed native Git runner and conservative caps.
   readonly gitRouteOptions?: GitRouteOptions | undefined;
+  // Issue #1941 - native OS file/folder dialog seam. Tests inject a fake adapter; production lazily
+  // selects the platform adapter in the route so unsupported platforms can fall back in the UI.
+  readonly nativeFileDialog?: NativeFileDialogAdapter | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
   readonly localKnowledgeEmbeddingRequest?:

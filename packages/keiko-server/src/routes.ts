@@ -147,6 +147,7 @@ import {
   handleFilesSearch,
   handleFilesTree,
 } from "./files.js";
+import { handleNativeFileDialogOpen } from "./native-file-dialog.js";
 import { handleGitBranches, handleGitDiff, handleGitStatus } from "./gitRoutes.js";
 import { handleGitHistory, handleGitRemotes, handleGitSummary } from "./gitRepositoryReads.js";
 import {
@@ -465,6 +466,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/git/remotes",
     handler: (ctx, deps) => handleGitRemotes(ctx, deps, deps.gitRouteOptions),
+  },
+  {
+    method: "POST",
+    pattern: "/api/native-file-dialog/open",
+    handler: handleNativeFileDialogOpen,
   },
   // Issue #1387 — controlled test/build/run command executor. Tasks are discovered from package
   // scripts and run through the single governed spawn boundary (keiko-tools runCommand): allowlisted

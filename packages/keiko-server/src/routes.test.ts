@@ -420,6 +420,9 @@ describe("API route contract", () => {
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/preview"),
     ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/native-file-dialog/open"),
+    ).toBeDefined();
   });
 
   it("exposes every contract path exactly once per method", () => {

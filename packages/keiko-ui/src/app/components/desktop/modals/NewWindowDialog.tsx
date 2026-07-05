@@ -9,6 +9,7 @@ import {
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  openNativeFileDialog,
   startRun,
 } from "../../../../lib/api";
 import type {
@@ -97,6 +98,30 @@ export function directoryPickerError(error: unknown): string {
 
 function errorMessage(error: unknown): string {
   return directoryPickerError(error);
+}
+
+async function openNativeDirectoryOrFallback(
+  seedPath: string,
+  title: string,
+  onSelect: (path: string) => void,
+  onFallback: () => void,
+): Promise<void> {
+  try {
+    const response = await openNativeFileDialog({
+      mode: "open-directory",
+      title,
+      ...(seedPath.trim().length > 0 ? { defaultPath: seedPath.trim() } : {}),
+    });
+    if (response.cancelled) return;
+    const selection = response.selections[0];
+    if (selection !== undefined && selection.kind === "directory") {
+      onSelect(selection.path);
+      return;
+    }
+    onFallback();
+  } catch {
+    onFallback();
+  }
 }
 
 function DirectoryPicker({
@@ -583,7 +608,7 @@ function renderField(
   cfg: Cfg,
   set: (k: string, v: CfgValue) => void,
   firstRef: ((node: HTMLElement | null) => void) | null,
-  openDirectoryPicker: (key: string) => void,
+  openDirectoryPicker: (key: string, value: string) => void,
 ): ReactNode {
   if (f.type === "perm") return <PermControl cfg={cfg} set={set} />;
   const raw = cfg[f.key];
@@ -633,13 +658,13 @@ function renderField(
           className="dlg-input mono"
           placeholder={f.placeholder ?? f.label}
           value={value}
-          onClick={() => openDirectoryPicker(f.key)}
+          onClick={() => openDirectoryPicker(f.key, value)}
           onChange={(e) => set(f.key, e.target.value)}
         />
         <button
           type="button"
           className="dlg-btn dlg-dirbtn"
-          onClick={() => openDirectoryPicker(f.key)}
+          onClick={() => openDirectoryPicker(f.key, value)}
         >
           Browse
         </button>
@@ -814,7 +839,12 @@ function AgentLauncher({
   const openRepositoryPicker = (): void => {
     if (!canBrowseRepository) return;
     if (workspace.length === 0) setWorkspaceRoot(repositoryBrowseSeed);
-    setDirectoryField("agentWorkspace");
+    void openNativeDirectoryOrFallback(
+      repositoryBrowseSeed,
+      "Select repository folder",
+      setWorkspaceRoot,
+      () => setDirectoryField("agentWorkspace"),
+    );
   };
 
   const renderAgentFields = (): ReactNode => {
@@ -1162,6 +1192,14 @@ export function NewWindowDialog({
   }, [cfg.root, type]);
 
   const set = (k: string, v: CfgValue): void => setCfg((s) => ({ ...s, [k]: v }));
+  const browseDirectoryField = (key: string, value: string): void => {
+    void openNativeDirectoryOrFallback(
+      value,
+      "Select folder",
+      (path) => set(key, path),
+      () => setDirectoryField(key),
+    );
+  };
   const submit = (): void => {
     if (type !== "agents") onConfirm(cfg);
   };
@@ -1273,7 +1311,7 @@ export function NewWindowDialog({
                         firstFieldRef.current = node;
                       }
                     : null,
-                  setDirectoryField,
+                  browseDirectoryField,
                 )}
                 {f.type === "directory" && directoryField === f.key ? (
                   <DirectoryPicker

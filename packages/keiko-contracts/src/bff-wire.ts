@@ -1017,6 +1017,149 @@ export interface BffError {
   readonly error: { readonly code: string; readonly message: string };
 }
 
+export type NativeFileDialogMode = "open-file" | "open-files" | "open-directory";
+export type NativeFileDialogSelectionKind = "file" | "directory";
+
+export interface NativeFileDialogFilter {
+  readonly name: string;
+  readonly extensions: readonly string[];
+}
+
+export interface NativeFileDialogRequest {
+  readonly mode: NativeFileDialogMode;
+  readonly title?: string;
+  readonly defaultPath?: string;
+  readonly filters?: readonly NativeFileDialogFilter[];
+}
+
+export interface NativeFileDialogSelection {
+  readonly path: string;
+  readonly kind: NativeFileDialogSelectionKind;
+}
+
+export interface NativeFileDialogResponse {
+  readonly cancelled: boolean;
+  readonly selections: readonly NativeFileDialogSelection[];
+}
+
+export type NativeFileDialogRequestValidation =
+  | { readonly ok: true; readonly value: NativeFileDialogRequest }
+  | { readonly ok: false; readonly error: string };
+
+const NATIVE_FILE_DIALOG_MODES: ReadonlySet<string> = new Set([
+  "open-file",
+  "open-files",
+  "open-directory",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalBoundedString(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): { readonly ok: true; readonly value?: string } | { readonly ok: false; readonly error: string } {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== "string") return { ok: false, error: `${field} must be a string` };
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return { ok: true };
+  if (trimmed.length > maxLength) return { ok: false, error: `${field} is too long` };
+  if (trimmed.includes("\0")) return { ok: false, error: `${field} must not contain NUL` };
+  return { ok: true, value: trimmed };
+}
+
+function parseNativeFileDialogFilters(value: unknown):
+  | { readonly ok: true; readonly value?: readonly NativeFileDialogFilter[] }
+  | {
+      readonly ok: false;
+      readonly error: string;
+    } {
+  if (value === undefined) return { ok: true };
+  if (!Array.isArray(value)) return { ok: false, error: "filters must be an array" };
+  if (value.length > 16) return { ok: false, error: "filters contains too many entries" };
+  const filters: NativeFileDialogFilter[] = [];
+  for (const [index, item] of value.entries()) {
+    const filter = parseNativeFileDialogFilter(item, index);
+    if (!filter.ok) return filter;
+    filters.push(filter.value);
+  }
+  return { ok: true, value: filters };
+}
+
+function parseNativeFileDialogFilter(
+  item: unknown,
+  index: number,
+):
+  | { readonly ok: true; readonly value: NativeFileDialogFilter }
+  | { readonly ok: false; readonly error: string } {
+  if (!isRecord(item)) return { ok: false, error: `filters[${String(index)}] must be an object` };
+  const name = optionalBoundedString(item.name, `filters[${String(index)}].name`, 80);
+  if (!name.ok) return name;
+  if (name.value === undefined) {
+    return { ok: false, error: `filters[${String(index)}].name is required` };
+  }
+  if (!Array.isArray(item.extensions)) {
+    return { ok: false, error: `filters[${String(index)}].extensions must be an array` };
+  }
+  if (item.extensions.length === 0 || item.extensions.length > 32) {
+    return { ok: false, error: `filters[${String(index)}].extensions has invalid size` };
+  }
+  const extensions = parseNativeFileDialogExtensions(item.extensions, index);
+  if (!extensions.ok) return extensions;
+  return { ok: true, value: { name: name.value, extensions: extensions.value } };
+}
+
+function parseNativeFileDialogExtensions(
+  values: readonly unknown[],
+  index: number,
+):
+  | { readonly ok: true; readonly value: readonly string[] }
+  | { readonly ok: false; readonly error: string } {
+  const extensions: string[] = [];
+  for (const [extensionIndex, extensionValue] of values.entries()) {
+    if (typeof extensionValue !== "string") {
+      return {
+        ok: false,
+        error: `filters[${String(index)}].extensions[${String(extensionIndex)}] must be a string`,
+      };
+    }
+    const extension = extensionValue.trim().replace(/^\./u, "").toLowerCase();
+    if (!/^[a-z0-9][a-z0-9+_-]{0,15}$/u.test(extension)) {
+      return {
+        ok: false,
+        error: `filters[${String(index)}].extensions[${String(extensionIndex)}] is invalid`,
+      };
+    }
+    extensions.push(extension);
+  }
+  return { ok: true, value: extensions };
+}
+
+export function validateNativeFileDialogRequest(input: unknown): NativeFileDialogRequestValidation {
+  if (!isRecord(input)) return { ok: false, error: "request must be an object" };
+  if (typeof input.mode !== "string" || !NATIVE_FILE_DIALOG_MODES.has(input.mode)) {
+    return { ok: false, error: "mode is invalid" };
+  }
+  const mode = input.mode as NativeFileDialogMode;
+  const title = optionalBoundedString(input.title, "title", 120);
+  if (!title.ok) return title;
+  const defaultPath = optionalBoundedString(input.defaultPath, "defaultPath", 4096);
+  if (!defaultPath.ok) return defaultPath;
+  const filters = parseNativeFileDialogFilters(input.filters);
+  if (!filters.ok) return filters;
+  return {
+    ok: true,
+    value: {
+      mode,
+      ...(title.value !== undefined ? { title: title.value } : {}),
+      ...(defaultPath.value !== undefined ? { defaultPath: defaultPath.value } : {}),
+      ...(filters.value !== undefined ? { filters: filters.value } : {}),
+    },
+  };
+}
+
 // ─── Run report (BFF GET /api/runs/:runId — projection over evidence + state) ─────
 
 export type RunStatus =

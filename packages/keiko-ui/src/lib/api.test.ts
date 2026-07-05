@@ -30,6 +30,7 @@ import {
   fetchUpdateRemediationStatus,
   fetchUpdateSessionStatus,
   fetchVoiceCapability,
+  openNativeFileDialog,
   openPdfCitationPreviewSession,
   pdfCitationPreviewDocumentUrl,
   prepareUpdateRemediationStatus,
@@ -690,6 +691,39 @@ describe("files API helpers", () => {
           path: "src/app.ts",
           content: "const x = 2;\n",
           expectedModifiedAt: 1,
+        }),
+      }),
+    );
+  });
+
+  it("posts native folder picker requests with the CSRF envelope", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        cancelled: false,
+        selections: [{ path: "/repo space", kind: "directory" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await openNativeFileDialog({
+      mode: "open-directory",
+      title: "Select folder",
+      defaultPath: "/repo space",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/native-file-dialog/open",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+        body: JSON.stringify({
+          mode: "open-directory",
+          title: "Select folder",
+          defaultPath: "/repo space",
         }),
       }),
     );
