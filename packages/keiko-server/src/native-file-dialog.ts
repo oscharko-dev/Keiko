@@ -119,7 +119,10 @@ Add-Type -AssemblyName System.Windows.Forms
 $raw = [Console]::In.ReadToEnd()
 $config = if ($raw.Trim().Length -eq 0) { @{} } else { $raw | ConvertFrom-Json }
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.AutoUpgradeEnabled = $true
+$autoUpgrade = $dialog.PSObject.Properties['AutoUpgradeEnabled']
+if ($null -ne $autoUpgrade) {
+  $dialog.AutoUpgradeEnabled = $true
+}
 $dialog.ShowNewFolderButton = $true
 if ($null -ne $config.title -and [string]$config.title -ne '') {
   $dialog.Description = [string]$config.title
