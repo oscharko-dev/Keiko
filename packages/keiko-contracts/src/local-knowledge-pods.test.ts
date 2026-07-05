@@ -135,6 +135,8 @@ describe("validateKnowledgePodSummary", () => {
       "gateway.internal/v1",
       "localhost:11434/v1",
       "127.0.0.1:11434/v1",
+      "[::1]:11434/v1",
+      "[2001:db8::1]:443/v1",
       "https://example.test/embed?api_key=secret-value",
       "gateway.internal/v1?api_key=secret-value",
       "wss://gateway.example.test/embed?access_token=secret-value",

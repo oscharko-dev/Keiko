@@ -37,6 +37,9 @@ import {
   isSafeScopePath,
   isSafeStorageReference,
   isSafeDisplaySummary,
+  KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  isKnowledgePodEvidenceSafeText,
+  validateKnowledgePodSummary,
   validateEmbeddingModelIdentity,
   validateKnowledgeSourceScope,
   validateKnowledgeCapsule,
@@ -350,6 +353,9 @@ describe("keiko-contracts package surface", () => {
     expect(typeof isSafeScopePath).toBe("function");
     expect(typeof isSafeStorageReference).toBe("function");
     expect(typeof isSafeDisplaySummary).toBe("function");
+    expect(KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION).toBe("1");
+    expect(typeof isKnowledgePodEvidenceSafeText).toBe("function");
+    expect(typeof validateKnowledgePodSummary).toBe("function");
     expect(typeof validateEmbeddingModelIdentity).toBe("function");
     expect(typeof validateKnowledgeSourceScope).toBe("function");
     expect(typeof validateKnowledgeCapsule).toBe("function");
