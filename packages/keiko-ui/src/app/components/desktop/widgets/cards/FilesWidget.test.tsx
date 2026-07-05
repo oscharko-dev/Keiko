@@ -328,6 +328,115 @@ describe("FilesWidget", () => {
     expect(screen.queryByText("Git status loading")).toBeNull();
   });
 
+  it("reads Git status from the visible nested folder after entering it", async () => {
+    const parentRoot = "D:\\Softwareentwicklung\\Projekte";
+    const nestedRoot = `${parentRoot}\\SpringAI Showcase`;
+    vi.mocked(fetchGitStatus).mockImplementation((root: string) =>
+      Promise.resolve(
+        root === nestedRoot
+          ? {
+              schemaVersion: "1",
+              root,
+              repositoryRoot: root,
+              state: "available",
+              available: true,
+              branch: "main",
+              detached: false,
+              clean: false,
+              stagedCount: 0,
+              unstagedCount: 1,
+              untrackedCount: 0,
+              conflictedCount: 0,
+              changes: [
+                {
+                  path: "pom.xml",
+                  indexStatus: " ",
+                  worktreeStatus: "M",
+                  staged: false,
+                  unstaged: true,
+                  untracked: false,
+                  conflicted: false,
+                },
+              ],
+              truncated: false,
+              maxChanges: 500,
+            }
+          : {
+              schemaVersion: "1",
+              root,
+              state: "unavailable",
+              available: false,
+              reason: "not-a-repository",
+              detached: false,
+              clean: true,
+              stagedCount: 0,
+              unstagedCount: 0,
+              untrackedCount: 0,
+              conflictedCount: 0,
+              changes: [],
+              truncated: false,
+              maxChanges: 500,
+            },
+      ),
+    );
+    vi.mocked(fetchFilesTree).mockImplementation((root: string, path = "") =>
+      Promise.resolve({
+        root,
+        path,
+        truncated: false,
+        entries:
+          path === ""
+            ? [
+                {
+                  ...treeEntryBase,
+                  name: "SpringAI Showcase",
+                  path: "SpringAI Showcase",
+                  kind: "directory",
+                },
+              ]
+            : [
+                {
+                  ...treeEntryBase,
+                  name: "pom.xml",
+                  path: "SpringAI Showcase/pom.xml",
+                  kind: "file",
+                  sizeBytes: 42,
+                  extension: "xml",
+                },
+              ],
+      }),
+    );
+    vi.mocked(fetchGitDiff).mockResolvedValueOnce({
+      schemaVersion: "1",
+      root: nestedRoot,
+      repositoryRoot: nestedRoot,
+      state: "available",
+      available: true,
+      path: "pom.xml",
+      scope: "all",
+      diff: "diff --git a/pom.xml b/pom.xml\n-old\n+new\n",
+      truncated: false,
+      maxBytes: 131072,
+    });
+
+    render(<FilesWidget root={parentRoot} />);
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: "SpringAI Showcase" }));
+
+    expect(await screen.findByText(/Git main 1 changed file/i)).toBeInTheDocument();
+    expect(fetchGitStatus).toHaveBeenCalledWith(nestedRoot);
+    expect(screen.getByText("M")).toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "View Git diff for SpringAI Showcase/pom.xml" }),
+    );
+
+    expect(fetchGitDiff).toHaveBeenCalledWith({
+      root: nestedRoot,
+      path: "pom.xml",
+    });
+  });
+
   it("progressively reveals large folders instead of rendering every row at once", async () => {
     const entries = Array.from({ length: 250 }, (_, index) => ({
       ...treeEntryBase,
