@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PORTABLE_TARGETS,
   safeArchiveEntryPath,
+  sha256File,
   validatePortableManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
@@ -17,6 +20,7 @@ const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 const DIGEST_D = "d".repeat(64);
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
+const NODE_VERSION = "24.14.0";
 
 const BASE_MANIFEST = {
   schemaVersion: 1,
@@ -155,6 +159,24 @@ function digestFor(text) {
   return createHash("sha256").update(text).digest("hex");
 }
 
+function digestBuffer(buffer) {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+function tempDir() {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-test-"));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function runStage(args) {
+  return spawnSync(process.execPath, ["scripts/stage-portable-runtime.mjs", ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    timeout: 120_000,
+  });
+}
+
 describe("portable runtime target contract", () => {
   it("defines exactly the first-class portable release targets", () => {
     expect(
@@ -186,8 +208,7 @@ describe("safeArchiveEntryPath", () => {
 
 describe("verifySha256File", () => {
   it("passes for the expected file digest and rejects mismatches", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-test-"));
-    tempDirs.push(dir);
+    const dir = tempDir();
     const path = join(dir, "node.zip");
     writeFileSync(path, "node-runtime");
 
@@ -223,6 +244,16 @@ describe("validatePortableManifest", () => {
     expect(failures).toContain("evidence.sbomPath: must be a relative contained path");
     expect(failures).toContain("releaseImpact.entryId: contains secret-like or private-path text");
     expect(failures).toContain("releaseImpact.entryId: contains forbidden payload reference");
+  });
+
+  it("rejects raw log and package-manager output fields", () => {
+    const candidate = manifest();
+    candidate.evidence.rawLogsPath = "logs/session.log";
+    candidate.releaseImpact.packageManagerOutput = "npm ERR! raw install output";
+
+    const failures = validatePortableManifest(candidate).join("\n");
+    expect(failures).toContain("evidence.rawLogsPath: uses a forbidden manifest key");
+    expect(failures).toContain("releaseImpact.packageManagerOutput: uses a forbidden manifest key");
   });
 
   it("rejects rollback eligibility and unverified platform signatures", () => {
@@ -272,5 +303,94 @@ describe("portable runtime package scripts", () => {
 
     expect(source).toContain('"--ignore-scripts"');
     expect(source).toContain('"--pack-destination"');
+  });
+});
+
+describe("stage-portable-runtime", () => {
+  it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
+    const dir = tempDir();
+    const nodeArchive = join(dir, `node-v${NODE_VERSION}-darwin-arm64.tar.gz`);
+    const nodeBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00]);
+    writeFileSync(nodeArchive, nodeBytes);
+    const outDir = join(dir, "out");
+
+    const result = runStage([
+      "--target",
+      "macos-arm64",
+      "--node-archive",
+      nodeArchive,
+      "--node-sha256",
+      digestBuffer(nodeBytes),
+      "--node-version",
+      NODE_VERSION,
+      "--commit-sha",
+      COMMIT_SHA,
+      "--release-id",
+      "123456789",
+      "--release-tag",
+      "v0.2.11",
+      "--signature-verified",
+      "--notarization-verified",
+      "--node-cache-dir",
+      join(dir, "cache"),
+      "--out-dir",
+      outDir,
+    ]);
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    const root = join(outDir, "macos-arm64");
+    const assetPath = join(root, "keiko-macos-arm64.zip");
+    const manifestPath = join(root, "manifest", "portable-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+
+    expect(manifest.artifact.sha256).toBe(await sha256File(assetPath));
+    expect(manifest.artifact.sizeBytes).toBe(statSync(assetPath).size);
+    expect(manifest.runtime.nodeVersion).toBe(NODE_VERSION);
+    expect(manifest.releaseImpact.reviewedBinding.nodeRuntimeIdentity).toBe(
+      `node-v${NODE_VERSION}-darwin-arm64`,
+    );
+    expect(readFileSync(join(root, "evidence", "SHA256SUMS.txt"), "utf8")).toContain(
+      `${manifest.artifact.sha256}  keiko-macos-arm64.zip`,
+    );
+    expect(
+      existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "app")),
+    ).toBe(true);
+    expect(
+      existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
+    ).toBe(true);
+    expect(existsSync(join(root, "payload", "Keiko", "app"))).toBe(false);
+  }, 120_000);
+
+  it("fails closed when a local Node archive name does not match the target runtime", () => {
+    const dir = tempDir();
+    const nodeArchive = join(dir, `node-v${NODE_VERSION}-darwin-arm64.tar.gz`);
+    const nodeBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+    writeFileSync(nodeArchive, nodeBytes);
+
+    const result = runStage([
+      "--target",
+      "windows-x64",
+      "--node-archive",
+      nodeArchive,
+      "--node-sha256",
+      digestBuffer(nodeBytes),
+      "--node-version",
+      NODE_VERSION,
+      "--commit-sha",
+      COMMIT_SHA,
+      "--release-id",
+      "123456789",
+      "--release-tag",
+      "v0.2.11",
+      "--signature-verified",
+      "--node-cache-dir",
+      join(dir, "cache"),
+      "--out-dir",
+      join(dir, "out"),
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(`Node archive must be named node-v${NODE_VERSION}-win-x64.zip`);
   });
 });

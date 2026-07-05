@@ -36,26 +36,22 @@ portable assets as a release-blocking set:
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
 
-## Archive Layout
+## Archive And Evidence Layout
 
-All archives extract into one top-level `Keiko/` directory. That directory is a bootstrap payload,
-not the long-lived self-update target until first-run setup attests and promotes a managed install.
+Portable staging produces a target directory containing the final ZIP asset, a payload tree for
+layout inspection, and sidecar manifest/evidence records. The sidecars bind the ZIP bytes by hash
+and size; they are sidecars rather than in-archive records so `artifact.sha256` can describe the
+actual release asset without a self-referential manifest checksum.
+
+Every ZIP asset extracts into one top-level `Keiko/` directory. That directory is a bootstrap
+payload, not the long-lived self-update target until first-run setup attests and promotes a managed
+install.
 
 Windows archive:
 
 ```text
-Keiko/
-  Keiko.exe
-  app/
-    package.json
-    dist/
-    node_modules/
-    release-impact.catalog.json
-  runtime/
-    node/
-      node.exe
-      LICENSE
-      NOTICE
+windows-x64/
+  keiko-windows-x64.zip
   manifest/
     portable-manifest.json
   evidence/
@@ -63,39 +59,55 @@ Keiko/
     sbom.cdx.json
     third-party-notices.txt
     signing-verification.json
-  support/
-    keiko-support.cmd
+  payload/
+    Keiko/
+      Keiko.exe
+      app/
+        package.json
+        dist/
+        node_modules/
+        release-impact.catalog.json
+      runtime/
+        node/
+          node.exe
+          LICENSE
+          NOTICE
+      support/
+        keiko-support.cmd
 ```
 
 macOS archive:
 
 ```text
-Keiko/
-  Keiko.app/
-    Contents/
-      Info.plist
-      MacOS/
-        Keiko
-      Resources/
-        app/
-          package.json
-          dist/
-          node_modules/
-          release-impact.catalog.json
-        runtime/
-          node/
-            bin/node
-            LICENSE
-            NOTICE
-        manifest/
-          portable-manifest.json
-        evidence/
-          SHA256SUMS.txt
-          sbom.cdx.json
-          third-party-notices.txt
-          signing-verification.json
-  support/
-    keiko-support.sh
+macos-arm64/
+  keiko-macos-arm64.zip
+  manifest/
+    portable-manifest.json
+  evidence/
+    SHA256SUMS.txt
+    sbom.cdx.json
+    third-party-notices.txt
+    signing-verification.json
+  payload/
+    Keiko/
+      Keiko.app/
+        Contents/
+          Info.plist
+          MacOS/
+            Keiko
+          Resources/
+            app/
+              package.json
+              dist/
+              node_modules/
+              release-impact.catalog.json
+            runtime/
+              node/
+                bin/node
+                LICENSE
+                NOTICE
+      support/
+        keiko-support.sh
 ```
 
 Layout rules:
@@ -108,10 +120,10 @@ Layout rules:
   contract as npm publication, not ad hoc copied workspace source.
 - `runtime/node/` contains the pinned Node.js runtime for the exact platform target. It is private
   to this Keiko artifact and must not be installed globally.
-- `manifest/portable-manifest.json` is the artifact contract record for build, setup, release, and
-  updater children.
-- `evidence/` contains release artifact evidence only. It must be content-free with respect to
-  customer data.
+- `manifest/portable-manifest.json` is the sidecar artifact contract record for build, setup,
+  release, and updater children.
+- `evidence/` contains sidecar release artifact evidence only. It must be content-free with
+  respect to customer data.
 
 ## Managed Install Layout
 
@@ -293,8 +305,8 @@ Validation rules:
 - `provenance.sourceCommitSha`, `provenance.rootPackageTarballSha256`,
   `provenance.packagedAppTreeSha256`, and `provenance.provenanceStatementSha256` bind the packaged
   application surface to the same reviewed release artifact; gate names alone are not provenance.
-- All path fields are relative to the archive root or app bundle resource root. Absolute paths are
-  forbidden in manifests.
+- All path fields are relative to the sidecar staging root or payload resource root. Absolute paths
+  are forbidden in manifests.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
 - `updateEligibility.requiredPredicates` must all be true before the one-click portable updater may

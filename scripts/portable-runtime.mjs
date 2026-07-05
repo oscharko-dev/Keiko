@@ -7,6 +7,8 @@ export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
 export const PORTABLE_TARGETS = Object.freeze([
   Object.freeze({
     assetName: "keiko-windows-x64.zip",
+    nodeArchiveExtension: "zip",
+    nodeArchiveTarget: "win-x64",
     nodeArchitecture: "x64",
     nodePlatform: "win32",
     platformTarget: "windows-x64",
@@ -16,6 +18,8 @@ export const PORTABLE_TARGETS = Object.freeze([
   }),
   Object.freeze({
     assetName: "keiko-macos-arm64.zip",
+    nodeArchiveExtension: "tar.gz",
+    nodeArchiveTarget: "darwin-arm64",
     nodeArchitecture: "arm64",
     nodePlatform: "darwin",
     platformTarget: "macos-arm64",
@@ -25,6 +29,8 @@ export const PORTABLE_TARGETS = Object.freeze([
   }),
   Object.freeze({
     assetName: "keiko-macos-x64.zip",
+    nodeArchiveExtension: "tar.gz",
+    nodeArchiveTarget: "darwin-x64",
     nodeArchitecture: "x64",
     nodePlatform: "darwin",
     platformTarget: "macos-x64",
@@ -49,11 +55,17 @@ const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
 const FORBIDDEN_KEY_PARTS = [
   "absolutePath",
   "credentialValue",
+  "evidenceBody",
   "modelOutput",
+  "packageManagerOutput",
   "privatePath",
   "promptBody",
+  "rawLog",
+  "rawLogs",
+  "rawOutput",
   "rawStderr",
   "rawStdout",
+  "responseBody",
   "secretValue",
   "tokenValue",
 ];
@@ -441,12 +453,18 @@ function scanForbidden(value, path, failures) {
     value.forEach((entry, index) => scanForbidden(entry, `${path}[${String(index)}]`, failures));
   if (isRecord(value)) {
     for (const [key, entry] of Object.entries(value)) {
-      if (FORBIDDEN_KEY_PARTS.some((part) => key.toLowerCase().includes(part.toLowerCase()))) {
+      if (isForbiddenManifestKey(key, path)) {
         push(failures, `${path}.${key}`, "uses a forbidden manifest key");
       }
       scanForbidden(entry, `${path}.${key}`, failures);
     }
   }
+}
+
+function isForbiddenManifestKey(key, path) {
+  if (path === "manifest.stateExclusion" && key.startsWith("excludes")) return false;
+  const normalizedKey = key.toLowerCase();
+  return FORBIDDEN_KEY_PARTS.some((part) => normalizedKey.includes(part.toLowerCase()));
 }
 
 function scanForbiddenString(value, path, failures) {

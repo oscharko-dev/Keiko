@@ -7,7 +7,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -29,11 +28,11 @@ import {
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-const DEFAULT_NODE_VERSION = process.version.replace(/^v/u, "");
 const ALLOWED_NODE_ARCHIVE_HOSTS = new Set(["nodejs.org", "dist.nodejs.org"]);
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const NODE_ARCHIVE_MAX_BYTES = 128 * 1024 * 1024;
 const NODE_ARCHIVE_TIMEOUT_MS = 300_000;
+const NODE_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 function fail(message) {
@@ -49,6 +48,7 @@ function parseArgs(argv) {
     nodeArchiveUrl: undefined,
     nodeCacheDir: join(repoRoot, ".portable-runtime", "cache", "node"),
     nodeSha256: undefined,
+    nodeVersion: undefined,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     releaseId: Number(process.env.GITHUB_RUN_ID ?? 0),
     releaseTag: `v${rootPackage.version}`,
@@ -65,6 +65,9 @@ function parseArgs(argv) {
   validateNodeRuntimeOptions(options);
   validateReleaseOptions(options);
   validateSigningOptions(options, target);
+  if (options.nodeArchive !== undefined) {
+    assertNodeArchiveIdentity(options.nodeArchive, target, options.nodeVersion);
+  }
   return options;
 }
 
@@ -88,6 +91,7 @@ function applyArg(argv, index, options) {
     ["--node-archive-url", "nodeArchiveUrl"],
     ["--node-cache-dir", "nodeCacheDir"],
     ["--node-sha256", "nodeSha256"],
+    ["--node-version", "nodeVersion"],
     ["--out-dir", "outDir"],
     ["--release-id", "releaseId"],
     ["--release-tag", "releaseTag"],
@@ -110,6 +114,13 @@ function validateNodeRuntimeOptions(options) {
   }
   if (options.nodeSha256 === undefined) fail("--node-sha256 is required");
   if (!SHA256_PATTERN.test(options.nodeSha256)) fail("--node-sha256 must be a SHA-256 digest");
+  if (typeof options.nodeVersion !== "string" || !NODE_VERSION_PATTERN.test(options.nodeVersion)) {
+    fail("--node-version is required and must identify the bundled Node.js runtime");
+  }
+  validateNodeDownloadEnvironment(options);
+}
+
+function validateNodeDownloadEnvironment(options) {
   if (options.nodeArchiveUrl !== undefined && process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") {
     fail("NODE_TLS_REJECT_UNAUTHORIZED=0 is not allowed for Node runtime acquisition");
   }
@@ -184,13 +195,14 @@ async function stageNodeRuntime(options, target, stageRoot) {
   const archiveRoot = join(runtimeRoot, "archive");
   mkdirSync(runtimeRoot, { recursive: true });
   mkdirSync(archiveRoot, { recursive: true });
-  const archive = await resolveNodeArchive(options);
+  const archive = await resolveNodeArchive(options, target);
   copyFileSync(archive.path, join(archiveRoot, archive.fileName));
   writeFileSync(
     join(runtimeRoot, "NODE_RUNTIME_SOURCE.json"),
     JSON.stringify(
       {
         fileName: archive.fileName,
+        nodeVersion: options.nodeVersion,
         sha256: archive.sha256,
         source: archive.source,
         target: target.runtimeTarget,
@@ -202,14 +214,27 @@ async function stageNodeRuntime(options, target, stageRoot) {
   return archive.sha256;
 }
 
-async function resolveNodeArchive(options) {
-  if (options.nodeArchive !== undefined) {
-    return cacheLocalNodeArchive(options.nodeArchive, options.nodeSha256, options.nodeCacheDir);
+function payloadResourceRoot(target, payloadRoot) {
+  if (target.nodePlatform === "darwin") {
+    return join(payloadRoot, "Keiko.app", "Contents", "Resources");
   }
-  return downloadNodeArchive(options.nodeArchiveUrl, options.nodeSha256, options.nodeCacheDir);
+  return payloadRoot;
 }
 
-async function cacheLocalNodeArchive(path, sha256, cacheDir) {
+function payloadSupportRoot(payloadRoot) {
+  return join(payloadRoot, "support");
+}
+
+async function resolveNodeArchive(options, target) {
+  if (options.nodeArchive !== undefined) {
+    return cacheLocalNodeArchive(options, target);
+  }
+  return downloadNodeArchive(options, target);
+}
+
+async function cacheLocalNodeArchive(options, target) {
+  const { nodeArchive: path, nodeCacheDir: cacheDir, nodeSha256: sha256 } = options;
+  assertNodeArchiveIdentity(path, target, options.nodeVersion);
   await verifySha256File(path, sha256);
   const cachePath = cacheArchivePath(cacheDir, sha256, basename(path));
   mkdirSync(dirname(cachePath), { recursive: true });
@@ -223,10 +248,12 @@ async function cacheLocalNodeArchive(path, sha256, cacheDir) {
   };
 }
 
-async function downloadNodeArchive(rawUrl, sha256, cacheDir) {
-  const url = validateNodeArchiveUrl(rawUrl);
+async function downloadNodeArchive(options, target) {
+  const { nodeArchiveUrl: rawUrl, nodeCacheDir: cacheDir, nodeSha256: sha256 } = options;
+  const url = validateNodeArchiveUrl(rawUrl, target, options.nodeVersion);
   const cachePath = cacheArchivePath(cacheDir, sha256, basename(url.pathname));
   if (existsSync(cachePath)) {
+    assertNodeArchiveIdentity(cachePath, target, options.nodeVersion);
     await verifySha256File(cachePath, sha256);
     return {
       fileName: basename(cachePath),
@@ -235,23 +262,24 @@ async function downloadNodeArchive(rawUrl, sha256, cacheDir) {
       source: "official-nodejs-url",
     };
   }
-  await downloadVerifiedArchive(url, sha256, cachePath);
+  await downloadVerifiedArchive(url, sha256, cachePath, target, options.nodeVersion);
   return { fileName: basename(cachePath), path: cachePath, sha256, source: "official-nodejs-url" };
 }
 
-async function downloadVerifiedArchive(url, sha256, cachePath) {
+async function downloadVerifiedArchive(url, sha256, cachePath, target, nodeVersion) {
   mkdirSync(dirname(cachePath), { recursive: true });
   const tempPath = `${cachePath}.${String(process.pid)}.tmp`;
   const response = await globalThis.fetch(url, {
     signal: globalThis.AbortSignal.timeout(NODE_ARCHIVE_TIMEOUT_MS),
   });
-  await writeBoundedResponse(response, url.toString(), tempPath);
+  await writeBoundedResponse(response, url.toString(), tempPath, target, nodeVersion);
+  assertNodeArchiveIdentity(tempPath, target, nodeVersion, basename(cachePath));
   await verifySha256File(tempPath, sha256);
   renameSync(tempPath, cachePath);
 }
 
-async function writeBoundedResponse(response, requestedUrl, path) {
-  validateDownloadResponse(response, requestedUrl);
+async function writeBoundedResponse(response, requestedUrl, path, target, nodeVersion) {
+  validateDownloadResponse(response, requestedUrl, target, nodeVersion);
   const contentLength = Number.parseInt(response.headers.get("content-length") ?? "0", 10);
   if (contentLength > NODE_ARCHIVE_MAX_BYTES) fail("Node archive download exceeds size limit");
   const bytes = Buffer.from(await response.arrayBuffer());
@@ -270,7 +298,7 @@ function safeNodeArchiveFileName(fileName) {
   return fileName;
 }
 
-function validateNodeArchiveUrl(rawUrl) {
+function validateNodeArchiveUrl(rawUrl, target, nodeVersion) {
   const url = new URL(rawUrl);
   if (url.protocol !== "https:") fail("--node-archive-url must use https");
   if (url.username.length > 0 || url.password.length > 0) {
@@ -279,15 +307,39 @@ function validateNodeArchiveUrl(rawUrl) {
   if (!ALLOWED_NODE_ARCHIVE_HOSTS.has(url.hostname)) {
     fail("--node-archive-url must point to an official nodejs.org distribution host");
   }
-  safeNodeArchiveFileName(basename(url.pathname));
+  assertNodeArchiveName(basename(url.pathname), target, nodeVersion);
   return url;
 }
 
-function validateDownloadResponse(response, requestedUrl) {
+function validateDownloadResponse(response, requestedUrl, target, nodeVersion) {
   if (!response.ok) {
     fail(`Node archive download failed for ${requestedUrl}: HTTP ${String(response.status)}`);
   }
-  validateNodeArchiveUrl(response.url);
+  if (response.url !== requestedUrl) validateNodeArchiveUrl(response.url, target, nodeVersion);
+}
+
+function assertNodeArchiveIdentity(path, target, nodeVersion, fileName = basename(path)) {
+  assertNodeArchiveName(fileName, target, nodeVersion);
+  const size = statSync(path).size;
+  if (size <= 0 || size > NODE_ARCHIVE_MAX_BYTES) fail("Node archive size is outside limits");
+  assertNodeArchiveMagic(path, target);
+}
+
+function assertNodeArchiveName(fileName, target, nodeVersion) {
+  const safeName = safeNodeArchiveFileName(fileName);
+  const expected = expectedNodeArchiveFileName(target, nodeVersion);
+  if (safeName !== expected) fail(`Node archive must be named ${expected}`);
+}
+
+function expectedNodeArchiveFileName(target, nodeVersion) {
+  return `node-v${nodeVersion}-${target.nodeArchiveTarget}.${target.nodeArchiveExtension}`;
+}
+
+function assertNodeArchiveMagic(path, target) {
+  const header = readFileSync(path).subarray(0, 4);
+  if (target.nodeArchiveExtension === "zip" && header[0] === 0x50 && header[1] === 0x4b) return;
+  if (target.nodeArchiveExtension === "tar.gz" && header[0] === 0x1f && header[1] === 0x8b) return;
+  fail(`Node archive bytes do not match ${target.nodeArchiveExtension}`);
 }
 
 function writeEvidence(stageRoot, manifest, provenanceStatement) {
@@ -323,6 +375,14 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
   writeFileSync(join(evidenceRoot, "provenance.intoto.jsonl"), provenanceStatement);
 }
 
+function writeManifest(stageRoot, manifest) {
+  mkdirSync(join(stageRoot, "manifest"), { recursive: true });
+  writeFileSync(
+    join(stageRoot, "manifest", "portable-manifest.json"),
+    JSON.stringify(manifest, null, 2) + "\n",
+  );
+}
+
 function provenanceStatementFor(options, target, digests) {
   return (
     JSON.stringify({
@@ -340,14 +400,11 @@ function sha256Text(text) {
   return createHash("sha256").update(text).digest("hex");
 }
 
-function directorySizeBytes(root) {
-  let total = 0;
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const path = join(root, entry.name);
-    if (entry.isDirectory()) total += directorySizeBytes(path);
-    else if (entry.isFile()) total += statSync(path).size;
-  }
-  return total;
+function createZipArchive(payloadContainer, assetName, outRoot) {
+  const assetPath = join(outRoot, assetName);
+  run("zip", ["-qr", assetPath, "Keiko"], { cwd: payloadContainer });
+  if (!existsSync(assetPath)) fail(`expected ZIP asset at ${assetPath}`);
+  return assetPath;
 }
 
 function launcherPath(target, stageRoot) {
@@ -359,6 +416,43 @@ function stageLauncher(target, stageRoot) {
   const path = launcherPath(target, stageRoot);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `Portable launcher placeholder for ${target.platformTarget}.\n`);
+  if (target.nodePlatform === "darwin") {
+    writeFileSync(join(stageRoot, "Keiko.app", "Contents", "Info.plist"), macInfoPlist(target));
+  }
+  stageSupportLauncher(target, stageRoot);
+}
+
+function stageSupportLauncher(target, stageRoot) {
+  const supportRoot = payloadSupportRoot(stageRoot);
+  mkdirSync(supportRoot, { recursive: true });
+  if (target.nodePlatform === "win32") {
+    writeFileSync(join(supportRoot, "keiko-support.cmd"), "@echo off\r\nKeiko.exe %*\r\n");
+    return;
+  }
+  writeFileSync(
+    join(supportRoot, "keiko-support.sh"),
+    '#!/bin/sh\nexec ../Keiko.app/Contents/MacOS/Keiko "$@"\n',
+  );
+}
+
+function macInfoPlist(target) {
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0">',
+    "<dict>",
+    "  <key>CFBundleExecutable</key>",
+    "  <string>Keiko</string>",
+    "  <key>CFBundleIdentifier</key>",
+    `  <string>dev.oscharko.keiko.${target.platformTarget}</string>`,
+    "  <key>CFBundleName</key>",
+    "  <string>Keiko</string>",
+    "  <key>CFBundlePackageType</key>",
+    "  <string>APPL</string>",
+    "</dict>",
+    "</plist>",
+    "",
+  ].join("\n");
 }
 
 function manifestProduct() {
@@ -402,9 +496,9 @@ function manifestProvenance(options, digests) {
   };
 }
 
-function manifestRuntime(target, digests) {
+function manifestRuntime(options, target, digests) {
   return {
-    nodeVersion: DEFAULT_NODE_VERSION,
+    nodeVersion: options.nodeVersion,
     nodePlatform: target.nodePlatform,
     nodeArchitecture: target.nodeArchitecture,
     nodeDistribution: "official-nodejs-dist",
@@ -516,7 +610,7 @@ function manifestUpdateEligibility() {
 
 function manifestFor(options, target, digests) {
   const assetSha = digests.assetSha256;
-  const nodeIdentity = `node-v${DEFAULT_NODE_VERSION}-${target.runtimeTarget}`;
+  const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
   const security = manifestSecurity(options, target);
   return {
     schemaVersion: 1,
@@ -524,7 +618,7 @@ function manifestFor(options, target, digests) {
     release: manifestRelease(options),
     artifact: manifestArtifact(options, target, { ...digests, assetSha256: assetSha }),
     provenance: manifestProvenance(options, digests),
-    runtime: manifestRuntime(target, digests),
+    runtime: manifestRuntime(options, target, digests),
     packageSurface: manifestPackageSurface(),
     entrypoints: {
       primaryLauncher: target.primaryLauncher,
@@ -554,17 +648,21 @@ async function assemble(options) {
   try {
     const tarball = packRoot(tmp);
     const installRoot = join(tmp, "install");
-    const stageRoot = join(tmp, "stage", "Keiko");
+    const stageRoot = join(tmp, "stage", target.platformTarget);
+    const payloadContainer = join(stageRoot, "payload");
+    const payloadRoot = join(payloadContainer, "Keiko");
+    const resourceRoot = payloadResourceRoot(target, payloadRoot);
     mkdirSync(installRoot, { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
+    mkdirSync(resourceRoot, { recursive: true });
     installPackage(tarball, installRoot);
-    stageInstalledPackage(installRoot, stageRoot);
-    stageLauncher(target, stageRoot);
-    const nodeArchiveSha256 = await stageNodeRuntime(options, target, stageRoot);
-    const appTreeSha256 = hashDirectoryTree(join(stageRoot, "app"));
+    stageInstalledPackage(installRoot, resourceRoot);
+    stageLauncher(target, payloadRoot);
+    const nodeArchiveSha256 = await stageNodeRuntime(options, target, resourceRoot);
+    const appTreeSha256 = hashDirectoryTree(join(resourceRoot, "app"));
     const tarballSha256 = await sha256File(tarball);
-    const assetSha256 = hashDirectoryTree(stageRoot);
-    const sizeBytes = directorySizeBytes(stageRoot);
+    const assetPath = createZipArchive(payloadContainer, target.assetName, stageRoot);
+    const assetSha256 = await sha256File(assetPath);
+    const sizeBytes = statSync(assetPath).size;
     const provenanceStatement = provenanceStatementFor(options, target, { assetSha256 });
     const provenanceSha256 = sha256Text(provenanceStatement);
     const manifest = manifestFor(options, target, {
@@ -576,11 +674,7 @@ async function assemble(options) {
       tarballSha256,
     });
     writeEvidence(stageRoot, manifest, provenanceStatement);
-    mkdirSync(join(stageRoot, "manifest"), { recursive: true });
-    writeFileSync(
-      join(stageRoot, "manifest", "portable-manifest.json"),
-      JSON.stringify(manifest, null, 2) + "\n",
-    );
+    writeManifest(stageRoot, manifest);
     const failures = validatePortableManifest(manifest);
     if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
     if (!options.dryRun) {
