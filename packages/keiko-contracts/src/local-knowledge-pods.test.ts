@@ -82,6 +82,32 @@ describe("validateKnowledgePodSummary", () => {
     expect(isKnowledgePodEvidenceSafeText("/Users/alice/customer/private.pdf")).toBe(false);
   });
 
+  it("redacts filesystem paths regardless of where they appear in the text", () => {
+    for (const unsafe of [
+      "report=/Users/alice/private/customer.pdf",
+      "report:/Users/alice/secret.pdf",
+      "a/Users/alice/secret.pdf",
+      "内部/Users/alice/secret.pdf",
+      "C:/Users/alice/customer/private.pdf",
+      "C:\\Users\\alice",
+      "../../etc/passwd",
+      "~/secrets/keys.txt",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
+    }
+  });
+
+  it("keeps benign display names with a single slash evidence-safe", () => {
+    for (const safeText of [
+      "UI/UX Guidelines",
+      "TCP/IP Reference",
+      "Q3 2024 / Finance",
+      "24/7 Support",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(safeText)).toBe(true);
+    }
+  });
+
   it("accepts a body-free Knowledge Pod summary over existing Local Knowledge state", () => {
     const result = validateKnowledgePodSummary(happySummary());
     expect(result.ok).toBe(true);
