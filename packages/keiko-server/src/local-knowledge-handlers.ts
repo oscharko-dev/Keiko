@@ -52,6 +52,8 @@ import type {
   LargeDocumentResourcePolicy,
   ParserDiagnostic,
   KnowledgeSourceScope,
+  LocalKnowledgeCapsuleListEntry,
+  LocalKnowledgeCapsuleSetListEntry,
   KnowledgePodSummary,
   KnowledgePodSummaryKind,
 } from "@oscharko-dev/keiko-contracts";
@@ -1972,6 +1974,39 @@ function shouldIncludeKnowledgePods(ctx: RouteContext): boolean {
   return value === "1" || value === "true";
 }
 
+function knowledgePodDisplayNames(
+  summaries: readonly KnowledgePodSummary[],
+  kind: KnowledgePodSummaryKind,
+): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  for (const summary of summaries) {
+    if (summary.kind === kind) names.set(String(summary.id), summary.displayName);
+  }
+  return names;
+}
+
+function redactCapsuleListForKnowledgePods(
+  capsules: readonly LocalKnowledgeCapsuleListEntry[],
+  summaries: readonly KnowledgePodSummary[],
+): readonly LocalKnowledgeCapsuleListEntry[] {
+  const names = knowledgePodDisplayNames(summaries, "pod");
+  return capsules.map((capsule) => ({
+    ...capsule,
+    displayName: names.get(String(capsule.id)) ?? "Knowledge Pod",
+  }));
+}
+
+function redactCapsuleSetListForKnowledgePods(
+  capsuleSets: readonly LocalKnowledgeCapsuleSetListEntry[],
+  summaries: readonly KnowledgePodSummary[],
+): readonly LocalKnowledgeCapsuleSetListEntry[] {
+  const names = knowledgePodDisplayNames(summaries, "pod-set");
+  return capsuleSets.map((capsuleSet) => ({
+    ...capsuleSet,
+    displayName: names.get(String(capsuleSet.id)) ?? "Knowledge Pod Set",
+  }));
+}
+
 async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await worker();
@@ -2011,7 +2046,13 @@ export async function handleListLocalKnowledgeCapsules(
       }));
       if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsules } };
       const knowledgePods = listValidatedKnowledgePodSummaries(env.store);
-      return { status: 200, body: { capsules, knowledgePods } };
+      return {
+        status: 200,
+        body: {
+          capsules: redactCapsuleListForKnowledgePods(capsules, knowledgePods),
+          knowledgePods,
+        },
+      };
     } finally {
       env.close();
     }
@@ -2033,7 +2074,13 @@ export async function handleListLocalKnowledgeCapsuleSets(
       }));
       if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsuleSets } };
       const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod-set");
-      return { status: 200, body: { capsuleSets, knowledgePods } };
+      return {
+        status: 200,
+        body: {
+          capsuleSets: redactCapsuleSetListForKnowledgePods(capsuleSets, knowledgePods),
+          knowledgePods,
+        },
+      };
     } finally {
       env.close();
     }

@@ -98,10 +98,14 @@ vi.mock("@/lib/api", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/local-knowledge-api", () => ({
-  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
-  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
-}));
+vi.mock("@/lib/local-knowledge-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/local-knowledge-api")>();
+  return {
+    ...actual,
+    fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+    fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+  };
+});
 
 const STT: VoiceCapabilityResolution = {
   available: true,

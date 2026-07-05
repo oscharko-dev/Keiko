@@ -661,7 +661,7 @@ function CapsuleRow({
           // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
           tabIndex={-1}
           aria-label={`Drag Knowledge Pod ${capsule.displayName} to the workspace`}
-          title="Drag to the workspace to create a connector card"
+          title="Drag to the workspace to create a Knowledge Pod card"
           onPointerDown={onPointerDown}
           onMouseDown={onMouseDown}
           onDragStart={onDragStart}

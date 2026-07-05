@@ -561,13 +561,13 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
-  // Epic #189 Slice 3 — compact connector picker window. The user selects a ready capsule or
-  // capsule-set; the selection is stored in cfg so the relationship-edge binding can read it.
+  // Epic #189 Slice 3 / Epic #1815 — compact Knowledge Pod picker window. The user selects
+  // a ready capsule or capsule-set; the selection is stored in cfg for relationship binding.
   connector: {
-    title: "Knowledge Connector",
+    title: "Knowledge Pod",
     icon: "server",
     accent: true,
-    desc: "Pick a Local Knowledge connector",
+    desc: "Pick a Knowledge Pod source",
     w: 320,
     h: 380,
     min: { w: 220, h: 180 },
