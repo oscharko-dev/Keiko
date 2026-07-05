@@ -239,7 +239,14 @@ export function normalizeEditorWindowCfg(cfg: Cfg): Cfg {
   return next;
 }
 
-const CARD_TYPES: readonly WindowType[] = ["chat", "connector", "files", "editor", "agents"];
+const CARD_TYPES: readonly WindowType[] = [
+  "chat",
+  "connector",
+  "files",
+  "editor",
+  "agents",
+  "docbrowser",
+];
 const TOOL_TYPES: readonly WindowType[] = [
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with rail buttons but were missing here, so the command palette could not open them
@@ -263,7 +270,9 @@ const TOOL_TYPES: readonly WindowType[] = [
 ];
 
 export function opensDirectlyFromPalette(type: WindowType): boolean {
-  return type === "connector";
+  // The documentation browser opens straight into its working surface (empty location input); it has
+  // no required pre-creation config, so it skips the New Window dialog like the connector.
+  return type === "connector" || type === "docbrowser";
 }
 
 function focusCreatedWindow(id: string): void {

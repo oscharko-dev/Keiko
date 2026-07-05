@@ -1271,6 +1271,35 @@ export {
   stripUnsafeFormatChars,
 } from "./text-safety.js";
 
+// ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
+export type {
+  DocumentationTargetClass,
+  DocumentationTargetClassification,
+  DocumentationTargetClassificationOk,
+  DocumentationTargetClassificationFail,
+  DocumentationNavigationReason,
+  DocumentationReasonSeverity,
+  DocumentationNavigationRequest,
+  DocumentationNavigationResult,
+  DocumentationNavigationResultInput,
+  DocumentationBrowserCapability,
+  DocumentationNavigationParse,
+  DocumentationNavigationParseOk,
+  DocumentationNavigationParseFail,
+} from "./documentation-browser.js";
+export {
+  DOCUMENTATION_BROWSER_SCHEMA_VERSION,
+  DOCUMENTATION_TARGET_CLASSES,
+  DOCUMENTATION_TARGET_MAX_LENGTH,
+  DOCUMENTATION_NAVIGATION_REASONS,
+  DOCUMENTATION_NAVIGATION_REASON_SEVERITY,
+  classifyDocumentationTarget,
+  mapBrowserErrorToDocumentationReason,
+  resolveDocumentationNavigationReason,
+  parseDocumentationNavigationRequest,
+  buildDocumentationNavigationResult,
+} from "./documentation-browser.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,
