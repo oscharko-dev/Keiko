@@ -83,6 +83,12 @@ jobs:
       - run: npm run check:git-client-evidence
       - run: npm run lint
       - run: npm run format:check
+      - name: UI i18n guard
+        run: |
+          if [ -n "${{ github.base_ref }}" ]; then
+            git fetch --no-tags --depth=100 origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          fi
+          npm run check:ui-i18n
       - run: npm run check:adr-index
       - run: npm run arch:check
       - run: npm run arch:check:negative

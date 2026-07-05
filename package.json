@@ -96,6 +96,7 @@
     "check:dependency-hygiene": "node scripts/check-dependency-hygiene.mjs",
     "check:git-delivery-evidence": "node scripts/check-git-delivery-evidence.mjs",
     "check:git-client-evidence": "node scripts/check-git-client-evidence.mjs",
+    "check:ui-i18n": "node scripts/check-ui-i18n-guard.mjs",
     "check:editor-doc-links": "node scripts/check-editor-doc-links.mjs",
     "check:adr-index": "node scripts/check-adr-index.mjs",
     "check:package-graph": "node scripts/check-package-graph.mjs",
