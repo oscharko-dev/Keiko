@@ -393,4 +393,36 @@ describe("stage-portable-runtime", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(`Node archive must be named node-v${NODE_VERSION}-win-x64.zip`);
   });
+
+  it("fails closed when a correctly named Node archive has the wrong byte signature", () => {
+    const dir = tempDir();
+    const nodeArchive = join(dir, `node-v${NODE_VERSION}-win-x64.zip`);
+    const nodeBytes = Buffer.from("not-a-zip-archive");
+    writeFileSync(nodeArchive, nodeBytes);
+
+    const result = runStage([
+      "--target",
+      "windows-x64",
+      "--node-archive",
+      nodeArchive,
+      "--node-sha256",
+      digestBuffer(nodeBytes),
+      "--node-version",
+      NODE_VERSION,
+      "--commit-sha",
+      COMMIT_SHA,
+      "--release-id",
+      "123456789",
+      "--release-tag",
+      "v0.2.11",
+      "--signature-verified",
+      "--node-cache-dir",
+      join(dir, "cache"),
+      "--out-dir",
+      join(dir, "out"),
+    ]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("Node archive bytes do not match zip");
+  });
 });
