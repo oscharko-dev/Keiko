@@ -2,7 +2,7 @@ export const LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE = "application/x-keiko-local-kn
 export const LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT = "keiko:local-knowledge-connector-drop";
 
 export interface LocalKnowledgeConnectorDragPayload {
-  readonly kind: "capsule";
+  readonly kind: "capsule" | "capsule-set";
   readonly id: string;
   readonly label?: string;
   readonly lifecycleState?: string;
@@ -33,13 +33,14 @@ export function parseLocalKnowledgeConnectorDrag(
     const parsed: unknown = JSON.parse(dataTransfer.getData(LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE));
     if (typeof parsed !== "object" || parsed === null) return null;
     const record = parsed as Record<string, unknown>;
-    if (record["kind"] !== "capsule") return null;
+    const kind = record["kind"];
+    if (kind !== "capsule" && kind !== "capsule-set") return null;
     if (typeof record["id"] !== "string" || record["id"].trim().length === 0) return null;
     const label = typeof record["label"] === "string" ? record["label"].trim() : "";
     const lifecycleState =
       typeof record["lifecycleState"] === "string" ? record["lifecycleState"].trim() : "";
     return {
-      kind: "capsule",
+      kind,
       id: record["id"].trim(),
       ...(label.length > 0 ? { label } : {}),
       ...(lifecycleState.length > 0 ? { lifecycleState } : {}),

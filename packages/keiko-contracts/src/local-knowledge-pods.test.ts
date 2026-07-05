@@ -87,6 +87,95 @@ describe("validateKnowledgePodSummary", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts closed pod-set readiness counts and reason codes", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      compatibility: {
+        ...happySummary().compatibility,
+        backingKind: "capsule-set",
+      },
+      counts: {
+        ...happySummary().counts,
+        capsuleCount: 3,
+      },
+      setReadiness: {
+        readyCount: 1,
+        draftCount: 0,
+        degradedCount: 1,
+        unavailableCount: 0,
+        deniedCount: 1,
+        indexingCount: 1,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: ["member-indexing", "member-degraded", "policy-denied"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects malformed pod-set readiness metadata", () => {
+    const invalidCode = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      compatibility: { ...happySummary().compatibility, backingKind: "capsule-set" },
+      setReadiness: {
+        readyCount: 1,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: ["raw-provider-error"],
+      },
+    });
+    const nonSet = validateKnowledgePodSummary({
+      ...happySummary(),
+      setReadiness: {
+        readyCount: 1,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: [],
+      },
+    });
+    const mismatch = validateKnowledgePodSummary({
+      ...happySummary(),
+      kind: "pod-set",
+      compatibility: { ...happySummary().compatibility, backingKind: "capsule-set" },
+      setReadiness: {
+        readyCount: 0,
+        draftCount: 0,
+        degradedCount: 0,
+        unavailableCount: 0,
+        deniedCount: 0,
+        indexingCount: 0,
+        staleCount: 0,
+        errorCount: 0,
+        missingCount: 0,
+        reasonCodes: [],
+      },
+    });
+
+    expect(invalidErrors(invalidCode)).toContain(
+      "setReadiness.reasonCodes entries must be known reason codes",
+    );
+    expect(invalidErrors(nonSet)).toContain("setReadiness is only valid for pod-set summaries");
+    expect(invalidErrors(mismatch)).toContain(
+      "setReadiness member counts must match counts.capsuleCount",
+    );
+  });
+
   it("rejects unexpected raw-content fields", () => {
     const result = validateKnowledgePodSummary({
       ...happySummary(),

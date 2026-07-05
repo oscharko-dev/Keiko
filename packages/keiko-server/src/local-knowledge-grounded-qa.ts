@@ -1676,14 +1676,44 @@ function podsForSkipped(
   cache: ActivitySummaryCache,
   source: KnowledgePodRetrievalActivitySkippedInput,
 ): readonly KnowledgePodRetrievalActivityPod[] {
-  const reason = normaliseActivityReason(source.reason);
-  const modes: readonly KnowledgePodRetrievalActivityMode[] =
-    reason === "policy-denied" ? ["local-only", "sealed"] : ["local-only"];
-  return source.selected.capsules.map((capsule) =>
-    activityPod(store, cache, capsule, stateForReason(reason), modes, [reason], {
+  return source.selected.capsules.map((capsule) => {
+    const reason = skippedReasonForCapsule(source.selected, capsule, source.reason);
+    const modes: readonly KnowledgePodRetrievalActivityMode[] =
+      reason === "policy-denied" ? ["local-only", "sealed"] : ["local-only"];
+    return activityPod(store, cache, capsule, stateForReason(reason), modes, [reason], {
       referenceCount: 0,
       citationCount: 0,
-    }),
+    });
+  });
+}
+
+function skippedReasonForCapsule(
+  selected: SelectedLocalKnowledgeScope,
+  capsule: KnowledgeCapsule,
+  reason: string,
+): KnowledgePodRetrievalActivityReasonCode {
+  const normalised = normaliseActivityReason(reason);
+  if (selected.scopeKind !== "capsule-set") return normalised;
+  const rule = SET_SKIPPED_REASON_RULES.find((entry) => entry.reason === normalised);
+  if (rule === undefined) return normalised;
+  return rule.matches(capsule) ? normalised : "source-skipped";
+}
+
+const SET_SKIPPED_REASON_RULES: readonly {
+  readonly reason: KnowledgePodRetrievalActivityReasonCode;
+  readonly matches: (capsule: KnowledgeCapsule) => boolean;
+}[] = [
+  { reason: "indexing-in-progress", matches: (capsule) => capsule.lifecycleState === "indexing" },
+  { reason: "stale-capsule", matches: (capsule) => capsule.lifecycleState === "stale" },
+  { reason: "retrieval-failure", matches: (capsule) => capsule.lifecycleState === "error" },
+  { reason: "scope-not-ready", matches: (capsule) => capsule.lifecycleState !== "ready" },
+  { reason: "policy-denied", matches: capsuleBlocksAnswerSynthesis },
+];
+
+function capsuleBlocksAnswerSynthesis(capsule: KnowledgeCapsule): boolean {
+  const policy = resolveScopeModelUsePolicy([capsule]);
+  return (
+    policy.operations.answerSynthesis === "deny" || policy.operations.rawContentRelease === "deny"
   );
 }
 

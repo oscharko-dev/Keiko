@@ -22,6 +22,22 @@ function capsule(id: string, displayName: string): CapsuleListEntry {
   };
 }
 
+function capsuleWithGuidance(
+  id: string,
+  displayName: string,
+  guidance: NonNullable<NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"]>,
+): CapsuleListEntry {
+  return {
+    ...capsule(id, displayName),
+    knowledgePod: {
+      readiness: "degraded",
+      reindexRecommended: true,
+      queryEmbeddingAllowed: false,
+      guidance,
+    },
+  };
+}
+
 const CAPSULES = [capsule("cap-1", "Alpha"), capsule("cap-2", "Beta"), capsule("cap-3", "Gamma")];
 
 function okSet(): { capsuleSet: CapsuleSetDetail } {
@@ -61,6 +77,27 @@ describe("CapsuleSetComposeDialog — rendering", () => {
     await user.click(screen.getByRole("checkbox", { name: /alpha/i }));
     await user.click(screen.getByRole("checkbox", { name: /beta/i }));
     expect(screen.getByText(/2\/16/)).toBeInTheDocument();
+  });
+
+  it("surfaces Knowledge Pod guidance before a member is selected", () => {
+    render(
+      <CapsuleSetComposeDialog
+        {...defaultProps({
+          capsules: [
+            capsuleWithGuidance("cap-legacy", "Legacy vectors", {
+              label: "Reindex recommended",
+              description: "Compatibility is unverified; lexical fallback remains available.",
+              tone: "warning",
+            }),
+          ],
+        })}
+      />,
+    );
+
+    const member = screen.getByRole("checkbox", { name: /legacy vectors/i });
+    expect(screen.getByText("Reindex recommended")).toBeInTheDocument();
+    expect(screen.getByText(/Compatibility is unverified/i)).toBeInTheDocument();
+    expect(member).toHaveAccessibleDescription(/Compatibility is unverified/i);
   });
 });
 

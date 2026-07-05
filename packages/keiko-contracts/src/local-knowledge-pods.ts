@@ -53,6 +53,39 @@ export type KnowledgePodLocationKind = "local" | "remote" | "federated";
 export type KnowledgePodSealingPosture =
   "local-store-policy" | "sealed-pod-policy" | "not-declared";
 export type KnowledgePodPolicyPosture = "none" | "policy-pack" | "not-declared";
+export type KnowledgePodSetReadinessReasonCode =
+  | "member-draft"
+  | "member-indexing"
+  | "member-stale"
+  | "member-error"
+  | "member-unavailable"
+  | "member-degraded"
+  | "missing-member"
+  | "policy-denied"
+  | "embedding-unknown"
+  | "embedding-incompatible"
+  | "embedding-unavailable"
+  | "embedding-opaque"
+  | "no-sources"
+  | "no-vectors";
+
+export const KNOWLEDGE_POD_SET_READINESS_REASON_CODES: readonly KnowledgePodSetReadinessReasonCode[] =
+  [
+    "member-draft",
+    "member-indexing",
+    "member-stale",
+    "member-error",
+    "member-unavailable",
+    "member-degraded",
+    "missing-member",
+    "policy-denied",
+    "embedding-unknown",
+    "embedding-incompatible",
+    "embedding-unavailable",
+    "embedding-opaque",
+    "no-sources",
+    "no-vectors",
+  ];
 
 export interface KnowledgePodCounts {
   readonly capsuleCount: number;
@@ -60,6 +93,19 @@ export interface KnowledgePodCounts {
   readonly documentCount: number;
   readonly chunkCount: number;
   readonly vectorCount: number;
+}
+
+export interface KnowledgePodSetReadinessSummary {
+  readonly readyCount: number;
+  readonly draftCount: number;
+  readonly degradedCount: number;
+  readonly unavailableCount: number;
+  readonly deniedCount: number;
+  readonly indexingCount: number;
+  readonly staleCount: number;
+  readonly errorCount: number;
+  readonly missingCount: number;
+  readonly reasonCodes: readonly KnowledgePodSetReadinessReasonCode[];
 }
 
 export interface KnowledgePodRetrievalCapabilities {
@@ -120,6 +166,7 @@ export interface KnowledgePodSummary {
   readonly readiness: KnowledgePodReadiness;
   readonly lifecycleState?: CapsuleLifecycleState;
   readonly counts: KnowledgePodCounts;
+  readonly setReadiness?: KnowledgePodSetReadinessSummary;
   readonly sourceKinds: readonly KnowledgePodSourceKind[];
   readonly retrieval: KnowledgePodRetrievalCapabilities;
   readonly privacy: KnowledgePodPrivacySummary;
@@ -165,6 +212,7 @@ const SUMMARY_KEYS = [
   "readiness",
   "lifecycleState",
   "counts",
+  "setReadiness",
   "sourceKinds",
   "retrieval",
   "privacy",
@@ -176,6 +224,18 @@ const SUMMARY_KEYS = [
 ] as const;
 
 const COUNT_KEYS = ["capsuleCount", "sourceCount", "documentCount", "chunkCount", "vectorCount"];
+const SET_READINESS_KEYS = [
+  "readyCount",
+  "draftCount",
+  "degradedCount",
+  "unavailableCount",
+  "deniedCount",
+  "indexingCount",
+  "staleCount",
+  "errorCount",
+  "missingCount",
+  "reasonCodes",
+] as const;
 const RETRIEVAL_KEYS = [
   "lexicalIndex",
   "vectorIndex",
@@ -573,6 +633,70 @@ function validateCounts(value: unknown, errors: string[]): void {
   }
 }
 
+function validateSetReadiness(
+  value: unknown,
+  kind: unknown,
+  counts: unknown,
+  errors: string[],
+): void {
+  if (value === undefined) return;
+  if (kind !== "pod-set") {
+    errors.push("setReadiness is only valid for pod-set summaries");
+    return;
+  }
+  if (!isRecord(value)) {
+    errors.push("setReadiness must be an object");
+    return;
+  }
+  onlyKeys(value, SET_READINESS_KEYS, "setReadiness", errors);
+  for (const key of SET_READINESS_KEYS) {
+    if (key === "reasonCodes") continue;
+    const count = value[key];
+    if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
+      errors.push(`setReadiness.${key} must be a non-negative integer`);
+      return;
+    }
+  }
+  validateSetReadinessReasonCodes(value.reasonCodes, errors);
+  validateSetReadinessMemberTotal(value, counts, errors);
+}
+
+function validateSetReadinessReasonCodes(value: unknown, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push("setReadiness.reasonCodes must be an array");
+    return;
+  }
+  for (const code of value) {
+    if (
+      typeof code !== "string" ||
+      !KNOWLEDGE_POD_SET_READINESS_REASON_CODES.includes(code as KnowledgePodSetReadinessReasonCode)
+    ) {
+      errors.push("setReadiness.reasonCodes entries must be known reason codes");
+      return;
+    }
+  }
+}
+
+function validateSetReadinessMemberTotal(
+  value: Record<string, unknown>,
+  counts: unknown,
+  errors: string[],
+): void {
+  if (!isRecord(counts) || typeof counts.capsuleCount !== "number") return;
+  const total =
+    Number(value.readyCount) +
+    Number(value.draftCount) +
+    Number(value.degradedCount) +
+    Number(value.unavailableCount) +
+    Number(value.indexingCount) +
+    Number(value.staleCount) +
+    Number(value.errorCount) +
+    Number(value.missingCount);
+  if (total !== counts.capsuleCount) {
+    errors.push("setReadiness member counts must match counts.capsuleCount");
+  }
+}
+
 function validateRetrieval(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("retrieval must be an object");
@@ -749,6 +873,7 @@ export function validateKnowledgePodSummary(
   onlyKeys(input, SUMMARY_KEYS, "summary", errors);
   validateSummaryScalars(input, errors);
   validateCounts(input.counts, errors);
+  validateSetReadiness(input.setReadiness, input.kind, input.counts, errors);
   validateSourceKinds(input.sourceKinds, errors);
   validateRetrieval(input.retrieval, errors);
   validatePrivacy(input.privacy, errors);

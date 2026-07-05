@@ -6,7 +6,9 @@ import { useRouter } from "next/navigation";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   fetchCapsules,
+  fetchCapsuleSets,
   createCapsule,
   startIndexing,
   cancelIndexing,
@@ -22,13 +24,22 @@ import type {
   RowActionKind,
 } from "./connector-graph-types";
 
-function useCapsuleLoader(fetchCapsulesImpl: typeof fetchCapsules): {
+function emptyCapsuleSets(): ReturnType<typeof fetchCapsuleSets> {
+  return Promise.resolve({ capsuleSets: [] });
+}
+
+function useCapsuleLoader(
+  fetchCapsulesImpl: typeof fetchCapsules,
+  fetchCapsuleSetsImpl: typeof fetchCapsuleSets,
+): {
   capsules: readonly CapsuleListEntry[];
+  capsuleSets: ConnectorGraphState["capsuleSets"];
   loadStatus: LoadStatus;
   loadError: string | null;
   reload: () => void;
 } {
   const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
+  const [capsuleSets, setCapsuleSets] = useState<ConnectorGraphState["capsuleSets"]>([]);
   const [loadStatus, setLoadStatus] = useState<LoadStatus>("loading");
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -36,14 +47,18 @@ function useCapsuleLoader(fetchCapsulesImpl: typeof fetchCapsules): {
     setLoadStatus("loading");
     setLoadError(null);
     try {
-      const response = await fetchCapsulesImpl({ includeKnowledgePods: true });
-      setCapsules(capsulesForKnowledgePodUi(response));
+      const [capsuleResponse, capsuleSetResponse] = await Promise.all([
+        fetchCapsulesImpl({ includeKnowledgePods: true }),
+        fetchCapsuleSetsImpl({ includeKnowledgePods: true }),
+      ]);
+      setCapsules(capsulesForKnowledgePodUi(capsuleResponse));
+      setCapsuleSets(capsuleSetsForKnowledgePodUi(capsuleSetResponse));
       setLoadStatus("ready");
     } catch (error) {
       setLoadError(formatError(error));
       setLoadStatus("error");
     }
-  }, [fetchCapsulesImpl]);
+  }, [fetchCapsulesImpl, fetchCapsuleSetsImpl]);
 
   useEffect(() => {
     void reload();
@@ -56,7 +71,7 @@ function useCapsuleLoader(fetchCapsulesImpl: typeof fetchCapsules): {
     void reload();
   }
 
-  return { capsules, loadStatus, loadError, reload: triggerReload };
+  return { capsules, capsuleSets, loadStatus, loadError, reload: triggerReload };
 }
 
 function useCapsuleActions(
@@ -172,6 +187,9 @@ function useCapsuleCreate(
 export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphState {
   const {
     fetchCapsulesImpl = fetchCapsules,
+    fetchCapsuleSetsImpl = props.fetchCapsulesImpl === undefined
+      ? fetchCapsuleSets
+      : emptyCapsuleSets,
     createCapsuleImpl = createCapsule,
     startIndexingImpl = startIndexing,
     cancelIndexingImpl = cancelIndexing,
@@ -179,7 +197,10 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     onOpenCapsule,
   } = props;
 
-  const { capsules, loadStatus, loadError, reload } = useCapsuleLoader(fetchCapsulesImpl);
+  const { capsules, capsuleSets, loadStatus, loadError, reload } = useCapsuleLoader(
+    fetchCapsulesImpl,
+    fetchCapsuleSetsImpl,
+  );
   const {
     actionBusy,
     actionKind,
@@ -203,6 +224,7 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
 
   return {
     capsules,
+    capsuleSets,
     loadStatus,
     loadError,
     actionBusy,

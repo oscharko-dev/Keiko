@@ -1500,6 +1500,99 @@ describe("local-knowledge retrieval activity", () => {
     }
   });
 
+  it("keeps mixed-readiness set activity reasons on the affected members", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const ready = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Ready Set Member",
+        capsuleId: "cap-ready-set-member",
+        sourceId: "src-ready-set-member",
+      });
+      const indexing = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Indexing Set Member",
+        capsuleId: "cap-indexing-set-member",
+        sourceId: "src-indexing-set-member",
+      });
+      updateCapsuleState(knowledgeStore, ready.capsuleId, "ready");
+      updateCapsuleState(knowledgeStore, indexing.capsuleId, "indexing");
+      const selected: SelectedLocalKnowledgeScope = {
+        capsules: [
+          requireCapsule(knowledgeStore, ready.capsuleId),
+          requireCapsule(knowledgeStore, indexing.capsuleId),
+        ],
+        scopeKind: "capsule-set",
+        scopeLabel: "Mixed Readiness Set",
+      };
+
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [],
+        skipped: [{ selected, reason: "indexing-in-progress" }],
+      });
+
+      expect(activity.pods.find((pod) => pod.podId === ready.capsuleId)).toMatchObject({
+        state: "skipped",
+        reasonCodes: ["source-skipped"],
+      });
+      expect(activity.pods.find((pod) => pod.podId === indexing.capsuleId)).toMatchObject({
+        state: "unavailable",
+        reasonCodes: ["indexing-in-progress"],
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("keeps set-level policy denial on the sealed member instead of every member", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const standard = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Standard Set Member",
+        capsuleId: "cap-standard-set-member",
+        sourceId: "src-standard-set-member",
+      });
+      const sealed = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Sealed Set Member",
+        capsuleId: "cap-sealed-set-member",
+        sourceId: "src-sealed-set-member",
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      });
+      updateCapsuleState(knowledgeStore, standard.capsuleId, "ready");
+      updateCapsuleState(knowledgeStore, sealed.capsuleId, "ready");
+      const selected: SelectedLocalKnowledgeScope = {
+        capsules: [
+          requireCapsule(knowledgeStore, standard.capsuleId),
+          requireCapsule(knowledgeStore, sealed.capsuleId),
+        ],
+        scopeKind: "capsule-set",
+        scopeLabel: "Mixed Policy Set",
+      };
+
+      const activity = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [],
+        skipped: [{ selected, reason: "policy-denied" }],
+      });
+
+      expect(activity.pods.find((pod) => pod.podId === standard.capsuleId)).toMatchObject({
+        state: "skipped",
+        modes: ["local-only"],
+        reasonCodes: ["source-skipped"],
+      });
+      expect(activity.pods.find((pod) => pod.podId === sealed.capsuleId)).toMatchObject({
+        state: "denied",
+        modes: ["local-only", "sealed"],
+        reasonCodes: ["policy-denied"],
+      });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
   it("caches Knowledge Pod summaries across repeated activity scopes", async () => {
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),

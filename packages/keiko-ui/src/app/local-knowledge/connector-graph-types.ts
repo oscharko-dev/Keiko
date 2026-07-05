@@ -3,16 +3,25 @@
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import type {
   fetchCapsules,
+  fetchCapsuleSets,
   createCapsule,
   startIndexing,
   cancelIndexing,
   disconnectCapsule,
   CapsuleListEntry,
+  CapsuleSetListEntry,
   CapsulesResponse,
+  CapsuleSetsResponse,
   CapsuleActionResponse,
 } from "@/lib/local-knowledge-api";
 
-export type { CapsuleListEntry, CapsulesResponse, CapsuleActionResponse };
+export type {
+  CapsuleListEntry,
+  CapsuleSetListEntry,
+  CapsulesResponse,
+  CapsuleSetsResponse,
+  CapsuleActionResponse,
+};
 
 export type LoadStatus = "loading" | "ready" | "error";
 
@@ -22,6 +31,7 @@ export type RowActionKind = "index" | "cancel" | "disconnect";
 
 export interface ConnectorGraphProps {
   readonly fetchCapsulesImpl?: typeof fetchCapsules;
+  readonly fetchCapsuleSetsImpl?: typeof fetchCapsuleSets;
   readonly createCapsuleImpl?: typeof createCapsule;
   readonly startIndexingImpl?: typeof startIndexing;
   readonly cancelIndexingImpl?: typeof cancelIndexing;
@@ -32,6 +42,7 @@ export interface ConnectorGraphProps {
 
 export interface ConnectorGraphState {
   readonly capsules: readonly CapsuleListEntry[];
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
   readonly loadStatus: LoadStatus;
   readonly loadError: string | null;
   readonly actionBusy: KnowledgeCapsuleId | null;

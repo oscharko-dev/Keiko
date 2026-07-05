@@ -42,6 +42,10 @@ export interface KnowledgePodUiGuidance {
 
 export interface KnowledgePodUiMetadata {
   readonly readiness: KnowledgePodSummary["readiness"];
+  readonly counts?: KnowledgePodSummary["counts"];
+  readonly setReadiness?: KnowledgePodSummary["setReadiness"];
+  readonly sourceKinds?: KnowledgePodSummary["sourceKinds"];
+  readonly degradationReasons?: KnowledgePodSummary["degradationReasons"];
   readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"];
   readonly sealed?: boolean;
   readonly deniedModelOperations?: readonly KnowledgePodModelUseOperation[];
@@ -167,6 +171,10 @@ function metadataForSummary(
   const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,
+    counts: summary.counts,
+    ...(summary.setReadiness !== undefined ? { setReadiness: summary.setReadiness } : {}),
+    sourceKinds: summary.sourceKinds,
+    degradationReasons: summary.degradationReasons,
     modelUsePolicy,
     sealed: isSealedPolicy(summary, modelUsePolicy),
     deniedModelOperations: deniedOperations,

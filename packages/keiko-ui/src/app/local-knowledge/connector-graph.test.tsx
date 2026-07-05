@@ -15,10 +15,16 @@ import {
 } from "./connector-drag";
 import type {
   CapsulesResponse,
+  CapsuleSetsResponse,
   CapsuleActionResponse,
   CapsuleListEntry,
+  CapsuleSetListEntry,
 } from "@/lib/local-knowledge-api";
-import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+import type {
+  CapsuleSetId,
+  KnowledgeCapsuleId,
+  CapsuleLifecycleState,
+} from "@oscharko-dev/keiko-contracts";
 
 const pushMock = vi.fn();
 
@@ -51,6 +57,10 @@ function makeCapsuleId(suffix: string): KnowledgeCapsuleId {
   return `cap-${suffix}` as KnowledgeCapsuleId;
 }
 
+function makeCapsuleSetId(suffix: string): CapsuleSetId {
+  return `set-${suffix}` as CapsuleSetId;
+}
+
 function makeCapsule(overrides: Partial<CapsuleListEntry> = {}): CapsuleListEntry {
   return {
     id: makeCapsuleId("1"),
@@ -58,6 +68,16 @@ function makeCapsule(overrides: Partial<CapsuleListEntry> = {}): CapsuleListEntr
     lifecycleState: "ready",
     sourceCount: 2,
     updatedAt: 1_000_000,
+    ...overrides,
+  };
+}
+
+function makeCapsuleSet(overrides: Partial<CapsuleSetListEntry> = {}): CapsuleSetListEntry {
+  return {
+    id: makeCapsuleSetId("1"),
+    displayName: "Release Set",
+    capsuleCount: 2,
+    composedAt: 1_000_001,
     ...overrides,
   };
 }
@@ -73,6 +93,12 @@ function emptyFetch(): Promise<CapsulesResponse> {
 
 function fetchWith(capsules: readonly CapsuleListEntry[]): () => Promise<CapsulesResponse> {
   return () => Promise.resolve({ capsules });
+}
+
+function fetchSetsWith(
+  capsuleSets: readonly CapsuleSetListEntry[],
+): () => Promise<CapsuleSetsResponse> {
+  return () => Promise.resolve({ capsuleSets });
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +227,100 @@ describe("ConnectorGraph — with capsules", () => {
 
     expect(screen.getByRole("region", { name: /knowledge pods/i })).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("2 Knowledge Pods");
+  });
+
+  it("renders Knowledge Pod Sets with readiness counts and workspace add", async () => {
+    const capsule = makeCapsule({ id: makeCapsuleId("alpha"), displayName: "Alpha Docs" });
+    const capsuleSet = makeCapsuleSet({
+      id: makeCapsuleSetId("release"),
+      displayName: "Release Readiness",
+      knowledgePod: {
+        readiness: "degraded",
+        counts: {
+          capsuleCount: 2,
+          sourceCount: 3,
+          documentCount: 4,
+          chunkCount: 5,
+          vectorCount: 6,
+        },
+        setReadiness: {
+          readyCount: 1,
+          draftCount: 0,
+          degradedCount: 1,
+          unavailableCount: 0,
+          deniedCount: 1,
+          indexingCount: 0,
+          staleCount: 0,
+          errorCount: 0,
+          missingCount: 0,
+          reasonCodes: ["member-degraded", "policy-denied"],
+        },
+        sourceKinds: ["files"],
+        degradationReasons: ["legacy-unverified-profile"],
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Reindex recommended",
+          description: "Compatibility is unverified; lexical fallback remains available.",
+          tone: "warning",
+        },
+      },
+    });
+    const workspace = document.createElement("main");
+    workspace.className = "workspace";
+    workspace.getBoundingClientRect = () =>
+      ({
+        left: 100,
+        right: 900,
+        top: 50,
+        bottom: 750,
+        width: 800,
+        height: 700,
+        x: 100,
+        y: 50,
+        toJSON: () => undefined,
+      }) as DOMRect;
+    document.body.appendChild(workspace);
+    const dropListener = vi.fn();
+    window.addEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+
+    const user = userEvent.setup();
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([capsule])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+      />,
+    );
+
+    const row = await screen.findByRole("article", {
+      name: "Knowledge Pod Set: Release Readiness",
+    });
+    expect(within(row).getByText("Degraded")).toBeInTheDocument();
+    expect(within(row).getByText("Reindex recommended")).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(
+      /2 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 1 ready \/ 1 degraded \/ 1 policy denied \/ 0 missing/i,
+    );
+    expect(screen.getByRole("status")).toHaveTextContent("1 Knowledge Pod, 1 Knowledge Pod Set");
+
+    await user.click(
+      screen.getByRole("button", {
+        name: /add Knowledge Pod Set Release Readiness to workspace/i,
+      }),
+    );
+
+    expect(dropListener).toHaveBeenCalledTimes(1);
+    const event = dropListener.mock.calls[0]?.[0] as CustomEvent<LocalKnowledgeConnectorDropDetail>;
+    expect(event.detail.payload).toEqual({
+      kind: "capsule-set",
+      id: "set-release",
+      label: "Release Readiness",
+      lifecycleState: "degraded",
+    });
+    expect(event.detail.clientX).toBe(500);
+    expect(event.detail.clientY).toBe(400);
+
+    window.removeEventListener(LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT, dropListener);
+    workspace.remove();
   });
 
   it("exports a capsule drag payload for dropping onto the workspace", async () => {

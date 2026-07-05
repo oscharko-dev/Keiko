@@ -22,6 +22,8 @@ import {
   type KnowledgePodReadiness,
   type KnowledgePodResolvedModelUsePolicyOperations,
   type KnowledgePodRetrievalCapabilities,
+  type KnowledgePodSetReadinessReasonCode,
+  type KnowledgePodSetReadinessSummary,
   type KnowledgePodSourceKind,
   type KnowledgePodSummary,
   type KnowledgeSource,
@@ -55,6 +57,20 @@ interface CapsuleCounts {
   readonly vectorCount: number;
 }
 
+interface SetReadinessCounts {
+  readyCount: number;
+  draftCount: number;
+  degradedCount: number;
+  unavailableCount: number;
+  deniedCount: number;
+  indexingCount: number;
+  staleCount: number;
+  errorCount: number;
+  missingCount: number;
+}
+
+type MemberReadinessCountKey = Exclude<keyof SetReadinessCounts, "deniedCount" | "missingCount">;
+
 const BASE_PRIVACY = {
   localFirst: true,
   modelOpen: true,
@@ -66,6 +82,21 @@ const BASE_PRIVACY = {
 
 const POD_FALLBACK_DISPLAY_NAME = "Knowledge Pod";
 const POD_SET_FALLBACK_DISPLAY_NAME = "Knowledge Pod Set";
+const MEMBER_READINESS_BUCKETS: Record<
+  KnowledgePodReadiness,
+  {
+    readonly countKey: MemberReadinessCountKey;
+    readonly reason?: KnowledgePodSetReadinessReasonCode;
+  }
+> = {
+  ready: { countKey: "readyCount" },
+  draft: { countKey: "draftCount", reason: "member-draft" },
+  degraded: { countKey: "degradedCount", reason: "member-degraded" },
+  unavailable: { countKey: "unavailableCount", reason: "member-unavailable" },
+  indexing: { countKey: "indexingCount", reason: "member-indexing" },
+  stale: { countKey: "staleCount", reason: "member-stale" },
+  error: { countKey: "errorCount", reason: "member-error" },
+};
 
 export function listKnowledgePodSummaries(store: KnowledgeStore): readonly KnowledgePodSummary[] {
   return [
@@ -125,6 +156,7 @@ export function buildKnowledgePodSetSummary(
     tags: safeTags(set.tags),
     readiness: setReadiness(memberProjections, degradationReasons),
     counts,
+    setReadiness: setReadinessSummary(set, memberProjections, embeddingDecision),
     sourceKinds,
     retrieval: setRetrieval(memberProjections, embeddingDecision),
     privacy: BASE_PRIVACY,
@@ -351,6 +383,79 @@ function setReadiness(
   if (members.some((member) => member.capsule.lifecycleState === "error")) return "error";
   if (members.some((member) => member.capsule.lifecycleState === "stale")) return "stale";
   return "draft";
+}
+
+function setReadinessSummary(
+  set: CapsuleSet,
+  members: readonly CapsuleProjectionInput[],
+  embeddingDecision: EmbeddingProfileCompatibilityDecision | undefined,
+): KnowledgePodSetReadinessSummary {
+  const reasonCodes = new Set<KnowledgePodSetReadinessReasonCode>();
+  const counts: SetReadinessCounts = {
+    readyCount: 0,
+    draftCount: 0,
+    degradedCount: 0,
+    unavailableCount: 0,
+    deniedCount: 0,
+    indexingCount: 0,
+    staleCount: 0,
+    errorCount: 0,
+    missingCount: Math.max(set.capsuleIds.length - members.length, 0),
+  };
+  if (counts.missingCount > 0) reasonCodes.add("missing-member");
+  for (const member of members) {
+    addMemberReadiness(counts, reasonCodes, member);
+  }
+  addEmbeddingReadinessReason(reasonCodes, embeddingDecision);
+  return { ...counts, reasonCodes: [...reasonCodes] };
+}
+
+function addMemberReadiness(
+  counts: SetReadinessCounts,
+  reasonCodes: Set<KnowledgePodSetReadinessReasonCode>,
+  member: CapsuleProjectionInput,
+): void {
+  const readiness = capsuleReadiness(member.capsule.lifecycleState, member.degradationReasons);
+  addPolicyReadinessReason(counts, reasonCodes, member.capsule);
+  addContentReadinessReasons(reasonCodes, member);
+  const bucket = MEMBER_READINESS_BUCKETS[readiness];
+  counts[bucket.countKey] += 1;
+  if (bucket.reason !== undefined) reasonCodes.add(bucket.reason);
+}
+
+function addPolicyReadinessReason(
+  counts: SetReadinessCounts,
+  reasonCodes: Set<KnowledgePodSetReadinessReasonCode>,
+  capsule: KnowledgeCapsule,
+): void {
+  const policy = capsuleModelUsePolicySummary(capsule);
+  if (
+    policy.operations.answerSynthesis !== "deny" &&
+    policy.operations.rawContentRelease !== "deny"
+  ) {
+    return;
+  }
+  counts.deniedCount += 1;
+  reasonCodes.add("policy-denied");
+}
+
+function addContentReadinessReasons(
+  reasonCodes: Set<KnowledgePodSetReadinessReasonCode>,
+  member: CapsuleProjectionInput,
+): void {
+  if (member.sources.length === 0) reasonCodes.add("no-sources");
+  else if (member.counts.vectorCount === 0) reasonCodes.add("no-vectors");
+}
+
+function addEmbeddingReadinessReason(
+  reasonCodes: Set<KnowledgePodSetReadinessReasonCode>,
+  decision: EmbeddingProfileCompatibilityDecision | undefined,
+): void {
+  if (decision === undefined || decision.status === "same") return;
+  if (decision.status === "unknown") reasonCodes.add("embedding-unknown");
+  if (decision.status === "incompatible") reasonCodes.add("embedding-incompatible");
+  if (decision.status === "unavailable") reasonCodes.add("embedding-unavailable");
+  if (decision.status === "opaque") reasonCodes.add("embedding-opaque");
 }
 
 function capsuleRetrieval(

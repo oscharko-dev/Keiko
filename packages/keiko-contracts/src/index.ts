@@ -1642,6 +1642,8 @@ export type {
   KnowledgePodReadiness,
   KnowledgePodRetrievalCapabilities,
   KnowledgePodSealingPosture,
+  KnowledgePodSetReadinessReasonCode,
+  KnowledgePodSetReadinessSummary,
   KnowledgePodSourceKind,
   KnowledgePodSummary,
   KnowledgePodSummaryKind,
@@ -1651,6 +1653,7 @@ export type {
   LocalKnowledgeCapsulesResponse,
 } from "./local-knowledge-pods.js";
 export {
+  KNOWLEDGE_POD_SET_READINESS_REASON_CODES,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,

@@ -87,6 +87,13 @@ The summary contract records compatibility explicitly:
 Opening Keiko after this change must not require reindexing, vector regeneration, store
 repair, or a one-time migration. Existing Local Knowledge stores remain authoritative.
 
+For task-ready Knowledge Pod Sets, `KnowledgePodSummary` also exposes an optional
+`setReadiness` object on `kind: "pod-set"` summaries. It is derived from member pod
+projections and contains only nonnegative counts plus closed reason codes: ready,
+draft, degraded, unavailable, denied, indexing, stale, error, missing, and the safe
+reasons that explain those buckets. It intentionally does not include member document
+names, source roots, paths, endpoints, raw diagnostics, excerpts, or vector scores.
+
 ## Redacted evidence shape
 
 Knowledge Pod summaries are designed for manifest-producing surfaces, release notes,
@@ -304,8 +311,12 @@ The Knowledge Pod compatibility and redaction behavior is covered by:
 - `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.test.tsx`
 - `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.a11y.test.tsx`
 - `packages/keiko-ui/src/app/local-knowledge/connector-graph.test.tsx`
+- `packages/keiko-ui/src/app/local-knowledge/capsule-set-compose.test.tsx`
 - `packages/keiko-ui/src/app/components/desktop/widgets/cards/ConnectorPickerWidget.test.tsx`
 - `packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/RunLauncher.test.tsx`
 
 The older capsule tests remain relevant because they pin the persisted state and API
 backward-compatibility that Knowledge Pods intentionally preserve.
+
+The task-ready Knowledge Pod Set rollout is tracked in
+[`knowledge-pod-sets-ledger.md`](knowledge-pod-sets-ledger.md).
