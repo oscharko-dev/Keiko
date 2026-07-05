@@ -544,4 +544,58 @@ describe("Knowledge Pod compatibility projection", () => {
       env.cleanup();
     }
   });
+
+  it("scopes the projection to the requested pod kind", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-scoped" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: capsuleId, lifecycleState: "ready" }));
+      createCapsuleSet(env.store, {
+        id: "set-scoped" as CapsuleSetId,
+        displayName: "Scoped Set",
+        tags: [],
+        capsuleIds: [capsuleId],
+      });
+
+      expect(
+        listKnowledgePodSummaries(env.store, "pod").map((summary) => summary.kind),
+      ).toStrictEqual(["pod"]);
+      expect(
+        listKnowledgePodSummaries(env.store, "pod-set").map((summary) => summary.kind),
+      ).toStrictEqual(["pod-set"]);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("does not fail the pod-set listing when an unrelated standalone capsule is corrupt", () => {
+    const env = freshStore();
+    try {
+      // A healthy pod-set with a healthy member.
+      const memberId = "cap-set-member" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: memberId, lifecycleState: "ready" }));
+      createCapsuleSet(env.store, {
+        id: "set-healthy" as CapsuleSetId,
+        displayName: "Healthy Set",
+        tags: [],
+        capsuleIds: [memberId],
+      });
+      // An unrelated standalone capsule with corrupt state, not a member of any set.
+      const strayId = "cap-unrelated-corrupt" as KnowledgeCapsuleId;
+      createCapsule(env.store, sampleCapsuleInput({ id: strayId, lifecycleState: "ready" }));
+      env.store._internal.db
+        .prepare("UPDATE capsules SET vector_metric = 'manhattan' WHERE id = :id")
+        .run({ id: strayId });
+
+      // Requesting only pod-sets must not materialize the corrupt standalone capsule.
+      const podSets = listKnowledgePodSummaries(env.store, "pod-set");
+      expect(podSets.map((summary) => summary.kind)).toStrictEqual(["pod-set"]);
+      expect(podSets[0]?.id).toBe("set-healthy");
+
+      // The unscoped listing still fails closed on the corrupt standalone capsule.
+      expect(() => listKnowledgePodSummaries(env.store)).toThrow(KnowledgeStoreError);
+    } finally {
+      env.cleanup();
+    }
+  });
 });
