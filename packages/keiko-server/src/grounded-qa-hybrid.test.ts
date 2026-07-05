@@ -1468,6 +1468,7 @@ describe("hybrid model reranker", () => {
       documentCount: 2,
       keptCount: 2,
     });
+    expect(answer.retrievalActivity?.pods[0]?.modes).toContain("reranked");
   });
 
   it("falls back to the preliminary order when the configured reranker times out", async () => {
@@ -1513,6 +1514,10 @@ describe("hybrid model reranker", () => {
       candidateCount: 2,
       documentCount: 2,
       keptCount: 2,
+    });
+    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+      state: "degraded",
+      reasonCodes: ["searched", "reranker-unavailable"],
     });
   });
 
