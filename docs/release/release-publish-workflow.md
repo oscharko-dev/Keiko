@@ -28,6 +28,9 @@ must be reviewed by a release owner before it is used for a stable package relea
 notes are generated from that same structured catalog, so the updater can keep consuming metadata
 without parsing prose.
 
+Portable archive layout, launcher, and manifest rules are documented in
+[Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+
 ## Triggering
 
 - Tag pushes matching `v*` run the full release verification job.
