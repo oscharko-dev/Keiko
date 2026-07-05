@@ -23,6 +23,9 @@ import type {
   GroundedRerankerDiagnostics,
   GroundedUncertainty,
   HybridGroundedAnswerContextSummary,
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
@@ -391,6 +394,102 @@ function hybridEvidenceSummary(answer: HybridGroundedAnswer): string {
   const fileCount = uniqueCitationCount(answer.citations);
   const knowledgeCount = uniqueCitationCount(answer.knowledgeCitations);
   return `${formatCount(fileCount)} file ${pluralize(fileCount, "citation")} · ${formatCount(knowledgeCount)} knowledge ${pluralize(knowledgeCount, "citation")}`;
+}
+
+const ACTIVITY_STATE_LABELS: Record<KnowledgePodRetrievalActivityState, string> = {
+  searched: "Searched",
+  skipped: "Skipped",
+  degraded: "Degraded",
+  denied: "Denied",
+  unavailable: "Unavailable",
+  "not-selected": "Not selected",
+};
+
+const ACTIVITY_REASON_LABELS: Record<KnowledgePodRetrievalActivityReasonCode, string> = {
+  "selected-for-search": "selected for search",
+  searched: "searched",
+  "not-selected": "not selected",
+  "source-skipped": "source skipped",
+  "scope-not-ready": "scope not ready",
+  "indexing-in-progress": "indexing in progress",
+  "stale-capsule": "stale pod",
+  "retrieval-failure": "retrieval failure",
+  "no-scope": "no scope",
+  "no-vectors": "no vectors",
+  "incompatible-embedding-identity": "embedding model mismatch",
+  "dense-scan-too-large": "vector scan too large",
+  "below-min-score": "below minimum score",
+  "answer-grounding-rejected": "grounding rejected",
+  "no-evidence-stated": "no evidence stated",
+  "no-evidence": "no evidence",
+  "empty-query": "empty query",
+  "empty-answer": "empty answer",
+  "embedding-failed": "embedding failed",
+  "embedding-unavailable": "embedding unavailable",
+  "reranker-unavailable": "reranker unavailable",
+  "reranker-invalid-response": "reranker invalid response",
+  "policy-denied": "policy denied",
+  "capability-missing": "capability missing",
+  "remote-unavailable": "remote unavailable",
+  "pack-validation-failed": "pack validation failed",
+  "max-sources-exceeded": "source limit exceeded",
+};
+
+type RetrievalActivityPod = KnowledgePodRetrievalActivity["pods"][number];
+
+function activityPodLine(pod: RetrievalActivityPod): string {
+  const referenceLabel = pluralize(pod.counts.referenceCount, "reference");
+  const citationLabel = pluralize(pod.counts.citationCount, "citation");
+  return `${pod.displayName} · ${formatCount(pod.counts.referenceCount)} ${referenceLabel} · ${formatCount(pod.counts.citationCount)} ${citationLabel}`;
+}
+
+function activityReasons(pod: RetrievalActivityPod): string {
+  return pod.reasonCodes.map((reason) => ACTIVITY_REASON_LABELS[reason]).join(", ");
+}
+
+function activityModes(pod: RetrievalActivityPod): string {
+  return pod.modes.map(humanizeToken).join(", ");
+}
+
+function KnowledgePodRetrievalActivityPanel({
+  activity,
+}: {
+  readonly activity: KnowledgePodRetrievalActivity | undefined;
+}): ReactNode {
+  if (activity === undefined || activity.pods.length === 0) return null;
+  const { summary } = activity;
+  return (
+    <section className="grounded-context-pack" aria-label="Knowledge Pod retrieval activity">
+      <div className="grounded-context-pack-headline">Knowledge Pod activity</div>
+      <dl className="grounded-context-pack-dl">
+        <MetricRow label="Searched" value={formatCount(summary.searchedCount)} />
+        <MetricRow label="Skipped" value={formatCount(summary.skippedCount)} />
+        <MetricRow label="Degraded" value={formatCount(summary.degradedCount)} />
+        <MetricRow label="Unavailable" value={formatCount(summary.unavailableCount)} />
+        <MetricRow
+          label="Candidates"
+          value={`${formatCount(summary.denseCandidateCount)} vector · ${formatCount(summary.lexicalCandidateCount)} lexical · ${formatCount(summary.fusedCandidateCount)} fused`}
+        />
+        <MetricRow
+          label="Evidence"
+          value={`${formatCount(summary.referenceCount)} ${pluralize(summary.referenceCount, "reference")} · ${formatCount(summary.citationCount)} ${pluralize(summary.citationCount, "citation")}`}
+        />
+      </dl>
+      <ul className="grounded-uncertainty-list" aria-label="Knowledge Pod activity details">
+        {activity.pods.map((pod) => (
+          <li key={`${pod.podKind}-${pod.podId}`}>
+            <span className="grounded-evidence-summary-badge">
+              {ACTIVITY_STATE_LABELS[pod.state]}
+            </span>{" "}
+            {activityPodLine(pod)}
+            <span className="grounded-meta">
+              {`Modes: ${activityModes(pod)} · Reasons: ${activityReasons(pod)}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function GroundedEvidenceDisclosure({
@@ -798,6 +897,7 @@ export function GroundedAnswer({
             citations={answer.citations}
             citationPreview={citationPreview}
           />
+          <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
           <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
         </GroundedEvidenceDisclosure>
@@ -826,6 +926,7 @@ export function GroundedAnswer({
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
           />
+          <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
           <OmittedLine
             omittedCount={answer.omittedCount}
