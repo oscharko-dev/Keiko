@@ -192,6 +192,16 @@ retrieval activity render denied or degraded pod states with `local-only` and `s
 modes. These projections do not include source text, excerpts, model prompts, provider
 endpoints, or raw diagnostics.
 
+Semantic reranker diagnostics follow the same rule. The browser-facing
+`GroundedRerankerDiagnostics` object carries only a closed status, a closed mode
+(`none`, `local-only`, or `provider-backed`), candidate/document/kept counts, optional
+latency, and a closed failure kind such as `not-configured`, `policy-denied`, `timeout`,
+`transport`, or `invalid-response`. It must not contain the user query, candidate
+excerpts, provider payloads, endpoints, credentials, paths, or free-form error text.
+If a reranker is not configured, denied by policy, unavailable, times out, throws, or
+returns an invalid mapping, Keiko preserves the fused retrieval order and records the
+redacted no-op/degraded diagnostics instead of failing the grounded answer.
+
 ## Retrieval activity projection
 
 Grounded local-knowledge and hybrid answers may include a `retrievalActivity` object.

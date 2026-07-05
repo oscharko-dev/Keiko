@@ -846,6 +846,9 @@ function rerankerDegradationNote(
   if (reranker === undefined || !DEGRADED_RERANKER_STATUSES.has(reranker.status)) {
     return undefined;
   }
+  if (reranker.status === "not-configured" || reranker.failureKind === "not-configured") {
+    return "Ranking: no reranker configured — showing fused retrieval order.";
+  }
   return "Ranking: reranker unavailable — showing fallback (lexical) order.";
 }
 

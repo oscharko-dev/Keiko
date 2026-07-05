@@ -101,4 +101,32 @@ describe("requestConfiguredRerank", () => {
     expect(captured?.egress).toEqual(RERANKER_EGRESS);
     deps.store.close();
   });
+
+  it("maps thrown reranker transport failures to redacted fallback diagnostics", async () => {
+    const deps = depsWith(gatewayConfig(), () => {
+      throw new Error(
+        "provider payload for https://reranker.example/v1 leaked query alpha and sk-secret",
+      );
+    });
+
+    const attempt = await requestConfiguredRerank({
+      deps,
+      query: "alpha",
+      documents: ["alpha document"],
+      topN: 1,
+    });
+
+    expect(attempt.outcome).toBeUndefined();
+    expect(attempt.diagnostics).toMatchObject({
+      status: "unavailable",
+      mode: "provider-backed",
+      candidateCount: 1,
+      documentCount: 1,
+      keptCount: 1,
+      failureKind: "transport",
+    });
+    expect(JSON.stringify(attempt.diagnostics)).not.toContain("reranker.example");
+    expect(JSON.stringify(attempt.diagnostics)).not.toContain("sk-secret");
+    deps.store.close();
+  });
 });

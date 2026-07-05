@@ -50,6 +50,9 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 
 type GroundedResult = Parameters<typeof buildLocalKnowledgeCitations>[0];
+type TestGatewayConfig = NonNullable<UiHandlerDeps["config"]>;
+type TestGatewayProvider = TestGatewayConfig["providers"][number];
+type TestModelCapability = NonNullable<TestGatewayConfig["capabilities"]>[number];
 
 function ref(
   n: number,
@@ -112,6 +115,77 @@ function externalRerankingDeniedPolicy(): KnowledgePodModelUsePolicy {
       ...standardPodModelUsePolicy().operations,
       externalReranking: "deny",
     },
+  };
+}
+
+function testProvider(modelId: string): TestGatewayProvider {
+  return {
+    modelId,
+    baseUrl: "https://provider.example/v1",
+    apiKey: "test-api-key-1234567890",
+    timeoutMs: 30_000,
+    maxRetries: 0,
+    retryBaseDelayMs: 500,
+  };
+}
+
+function chatCapability(modelId: string): TestModelCapability {
+  return {
+    id: modelId,
+    kind: "chat",
+    contextWindow: 64_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test",
+    preferredUseCases: [],
+    knownLimitations: [],
+  };
+}
+
+function embeddingCapability(modelId: string): TestModelCapability {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8_191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test",
+    preferredUseCases: [],
+    knownLimitations: [],
+  };
+}
+
+function answerModel(content: string, requestId: string): ModelPort {
+  return {
+    call: () =>
+      Promise.resolve({
+        modelId: "chat-model",
+        content,
+        finishReason: "stop" as const,
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId,
+          promptTokens: 5,
+          completionTokens: 12,
+          latencyMs: 1,
+          costClass: "medium" as const,
+        },
+      }),
   };
 }
 
@@ -945,7 +1019,8 @@ describe("local-knowledge reranker diagnostics", () => {
     >;
     expect(rerankCalls).toBe(0);
     expect(answer.contextPack.reranker).toMatchObject({
-      status: "disabled",
+      status: "denied",
+      mode: "local-only",
       failureKind: "policy-denied",
       documentCount: 0,
     });
@@ -954,6 +1029,74 @@ describe("local-knowledge reranker diagnostics", () => {
       reasonCodes: ["searched", "policy-denied"],
     });
     expect(answer.retrievalActivity?.pods[0]?.modes).toContain("sealed");
+  });
+
+  it("preserves fused order without preparing reranker documents when no reranker is configured", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "No Reranker Capsule",
+      capsuleId: "cap-no-reranker",
+      sourceId: "src-no-reranker",
+      text: "alpha beta no reranker evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "no-reranker-project");
+    const created = rescueStore.createChat(project.path, "No reranker", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () =>
+        answerModel("The alpha beta evidence is sufficient [1].", "no-reranker"),
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: scriptedAdapter().request,
+      rerankRequest: () => {
+        throw new Error("reranker must not be called without a configured reranker");
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "disabled",
+      mode: "none",
+      failureKind: "not-configured",
+      documentCount: 0,
+      keptCount: 1,
+    });
+    expect(answer.citations[0]?.marker).toBe("[1]");
   });
 });
 

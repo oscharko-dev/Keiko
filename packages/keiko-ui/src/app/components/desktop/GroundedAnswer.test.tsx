@@ -1106,4 +1106,26 @@ describe("GroundedAnswer", () => {
     const warning = container.querySelector(".grounded-uncertainty[role='alert']");
     expect(warning?.textContent?.toLowerCase()).toContain("reranker unavailable");
   });
+
+  it("describes configured no-op reranking without exposing provider details", () => {
+    const base = localKnowledgeAnswer();
+    const a = {
+      ...base,
+      contextPack: {
+        ...base.contextPack,
+        reranker: {
+          status: "not-configured" as const,
+          mode: "none" as const,
+          failureKind: "not-configured" as const,
+          candidateCount: 3,
+          documentCount: 0,
+          keptCount: 3,
+        },
+      },
+    } as GroundedAnswerType;
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    const warning = container.querySelector(".grounded-uncertainty[role='alert']");
+    expect(warning?.textContent).toContain("no reranker configured");
+    expect(warning?.textContent).not.toContain("http");
+  });
 });

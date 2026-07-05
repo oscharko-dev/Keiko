@@ -716,14 +716,45 @@ export interface GroundedUncertainty {
 }
 
 export type GroundedRerankerStatus =
-  "disabled" | "not-configured" | "unavailable" | "invalid-response" | "applied";
+  "disabled" | "denied" | "not-configured" | "unavailable" | "invalid-response" | "applied";
+
+export type GroundedRerankerMode = "none" | "local-only" | "provider-backed";
+
+export const GROUNDED_RERANKER_FAILURE_KINDS = [
+  "not-configured",
+  "policy-denied",
+  "wrong-header",
+  "rate-limited",
+  "unsupported-model",
+  "timeout",
+  "cancelled",
+  "transport",
+  "proxy-unreachable",
+  "proxy-auth-required",
+  "proxy-egress-failed",
+  "proxy-blocked-by-policy",
+  "tls-ca-failure",
+  "invalid-response",
+] as const;
+
+export type GroundedRerankerFailureKind = (typeof GROUNDED_RERANKER_FAILURE_KINDS)[number];
+
+export function isGroundedRerankerFailureKind(
+  value: unknown,
+): value is GroundedRerankerFailureKind {
+  return (
+    typeof value === "string" &&
+    (GROUNDED_RERANKER_FAILURE_KINDS as readonly string[]).includes(value)
+  );
+}
 
 export interface GroundedRerankerDiagnostics {
   readonly status: GroundedRerankerStatus;
+  readonly mode?: GroundedRerankerMode | undefined;
   readonly candidateCount: number;
   readonly documentCount: number;
   readonly keptCount: number;
-  readonly failureKind?: string | undefined;
+  readonly failureKind?: GroundedRerankerFailureKind | undefined;
   readonly latencyMs?: number | undefined;
 }
 

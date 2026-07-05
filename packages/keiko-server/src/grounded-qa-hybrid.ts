@@ -372,7 +372,8 @@ function policyDeniedRerankDiagnostics(
   keptCount: number,
 ): GroundedRerankerDiagnostics {
   return {
-    status: "disabled",
+    status: "denied",
+    mode: "local-only",
     candidateCount,
     documentCount: 0,
     keptCount,

@@ -511,6 +511,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     );
     expect(answer.contextPack.reranker).toMatchObject({
       status: "disabled",
+      mode: "none",
       candidateCount: 2,
       documentCount: 0,
       keptCount: 2,
@@ -1576,7 +1577,8 @@ describe("hybrid model reranker", () => {
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(rerankCalls).toBe(0);
     expect(answer.contextPack.reranker).toMatchObject({
-      status: "disabled",
+      status: "denied",
+      mode: "local-only",
       failureKind: "policy-denied",
       candidateCount: 2,
       keptCount: 2,
@@ -1623,6 +1625,7 @@ describe("hybrid model reranker", () => {
     expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
     expect(answer.contextPack.reranker).toMatchObject({
       status: "unavailable",
+      mode: "provider-backed",
       failureKind: "timeout",
       candidateCount: 2,
       documentCount: 2,
@@ -1672,6 +1675,7 @@ describe("hybrid model reranker", () => {
     const answer = asHybrid(result.body as GroundedAnswer);
     expect(answer.contextPack.reranker).toMatchObject({
       status: "invalid-response",
+      mode: "provider-backed",
       failureKind: "invalid-response",
       keptCount: 2,
     });
