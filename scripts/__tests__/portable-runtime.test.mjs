@@ -31,6 +31,7 @@ const DIGEST_C = "c".repeat(64);
 const DIGEST_D = "d".repeat(64);
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 const NODE_VERSION = "24.14.0";
+const STAGE_COMMAND_TIMEOUT_MS = 300_000;
 
 const BASE_MANIFEST = {
   schemaVersion: 1,
@@ -231,7 +232,7 @@ function runStage(args) {
   return spawnSync(process.execPath, ["scripts/stage-portable-runtime.mjs", ...args], {
     cwd: process.cwd(),
     encoding: "utf8",
-    timeout: 120_000,
+    timeout: STAGE_COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -385,6 +386,10 @@ describe("portable runtime package scripts", () => {
 
     expect(source).toContain('"--ignore-scripts"');
     expect(source).toContain('"--pack-destination"');
+    expect(source).toContain('["run", "check:package-surface"]');
+    expect(source.indexOf("preparePackageSurface();")).toBeLessThan(
+      source.indexOf("const tarball = packRoot(tmp);"),
+    );
     expect(source).not.toContain('["install"');
   });
 
@@ -444,7 +449,7 @@ describe("stage-portable-runtime", () => {
     expect(manifest.artifact.assetId).toBe(0);
     expect(manifest.releaseImpact.reviewedBinding.assetId).toBe(0);
     expect(manifest.releaseImpact.entryId).toBe(
-      "2026-06-30-keiko-0.2.11-governed-release-impact-baseline",
+      "2026-07-05-keiko-0.2.11-portable-runtime-staging-contract",
     );
     expect(manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified).toBe(
       false,
@@ -489,7 +494,16 @@ describe("stage-portable-runtime", () => {
         "utf8",
       ),
     );
-    expect(catalog.entries.some((entry) => entry.id === manifest.releaseImpact.entryId)).toBe(true);
+    const releaseImpactEntry = catalog.entries.find(
+      (entry) => entry.id === manifest.releaseImpact.entryId,
+    );
+    expect(releaseImpactEntry?.portableRuntimeArtifactContract).toEqual({
+      programEpic: 1944,
+      parentEpic: 1942,
+      issue: 1948,
+      stagingOnly: true,
+      targets: ["windows-x64", "macos-arm64", "macos-x64"],
+    });
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
     ).toBe(true);
@@ -540,7 +554,7 @@ describe("stage-portable-runtime", () => {
       ),
     ).toBe(true);
     expect(existsSync(join(root, "payload", "Keiko", "app"))).toBe(false);
-  }, 120_000);
+  }, 360_000);
 
   it("stages Windows resources with an extracted bundled Node runtime", () => {
     const dir = tempDir();
@@ -574,7 +588,7 @@ describe("stage-portable-runtime", () => {
     expect(existsSync(join(runtimeRoot, "node.exe"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "NOTICE"))).toBe(true);
-  }, 120_000);
+  }, 360_000);
 
   it("fails closed when a local Node archive name does not match the target runtime", () => {
     const dir = tempDir();

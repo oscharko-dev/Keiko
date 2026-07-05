@@ -48,6 +48,13 @@ const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "NOTICE",
 ]);
 const TAR_LINK_POLICY_SKIP_SAFE = "skip-safe";
+const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
+  issue: 1948,
+  parentEpic: 1942,
+  programEpic: 1944,
+  stagingOnly: true,
+  targets: Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]),
+});
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -166,6 +173,15 @@ function packRoot(packDir) {
   const tarball = join(packDir, tarballName);
   if (!existsSync(tarball)) fail(`expected npm pack tarball at ${tarball}`);
   return tarball;
+}
+
+function preparePackageSurface() {
+  run("npm", ["run", "build"]);
+  run("npm", ["run", "build:ui"]);
+  run("npm", ["run", "prepare:bin"]);
+  run("npm", ["run", "prune:package-build-artifacts"]);
+  run("npm", ["run", "prune:package-native-optionals"]);
+  run("npm", ["run", "check:package-surface"]);
 }
 
 function stagePackedPackage(tarball, extractRoot, stageRoot) {
@@ -857,11 +873,11 @@ function manifestFor(options, target, digests) {
 
 function reviewedReleaseImpactEntry(options) {
   const entries = Array.isArray(releaseImpactCatalog.entries) ? releaseImpactCatalog.entries : [];
-  const entry = entries.find((candidate) => releaseImpactEntryMatches(candidate, options));
-  if (entry === undefined) {
-    fail("release-impact catalog must contain a reviewed entry for the staged package version");
+  const matches = entries.filter((candidate) => releaseImpactEntryMatches(candidate, options));
+  if (matches.length !== 1) {
+    fail("release-impact catalog must contain exactly one reviewed portable runtime staging entry");
   }
-  return entry;
+  return matches[0];
 }
 
 function releaseImpactEntryMatches(entry, options) {
@@ -870,8 +886,27 @@ function releaseImpactEntryMatches(entry, options) {
     entry.packageVersion === rootPackage.version &&
     entry.releaseTag === options.releaseTag &&
     entry.review?.status === "reviewed" &&
-    entry.review?.humanApproved === true
+    entry.review?.humanApproved === true &&
+    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract)
   );
+}
+
+function portableRuntimeContractMatches(contract) {
+  return (
+    contract !== null &&
+    typeof contract === "object" &&
+    contract.issue === PORTABLE_RELEASE_IMPACT_CONTRACT.issue &&
+    contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
+    contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
+    contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
+    sameStringSet(contract.targets, PORTABLE_RELEASE_IMPACT_CONTRACT.targets)
+  );
+}
+
+function sameStringSet(actual, expected) {
+  if (!Array.isArray(actual) || actual.length !== expected.length) return false;
+  const actualSet = new Set(actual);
+  return actualSet.size === expected.length && expected.every((value) => actualSet.has(value));
 }
 
 async function assemble(options) {
@@ -881,7 +916,6 @@ async function assemble(options) {
   rmSync(finalRoot, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   try {
-    const tarball = packRoot(tmp);
     const extractRoot = join(tmp, "extract");
     const stageRoot = join(tmp, "stage", target.platformTarget);
     const payloadContainer = join(stageRoot, "payload");
@@ -889,9 +923,11 @@ async function assemble(options) {
     const resourceRoot = payloadResourceRoot(target, payloadRoot);
     mkdirSync(extractRoot, { recursive: true });
     mkdirSync(resourceRoot, { recursive: true });
+    const nodeArchiveSha256 = await stageNodeRuntime(options, target, resourceRoot);
+    preparePackageSurface();
+    const tarball = packRoot(tmp);
     stagePackedPackage(tarball, extractRoot, resourceRoot);
     stageLauncher(target, payloadRoot);
-    const nodeArchiveSha256 = await stageNodeRuntime(options, target, resourceRoot);
     const appTreeSha256 = hashDirectoryTree(join(resourceRoot, "app"));
     const tarballSha256 = await sha256File(tarball);
     const assetPath = createZipArchive(payloadContainer, target.assetName, stageRoot);
