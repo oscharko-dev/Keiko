@@ -143,6 +143,10 @@ workspace-index-*.json.*.tmp
 # scripts/check-workspace-supply-chain.mjs. CI uploads them as a workflow artifact.
 /sbom/
 
+# Generated portable runtime staging output. Release jobs may archive/upload this output, but the
+# staged payloads and runtime archives are generated artifacts and must never be committed.
+/.portable-runtime/
+
 # Per-run tmp copy of the unit-test-generation integration fixture (ADR-0008 D11). Created under
 # the repo root so `npx vitest` resolves vitest from the repo's node_modules; cleaned up per test.
 .keiko-itest-*/
