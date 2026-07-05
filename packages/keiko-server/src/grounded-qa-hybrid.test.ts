@@ -727,6 +727,19 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(answer.retrievalActivity?.summary.unavailableCount).toBe(2);
+    expect(answer.retrievalActivity?.summary.referenceCount).toBe(0);
+    expect(answer.retrievalActivity?.summary.citationCount).toBe(0);
+    expect(answer.retrievalActivity?.pods).toHaveLength(2);
+    expect(answer.retrievalActivity?.pods.map((pod) => pod.state)).toEqual([
+      "unavailable",
+      "unavailable",
+    ]);
+    for (const pod of answer.retrievalActivity?.pods ?? []) {
+      expect(pod.reasonCodes).toContain("no-vectors");
+      expect(pod.counts.referenceCount).toBe(0);
+      expect(pod.counts.citationCount).toBe(0);
+    }
     expect(auditKindsFor(capA)).toEqual(["retrieval-performed"]);
     expect(auditKindsFor(capB)).toEqual(["retrieval-performed"]);
   });
@@ -800,6 +813,23 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
       kc.source?.startsWith("Indexing Docs / "),
     );
     expect(indexingCitations).toHaveLength(0);
+    const readyActivity = answer.retrievalActivity?.pods.find((pod) => pod.podId === readyCap);
+    const indexingActivity = answer.retrievalActivity?.pods.find(
+      (pod) => pod.podId === indexingCap,
+    );
+    expect(readyActivity).toMatchObject({
+      displayName: "Ready Docs",
+      state: "searched",
+      counts: { referenceCount: 1, citationCount: 1 },
+    });
+    expect(readyActivity?.reasonCodes).toContain("searched");
+    expect(indexingActivity).toMatchObject({
+      displayName: "Indexing Docs",
+      state: "unavailable",
+      reasonCodes: ["indexing-in-progress"],
+      counts: { referenceCount: 0, citationCount: 0 },
+    });
+    expect(answer.retrievalActivity?.privacy.privatePathsExposed).toBe(false);
 
     // Retrieval was called exactly once (only the ready connector)
     // mutation: removing the skip check → retrievalCallCount would be 2

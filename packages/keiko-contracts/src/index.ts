@@ -1612,6 +1612,24 @@ export {
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,
 } from "./local-knowledge-pods.js";
+export type {
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityMode,
+  KnowledgePodRetrievalActivityPod,
+  KnowledgePodRetrievalActivityPodCounts,
+  KnowledgePodRetrievalActivityPrivacy,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
+  KnowledgePodRetrievalActivitySummary,
+} from "./local-knowledge-retrieval-activity.js";
+export {
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_MODES,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
+  KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_STATES,
+  isKnowledgePodRetrievalActivitySafeText,
+  validateKnowledgePodRetrievalActivity,
+} from "./local-knowledge-retrieval-activity.js";
 
 // ─── Bounded large-document ingestion (Epic #1160 / Issue #1286) ────────────────
 export type {

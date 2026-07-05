@@ -106,6 +106,10 @@ export type {
   UpdateRemediationScopeCounts,
   UpdateRemediationStatusReport,
   UpdateRemediationStatusRequest,
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityMode,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
 } from "@oscharko-dev/keiko-contracts";
 
 export {
