@@ -14,6 +14,7 @@ import {
   mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
+  multiSpaceFixture,
   multilingualFixture,
   noEvidenceFixture,
   semanticParaphraseFixture,
@@ -48,6 +49,7 @@ describe("fixtures — registry", () => {
     expect(ids).toEqual([
       singleTopicFixture.id,
       multiCapsuleFixture.id,
+      multiSpaceFixture.id,
       noEvidenceFixture.id,
       ambiguousQueryFixture.id,
       sourceIsolationFixture.id,
@@ -160,8 +162,8 @@ describe("fixtures — internal consistency", () => {
   });
 });
 
-describe("fixtures — embedding identity is consistent", () => {
-  it("all capsules in a capsule-set query share the same embedding identity", () => {
+describe("fixtures — embedding lane dimensions are compatible", () => {
+  it("all capsules in a capsule-set query share vector dimensions and metric", () => {
     for (const fixture of ALL_FIXTURES) {
       for (const query of fixture.queries) {
         if (query.scope.kind !== "capsule-set") continue;

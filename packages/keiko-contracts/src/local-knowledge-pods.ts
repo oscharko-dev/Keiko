@@ -7,6 +7,14 @@
 // endpoints, credentials, vectors, or raw evidence.
 
 import type {
+  EmbeddingProfileCompatibilityReason,
+  EmbeddingProfileCompatibilityStatus,
+} from "./local-knowledge-embedding-profiles.js";
+import {
+  EMBEDDING_PROFILE_COMPATIBILITY_REASONS,
+  EMBEDDING_PROFILE_COMPATIBILITY_STATUSES,
+} from "./local-knowledge-embedding-profiles.js";
+import type {
   CapsuleLifecycleState,
   CapsuleSetId,
   EmbeddingVectorMetric,
@@ -55,6 +63,11 @@ export interface KnowledgePodRetrievalCapabilities {
   readonly embeddingSpaceFingerprint?: string;
   readonly vectorDimensions?: number;
   readonly vectorMetric?: EmbeddingVectorMetric;
+  readonly embeddingProfileKey?: string;
+  readonly embeddingCompatibilityStatus?: EmbeddingProfileCompatibilityStatus;
+  readonly embeddingCompatibilityReason?: EmbeddingProfileCompatibilityReason;
+  readonly reindexRecommended?: boolean;
+  readonly queryEmbeddingAllowed?: boolean;
 }
 
 export interface KnowledgePodPrivacySummary {
@@ -156,6 +169,11 @@ const RETRIEVAL_KEYS = [
   "embeddingSpaceFingerprint",
   "vectorDimensions",
   "vectorMetric",
+  "embeddingProfileKey",
+  "embeddingCompatibilityStatus",
+  "embeddingCompatibilityReason",
+  "reindexRecommended",
+  "queryEmbeddingAllowed",
 ] as const;
 const PRIVACY_KEYS = [
   "localFirst",
@@ -551,8 +569,41 @@ function validateRetrieval(value: unknown, errors: string[]): void {
     "retrieval.embeddingSpaceFingerprint",
     errors,
   );
+  validateOptionalSafeText(value.embeddingProfileKey, "retrieval.embeddingProfileKey", errors);
+  validateEmbeddingCompatibilityStatus(value.embeddingCompatibilityStatus, errors);
+  validateEmbeddingCompatibilityReason(value.embeddingCompatibilityReason, errors);
+  validateOptionalBoolean(value.reindexRecommended, "retrieval.reindexRecommended", errors);
+  validateOptionalBoolean(value.queryEmbeddingAllowed, "retrieval.queryEmbeddingAllowed", errors);
   validateVectorDimensions(value.vectorDimensions, errors);
   validateVectorMetric(value.vectorMetric, errors);
+}
+
+function validateOptionalBoolean(value: unknown, field: string, errors: string[]): void {
+  if (value !== undefined && typeof value !== "boolean") {
+    errors.push(`${field} must be a boolean when set`);
+  }
+}
+
+function validateEmbeddingCompatibilityStatus(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value === "string" &&
+    EMBEDDING_PROFILE_COMPATIBILITY_STATUSES.includes(value as EmbeddingProfileCompatibilityStatus)
+  ) {
+    return;
+  }
+  errors.push("retrieval.embeddingCompatibilityStatus is invalid when set");
+}
+
+function validateEmbeddingCompatibilityReason(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (
+    typeof value === "string" &&
+    EMBEDDING_PROFILE_COMPATIBILITY_REASONS.includes(value as EmbeddingProfileCompatibilityReason)
+  ) {
+    return;
+  }
+  errors.push("retrieval.embeddingCompatibilityReason is invalid when set");
 }
 
 function validateVectorDimensions(value: unknown, errors: string[]): void {

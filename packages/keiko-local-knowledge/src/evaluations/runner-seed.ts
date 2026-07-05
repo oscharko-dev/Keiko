@@ -37,25 +37,13 @@ export interface SeededFixture {
   // Aggregated topic boosts across all chunks + queries in the fixture, ready to hand to
   // the scripted adapter.
   readonly topicBoosts: Readonly<Record<string, number>>;
-  // Pinned identity for the run. Every capsule in a fixture currently shares one identity.
+  // Default query adapter identity for the run. Mixed-space fixtures may seed distinct
+  // capsule identities; query-time retrieval still requests the model id pinned to each capsule.
   readonly identity: EmbeddingModelIdentity;
 }
 
 function chunkParsedUnitId(documentId: string, parsedUnitId: string): string {
   return `unit-${documentId}-${parsedUnitId}`;
-}
-
-function sameEmbeddingIdentity(
-  left: EmbeddingModelIdentity,
-  right: EmbeddingModelIdentity,
-): boolean {
-  return (
-    left.provider === right.provider &&
-    left.modelId === right.modelId &&
-    left.modelRevision === right.modelRevision &&
-    left.vectorDimensions === right.vectorDimensions &&
-    left.vectorMetric === right.vectorMetric
-  );
 }
 
 function seedCapsule(store: KnowledgeStore, capsule: EvalCapsuleSpec): void {
@@ -219,17 +207,10 @@ function seedCapsuleSets(store: KnowledgeStore, fixture: RetrievalEvalFixture): 
   }
 }
 
-function validateFixtureIdentity(fixture: RetrievalEvalFixture): EmbeddingModelIdentity {
+function defaultFixtureIdentity(fixture: RetrievalEvalFixture): EmbeddingModelIdentity {
   const first = fixture.capsules[0];
   if (first === undefined) {
     throw new Error("fixture must declare at least one capsule");
-  }
-  for (const capsule of fixture.capsules) {
-    if (!sameEmbeddingIdentity(first.embeddingModelIdentity, capsule.embeddingModelIdentity)) {
-      throw new Error(
-        `fixture ${fixture.id} mixes embedding identities; eval runner requires one identity per run`,
-      );
-    }
   }
   return first.embeddingModelIdentity;
 }
@@ -252,6 +233,6 @@ export function seedFixture(store: KnowledgeStore, fixture: RetrievalEvalFixture
     chunkUnitKinds,
     chunkTokenCounts,
     topicBoosts: collectTopicBoosts(fixture),
-    identity: validateFixtureIdentity(fixture),
+    identity: defaultFixtureIdentity(fixture),
   };
 }

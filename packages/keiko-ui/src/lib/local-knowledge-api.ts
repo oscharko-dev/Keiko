@@ -17,8 +17,8 @@ import type {
   CapsuleDeleteRequest,
   ParserDiagnostic,
   IndexingJobRecord,
-  LocalKnowledgeCapsuleListEntry as CapsuleListEntry,
-  LocalKnowledgeCapsuleSetListEntry as CapsuleSetListEntry,
+  LocalKnowledgeCapsuleListEntry as CapsuleListEntryBase,
+  LocalKnowledgeCapsuleSetListEntry as CapsuleSetListEntryBase,
   LocalKnowledgeCapsuleSetsResponse as CapsuleSetsResponse,
   LocalKnowledgeCapsulesResponse as CapsulesResponse,
   KnowledgePodSummary,
@@ -28,35 +28,121 @@ import type {
 // Wire shapes
 // ---------------------------------------------------------------------------
 
-export type { CapsuleListEntry, CapsuleSetListEntry, CapsuleSetsResponse, CapsulesResponse };
+export interface KnowledgePodUiGuidance {
+  readonly label: string;
+  readonly description: string;
+  readonly tone: "warning" | "danger" | "muted";
+}
 
-function summaryDisplayNames(
+export interface KnowledgePodUiMetadata {
+  readonly readiness: KnowledgePodSummary["readiness"];
+  readonly embeddingCompatibilityStatus?: NonNullable<
+    KnowledgePodSummary["retrieval"]["embeddingCompatibilityStatus"]
+  >;
+  readonly embeddingCompatibilityReason?: NonNullable<
+    KnowledgePodSummary["retrieval"]["embeddingCompatibilityReason"]
+  >;
+  readonly reindexRecommended: boolean;
+  readonly queryEmbeddingAllowed: boolean;
+  readonly guidance?: KnowledgePodUiGuidance;
+}
+
+export type CapsuleListEntry = CapsuleListEntryBase & {
+  readonly knowledgePod?: KnowledgePodUiMetadata;
+};
+export type CapsuleSetListEntry = CapsuleSetListEntryBase & {
+  readonly knowledgePod?: KnowledgePodUiMetadata;
+};
+export type { CapsuleSetsResponse, CapsulesResponse };
+
+function summariesById(
   summaries: readonly KnowledgePodSummary[] | undefined,
   kind: KnowledgePodSummary["kind"],
-): ReadonlyMap<string, string> {
-  const names = new Map<string, string>();
+): ReadonlyMap<string, KnowledgePodSummary> {
+  const byId = new Map<string, KnowledgePodSummary>();
   for (const summary of summaries ?? []) {
-    if (summary.kind === kind) names.set(String(summary.id), summary.displayName);
+    if (summary.kind === kind) byId.set(String(summary.id), summary);
   }
-  return names;
+  return byId;
+}
+
+function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+  const status = summary.retrieval.embeddingCompatibilityStatus;
+  if (status === "incompatible") {
+    return {
+      label: "Embedding mismatch",
+      description: "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+      tone: "danger",
+    };
+  }
+  if (status === "unavailable") {
+    return {
+      label: "Embedding unavailable",
+      description: "Semantic retrieval cannot run under the current local policy.",
+      tone: "danger",
+    };
+  }
+  if (status === "unknown" || summary.retrieval.reindexRecommended === true) {
+    return {
+      label: "Reindex recommended",
+      description: "Compatibility is unverified; lexical fallback remains available.",
+      tone: "warning",
+    };
+  }
+  if (status === "opaque") {
+    return {
+      label: "Embedding opaque",
+      description: "Semantic compatibility cannot be verified for this retrieval space.",
+      tone: "muted",
+    };
+  }
+  return undefined;
+}
+
+function metadataForSummary(
+  summary: KnowledgePodSummary | undefined,
+): KnowledgePodUiMetadata | undefined {
+  if (summary === undefined) return undefined;
+  const guidance = guidanceForSummary(summary);
+  return {
+    readiness: summary.readiness,
+    ...(summary.retrieval.embeddingCompatibilityStatus !== undefined
+      ? { embeddingCompatibilityStatus: summary.retrieval.embeddingCompatibilityStatus }
+      : {}),
+    ...(summary.retrieval.embeddingCompatibilityReason !== undefined
+      ? { embeddingCompatibilityReason: summary.retrieval.embeddingCompatibilityReason }
+      : {}),
+    reindexRecommended: summary.retrieval.reindexRecommended === true,
+    queryEmbeddingAllowed: summary.retrieval.queryEmbeddingAllowed === true,
+    ...(guidance !== undefined ? { guidance } : {}),
+  };
 }
 
 export function capsulesForKnowledgePodUi(response: CapsulesResponse): readonly CapsuleListEntry[] {
-  const names = summaryDisplayNames(response.knowledgePods, "pod");
+  const summaries = summariesById(response.knowledgePods, "pod");
   return response.capsules.map((capsule) => ({
     ...capsule,
-    displayName: names.get(String(capsule.id)) ?? capsule.displayName,
+    displayName: summaries.get(String(capsule.id))?.displayName ?? capsule.displayName,
+    ...metadataProperty(summaries.get(String(capsule.id))),
   }));
 }
 
 export function capsuleSetsForKnowledgePodUi(
   response: CapsuleSetsResponse,
 ): readonly CapsuleSetListEntry[] {
-  const names = summaryDisplayNames(response.knowledgePods, "pod-set");
+  const summaries = summariesById(response.knowledgePods, "pod-set");
   return response.capsuleSets.map((set) => ({
     ...set,
-    displayName: names.get(String(set.id)) ?? set.displayName,
+    displayName: summaries.get(String(set.id))?.displayName ?? set.displayName,
+    ...metadataProperty(summaries.get(String(set.id))),
   }));
+}
+
+function metadataProperty(summary: KnowledgePodSummary | undefined): {
+  readonly knowledgePod?: KnowledgePodUiMetadata;
+} {
+  const knowledgePod = metadataForSummary(summary);
+  return knowledgePod === undefined ? {} : { knowledgePod };
 }
 
 export interface CapsuleDetailResponse {

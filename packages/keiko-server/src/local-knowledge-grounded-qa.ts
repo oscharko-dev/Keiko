@@ -13,6 +13,7 @@ import {
   type QueryTransformer,
   type ReferenceReranker,
   type ReferenceRerankerResult,
+  type RetrievalEmbeddingLaneStatus,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
 import { buildLocalKnowledgeIndexLifecycle } from "./local-knowledge-index-lifecycle.js";
@@ -1153,6 +1154,13 @@ const DEGRADED_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCod
   "reranker-unavailable",
   "reranker-invalid-response",
 ]);
+const DENSE_FALLBACK_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
+  "embedding-failed",
+  "incompatible-embedding-identity",
+  "dense-scan-too-large",
+  "embedding-unavailable",
+  "no-vectors",
+]);
 const SKIPPED_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
   "source-skipped",
   "max-sources-exceeded",
@@ -1261,34 +1269,90 @@ function activityModes(
 function reasonCodesForPod(
   result: KnowledgePodRetrievalActivityResultInput,
   referenceCount: number,
+  capsuleId?: KnowledgeCapsuleId,
 ): readonly KnowledgePodRetrievalActivityReasonCode[] {
   const codes = new Set<KnowledgePodRetrievalActivityReasonCode>();
   if (referenceCount > 0) codes.add("searched");
   if (result.references.length > 0 && referenceCount === 0) codes.add("not-selected");
   if (result.noEvidence) codes.add(normaliseActivityReason(result.reason));
-  if (result.embeddingDegraded === true) codes.add("embedding-failed");
-  if (result.reranker !== undefined && RERANKER_DEGRADED.has(result.reranker.status)) {
-    codes.add(
-      result.reranker.status === "invalid-response"
-        ? "reranker-invalid-response"
-        : "reranker-unavailable",
-    );
-  }
+  addLaneReasonCodes(codes, result, capsuleId);
+  addLegacyEmbeddingDegradedCode(codes, result);
+  addRerankerReasonCode(codes, result);
   if (codes.size === 0) codes.add("selected-for-search");
   return [...codes];
+}
+
+function addLaneReasonCodes(
+  codes: Set<KnowledgePodRetrievalActivityReasonCode>,
+  result: KnowledgePodRetrievalActivityResultInput,
+  capsuleId: KnowledgeCapsuleId | undefined,
+): void {
+  for (const code of laneReasonCodesForPod(result, capsuleId)) codes.add(code);
+}
+
+function addLegacyEmbeddingDegradedCode(
+  codes: Set<KnowledgePodRetrievalActivityReasonCode>,
+  result: KnowledgePodRetrievalActivityResultInput,
+): void {
+  if (result.embeddingDegraded === true && !hasLaneDiagnostics(result))
+    codes.add("embedding-failed");
+}
+
+function addRerankerReasonCode(
+  codes: Set<KnowledgePodRetrievalActivityReasonCode>,
+  result: KnowledgePodRetrievalActivityResultInput,
+): void {
+  if (result.reranker === undefined || !RERANKER_DEGRADED.has(result.reranker.status)) return;
+  codes.add(
+    result.reranker.status === "invalid-response"
+      ? "reranker-invalid-response"
+      : "reranker-unavailable",
+  );
 }
 
 function stateForPod(
   result: KnowledgePodRetrievalActivityResultInput,
   referenceCount: number,
+  capsuleId?: KnowledgeCapsuleId,
 ): KnowledgePodRetrievalActivityState {
-  if (result.references.length > 0 && referenceCount === 0) return "not-selected";
-  const codes = reasonCodesForPod(result, referenceCount);
+  const codes = reasonCodesForPod(result, referenceCount, capsuleId);
   if (codes.some((code) => DENIED_ACTIVITY_REASONS.has(code))) return "denied";
+  if (referenceCount > 0 && codes.some((code) => DENSE_FALLBACK_ACTIVITY_REASONS.has(code))) {
+    return "degraded";
+  }
   if (codes.some((code) => DEGRADED_ACTIVITY_REASONS.has(code))) return "degraded";
   if (codes.some((code) => UNAVAILABLE_ACTIVITY_REASONS.has(code))) return "unavailable";
   if (codes.some((code) => SKIPPED_ACTIVITY_REASONS.has(code))) return "skipped";
+  if (codes.some((code) => code === "not-selected")) return "not-selected";
   return "searched";
+}
+
+function hasLaneDiagnostics(result: KnowledgePodRetrievalActivityResultInput): boolean {
+  return (result.retrievalDiagnostics?.embeddingLanes?.length ?? 0) > 0;
+}
+
+function laneReasonCodesForPod(
+  result: KnowledgePodRetrievalActivityResultInput,
+  capsuleId: KnowledgeCapsuleId | undefined,
+): readonly KnowledgePodRetrievalActivityReasonCode[] {
+  if (capsuleId === undefined) return [];
+  const lanes = result.retrievalDiagnostics?.embeddingLanes ?? [];
+  const codes = new Set<KnowledgePodRetrievalActivityReasonCode>();
+  for (const lane of lanes) {
+    if (!lane.capsuleIds.some((id) => String(id) === String(capsuleId))) continue;
+    const code = reasonCodeForLaneStatus(lane.status);
+    if (code !== undefined) codes.add(code);
+  }
+  return [...codes];
+}
+
+function reasonCodeForLaneStatus(
+  status: RetrievalEmbeddingLaneStatus,
+): KnowledgePodRetrievalActivityReasonCode | undefined {
+  if (status === "identity-incompatible") return "incompatible-embedding-identity";
+  if (status === "embedding-failed" || status === "degraded") return "embedding-failed";
+  if (status === "no-vectors") return "no-vectors";
+  return undefined;
 }
 
 function countReferencesByCapsule(
@@ -1425,9 +1489,9 @@ function podsForSource(
       store,
       cache,
       capsule,
-      stateForPod(source.result, referenceCount),
+      stateForPod(source.result, referenceCount, capsule.id),
       activityModes(source.result),
-      reasonCodesForPod(source.result, referenceCount),
+      reasonCodesForPod(source.result, referenceCount, capsule.id),
       { referenceCount, citationCount },
     );
   });

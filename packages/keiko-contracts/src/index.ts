@@ -1588,6 +1588,25 @@ export {
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
 export type {
+  EmbeddingProfileCompatibilityDecision,
+  EmbeddingProfileCompatibilityReason,
+  EmbeddingProfileCompatibilityStatus,
+  EmbeddingProfileFromModelOptions,
+  EmbeddingProfileIdentity,
+  EmbeddingProfileLocality,
+  EmbeddingProfilePolicyCapability,
+} from "./local-knowledge-embedding-profiles.js";
+export {
+  EMBEDDING_PROFILE_COMPATIBILITY_REASONS,
+  EMBEDDING_PROFILE_COMPATIBILITY_STATUSES,
+  EMBEDDING_PROFILE_POLICY_CAPABILITIES,
+  EMBEDDING_PROFILE_SCHEMA_VERSION,
+  compareEmbeddingProfiles,
+  embeddingProfileFromModelIdentity,
+  embeddingProfileKey,
+  inferEmbeddingModelFamily,
+} from "./local-knowledge-embedding-profiles.js";
+export type {
   KnowledgePodBackingKind,
   KnowledgePodCompatibilitySummary,
   KnowledgePodCounts,

@@ -38,6 +38,8 @@ import { shapeEmbeddingQuery } from "./embedding-query-shaping.js";
 import { lexicalQueryTermGroups, type LexicalQueryTermGroup } from "./lexical-normalization.js";
 import {
   RetrievalError,
+  type RetrievalEmbeddingLaneDiagnostics,
+  type RetrievalEmbeddingLaneStatus,
   type QueryTransformer,
   type ResolvedRetrievalStrategy,
   type RetrievalDiagnostics,
@@ -816,6 +818,10 @@ function identityKey(identity: EmbeddingModelIdentity): string {
   ].join("|");
 }
 
+function embeddingLaneId(identity: EmbeddingModelIdentity): string {
+  return `embedding-lane-${fnv1a32(identityKey(identity)).toString(16).padStart(8, "0")}`;
+}
+
 function queryEmbeddingCacheKey(identity: EmbeddingModelIdentity, query: string): string {
   return `${identityKey(identity)}\u0000${query}`;
 }
@@ -936,6 +942,7 @@ function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationRe
 interface DenseCandidate {
   readonly chunkId: string;
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly laneId: string;
   readonly score: number;
 }
 
@@ -1006,6 +1013,7 @@ function identityFromVectorRow(row: DecodedVectorRow): EmbeddingModelIdentity | 
 function scoreCapsuleVectors(
   rows: readonly DecodedVectorRow[],
   capsule: KnowledgeCapsule,
+  laneId: string,
   queryVector: Float32Array,
   candidateLimit: number,
   minScore: number | undefined,
@@ -1030,7 +1038,7 @@ function scoreCapsuleVectors(
     sawDimensionCompatible = true;
     const score = scoreFor(metric, queryVector, row.vector);
     if (minScore !== undefined && score < minScore) continue;
-    scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, score });
+    scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, laneId, score });
   }
   scored.sort(scoreDesc);
   return {
@@ -1462,22 +1470,23 @@ function fuseCandidates(
   limit: number,
 ): readonly FusedCandidate[] {
   const byKey = new Map<string, FusedCandidate>();
-  const rankedDense = [...dedupeDenseCandidates(denseCandidates)].sort(scoreDesc);
-  rankedDense.forEach((candidate, index) => {
-    const rank = index + 1;
-    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
-    upsertFusedCandidate(
-      byKey,
-      key,
-      {
-        chunkId: candidate.chunkId,
-        capsuleId: candidate.capsuleId,
-        denseRank: rank,
-        denseScore: candidate.score,
-      },
-      rrf(rank),
-    );
-  });
+  for (const rankedDense of denseCandidateLanes(denseCandidates)) {
+    rankedDense.forEach((candidate, index) => {
+      const rank = index + 1;
+      const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+      upsertFusedCandidate(
+        byKey,
+        key,
+        {
+          chunkId: candidate.chunkId,
+          capsuleId: candidate.capsuleId,
+          denseRank: rank,
+          denseScore: candidate.score,
+        },
+        rrf(rank),
+      );
+    });
+  }
   const rankedLexical = [...dedupeLexicalCandidates(lexicalCandidates)].sort(lexicalCandidateAsc);
   rankedLexical.forEach((candidate, index) => {
     const rank = index + 1;
@@ -1497,10 +1506,25 @@ function fuseCandidates(
   return [...byKey.values()].sort(fusedScoreDesc).slice(0, limit);
 }
 
+function denseCandidateLanes(candidates: readonly DenseCandidate[]): readonly DenseCandidate[][] {
+  const byLane = new Map<string, DenseCandidate[]>();
+  for (const candidate of dedupeDenseCandidates(candidates)) {
+    const bucket = byLane.get(candidate.laneId);
+    if (bucket === undefined) {
+      byLane.set(candidate.laneId, [candidate]);
+    } else {
+      bucket.push(candidate);
+    }
+  }
+  return [...byLane.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, laneCandidates]) => laneCandidates.sort(scoreDesc));
+}
+
 function dedupeDenseCandidates(candidates: readonly DenseCandidate[]): readonly DenseCandidate[] {
   const byKey = new Map<string, DenseCandidate>();
   for (const candidate of candidates) {
-    const key = `${String(candidate.capsuleId)}|${candidate.chunkId}`;
+    const key = `${candidate.laneId}|${String(candidate.capsuleId)}|${candidate.chunkId}`;
     const existing = byKey.get(key);
     if (existing === undefined || candidate.score > existing.score) byKey.set(key, candidate);
   }
@@ -1621,9 +1645,9 @@ export interface SearchOutcome {
   // Set when the search produced no references for a reason the runner needs to
   // discriminate. `noEvidence` mirrors `RetrievalResult` (same vocabulary).
   readonly noEvidenceReason?: RetrievalNoEvidenceReason;
-  // True when the embedding adapter failed for at least one capsule but lexical
-  // candidates kept the result non-empty. Observability signal only — does not
-  // change which references are returned.
+  // True when a dense embedding lane degraded but lexical candidates kept the
+  // result non-empty. Observability signal only — does not change which references
+  // are returned.
   readonly embeddingDegraded?: true;
   readonly diagnostics: RetrievalDiagnostics;
 }
@@ -1633,6 +1657,7 @@ export interface SearchOutcome {
 // has 4 distinct branches; bundling them into one function pushes it past the lint cap).
 interface SearchState {
   readonly candidates: DenseCandidate[];
+  readonly lanes: Map<string, EmbeddingLaneState>;
   readonly vectorIndexDiagnostics: RetrievalVectorIndexDiagnostics[];
   anyVectorSeen: boolean;
   anyDimensionCompatible: boolean;
@@ -1643,9 +1668,19 @@ interface SearchState {
   denseAnn: boolean;
 }
 
+interface EmbeddingLaneState {
+  readonly laneId: string;
+  readonly capsuleIds: Set<string>;
+  status: RetrievalEmbeddingLaneStatus;
+  queryEmbeddingRequested: boolean;
+  vectorCount: number;
+  denseCandidateCount: number;
+}
+
 function emptyState(): SearchState {
   return {
     candidates: [],
+    lanes: new Map(),
     vectorIndexDiagnostics: [],
     anyVectorSeen: false,
     anyDimensionCompatible: false,
@@ -1655,6 +1690,31 @@ function emptyState(): SearchState {
     denseGuided: false,
     denseAnn: false,
   };
+}
+
+function laneStateFor(state: SearchState, capsule: KnowledgeCapsule): EmbeddingLaneState {
+  const laneId = embeddingLaneId(capsule.embeddingModelIdentity);
+  const existing = state.lanes.get(laneId);
+  if (existing !== undefined) {
+    existing.capsuleIds.add(String(capsule.id));
+    return existing;
+  }
+  const created: EmbeddingLaneState = {
+    laneId,
+    capsuleIds: new Set([String(capsule.id)]),
+    status: "no-vectors",
+    queryEmbeddingRequested: false,
+    vectorCount: 0,
+    denseCandidateCount: 0,
+  };
+  state.lanes.set(laneId, created);
+  return created;
+}
+
+function markLaneStatus(lane: EmbeddingLaneState, status: RetrievalEmbeddingLaneStatus): void {
+  if (lane.status === "identity-incompatible" || lane.status === "embedding-failed") return;
+  if (lane.status === "degraded" && status === "searched") return;
+  lane.status = status;
 }
 
 type IdentityPreflightResult = "ok" | "incompatible" | "failed";
@@ -1742,24 +1802,41 @@ async function ensureCapsuleQueryEmbedding(
 
 function recordEmbeddingFailure(
   state: SearchState,
+  lane: EmbeddingLaneState,
   result: Exclude<CapsuleQueryEmbeddingResult, { readonly kind: "ready" }>,
 ): void {
   if (result.kind === "identity-incompatible") {
     state.anyIdentityIncompatible = true;
+    markLaneStatus(lane, "identity-incompatible");
   } else {
     state.embeddingFailed = true;
+    markLaneStatus(lane, "embedding-failed");
   }
 }
 
-function pushScoredCandidates(state: SearchState, scored: CapsuleScoreResult): void {
-  if (scored.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
-  if (scored.sawDimensionCompatible) state.anyDimensionCompatible = true;
+function pushScoredCandidates(
+  state: SearchState,
+  lane: EmbeddingLaneState,
+  scored: CapsuleScoreResult,
+): void {
+  if (scored.sawIdentityIncompatible) {
+    state.anyIdentityIncompatible = true;
+    markLaneStatus(lane, "identity-incompatible");
+  }
+  if (scored.sawDimensionCompatible) {
+    state.anyDimensionCompatible = true;
+    markLaneStatus(lane, "searched");
+  } else if (!scored.sawIdentityIncompatible) {
+    markLaneStatus(lane, "identity-incompatible");
+  }
+  lane.denseCandidateCount += scored.candidates.length;
   state.candidates.push(...scored.candidates);
 }
 
 function denseCandidatesFromVectorIndex(
   candidates: readonly VectorIndexCandidate[],
   capsule: KnowledgeCapsule,
+  laneId: string,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
 ): readonly DenseCandidate[] {
   const allowedSources =
@@ -1778,6 +1855,7 @@ function denseCandidatesFromVectorIndex(
     out.push({
       chunkId: candidate.chunkId,
       capsuleId: capsule.id,
+      laneId,
       score: candidate.score,
     });
   }
@@ -1787,6 +1865,7 @@ function denseCandidatesFromVectorIndex(
 function tryVectorIndexForCapsule(
   store: KnowledgeStore,
   capsule: KnowledgeCapsule,
+  lane: EmbeddingLaneState,
   sourceFilter: readonly KnowledgeSourceId[] | undefined,
   embedded: EmbeddedQuery,
   options: SearchOptions,
@@ -1805,13 +1884,24 @@ function tryVectorIndexForCapsule(
     options.vectorIndex,
   );
   state.vectorIndexDiagnostics.push(indexed.diagnostics);
-  if (indexed.sawIdentityIncompatible) state.anyIdentityIncompatible = true;
-  if (indexed.sawDimensionCompatible) state.anyDimensionCompatible = true;
+  if (indexed.sawIdentityIncompatible) {
+    state.anyIdentityIncompatible = true;
+    markLaneStatus(lane, "identity-incompatible");
+  }
+  if (indexed.sawDimensionCompatible) {
+    state.anyDimensionCompatible = true;
+    markLaneStatus(lane, "searched");
+  }
   if (!indexed.ok) return false;
   state.anyVectorSeen = true;
-  state.candidates.push(
-    ...denseCandidatesFromVectorIndex(indexed.candidates, capsule, sourceFilter),
+  const candidates = denseCandidatesFromVectorIndex(
+    indexed.candidates,
+    capsule,
+    lane.laneId,
+    sourceFilter,
   );
+  lane.denseCandidateCount += candidates.length;
+  state.candidates.push(...candidates);
   return true;
 }
 
@@ -1829,8 +1919,11 @@ async function processCapsule(
   preflightCache: Map<string, IdentityPreflightResult>,
   state: SearchState,
 ): Promise<void> {
+  const lane = laneStateFor(state, capsule);
   const vectorStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
   if (vectorStamp.n === 0) return;
+  lane.vectorCount += vectorStamp.n;
+  lane.queryEmbeddingRequested = true;
   state.anyVectorSeen = true;
 
   const queryEmbedding = await ensureCapsuleQueryEmbedding(
@@ -1842,13 +1935,14 @@ async function processCapsule(
     preflightCache,
   );
   if (queryEmbedding.kind !== "ready") {
-    recordEmbeddingFailure(state, queryEmbedding);
+    recordEmbeddingFailure(state, lane, queryEmbedding);
     return;
   }
   if (
     tryVectorIndexForCapsule(
       store,
       capsule,
+      lane,
       sourceFilter,
       queryEmbedding.embedded,
       options,
@@ -1870,6 +1964,7 @@ async function processCapsule(
     const annRead = readAnnIndexForCapsule(store, capsule, sourceFilter);
     if (annRead.kind === "skipped-too-large") {
       state.denseSkippedTooLarge = true;
+      markLaneStatus(lane, "degraded");
       return;
     }
     if (annRead.kind === "empty") return;
@@ -1880,17 +1975,19 @@ async function processCapsule(
     );
     if (annRows.length === 0) {
       state.denseSkippedTooLarge = true;
+      markLaneStatus(lane, "degraded");
       return;
     }
     const scored = scoreCapsuleVectors(
       annRows,
       capsule,
+      lane.laneId,
       queryEmbedding.embedded.vector,
       oversampleTopK(options.topK, profile),
       options.minScore,
     );
     state.denseAnn = true;
-    pushScoredCandidates(state, scored);
+    pushScoredCandidates(state, lane, scored);
     return;
   }
   if (vectorRead.rowCount > 0) state.anyVectorSeen = true;
@@ -1901,11 +1998,12 @@ async function processCapsule(
   const scored = scoreCapsuleVectors(
     rows,
     capsule,
+    lane.laneId,
     queryEmbedding.embedded.vector,
     oversampleTopK(options.topK, profile),
     options.minScore,
   );
-  pushScoredCandidates(state, scored);
+  pushScoredCandidates(state, lane, scored);
 }
 
 async function ensureQueryEmbedded(
@@ -1943,9 +2041,6 @@ function selectTopCandidates(
   state: SearchState,
   candidates: readonly FusedCandidate[],
 ): CandidateSelection {
-  if (state.anyIdentityIncompatible) {
-    return { ok: false, reason: "incompatible-embedding-identity" };
-  }
   if (!state.anyVectorSeen && candidates.length === 0) {
     return { ok: false, reason: "no-vectors" };
   }
@@ -1957,6 +2052,7 @@ function selectTopCandidates(
   }
   if (
     state.anyVectorSeen &&
+    candidates.length === 0 &&
     !state.denseSkippedTooLarge &&
     !state.anyDimensionCompatible &&
     !state.embeddingFailed
@@ -1965,6 +2061,10 @@ function selectTopCandidates(
   }
   if (candidates.length === 0) return { ok: false, reason: "below-min-score" };
   return { ok: true, top: candidates };
+}
+
+function hasEmbeddingDegradation(state: SearchState): boolean {
+  return state.embeddingFailed || state.anyIdentityIncompatible || state.denseSkippedTooLarge;
 }
 
 function vectorIndexDiagnostics(
@@ -1981,7 +2081,60 @@ function vectorIndexDiagnostics(
   };
 }
 
-// eslint-disable-next-line complexity
+function finalLaneStatus(lane: EmbeddingLaneState): RetrievalEmbeddingLaneStatus {
+  if (
+    lane.denseCandidateCount > 0 &&
+    (lane.status === "identity-incompatible" || lane.status === "embedding-failed")
+  ) {
+    return "degraded";
+  }
+  if (lane.status === "no-vectors" && lane.vectorCount > 0 && lane.queryEmbeddingRequested) {
+    return "identity-incompatible";
+  }
+  if (lane.status === "degraded") return "degraded";
+  return lane.denseCandidateCount > 0 ? "searched" : lane.status;
+}
+
+function embeddingLaneDiagnostics(
+  state: SearchState,
+): readonly RetrievalEmbeddingLaneDiagnostics[] {
+  return [...state.lanes.values()]
+    .sort((left, right) => left.laneId.localeCompare(right.laneId))
+    .map((lane) => ({
+      laneId: lane.laneId,
+      capsuleIds: [...lane.capsuleIds].sort().map((id) => id as KnowledgeCapsuleId),
+      status: finalLaneStatus(lane),
+      queryEmbeddingRequested: lane.queryEmbeddingRequested,
+      vectorCount: lane.vectorCount,
+      denseCandidateCount: lane.denseCandidateCount,
+    }));
+}
+
+function lexicalIndexState(lexical: LexicalCollection): RetrievalDiagnostics["lexicalIndex"] {
+  if (lexical.queryError) return "query-error";
+  return lexical.indexedRowCount === 0 ? "missing" : "available";
+}
+
+function denseIndexState(state: SearchState): RetrievalDiagnostics["denseIndex"] {
+  if (state.denseSkippedTooLarge) return "skipped-too-large";
+  if (state.denseAnn) return "ann";
+  if (state.denseGuided) return "guided";
+  return state.anyVectorSeen ? "available" : "missing";
+}
+
+function retrievalMode(
+  state: SearchState,
+  lexical: LexicalCollection,
+): RetrievalDiagnostics["mode"] {
+  const hasDense = state.candidates.length > 0;
+  const hasLexical = lexical.candidates.length > 0;
+  const denseDegraded = hasEmbeddingDegradation(state);
+  if (denseDegraded && hasLexical && !hasDense) return "lexical-degraded";
+  if (hasDense && hasLexical) return "hybrid";
+  if (hasLexical) return "lexical-only";
+  return "dense-only";
+}
+
 function retrievalDiagnostics(
   state: SearchState,
   lexical: LexicalCollection,
@@ -1990,33 +2143,9 @@ function retrievalDiagnostics(
   budgets: CandidateBudgets,
   queryVariantCount: number,
 ): RetrievalDiagnostics {
-  const lexicalIndex = lexical.queryError
-    ? "query-error"
-    : lexical.indexedRowCount === 0
-      ? "missing"
-      : "available";
-  const denseIndex = state.denseSkippedTooLarge
-    ? "skipped-too-large"
-    : state.denseAnn
-      ? "ann"
-      : state.denseGuided
-        ? "guided"
-        : state.anyVectorSeen
-          ? "available"
-          : "missing";
-  const hasDense = state.candidates.length > 0;
-  const hasLexical = lexical.candidates.length > 0;
-  const denseDegraded = state.embeddingFailed || state.denseSkippedTooLarge;
-  const mode =
-    denseDegraded && hasLexical && !hasDense
-      ? "lexical-degraded"
-      : hasDense && hasLexical
-        ? "hybrid"
-        : hasLexical
-          ? "lexical-only"
-          : "dense-only";
+  const lanes = embeddingLaneDiagnostics(state);
   return {
-    mode,
+    mode: retrievalMode(state, lexical),
     strategy,
     denseCandidateCount: state.candidates.length,
     lexicalCandidateCount: lexical.candidates.length,
@@ -2025,9 +2154,11 @@ function retrievalDiagnostics(
     lexicalCandidateBudget: budgets.lexicalCandidateBudget,
     fusedCandidateBudget: budgets.fusedCandidateBudget,
     queryVariantCount,
-    denseIndex,
-    lexicalIndex,
+    denseIndex: denseIndexState(state),
+    lexicalIndex: lexicalIndexState(lexical),
     vectorIndex: vectorIndexDiagnostics(state.vectorIndexDiagnostics),
+    embeddingLaneCount: lanes.length,
+    embeddingLanes: lanes,
   };
 }
 
@@ -2063,6 +2194,8 @@ export async function searchVectorsForScope(
           status: "disabled",
           reason: "vector-index-disabled",
         },
+        embeddingLaneCount: 0,
+        embeddingLanes: [],
       },
     };
   }
@@ -2115,7 +2248,7 @@ export async function searchVectorsForScope(
     return { references: [], noEvidenceReason: selection.reason, diagnostics };
   }
   const refs = buildReferences(store, selection.top, options.topK, profile);
-  return state.embeddingFailed
+  return hasEmbeddingDegradation(state)
     ? { references: refs, embeddingDegraded: true, diagnostics }
     : { references: refs, diagnostics };
 }
