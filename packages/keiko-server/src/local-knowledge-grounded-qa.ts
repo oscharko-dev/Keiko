@@ -153,20 +153,6 @@ function hashString32(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = baseUrl.trim().replace(/\/+$/, "");
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
-
-function embeddingProviderIdentity(baseUrl: string): string {
-  return `openai-compatible:${normalizedEndpointFingerprint(baseUrl)}`;
-}
-
-function storedProviderMatchesConfiguredProvider(storedProvider: string, baseUrl: string): boolean {
-  if (!storedProvider.startsWith("openai-compatible:")) return true;
-  return storedProvider === embeddingProviderIdentity(baseUrl);
-}
-
 function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
@@ -177,6 +163,21 @@ function isConfiguredEmbeddingModel(config: GatewayConfig, modelId: string): boo
   return findConfiguredCapability(config, modelId)?.kind === "embedding";
 }
 
+function unavailableEmbeddingModelIds(
+  config: GatewayConfig,
+  capsules: readonly KnowledgeCapsule[],
+): ReadonlySet<string> {
+  const unavailable = new Set<string>();
+  for (const capsule of capsules) {
+    const modelId = capsule.embeddingModelIdentity.modelId;
+    const provider = config.providers.find((entry) => entry.modelId === modelId);
+    if (provider === undefined || !isConfiguredEmbeddingModel(config, provider.modelId)) {
+      unavailable.add(modelId);
+    }
+  }
+  return unavailable;
+}
+
 export function createEmbeddingAdapter(
   deps: UiHandlerDeps,
   capsules: readonly KnowledgeCapsule[],
@@ -185,30 +186,17 @@ export function createEmbeddingAdapter(
   if (config === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  for (const capsule of capsules) {
-    const modelId = capsule.embeddingModelIdentity.modelId;
-    const provider = config.providers.find((entry) => entry.modelId === modelId);
-    if (provider === undefined) {
-      return conflict(`No configured embedding provider matches local knowledge model ${modelId}.`);
-    }
-    if (!isConfiguredEmbeddingModel(config, provider.modelId)) {
-      return conflict(`Configured local knowledge model ${modelId} cannot serve embeddings.`);
-    }
-    if (
-      !storedProviderMatchesConfiguredProvider(
-        capsule.embeddingModelIdentity.provider,
-        provider.baseUrl,
-      )
-    ) {
-      return conflict(`Configured local knowledge gateway no longer matches model ${modelId}.`);
-    }
-  }
+  const unavailableModelIds = unavailableEmbeddingModelIds(config, capsules);
   return {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (provider === undefined) {
+      if (
+        provider === undefined ||
+        unavailableModelIds.has(request.modelId) ||
+        !isConfiguredEmbeddingModel(config, provider.modelId)
+      ) {
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({

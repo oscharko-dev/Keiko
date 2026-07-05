@@ -24,6 +24,13 @@ import {
 import { addSourceToCapsule } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
 
+const LEGACY_EMBEDDING = {
+  provider: "openai",
+  modelId: "text-embedding-3-small",
+  vectorDimensions: 1536,
+  vectorMetric: "cosine",
+} as const;
+
 function seedIndexedDocument(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -82,6 +89,7 @@ describe("Knowledge Pod compatibility projection", () => {
           id: capsuleId,
           displayName: "Risk Controls",
           lifecycleState: "ready",
+          embeddingModelIdentity: LEGACY_EMBEDDING,
         }),
       );
       addSourceToCapsule(env.store, capsuleId, sampleSourceInput(sourceId));
@@ -145,12 +153,20 @@ describe("Knowledge Pod compatibility projection", () => {
       const bId = "cap-b" as KnowledgeCapsuleId;
       const aSourceId = "src-a" as KnowledgeSourceId;
       const bSourceId = "src-b" as KnowledgeSourceId;
-      createCapsule(env.store, sampleCapsuleInput({ id: aId, lifecycleState: "ready" }));
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: aId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: LEGACY_EMBEDDING,
+        }),
+      );
       createCapsule(
         env.store,
         sampleCapsuleInput({
           id: bId,
           lifecycleState: "ready",
+          embeddingModelIdentity: LEGACY_EMBEDDING,
           storageReference: "engineering/capsule-b",
         }),
       );

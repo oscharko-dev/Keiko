@@ -1274,7 +1274,7 @@ describe("local-knowledge retrieval activity", () => {
 });
 
 describe("local-knowledge embedding capability gate", () => {
-  it("rejects a provider whose configured capability is not embedding", () => {
+  it("degrades a provider whose configured capability is not embedding at request time", async () => {
     let embeddingRequests = 0;
     const deps = {
       config: {
@@ -1317,11 +1317,21 @@ describe("local-knowledge embedding capability gate", () => {
 
     const adapter = createEmbeddingAdapter(deps, [capsule()]);
 
-    expect("status" in adapter ? adapter.status : 200).toBe(409);
+    expect("status" in adapter).toBe(false);
+    if ("status" in adapter) throw new Error("expected embedding adapter");
+    await expect(
+      adapter.request({
+        endpoint: adapter.endpoint,
+        apiKey: adapter.apiKey,
+        modelId: "text-embedding-3-small",
+        input: "query",
+      }),
+    ).resolves.toEqual({ ok: false, kind: "unsupported-model" });
     expect(embeddingRequests).toBe(0);
   });
 
-  it("rejects a fingerprinted capsule when the configured gateway changes", () => {
+  it("lets fingerprinted gateway drift degrade in the affected retrieval lane", async () => {
+    let embeddingRequests = 0;
     const deps = {
       config: {
         providers: [
@@ -1336,11 +1346,30 @@ describe("local-knowledge embedding capability gate", () => {
         ],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
       },
+      localKnowledgeEmbeddingRequest: () => {
+        embeddingRequests += 1;
+        return Promise.resolve({
+          ok: true,
+          value: {
+            vector: new Float32Array(1536),
+            modelId: "text-embedding-3-small",
+          },
+        });
+      },
     } as unknown as UiHandlerDeps;
 
     const adapter = createEmbeddingAdapter(deps, [capsule("openai-compatible:0000000000000000")]);
 
-    expect("status" in adapter ? adapter.status : 200).toBe(409);
-    expect("body" in adapter ? JSON.stringify(adapter.body) : "").not.toContain("provider-b");
+    expect("status" in adapter).toBe(false);
+    if ("status" in adapter) throw new Error("expected embedding adapter");
+    await expect(
+      adapter.request({
+        endpoint: adapter.endpoint,
+        apiKey: adapter.apiKey,
+        modelId: "text-embedding-3-small",
+        input: "query",
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(embeddingRequests).toBe(1);
   });
 });

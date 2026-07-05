@@ -164,15 +164,17 @@ describe("ConnectorGraph — with capsules", () => {
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
 
     const badge = await screen.findByText("Reindex recommended");
+    const description =
+      "Embedding compatibility: Reindex recommended. Compatibility is unverified; lexical fallback remains available.";
+    const row = screen.getByRole("article", { name: "Knowledge Pod: Legacy Vectors" });
+    const dragHandle = screen.getByRole("button", {
+      name: "Drag Knowledge Pod Legacy Vectors to the workspace",
+    });
 
-    expect(badge).toHaveAttribute(
-      "title",
-      "Compatibility is unverified; lexical fallback remains available.",
-    );
-    expect(badge).toHaveAttribute(
-      "aria-label",
-      "Embedding compatibility: Reindex recommended. Compatibility is unverified; lexical fallback remains available.",
-    );
+    expect(badge).not.toHaveAttribute("title");
+    expect(screen.getByText(description)).toBeInTheDocument();
+    expect(row).toHaveAccessibleDescription(description);
+    expect(dragHandle).toHaveAccessibleDescription(description);
   });
 
   it("does NOT render the empty-state panel when capsules are present", async () => {
@@ -782,7 +784,23 @@ describe("ConnectorGraph — a11y", () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "A Doc", lifecycleState: "ready" }),
       makeCapsule({ id: makeCapsuleId("2"), displayName: "B Doc", lifecycleState: "indexing" }),
-      makeCapsule({ id: makeCapsuleId("3"), displayName: "C Doc", lifecycleState: "stale" }),
+      makeCapsule({
+        id: makeCapsuleId("3"),
+        displayName: "C Doc",
+        lifecycleState: "stale",
+        knowledgePod: {
+          readiness: "degraded",
+          embeddingCompatibilityStatus: "unavailable",
+          embeddingCompatibilityReason: "policy-denied",
+          reindexRecommended: false,
+          queryEmbeddingAllowed: false,
+          guidance: {
+            label: "Embedding unavailable",
+            description: "Semantic retrieval cannot run under the current local policy.",
+            tone: "danger",
+          },
+        },
+      }),
       makeCapsule({ id: makeCapsuleId("4"), displayName: "D Doc", lifecycleState: "error" }),
     ];
     const { container } = render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);

@@ -1719,13 +1719,21 @@ function markLaneStatus(lane: EmbeddingLaneState, status: RetrievalEmbeddingLane
 
 type IdentityPreflightResult = "ok" | "incompatible" | "failed";
 
+function hasHardenedEmbeddingSpace(identity: EmbeddingModelIdentity): boolean {
+  return (
+    identity.normalization === "l2" &&
+    identity.instructionVersion !== undefined &&
+    identity.embeddingSpaceFingerprint !== undefined
+  );
+}
+
 async function ensureIdentityPreflight(
   adapter: OpenAIEmbeddingAdapter,
   identity: EmbeddingModelIdentity,
   signal: AbortSignal | undefined,
   cache: Map<string, IdentityPreflightResult>,
 ): Promise<IdentityPreflightResult> {
-  if (identity.embeddingSpaceFingerprint === undefined) return "ok";
+  if (!hasHardenedEmbeddingSpace(identity)) return "incompatible";
   const key = identityKey(identity);
   const cached = cache.get(key);
   if (cached !== undefined) return cached;

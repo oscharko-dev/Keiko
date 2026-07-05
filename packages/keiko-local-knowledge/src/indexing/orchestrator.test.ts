@@ -51,6 +51,10 @@ import type { KnowledgeStore } from "../store.js";
 
 const ROOT = "/srv/orchestrator";
 
+function isEmbeddingCapabilityProbe(input: string): boolean {
+  return input === "ping" || input.startsWith("Keiko embedding space probe:");
+}
+
 type FixtureFiles = Record<string, string | Uint8Array>;
 
 interface Fixture {
@@ -307,7 +311,7 @@ describe("runIndexingJob — contextual retrieval indexing", () => {
       expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
       expect(contextCalls.length).toBeGreaterThan(0);
       expect(contextCalls[0]?.messages[1]?.content).toContain("<document>");
-      const chunkInputs = inputs.filter((input) => input !== "ping");
+      const chunkInputs = inputs.filter((input) => !isEmbeddingCapabilityProbe(input));
       expect(chunkInputs.length).toBeGreaterThan(0);
       expect(chunkInputs.every((input) => input.startsWith("Context: TS-999"))).toBe(true);
       expect(inputs.some((input) => input.startsWith("Instruct:"))).toBe(false);
@@ -684,7 +688,10 @@ describe("runIndexingJob — happy path", () => {
     let kindsBeforeFirstChunkEmbedding: readonly string[] | undefined;
     const adapter = scriptedAdapter({
       responder: (req) => {
-        if (req.input !== "ping" && kindsBeforeFirstChunkEmbedding === undefined) {
+        if (
+          !isEmbeddingCapabilityProbe(req.input) &&
+          kindsBeforeFirstChunkEmbedding === undefined
+        ) {
           kindsBeforeFirstChunkEmbedding = [...seen];
         }
         return {
