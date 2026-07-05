@@ -289,6 +289,45 @@ describe("FilesWidget", () => {
     expect(fetchGitStatus).toHaveBeenCalledWith("/repo");
   });
 
+  it("settles Git status after the root tree resolves to the same root", async () => {
+    const gitStatus = deferred<Awaited<ReturnType<typeof fetchGitStatus>>>();
+    vi.mocked(fetchGitStatus).mockReturnValue(gitStatus.promise);
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    expect(await screen.findByText("Empty folder.")).toBeInTheDocument();
+    expect(screen.getByText("Git status loading")).toBeInTheDocument();
+
+    await act(async () => {
+      gitStatus.resolve({
+        schemaVersion: "1",
+        root: "/repo",
+        state: "unavailable",
+        available: false,
+        reason: "not-a-repository",
+        detached: false,
+        clean: true,
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        conflictedCount: 0,
+        changes: [],
+        truncated: false,
+        maxChanges: 500,
+      });
+      await gitStatus.promise;
+    });
+
+    expect(await screen.findByText("Git unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Git status loading")).toBeNull();
+  });
+
   it("progressively reveals large folders instead of rendering every row at once", async () => {
     const entries = Array.from({ length: 250 }, (_, index) => ({
       ...treeEntryBase,

@@ -411,6 +411,7 @@ export function FilesWidget({
     error: null,
   });
   const gitStatusRootRef = useRef<string | null>(null);
+  const gitStatusSettledRootRef = useRef<string | null>(null);
   const [gitDiffState, setGitDiffState] = useState<GitDiffState | null>(null);
   // File-operation state (new file/folder, rename, delete). `pendingEntry` drives the single inline
   // input reused for all three create/rename flows; `menu` is the right-click context menu; `confirm`
@@ -604,19 +605,27 @@ export function FilesWidget({
     const targetRoot = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : null);
     if (targetRoot === null) {
       gitStatusRootRef.current = null;
+      gitStatusSettledRootRef.current = null;
       setGitStatusState({ loading: false, status: null, error: null });
       return;
     }
-    if (gitStatusRootRef.current === targetRoot) return;
+    if (gitStatusRootRef.current === targetRoot && gitStatusSettledRootRef.current === targetRoot) {
+      return;
+    }
     gitStatusRootRef.current = targetRoot;
+    gitStatusSettledRootRef.current = null;
     let cancelled = false;
     setGitStatusState((current) => ({ ...current, loading: true, error: null }));
     void readSharedGitStatus(targetRoot)
       .then((status) => {
-        if (!cancelled) setGitStatusState({ loading: false, status, error: null });
+        if (!cancelled) {
+          gitStatusSettledRootRef.current = targetRoot;
+          setGitStatusState({ loading: false, status, error: null });
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) {
+          gitStatusSettledRootRef.current = targetRoot;
           setGitStatusState({
             loading: false,
             status: null,
