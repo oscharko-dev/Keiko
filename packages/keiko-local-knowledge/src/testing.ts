@@ -31,6 +31,9 @@ const DEFAULT_EMBEDDING: EmbeddingModelIdentity = {
   modelId: "text-embedding-3-small",
   vectorDimensions: 1536,
   vectorMetric: "cosine",
+  normalization: "l2",
+  instructionVersion: "keiko-embedding-input-v1",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:3ff5f7fb35874f7a6b414af6",
 };
 
 type ParsedUnitWithoutDocId =

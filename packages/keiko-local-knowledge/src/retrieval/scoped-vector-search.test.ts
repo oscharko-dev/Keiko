@@ -38,6 +38,13 @@ interface Fixture {
   readonly cleanup: () => void;
 }
 
+const LEGACY_EMBEDDING: EmbeddingModelIdentity = {
+  provider: "openai",
+  modelId: "text-embedding-3-small",
+  vectorDimensions: 1536,
+  vectorMetric: "cosine",
+};
+
 let fixture: Fixture | undefined;
 
 beforeEach(() => {
@@ -59,6 +66,30 @@ function vectorBlob(first: number, second: number): Uint8Array {
   vector[0] = first;
   vector[1] = second;
   return new Uint8Array(vector.buffer.slice(0));
+}
+
+function isEmbeddingCapabilityProbe(input: string): boolean {
+  return input === "ping" || input.startsWith("Keiko embedding space probe:");
+}
+
+function userEmbeddingInputs(inputs: readonly string[]): readonly string[] {
+  return inputs.filter((input) => !isEmbeddingCapabilityProbe(input));
+}
+
+function fixedQueryVectorOutcome(
+  req: { readonly input: string; readonly modelId: string },
+  vector: Float32Array,
+  dimensions: number = DEFAULT_EMBEDDING.vectorDimensions,
+): OpenAIEmbeddingOutcome {
+  return {
+    ok: true,
+    value: {
+      vector: isEmbeddingCapabilityProbe(req.input)
+        ? deterministicVector(req.input, dimensions)
+        : vector,
+      modelId: req.modelId,
+    },
+  };
 }
 
 function setCapsuleVector(
@@ -343,13 +374,7 @@ describe("searchVectorsForScope — composed capsule set", () => {
     const embeddingAdapter = scriptedAdapter({
       responder: (req): OpenAIEmbeddingOutcome => {
         embeddedModels.push(req.modelId);
-        return {
-          ok: true,
-          value: {
-            vector: new Float32Array(vectorBlob(1, 0).buffer),
-            modelId: req.modelId,
-          },
-        };
+        return fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer));
       },
     });
 
@@ -391,13 +416,8 @@ describe("searchVectorsForScope — decoded vector cache", () => {
     setChunkVectorAt(store, capsuleId, String(firstChunk), vectorBlob(1, 0), 1_700_000_000_100);
     setChunkVectorAt(store, capsuleId, String(secondChunk), vectorBlob(0, 1), 1_700_000_000_100);
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const beforeReindex = await searchVectorsForScope(
@@ -494,13 +514,8 @@ describe("searchVectorsForScope — vector index adapter", () => {
     setChunkVector(store, seeded.capsuleId, String(firstChunk), vectorBlob(1, 0));
     setChunkVector(store, seeded.capsuleId, String(secondChunk), vectorBlob(0, 1));
     const embeddingAdapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
     const adapter: VectorIndexAdapter = {
       searchCapsule: () => ({
@@ -631,13 +646,8 @@ describe("searchVectorsForScope — minScore filtering", () => {
       );
     });
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
     const unfiltered = await searchVectorsForScope(
       store,
@@ -681,10 +691,8 @@ describe("searchVectorsForScope — minScore filtering", () => {
         .run({ e: blob(0, 1), c: "cap-a", id: String(ch) });
     }
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: { vector: new Float32Array(blob(1, 0).buffer), modelId: DEFAULT_EMBEDDING.modelId },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(blob(1, 0).buffer)),
     });
     const scope = { capsuleIds: ["cap-a" as KnowledgeCapsuleId] };
 
@@ -778,6 +786,118 @@ describe("searchVectorsForScope — hardened embedding identity", () => {
     ]);
     expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
+
+  it("keeps available lanes when another embedding model is unavailable", async () => {
+    const { store } = getFixture();
+    const identityA: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-a" };
+    const identityB: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-b" };
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-available-lane",
+      sourceId: "src-available-lane",
+      documentId: "doc-available-lane",
+      identity: identityA,
+      text: "treasury controls evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-unavailable-lane",
+      sourceId: "src-unavailable-lane",
+      documentId: "doc-unavailable-lane",
+      identity: identityB,
+      text: "unavailable semantic lane",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id = :c")
+      .run({ c: String(seededB.capsuleId) });
+    const embeddingAdapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        req.modelId === "model-b"
+          ? { ok: false, kind: "unsupported-model" }
+          : {
+              ok: true,
+              value: {
+                vector: deterministicVector(req.input, identityA.vectorDimensions),
+                modelId: req.modelId,
+              },
+            },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      embeddingAdapter,
+      { capsuleIds: [seededA.capsuleId, seededB.capsuleId] },
+      "treasury controls",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(new Set(outcome.references.map((ref) => String(ref.capsuleId)))).toEqual(
+      new Set(["cap-available-lane"]),
+    );
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.diagnostics.embeddingLanes?.map((lane) => lane.status).sort()).toEqual([
+      "embedding-failed",
+      "searched",
+    ]);
+  });
+
+  it("keeps a compatible same-model lane when another fingerprint drifts", async () => {
+    const { store } = getFixture();
+    const compatibleIdentity = DEFAULT_EMBEDDING;
+    const driftedIdentity: EmbeddingModelIdentity = {
+      ...DEFAULT_EMBEDDING,
+      embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+    };
+    const seededCompatible = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-compatible-same-model",
+      sourceId: "src-compatible-same-model",
+      documentId: "doc-compatible-same-model",
+      identity: compatibleIdentity,
+      text: "compatible semantic lane treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededDrifted = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-drifted-same-model",
+      sourceId: "src-drifted-same-model",
+      documentId: "doc-drifted-same-model",
+      identity: driftedIdentity,
+      text: "drifted semantic lane",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id = :c")
+      .run({ c: String(seededDrifted.capsuleId) });
+    const embeddingAdapter = scriptedAdapter({
+      identity: compatibleIdentity,
+      responder: (req): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: deterministicVector(req.input, compatibleIdentity.vectorDimensions),
+          modelId: req.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      embeddingAdapter,
+      { capsuleIds: [seededCompatible.capsuleId, seededDrifted.capsuleId] },
+      "treasury evidence",
+      { topK: 5 },
+    );
+
+    expect(outcome.references.length).toBeGreaterThan(0);
+    expect(new Set(outcome.references.map((ref) => String(ref.capsuleId)))).toEqual(
+      new Set(["cap-compatible-same-model"]),
+    );
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+    expect(outcome.diagnostics.embeddingLanes?.map((lane) => lane.status).sort()).toEqual([
+      "identity-incompatible",
+      "searched",
+    ]);
+  });
 });
 
 describe("searchVectorsForScope — selective query transformation", () => {
@@ -817,7 +937,7 @@ describe("searchVectorsForScope — selective query transformation", () => {
       { topK: 5, queryTransformer },
     );
     expect(rewrites).toHaveLength(1);
-    expect(new Set(inputs).size).toBeGreaterThan(1);
+    expect(new Set(userEmbeddingInputs(inputs)).size).toBeGreaterThan(1);
 
     inputs.length = 0;
     rewrites.length = 0;
@@ -829,7 +949,7 @@ describe("searchVectorsForScope — selective query transformation", () => {
       { topK: 5, queryTransformer },
     );
     expect(rewrites).toHaveLength(0);
-    expect(new Set(inputs).size).toBe(1);
+    expect(new Set(userEmbeddingInputs(inputs)).size).toBe(1);
   });
 });
 
@@ -864,7 +984,7 @@ describe("searchVectorsForScope — query shaping", () => {
       { topK: 1 },
     );
 
-    expect(inputs[0]).toBe(
+    expect(userEmbeddingInputs(inputs)[0]).toBe(
       `Instruct: ${QWEN3_QUERY_INSTRUCTION_TASK}\nQuery:Which policy mentions SOC2?`,
     );
   });
@@ -894,7 +1014,7 @@ describe("searchVectorsForScope — query shaping", () => {
       { topK: 1 },
     );
 
-    expect(inputs[0]).toBe("Which policy mentions SOC2?");
+    expect(userEmbeddingInputs(inputs)[0]).toBe("Which policy mentions SOC2?");
   });
 });
 
@@ -1219,13 +1339,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setCapsuleVector(store, fast.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, metadata.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1294,13 +1409,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setCapsuleVector(store, vectorOnly.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, exact.capsuleId, vectorBlob(0.96, Math.sqrt(1 - 0.96 * 0.96)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1338,13 +1448,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setCapsuleVector(store, ascii.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, umlaut.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const exactUmlaut = await searchVectorsForScope(
@@ -1387,13 +1492,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setCapsuleVector(store, general.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, inflected.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1439,13 +1539,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setCapsuleVector(store, generic.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, contextual.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1639,13 +1734,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setCapsuleVector(store, generic.capsuleId, vectorBlob(1, 0));
     setCapsuleVector(store, phrase.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1732,13 +1822,8 @@ describe("searchVectorsForScope — citation fields", () => {
     if (exactChunk === undefined) throw new Error("expected exact chunk");
     setChunkVector(store, capsuleId, exactChunk, vectorBlob(0.1, Math.sqrt(1 - 0.1 * 0.1)));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1788,13 +1873,8 @@ describe("searchVectorsForScope — citation fields", () => {
     setChunkVector(store, first.capsuleId, duplicateChunk, vectorBlob(0.99, 0.14106736));
     setChunkVector(store, second.capsuleId, secondChunk, vectorBlob(0.98, 0.19899749));
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
     });
 
     const outcome = await searchVectorsForScope(
@@ -1823,15 +1903,9 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
     duplicateFirstVectorRows(store, seeded.capsuleId, 1);
     let embeddingCalls = 0;
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => {
-        embeddingCalls += 1;
-        return {
-          ok: true,
-          value: {
-            vector: new Float32Array(vectorBlob(1, 0).buffer),
-            modelId: DEFAULT_EMBEDDING.modelId,
-          },
-        };
+      responder: (req): OpenAIEmbeddingOutcome => {
+        if (!isEmbeddingCapabilityProbe(req.input)) embeddingCalls += 1;
+        return fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer));
       },
     });
 
@@ -1865,15 +1939,9 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
       .run({ c: String(seeded.capsuleId) });
     let embeddingCalls = 0;
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => {
-        embeddingCalls += 1;
-        return {
-          ok: true,
-          value: {
-            vector: new Float32Array(vectorBlob(1, 0).buffer),
-            modelId: DEFAULT_EMBEDDING.modelId,
-          },
-        };
+      responder: (req): OpenAIEmbeddingOutcome => {
+        if (!isEmbeddingCapabilityProbe(req.input)) embeddingCalls += 1;
+        return fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer));
       },
     });
 
@@ -1917,15 +1985,9 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
     duplicateFirstVectorRows(store, large.capsuleId, 2, large.sourceId);
     let embeddingCalls = 0;
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => {
-        embeddingCalls += 1;
-        return {
-          ok: true,
-          value: {
-            vector: new Float32Array(vectorBlob(1, 0).buffer),
-            modelId: DEFAULT_EMBEDDING.modelId,
-          },
-        };
+      responder: (req): OpenAIEmbeddingOutcome => {
+        if (!isEmbeddingCapabilityProbe(req.input)) embeddingCalls += 1;
+        return fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer));
       },
     });
 
@@ -1945,27 +2007,96 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
     );
   });
 
-  it("reports dense-only when an existing capsule has vectors but no FTS rows", async () => {
+  it("fails closed for legacy unverified vectors instead of running dense retrieval", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-legacy",
+      identity: LEGACY_EMBEDDING,
       text: "legacy capsule alpha beta gamma",
     });
     store._internal.db
       .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id = :c")
       .run({ c: String(seeded.capsuleId) });
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector("alpha beta", DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
 
     const outcome = await searchVectorsForScope(
       store,
-      scriptedAdapter(),
+      adapter,
       { capsuleIds: [seeded.capsuleId] },
       "alpha beta",
       { topK: 5 },
     );
 
-    expect(outcome.references.length).toBeGreaterThan(0);
-    expect(outcome.diagnostics.mode).toBe("dense-only");
+    expect(embeddingCalls).toBe(0);
+    expect(outcome.references).toHaveLength(0);
+    expect(outcome.noEvidenceReason).toBe("incompatible-embedding-identity");
     expect(outcome.diagnostics.lexicalIndex).toBe("missing");
+    expect(outcome.diagnostics.embeddingLanes).toEqual([
+      expect.objectContaining({
+        capsuleIds: ["cap-legacy"],
+        status: "identity-incompatible",
+        queryEmbeddingRequested: true,
+        denseCandidateCount: 0,
+      }),
+    ]);
+  });
+
+  it("keeps lexical fallback when legacy unverified vectors are rejected", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-legacy-lexical",
+      identity: LEGACY_EMBEDDING,
+      text: "legacy lexical fallback treasury evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    let embeddingCalls = 0;
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => {
+        embeddingCalls += 1;
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(
+              "legacy lexical fallback",
+              DEFAULT_EMBEDDING.vectorDimensions,
+            ),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [seeded.capsuleId] },
+      "legacy lexical fallback",
+      { topK: 5 },
+    );
+
+    expect(embeddingCalls).toBe(0);
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.diagnostics.mode).toBe("lexical-degraded");
+    expect(outcome.diagnostics.embeddingLanes).toEqual([
+      expect.objectContaining({
+        capsuleIds: ["cap-legacy-lexical"],
+        status: "identity-incompatible",
+        denseCandidateCount: 0,
+      }),
+    ]);
   });
 
   it("falls back to lexical-degraded retrieval when query embedding fails", async () => {
@@ -1995,42 +2126,31 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
   });
 
   it("sets embeddingDegraded=true when one capsule's embedding fails but another capsule's vectors keep result non-empty", async () => {
-    // Two capsules share the same identity. Capsule A: embedding returns wrong dim →
-    // embeddingFailed=true for that identity, but the dim-check path means anyDimensionCompatible
-    // is false for A. Capsule B: embedding succeeds (correct dim) → anyDimensionCompatible=true,
-    // vector candidates surface.
-    // Because embeddingFailed=true AND anyDimensionCompatible=true AND candidates>0,
-    // the outcome has references (from B) AND embeddingDegraded=true.
     const { store } = getFixture();
-    const identity = DEFAULT_EMBEDDING;
-    // Capsule A: has vectors but its embedding call will fail.
+    const failingIdentity: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-a" };
+    const availableIdentity: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-b" };
     const seededA = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-deg-a",
       sourceId: "src-deg-a",
       documentId: "doc-deg-a",
-      identity,
+      identity: failingIdentity,
       text: "alpha beta gamma delta epsilon zeta",
     });
-    // Capsule B: has vectors and its embedding call will succeed.
     const seededB = await seedCapsuleWithVectors(store, {
       capsuleId: "cap-deg-b",
       sourceId: "src-deg-b",
       documentId: "doc-deg-b",
-      identity,
+      identity: availableIdentity,
       text: "alpha beta gamma delta epsilon zeta",
     });
-    let callCount = 0;
-    // First call (for cap-deg-a) fails; subsequent calls succeed.
     const partiallyFailingAdapter = scriptedAdapter({
-      identity,
       responder: (req): OpenAIEmbeddingOutcome => {
-        callCount += 1;
-        if (callCount === 1) return { ok: false, kind: "transport" };
+        if (req.modelId === failingIdentity.modelId) return { ok: false, kind: "transport" };
         return {
           ok: true,
           value: {
-            vector: deterministicVector(req.input, identity.vectorDimensions),
-            modelId: identity.modelId,
+            vector: deterministicVector(req.input, availableIdentity.vectorDimensions),
+            modelId: req.modelId,
           },
         };
       },
@@ -2042,7 +2162,6 @@ describe("searchVectorsForScope — embeddingDegraded", () => {
       "alpha beta",
       { topK: 10 },
     );
-    // Capsule B's vectors surface despite capsule A's embedding failure.
     expect(outcome.references.length).toBeGreaterThan(0);
     expect(outcome.embeddingDegraded).toBe(true);
     expect(outcome.noEvidenceReason).toBeUndefined();

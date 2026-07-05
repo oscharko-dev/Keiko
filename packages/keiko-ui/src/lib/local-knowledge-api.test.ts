@@ -165,6 +165,66 @@ describe("local knowledge BFF boundary helpers", () => {
     });
   });
 
+  it("maps unavailable and incompatible Knowledge Pod guidance", () => {
+    const unavailableId = "cap-unavailable" as KnowledgeCapsuleId;
+    const incompatibleId = "cap-incompatible" as KnowledgeCapsuleId;
+    const capsules = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: unavailableId,
+          displayName: "Unavailable vectors",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+        {
+          id: incompatibleId,
+          displayName: "Mismatched vectors",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(unavailableId, "pod", "Unavailable vectors", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "unavailable",
+            embeddingCompatibilityReason: "policy-denied",
+            reindexRecommended: false,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+        podSummary(incompatibleId, "pod", "Mismatched vectors", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "incompatible",
+            embeddingCompatibilityReason: "fingerprint-mismatch",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    });
+
+    expect(capsules[0]?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding unavailable",
+      tone: "danger",
+    });
+    expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
+      label: "Embedding mismatch",
+      tone: "danger",
+    });
+  });
+
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(jsonResponse({ ok: true, capsule: { id: "cap 1" } })),

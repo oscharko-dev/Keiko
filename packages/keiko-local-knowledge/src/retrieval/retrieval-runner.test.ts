@@ -56,6 +56,22 @@ function vectorBlob(first: number, second: number): Uint8Array {
   return new Uint8Array(vector.buffer.slice(0));
 }
 
+function isEmbeddingCapabilityProbe(input: string): boolean {
+  return input === "ping" || input.startsWith("Keiko embedding space probe:");
+}
+
+function fixedQueryVectorOutcome(input: string, vector: Float32Array): OpenAIEmbeddingOutcome {
+  return {
+    ok: true,
+    value: {
+      vector: isEmbeddingCapabilityProbe(input)
+        ? deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions)
+        : vector,
+      modelId: DEFAULT_EMBEDDING.modelId,
+    },
+  };
+}
+
 function setChunkVector(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -463,13 +479,8 @@ describe("runLocalKnowledgeRetrieval — topK and minScore pass-through", () => 
       );
     });
     const adapter = scriptedAdapter({
-      responder: (): OpenAIEmbeddingOutcome => ({
-        ok: true,
-        value: {
-          vector: new Float32Array(vectorBlob(1, 0).buffer),
-          modelId: DEFAULT_EMBEDDING.modelId,
-        },
-      }),
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req.input, new Float32Array(vectorBlob(1, 0).buffer)),
     });
     const unfiltered = await runLocalKnowledgeRetrieval(
       { store, embeddingAdapter: adapter },

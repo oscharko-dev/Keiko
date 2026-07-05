@@ -353,18 +353,31 @@ function guidanceBadgeState(tone: "warning" | "danger" | "muted"): CapsuleLifecy
   return "draft";
 }
 
-function EmbeddingGuidanceBadge({ capsule }: { readonly capsule: CapsuleListEntry }): ReactNode {
-  const guidance = capsule.knowledgePod?.guidance;
+function EmbeddingGuidanceBadge({
+  guidance,
+}: {
+  readonly guidance: NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"];
+}): ReactNode {
   if (guidance === undefined) return null;
   return (
-    <span
-      className="lk-badge"
-      data-state={guidanceBadgeState(guidance.tone)}
-      title={guidance.description}
-      aria-label={`Embedding compatibility: ${guidance.label}. ${guidance.description}`}
-    >
+    <span className="lk-badge" data-state={guidanceBadgeState(guidance.tone)}>
       {guidance.label}
     </span>
+  );
+}
+
+function EmbeddingGuidanceDescription({
+  id,
+  guidance,
+}: {
+  readonly id: string;
+  readonly guidance: NonNullable<CapsuleListEntry["knowledgePod"]>["guidance"];
+}): ReactNode {
+  if (guidance === undefined) return null;
+  return (
+    <small id={id}>
+      Embedding compatibility: {guidance.label}. {guidance.description}
+    </small>
   );
 }
 
@@ -558,6 +571,9 @@ function CapsuleRow({
   onHealth,
   onAddToWorkspace,
 }: RowActionProps): ReactNode {
+  const guidance = capsule.knowledgePod?.guidance;
+  const guidanceDescriptionId = useId();
+  const guidanceDescribedBy = guidance === undefined ? undefined : guidanceDescriptionId;
   const [dragGhost, setDragGhost] = useState<CapsuleDragGhost | null>(null);
   const dragActiveRef = useRef(false);
   const dropDispatchedRef = useRef(false);
@@ -672,7 +688,11 @@ function CapsuleRow({
 
   return (
     <>
-      <article aria-label={`Knowledge Pod: ${capsule.displayName}`} className="lk-capsule-row">
+      <article
+        aria-label={`Knowledge Pod: ${capsule.displayName}`}
+        aria-describedby={guidanceDescribedBy}
+        className="lk-capsule-row"
+      >
         <button
           type="button"
           className="lk-capsule-drag-handle"
@@ -682,6 +702,7 @@ function CapsuleRow({
           // keyboard-inert stop (GEN-UI-KEYBOARD-004 / GEN-UI-INTERACTION-004).
           tabIndex={-1}
           aria-label={`Drag Knowledge Pod ${capsule.displayName} to the workspace`}
+          aria-describedby={guidanceDescribedBy}
           title="Drag to the workspace to create a Knowledge Pod card"
           onPointerDown={onPointerDown}
           onMouseDown={onMouseDown}
@@ -697,7 +718,8 @@ function CapsuleRow({
               {capsule.displayName}
             </span>
             <StatusBadge state={capsule.lifecycleState} />
-            <EmbeddingGuidanceBadge capsule={capsule} />
+            <EmbeddingGuidanceBadge guidance={guidance} />
+            <EmbeddingGuidanceDescription id={guidanceDescriptionId} guidance={guidance} />
           </span>
         </button>
         <CapsuleRowActions

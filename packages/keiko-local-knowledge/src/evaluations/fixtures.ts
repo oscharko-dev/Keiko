@@ -25,6 +25,9 @@ export const EVAL_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
   modelId: "text-embedding-eval",
   vectorDimensions: 16,
   vectorMetric: "cosine",
+  normalization: "l2",
+  instructionVersion: "keiko-embedding-input-v1",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:8d52f5d1eab88fa30d5ff958",
 };
 
 export const STALE_QUERY_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
@@ -32,6 +35,9 @@ export const STALE_QUERY_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
   modelId: "text-embedding-eval-v2",
   vectorDimensions: 24,
   vectorMetric: "cosine",
+  normalization: "l2",
+  instructionVersion: "keiko-embedding-input-v1",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:e056895c22c06459763fc521",
 };
 
 export const EVAL_ALT_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
