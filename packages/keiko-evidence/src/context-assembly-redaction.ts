@@ -10,6 +10,7 @@ import type {
   ContextLaneDiagnostics,
   ContextModelMetadata,
   ContextProfile,
+  ContextTokenAccounting,
 } from "@oscharko-dev/keiko-contracts";
 
 type Redactor = (input: string) => string;
@@ -30,6 +31,7 @@ function redactModelMetadata(
 
 function redactProfile(profile: ContextProfile, redact: Redactor): ContextProfile {
   const model = redactModelMetadata(profile.model, redact);
+  const tokenAccounting = redactTokenAccounting(profile.tokenAccounting, redact);
   return {
     schemaVersion: profile.schemaVersion,
     maxInputTokens: profile.maxInputTokens,
@@ -37,7 +39,25 @@ function redactProfile(profile: ContextProfile, redact: Redactor): ContextProfil
     safetyMarginTokens: profile.safetyMarginTokens,
     effectiveInputBudget: profile.effectiveInputBudget,
     tokenEstimatorId: redact(profile.tokenEstimatorId),
+    ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...(model === undefined ? {} : { model }),
+  };
+}
+
+function redactTokenAccounting(
+  tokenAccounting: ContextTokenAccounting | undefined,
+  redact: Redactor,
+): ContextTokenAccounting | undefined {
+  if (tokenAccounting === undefined) {
+    return undefined;
+  }
+  return {
+    source: tokenAccounting.source,
+    counterId: redact(tokenAccounting.counterId),
+    ...(tokenAccounting.scaleMilli === undefined ? {} : { scaleMilli: tokenAccounting.scaleMilli }),
+    ...(tokenAccounting.offsetTokens === undefined
+      ? {}
+      : { offsetTokens: tokenAccounting.offsetTokens }),
   };
 }
 

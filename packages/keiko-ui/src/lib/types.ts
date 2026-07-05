@@ -68,6 +68,7 @@ export type {
   UpdatePreflightBlockerCode,
   UpdatePreflightImpactEntry,
   UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
   UpdatePreflightRegistryStatus,
   UpdatePreflightReleaseMetadataStatus,
@@ -81,6 +82,7 @@ export type {
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
   UpdatePolicySource,
+  UpdateRestartCommandPreview,
   UpdateRestartVerificationRequest,
   UpdateSession,
   UpdateSessionFailureReason,
@@ -104,6 +106,10 @@ export type {
   UpdateRemediationScopeCounts,
   UpdateRemediationStatusReport,
   UpdateRemediationStatusRequest,
+  KnowledgePodRetrievalActivity,
+  KnowledgePodRetrievalActivityMode,
+  KnowledgePodRetrievalActivityReasonCode,
+  KnowledgePodRetrievalActivityState,
 } from "@oscharko-dev/keiko-contracts";
 
 export {

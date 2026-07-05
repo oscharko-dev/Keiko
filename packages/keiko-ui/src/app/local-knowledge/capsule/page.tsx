@@ -7,16 +7,16 @@ import { Suspense, type ReactNode } from "react";
 import { CapsuleDetail } from "../[capsuleId]/capsule-detail";
 
 export const metadata = {
-  title: "Capsule Detail — Keiko",
+  title: "Knowledge Pod Detail — Keiko",
 };
 
 export default function CapsuleDetailPage(): ReactNode {
   return (
-    <main className="lk-page" aria-label="Capsule detail">
+    <main className="lk-page" aria-label="Knowledge Pod detail">
       <Suspense
         fallback={
           <p role="status" aria-live="polite" className="lk-loading">
-            Loading capsule…
+            Loading Knowledge Pod…
           </p>
         }
       >

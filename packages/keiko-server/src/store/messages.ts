@@ -5,6 +5,7 @@
 //   - updateMessage(): partial PATCH on the row, re-using the existing redact+truncate path.
 
 import type { DatabaseSync } from "node:sqlite";
+import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts";
 import type {
   ChatMessage,
   ChatRole,
@@ -14,7 +15,7 @@ import type {
   UpdateChatMessagePatch,
   WorkflowStatus,
 } from "./types.js";
-import { invalidRequest, notFound } from "./errors.js";
+import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 
 const MAX_SHORT_RESULT = 200;
 const MAX_TASK_TYPE = 64;
@@ -48,11 +49,18 @@ interface MessageRow {
 
 function parseGroundedAnswer(raw: string | null): GroundedAnswer | undefined {
   if (raw === null) return undefined;
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as GroundedAnswer;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
-    return undefined;
+    throw new UiStoreError("INTERNAL", "Stored grounded answer metadata is invalid.", 500);
   }
+  assertGroundedAnswerRetrievalActivity(
+    parsed,
+    () =>
+      new UiStoreError("INTERNAL", "Stored grounded answer retrieval activity is invalid.", 500),
+  );
+  return parsed as GroundedAnswer;
 }
 
 function parseGroundedPreviewCitations(
@@ -173,13 +181,33 @@ function processGroundedAnswer(
   redactString: (s: string) => string,
 ): string | null {
   if (raw === undefined) return null;
+  assertGroundedAnswerRetrievalActivity(raw, () =>
+    invalidRequest("Grounded answer retrieval activity is invalid."),
+  );
   const redacted = redactString(JSON.stringify(raw));
+  let parsed: unknown;
   try {
-    JSON.parse(redacted);
+    parsed = JSON.parse(redacted) as unknown;
   } catch {
     throw invalidRequest("Grounded answer metadata is invalid.");
   }
+  assertGroundedAnswerRetrievalActivity(parsed, () =>
+    invalidRequest("Grounded answer retrieval activity is invalid."),
+  );
   return redacted;
+}
+
+function assertGroundedAnswerRetrievalActivity(
+  value: unknown,
+  errorFactory: () => UiStoreError,
+): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw errorFactory();
+  }
+  const activity = (value as { readonly retrievalActivity?: unknown }).retrievalActivity;
+  if (activity === undefined) return;
+  const validation = validateKnowledgePodRetrievalActivity(activity);
+  if (!validation.ok) throw errorFactory();
 }
 
 function processGroundedPreviewCitations(

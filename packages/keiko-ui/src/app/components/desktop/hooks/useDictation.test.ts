@@ -11,16 +11,25 @@ import {
   DictationRecorderError,
   type DictationCapture,
   type DictationRecorder,
+  type DictationRecorderStartOptions,
   type DictationSession,
 } from "./dictation-recorder";
 import type { VoiceActivityDetector, VoiceActivityEvent } from "./voice-activity-detector";
 import { ApiError } from "@/lib/api";
 import type { VoiceTranscriptionResult } from "@/lib/api";
+import { VoiceLiveDictationControlError } from "./voice-live-dictation-client";
+import type { VoiceLiveDictationControlClient } from "./voice-live-dictation-client";
+import type { VoiceRtcSession, VoiceRtcTransport } from "./voice-rtc-transport";
 
 interface FakeRecorder {
   readonly recorder: DictationRecorder;
-  readonly session: { stop: ReturnType<typeof vi.fn>; cancel: ReturnType<typeof vi.fn> };
+  readonly session: {
+    stop: ReturnType<typeof vi.fn>;
+    cancel: ReturnType<typeof vi.fn>;
+    requestData: ReturnType<typeof vi.fn>;
+  };
   readonly start: ReturnType<typeof vi.fn>;
+  readonly startOptions: () => DictationRecorderStartOptions | undefined;
 }
 
 function makeRecorder(opts: {
@@ -38,12 +47,22 @@ function makeRecorder(opts: {
     return capture;
   });
   const cancel = vi.fn();
-  const session: DictationSession = { stop, cancel };
-  const start = vi.fn(async (): Promise<DictationSession> => {
-    if (opts.startError !== undefined) throw opts.startError;
-    return session;
-  });
-  return { recorder: { start }, session: { stop, cancel }, start };
+  const requestData = vi.fn();
+  const session: DictationSession = { stop, cancel, requestData };
+  let capturedStartOptions: DictationRecorderStartOptions | undefined;
+  const start = vi.fn(
+    async (options?: DictationRecorderStartOptions): Promise<DictationSession> => {
+      capturedStartOptions = options;
+      if (opts.startError !== undefined) throw opts.startError;
+      return session;
+    },
+  );
+  return {
+    recorder: { start },
+    session: { stop, cancel, requestData },
+    start,
+    startOptions: () => capturedStartOptions,
+  };
 }
 
 // A fake VAD: captures the onEvent callback so the test can fire scripted activity, and records that
@@ -86,9 +105,66 @@ function makeStreamingRecorder(): { recorder: DictationRecorder; stop: ReturnTyp
   const session: DictationSession = {
     stream: { getTracks: () => [] } as unknown as MediaStream,
     stop,
+    requestData: vi.fn(),
     cancel: vi.fn(),
   };
   return { recorder: { start: vi.fn(async () => session) }, stop };
+}
+
+function makeRealtimeDictationFakes(
+  opts: {
+    negotiateError?: unknown;
+    applyAnswerError?: unknown;
+  } = {},
+): {
+  transport: VoiceRtcTransport;
+  control: VoiceLiveDictationControlClient;
+  session: VoiceRtcSession;
+  connect: ReturnType<typeof vi.fn>;
+  negotiate: ReturnType<typeof vi.fn>;
+  applyAnswer: ReturnType<typeof vi.fn>;
+  closeSession: ReturnType<typeof vi.fn>;
+  closeControl: ReturnType<typeof vi.fn>;
+  sendDataChannelEvent: ReturnType<typeof vi.fn>;
+  emitDataChannelEvent: (event: unknown) => void;
+} {
+  let onDataChannelEvent: ((event: unknown) => void) | undefined;
+  const applyAnswer = vi.fn(async (): Promise<void> => {
+    if (opts.applyAnswerError !== undefined) throw opts.applyAnswerError;
+  });
+  const closeSession = vi.fn();
+  const sendDataChannelEvent = vi.fn(() => true);
+  const session: VoiceRtcSession = {
+    offerSdp: "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n",
+    applyAnswer,
+    onRemoteTrack: vi.fn(),
+    onConnectionStateChange: vi.fn(),
+    onLocalVoiceActivity: vi.fn(),
+    onDataChannelStateChange: vi.fn(),
+    onDataChannelEvent(cb) {
+      onDataChannelEvent = cb;
+    },
+    sendDataChannelEvent,
+    close: closeSession,
+  };
+  const connect = vi.fn(async (): Promise<VoiceRtcSession> => session);
+  const negotiate = vi.fn(async (): Promise<string> => {
+    if (opts.negotiateError !== undefined) throw opts.negotiateError;
+    return "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n";
+  });
+  const closeControl = vi.fn();
+  return {
+    transport: { connect },
+    control: { negotiate, close: closeControl },
+    session,
+    connect,
+    negotiate,
+    applyAnswer,
+    closeSession,
+    closeControl,
+    sendDataChannelEvent,
+    emitDataChannelEvent: (event) => onDataChannelEvent?.(event),
+  };
 }
 
 function setup(opts: {
@@ -111,6 +187,7 @@ function setup(opts: {
       onInsert,
       createRecorder: () => opts.recorder.recorder,
       transcribe,
+      postRollMs: 0,
       ...(opts.language !== undefined ? { language: opts.language } : {}),
     }),
   );
@@ -131,10 +208,14 @@ describe("useDictation — enabled happy path (AC2)", () => {
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("recording"));
     expect(result.current.busy).toBe(true);
+    expect(recorder.startOptions()?.timesliceMs).toBe(250);
+    expect(typeof recorder.startOptions()?.onAudioLevel).toBe("function");
 
     act(() => result.current.stop());
+    expect(result.current.phase).toBe("finalizing");
     await waitFor(() => expect(result.current.phase).toBe("preview"));
     expect(result.current.transcript).toBe("hello world");
+    expect(recorder.session.requestData).toHaveBeenCalledTimes(1);
 
     // The audio + content-free metadata are forwarded to the BFF client.
     expect(transcribe).toHaveBeenCalledWith({
@@ -163,6 +244,113 @@ describe("useDictation — enabled happy path (AC2)", () => {
     act(() => result.current.stop());
     await waitFor(() => expect(result.current.phase).toBe("preview"));
     expect(transcribe).toHaveBeenCalledWith({ audio: "QUJDRA==", mimeType: "audio/webm" });
+  });
+
+  it("updates content-free microphone level feedback while recording", async () => {
+    const recorder = makeRecorder({});
+    const { result } = setup({ recorder });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+
+    act(() => recorder.startOptions()?.onAudioLevel?.(0.5));
+
+    expect(result.current.audioLevel).toBe(0.5);
+    expect(result.current.heardSpeech).toBe(true);
+  });
+
+  it("stays not-ready until the recorder signals the first live sample (onReady)", async () => {
+    const recorder = makeRecorder({});
+    const { result } = setup({ recorder });
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+
+    // Recording, but capture not yet verified live — the UI shows "Preparing mic".
+    expect(result.current.micReady).toBe(false);
+
+    act(() => recorder.startOptions()?.onReady?.());
+    expect(result.current.micReady).toBe(true);
+  });
+
+  it("emits content-free latency marks and derived legs across the capture round trip", async () => {
+    const onMark = vi.fn();
+    const onLeg = vi.fn();
+    const recorder = makeRecorder({});
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder.recorder,
+        transcribe: async (): Promise<VoiceTranscriptionResult> => ({ transcript: "hello world" }),
+        postRollMs: 0,
+        latencySink: { onMark, onLeg },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => recorder.startOptions()?.onReady?.());
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("preview"));
+
+    const markNames = onMark.mock.calls.map((call) => call[0].mark);
+    expect(markNames).toEqual(
+      expect.arrayContaining([
+        "mic_click",
+        "media_recorder_start",
+        "first_audio_level",
+        "stop_pressed",
+        "postroll_done",
+        "upload_start",
+        "upload_end",
+        "stt_final",
+      ]),
+    );
+
+    // Every mark sample carries ONLY the enum literal and an integer timestamp — the privacy contract.
+    for (const call of onMark.mock.calls) {
+      expect(Object.keys(call[0]).sort()).toEqual(["atMs", "mark"]);
+      expect(typeof call[0].atMs).toBe("number");
+    }
+
+    // The capture-readiness leg (swallowed-first-words window) is derived and content-free.
+    const readinessLeg = onLeg.mock.calls
+      .map((call) => call[0])
+      .find((leg) => leg.to === "first_audio_level");
+    expect(readinessLeg).toMatchObject({ from: "mic_click", to: "first_audio_level" });
+    expect(typeof readinessLeg.ms).toBe("number");
+  });
+
+  it("stays in requesting until the recorder start promise resolves", async () => {
+    let resolveStart: (session: DictationSession) => void = () => {};
+    const session: DictationSession = {
+      stop: vi.fn(async () => ({
+        audioBase64: "QUJDRA==",
+        mimeType: "audio/webm",
+        durationMs: 500,
+      })),
+      cancel: vi.fn(),
+    };
+    const recorder: DictationRecorder = {
+      start: vi.fn(
+        () =>
+          new Promise<DictationSession>((resolve) => {
+            resolveStart = resolve;
+          }),
+      ),
+    };
+
+    const { result } = renderHook(() =>
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, postRollMs: 0 }),
+    );
+
+    act(() => result.current.start());
+    expect(result.current.phase).toBe("requesting");
+
+    await act(async () => {
+      resolveStart(session);
+      await Promise.resolve();
+    });
+
+    expect(result.current.phase).toBe("recording");
   });
 });
 
@@ -293,7 +481,7 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
       ),
     };
     const { result, unmount } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, postRollMs: 0 }),
     );
     act(() => result.current.start());
     unmount();
@@ -308,7 +496,7 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
   it("cancels the live session when unmounted while recording", async () => {
     const recorder = makeRecorder({});
     const { result, unmount } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder.recorder }),
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder.recorder, postRollMs: 0 }),
     );
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("recording"));
@@ -326,7 +514,12 @@ describe("useDictation — unmount safety (no dispatch / no mic left open)", () 
         }),
     );
     const { result, unmount } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder.recorder, transcribe }),
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+      }),
     );
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("recording"));
@@ -349,7 +542,12 @@ describe("useDictation — capture bounds", () => {
     const onInsert = vi.fn();
     const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({ transcript: "x" }));
     const { result } = renderHook(() =>
-      useDictation({ onInsert, createRecorder: () => recorder.recorder, transcribe }),
+      useDictation({
+        onInsert,
+        createRecorder: () => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+      }),
     );
     act(() => result.current.start());
     // Flush the microtasks that resolve recorder.start().
@@ -401,7 +599,7 @@ describe("useDictation — microphone permission-window safety (Issue #1562)", (
     const recorder: DictationRecorder = { start: startSpy };
 
     const { result } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, postRollMs: 0 }),
     );
 
     // Act: two synchronous start() calls before the permission window resolves.
@@ -438,7 +636,7 @@ describe("useDictation — microphone permission-window safety (Issue #1562)", (
     };
 
     const { result } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, postRollMs: 0 }),
     );
 
     // Act: start() enters the permission window (requesting phase), then cancel() fires.
@@ -466,7 +664,7 @@ describe("useDictation — microphone permission-window safety (Issue #1562)", (
     // Arrange: a standard fake recorder that resolves immediately.
     const recorder = makeRecorder({});
     const { result } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder.recorder }),
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder.recorder, postRollMs: 0 }),
     );
 
     // Act: start → wait for recording phase → cancel.
@@ -494,6 +692,7 @@ describe("useDictation — voice-activity end-of-turn (dialogue mode)", () => {
         createRecorder: () => recorder,
         transcribe: vi.fn(async (): Promise<VoiceTranscriptionResult> => ({ transcript: "done" })),
         vad: fake.vad,
+        postRollMs: 0,
       }),
     );
 
@@ -503,8 +702,8 @@ describe("useDictation — voice-activity end-of-turn (dialogue mode)", () => {
 
     // A trailing silence ends the turn automatically — same path as a manual stop.
     act(() => fake.fire("end-of-turn"));
-    await waitFor(() => expect(result.current.phase).toBe("transcribing"));
-    expect(stop).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current.phase).toBe("preview"));
     expect(fake.stopped()).toBe(true); // the analyser is released when the turn ends
   });
 
@@ -512,7 +711,12 @@ describe("useDictation — voice-activity end-of-turn (dialogue mode)", () => {
     const { recorder, stop } = makeStreamingRecorder();
     const fake = makeFakeVad();
     const { result } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, vad: fake.vad }),
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder,
+        vad: fake.vad,
+        postRollMs: 0,
+      }),
     );
 
     act(() => result.current.start());
@@ -520,6 +724,7 @@ describe("useDictation — voice-activity end-of-turn (dialogue mode)", () => {
 
     act(() => fake.fire("speech-onset"));
     expect(result.current.phase).toBe("recording"); // still capturing
+    expect(result.current.heardSpeech).toBe(true);
     expect(stop).not.toHaveBeenCalled();
   });
 
@@ -527,10 +732,210 @@ describe("useDictation — voice-activity end-of-turn (dialogue mode)", () => {
     const { recorder } = makeStreamingRecorder();
     const fake = makeFakeVad();
     const { result } = renderHook(() =>
-      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder }),
+      useDictation({ onInsert: vi.fn(), createRecorder: () => recorder, postRollMs: 0 }),
     );
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("recording"));
     expect(fake.started()).toBe(false);
+  });
+});
+
+describe("useDictation — realtime live dictation (P3)", () => {
+  it("renders live partials, commits the input buffer, and previews the final transcript", async () => {
+    const fakes = makeRealtimeDictationFakes();
+    const onMark = vi.fn();
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: () => fakes.transport,
+          createControlClient: () => fakes.control,
+        },
+        latencySink: { onMark },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+
+    expect(result.current.mode).toBe("realtime");
+    expect(fakes.connect).toHaveBeenCalledTimes(1);
+    expect(fakes.negotiate).toHaveBeenCalledWith(fakes.session.offerSdp);
+    expect(fakes.applyAnswer).toHaveBeenCalledTimes(1);
+
+    act(() =>
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        delta: "hello ",
+      }),
+    );
+    expect(result.current.liveTranscript).toBe("hello ");
+
+    act(() => result.current.stop());
+    expect(result.current.phase).toBe("finalizing");
+    expect(fakes.sendDataChannelEvent).toHaveBeenCalledWith({
+      type: "input_audio_buffer.commit",
+    });
+
+    act(() =>
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        transcript: "hello world",
+      }),
+    );
+    await waitFor(() => expect(result.current.phase).toBe("preview"));
+    expect(result.current.transcript).toBe("hello world");
+    expect(result.current.finalizationNote).toBeUndefined();
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(onMark.mock.calls.map((call) => call[0].mark)).toEqual(
+      expect.arrayContaining(["live_transcription_delta", "live_transcription_final"]),
+    );
+  });
+
+  it("previews the accumulated partial with a note when no final event arrives", async () => {
+    vi.useFakeTimers();
+    const fakes = makeRealtimeDictationFakes();
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: () => fakes.transport,
+          createControlClient: () => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(result.current.phase).toBe("recording");
+
+    act(() =>
+      fakes.emitDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        delta: "partial text",
+      }),
+    );
+    act(() => result.current.stop());
+    await act(async () => {
+      vi.advanceTimersByTime(4_000);
+      await Promise.resolve();
+    });
+
+    expect(result.current.phase).toBe("preview");
+    expect(result.current.transcript).toBe("partial text");
+    expect(result.current.finalizationNote).toBe(
+      "No final transcript arrived; review the live text before inserting.",
+    );
+  });
+
+  it("cancel closes the realtime control client, peer connection, data channel, and mic tracks", async () => {
+    const fakes = makeRealtimeDictationFakes();
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: () => fakes.transport,
+          createControlClient: () => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    act(() => result.current.cancel());
+
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("idle");
+  });
+
+  it("clears a realtime session that resolves after cancel so dictation can start again", async () => {
+    let resolveConnect: (session: VoiceRtcSession) => void = () => {};
+    const pendingConnect = new Promise<VoiceRtcSession>((resolve) => {
+      resolveConnect = resolve;
+    });
+    const fakes = makeRealtimeDictationFakes();
+    const connect = vi.fn();
+    connect.mockReturnValueOnce(pendingConnect);
+    connect.mockResolvedValueOnce(fakes.session);
+    const transport: VoiceRtcTransport = {
+      connect: connect as VoiceRtcTransport["connect"],
+    };
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        realtime: {
+          enabled: true,
+          createTransport: () => transport,
+          createControlClient: () => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    expect(result.current.phase).toBe("requesting");
+    act(() => result.current.cancel());
+
+    await act(async () => {
+      resolveConnect(fakes.session);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+    expect(result.current.phase).toBe("idle");
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    expect(connect).toHaveBeenCalledTimes(2);
+    expect(fakes.negotiate).toHaveBeenCalledTimes(1);
+  });
+
+  it("retry falls back to the batch STT path after live negotiation fails", async () => {
+    const fakes = makeRealtimeDictationFakes({
+      negotiateError: new VoiceLiveDictationControlError("negotiation-failed", "failed"),
+    });
+    const recorder = makeRecorder({});
+    const transcribe = vi.fn(async (): Promise<VoiceTranscriptionResult> => ({
+      transcript: "batch transcript",
+    }));
+    const { result } = renderHook(() =>
+      useDictation({
+        onInsert: vi.fn(),
+        createRecorder: () => recorder.recorder,
+        transcribe,
+        postRollMs: 0,
+        realtime: {
+          enabled: true,
+          createTransport: () => fakes.transport,
+          createControlClient: () => fakes.control,
+        },
+      }),
+    );
+
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("error"));
+    expect(result.current.error?.reason).toBe("transcribe-failed");
+    expect(fakes.closeSession).toHaveBeenCalledTimes(1);
+    expect(fakes.closeControl).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.phase).toBe("recording"));
+    expect(result.current.mode).toBe("batch");
+    expect(recorder.start).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.stop());
+    await waitFor(() => expect(result.current.phase).toBe("preview"));
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(result.current.transcript).toBe("batch transcript");
   });
 });

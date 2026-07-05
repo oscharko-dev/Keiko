@@ -14,6 +14,14 @@
 // keiko-server can compose it; it mirrors the QI-domain `stripUnsafeFormatChars` without
 // creating a dependency on the QI package.
 
+const POSIX_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])\/(?!\/)(?=[^\n\r"'`<>]*\/)[^\n\r"'`<>]+/gu;
+const WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])[A-Za-z]:[\\/](?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const WINDOWS_UNC_ABSOLUTE_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~:/-])(?:\\\\|\/\/)(?=[^\n\r"'`<>]*[\\/])[^\n\r"'`<>]+/gu;
+const CHAT_ROLE_MARKERS = ["user", "assistant", "system"] as const;
+
 // True for an invisible / text-reordering code point: bidi override/embedding/isolate,
 // zero-width joiners, BOM, LRM/RLM, the Arabic letter mark, and the U+2060..U+206F block
 // (word joiner, invisible math operators, and the deprecated format characters). The last
@@ -61,4 +69,101 @@ export function stripUnsafeFormatChars(value: string): string {
     out += ch;
   }
   return out;
+}
+
+/**
+ * Redact filesystem-looking absolute paths, including paths whose directory names contain spaces.
+ * This intentionally favours over-redaction after an absolute path over leaking a private path tail.
+ */
+export function redactAbsolutePaths(value: string): string {
+  return value
+    .replace(POSIX_ABSOLUTE_PATH_PATTERN, (_match, prefix: string) => `${prefix}[REDACTED_PATH]`)
+    .replace(
+      WINDOWS_DRIVE_ABSOLUTE_PATH_PATTERN,
+      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
+    )
+    .replace(
+      WINDOWS_UNC_ABSOLUTE_PATH_PATTERN,
+      (_match, prefix: string) => `${prefix}[REDACTED_PATH]`,
+    );
+}
+
+export function containsAbsolutePath(value: string): boolean {
+  return redactAbsolutePaths(value) !== value;
+}
+
+export function containsPseudoRoleMarker(value: string): boolean {
+  let lineStart = 0;
+  for (let cursor = 0; cursor <= value.length; cursor += 1) {
+    if (!isPseudoRoleLineEnd(value, cursor)) continue;
+    if (lineContainsPseudoRoleMarker(value, lineStart, cursor)) return true;
+    if (isCrLfAt(value, cursor)) cursor += 1;
+    lineStart = cursor + 1;
+  }
+  return false;
+}
+
+function isPseudoRoleLineEnd(value: string, cursor: number): boolean {
+  if (cursor === value.length) return true;
+  const current = value[cursor];
+  return current === "\n" || current === "\r";
+}
+
+function isCrLfAt(value: string, cursor: number): boolean {
+  return cursor + 1 < value.length && value[cursor] === "\r" && value[cursor + 1] === "\n";
+}
+
+function lineContainsPseudoRoleMarker(value: string, start: number, end: number): boolean {
+  let cursor = skipInlineWhitespace(value, start, end);
+  if (hasDirectRoleMarker(value, cursor, end)) return true;
+  if (!startsWithAsciiInsensitive(value, cursor, end, "role")) return false;
+
+  cursor = skipInlineWhitespace(value, cursor + "role".length, end);
+  if (cursor >= end || value[cursor] !== ":") return false;
+  cursor = skipInlineWhitespace(value, cursor + 1, end);
+
+  return CHAT_ROLE_MARKERS.some(
+    (role) =>
+      startsWithAsciiInsensitive(value, cursor, end, role) &&
+      hasAsciiWordBoundary(value, cursor + role.length, end),
+  );
+}
+
+function hasDirectRoleMarker(value: string, start: number, end: number): boolean {
+  return CHAT_ROLE_MARKERS.some((role) => {
+    if (!startsWithAsciiInsensitive(value, start, end, role)) return false;
+    const cursor = skipInlineWhitespace(value, start + role.length, end);
+    return cursor < end && value[cursor] === ":";
+  });
+}
+
+function skipInlineWhitespace(value: string, start: number, end: number): number {
+  let cursor = start;
+  while (cursor < end) {
+    const ch = value[cursor];
+    if (ch !== " " && ch !== "\t" && ch !== "\f" && ch !== "\v") break;
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function startsWithAsciiInsensitive(
+  value: string,
+  start: number,
+  end: number,
+  prefix: string,
+): boolean {
+  if (start + prefix.length > end) return false;
+  return value.slice(start, start + prefix.length).toLowerCase() === prefix;
+}
+
+function hasAsciiWordBoundary(value: string, cursor: number, end: number): boolean {
+  if (cursor >= end) return true;
+  const code = value.charCodeAt(cursor);
+  return (
+    !(code >= 48 && code <= 57) &&
+    !(code >= 65 && code <= 90) &&
+    code !== 95 &&
+    !(code >= 97 && code <= 122)
+  );
 }

@@ -92,7 +92,7 @@ describe("Palette", () => {
     const dialog = screen.getByRole("dialog");
 
     expect(dialog).toHaveAttribute("data-columns", "3");
-    expect(cardNames()).toEqual(["Chat", "Knowledge Connector", "Files", "Editor", "Agents"]);
+    expect(cardNames()).toEqual(["Chat", "Knowledge Pod", "Files", "Editor", "Agents"]);
   });
 
   it("uses the compact two-column arrangement for a two-card picker", () => {

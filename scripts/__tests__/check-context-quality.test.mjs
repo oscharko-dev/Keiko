@@ -13,6 +13,7 @@ import {
   buildAggregateSummary,
   buildProvenanceMap,
   deepEqual,
+  evaluateCalibratedTokenAccounting,
   evaluateChatCompaction,
   evaluateCompactionPreservation,
   evaluateContextQualityBudget,
@@ -71,6 +72,7 @@ const STRICT_BUDGET = {
   minToolObservationShapingFidelity: 0.9,
   requireShapingRedactionClean: true,
   requireShapingInjectionFlagged: true,
+  requireCalibratedTokenAccounting: true,
   requireChatLongSessionCompaction: true,
   requireChatManyShortBudgetSafeUnchanged: true,
   requireChatCurrentInstructionPreserved: true,
@@ -102,6 +104,7 @@ function passingSummary() {
       toolObservationShapingFidelity: 1,
       shapingRedactionClean: true,
       shapingInjectionFlagged: true,
+      calibratedTokenAccounting: true,
       chatLongSessionCompaction: true,
       chatManyShortBudgetSafeUnchanged: true,
       chatCurrentInstructionPreserved: true,
@@ -448,6 +451,7 @@ describe("evaluateContextQualityBudget", () => {
       ["toolObservationShapingFidelity", (s) => (s.measured.toolObservationShapingFidelity = 0.5)],
       ["shapingRedactionClean", (s) => (s.measured.shapingRedactionClean = false)],
       ["shapingInjectionFlagged", (s) => (s.measured.shapingInjectionFlagged = false)],
+      ["calibratedTokenAccounting", (s) => (s.measured.calibratedTokenAccounting = false)],
       ["chatLongSessionCompaction", (s) => (s.measured.chatLongSessionCompaction = false)],
       [
         "chatManyShortBudgetSafeUnchanged",
@@ -613,6 +617,11 @@ describe("buildScenarioCorpus determinism + coverage", () => {
       result.lanes.find((l) => l.laneId === "repo-evidence").includedItemIds,
     );
     expect(standard.every((m) => included.has(m.id))).toBe(true);
+  });
+
+  it("proves calibrated token accounting over every context-quality scenario", async () => {
+    const corpus = await buildScenarioCorpus();
+    expect(corpus.every((scenario) => evaluateCalibratedTokenAccounting(scenario))).toBe(true);
   });
 });
 

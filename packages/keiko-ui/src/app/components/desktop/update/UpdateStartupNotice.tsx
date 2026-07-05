@@ -24,9 +24,15 @@ function dismissalFingerprint(report: UpdatePreflightReport): string {
   return [
     report.currentVersion,
     report.targetVersion ?? "no-target",
-    report.checkedAt,
     report.status,
     report.severity,
+    report.manualUpdateRequired ? "manual" : "automatic",
+    report.userActionRequired ? "action" : "no-action",
+    report.blockers
+      .map((blocker) => blocker.code)
+      .slice()
+      .sort()
+      .join(","),
   ].join("|");
 }
 

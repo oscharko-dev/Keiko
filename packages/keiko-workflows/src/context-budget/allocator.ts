@@ -1,12 +1,13 @@
 // Pure, deterministic, no-IO lane budget allocator (ADR-0052 D3/D6). Mirrors the immutable
 // state pattern of planner/governor.ts: never mutates inputs, returns fresh objects, no clock,
-// no randomness, no network. estimateTokens from keiko-contracts is the SINGLE token currency
+// no randomness, no network. countContextTokens from keiko-contracts is the SINGLE token currency
 // (ADR-0052 gate 3) — no other ratio appears in this module.
 
 import {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_LANE_IDS,
-  estimateTokens,
+  countContextTokens,
+  resolveContextTokenAccounting,
   type ContextAssemblyDiagnostics,
   type ContextBudget,
   type ContextBudgetPressure,
@@ -14,6 +15,7 @@ import {
   type ContextLaneDiagnostics,
   type ContextLaneId,
   type ContextProfile,
+  type ContextTokenAccounting,
 } from "@oscharko-dev/keiko-contracts";
 
 export interface ContextLaneItemInput {
@@ -66,10 +68,11 @@ function canonicalIndex(laneId: ContextLaneId): number {
 // selectScoredTextByByteBudget (packages/keiko-workspace/src/contextPack.ts:53): score DESC,
 // then id ASC (localeCompare) for stable ties, greedy-fill until the cap is reached. Byte-reuse
 // was rejected here because that primitive measures utf8 BYTES, which would corrupt the single
-// token currency the allocator must use (estimateTokens) for every lane.
+// token currency the allocator must use (countContextTokens) for every lane.
 function selectScoredByTokenBudget(
   items: readonly ContextLaneItemInput[],
   tokenBudget: number,
+  tokenAccounting: ContextTokenAccounting | undefined,
 ): LaneFill {
   const ordered = [...items].sort((a, b) => {
     const byScore = b.score - a.score;
@@ -79,7 +82,7 @@ function selectScoredByTokenBudget(
   const excludedIds: string[] = [];
   let tokens = 0;
   for (const item of ordered) {
-    const cost = estimateTokens(item.text);
+    const cost = countContextTokens(item.text, tokenAccounting);
     if (tokens + cost > tokenBudget) {
       excludedIds.push(item.id);
       continue;
@@ -92,11 +95,14 @@ function selectScoredByTokenBudget(
 
 // Non-evictable lanes include EVERY item (reserved off the top, never dropped) even if their
 // total exceeds the budget — that overflow is the only permitted exception (forces "exceeded").
-function includeAll(items: readonly ContextLaneItemInput[]): LaneFill {
+function includeAll(
+  items: readonly ContextLaneItemInput[],
+  tokenAccounting: ContextTokenAccounting | undefined,
+): LaneFill {
   const includedIds = items.map((item) => item.id);
   let tokens = 0;
   for (const item of items) {
-    tokens += estimateTokens(item.text);
+    tokens += countContextTokens(item.text, tokenAccounting);
   }
   return { includedIds, excludedIds: [], tokens, droppedForBudget: false };
 }
@@ -185,13 +191,14 @@ function byEvictionOrder(a: PlannedLane, b: PlannedLane): number {
 function fillEvictableLanes(
   lanes: readonly PlannedLane[],
   budgetAfterReserved: number,
+  tokenAccounting: ContextTokenAccounting | undefined,
 ): ReadonlyMap<ContextLaneId, LaneFill> {
   const ordered = [...lanes].sort(byEvictionOrder);
   const fills = new Map<ContextLaneId, LaneFill>();
   let remaining = Math.max(0, budgetAfterReserved);
   for (const lane of ordered) {
     const cap = Math.min(lane.row.maxTokens, remaining);
-    const fill = selectScoredByTokenBudget(lane.items, cap);
+    const fill = selectScoredByTokenBudget(lane.items, cap, tokenAccounting);
     fills.set(lane.row.laneId, fill);
     remaining -= fill.tokens;
   }
@@ -206,14 +213,18 @@ interface LaneFillResult {
   readonly nonEvictableOverflow: boolean;
 }
 
-function buildLaneFills(planned: readonly PlannedLane[], effectiveBudget: number): LaneFillResult {
+function buildLaneFills(
+  planned: readonly PlannedLane[],
+  effectiveBudget: number,
+  tokenAccounting: ContextTokenAccounting | undefined,
+): LaneFillResult {
   const fills = new Map<ContextLaneId, LaneFill>();
   let reservedTokens = 0;
   let nonEvictableOverflow = false;
   const evictable: PlannedLane[] = [];
   for (const lane of planned) {
     if (isNonEvictable(lane.row)) {
-      const fill = includeAll(lane.items);
+      const fill = includeAll(lane.items, tokenAccounting);
       fills.set(lane.row.laneId, fill);
       reservedTokens += fill.tokens;
       if (fill.tokens > lane.row.maxTokens) {
@@ -223,7 +234,11 @@ function buildLaneFills(planned: readonly PlannedLane[], effectiveBudget: number
       evictable.push(lane);
     }
   }
-  const evictableFills = fillEvictableLanes(evictable, effectiveBudget - reservedTokens);
+  const evictableFills = fillEvictableLanes(
+    evictable,
+    effectiveBudget - reservedTokens,
+    tokenAccounting,
+  );
   for (const [laneId, fill] of evictableFills) {
     fills.set(laneId, fill);
   }
@@ -256,9 +271,18 @@ function orderResults(
 }
 
 export function allocateContext(input: AllocateContextInput): AllocateContextResult {
-  const effectiveBudget = input.profile.effectiveInputBudget;
+  const tokenAccounting = resolveContextTokenAccounting(input.profile);
+  const activeProfile: ContextProfile =
+    input.profile.tokenAccounting === undefined
+      ? { ...input.profile, tokenAccounting }
+      : input.profile;
+  const effectiveBudget = activeProfile.effectiveInputBudget;
   const planned = planLanes(input);
-  const { fills, reservedTokens, nonEvictableOverflow } = buildLaneFills(planned, effectiveBudget);
+  const { fills, reservedTokens, nonEvictableOverflow } = buildLaneFills(
+    planned,
+    effectiveBudget,
+    tokenAccounting,
+  );
   const lanes = orderResults(input.budget, fills);
 
   const totalEstimatedTokens = lanes.reduce((sum, lane) => sum + lane.estimatedTokens, 0);
@@ -268,7 +292,7 @@ export function allocateContext(input: AllocateContextInput): AllocateContextRes
     : pressureFor(totalEstimatedTokens, effectiveBudget);
   const diagnostics: ContextAssemblyDiagnostics = {
     schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
-    profile: input.profile,
+    profile: activeProfile,
     totalEstimatedTokens,
     budgetPressure,
     lanes: lanes.map((lane) => lane.diagnostics),

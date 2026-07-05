@@ -47,6 +47,12 @@ The specific problem this harness must solve is:
 The harness therefore operates at the **contract surface that all voice features import from**, proving
 that the contracts themselves encode the right invariants.
 
+P10 adds a companion deterministic acoustic-quality gate at
+`packages/keiko-evaluations/src/voice-acoustic/` (namespace `VoiceAcousticEval`). This does not change
+the contract-boundary purpose of `VoiceTwinEval`; it closes the prior "no numeric acoustic/wall-clock
+gate" limitation for provider-free CI by scoring harness-authored transcript hypotheses and ordered
+enum/timestamp traces. It still does not run a live WebRTC transport or capture audio.
+
 ## Decision
 
 We will ship a self-contained, deterministic evaluation suite at
@@ -260,15 +266,43 @@ fixtures must exist and must produce `external-destination-privacy` results wher
 
 ### D10 — Barrel registration follows established namespace convention
 
-`packages/keiko-evaluations/src/index.ts` gains one additive export after `VoiceRecapEval`:
+`packages/keiko-evaluations/src/index.ts` exposes voice evaluation suites as additive namespaces:
 
 ```typescript
 export * as VoiceTwinEval from "./voice-twin/index.js";
+export * as VoiceAcousticEval from "./voice-acoustic/index.js";
 ```
 
-This follows the `DiscussionEval`, `VoiceActionEval`, and `VoiceRecapEval` namespace pattern. No
-existing barrel export is modified. The addition is surface-neutral at root because
-`keiko-evaluations` is not in the root package surface (confirmed pattern from issues #500–#504).
+This follows the `PromptEnhancerEval`, `DiscussionEval`, and `VoiceTwinEval` namespace pattern. No
+existing barrel export is modified.
+
+### D11 — Offline acoustic companion gate for numeric budgets
+
+`VoiceAcousticEval` is a pure, deterministic fixture suite with schema version `"1"`. Its fixture
+registry covers exactly these scenarios: `first-word`, `trailing-word`, `noisy-room`, `laptop-echo`,
+`headset`, `fast-interrupt`, `long-pause`, `unfinished-utterance`, `exact-identifiers`, and
+`grounded-vs-casual`.
+
+Fixtures store only harness-authored reference transcripts, hypothesis transcripts, ordered trace
+events, acoustic-profile labels, required terms, and numeric budgets. They do not store real user audio,
+provider credentials, provider URLs, raw provider event bodies, or production transcripts. The scorecard
+reports only fixture/scenario labels, pass/fail states, counts, and numeric metrics.
+
+The gate scores WER, CER, first-token retention, last-token retention, exact required-identifier match,
+first-partial latency, final-transcript latency, time-to-first-assistant-audio, local barge-in duck
+latency, interrupt ack latency, premature finalization, and grounded-tool-before-answer ordering.
+Default thresholds are `maxWer=0.08`, `maxCer=0.04`, `maxFirstPartialMs=1200`,
+`maxFinalTranscriptMs=4000`, `maxTtfaMs=4000`, `maxLocalDuckMs=80`, and
+`maxInterruptAckMs=500`; `noisy-room` and `laptop-echo` relax to `maxWer=0.15`, `maxCer=0.08`, and
+`maxFirstPartialMs=1800`.
+
+`runVoiceAcousticEvaluation()` returns `GO` only when every positive fixture passes, every requested
+scenario is covered by the positive set, and every adversarial negative fixture is caught. The targeted
+local gate is:
+
+```bash
+npm run eval:voice-acoustic
+```
 
 ## Consequences
 
@@ -287,6 +321,9 @@ existing barrel export is modified. The addition is surface-neutral at root beca
   no hidden IO path can make the suite non-deterministic.
 - The 11-dimension structure maps 1:1 to acceptance criteria; CI failures are immediately actionable
   without reading source.
+- The offline `VoiceAcousticEval` companion gate adds numeric acoustic-budget coverage without a live
+  provider: first/last token retention, exact identifiers, WER/CER, partial/final latency, TTFA,
+  barge-in, endpointing, and grounded-ordering regressions now produce a CI-blocking NO-GO verdict.
 
 ### Negative
 
@@ -303,6 +340,10 @@ existing barrel export is modified. The addition is surface-neutral at root beca
 - The absence of a positive egress allowlist (D5 honest limitation) means AC5 bounding is incomplete
   for deployments that require positive destination denial. This is a pre-existing gap in the
   architecture, not introduced by this ADR; the harness makes it visible rather than obscuring it.
+- `VoiceAcousticEval` is not a live acoustic lab or live WebRTC wall-clock measurement. It scores
+  deterministic fixture traces, not real microphones, real speakers, provider jitter, packet loss,
+  browser echo-canceller behavior, or production audio. Live/provider evaluation remains a separate
+  production-readiness activity.
 
 ### Neutral
 

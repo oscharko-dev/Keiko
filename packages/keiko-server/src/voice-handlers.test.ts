@@ -251,6 +251,24 @@ describe("POST /api/voice/transcribe — successful dictation (AC3/AC4/AC6)", ()
     );
   });
 
+  it("applies the default domain-keyword prompt, and forwards a caller override", async () => {
+    const withDefault = sttDeps();
+    await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "audio/webm" }),
+      withDefault.deps,
+    );
+    // No caller prompt → the language-neutral domain default, so proper nouns like "Keiko" transcribe.
+    expect(withDefault.seen[0]?.prompt).toContain("Keiko");
+
+    const withOverride = sttDeps();
+    await handleVoiceTranscribe(
+      ctx({ audio: VALID_AUDIO, mimeType: "audio/webm", prompt: "  custom domain terms  " }),
+      withOverride.deps,
+    );
+    // A caller prompt is trimmed and forwarded verbatim (overrides the default).
+    expect(withOverride.seen[0]?.prompt).toBe("custom domain terms");
+  });
+
   it("surfaces content-free provider metadata when present", async () => {
     const { deps } = sttDeps(
       {},

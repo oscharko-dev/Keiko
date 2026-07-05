@@ -34,6 +34,9 @@ const PUBLIC_EXPORTS = [
   "deleteCapsuleSet",
   "getCapsuleSet",
   "listCapsuleSets",
+  "buildKnowledgePodSetSummary",
+  "buildKnowledgePodSummary",
+  "listKnowledgePodSummaries",
   // Parser registry + adapters (#266)
   "DEFAULT_MAX_BYTES",
   "DEFAULT_MAX_NESTING_DEPTH",
@@ -110,7 +113,11 @@ describe("barrel surface", () => {
     // *enumerations*. The store-only enumerations (`listCapsules`, `listCapsuleSets`)
     // are PERMITTED — they enumerate the top-level Foundry-IQ entities themselves, not
     // their internals. Anything else MUST be capsule-scoped.
-    const allowedStoreOnly = new Set(["listCapsules", "listCapsuleSets"]);
+    const allowedStoreOnly = new Set([
+      "listCapsules",
+      "listCapsuleSets",
+      "listKnowledgePodSummaries",
+    ]);
     const listNames = Object.keys(api).filter((name) => name.startsWith("list"));
     for (const name of listNames) {
       const fn = (api as Record<string, unknown>)[name];

@@ -389,6 +389,10 @@ function recordQiManifest(
   const target = lexicalQiManifestPath(manifest.runId, realBase);
   assertWritableQiManifestEntry(target, fs);
   atomicWriteQiManifest(target, JSON.stringify(manifest), randomSuffix);
+  const stat = fs.stat(target);
+  if (stat.mtimeMs !== undefined) {
+    qiVerificationCacheSet(target, stat.mtimeMs, stat.size, manifest);
+  }
   return target;
 }
 

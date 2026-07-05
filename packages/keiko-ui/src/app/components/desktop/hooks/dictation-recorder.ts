@@ -43,8 +43,25 @@ export interface DictationSession {
   // teardown — stop()/cancel() release the tracks. Optional only so existing test fakes need not provide
   // it; the production recorder always sets it.
   readonly stream?: MediaStream;
+  requestData?(): void;
   stop(): Promise<DictationCapture>;
   cancel(): void;
+}
+
+export interface DictationRecorderStartOptions {
+  // Request incremental `dataavailable` chunks while recording so the final stop path is not the
+  // first time the browser is asked to flush encoded audio.
+  readonly timesliceMs?: number | undefined;
+  // Fires exactly once, when the MediaRecorder has emitted its `start` event AND the analyser has
+  // produced its first level sample — i.e. the capture pipeline is verified live and actually measuring
+  // audio. The caller flips its UI from "Preparing mic" to a "ready / speak now" state on this, so the
+  // user is only invited to speak once capture is genuinely flowing (addresses swallowed first words).
+  readonly onReady?: (() => void) | undefined;
+  // Normalized local microphone level in [0,1], derived from short-term RMS. Content-free: never
+  // contains raw samples and never leaves the browser unless the caller chooses to render it.
+  readonly onAudioLevel?: ((level: number) => void) | undefined;
+  // Optional test/telemetry hook for encoded chunk arrival. The hook must not persist the blob.
+  readonly onChunk?: ((chunk: Blob) => void) | undefined;
 }
 
 // The capture seam. `start` requests microphone permission and begins capture, rejecting with a
@@ -52,7 +69,7 @@ export interface DictationSession {
 // the returned promise resolves, so the caller can tie the "recording" UI state to an explicit user
 // gesture (AC3 — capture never starts in the background).
 export interface DictationRecorder {
-  start(): Promise<DictationSession>;
+  start(options?: DictationRecorderStartOptions): Promise<DictationSession>;
 }
 
 // MIME container preference order. The browser picks the first it can actually produce; all entries
@@ -64,6 +81,11 @@ const PREFERRED_MIME_TYPES: readonly string[] = [
   "audio/ogg",
   "audio/mp4",
 ];
+
+const DEFAULT_TIMESLICE_MS = 250;
+const LEVEL_SAMPLE_INTERVAL_MS = 80;
+const LEVEL_ANALYSER_FFT_SIZE = 1024;
+const LEVEL_NORMALIZATION_RMS = 0.08;
 
 // True when the running browser can capture dictation audio. The composer gates the microphone
 // affordance on this in addition to the server-side capability so it never renders a control the
@@ -165,7 +187,83 @@ function waitForStop(recorder: MediaRecorder): Promise<void> {
   });
 }
 
-function beginSession(stream: MediaStream): DictationSession {
+function waitForStart(recorder: MediaRecorder): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    recorder.addEventListener("start", () => resolve(), { once: true });
+    recorder.addEventListener(
+      "error",
+      () => reject(new DictationRecorderError("capture-failed", "Audio capture failed.")),
+      { once: true },
+    );
+  });
+}
+
+interface AudioLevelMonitor {
+  stop(): void;
+}
+
+function sampleRms(samples: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    sum += samples[i]! * samples[i]!;
+  }
+  return Math.sqrt(sum / samples.length);
+}
+
+// Builds a short-term RMS level monitor over the capture stream. Returns undefined when the browser
+// exposes no AudioContext or analyser setup fails, so the caller can still signal readiness without a
+// measured level rather than waiting forever. `onSample` receives a normalized [0,1] level on each tick.
+function createAudioLevelMonitor(
+  stream: MediaStream,
+  onSample: (level: number) => void,
+): AudioLevelMonitor | undefined {
+  if (typeof AudioContext === "undefined") {
+    return undefined;
+  }
+  let context: AudioContext;
+  try {
+    context = new AudioContext();
+  } catch {
+    return undefined;
+  }
+  let source: MediaStreamAudioSourceNode;
+  let analyser: AnalyserNode;
+  try {
+    source = context.createMediaStreamSource(stream);
+    analyser = context.createAnalyser();
+    analyser.fftSize = LEVEL_ANALYSER_FFT_SIZE;
+    source.connect(analyser);
+  } catch {
+    void context.close().catch(() => {
+      // Level feedback is optional; setup failures must not fail microphone capture.
+    });
+    return undefined;
+  }
+  const buffer = new Float32Array(analyser.fftSize);
+  const timer = setInterval(() => {
+    analyser.getFloatTimeDomainData(buffer);
+    const normalized = Math.min(1, sampleRms(buffer) / LEVEL_NORMALIZATION_RMS);
+    onSample(Number.isFinite(normalized) ? normalized : 0);
+  }, LEVEL_SAMPLE_INTERVAL_MS);
+  return {
+    stop(): void {
+      clearInterval(timer);
+      try {
+        source.disconnect();
+      } catch {
+        // ignore — already disconnected
+      }
+      void context.close().catch(() => {
+        // ignore — already closed
+      });
+    },
+  };
+}
+
+async function beginSession(
+  stream: MediaStream,
+  options: DictationRecorderStartOptions = {},
+): Promise<DictationSession> {
   const mimeType = selectMimeType();
   const recorder =
     mimeType === "" ? new MediaRecorder(stream) : new MediaRecorder(stream, { mimeType });
@@ -173,25 +271,66 @@ function beginSession(stream: MediaStream): DictationSession {
   recorder.addEventListener("dataavailable", (event) => {
     if (event.data.size > 0) {
       chunks.push(event.data);
+      options.onChunk?.(event.data);
     }
   });
+  const started = waitForStart(recorder);
+  recorder.start(options.timesliceMs ?? DEFAULT_TIMESLICE_MS);
+  await started;
   const startedAt = Date.now();
-  recorder.start();
+  // Ready = start event seen (above) AND the analyser has produced its first sample (below), so the
+  // caller only invites the user to speak once capture is verifiably live. Fired at most once.
+  let readyFired = false;
+  const emitReadyOnce = (): void => {
+    if (readyFired) return;
+    readyFired = true;
+    options.onReady?.();
+  };
+  const wantsMonitor = options.onAudioLevel !== undefined || options.onReady !== undefined;
+  const levelMonitor = wantsMonitor
+    ? createAudioLevelMonitor(stream, (level) => {
+        emitReadyOnce();
+        options.onAudioLevel?.(level);
+      })
+    : undefined;
+  // No analyser available (headless / no AudioContext): capture is still live after the start event, so
+  // signal readiness immediately instead of leaving the UI stuck in "Preparing mic".
+  if (levelMonitor === undefined) {
+    emitReadyOnce();
+  }
 
   let settled = false;
 
   return {
     stream,
+    requestData(): void {
+      if (settled || recorder.state !== "recording") {
+        return;
+      }
+      try {
+        recorder.requestData();
+      } catch {
+        // A best-effort flush failure should not prevent the final stop from collecting audio.
+      }
+    },
     async stop(): Promise<DictationCapture> {
       if (settled) {
         throw new DictationRecorderError("capture-failed", "The recording is no longer active.");
       }
       settled = true;
       const stopped = waitForStop(recorder);
+      try {
+        if (recorder.state === "recording") {
+          recorder.requestData();
+        }
+      } catch {
+        // Ignore; the final stop event still provides the authoritative flush.
+      }
       recorder.stop();
       try {
         await stopped;
       } finally {
+        levelMonitor?.stop();
         stopTracks(stream);
       }
       const effectiveType = recorder.mimeType !== "" ? recorder.mimeType : mimeType || "audio/webm";
@@ -211,6 +350,7 @@ function beginSession(stream: MediaStream): DictationSession {
       if (recorder.state !== "inactive") {
         recorder.stop();
       }
+      levelMonitor?.stop();
       stopTracks(stream);
     },
   };
@@ -220,7 +360,7 @@ function beginSession(stream: MediaStream): DictationSession {
 // no-voice / unsupported environment never touches the media APIs.
 export function createBrowserDictationRecorder(): DictationRecorder {
   return {
-    async start(): Promise<DictationSession> {
+    async start(options?: DictationRecorderStartOptions): Promise<DictationSession> {
       if (!dictationCaptureSupported()) {
         throw new DictationRecorderError(
           "unsupported",
@@ -237,7 +377,7 @@ export function createBrowserDictationRecorder(): DictationRecorder {
         );
       }
       try {
-        return beginSession(stream);
+        return await beginSession(stream, options);
       } catch (error) {
         // MediaRecorder construction / start failed after permission was granted — release the track.
         stopTracks(stream);

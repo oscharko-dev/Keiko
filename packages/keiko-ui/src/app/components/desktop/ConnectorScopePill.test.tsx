@@ -51,7 +51,7 @@ describe("ConnectorScopePill", () => {
     // queried by text; each pill carries one disconnect button.
     expect(screen.getAllByRole("button")).toHaveLength(1);
     // uiux-fix F041 (C173) — the entity is a "capsule" product-wide, not a "connector".
-    expect(screen.getByText("Capsule: cap-abc")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge Pod: cap-abc")).toBeInTheDocument();
   });
 
   it("renders resolved label from the labels map when provided", () => {
@@ -74,8 +74,8 @@ describe("ConnectorScopePill", () => {
     const chat = makeChat({ localKnowledgeScopes: scopes });
     render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} />);
     const buttons = screen.getAllByRole("button");
-    expect(buttons[0]).toHaveAttribute("aria-label", "Disconnect Capsule: c1 from chat");
-    expect(buttons[1]).toHaveAttribute("aria-label", "Disconnect Capsule: c2 from chat");
+    expect(buttons[0]).toHaveAttribute("aria-label", "Disconnect Knowledge Pod: c1 from chat");
+    expect(buttons[1]).toHaveAttribute("aria-label", "Disconnect Knowledge Pod: c2 from chat");
   });
 
   it("PATCHes with the remaining scopes when a single connector is removed (#189)", async () => {
@@ -88,7 +88,9 @@ describe("ConnectorScopePill", () => {
     render(
       <ConnectorScopePill chat={chat} updateScopes={updateScopes} onDisconnect={onDisconnect} />,
     );
-    await user.click(screen.getByRole("button", { name: "Disconnect Capsule: c1 from chat" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect Knowledge Pod: c1 from chat" }),
+    );
     await waitFor(() => {
       expect(updateScopes).toHaveBeenCalledWith("chat-1", [scopes[1]]);
     });
@@ -101,7 +103,9 @@ describe("ConnectorScopePill", () => {
     const updateScopes = vi.fn().mockResolvedValue({ chat: cleared } satisfies ChatResponse);
     const user = userEvent.setup();
     render(<ConnectorScopePill chat={chat} updateScopes={updateScopes} />);
-    await user.click(screen.getByRole("button", { name: "Disconnect Capsule: only from chat" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect Knowledge Pod: only from chat" }),
+    );
     await waitFor(() => {
       expect(updateScopes).toHaveBeenCalledWith("chat-1", null);
     });

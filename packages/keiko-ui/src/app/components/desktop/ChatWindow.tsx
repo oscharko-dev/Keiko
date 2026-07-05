@@ -66,12 +66,14 @@ import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import {
   supportsDictation,
+  supportsRealtimeVoice,
   supportsSpeechOutput,
   supportsRealtimeToolCalling,
   useVoiceCapability,
 } from "./hooks/useVoiceCapability";
 import { useDictation, type DictationController } from "./hooks/useDictation";
 import { dictationCaptureSupported } from "./hooks/dictation-recorder";
+import { realtimeVoiceTransportSupported } from "./hooks/voice-rtc-transport";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./VoiceDictation";
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
@@ -86,7 +88,7 @@ import { registerPdfCitationPreviewMessageTarget } from "./widgets/cards/pdf-cit
 import {
   deriveVoiceAuraState,
   deriveVoiceDialogState,
-  voiceDialogStateHeadline,
+  voiceAuraStateHeadline,
 } from "./hooks/voice-dialog-state";
 import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
@@ -94,6 +96,8 @@ import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { formatUserError } from "./format-error";
 import {
+  capsulesForKnowledgePodUi,
+  capsuleSetsForKnowledgePodUi,
   fetchCapsules,
   fetchCapsuleSets,
   type CapsuleListEntry,
@@ -148,6 +152,9 @@ function repositoryFilePickerOptionId(index: number): string {
 const CHAT_TURN_WINDOW_THRESHOLD = 120;
 const CHAT_TURN_WINDOW_SIZE = 80;
 const CHAT_TURN_WINDOW_OVERSCAN = 8;
+// Debounce for the spoken-dialogue status live region: rapid aura transitions in a fast turn exchange
+// settle before a screen reader announces, so it hears the meaningful state, not every flicker.
+const DIALOG_ANNOUNCE_DEBOUNCE_MS = 400;
 const CHAT_TURN_ESTIMATED_BLOCK_SIZE_PX = 132;
 
 function timeLabel(timestamp: number): string {
@@ -1774,6 +1781,7 @@ function ComposerBar({
         {voiceDictationVisible ? (
           <VoiceDictationButton
             phase={dictation.phase}
+            audioLevel={dictation.audioLevel}
             onStart={dictation.start}
             onStop={dictation.stop}
             buttonRef={micButtonRef}
@@ -2016,6 +2024,10 @@ function ComposerCore({
   // environment shows no voice control at all, so the composer stays clean and fully text-capable.
   const voiceCapability = useVoiceCapability();
   const voiceDictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
+  const liveDictationEnabled =
+    voiceDictationVisible &&
+    supportsRealtimeVoice(voiceCapability) &&
+    realtimeVoiceTransportSupported();
   // Issue #501 — assistant speech-output gate: reuse the already-fetched voiceCapability probe (no
   // second fetch). Only true when the deployment advertises speech output; STT-only and no-voice
   // deployments leave it false, so no playback control appears and Keiko answers in text (AC1).
@@ -2035,7 +2047,10 @@ function ComposerCore({
     },
     [draft, setDraft],
   );
-  const dictation = useDictation({ onInsert: insertTranscript });
+  const dictation = useDictation({
+    onInsert: insertTranscript,
+    realtime: { enabled: liveDictationEnabled },
+  });
   // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue is true
   // WebRTC realtime speech-to-speech; STT dictation remains a separate "speech to draft" feature.
   const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
@@ -2085,7 +2100,27 @@ function ComposerCore({
     sending,
     sendStatus,
     hasSessionError: error !== undefined || realtimeVoice.error !== undefined,
+    // A recovering transport (turn manager) → 'reconnecting'; an in-flight grounded retrieval →
+    // 'checking-sources'. Both give the user a specific reason for the wait instead of dead air.
+    reconnecting: realtimeVoice.turnSnapshot.recovering,
+    retrieving: realtimeVoice.retrieving,
   });
+  // Throttle the spoken-dialogue live region: a fast turn exchange can flip listening→thinking→speaking
+  // within a second, and an unthrottled aria-live would read every transition aloud. Debouncing to the
+  // settled state (after DIALOG_ANNOUNCE_DEBOUNCE_MS of quiet) announces what matters without the chatter,
+  // while text chat's own SendLifecycleStatus keeps its immediate announcements.
+  const [announcedVoiceHeadline, setAnnouncedVoiceHeadline] = useState("");
+  useEffect(() => {
+    if (!voiceAura.active) {
+      setAnnouncedVoiceHeadline("");
+      return undefined;
+    }
+    const headline = voiceAuraStateHeadline(voiceAura.state);
+    const timer = setTimeout(() => {
+      setAnnouncedVoiceHeadline(headline);
+    }, DIALOG_ANNOUNCE_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [voiceAura.active, voiceAura.state]);
   const enterVoiceDialog = useCallback(() => {
     if (!voiceDialogAvailable) {
       return;
@@ -2436,12 +2471,12 @@ function ComposerCore({
         {voiceDialog.active ? null : <SendLifecycleStatus status={sendStatus} />}
         {voiceAura.active ? (
           <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-            {voiceDialogStateHeadline(voiceDialogState)}
+            {announcedVoiceHeadline}
           </span>
         ) : null}
         {/* Issue #495 — dictation transcript review / transcribing status / error. Lives in the input
             stack so it is contextually adjacent to the textarea and announced to assistive tech. It
-            renders nothing while idle or recording (the mic button carries those states). */}
+            renders live capture feedback while recording and stays hidden only when idle. */}
         {!voiceDialog.active && voiceDictationVisible ? (
           <VoiceDictationPreviewFromController
             controller={dictation}
@@ -2796,7 +2831,10 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
   if (cached !== undefined) return cached;
   if (knowledgeCatalogPending !== undefined) return knowledgeCatalogPending;
 
-  knowledgeCatalogPending = Promise.allSettled([fetchCapsules(), fetchCapsuleSets()])
+  knowledgeCatalogPending = Promise.allSettled([
+    fetchCapsules({ includeKnowledgePods: true }),
+    fetchCapsuleSets({ includeKnowledgePods: true }),
+  ])
     .then(([capsuleResult, capsuleSetResult]) => {
       if (capsuleResult.status !== "fulfilled") {
         return {
@@ -2804,10 +2842,16 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
           loadError: capsuleResult.reason,
         };
       }
+      const capsules = capsulesForKnowledgePodUi(capsuleResult.value).filter(
+        (entry) => entry.lifecycleState === "ready",
+      );
+      const capsuleSets =
+        capsuleSetResult.status === "fulfilled"
+          ? capsuleSetsForKnowledgePodUi(capsuleSetResult.value)
+          : [];
       const snapshot: KnowledgeCatalogSnapshot = {
-        capsules: capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
-        capsuleSets:
-          capsuleSetResult.status === "fulfilled" ? capsuleSetResult.value.capsuleSets : [],
+        capsules,
+        capsuleSets,
         loadError: capsuleSetResult.status === "fulfilled" ? null : capsuleSetResult.reason,
       };
       return snapshot;

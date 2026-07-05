@@ -396,7 +396,7 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
           <OverviewRow
             label="Tags"
             value={
-              <ul className="lkd-tags" aria-label="Capsule tags">
+              <ul className="lkd-tags" aria-label="Knowledge Pod tags">
                 {capsule.tags.map((tag) => (
                   <li key={tag} className="lkd-tag">
                     {tag}
@@ -531,7 +531,7 @@ function ContextualRetrievalSection({
     try {
       const updated = await updateImpl(data.capsule.id, next);
       onSaved(updated);
-      setMessage("Saved. Full rebuild / rechunk this capsule to apply retrieval text changes.");
+      setMessage("Saved. Full rebuild / rechunk this pod to apply retrieval text changes.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to save contextual retrieval.");
     } finally {
@@ -695,7 +695,7 @@ function SourcesSection({
         <SectionHeading>
           <span id="lkd-sources-heading">Sources</span>
         </SectionHeading>
-        <p className="lkd-empty-note">No sources attached to this capsule.</p>
+        <p className="lkd-empty-note">No sources attached to this pod.</p>
       </section>
     );
   }
@@ -705,7 +705,7 @@ function SourcesSection({
       <SectionHeading>
         <span id="lkd-sources-heading">Sources</span>
       </SectionHeading>
-      <ul className="lkd-list lkd-source-list" aria-label="Capsule sources">
+      <ul className="lkd-list lkd-source-list" aria-label="Knowledge Pod sources">
         {sources.map((src) => {
           const total = sourceTotal(src);
           const location = scopeLocation(src.scope);
@@ -779,11 +779,11 @@ function PrivacySection(): ReactNode {
         </li>
         <li className="lkd-source-row">
           Selected chunks may be sent through the configured Model Gateway for embeddings during
-          indexing and for grounded answers when you ask questions against this capsule.
+          indexing and for grounded answers when you ask questions against this Knowledge Pod.
         </li>
         <li className="lkd-source-row">
-          Deleting a capsule removes its local index data and capsule-set memberships. Source files
-          on disk are not deleted.
+          Deleting a Knowledge Pod removes its local index data and Knowledge Pod Set memberships.
+          Source files on disk are not deleted.
         </li>
       </ul>
     </section>
@@ -1166,7 +1166,7 @@ export function CapsuleDetail({
   if (loadStatus === "loading") {
     return (
       <p role="status" aria-live="polite" className="lk-loading">
-        Loading capsule…
+        Loading Knowledge Pod…
       </p>
     );
   }
@@ -1178,7 +1178,7 @@ export function CapsuleDetail({
     if (capsuleId === "") {
       return (
         <div role="alert" aria-live="assertive" className="lk-alert">
-          No capsule selected. Open a capsule from the Local Knowledge overview.
+          No Knowledge Pod selected. Open a pod from the Local Knowledge overview.
           <Link href="/local-knowledge" className="lk-alert-retry">
             Back to Local Knowledge
           </Link>
@@ -1191,20 +1191,20 @@ export function CapsuleDetail({
     if (isMissingCapsule) {
       return (
         <div role="alert" aria-live="assertive" className="lk-alert">
-          This capsule no longer exists. Return to the Local Knowledge overview.
+          This Knowledge Pod no longer exists. Return to the Local Knowledge overview.
           <Link href="/local-knowledge" className="lk-alert-retry">
-            Back to capsules
+            Back to Knowledge Pods
           </Link>
         </div>
       );
     }
     return (
       <div role="alert" aria-live="assertive" className="lk-alert">
-        {loadError ?? "Failed to load capsule."}
+        {loadError ?? "Failed to load Knowledge Pod."}
         <button
           type="button"
           onClick={reload}
-          aria-label="Retry loading capsule detail"
+          aria-label="Retry loading Knowledge Pod detail"
           className="lk-alert-retry"
         >
           Retry

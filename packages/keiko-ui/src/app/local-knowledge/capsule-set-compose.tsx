@@ -119,10 +119,10 @@ function MemberCheckbox({
 }
 
 function validateSelection(name: string, count: number): string | null {
-  if (name.trim().length === 0) return "Set name is required.";
-  if (count === 0) return "Select at least one capsule to combine.";
+  if (name.trim().length === 0) return "Knowledge Pod Set name is required.";
+  if (count === 0) return "Select at least one Knowledge Pod to combine.";
   if (count > CAPSULE_SET_MAX_MEMBERS) {
-    return `A set can hold at most ${CAPSULE_SET_MAX_MEMBERS.toString()} capsules.`;
+    return `A Knowledge Pod Set can hold at most ${CAPSULE_SET_MAX_MEMBERS.toString()} Knowledge Pods.`;
   }
   return null;
 }
@@ -180,8 +180,8 @@ export function CapsuleSetComposeDialog({
     }
   }
 
-  const nameInvalid = error === "Set name is required.";
-  const selectionInvalid = error === "Select at least one capsule to combine.";
+  const nameInvalid = error === "Knowledge Pod Set name is required.";
+  const selectionInvalid = error === "Select at least one Knowledge Pod to combine.";
 
   return createPortal(
     <div className="mc-dialog-backdrop" role="presentation">
@@ -194,11 +194,11 @@ export function CapsuleSetComposeDialog({
         tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
-          Combine capsules into a set
+          Create Knowledge Pod Set
         </h2>
         <form onSubmit={(event) => void handleSubmit(event)}>
           <label className="mc-dialog-field" htmlFor={nameId}>
-            <span className="mc-dialog-label">Set name</span>
+            <span className="mc-dialog-label">Knowledge Pod Set name</span>
             <input
               id={nameId}
               className="mc-dialog-input"
@@ -220,12 +220,12 @@ export function CapsuleSetComposeDialog({
             aria-describedby={selectionInvalid ? errorId : undefined}
           >
             <legend className="mc-dialog-label">
-              Capsules ({selected.size.toString()}/{CAPSULE_SET_MAX_MEMBERS.toString()})
+              Knowledge Pods ({selected.size.toString()}/{CAPSULE_SET_MAX_MEMBERS.toString()})
             </legend>
             {capsules.length === 0 ? (
-              <p className="lkd-empty-note">No capsules available to combine.</p>
+              <p className="lkd-empty-note">No Knowledge Pods available to combine.</p>
             ) : (
-              <ul className="lk-compose-member-list" aria-label="Selectable capsules">
+              <ul className="lk-compose-member-list" aria-label="Selectable Knowledge Pods">
                 {capsules.map((capsule) => (
                   <MemberCheckbox
                     key={capsule.id}
@@ -258,10 +258,7 @@ export function CapsuleSetComposeDialog({
               disabled={busy}
               aria-busy={busy}
             >
-              {/* One verb through the whole flow — header "Combine capsules",
-                  dialog title, submit and busy label all say Combine
-                  (uiux-fix F048, C368). */}
-              {busy ? "Combining…" : "Combine"}
+              {busy ? "Creating Knowledge Pod Set…" : "Create Knowledge Pod Set"}
             </button>
           </div>
         </form>

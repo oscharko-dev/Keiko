@@ -98,6 +98,10 @@ export async function runGroundedAnswer(
       pack,
       noEvidence: true,
       ...(retrieval.reason !== undefined ? { reason: retrieval.reason } : {}),
+      ...(retrieval.diagnostics !== undefined
+        ? { retrievalDiagnostics: retrieval.diagnostics }
+        : {}),
+      ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
     };
   }
 
@@ -137,5 +141,7 @@ export async function runGroundedAnswer(
     pack,
     noEvidence: false,
     ...(reranked?.diagnostics === undefined ? {} : { reranker: reranked.diagnostics }),
+    ...(retrieval.diagnostics !== undefined ? { retrievalDiagnostics: retrieval.diagnostics } : {}),
+    ...(retrieval.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
   };
 }
