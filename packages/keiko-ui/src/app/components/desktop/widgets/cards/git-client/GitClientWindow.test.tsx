@@ -489,6 +489,46 @@ describe("GitClientWindow — repository list", () => {
     act(() => resolveBetaStatus(makeStatus()));
   });
 
+  it("hides stale branch names while a newly selected repository is loading", async () => {
+    let resolveBetaBranches!: (value: GitBranchListResponse) => void;
+    let resolveBetaStatus!: (value: GitRepositoryStatusResponse) => void;
+    const betaBranches = new Promise<GitBranchListResponse>((res) => {
+      resolveBetaBranches = res;
+    });
+    const betaStatus = new Promise<GitRepositoryStatusResponse>((res) => {
+      resolveBetaStatus = res;
+    });
+    const client = makeClient({
+      listBranches: vi.fn((path: string) =>
+        path === REPO_A.path ? Promise.resolve(makeBranchList()) : betaBranches,
+      ),
+      getStatus: vi.fn((path: string) =>
+        path === REPO_A.path ? Promise.resolve(makeStatus()) : betaStatus,
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("combobox", { name: "Branch: main" });
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+
+    await waitFor(() => expect(client.listBranches).toHaveBeenCalledWith(REPO_B.path));
+    expect(screen.queryByRole("combobox", { name: "Branch: main" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Branch: Loading branches" })).toBeDisabled();
+
+    act(() => {
+      resolveBetaBranches(
+        makeBranchList({
+          root: REPO_B.path,
+          branches: [{ name: "release", headRefHash: "ccc", current: true }],
+        }),
+      );
+      resolveBetaStatus(makeStatus({ root: REPO_B.path, branch: "release" }));
+    });
+    await screen.findByRole("combobox", { name: "Branch: release" });
+  });
+
   it("renders a loading state while repos are being fetched", async () => {
     let resolve!: (v: { projects: readonly ProjectWithAvailability[] }) => void;
     const pending = new Promise<{ projects: readonly ProjectWithAvailability[] }>((res) => {
