@@ -8,7 +8,11 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorPickerWidget } from "./ConnectorPickerWidget";
-import type { CapsulesResponse, CapsuleSetsResponse } from "@/lib/local-knowledge-api";
+import type {
+  CapsuleListEntry,
+  CapsulesResponse,
+  CapsuleSetsResponse,
+} from "@/lib/local-knowledge-api";
 
 // ─── Mock the local-knowledge-api module ──────────────────────────────────────
 
@@ -142,6 +146,45 @@ describe("ConnectorPickerWidget", () => {
     const statuses = screen.getAllByRole("status");
     const badge = statuses.find((el) => el.textContent?.includes("My Docs"));
     expect(badge).not.toBeUndefined();
+  });
+
+  it("surfaces Knowledge Pod embedding guidance in selected and option states", async () => {
+    const guidedCapsule: CapsuleListEntry = {
+      ...READY_CAPSULE,
+      knowledgePod: {
+        readiness: "degraded",
+        embeddingCompatibilityStatus: "incompatible",
+        embeddingCompatibilityReason: "fingerprint-mismatch",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Embedding mismatch",
+          description: "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+          tone: "danger",
+        },
+      },
+    };
+    mockFetchCapsules.mockResolvedValue({ capsules: [guidedCapsule] });
+    mockFetchCapsuleSets.mockResolvedValue({ capsuleSets: [] });
+    const user = userEvent.setup();
+    render(
+      <ConnectorPickerWidget selectedKind="capsule" selectedId="cap-abc" onSelect={vi.fn()} />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    const selectedStatuses = screen.getAllByRole("status");
+    const selectedBadge = selectedStatuses.find((el) =>
+      el.textContent?.includes("Embedding mismatch"),
+    );
+    expect(selectedBadge).not.toBeUndefined();
+    expect(
+      screen.getAllByText(
+        "Semantic retrieval is disabled for this pod until it is reindexed locally.",
+      ),
+    ).toHaveLength(2);
+
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("option", { name: /Embedding mismatch/i })).toBeInTheDocument();
   });
 
   it("shows an empty state with a 'Create' action when no Knowledge Pods exist", async () => {
