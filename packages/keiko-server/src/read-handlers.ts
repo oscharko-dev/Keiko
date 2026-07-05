@@ -8,7 +8,7 @@
 
 import {
   toSafeObject,
-  listConfiguredCapabilities,
+  listSafeConfiguredCapabilities,
   resolveVoiceCapability,
   type EnvSource,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -66,7 +66,7 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 // model-backed run can start, so the endpoint returns an empty list.
 export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
-  const models = config === undefined ? [] : listConfiguredCapabilities(config);
+  const models = config === undefined ? [] : listSafeConfiguredCapabilities(config);
   return { status: 200, body: { models } };
 }
 

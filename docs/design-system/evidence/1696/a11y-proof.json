@@ -2,7 +2,7 @@
   "issue": 1696,
   "verdict": "PASS",
   "tool": "axe-core 4.12.1",
-  "cssSha256": "bb4d57273cf58d823d435a346feb87400145bcb0636348a22eefb17027e2585f",
+  "cssSha256": "5081884b1f363e891ff92c6fc630def8874b2c90a55bdd55da164dcb7ddf9f35",
   "gate": "zero serious/critical axe violations across update window modes, startup notice, and responsive manual path",
   "captures": [
     {

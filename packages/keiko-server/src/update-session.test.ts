@@ -131,6 +131,48 @@ describe("UpdateSessionManager", () => {
     expect(manager.getStatus().activeSession?.logs?.stdoutPreview).toContain("[REDACTED]");
   });
 
+  it("surfaces a restart command that targets the running port and state directory", () => {
+    const manager = createUpdateSessionManager({
+      processEnv: {
+        KEIKO_UI_PORT: "1990",
+        KEIKO_UI_HOST: "127.0.0.1",
+        KEIKO_STATE_DIR: "/tmp/keiko update state",
+      },
+      detector: () => supportedMode("npm"),
+      beforeExecute: () => Promise.race([]),
+      runCommandImpl: () => Promise.resolve(commandResult()),
+    });
+
+    const started = manager.start({ targetVersion: "0.2.12" });
+
+    expect(started.session.restartCommandPreview).toEqual({
+      executable: "keiko",
+      args: [
+        "restart",
+        "--port",
+        "1990",
+        "--host",
+        "127.0.0.1",
+        "--state-dir",
+        "/tmp/keiko update state",
+      ],
+      label: "keiko restart --port 1990 --host 127.0.0.1 --state-dir '/tmp/keiko update state'",
+    });
+  });
+
+  it("omits the restart command preview when runtime targeting data is incomplete", () => {
+    const manager = createUpdateSessionManager({
+      processEnv: { KEIKO_UI_PORT: "1990" },
+      detector: () => supportedMode("npm"),
+      beforeExecute: () => Promise.race([]),
+      runCommandImpl: () => Promise.resolve(commandResult()),
+    });
+
+    const started = manager.start({ targetVersion: "0.2.12" });
+
+    expect(started.session.restartCommandPreview).toBeUndefined();
+  });
+
   it("runs Yarn through equivalent governed argv", async () => {
     const calls: Parameters<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>[0][] = [];
     const manager = createUpdateSessionManager({
@@ -434,7 +476,12 @@ describe("UpdateSessionManager", () => {
 
     manager.start({ targetVersion: "0.2.12" });
     await waitForPhase(manager, "restart-required");
-    expect(manager.verifyRestart("0.2.12").failureReason).toBe("restart-version-mismatch");
+    expect(manager.verifyRestart("0.2.12")).toMatchObject({
+      phase: "restart-required",
+      failureReason: "restart-version-mismatch",
+      restartRequired: true,
+      message: "Restart not detected yet. Run the restart command, then try Verify restart again.",
+    });
 
     const second = createUpdateSessionManager({
       detector: () => supportedMode(),

@@ -16,6 +16,8 @@ export type {
   ModelKind,
   CostClass,
   LatencyClass,
+  ModelTokenAccountingSource,
+  ModelTokenAccounting,
   InfillingAlignment,
   ModelCapability,
   CompletionInteractionMode,

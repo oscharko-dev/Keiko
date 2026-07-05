@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  CONTEXT_ENGINEERING_SCHEMA_VERSION,
+  DEFAULT_CONTEXT_PROFILE,
+  type ContextAssemblyDiagnostics,
+} from "@oscharko-dev/keiko-contracts";
+import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,
 } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -93,6 +98,33 @@ function pack(): ConnectedContextPack {
     ],
     emittedAtMs: NOW,
     ledgerRef: undefined,
+  };
+}
+
+function assemblyDiagnosticsWithCalibratedTokenAccounting(): ContextAssemblyDiagnostics {
+  return {
+    schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
+    profile: {
+      ...DEFAULT_CONTEXT_PROFILE,
+      tokenAccounting: {
+        source: "calibrated",
+        counterId: `counter-${SK_FAKE}`,
+        scaleMilli: 1_250,
+        offsetTokens: 2,
+      },
+    },
+    totalEstimatedTokens: 12,
+    budgetPressure: "low",
+    orderedForRecency: false,
+    lanes: [
+      {
+        laneId: "repo-evidence",
+        estimatedTokens: 12,
+        includedItems: 1,
+        excludedItems: 0,
+        budgetPressure: "low",
+      },
+    ],
   };
 }
 
@@ -285,5 +317,53 @@ describe("connected-context evidence", () => {
     expect(store.list()).toEqual(["grounded-run-2"]);
     expect(loadEvidence(store, "grounded-run-1")).toBeUndefined();
     expect(loadEvidence(store, "grounded-run-2")).toBeDefined();
+  });
+
+  it("redacts tokenAccounting.counterId while passing source/scaleMilli/offsetTokens through", () => {
+    const store = createInMemoryEvidenceStore();
+    persistConnectedContextEvidence(
+      {
+        runId: "grounded-run-token-accounting",
+        modelId: "example-chat-model",
+        workspaceRoot: "/repo",
+        pack: pack(),
+        contextAssembly: assemblyDiagnosticsWithCalibratedTokenAccounting(),
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 1,
+      },
+      { store, env: {}, additionalSecrets: [SK_FAKE, GHP_FAKE, PEM_FAKE] },
+    );
+    const manifest = requireManifest(loadEvidence(store, "grounded-run-token-accounting"));
+    const tokenAccounting = manifest.contextAssembly?.profile.tokenAccounting;
+    expect(tokenAccounting).toBeDefined();
+    expect(tokenAccounting?.counterId).not.toContain(SK_FAKE);
+    expect(tokenAccounting?.counterId).toContain("[REDACTED]");
+    expect(tokenAccounting?.source).toBe("calibrated");
+    expect(tokenAccounting?.scaleMilli).toBe(1_250);
+    expect(tokenAccounting?.offsetTokens).toBe(2);
+
+    persistConnectedContextEvidence(
+      {
+        runId: "grounded-run-no-token-accounting",
+        modelId: "example-chat-model",
+        workspaceRoot: "/repo",
+        pack: pack(),
+        contextAssembly: {
+          ...assemblyDiagnosticsWithCalibratedTokenAccounting(),
+          profile: { ...DEFAULT_CONTEXT_PROFILE, tokenAccounting: undefined },
+        },
+        citationCount: 1,
+        elapsedMs: 42,
+        startedAt: NOW,
+        finishedAt: NOW + 1,
+      },
+      { store, env: {} },
+    );
+    const manifestWithoutAccounting = requireManifest(
+      loadEvidence(store, "grounded-run-no-token-accounting"),
+    );
+    expect(manifestWithoutAccounting.contextAssembly?.profile.tokenAccounting).toBeUndefined();
   });
 });

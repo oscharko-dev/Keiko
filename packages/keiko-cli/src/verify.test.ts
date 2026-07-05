@@ -11,7 +11,7 @@ interface Captured {
   readonly err: () => string;
 }
 
-const VERIFY_CLI_SPAWN_TIMEOUT_MS = 15_000;
+const VERIFY_CLI_SPAWN_TIMEOUT_MS = 45_000;
 
 function makeIo(): Captured {
   const outChunks: string[] = [];

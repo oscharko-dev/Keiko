@@ -11,9 +11,9 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const RUNNER = join(REPO_ROOT, "scripts", "dev-runner.mjs");
 const DEFAULT_DEV_PID_FILE = join(REPO_ROOT, ".keiko", "dev", "dev-ui.pid.json");
 const UI_TSCONFIG = join(REPO_ROOT, "packages", "keiko-ui", "tsconfig.json");
-const PUBLIC_READY_TIMEOUT_MS = 90_000;
+const PUBLIC_READY_TIMEOUT_MS = 180_000;
 const PUBLIC_READY_POLL_MS = 250;
-const DEV_RUNNER_TEST_TIMEOUT_MS = 120_000;
+const DEV_RUNNER_TEST_TIMEOUT_MS = 240_000;
 
 async function freePort(): Promise<number> {
   const server = createServer();

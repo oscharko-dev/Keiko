@@ -109,6 +109,7 @@ export type {
   UpdatePreflightBlockerCode,
   UpdatePreflightImpactEntry,
   UpdatePreflightImpactSummary,
+  UpdatePreflightPatchNoteSection,
   UpdatePreflightPatchNotes,
   UpdatePreflightRegistryStatus,
   UpdatePreflightReleaseMetadataStatus,
@@ -136,6 +137,7 @@ export type {
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
   UpdatePolicySource,
+  UpdateRestartCommandPreview,
   UpdateRestartVerificationRequest,
   UpdateRestartVerificationRequestParse,
   UpdateRestartVerificationRequestParseFail,
@@ -843,6 +845,8 @@ export type {
   ModelKind,
   CostClass,
   LatencyClass,
+  ModelTokenAccountingSource,
+  ModelTokenAccounting,
   InfillingAlignment,
   ModelCapability,
   CompletionInteractionMode,
@@ -1260,7 +1264,12 @@ export {
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
-export { stripUnsafeFormatChars } from "./text-safety.js";
+export {
+  containsAbsolutePath,
+  containsPseudoRoleMarker,
+  redactAbsolutePaths,
+  stripUnsafeFormatChars,
+} from "./text-safety.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
@@ -1320,6 +1329,8 @@ export type {
   ContextLaneId,
   ContextEvictionPolicy,
   ContextBudgetPressure,
+  ContextTokenAccountingSource,
+  ContextTokenAccounting,
   ContextModelMetadata,
   ContextProfile,
   ContextLaneBudget,
@@ -1329,6 +1340,9 @@ export type {
   ContextAssemblyDiagnostics,
   ContextCompactionRecord,
   ContextCompactionModelSummary,
+  ContextCompactionModelSummaryStatus,
+  ContextCompactionModelSummaryValidationState,
+  ContextCompactionModelSummaryFailureReason,
   ContextRehydrationHandle,
   ContextProvenanceRefKind,
   ContextProvenanceRef,
@@ -1341,13 +1355,23 @@ export type {
 export {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEMS,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_STATUSES,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_VALIDATION_STATES,
+  CONTEXT_COMPACTION_MODEL_SUMMARY_FAILURE_REASONS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   DEFAULT_TOKEN_ESTIMATOR_ID,
+  DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
   CONTEXT_LANE_IDS,
   CONTEXT_EVICTION_POLICIES,
+  CONTEXT_TOKEN_ACCOUNTING_SOURCES,
   DEFAULT_CONTEXT_PROFILE,
   estimateTokens,
   estimateTokensForSegments,
+  countContextTokens,
+  countContextTokensForSegments,
+  resolveContextTokenAccounting,
   maxUtf8BytesForTokenBudget,
   deriveContextProfile,
   deriveContextProfileFromCapability,

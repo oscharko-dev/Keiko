@@ -457,6 +457,7 @@ export const EN_MESSAGES = {
   "updates.notice.notNow": "Not now",
   "updates.versionUnknown": "unknown",
   "updates.versionLine": "Current {current} -> target {target}",
+  "updates.versionUnavailable": "Current {current}; latest version could not be verified.",
   "updates.versionInstalled": "Keiko is now running {version}.",
   "updates.loading": "Checking update status...",
   "updates.error.title": "Update status unavailable",
@@ -466,6 +467,7 @@ export const EN_MESSAGES = {
   "updates.status.available": "Update available",
   "updates.status.critical": "Critical update available",
   "updates.status.degraded": "Update status degraded",
+  "updates.status.unavailable": "Update status unavailable",
   "updates.status.installing": "Installing update",
   "updates.status.restart": "Restart required",
   "updates.status.success": "Update installed",
@@ -473,6 +475,8 @@ export const EN_MESSAGES = {
   "updates.primary.title": "Recommended action",
   "updates.primary.available": "Review the state impact, then install when you are ready.",
   "updates.primary.current": "No update is available. You can check again at any time.",
+  "updates.primary.unavailable":
+    "Update availability could not be verified. Check again when the registry is reachable.",
   "updates.primary.manual":
     "Automatic install is unavailable. Follow the approved manual instructions, restart Keiko, then check again.",
   "updates.primary.installed":
@@ -480,20 +484,27 @@ export const EN_MESSAGES = {
   "updates.primary.cancelled": "The update was cancelled. Check again before starting another run.",
   "updates.primary.failed":
     "The update did not complete. Review the failure details before retrying.",
-  "updates.primary.restart":
-    "Restart Keiko outside this window, then verify that the new version is running.",
+  "updates.primary.restart": "Restart and verification are needed to finish the update.",
   "updates.action.check": "Check again",
   "updates.action.install": "Install update",
   "updates.action.retry": "Retry update",
   "updates.action.cancel": "Cancel update",
   "updates.action.verifyRestart": "Verify restart",
-  "updates.action.showInstructions": "Show instructions",
-  "updates.action.hideInstructions": "Hide instructions",
-  "updates.restart.verifyHelp":
-    "This does not restart Keiko. Use your normal restart command first, then verify here.",
+  "updates.restart.summary": "Restart instructions",
+  "updates.restart.ready": "Keiko {version} is installed. Finish with one restart.",
+  "updates.restart.notDetected":
+    "Restart not detected yet. Run the restart command, then try Verify restart again.",
+  "updates.restart.verifyHelp": "When Keiko opens again, click Verify restart.",
+  "updates.restart.instructions":
+    "Copy the command below, paste it into your terminal, and press Enter.",
+  "updates.restart.genericInstructions":
+    "Restart Keiko from the same launcher you used before, then return here and verify.",
+  "updates.restart.commandListLabel": "Restart command",
+  "updates.restart.commandLabel": "Restart Keiko",
   "updates.check.checking": "Checking for updates...",
   "updates.check.current": "Checked just now. No newer update is available.",
   "updates.check.available": "Checked just now. A newer update is available.",
+  "updates.check.unavailable": "Checked just now. Update status could not be verified.",
   "updates.check.manualStillRequired":
     "Manual install is still pending. Follow the approved manual instructions, restart Keiko, then check again.",
   "updates.check.manualInstalled": "Update installed. Keiko is now running {version}.",
@@ -530,6 +541,18 @@ export const EN_MESSAGES = {
   "updates.manual.stepRestart": "Restart Keiko using your normal launcher.",
   "updates.manual.stepCheck": "Return here and check again to verify the new version.",
   "updates.manual.instructionsSummary": "Manual update instructions",
+  "updates.manual.copyInstructionLabel": "Approved manual instruction",
+  "updates.manual.copyCommandLabel": "Approved update command",
+  "updates.manual.commandListLabel": "Package-manager commands",
+  "updates.manual.copyInstructions": "Copy manual instructions",
+  "updates.manual.copyCommand": "Copy command",
+  "updates.manual.copyNpmCommand": "Copy npm command",
+  "updates.manual.copyYarnCommand": "Copy Yarn command",
+  "updates.manual.copyCopied": "Copied",
+  "updates.manual.copySelected": "Text selected. Use your system copy shortcut.",
+  "updates.manual.copySelectedShort": "Text selected",
+  "updates.manual.copyFailed": "Copy failed. Select the text and copy it manually.",
+  "updates.manual.copyFailedShort": "Copy failed",
   "updates.manual.finish":
     "After the manual update is complete and Keiko has restarted, verify here.",
   "updates.manual.releaseLink": "Open release notes",
@@ -539,6 +562,7 @@ export const EN_MESSAGES = {
   "updates.details.releaseMetadata": "Release metadata",
   "updates.details.installMode": "Install mode",
   "updates.details.remediation": "Remediation",
+  "updates.details.installLog": "Installer output",
   "updates.actionStatus.notNeeded": "Not needed",
   "updates.actionStatus.pending": "Pending",
   "updates.actionStatus.running": "Running",
