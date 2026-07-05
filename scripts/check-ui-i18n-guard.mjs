@@ -14,7 +14,7 @@ const I18N_USAGE_PATTERNS = [
   /\bI18nTranslate\b/,
   /\btranslate\s*\(/,
   /["']@\/lib\/i18n["']/,
-  /["'][.\/]+lib\/i18n["']/,
+  /["'][./]+lib\/i18n["']/,
 ];
 
 function normalizePath(file) {
