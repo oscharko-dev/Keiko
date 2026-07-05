@@ -206,7 +206,7 @@ async function installRoutes(page: Page, state: RouteState): Promise<RouteLedger
       state.verifyRestartSession ??
       updateSession({ phase: "succeeded", restartRequired: false, message: "Update verified." });
     state.sessionStatus =
-      nextSession["phase"] === "restart-required"
+      nextSession.phase === "restart-required"
         ? sessionStatus({ activeSession: nextSession })
         : sessionStatus({ lastSession: nextSession });
     await fulfillJson(route, nextSession);
@@ -291,6 +291,52 @@ async function assertWindowBodyClipped(updateWindow: Locator): Promise<void> {
   expect(metrics.bodyBottom).toBeLessThanOrEqual(metrics.clipBottom + 1);
 }
 
+async function assertManualCommandCopyAndReleaseLink(
+  page: Page,
+  updateWindow: Locator,
+): Promise<void> {
+  const manualInstructions = updateWindow.locator("details").filter({
+    hasText: "Manual update instructions",
+  });
+  await manualInstructions.locator("summary").click();
+  await expect(manualInstructions).toHaveAttribute("open", "");
+  await expect(updateWindow.getByText("npm", { exact: true })).toBeVisible();
+  await expect(updateWindow.getByText("Yarn", { exact: true })).toBeVisible();
+  await expect(
+    updateWindow.getByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.12"),
+  ).toBeVisible();
+  await expect(
+    updateWindow.getByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.12"),
+  ).toBeVisible();
+
+  const npmCopy = updateWindow.getByRole("button", { name: "Copy npm command" });
+  await npmCopy.click();
+  await expect(npmCopy).toHaveAttribute("data-copied", "true");
+
+  const releaseLink = updateWindow.getByRole("link", { name: "Open release notes" });
+  await expect(releaseLink).toHaveAttribute("target", "_blank");
+  await expect(releaseLink).toHaveAttribute("rel", "noopener noreferrer");
+  const popupPromise = page.waitForEvent("popup");
+  await releaseLink.click();
+  const popup = await popupPromise;
+  await expect.poll(() => popup.url()).toContain(RELEASE_URL);
+  await popup.close();
+}
+
+async function assertScrollableWindowClipped(updateWindow: Locator): Promise<void> {
+  await assertWindowBodyClipped(updateWindow);
+  const body = updateWindow.locator(".win-body");
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect
+    .poll(() =>
+      body.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight),
+    )
+    .toBe(true);
+  await assertWindowBodyClipped(updateWindow);
+}
+
 test("shows current release notes without target-unknown or degraded copy", async ({ page }) => {
   await installRoutes(page, {
     report: preflight(),
@@ -336,45 +382,8 @@ test("renders manual update instructions as copyable commands and keeps release 
   await expect(updateWindow.getByRole("heading", { name: "Update available" })).toBeVisible();
   await expect(updateWindow.getByRole("button", { name: "Show instructions" })).toHaveCount(0);
   await expect(updateWindow.getByText("Manual update path")).toBeVisible();
-
-  const manualInstructions = updateWindow.locator("details").filter({
-    hasText: "Manual update instructions",
-  });
-  await manualInstructions.locator("summary").click();
-  await expect(manualInstructions).toHaveAttribute("open", "");
-  await expect(updateWindow.getByText("npm", { exact: true })).toBeVisible();
-  await expect(updateWindow.getByText("Yarn", { exact: true })).toBeVisible();
-  await expect(
-    updateWindow.getByText("npm install --global --ignore-scripts @oscharko-dev/keiko@0.2.12"),
-  ).toBeVisible();
-  await expect(
-    updateWindow.getByText("yarn global add --ignore-scripts @oscharko-dev/keiko@0.2.12"),
-  ).toBeVisible();
-
-  const npmCopy = updateWindow.getByRole("button", { name: "Copy npm command" });
-  await npmCopy.click();
-  await expect(npmCopy).toHaveAttribute("data-copied", "true");
-
-  const releaseLink = updateWindow.getByRole("link", { name: "Open release notes" });
-  await expect(releaseLink).toHaveAttribute("target", "_blank");
-  await expect(releaseLink).toHaveAttribute("rel", "noopener noreferrer");
-  const popupPromise = page.waitForEvent("popup");
-  await releaseLink.click();
-  const popup = await popupPromise;
-  await expect.poll(() => popup.url()).toContain(RELEASE_URL);
-  await popup.close();
-
-  await assertWindowBodyClipped(updateWindow);
-  const body = updateWindow.locator(".win-body");
-  await body.evaluate((element) => {
-    element.scrollTop = element.scrollHeight;
-  });
-  await expect
-    .poll(() =>
-      body.evaluate((element) => element.scrollTop + element.clientHeight >= element.scrollHeight),
-    )
-    .toBe(true);
-  await assertWindowBodyClipped(updateWindow);
+  await assertManualCommandCopyAndReleaseLink(page, updateWindow);
+  await assertScrollableWindowClipped(updateWindow);
 });
 
 test("keeps failed restart verification in the restart-required flow", async ({ page }) => {
