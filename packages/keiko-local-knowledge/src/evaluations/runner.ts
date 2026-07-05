@@ -107,16 +107,16 @@ async function embedAllChunks(
   seeded: SeededFixture,
   now: () => number,
 ): Promise<void> {
-  const adapter = createScriptedEmbeddingAdapter({
-    identity: seeded.identity,
-    topicBoosts: seeded.topicBoosts,
-  });
   let storageCounter = 0;
   const idSource = (): string => {
     storageCounter += 1;
     return `eval-storage-${String(storageCounter)}`;
   };
   for (const capsule of fixture.capsules) {
+    const adapter = createScriptedEmbeddingAdapter({
+      identity: capsule.embeddingModelIdentity,
+      topicBoosts: seeded.topicBoosts,
+    });
     const chunks = collectCapsuleChunks(capsule);
     const result = await embedChunkBatch(chunks, {
       adapter,

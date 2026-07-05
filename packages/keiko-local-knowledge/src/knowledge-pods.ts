@@ -8,6 +8,11 @@
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  compareEmbeddingProfiles,
+  embeddingProfileFromModelIdentity,
+  embeddingProfileKey,
+  type EmbeddingProfileCompatibilityDecision,
+  type EmbeddingProfileIdentity,
   type CapsuleLifecycleState,
   type CapsuleSet,
   type KnowledgeCapsule,
@@ -37,6 +42,8 @@ interface CapsuleProjectionInput {
   readonly sources: readonly KnowledgeSource[];
   readonly counts: KnowledgePodCounts;
   readonly degradationReasons: readonly string[];
+  readonly embeddingProfile: EmbeddingProfileIdentity;
+  readonly embeddingDecision: EmbeddingProfileCompatibilityDecision;
 }
 
 interface CapsuleCounts {
@@ -77,6 +84,8 @@ export function buildKnowledgePodSummary(
 ): KnowledgePodSummary {
   const sources = listCapsuleSources(store, capsule.id);
   const counts = capsuleCounts(store, capsule.id);
+  const embeddingProfile = capsuleEmbeddingProfile(capsule);
+  const embeddingDecision = compareEmbeddingProfiles(embeddingProfile, embeddingProfile);
   return assertValidSummary(
     capsuleProjection({
       capsule,
@@ -86,7 +95,9 @@ export function buildKnowledgePodSummary(
         sourceCount: sources.length,
         ...counts,
       },
-      degradationReasons: capsuleDegradationReasons(capsule, sources, counts),
+      embeddingProfile,
+      embeddingDecision,
+      degradationReasons: capsuleDegradationReasons(capsule, sources, counts, embeddingDecision),
     }),
   );
 }
@@ -102,9 +113,11 @@ export function buildKnowledgePodSetSummary(
   const sourceKinds = uniqueSourceKinds(
     memberProjections.flatMap((projection) => projection.sources),
   );
+  const embeddingDecision = setEmbeddingDecision(memberProjections);
   const degradationReasons = uniqueStrings([
     ...missingMemberReasons(set, memberProjections),
     ...memberProjections.flatMap((projection) => projection.degradationReasons),
+    ...(counts.vectorCount > 0 ? embeddingDegradationReasons(embeddingDecision) : []),
   ]);
   return assertValidSummary({
     schemaVersion: KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
@@ -116,7 +129,7 @@ export function buildKnowledgePodSetSummary(
     readiness: setReadiness(memberProjections, degradationReasons),
     counts,
     sourceKinds,
-    retrieval: setRetrieval(memberProjections),
+    retrieval: setRetrieval(memberProjections, embeddingDecision),
     privacy: BASE_PRIVACY,
     governance: BASE_GOVERNANCE,
     compatibility: {
@@ -152,7 +165,12 @@ function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
     lifecycleState: input.capsule.lifecycleState,
     counts: input.counts,
     sourceKinds: uniqueSourceKinds(input.sources),
-    retrieval: capsuleRetrieval(input.capsule, input.counts),
+    retrieval: capsuleRetrieval(
+      input.capsule,
+      input.counts,
+      input.embeddingProfile,
+      input.embeddingDecision,
+    ),
     privacy: BASE_PRIVACY,
     governance: BASE_GOVERNANCE,
     compatibility: {
@@ -167,7 +185,6 @@ function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
     degradationReasons: input.degradationReasons,
   };
 }
-
 function memberProjection(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -176,6 +193,8 @@ function memberProjection(
   if (capsule === undefined) return undefined;
   const sources = listCapsuleSources(store, capsule.id);
   const counts = capsuleCounts(store, capsule.id);
+  const embeddingProfile = capsuleEmbeddingProfile(capsule);
+  const embeddingDecision = compareEmbeddingProfiles(embeddingProfile, embeddingProfile);
   const projection = {
     capsule,
     sources,
@@ -184,7 +203,9 @@ function memberProjection(
       sourceCount: sources.length,
       ...counts,
     },
-    degradationReasons: capsuleDegradationReasons(capsule, sources, counts),
+    embeddingProfile,
+    embeddingDecision,
+    degradationReasons: capsuleDegradationReasons(capsule, sources, counts, embeddingDecision),
   };
   assertValidSummary(capsuleProjection(projection));
   return projection;
@@ -213,6 +234,7 @@ function capsuleDegradationReasons(
   capsule: KnowledgeCapsule,
   sources: readonly KnowledgeSource[],
   counts: CapsuleCounts,
+  embeddingDecision: EmbeddingProfileCompatibilityDecision,
 ): readonly string[] {
   const reasons: string[] = [];
   if (sources.length === 0) reasons.push("No sources are attached.");
@@ -223,6 +245,7 @@ function capsuleDegradationReasons(
   if (sources.length > 0 && counts.vectorCount === 0 && capsule.lifecycleState !== "draft") {
     reasons.push("No retrieval vectors are available yet.");
   }
+  if (counts.vectorCount > 0) reasons.push(...embeddingDegradationReasons(embeddingDecision));
   return reasons;
 }
 
@@ -254,6 +277,8 @@ function setReadiness(
 function capsuleRetrieval(
   capsule: KnowledgeCapsule,
   counts: KnowledgePodCounts,
+  embeddingProfile: EmbeddingProfileIdentity,
+  embeddingDecision: EmbeddingProfileCompatibilityDecision,
 ): KnowledgePodRetrievalCapabilities {
   return {
     lexicalIndex: counts.chunkCount > 0,
@@ -270,18 +295,69 @@ function capsuleRetrieval(
       : {}),
     vectorDimensions: capsule.embeddingModelIdentity.vectorDimensions,
     vectorMetric: capsule.embeddingModelIdentity.vectorMetric,
+    ...safeRetrievalText("embeddingProfileKey", embeddingProfileKey(embeddingProfile)),
+    embeddingCompatibilityStatus: embeddingDecision.status,
+    embeddingCompatibilityReason: embeddingDecision.reason,
+    reindexRecommended: embeddingDecision.reindexRecommended,
+    queryEmbeddingAllowed: embeddingDecision.queryEmbeddingAllowed,
   };
 }
 
 function setRetrieval(
   members: readonly CapsuleProjectionInput[],
+  embeddingDecision: EmbeddingProfileCompatibilityDecision | undefined,
 ): KnowledgePodRetrievalCapabilities {
   return {
     lexicalIndex: members.some((member) => member.counts.chunkCount > 0),
     vectorIndex: members.some((member) => member.counts.vectorCount > 0),
     hybridGrounding: true,
     crossSpaceScoreMixing: false,
+    ...(embeddingDecision === undefined
+      ? {}
+      : {
+          embeddingCompatibilityStatus: embeddingDecision.status,
+          embeddingCompatibilityReason: embeddingDecision.reason,
+          reindexRecommended: embeddingDecision.reindexRecommended,
+          queryEmbeddingAllowed: embeddingDecision.queryEmbeddingAllowed,
+        }),
   };
+}
+
+function capsuleEmbeddingProfile(capsule: KnowledgeCapsule): EmbeddingProfileIdentity {
+  return embeddingProfileFromModelIdentity(capsule.embeddingModelIdentity, {
+    locality: "provider",
+    policyCapabilities: ["query-embedding"],
+  });
+}
+
+function setEmbeddingDecision(
+  members: readonly CapsuleProjectionInput[],
+): EmbeddingProfileCompatibilityDecision | undefined {
+  const first = members[0];
+  if (first === undefined) return undefined;
+  const firstNonSame = members.find((member) => member.embeddingDecision.status !== "same");
+  if (firstNonSame !== undefined) return firstNonSame.embeddingDecision;
+  for (const member of members.slice(1)) {
+    const decision = compareEmbeddingProfiles(first.embeddingProfile, member.embeddingProfile);
+    if (decision.status !== "same") return decision;
+  }
+  return first.embeddingDecision;
+}
+
+function embeddingDegradationReasons(
+  decision: EmbeddingProfileCompatibilityDecision | undefined,
+): readonly string[] {
+  if (decision === undefined || decision.status === "same") return [];
+  if (decision.status === "unknown") {
+    return ["Embedding profile compatibility is unverified; full re-embed is recommended."];
+  }
+  if (decision.status === "unavailable") {
+    return ["Embedding profile cannot run semantic retrieval under the current policy."];
+  }
+  if (decision.status === "opaque") {
+    return ["Embedding profile is opaque; semantic compatibility cannot be established."];
+  }
+  return ["Embedding profile is incompatible with the current semantic retrieval space."];
 }
 
 function uniqueSourceKinds(sources: readonly KnowledgeSource[]): readonly KnowledgePodSourceKind[] {
@@ -334,12 +410,13 @@ function safeTags(values: readonly string[]): readonly string[] {
 }
 
 function safeRetrievalText(
-  key: "embeddingProvider" | "embeddingModelId" | "embeddingSpaceFingerprint",
+  key:
+    "embeddingProvider" | "embeddingModelId" | "embeddingSpaceFingerprint" | "embeddingProfileKey",
   value: string,
 ): Partial<
   Pick<
     KnowledgePodRetrievalCapabilities,
-    "embeddingProvider" | "embeddingModelId" | "embeddingSpaceFingerprint"
+    "embeddingProvider" | "embeddingModelId" | "embeddingSpaceFingerprint" | "embeddingProfileKey"
   >
 > {
   if (!isKnowledgePodEvidenceSafeText(value)) return {};
@@ -350,5 +427,7 @@ function safeRetrievalText(
       return { embeddingModelId: value };
     case "embeddingSpaceFingerprint":
       return { embeddingSpaceFingerprint: value };
+    case "embeddingProfileKey":
+      return { embeddingProfileKey: value };
   }
 }

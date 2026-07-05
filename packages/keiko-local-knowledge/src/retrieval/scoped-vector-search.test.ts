@@ -272,6 +272,106 @@ describe("searchVectorsForScope — composed capsule set", () => {
     expect(capsuleIds.has("cap-a")).toBe(true);
     expect(capsuleIds.has("cap-b")).toBe(true);
   });
+
+  it("uses lane-local dense ranks before fusing incompatible raw score spaces", async () => {
+    const { store } = getFixture();
+    const identityA: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-a" };
+    const identityB: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "model-b" };
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-lane-a",
+      sourceId: "src-lane-a",
+      documentId: "doc-lane-a",
+      identity: identityA,
+      text: "alpha beta gamma delta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-lane-b",
+      sourceId: "src-lane-b",
+      documentId: "doc-lane-b",
+      identity: identityB,
+      text: "epsilon zeta eta theta",
+      chunkingOptions: { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    });
+    const aChunk = seededA.chunkIds[0];
+    const bFirst = seededB.chunkIds[0];
+    const bSecond = seededB.chunkIds[1];
+    if (aChunk === undefined || bFirst === undefined || bSecond === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id IN (:a, :b)")
+      .run({ a: String(seededA.capsuleId), b: String(seededB.capsuleId) });
+    const indexed: VectorIndexAdapter = {
+      searchCapsule: (request) => ({
+        ok: true,
+        candidates:
+          String(request.capsule.id) === "cap-lane-a"
+            ? [
+                {
+                  chunkId: String(aChunk),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededA.sourceId,
+                  score: 0.1,
+                },
+              ]
+            : [
+                {
+                  chunkId: String(bFirst),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededB.sourceId,
+                  score: 0.99,
+                },
+                {
+                  chunkId: String(bSecond),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededB.sourceId,
+                  score: 0.98,
+                },
+              ],
+        sawDimensionCompatible: true,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "available",
+          indexName: "lane-local-test-index",
+          vectorCount: 1,
+        },
+      }),
+    };
+    const embeddedModels: string[] = [];
+    const embeddingAdapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        embeddedModels.push(req.modelId);
+        return {
+          ok: true,
+          value: {
+            vector: new Float32Array(vectorBlob(1, 0).buffer),
+            modelId: req.modelId,
+          },
+        };
+      },
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      embeddingAdapter,
+      { capsuleIds: [seededA.capsuleId, seededB.capsuleId] },
+      "unmatched lane query",
+      { topK: 2, vectorIndex: { adapter: indexed } },
+    );
+
+    expect(new Set(embeddedModels)).toEqual(new Set(["model-a", "model-b"]));
+    expect(outcome.references).toHaveLength(2);
+    expect(new Set(outcome.references.map((ref) => String(ref.capsuleId)))).toEqual(
+      new Set(["cap-lane-a", "cap-lane-b"]),
+    );
+    expect(outcome.diagnostics.embeddingLaneCount).toBe(2);
+    expect(outcome.diagnostics.embeddingLanes?.map((lane) => lane.status).sort()).toEqual([
+      "searched",
+      "searched",
+    ]);
+  });
 });
 
 describe("searchVectorsForScope — decoded vector cache", () => {
@@ -632,7 +732,7 @@ describe("searchVectorsForScope — embedding dim mismatch", () => {
 });
 
 describe("searchVectorsForScope — hardened embedding identity", () => {
-  it("returns incompatible-embedding-identity on embedding-space fingerprint drift even when lexical matches exist", async () => {
+  it("falls back to lexical-degraded retrieval on embedding-space fingerprint drift", async () => {
     const { store } = getFixture();
     const identity: EmbeddingModelIdentity = {
       ...DEFAULT_EMBEDDING,
@@ -665,8 +765,17 @@ describe("searchVectorsForScope — hardened embedding identity", () => {
       { topK: 10 },
     );
 
-    expect(outcome.references).toHaveLength(0);
-    expect(outcome.noEvidenceReason).toBe("incompatible-embedding-identity");
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.embeddingDegraded).toBe(true);
+    expect(outcome.noEvidenceReason).toBeUndefined();
+    expect(outcome.diagnostics.mode).toBe("lexical-degraded");
+    expect(outcome.diagnostics.embeddingLanes).toEqual([
+      expect.objectContaining({
+        capsuleIds: ["cap-fingerprint"],
+        status: "identity-incompatible",
+        denseCandidateCount: 0,
+      }),
+    ]);
     expect(outcome.diagnostics.lexicalCandidateCount).toBeGreaterThan(0);
   });
 });

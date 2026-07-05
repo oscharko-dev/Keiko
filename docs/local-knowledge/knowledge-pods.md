@@ -1,6 +1,6 @@
 # Local Knowledge: Knowledge Pods
 
-Status: implementation note for Epic #1815 and child issues #1827-#1831.
+Status: implementation note for Epic #1815 and embedding-space governance in Epic #1818.
 
 ## Product term
 
@@ -136,6 +136,34 @@ Raw vector scores remain comparable only inside one embedding space. Cross-pod a
 cross-space retrieval must continue to use rank fusion, metadata, and optional text-level
 reranking rather than direct score mixing.
 
+Embedding-space governance adds a redacted profile layer over the existing
+`EmbeddingModelIdentity` metadata. A summary may expose:
+
+- `embeddingProfileKey` after evidence-safe validation;
+- `embeddingCompatibilityStatus` as `same`, `unknown`, `incompatible`, `unavailable`,
+  or `opaque`;
+- `embeddingCompatibilityReason` as a closed Keiko-owned reason code;
+- `reindexRecommended` when compatibility is unknown or incompatible;
+- `queryEmbeddingAllowed` when policy allows semantic query embedding for the profile.
+
+Legacy pods that do not carry hardening fields such as normalization, instruction
+version, and embedding-space fingerprint are `unknown`, not silently compatible. They
+remain usable through lexical retrieval, but the UI can present local reindex guidance.
+Incompatible or unavailable semantic lanes fail closed for vector retrieval and do not
+pretend to be successful dense searches.
+
+Query-time retrieval embeds once per distinct compatible embedding identity. Dense
+candidates are ranked inside their embedding lane first. RRF then fuses lane-local dense
+ranks with lexical ranks; it never sorts dense candidates from heterogeneous lanes by
+raw vector score. This preserves ADR-0036: raw vector scores are only meaningful inside
+one embedding space.
+
+The retrieval diagnostics include redacted embedding lane evidence: lane id, participating
+pod ids, vector count, dense candidate count, query-embedding participation, and a closed
+lane status such as `searched`, `identity-incompatible`, `embedding-failed`, or
+`no-vectors`. Lane ids are opaque and do not expose provider endpoints, source paths, raw
+queries, vectors, or scores.
+
 ## Retrieval activity projection
 
 Grounded local-knowledge and hybrid answers may include a `retrievalActivity` object.
@@ -228,8 +256,10 @@ Known limits:
 The Knowledge Pod compatibility and redaction behavior is covered by:
 
 - `packages/keiko-contracts/src/local-knowledge-pods.test.ts`
+- `packages/keiko-contracts/src/local-knowledge-embedding-profiles.test.ts`
 - `packages/keiko-contracts/src/local-knowledge-retrieval-activity.test.ts`
 - `packages/keiko-local-knowledge/src/knowledge-pods.test.ts`
+- `packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts`
 - `packages/keiko-server/src/local-knowledge-grounded-qa.rescue.test.ts`
 - `packages/keiko-server/src/grounded-qa-hybrid.test.ts`
 - `packages/keiko-server/src/local-knowledge-handlers.test.ts`

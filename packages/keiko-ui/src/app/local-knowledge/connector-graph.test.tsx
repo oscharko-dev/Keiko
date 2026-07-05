@@ -145,6 +145,36 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.getByText("Beta Notes")).toBeInTheDocument();
   });
 
+  it("renders redacted embedding reindex guidance when Knowledge Pod metadata is present", async () => {
+    const capsule = makeCapsule({
+      displayName: "Legacy Vectors",
+      knowledgePod: {
+        readiness: "degraded",
+        embeddingCompatibilityStatus: "unknown",
+        embeddingCompatibilityReason: "legacy-unverified-profile",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+        guidance: {
+          label: "Reindex recommended",
+          description: "Compatibility is unverified; lexical fallback remains available.",
+          tone: "warning",
+        },
+      },
+    });
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    const badge = await screen.findByText("Reindex recommended");
+
+    expect(badge).toHaveAttribute(
+      "title",
+      "Compatibility is unverified; lexical fallback remains available.",
+    );
+    expect(badge).toHaveAttribute(
+      "aria-label",
+      "Embedding compatibility: Reindex recommended. Compatibility is unverified; lexical fallback remains available.",
+    );
+  });
+
   it("does NOT render the empty-state panel when capsules are present", async () => {
     const capsules = [makeCapsule()];
     render(<ConnectorGraph fetchCapsulesImpl={fetchWith(capsules)} />);

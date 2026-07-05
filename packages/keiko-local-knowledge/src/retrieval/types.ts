@@ -86,11 +86,23 @@ export interface RetrievalResult {
   readonly references: readonly RetrievalReference[];
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
-  // True when the embedding adapter failed for at least one capsule but lexical
-  // candidates kept the result non-empty. Observability signal for callers; does
-  // not change which references are returned or whether noEvidence fires.
+  // True when a dense embedding lane degraded but lexical candidates kept the
+  // result non-empty. Observability signal for callers; does not change which
+  // references are returned or whether noEvidence fires.
   readonly embeddingDegraded?: true;
   readonly diagnostics?: RetrievalDiagnostics;
+}
+
+export type RetrievalEmbeddingLaneStatus =
+  "searched" | "degraded" | "embedding-failed" | "identity-incompatible" | "no-vectors";
+
+export interface RetrievalEmbeddingLaneDiagnostics {
+  readonly laneId: string;
+  readonly capsuleIds: readonly KnowledgeCapsuleId[];
+  readonly status: RetrievalEmbeddingLaneStatus;
+  readonly queryEmbeddingRequested: boolean;
+  readonly vectorCount: number;
+  readonly denseCandidateCount: number;
 }
 
 export interface RetrievalDiagnostics {
@@ -106,6 +118,8 @@ export interface RetrievalDiagnostics {
   readonly denseIndex: "available" | "guided" | "ann" | "missing" | "skipped-too-large";
   readonly lexicalIndex: "available" | "missing" | "query-error";
   readonly vectorIndex: RetrievalVectorIndexDiagnostics;
+  readonly embeddingLaneCount?: number;
+  readonly embeddingLanes?: readonly RetrievalEmbeddingLaneDiagnostics[];
 }
 
 export interface RetrievalVectorIndexDiagnostics {

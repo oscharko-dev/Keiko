@@ -39,6 +39,7 @@ function podSummary(
   id: KnowledgeCapsuleId | CapsuleSetId,
   kind: KnowledgePodSummary["kind"],
   displayName: string,
+  overrides: Partial<Pick<KnowledgePodSummary, "readiness" | "retrieval">> = {},
 ): KnowledgePodSummary {
   return {
     schemaVersion: "1",
@@ -46,7 +47,7 @@ function podSummary(
     kind,
     displayName,
     tags: [],
-    readiness: "ready",
+    readiness: overrides.readiness ?? "ready",
     counts: { capsuleCount: 1, sourceCount: 0, documentCount: 0, chunkCount: 0, vectorCount: 0 },
     sourceKinds: [],
     retrieval: {
@@ -54,6 +55,7 @@ function podSummary(
       vectorIndex: false,
       hybridGrounding: true,
       crossSpaceScoreMixing: false,
+      ...overrides.retrieval,
     },
     privacy: {
       localFirst: true,
@@ -119,6 +121,48 @@ describe("local knowledge BFF boundary helpers", () => {
         knowledgePods: [podSummary(setId, "pod-set", "Knowledge Pod Set")],
       })[0]?.displayName,
     ).toBe("Knowledge Pod Set");
+  });
+
+  it("maps Knowledge Pod embedding guidance into optional UI metadata", () => {
+    const capsuleId = "cap-legacy" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Legacy vectors",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Legacy vectors", {
+          readiness: "degraded",
+          retrieval: {
+            lexicalIndex: true,
+            vectorIndex: true,
+            hybridGrounding: true,
+            crossSpaceScoreMixing: false,
+            embeddingCompatibilityStatus: "unknown",
+            embeddingCompatibilityReason: "legacy-unverified-profile",
+            reindexRecommended: true,
+            queryEmbeddingAllowed: false,
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      readiness: "degraded",
+      embeddingCompatibilityStatus: "unknown",
+      embeddingCompatibilityReason: "legacy-unverified-profile",
+      reindexRecommended: true,
+      queryEmbeddingAllowed: false,
+      guidance: {
+        label: "Reindex recommended",
+        tone: "warning",
+      },
+    });
   });
 
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {

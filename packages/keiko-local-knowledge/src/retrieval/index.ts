@@ -44,6 +44,8 @@ export {
   RetrievalError,
   type RetrievalErrorCode,
   type RetrievalDiagnostics,
+  type RetrievalEmbeddingLaneDiagnostics,
+  type RetrievalEmbeddingLaneStatus,
   type RetrievalNoEvidenceReason,
   type QueryTransformer,
   type QueryTransformRequest,

@@ -34,6 +34,11 @@ export const STALE_QUERY_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
   vectorMetric: "cosine",
 };
 
+export const EVAL_ALT_EMBEDDING_IDENTITY: EmbeddingModelIdentity = {
+  ...EVAL_EMBEDDING_IDENTITY,
+  modelId: "text-embedding-eval-alt",
+};
+
 export const EVAL_TOPIC_BOOST = 1.0;
 
 function chunkId(value: string): ChunkId {
@@ -182,6 +187,99 @@ export const multiCapsuleFixture: RetrievalEvalFixture = {
         capsuleIds: [capsuleId("cap-multi-a"), capsuleId("cap-multi-b")],
       },
       expectedChunkIds: [chunkId("c-multi-a-shared"), chunkId("c-multi-b-shared")],
+      topK: 2,
+    },
+  ],
+};
+
+export const multiSpaceFixture: RetrievalEvalFixture = {
+  id: "multi-space",
+  description: "Two capsules use distinct embedding model ids; a capsule-set query returns both.",
+  capsules: [
+    {
+      id: capsuleId("cap-space-a"),
+      displayName: "Space A",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-space-a"),
+          documents: [
+            {
+              id: documentId("doc-space-a"),
+              safeDisplayName: "space-a.md",
+              parsedUnits: [
+                {
+                  id: "section-space-a",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Space A"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-space-a"),
+                  text: "Space A documents the first governed retrieval lane.",
+                  topic: "multi-space",
+                  parsedUnitId: "section-space-a",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: capsuleId("cap-space-b"),
+      displayName: "Space B",
+      answerGroundingPolicy: "best-effort",
+      embeddingModelIdentity: EVAL_ALT_EMBEDDING_IDENTITY,
+      sources: [
+        {
+          id: sourceId("src-space-b"),
+          documents: [
+            {
+              id: documentId("doc-space-b"),
+              safeDisplayName: "space-b.md",
+              parsedUnits: [
+                {
+                  id: "section-space-b",
+                  unit: {
+                    kind: "section",
+                    sectionPath: ["Space B"],
+                    characterStart: 0,
+                    characterEnd: 120,
+                  },
+                },
+              ],
+              chunks: [
+                {
+                  id: chunkId("c-space-b"),
+                  text: "Space B documents the second governed retrieval lane.",
+                  topic: "multi-space",
+                  parsedUnitId: "section-space-b",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  queries: [
+    {
+      id: "q-multi-space",
+      text: "Which governed retrieval lanes have evidence?",
+      topic: "multi-space",
+      scope: {
+        kind: "capsule-set",
+        capsuleSetId: "set-space",
+        capsuleIds: [capsuleId("cap-space-a"), capsuleId("cap-space-b")],
+      },
+      expectedChunkIds: [chunkId("c-space-a"), chunkId("c-space-b")],
       topK: 2,
     },
   ],
@@ -1209,6 +1307,7 @@ export const mixedStrategyFixture: RetrievalEvalFixture = {
 export const ALL_FIXTURES: readonly RetrievalEvalFixture[] = [
   singleTopicFixture,
   multiCapsuleFixture,
+  multiSpaceFixture,
   noEvidenceFixture,
   ambiguousQueryFixture,
   sourceIsolationFixture,
