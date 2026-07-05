@@ -17,10 +17,16 @@ import type {
   KnowledgeSourceId,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+  type KnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
-import { createCapsule, getCapsule } from "../capsule-lifecycle.js";
+import { createCapsule, getCapsule, updateCapsuleDetails } from "../capsule-lifecycle.js";
 import {
   createDefaultParserRegistry,
   createParserRegistry,
@@ -55,6 +61,17 @@ function isEmbeddingCapabilityProbe(input: string): boolean {
   return input === "ping" || input.startsWith("Keiko embedding space probe:");
 }
 
+function contextualRawReleaseDeniedPolicy(): KnowledgePodModelUsePolicy {
+  return {
+    schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+    mode: "custom",
+    operations: {
+      ...standardPodModelUsePolicy().operations,
+      rawContentRelease: "deny",
+    },
+  };
+}
+
 type FixtureFiles = Record<string, string | Uint8Array>;
 
 interface Fixture {
@@ -73,7 +90,14 @@ function buildFixture(
   const { store, cleanup } = freshStore();
   const capsuleId = "cap-orch" as KnowledgeCapsuleId;
   const sourceId = "src-orch" as KnowledgeSourceId;
-  createCapsule(store, sampleCapsuleInput({ id: capsuleId, embeddingModelIdentity: identity }));
+  createCapsule(
+    store,
+    sampleCapsuleInput({
+      id: capsuleId,
+      embeddingModelIdentity: identity,
+      modelUsePolicy: standardPodModelUsePolicy(),
+    }),
+  );
   const source = addSourceToCapsule(store, capsuleId, {
     id: sourceId,
     displayName: "orch",
@@ -91,7 +115,10 @@ function buildTwoSourceFixture(): Fixture & { readonly otherSourceId: KnowledgeS
   const { store, cleanup } = freshStore();
   const capsuleId = "cap-orch" as KnowledgeCapsuleId;
   const sourceId = "src-orch" as KnowledgeSourceId;
-  createCapsule(store, sampleCapsuleInput({ id: capsuleId }));
+  createCapsule(
+    store,
+    sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+  );
   const source = addSourceToCapsule(store, capsuleId, {
     id: sourceId,
     displayName: "alpha",
@@ -173,7 +200,10 @@ describe("runIndexingJob — source preconditions", () => {
   it("rejects capsules without attached sources before creating an indexing job", async () => {
     const { store, cleanup } = freshStore();
     const capsuleId = "cap-empty" as KnowledgeCapsuleId;
-    createCapsule(store, sampleCapsuleInput({ id: capsuleId }));
+    createCapsule(
+      store,
+      sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+    );
 
     try {
       await expect(
@@ -214,6 +244,92 @@ describe("runIndexingJob — source preconditions", () => {
         .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
         .get({ c: fixture.capsuleId }) as { readonly n: number };
       expect(jobs.n).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails closed before embedding preflight when pod policy denies external embeddings", async () => {
+    const fixture = buildFixture({ "sealed.txt": "Sealed text. ".repeat(64) });
+    const calls: string[] = [];
+    updateCapsuleDetails(fixture.store, fixture.capsuleId, {
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        calls.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    try {
+      const events = await drain(
+        runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+      );
+
+      expect(events.map((event) => event.kind)).toStrictEqual(["job-started", "job-failed"]);
+      expect(events[1]).toMatchObject({
+        kind: "job-failed",
+        error: {
+          code: "POLICY_DENIED",
+          message: "Knowledge Pod policy denies external embeddings for indexing.",
+        },
+      });
+      expect(calls).toStrictEqual([]);
+      expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails closed before contextual retrieval when raw content release is denied", async () => {
+    const fixture = buildFixture({ "raw-denied.txt": "Raw confidential text. ".repeat(64) });
+    const embeddingCalls: string[] = [];
+    const contextCalls: GatewayRequest[] = [];
+    updateCapsuleDetails(fixture.store, fixture.capsuleId, {
+      modelUsePolicy: contextualRawReleaseDeniedPolicy(),
+    });
+    const adapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome => {
+        embeddingCalls.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+    const gateway = contextGateway(() => "context must not be generated", contextCalls);
+
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: adapter,
+            contextualRetrieval: { enabled: true, chatGateway: gateway, modelId: "context-model" },
+          }),
+        ),
+      );
+
+      expect(events.map((event) => event.kind)).toStrictEqual(["job-started", "job-failed"]);
+      expect(events[1]).toMatchObject({
+        kind: "job-failed",
+        error: {
+          code: "POLICY_DENIED",
+          message: "Knowledge Pod policy denies raw content release for contextual indexing.",
+        },
+      });
+      expect(contextCalls).toEqual([]);
+      expect(embeddingCalls).toEqual([]);
+      expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
     } finally {
       fixture.cleanup();
     }

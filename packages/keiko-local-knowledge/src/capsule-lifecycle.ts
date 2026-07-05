@@ -24,8 +24,10 @@ import {
   type EmbeddingVectorNormalization,
   type KnowledgeCapsule,
   type KnowledgeCapsuleId,
+  type KnowledgePodModelUsePolicy,
   type KnowledgeSourceId,
   isSafeStorageReference,
+  validateKnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
@@ -44,6 +46,7 @@ export interface CreateCapsuleInput {
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
   readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   readonly storageReference: string;
@@ -65,6 +68,7 @@ interface CapsuleRow {
   readonly contextual_retrieval_strict: number | null;
   readonly contextual_retrieval_max_context_chars: number | null;
   readonly contextual_retrieval_document_context_max_chars: number | null;
+  readonly model_use_policy_json: string | null;
   readonly embedding_model_provider: string;
   readonly embedding_model_id: string;
   readonly embedding_model_revision: string | null;
@@ -91,6 +95,7 @@ const INSERT_CAPSULE_SQL = [
   "  contextual_retrieval_enabled, contextual_retrieval_model_id,",
   "  contextual_retrieval_prompt_version, contextual_retrieval_strict,",
   "  contextual_retrieval_max_context_chars, contextual_retrieval_document_context_max_chars,",
+  "  model_use_policy_json,",
   "  embedding_model_provider, embedding_model_id, embedding_model_revision,",
   "  embedding_normalization, embedding_instruction_version, embedding_space_fingerprint,",
   "  embedding_dimensions_param,",
@@ -102,6 +107,7 @@ const INSERT_CAPSULE_SQL = [
   "  :contextual_retrieval_enabled, :contextual_retrieval_model_id,",
   "  :contextual_retrieval_prompt_version, :contextual_retrieval_strict,",
   "  :contextual_retrieval_max_context_chars, :contextual_retrieval_document_context_max_chars,",
+  "  :model_use_policy_json,",
   "  :embedding_model_provider, :embedding_model_id, :embedding_model_revision,",
   "  :embedding_normalization, :embedding_instruction_version, :embedding_space_fingerprint,",
   "  :embedding_dimensions_param,",
@@ -194,6 +200,14 @@ function assertSafeContextualRetrievalSettings(
   );
 }
 
+function assertSafeModelUsePolicy(policy: KnowledgePodModelUsePolicy | undefined): void {
+  if (policy === undefined) return;
+  const validation = validateKnowledgePodModelUsePolicy(policy);
+  if (!validation.ok) {
+    throw new KnowledgeStoreError(validation.errors.join(" "));
+  }
+}
+
 function assertSafeCreateCapsuleInput(input: CreateCapsuleInput): void {
   assertSafeDisplayField("displayName", input.displayName);
   assertSafeOptionalDisplayField("description", input.description);
@@ -202,6 +216,7 @@ function assertSafeCreateCapsuleInput(input: CreateCapsuleInput): void {
     assertSafeDisplayField("tag", tag);
   }
   assertSafeContextualRetrievalSettings(input.contextualRetrieval);
+  assertSafeModelUsePolicy(input.modelUsePolicy);
   if (!isSafeStorageReference(input.storageReference)) {
     throw new KnowledgeStoreError("storageReference must be a safe relative path");
   }
@@ -271,6 +286,21 @@ function buildContextualRetrievalSettings(
   return settings;
 }
 
+function parseModelUsePolicy(json: string | null): KnowledgePodModelUsePolicy | undefined {
+  if (json === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json) as unknown;
+  } catch (cause) {
+    throw new KnowledgeStoreError("Corrupt capsules.model_use_policy_json", { cause });
+  }
+  const validation = validateKnowledgePodModelUsePolicy(parsed);
+  if (!validation.ok) {
+    throw new KnowledgeStoreError("Corrupt capsules.model_use_policy_json");
+  }
+  return validation.value;
+}
+
 function rowToCapsule(row: CapsuleRow, sourceIds: readonly KnowledgeSourceId[]): KnowledgeCapsule {
   const base: KnowledgeCapsule = {
     id: row.id as KnowledgeCapsuleId,
@@ -308,6 +338,10 @@ function withOptionalCapsuleFields(base: KnowledgeCapsule, row: CapsuleRow): Kno
   if (contextualRetrieval !== undefined) {
     result = { ...result, contextualRetrieval };
   }
+  const modelUsePolicy = parseModelUsePolicy(row.model_use_policy_json);
+  if (modelUsePolicy !== undefined) {
+    result = { ...result, modelUsePolicy };
+  }
   return result;
 }
 
@@ -342,6 +376,8 @@ export function createCapsule(
     contextual_retrieval_max_context_chars: input.contextualRetrieval?.maxContextChars ?? null,
     contextual_retrieval_document_context_max_chars:
       input.contextualRetrieval?.documentContextMaxChars ?? null,
+    model_use_policy_json:
+      input.modelUsePolicy === undefined ? null : JSON.stringify(input.modelUsePolicy),
     embedding_model_provider: input.embeddingModelIdentity.provider,
     embedding_model_id: input.embeddingModelIdentity.modelId,
     embedding_model_revision: input.embeddingModelIdentity.modelRevision ?? null,
@@ -473,14 +509,23 @@ export interface CapsuleDetailsPatch {
   readonly displayName?: string;
   readonly description?: string;
   readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 type CapsuleDetailsUpdateParams = Record<string, string | number | null>;
+
+interface CapsuleDetailsUpdate {
+  readonly assignments: readonly string[];
+  readonly params: CapsuleDetailsUpdateParams;
+}
 
 function strictFlag(value: boolean | undefined): number | null {
   if (value === undefined) return null;
   return value ? 1 : 0;
 }
+
+const MARK_READY_CAPSULE_STALE_SQL =
+  "lifecycle_state = CASE WHEN lifecycle_state = 'ready' THEN 'stale' ELSE lifecycle_state END";
 
 function assignContextualRetrievalSettings(
   assignments: string[],
@@ -513,23 +558,47 @@ function markStaleWhenContextualRetrievalChanged(
 ): void {
   const previous = JSON.stringify(before?.contextualRetrieval ?? null);
   if (previous === JSON.stringify(settings)) return;
-  assignments.push(
-    "lifecycle_state = CASE WHEN lifecycle_state = 'ready' THEN 'stale' ELSE lifecycle_state END",
-  );
+  assignments.push(MARK_READY_CAPSULE_STALE_SQL);
 }
 
-// Slice 4 (#189): update a capsule's display name / description. The SET clause is built only
-// from the columns present in the patch; column fragments are fixed literals (no user input),
-// so values stay fully parameterised. Metadata persistence is a separate schema migration and is
-// intentionally NOT handled here.
-export function updateCapsuleDetails(
+function markStaleWhenModelUsePolicyChanged(
+  assignments: string[],
+  before: KnowledgeCapsule | undefined,
+  policy: KnowledgePodModelUsePolicy,
+): void {
+  const previous = JSON.stringify(before?.modelUsePolicy ?? null);
+  if (previous === JSON.stringify(policy)) return;
+  assignments.push(MARK_READY_CAPSULE_STALE_SQL);
+}
+
+function assignModelUsePolicy(
+  assignments: string[],
+  params: CapsuleDetailsUpdateParams,
+  policy: KnowledgePodModelUsePolicy,
+): void {
+  assertSafeModelUsePolicy(policy);
+  assignments.push("model_use_policy_json = :model_use_policy_json");
+  params.model_use_policy_json = JSON.stringify(policy);
+}
+
+function beforeCapsuleForDetailsPatch(
   store: KnowledgeStore,
   id: KnowledgeCapsuleId,
   patch: CapsuleDetailsPatch,
-): KnowledgeCapsule {
+): KnowledgeCapsule | undefined {
+  return patch.contextualRetrieval === undefined && patch.modelUsePolicy === undefined
+    ? undefined
+    : getCapsule(store, id);
+}
+
+function buildCapsuleDetailsUpdate(
+  store: KnowledgeStore,
+  id: KnowledgeCapsuleId,
+  patch: CapsuleDetailsPatch,
+): CapsuleDetailsUpdate {
   const assignments: string[] = [];
   const params: CapsuleDetailsUpdateParams = { id, now: store._internal.now() };
-  const before = patch.contextualRetrieval === undefined ? undefined : getCapsule(store, id);
+  const before = beforeCapsuleForDetailsPatch(store, id, patch);
   if (patch.displayName !== undefined) {
     assertSafeDisplayField("displayName", patch.displayName);
     assignments.push("display_name = :displayName");
@@ -544,6 +613,24 @@ export function updateCapsuleDetails(
     assignContextualRetrievalSettings(assignments, params, patch.contextualRetrieval);
     markStaleWhenContextualRetrievalChanged(assignments, before, patch.contextualRetrieval);
   }
+  if (patch.modelUsePolicy !== undefined) {
+    assignModelUsePolicy(assignments, params, patch.modelUsePolicy);
+    markStaleWhenModelUsePolicyChanged(assignments, before, patch.modelUsePolicy);
+  }
+  return { assignments, params };
+}
+
+// Slice 4 (#189): update a capsule's display name / description. The SET clause is built only
+// from the columns present in the patch; column fragments are fixed literals (no user input),
+// so values stay fully parameterised. Metadata persistence is a separate schema migration and is
+// intentionally NOT handled here. Model-use policy persistence is a typed additive column and is
+// handled here so BFF policy updates cannot be silently dropped.
+export function updateCapsuleDetails(
+  store: KnowledgeStore,
+  id: KnowledgeCapsuleId,
+  patch: CapsuleDetailsPatch,
+): KnowledgeCapsule {
+  const { assignments, params } = buildCapsuleDetailsUpdate(store, id, patch);
   if (assignments.length === 0) {
     throw new KnowledgeStoreError("updateCapsuleDetails requires at least one field to change.");
   }

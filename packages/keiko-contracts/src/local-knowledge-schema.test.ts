@@ -253,8 +253,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 23 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(23);
+  it("is the integer 24 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(24);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -432,7 +432,9 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       expect(byName.get("contextual_retrieval_strict")?.type).toBe("INTEGER");
       expect(byName.get("contextual_retrieval_max_context_chars")?.type).toBe("INTEGER");
       expect(byName.get("contextual_retrieval_document_context_max_chars")?.type).toBe("INTEGER");
+      expect(byName.get("model_use_policy_json")?.type).toBe("TEXT");
       expect(byName.get("contextual_retrieval_enabled")?.notnull).toBe(0);
+      expect(byName.get("model_use_policy_json")?.notnull).toBe(0);
     } finally {
       db.close();
     }

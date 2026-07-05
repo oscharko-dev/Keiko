@@ -1607,12 +1607,36 @@ export {
   inferEmbeddingModelFamily,
 } from "./local-knowledge-embedding-profiles.js";
 export type {
+  KnowledgePodModelUseOperation,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodModelUsePolicyDecision,
+  KnowledgePodModelUsePolicyMode,
+  KnowledgePodModelUsePolicyOperations,
+  KnowledgePodModelUsePolicySource,
+  KnowledgePodModelUsePolicyResolvedDecision,
+  KnowledgePodResolvedModelUsePolicy,
+  KnowledgePodResolvedModelUsePolicyOperations,
+} from "./local-knowledge-model-use-policy.js";
+export {
+  KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_MODES,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_RESOLVED_DECISIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+  isKnowledgePodModelUseOperationAllowed,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+  validateKnowledgePodModelUsePolicy,
+} from "./local-knowledge-model-use-policy.js";
+export type {
   KnowledgePodBackingKind,
   KnowledgePodCompatibilitySummary,
   KnowledgePodCounts,
   KnowledgePodEvidenceMode,
   KnowledgePodGovernanceSummary,
   KnowledgePodLocationKind,
+  KnowledgePodModelUsePolicySummary,
   KnowledgePodPolicyPosture,
   KnowledgePodPrivacySummary,
   KnowledgePodReadiness,

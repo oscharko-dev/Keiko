@@ -25,8 +25,13 @@ import type {
   ChunkId,
   DocumentId,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+  standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 
 import {
@@ -135,6 +140,7 @@ function seedIds(displayName: string): { capsuleId: string; sourceId: string } {
 
 async function seedReadyCapsule(
   displayName: string,
+  options: { readonly modelUsePolicy?: KnowledgePodModelUsePolicy } = {},
 ): Promise<{ capsuleId: KnowledgeCapsuleId; label: string }> {
   const knowledgeStore = openKnowledgeStore({
     dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
@@ -142,10 +148,24 @@ async function seedReadyCapsule(
   const seeded = await seedCapsuleWithVectors(knowledgeStore, {
     displayName,
     ...seedIds(displayName),
+    ...(options.modelUsePolicy !== undefined ? { modelUsePolicy: options.modelUsePolicy } : {}),
   });
   updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
   knowledgeStore.close();
   return { capsuleId: seeded.capsuleId, label: displayName };
+}
+
+function modelUsePolicyDenying(
+  operation: keyof KnowledgePodModelUsePolicy["operations"],
+): KnowledgePodModelUsePolicy {
+  return {
+    schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+    mode: "custom",
+    operations: {
+      ...standardPodModelUsePolicy().operations,
+      [operation]: "deny",
+    },
+  };
 }
 
 // Seeds a NOT-READY capsule (indexing state). scopeStateFailure detects it and skips retrieval.
@@ -510,6 +530,47 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
       "model-context-sent",
       "retrieval-performed",
     ]);
+  });
+
+  it("omits connector audit evidence when connector evidence persistence is denied", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("No Evidence Persist Docs", {
+      modelUsePolicy: modelUsePolicyDenying("evidencePersistence"),
+    });
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/no-evidence-persist.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("no-evidence-persist-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      [
+        "src/no-evidence-persist.ts",
+        folderPack("src/no-evidence-persist.ts", 0.7, "no-evidence-persist-atom"),
+      ],
+    ]);
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What evidence is available?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer("Hybrid answer from selected evidence [1] [2]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.knowledgeCitations).toHaveLength(1);
+    expect(auditKindsFor(capId)).toEqual([]);
   });
 
   it("does not persist a hybrid answer when the client disconnects after answering", async () => {
@@ -1469,6 +1530,58 @@ describe("hybrid model reranker", () => {
       keptCount: 2,
     });
     expect(answer.retrievalActivity?.pods[0]?.modes).toContain("reranked");
+  });
+
+  it("does not call the configured reranker when connector policy denies external reranking", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Denied Rerank Docs", {
+      modelUsePolicy: modelUsePolicyDenying("externalReranking"),
+    });
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/rerank-denied.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("rerank-denied-repo"),
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+    const packMap = new Map([
+      ["src/rerank-denied.ts", folderPack("src/rerank-denied.ts", 0.5, "rerank-denied-atom")],
+    ]);
+    let rerankCalls = 0;
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Should rerank run?" })),
+      hybridDeps({
+        config: rerankerGatewayConfig(),
+        configPresent: true,
+        rerankRequest: () => {
+          rerankCalls += 1;
+          return Promise.resolve(successfulRerank([1, 0]));
+        },
+      }),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: sentinelAnswerer("Policy-denied rerank fallback answer [1] [2]."),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(rerankCalls).toBe(0);
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "disabled",
+      failureKind: "policy-denied",
+      candidateCount: 2,
+      keptCount: 2,
+    });
+    expect(answer.retrievalActivity?.pods[0]?.reasonCodes).toContain("policy-denied");
   });
 
   it("falls back to the preliminary order when the configured reranker times out", async () => {

@@ -31,6 +31,7 @@ import {
 
 import { getCapsule } from "../capsule-lifecycle.js";
 import type { ComposedRetrievalScope } from "../composition.js";
+import { resolveCapsuleModelUsePolicy } from "../model-use-policy.js";
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
@@ -1663,6 +1664,7 @@ interface SearchState {
   anyDimensionCompatible: boolean;
   anyIdentityIncompatible: boolean;
   embeddingFailed: boolean;
+  embeddingPolicyDenied: boolean;
   denseSkippedTooLarge: boolean;
   denseGuided: boolean;
   denseAnn: boolean;
@@ -1686,6 +1688,7 @@ function emptyState(): SearchState {
     anyDimensionCompatible: false,
     anyIdentityIncompatible: false,
     embeddingFailed: false,
+    embeddingPolicyDenied: false,
     denseSkippedTooLarge: false,
     denseGuided: false,
     denseAnn: false,
@@ -1712,6 +1715,7 @@ function laneStateFor(state: SearchState, capsule: KnowledgeCapsule): EmbeddingL
 }
 
 function markLaneStatus(lane: EmbeddingLaneState, status: RetrievalEmbeddingLaneStatus): void {
+  if (lane.status === "policy-denied") return;
   if (lane.status === "identity-incompatible" || lane.status === "embedding-failed") return;
   if (lane.status === "degraded" && status === "searched") return;
   lane.status = status;
@@ -1841,6 +1845,10 @@ function pushScoredCandidates(
   state.candidates.push(...scored.candidates);
 }
 
+function isExternalEmbeddingAllowed(capsule: KnowledgeCapsule): boolean {
+  return resolveCapsuleModelUsePolicy(capsule).operations.externalEmbeddings === "allow";
+}
+
 function denseCandidatesFromVectorIndex(
   candidates: readonly VectorIndexCandidate[],
   capsule: KnowledgeCapsule,
@@ -1931,8 +1939,13 @@ async function processCapsule(
   const vectorStamp = vectorCacheStampForScope(store, capsule.id, sourceFilter);
   if (vectorStamp.n === 0) return;
   lane.vectorCount += vectorStamp.n;
-  lane.queryEmbeddingRequested = true;
   state.anyVectorSeen = true;
+  if (!isExternalEmbeddingAllowed(capsule)) {
+    state.embeddingPolicyDenied = true;
+    markLaneStatus(lane, "policy-denied");
+    return;
+  }
+  lane.queryEmbeddingRequested = true;
 
   const queryEmbedding = await ensureCapsuleQueryEmbedding(
     embeddingAdapter,
@@ -2038,7 +2051,8 @@ type EmptyReason =
   | "incompatible-embedding-identity"
   | "dense-scan-too-large"
   | "below-min-score"
-  | "embedding-failed";
+  | "embedding-failed"
+  | "policy-denied";
 
 type CandidateSelection =
   | { readonly ok: true; readonly top: readonly FusedCandidate[] }
@@ -2058,6 +2072,9 @@ function selectTopCandidates(
   if (state.embeddingFailed && candidates.length === 0) {
     return { ok: false, reason: "embedding-failed" };
   }
+  if (state.embeddingPolicyDenied && candidates.length === 0) {
+    return { ok: false, reason: "policy-denied" };
+  }
   if (
     state.anyVectorSeen &&
     candidates.length === 0 &&
@@ -2072,7 +2089,12 @@ function selectTopCandidates(
 }
 
 function hasEmbeddingDegradation(state: SearchState): boolean {
-  return state.embeddingFailed || state.anyIdentityIncompatible || state.denseSkippedTooLarge;
+  return (
+    state.embeddingFailed ||
+    state.embeddingPolicyDenied ||
+    state.anyIdentityIncompatible ||
+    state.denseSkippedTooLarge
+  );
 }
 
 function vectorIndexDiagnostics(
@@ -2090,12 +2112,15 @@ function vectorIndexDiagnostics(
 }
 
 function finalLaneStatus(lane: EmbeddingLaneState): RetrievalEmbeddingLaneStatus {
-  if (
-    lane.denseCandidateCount > 0 &&
-    (lane.status === "identity-incompatible" || lane.status === "embedding-failed")
-  ) {
+  const degradedStatuses = new Set<RetrievalEmbeddingLaneStatus>([
+    "identity-incompatible",
+    "embedding-failed",
+    "policy-denied",
+  ]);
+  if (lane.denseCandidateCount > 0 && degradedStatuses.has(lane.status)) {
     return "degraded";
   }
+  if (lane.status === "policy-denied") return "policy-denied";
   if (lane.status === "no-vectors" && lane.vectorCount > 0 && lane.queryEmbeddingRequested) {
     return "identity-incompatible";
   }

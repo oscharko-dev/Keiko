@@ -2,7 +2,10 @@
 // Drives the real runIndexingJob with the synthetic streaming extractor injected, so the document
 // takes the progressive page-windowed extraction + bounded chunk/embed pipeline end to end.
 
-import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
@@ -51,7 +54,10 @@ beforeEach(() => {
   const fresh = freshStore();
   store = fresh.store;
   cleanup = fresh.cleanup;
-  createCapsule(store, sampleCapsuleInput({ id: capsuleId }));
+  createCapsule(
+    store,
+    sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+  );
   addSourceToCapsule(store, capsuleId, {
     id: "src-bounded" as KnowledgeSourceId,
     displayName: "docs",

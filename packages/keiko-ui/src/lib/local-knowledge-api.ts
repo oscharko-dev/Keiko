@@ -22,6 +22,12 @@ import type {
   LocalKnowledgeCapsuleSetsResponse as CapsuleSetsResponse,
   LocalKnowledgeCapsulesResponse as CapsulesResponse,
   KnowledgePodSummary,
+  KnowledgePodModelUseOperation,
+  KnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+  resolveKnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -36,6 +42,9 @@ export interface KnowledgePodUiGuidance {
 
 export interface KnowledgePodUiMetadata {
   readonly readiness: KnowledgePodSummary["readiness"];
+  readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"];
+  readonly sealed?: boolean;
+  readonly deniedModelOperations?: readonly KnowledgePodModelUseOperation[];
   readonly embeddingCompatibilityStatus?: NonNullable<
     KnowledgePodSummary["retrieval"]["embeddingCompatibilityStatus"]
   >;
@@ -99,13 +108,68 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
   return undefined;
 }
 
+function deniedModelOperations(
+  modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
+): readonly KnowledgePodModelUseOperation[] {
+  return KNOWLEDGE_POD_MODEL_USE_OPERATIONS.filter(
+    (operation) => modelUsePolicy.operations[operation] === "deny",
+  );
+}
+
+function isSealedPolicy(
+  summary: KnowledgePodSummary,
+  modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
+): boolean {
+  return (
+    summary.governance.sealingPosture === "sealed-pod-policy" ||
+    modelUsePolicy.mode === "sealed-local"
+  );
+}
+
+function guidanceForPolicy(
+  modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
+): KnowledgePodUiGuidance | undefined {
+  const operations = modelUsePolicy.operations;
+  if (operations.answerSynthesis === "deny" || operations.rawContentRelease === "deny") {
+    return {
+      label: "Policy denied",
+      description:
+        "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+      tone: "danger",
+    };
+  }
+  if (operations.externalEmbeddings === "deny" || operations.externalReranking === "deny") {
+    return {
+      label: "Sealed local policy",
+      description:
+        "External embedding or reranking calls are disabled for this Knowledge Pod; retrieval may use lexical or local fallback.",
+      tone: "warning",
+    };
+  }
+  return undefined;
+}
+
+function resolvedModelUsePolicyForSummary(
+  summary: KnowledgePodSummary,
+): KnowledgePodSummary["modelUsePolicy"] {
+  const raw = (summary as { readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"] })
+    .modelUsePolicy;
+  return raw ?? resolveKnowledgePodModelUsePolicy(undefined);
+}
+
 function metadataForSummary(
   summary: KnowledgePodSummary | undefined,
 ): KnowledgePodUiMetadata | undefined {
   if (summary === undefined) return undefined;
+  const modelUsePolicy = resolvedModelUsePolicyForSummary(summary);
   const guidance = guidanceForSummary(summary);
+  const policyGuidance = guidanceForPolicy(modelUsePolicy);
+  const deniedOperations = deniedModelOperations(modelUsePolicy);
   return {
     readiness: summary.readiness,
+    modelUsePolicy,
+    sealed: isSealedPolicy(summary, modelUsePolicy),
+    deniedModelOperations: deniedOperations,
     ...(summary.retrieval.embeddingCompatibilityStatus !== undefined
       ? { embeddingCompatibilityStatus: summary.retrieval.embeddingCompatibilityStatus }
       : {}),
@@ -114,7 +178,8 @@ function metadataForSummary(
       : {}),
     reindexRecommended: summary.retrieval.reindexRecommended === true,
     queryEmbeddingAllowed: summary.retrieval.queryEmbeddingAllowed === true,
-    ...(guidance !== undefined ? { guidance } : {}),
+    ...(policyGuidance !== undefined ? { guidance: policyGuidance } : {}),
+    ...(policyGuidance === undefined && guidance !== undefined ? { guidance } : {}),
   };
 }
 
@@ -227,6 +292,7 @@ export async function fetchCapsuleSets(
 export interface CreateCapsuleInput {
   readonly displayName: string;
   readonly description?: string;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 export async function createCapsule(input: CreateCapsuleInput): Promise<CapsuleDetailResponse> {

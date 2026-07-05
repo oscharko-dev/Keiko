@@ -27,6 +27,15 @@ import {
   EMBEDDING_VECTOR_METRICS,
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
 } from "./local-knowledge.js";
+import type {
+  KnowledgePodModelUsePolicyMode,
+  KnowledgePodModelUsePolicySource,
+  KnowledgePodResolvedModelUsePolicyOperations,
+} from "./local-knowledge-model-use-policy.js";
+import {
+  KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+  KNOWLEDGE_POD_MODEL_USE_POLICY_MODES,
+} from "./local-knowledge-model-use-policy.js";
 import {
   isSafeDisplaySummary,
   type LocalKnowledgeValidation,
@@ -86,6 +95,12 @@ export interface KnowledgePodGovernanceSummary {
   readonly managedServiceDependency: boolean;
 }
 
+export interface KnowledgePodModelUsePolicySummary {
+  readonly source: KnowledgePodModelUsePolicySource;
+  readonly mode: KnowledgePodModelUsePolicyMode;
+  readonly operations: KnowledgePodResolvedModelUsePolicyOperations;
+}
+
 export interface KnowledgePodCompatibilitySummary {
   readonly backingKind: KnowledgePodBackingKind;
   readonly capsuleIds: readonly KnowledgeCapsuleId[];
@@ -109,6 +124,7 @@ export interface KnowledgePodSummary {
   readonly retrieval: KnowledgePodRetrievalCapabilities;
   readonly privacy: KnowledgePodPrivacySummary;
   readonly governance: KnowledgePodGovernanceSummary;
+  readonly modelUsePolicy: KnowledgePodModelUsePolicySummary;
   readonly compatibility: KnowledgePodCompatibilitySummary;
   readonly updatedAt: number;
   readonly degradationReasons: readonly string[];
@@ -153,6 +169,7 @@ const SUMMARY_KEYS = [
   "retrieval",
   "privacy",
   "governance",
+  "modelUsePolicy",
   "compatibility",
   "updatedAt",
   "degradationReasons",
@@ -189,6 +206,7 @@ const GOVERNANCE_KEYS = [
   "policyPosture",
   "managedServiceDependency",
 ] as const;
+const MODEL_USE_POLICY_KEYS = ["source", "mode", "operations"] as const;
 const COMPATIBILITY_KEYS = [
   "backingKind",
   "capsuleIds",
@@ -219,6 +237,11 @@ const POLICY_POSTURES: readonly KnowledgePodPolicyPosture[] = [
   "none",
   "policy-pack",
   "not-declared",
+];
+const MODEL_USE_POLICY_SOURCES: readonly KnowledgePodModelUsePolicySource[] = [
+  "explicit",
+  "sealed-default",
+  "legacy-default",
 ];
 const SOURCE_KINDS: readonly KnowledgePodSourceKind[] = [
   "folder",
@@ -667,6 +690,37 @@ function validateGovernance(value: unknown, errors: string[]): void {
   }
 }
 
+function validateModelUsePolicy(value: unknown, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push("modelUsePolicy must be an object");
+    return;
+  }
+  onlyKeys(value, MODEL_USE_POLICY_KEYS, "modelUsePolicy", errors);
+  if (!MODEL_USE_POLICY_SOURCES.includes(value.source as KnowledgePodModelUsePolicySource)) {
+    errors.push("modelUsePolicy.source is invalid");
+  }
+  if (!KNOWLEDGE_POD_MODEL_USE_POLICY_MODES.includes(value.mode as never)) {
+    errors.push("modelUsePolicy.mode is invalid");
+  }
+  if (!isRecord(value.operations)) {
+    errors.push("modelUsePolicy.operations must be an object");
+    return;
+  }
+  onlyKeys(
+    value.operations,
+    KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+    "modelUsePolicy.operations",
+    errors,
+  );
+  for (const operation of KNOWLEDGE_POD_MODEL_USE_OPERATIONS) {
+    const decision = value.operations[operation];
+    if (decision !== "allow" && decision !== "deny") {
+      errors.push(`modelUsePolicy.operations.${operation} is invalid`);
+      return;
+    }
+  }
+}
+
 function validateCompatibility(value: unknown, errors: string[]): void {
   if (!isRecord(value)) {
     errors.push("compatibility must be an object");
@@ -699,6 +753,7 @@ export function validateKnowledgePodSummary(
   validateRetrieval(input.retrieval, errors);
   validatePrivacy(input.privacy, errors);
   validateGovernance(input.governance, errors);
+  validateModelUsePolicy(input.modelUsePolicy, errors);
   validateCompatibility(input.compatibility, errors);
   validateSafeTextArray(input.degradationReasons, "summary.degradationReasons", errors, true);
   return errors.length > 0

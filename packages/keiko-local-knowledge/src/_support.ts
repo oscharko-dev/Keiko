@@ -13,6 +13,7 @@ import type {
   CapsuleRetrievalEffort,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
@@ -52,6 +53,7 @@ export interface SampleCapsuleOverrides {
   readonly outputMode?: CapsuleOutputMode;
   readonly answerGroundingPolicy?: CapsuleAnswerGroundingPolicy;
   readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
   readonly embeddingModelIdentity?: EmbeddingModelIdentity;
   readonly lifecycleState?: CapsuleLifecycleState;
   readonly storageReference?: string;
@@ -62,6 +64,7 @@ interface OptionalCapsuleFields {
   readonly sourceRoutingInstructions?: string;
   readonly alwaysQuery?: boolean;
   readonly contextualRetrieval?: CapsuleContextualRetrievalSettings;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 function optionalCapsuleFields(overrides: SampleCapsuleOverrides): OptionalCapsuleFields {
@@ -74,6 +77,7 @@ function optionalCapsuleFields(overrides: SampleCapsuleOverrides): OptionalCapsu
     ...(overrides.contextualRetrieval !== undefined
       ? { contextualRetrieval: overrides.contextualRetrieval }
       : {}),
+    ...(overrides.modelUsePolicy !== undefined ? { modelUsePolicy: overrides.modelUsePolicy } : {}),
   };
 }
 

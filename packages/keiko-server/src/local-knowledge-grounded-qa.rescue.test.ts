@@ -10,8 +10,14 @@ import type {
   DocumentId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   RetrievalReference,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
 import {
   getCapsule,
@@ -95,6 +101,17 @@ function capsule(provider = "openai"): KnowledgeCapsule {
     storageReference: "capsules/cap-1",
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+function externalRerankingDeniedPolicy(): KnowledgePodModelUsePolicy {
+  return {
+    schemaVersion: KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
+    mode: "custom",
+    operations: {
+      ...standardPodModelUsePolicy().operations,
+      externalReranking: "deny",
+    },
   };
 }
 
@@ -789,9 +806,216 @@ describe("local-knowledge reranker diagnostics", () => {
     expectAppliedRerankerDiagnostics(answer, seeded.capsuleId);
     expectRerankedRetrievalActivity(answer, seeded.capsuleId);
   });
+
+  it("does not prepare external reranker requests when policy denies external reranking", async () => {
+    const embeddingModelId = "text-embedding-3-small";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Reranker Policy Capsule",
+      capsuleId: "cap-reranker-policy",
+      sourceId: "src-reranker-policy",
+      text: "alpha beta policy reranker evidence",
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+      modelUsePolicy: externalRerankingDeniedPolicy(),
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "reranker-policy-project");
+    const created = rescueStore.createChat(project.path, "Reranker policy", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const fakeModel: ModelPort = {
+      call: () =>
+        Promise.resolve({
+          modelId: "chat-model",
+          content: "The alpha beta policy evidence is sufficient [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "reranker-policy",
+            promptTokens: 5,
+            completionTokens: 12,
+            latencyMs: 1,
+            costClass: "medium" as const,
+          },
+        }),
+    };
+    const adapter = scriptedAdapter();
+    let rerankCalls = 0;
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [
+          {
+            modelId: "chat-model",
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+          {
+            modelId: embeddingModelId,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "test-api-key-1234567890",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: "chat-model",
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+          {
+            id: embeddingModelId,
+            kind: "embedding",
+            contextWindow: 8_191,
+            maxOutputTokens: 0,
+            toolCalling: false,
+            structuredOutput: false,
+            streaming: false,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "low",
+            latencyClass: "fast",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+        reranker: {
+          modelId: "qwen3-reranker",
+          baseUrl: "https://reranker.example/v1",
+          apiKey: "reranker-test-key",
+          timeoutMs: 30_000,
+        },
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => fakeModel,
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: adapter.request,
+      rerankRequest: () => {
+        rerankCalls += 1;
+        throw new Error("reranker must not be called when policy denies external reranking");
+      },
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(rerankCalls).toBe(0);
+    expect(answer.contextPack.reranker).toMatchObject({
+      status: "disabled",
+      failureKind: "policy-denied",
+      documentCount: 0,
+    });
+    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+      state: "degraded",
+      reasonCodes: ["searched", "policy-denied"],
+    });
+    expect(answer.retrievalActivity?.pods[0]?.modes).toContain("sealed");
+  });
 });
 
 describe("local-knowledge retrieval activity", () => {
+  it("short-circuits answer synthesis before resolving a model when policy denies it", async () => {
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: "Sealed Synthesis Capsule",
+      capsuleId: "cap-policy-denied-synthesis",
+      sourceId: "src-policy-denied-synthesis",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "policy-denied-synthesis-project");
+    const created = rescueStore.createChat(project.path, "Policy denied", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () => {
+        throw new Error("model must not be resolved for policy-denied synthesis");
+      },
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.noEvidence).toBe(true);
+    expect(answer.noEvidenceReason).toBe("policy-denied");
+    expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+      state: "denied",
+      modes: ["local-only", "sealed"],
+      reasonCodes: ["policy-denied"],
+    });
+  });
+
   it("redacts unsafe pod metadata without dropping retrieval activity", async () => {
     const unsafeCapsuleId = "owner@example.com" as KnowledgeCapsuleId;
     const unsafeSourceId = "source@example.com" as KnowledgeSourceId;

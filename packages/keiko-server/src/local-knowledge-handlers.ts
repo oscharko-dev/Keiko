@@ -54,6 +54,7 @@ import type {
   KnowledgeSourceScope,
   LocalKnowledgeCapsuleListEntry,
   LocalKnowledgeCapsuleSetListEntry,
+  KnowledgePodModelUsePolicy,
   KnowledgePodSummary,
   KnowledgePodSummaryKind,
 } from "@oscharko-dev/keiko-contracts";
@@ -65,8 +66,10 @@ import {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   isSafeDisplaySummary,
   isSafeQualityWarning,
+  standardPodModelUsePolicy,
   validateCapsuleContextualRetrievalSettings,
   validateCapsuleReindexRequest,
+  validateKnowledgePodModelUsePolicy,
   validateKnowledgePodSummary,
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
@@ -1417,13 +1420,20 @@ function safeOptionalDisplayText(field: string, value: unknown): string | undefi
 function parseCreateCapsuleInput(body: Record<string, unknown>): {
   readonly displayName: string;
   readonly description?: string;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 } {
   if (typeof body.displayName !== "string") {
     throw new InvalidRequest('Field "displayName" must be a non-empty string.');
   }
   const displayName = requireSafeDisplayText("displayName", body.displayName);
   const description = safeOptionalDisplayText("description", body.description);
-  return description === undefined ? { displayName } : { displayName, description };
+  const modelUsePolicy =
+    body.modelUsePolicy === undefined ? undefined : parseModelUsePolicyPatch(body.modelUsePolicy);
+  return {
+    displayName,
+    ...(description !== undefined ? { description } : {}),
+    ...(modelUsePolicy !== undefined ? { modelUsePolicy } : {}),
+  };
 }
 
 function normalizedEndpointFingerprint(baseUrl: string): string {
@@ -2178,6 +2188,14 @@ function parseContextualRetrievalPatch(value: unknown): CapsuleContextualRetriev
   return validation.value;
 }
 
+function parseModelUsePolicyPatch(value: unknown): KnowledgePodModelUsePolicy {
+  const validation = validateKnowledgePodModelUsePolicy(value);
+  if (!validation.ok) {
+    throw new InvalidRequest(validation.errors.join(" "));
+  }
+  return validation.value;
+}
+
 function parseDisplayNamePatch(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") {
@@ -2202,7 +2220,8 @@ function patchHasFields(patch: CapsuleDetailsPatch): boolean {
   return (
     patch.displayName !== undefined ||
     patch.description !== undefined ||
-    patch.contextualRetrieval !== undefined
+    patch.contextualRetrieval !== undefined ||
+    patch.modelUsePolicy !== undefined
   );
 }
 
@@ -2219,6 +2238,7 @@ function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsP
     displayName?: string;
     description?: string;
     contextualRetrieval?: CapsuleContextualRetrievalSettings;
+    modelUsePolicy?: KnowledgePodModelUsePolicy;
   } = {};
   const displayName = parseDisplayNamePatch(body.displayName);
   const description = parseDescriptionPatch(body.description);
@@ -2231,9 +2251,12 @@ function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsP
   if (body.contextualRetrieval !== undefined) {
     patch.contextualRetrieval = parseContextualRetrievalPatch(body.contextualRetrieval);
   }
+  if (body.modelUsePolicy !== undefined) {
+    patch.modelUsePolicy = parseModelUsePolicyPatch(body.modelUsePolicy);
+  }
   if (!patchHasFields(patch)) {
     throw new InvalidRequest(
-      "Patch must include displayName, description, or contextualRetrieval.",
+      "Patch must include displayName, description, contextualRetrieval, or modelUsePolicy.",
     );
   }
   return patch;
@@ -2282,6 +2305,7 @@ export async function handleCreateLocalKnowledgeCapsule(
           retrievalEffort: "default",
           outputMode: "snippets",
           answerGroundingPolicy: "require-citations",
+          modelUsePolicy: input.modelUsePolicy ?? standardPodModelUsePolicy(),
           embeddingModelIdentity: embeddingIdentity.identity,
           lifecycleState: "draft",
           storageReference: createCapsuleStorageReference(capsuleId),

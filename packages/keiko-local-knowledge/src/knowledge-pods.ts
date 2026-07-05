@@ -18,12 +18,15 @@ import {
   type KnowledgeCapsule,
   type KnowledgeCapsuleId,
   type KnowledgePodCounts,
+  type KnowledgePodModelUsePolicySummary,
   type KnowledgePodReadiness,
+  type KnowledgePodResolvedModelUsePolicyOperations,
   type KnowledgePodRetrievalCapabilities,
   type KnowledgePodSourceKind,
   type KnowledgePodSummary,
   type KnowledgeSource,
   isKnowledgePodEvidenceSafeText,
+  resolveKnowledgePodModelUsePolicy,
   validateKnowledgePodSummary,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -59,13 +62,6 @@ const BASE_PRIVACY = {
   privatePathsExposed: false,
   evidenceMode: "counts-hashes-and-status",
   storageLocation: "local-runtime-state",
-} as const;
-
-const BASE_GOVERNANCE = {
-  locationKind: "local",
-  sealingPosture: "local-store-policy",
-  policyPosture: "none",
-  managedServiceDependency: false,
 } as const;
 
 const POD_FALLBACK_DISPLAY_NAME = "Knowledge Pod";
@@ -114,6 +110,7 @@ export function buildKnowledgePodSetSummary(
     memberProjections.flatMap((projection) => projection.sources),
   );
   const embeddingDecision = setEmbeddingDecision(memberProjections);
+  const modelUsePolicy = setModelUsePolicySummary(memberProjections);
   const degradationReasons = uniqueStrings([
     ...missingMemberReasons(set, memberProjections),
     ...memberProjections.flatMap((projection) => projection.degradationReasons),
@@ -131,7 +128,8 @@ export function buildKnowledgePodSetSummary(
     sourceKinds,
     retrieval: setRetrieval(memberProjections, embeddingDecision),
     privacy: BASE_PRIVACY,
-    governance: BASE_GOVERNANCE,
+    governance: governanceForPolicy(modelUsePolicy),
+    modelUsePolicy,
     compatibility: {
       backingKind: "capsule-set",
       capsuleIds: set.capsuleIds,
@@ -154,6 +152,7 @@ function assertValidSummary(summary: KnowledgePodSummary): KnowledgePodSummary {
 }
 
 function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
+  const modelUsePolicy = capsuleModelUsePolicySummary(input.capsule);
   return {
     schemaVersion: KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
     id: input.capsule.id,
@@ -172,7 +171,8 @@ function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
       input.embeddingDecision,
     ),
     privacy: BASE_PRIVACY,
-    governance: BASE_GOVERNANCE,
+    governance: governanceForPolicy(modelUsePolicy),
+    modelUsePolicy,
     compatibility: {
       backingKind: "knowledge-capsule",
       capsuleIds: [input.capsule.id],
@@ -185,6 +185,85 @@ function capsuleProjection(input: CapsuleProjectionInput): KnowledgePodSummary {
     degradationReasons: input.degradationReasons,
   };
 }
+
+function capsuleModelUsePolicySummary(
+  capsule: KnowledgeCapsule,
+): KnowledgePodModelUsePolicySummary {
+  return resolveKnowledgePodModelUsePolicy(capsule.modelUsePolicy);
+}
+
+function setModelUsePolicySummary(
+  members: readonly CapsuleProjectionInput[],
+): KnowledgePodModelUsePolicySummary {
+  if (members.length === 0) {
+    return resolveKnowledgePodModelUsePolicy(undefined);
+  }
+  const memberPolicies = members.map((member) => capsuleModelUsePolicySummary(member.capsule));
+  return {
+    source: aggregatePolicySource(memberPolicies),
+    mode: aggregatePolicyMode(memberPolicies),
+    operations: aggregatePolicyOperations(memberPolicies),
+  };
+}
+
+function aggregatePolicySource(
+  policies: readonly KnowledgePodModelUsePolicySummary[],
+): KnowledgePodModelUsePolicySummary["source"] {
+  if (policies.every((policy) => policy.source === "explicit")) return "explicit";
+  if (policies.every((policy) => policy.source === "sealed-default")) return "sealed-default";
+  return "legacy-default";
+}
+
+function aggregatePolicyMode(
+  policies: readonly KnowledgePodModelUsePolicySummary[],
+): KnowledgePodModelUsePolicySummary["mode"] {
+  if (policies.some((policy) => policy.mode === "sealed-local")) return "sealed-local";
+  if (policies.every((policy) => policy.mode === "standard")) return "standard";
+  return "custom";
+}
+
+function aggregatePolicyOperations(
+  policies: readonly KnowledgePodModelUsePolicySummary[],
+): KnowledgePodResolvedModelUsePolicyOperations {
+  return {
+    externalEmbeddings: aggregatePolicyOperation(policies, "externalEmbeddings"),
+    localEmbeddings: aggregatePolicyOperation(policies, "localEmbeddings"),
+    externalReranking: aggregatePolicyOperation(policies, "externalReranking"),
+    localReranking: aggregatePolicyOperation(policies, "localReranking"),
+    answerSynthesis: aggregatePolicyOperation(policies, "answerSynthesis"),
+    rawContentRelease: aggregatePolicyOperation(policies, "rawContentRelease"),
+    evidencePersistence: aggregatePolicyOperation(policies, "evidencePersistence"),
+  };
+}
+
+function aggregatePolicyOperation(
+  policies: readonly KnowledgePodModelUsePolicySummary[],
+  operation: keyof KnowledgePodResolvedModelUsePolicyOperations,
+): KnowledgePodResolvedModelUsePolicyOperations[typeof operation] {
+  return policies.some((policy) => policy.operations[operation] === "deny") ? "deny" : "allow";
+}
+
+function governanceForPolicy(
+  policy: KnowledgePodModelUsePolicySummary,
+): KnowledgePodSummary["governance"] {
+  return {
+    locationKind: "local",
+    sealingPosture: hasSealedOperation(policy) ? "sealed-pod-policy" : "local-store-policy",
+    policyPosture: policy.source === "explicit" ? "policy-pack" : "not-declared",
+    managedServiceDependency: false,
+  };
+}
+
+function hasSealedOperation(policy: KnowledgePodModelUsePolicySummary): boolean {
+  return (
+    policy.mode === "sealed-local" ||
+    policy.operations.externalEmbeddings === "deny" ||
+    policy.operations.externalReranking === "deny" ||
+    policy.operations.answerSynthesis === "deny" ||
+    policy.operations.rawContentRelease === "deny"
+  );
+}
+
 function memberProjection(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,

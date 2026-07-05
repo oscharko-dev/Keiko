@@ -7,6 +7,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
   type KnowledgePodSummary,
@@ -232,6 +235,7 @@ function knowledgePodSummary(
       policyPosture: "none",
       managedServiceDependency: false,
     },
+    modelUsePolicy: resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy()),
     compatibility: {
       backingKind: kind === "pod" ? "knowledge-capsule" : "capsule-set",
       capsuleIds: kind === "pod" ? [id as KnowledgeCapsuleId] : [],
@@ -1212,7 +1216,18 @@ describe("ChatWindow local knowledge scope disclosure", () => {
           updatedAt: 1,
         },
       ],
-      knowledgePods: [knowledgePodSummary(capsuleId, "pod", "Knowledge Pod")],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(capsuleId, "pod", "Knowledge Pod"),
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        },
+      ],
     });
     fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
 
@@ -1221,7 +1236,9 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     await openCombobox(user, "Grounding mode");
 
     expect(fetchCapsulesMock).toHaveBeenCalledWith({ includeKnowledgePods: true });
-    expect(screen.getByRole("option", { name: "Knowledge Pod: Knowledge Pod" })).toBeVisible();
+    expect(screen.getByRole("option", { name: /Knowledge Pod: Knowledge Pod/u })).toBeVisible();
+    expect(screen.getByText("Policy denied")).toBeVisible();
+    expect(screen.getByText(/blocks grounded answer synthesis/u)).toBeVisible();
     expect(screen.queryByText(/\/Users\/alice/u)).toBeNull();
     expect(screen.queryByText(/client_secret/u)).toBeNull();
   });

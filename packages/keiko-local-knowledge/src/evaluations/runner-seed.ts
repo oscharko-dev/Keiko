@@ -14,6 +14,7 @@ import type {
   KnowledgeCapsuleId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 
 import { createCapsule } from "../capsule-lifecycle.js";
 import { createCapsuleSet, getCapsuleSet } from "../capsule-set-lifecycle.js";
@@ -54,6 +55,7 @@ function seedCapsule(store: KnowledgeStore, capsule: EvalCapsuleSpec): void {
     retrievalEffort: "default",
     outputMode: "answers",
     answerGroundingPolicy: capsule.answerGroundingPolicy,
+    modelUsePolicy: standardPodModelUsePolicy(),
     embeddingModelIdentity: capsule.embeddingModelIdentity,
     lifecycleState: "draft",
     storageReference: `eval/${String(capsule.id)}`,

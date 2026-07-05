@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   CapsuleSetId,
   KnowledgeCapsuleId,
@@ -39,8 +44,12 @@ function podSummary(
   id: KnowledgeCapsuleId | CapsuleSetId,
   kind: KnowledgePodSummary["kind"],
   displayName: string,
-  overrides: Partial<Pick<KnowledgePodSummary, "readiness" | "retrieval">> = {},
+  overrides: Partial<
+    Pick<KnowledgePodSummary, "readiness" | "retrieval" | "governance" | "modelUsePolicy">
+  > = {},
 ): KnowledgePodSummary {
+  const modelUsePolicy =
+    overrides.modelUsePolicy ?? resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy());
   return {
     schemaVersion: "1",
     id,
@@ -65,12 +74,13 @@ function podSummary(
       evidenceMode: "counts-hashes-and-status",
       storageLocation: "local-runtime-state",
     },
-    governance: {
+    governance: overrides.governance ?? {
       locationKind: "local",
       sealingPosture: "local-store-policy",
       policyPosture: "none",
       managedServiceDependency: false,
     },
+    modelUsePolicy,
     compatibility: {
       backingKind: kind === "pod" ? "knowledge-capsule" : "capsule-set",
       capsuleIds: kind === "pod" ? [id as KnowledgeCapsuleId] : [],
@@ -222,6 +232,80 @@ describe("local knowledge BFF boundary helpers", () => {
     expect(capsules[1]?.knowledgePod?.guidance).toMatchObject({
       label: "Embedding mismatch",
       tone: "danger",
+    });
+  });
+
+  it("maps sealed Knowledge Pod policy guidance and denied operation metadata", () => {
+    const capsuleId = "cap-sealed" as KnowledgeCapsuleId;
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Sealed policy",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(capsuleId, "pod", "Sealed policy", {
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy()),
+        }),
+      ],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
+      deniedModelOperations: [
+        "externalEmbeddings",
+        "externalReranking",
+        "answerSynthesis",
+        "rawContentRelease",
+      ],
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
+    });
+  });
+
+  it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {
+    const capsuleId = "cap-legacy-policy" as KnowledgeCapsuleId;
+    const legacySummary = podSummary(capsuleId, "pod", "Legacy policy");
+    const legacyWire = { ...legacySummary } as Record<string, unknown>;
+    delete legacyWire.modelUsePolicy;
+
+    const capsule = capsulesForKnowledgePodUi({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Legacy policy",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [legacyWire as unknown as KnowledgePodSummary],
+    })[0];
+
+    expect(capsule?.knowledgePod).toMatchObject({
+      sealed: true,
+      deniedModelOperations: [
+        "externalEmbeddings",
+        "externalReranking",
+        "answerSynthesis",
+        "rawContentRelease",
+      ],
+      guidance: {
+        label: "Policy denied",
+        tone: "danger",
+      },
     });
   });
 

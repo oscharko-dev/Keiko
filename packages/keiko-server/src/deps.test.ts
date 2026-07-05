@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import {
   DEFAULT_CONTEXT_PROFILE,
+  standardPodModelUsePolicy,
   type KnowledgeCapsuleId,
   type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
@@ -297,6 +298,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         retrievalEffort: "default",
         outputMode: "answers",
         answerGroundingPolicy: "require-citations",
+        modelUsePolicy: standardPodModelUsePolicy(),
         embeddingModelIdentity: identity,
         lifecycleState: "draft",
         storageReference: "server/local-knowledge",

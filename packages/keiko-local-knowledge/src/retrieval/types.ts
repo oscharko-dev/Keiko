@@ -80,7 +80,8 @@ export type RetrievalNoEvidenceReason =
   | "answer-grounding-rejected"
   | "no-evidence-stated"
   | "empty-query"
-  | "embedding-failed";
+  | "embedding-failed"
+  | "policy-denied";
 
 export interface RetrievalResult {
   readonly references: readonly RetrievalReference[];
@@ -94,7 +95,12 @@ export interface RetrievalResult {
 }
 
 export type RetrievalEmbeddingLaneStatus =
-  "searched" | "degraded" | "embedding-failed" | "identity-incompatible" | "no-vectors";
+  | "searched"
+  | "degraded"
+  | "embedding-failed"
+  | "identity-incompatible"
+  | "no-vectors"
+  | "policy-denied";
 
 export interface RetrievalEmbeddingLaneDiagnostics {
   readonly laneId: string;
