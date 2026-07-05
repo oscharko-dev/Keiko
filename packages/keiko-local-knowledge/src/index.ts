@@ -165,6 +165,12 @@ export {
   type CitationPreviewSnapshotLookup,
 } from "./citation-preview-snapshot.js";
 export * from "./privacy/index.js";
+export {
+  isScopeModelUseOperationAllowed,
+  resolveCapsuleModelUsePolicy,
+  resolveScopeModelUsePolicy,
+  type ScopeModelUsePolicy,
+} from "./model-use-policy.js";
 // Slice 4 (Issue #189) — non-destructive capsule-set composition exposed to the BFF.
 export {
   addSourcesToCapsule,

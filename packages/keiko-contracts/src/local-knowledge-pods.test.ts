@@ -11,6 +11,7 @@ import {
   validateKnowledgePodSummary,
   type KnowledgePodSummary,
 } from "./local-knowledge-pods.js";
+import { resolveKnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
 
 function happySummary(): KnowledgePodSummary {
   return {
@@ -55,6 +56,7 @@ function happySummary(): KnowledgePodSummary {
       policyPosture: "none",
       managedServiceDependency: false,
     },
+    modelUsePolicy: resolveKnowledgePodModelUsePolicy(undefined),
     compatibility: {
       backingKind: "knowledge-capsule",
       capsuleIds: ["cap-risk-controls" as KnowledgeCapsuleId],
@@ -198,6 +200,27 @@ describe("validateKnowledgePodSummary", () => {
       },
     });
     expect(invalidErrors(result)).toContain("governance.locationKind is invalid");
+  });
+
+  it("rejects invalid model-use policy summary metadata", () => {
+    const result = validateKnowledgePodSummary({
+      ...happySummary(),
+      modelUsePolicy: {
+        source: "remote-policy-plane",
+        mode: "sealed-local",
+        operations: {
+          ...happySummary().modelUsePolicy.operations,
+          externalEmbeddings: "inherit",
+        },
+      },
+    });
+
+    expect(invalidErrors(result)).toEqual(
+      expect.arrayContaining([
+        "modelUsePolicy.source is invalid",
+        "modelUsePolicy.operations.externalEmbeddings is invalid",
+      ]),
+    );
   });
 
   it("rejects invalid lifecycle and retrieval enum metadata", () => {

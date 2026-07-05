@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  standardPodModelUsePolicy,
   validateKnowledgePodSummary,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
@@ -127,9 +128,22 @@ describe("Knowledge Pod compatibility projection", () => {
         },
         governance: {
           locationKind: "local",
-          sealingPosture: "local-store-policy",
-          policyPosture: "none",
+          sealingPosture: "sealed-pod-policy",
+          policyPosture: "not-declared",
           managedServiceDependency: false,
+        },
+        modelUsePolicy: {
+          source: "legacy-default",
+          mode: "sealed-local",
+          operations: {
+            externalEmbeddings: "deny",
+            localEmbeddings: "allow",
+            externalReranking: "deny",
+            localReranking: "allow",
+            answerSynthesis: "deny",
+            rawContentRelease: "deny",
+            evidencePersistence: "allow",
+          },
         },
         compatibility: {
           backingKind: "knowledge-capsule",
@@ -206,9 +220,13 @@ describe("Knowledge Pod compatibility projection", () => {
         },
         governance: {
           locationKind: "local",
-          sealingPosture: "local-store-policy",
-          policyPosture: "none",
+          sealingPosture: "sealed-pod-policy",
+          policyPosture: "not-declared",
           managedServiceDependency: false,
+        },
+        modelUsePolicy: {
+          source: "legacy-default",
+          mode: "sealed-local",
         },
         compatibility: {
           backingKind: "capsule-set",
@@ -216,6 +234,42 @@ describe("Knowledge Pod compatibility projection", () => {
           sourceIds: [aSourceId, bSourceId],
           migrationRequired: false,
           persistedStateRenamed: false,
+        },
+      });
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("projects explicit standard model-use policy without sealed posture", () => {
+    const env = freshStore();
+    try {
+      const capsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: "cap-standard-policy" as KnowledgeCapsuleId,
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+
+      const summary = buildKnowledgePodSummary(env.store, capsule);
+
+      expect(summary).toMatchObject({
+        governance: {
+          sealingPosture: "local-store-policy",
+          policyPosture: "policy-pack",
+          managedServiceDependency: false,
+        },
+        modelUsePolicy: {
+          source: "explicit",
+          mode: "standard",
+          operations: {
+            externalEmbeddings: "allow",
+            externalReranking: "allow",
+            answerSynthesis: "allow",
+            rawContentRelease: "allow",
+          },
         },
       });
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);

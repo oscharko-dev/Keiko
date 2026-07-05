@@ -376,7 +376,7 @@ function EmbeddingGuidanceDescription({
   if (guidance === undefined) return null;
   return (
     <small id={id}>
-      Embedding compatibility: {guidance.label}. {guidance.description}
+      Knowledge Pod guidance: {guidance.label}. {guidance.description}
     </small>
   );
 }

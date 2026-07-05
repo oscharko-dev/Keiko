@@ -16,6 +16,7 @@ import type {
   KnowledgeCapsule,
   KnowledgeSourceScope,
 } from "./local-knowledge.js";
+import { validateKnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
 import type { CapsuleReindexRequest } from "./local-knowledge-records.js";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
@@ -464,6 +465,36 @@ function validateKnowledgeCapsuleDisplayMetadata(
   validateSafeMetadataMap(errors, "capsule.metadata", input.metadata);
 }
 
+function validateKnowledgeCapsuleOptionalSettings(
+  input: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (input.contextualRetrieval !== undefined) {
+    const contextualResult = validateCapsuleContextualRetrievalSettings(input.contextualRetrieval);
+    if (!contextualResult.ok) {
+      errors.push(...contextualResult.errors.map((error) => `capsule.${error}`));
+    }
+  }
+  if (input.modelUsePolicy !== undefined) {
+    const policyResult = validateKnowledgePodModelUsePolicy(input.modelUsePolicy);
+    if (!policyResult.ok) {
+      errors.push(...policyResult.errors.map((error) => `capsule.${error}`));
+    }
+  }
+}
+
+function validateKnowledgeCapsuleStorageReference(
+  input: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    typeof input.storageReference !== "string" ||
+    !isSafeStorageReference(input.storageReference)
+  ) {
+    errors.push("capsule.storageReference must be a safe relative path");
+  }
+}
+
 export function validateKnowledgeCapsule(
   input: unknown,
 ): LocalKnowledgeValidation<KnowledgeCapsule> {
@@ -475,12 +506,7 @@ export function validateKnowledgeCapsule(
     errors.push("capsule.id must be a non-empty string");
   }
   validateKnowledgeCapsuleDisplayMetadata(input, errors);
-  if (input.contextualRetrieval !== undefined) {
-    const contextualResult = validateCapsuleContextualRetrievalSettings(input.contextualRetrieval);
-    if (!contextualResult.ok) {
-      errors.push(...contextualResult.errors.map((error) => `capsule.${error}`));
-    }
-  }
+  validateKnowledgeCapsuleOptionalSettings(input, errors);
   validateCapsuleSourceLineage(input, errors);
   validateCapsuleEnums(input, errors);
   const identityResult = validateEmbeddingModelIdentity(input.embeddingModelIdentity);
@@ -489,12 +515,7 @@ export function validateKnowledgeCapsule(
       errors.push(`capsule.${reason}`);
     }
   }
-  if (
-    typeof input.storageReference !== "string" ||
-    !isSafeStorageReference(input.storageReference)
-  ) {
-    errors.push("capsule.storageReference must be a safe relative path");
-  }
+  validateKnowledgeCapsuleStorageReference(input, errors);
   validateCapsuleTimestamps(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };

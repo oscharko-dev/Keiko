@@ -6,6 +6,7 @@ import {
   getCapsuleSet,
   listCapsuleSources,
   readCitationExcerpt,
+  resolveScopeModelUsePolicy,
   runGroundedAnswer,
   type AnswerGenerator,
   type AnswerGeneratorInput,
@@ -277,6 +278,16 @@ export function scopeStateFailure(
     return {
       reason: "scope-not-ready",
       message: "The selected knowledge scope is not ready for grounded answers yet.",
+    };
+  }
+  const policy = resolveScopeModelUsePolicy(selected.capsules);
+  if (
+    policy.operations.answerSynthesis === "deny" ||
+    policy.operations.rawContentRelease === "deny"
+  ) {
+    return {
+      reason: "policy-denied",
+      message: "The selected Knowledge Pod policy does not allow grounded answer synthesis.",
     };
   }
   return undefined;
@@ -819,35 +830,53 @@ function isNoEvidenceAnswer(answer: string): boolean {
   return REFUSAL_PATTERNS.some((pattern) => pattern.test(compact));
 }
 
+function localKnowledgeSpecificNoEvidenceAnswer(
+  reason: string,
+  german: boolean,
+): string | undefined {
+  if (reason === "incompatible-embedding-identity") {
+    return german
+      ? "Dieser Knowledge Pod wurde mit einem anderen Embedding-Modell indiziert. Indiziere ihn fuer das aktuelle Embedding-Modell neu."
+      : "This Knowledge Pod was indexed with a different embedding model. Re-index it for the current embedding model.";
+  }
+  if (reason === "embedding-failed") {
+    return german
+      ? "Das Embedding-Gateway hat keinen nutzbaren Query-Vektor geliefert. Pruefe den konfigurierten Embedding-Provider und versuche es erneut."
+      : "The embedding gateway did not return a usable query vector. Check the configured embedding provider and try again.";
+  }
+  if (reason === "no-vectors") {
+    return german
+      ? "Im ausgewaehlten Wissensumfang sind keine indexierten Vektoren verfuegbar. Indiziere den Knowledge Pod, bevor du fragst."
+      : "No indexed vectors are available for the selected knowledge scope. Index the Knowledge Pod before asking.";
+  }
+  return undefined;
+}
+
+function localKnowledgePolicyNoEvidenceAnswer(reason: string, german: boolean): string | undefined {
+  if (reason === "policy-denied") {
+    return german
+      ? "Die Richtlinie des ausgewaehlten Knowledge Pods erlaubt diesen Modellvorgang nicht."
+      : "The selected Knowledge Pod policy does not allow this model operation.";
+  }
+  if (reason === "dense-scan-too-large") {
+    return german
+      ? "Der ausgewaehlte Wissensumfang ist fuer die exakte Vektorsuche zu gross und hat keinen nutzbaren Lexikalindex. Erstelle oder repariere den Suchindex und versuche es erneut."
+      : "The selected knowledge scope is too large for exact vector search and has no usable lexical index. Build or repair the search index and try again.";
+  }
+  return undefined;
+}
+
 export function localKnowledgeNoEvidenceAnswer(
   reason: string | undefined,
   question?: string,
 ): string {
   const german = shouldUseGermanForSystemAnswer(question);
-  if (reason === "incompatible-embedding-identity") {
-    if (german) {
-      return "Dieser Knowledge Pod wurde mit einem anderen Embedding-Modell indiziert. Indiziere ihn fuer das aktuelle Embedding-Modell neu.";
-    }
-    return "This Knowledge Pod was indexed with a different embedding model. Re-index it for the current embedding model.";
-  }
-  if (reason === "embedding-failed") {
-    if (german) {
-      return "Das Embedding-Gateway hat keinen nutzbaren Query-Vektor geliefert. Pruefe den konfigurierten Embedding-Provider und versuche es erneut.";
-    }
-    return "The embedding gateway did not return a usable query vector. Check the configured embedding provider and try again.";
-  }
-  if (reason === "no-vectors") {
-    if (german) {
-      return "Im ausgewaehlten Wissensumfang sind keine indexierten Vektoren verfuegbar. Indiziere den Knowledge Pod, bevor du fragst.";
-    }
-    return "No indexed vectors are available for the selected knowledge scope. Index the Knowledge Pod before asking.";
-  }
-  if (reason === "dense-scan-too-large") {
-    if (german) {
-      return "Der ausgewaehlte Wissensumfang ist fuer die exakte Vektorsuche zu gross und hat keinen nutzbaren Lexikalindex. Erstelle oder repariere den Suchindex und versuche es erneut.";
-    }
-    return "The selected knowledge scope is too large for exact vector search and has no usable lexical index. Build or repair the search index and try again.";
-  }
+  const specific =
+    reason === undefined
+      ? undefined
+      : (localKnowledgeSpecificNoEvidenceAnswer(reason, german) ??
+        localKnowledgePolicyNoEvidenceAnswer(reason, german));
+  if (specific !== undefined) return specific;
   if (german) {
     return "Keine Evidenz im ausgewaehlten Wissensumfang gefunden.";
   }
@@ -1107,6 +1136,37 @@ function createReferenceReranker(deps: UiHandlerDeps, store: KnowledgeStore): Re
   };
 }
 
+function createPolicyDeniedReranker(): ReferenceReranker {
+  return {
+    rerank: (input): Promise<ReferenceRerankerResult> => {
+      const fallback = fallbackReferenceSelection(input.references);
+      return Promise.resolve({
+        references: fallback,
+        diagnostics: {
+          status: "disabled",
+          candidateCount: input.references.length,
+          documentCount: 0,
+          keptCount: fallback.length,
+          failureKind: "policy-denied",
+          latencyMs: 0,
+        },
+      });
+    },
+  };
+}
+
+function referenceRerankerForScope(
+  deps: UiHandlerDeps,
+  store: KnowledgeStore,
+  selected: SelectedLocalKnowledgeScope,
+): ReferenceReranker {
+  const policy = resolveScopeModelUsePolicy(selected.capsules);
+  if (policy.operations.externalReranking === "deny") {
+    return createPolicyDeniedReranker();
+  }
+  return createReferenceReranker(deps, store);
+}
+
 type ScopedGroundedResult = Awaited<ReturnType<typeof runGroundedAnswer>>;
 
 export interface KnowledgePodRetrievalActivityResultInput {
@@ -1240,7 +1300,16 @@ function activityModes(
   result: KnowledgePodRetrievalActivityResultInput | undefined,
 ): readonly KnowledgePodRetrievalActivityMode[] {
   const modes = new Set<KnowledgePodRetrievalActivityMode>(["local-only"]);
-  const mode = result?.retrievalDiagnostics?.mode;
+  addRetrievalMode(modes, result?.retrievalDiagnostics?.mode);
+  if (result?.reranker?.status === "applied") modes.add("reranked");
+  if (hasPolicyDeniedSignal(result)) modes.add("sealed");
+  return [...modes];
+}
+
+function addRetrievalMode(
+  modes: Set<KnowledgePodRetrievalActivityMode>,
+  mode: NonNullable<ScopedGroundedResult["retrievalDiagnostics"]>["mode"] | undefined,
+): void {
   if (mode === "hybrid") {
     modes.add("hybrid");
     modes.add("lexical");
@@ -1250,8 +1319,25 @@ function activityModes(
   } else if (mode === "lexical-only" || mode === "lexical-degraded") {
     modes.add("lexical");
   }
-  if (result?.reranker?.status === "applied") modes.add("reranked");
-  return [...modes];
+}
+
+function hasPolicyDeniedSignal(
+  result: KnowledgePodRetrievalActivityResultInput | undefined,
+): boolean {
+  return (
+    result?.reason === "policy-denied" ||
+    result?.reranker?.failureKind === "policy-denied" ||
+    resultHasPolicyDeniedLane(result)
+  );
+}
+
+function resultHasPolicyDeniedLane(
+  result: KnowledgePodRetrievalActivityResultInput | undefined,
+): boolean {
+  return (
+    result?.retrievalDiagnostics?.embeddingLanes?.some((lane) => lane.status === "policy-denied") ??
+    false
+  );
 }
 
 function reasonCodesForPod(
@@ -1290,6 +1376,10 @@ function addRerankerReasonCode(
   codes: Set<KnowledgePodRetrievalActivityReasonCode>,
   result: KnowledgePodRetrievalActivityResultInput,
 ): void {
+  if (result.reranker?.failureKind === "policy-denied") {
+    codes.add("policy-denied");
+    return;
+  }
   if (result.reranker === undefined || !RERANKER_DEGRADED.has(result.reranker.status)) return;
   codes.add(
     result.reranker.status === "invalid-response"
@@ -1304,6 +1394,7 @@ function stateForPod(
   capsuleId?: KnowledgeCapsuleId,
 ): KnowledgePodRetrievalActivityState {
   const codes = reasonCodesForPod(result, referenceCount, capsuleId);
+  if (referenceCount > 0 && codes.some((code) => code === "policy-denied")) return "degraded";
   if (codes.some((code) => DENIED_ACTIVITY_REASONS.has(code))) return "denied";
   if (referenceCount > 0 && codes.some((code) => DENSE_FALLBACK_ACTIVITY_REASONS.has(code))) {
     return "degraded";
@@ -1340,6 +1431,7 @@ function reasonCodeForLaneStatus(
   if (status === "identity-incompatible") return "incompatible-embedding-identity";
   if (status === "embedding-failed" || status === "degraded") return "embedding-failed";
   if (status === "no-vectors") return "no-vectors";
+  if (status === "policy-denied") return "policy-denied";
   return undefined;
 }
 
@@ -1491,8 +1583,10 @@ function podsForSkipped(
   source: KnowledgePodRetrievalActivitySkippedInput,
 ): readonly KnowledgePodRetrievalActivityPod[] {
   const reason = normaliseActivityReason(source.reason);
+  const modes: readonly KnowledgePodRetrievalActivityMode[] =
+    reason === "policy-denied" ? ["local-only", "sealed"] : ["local-only"];
   return source.selected.capsules.map((capsule) =>
-    activityPod(store, cache, capsule, stateForReason(reason), ["local-only"], [reason], {
+    activityPod(store, cache, capsule, stateForReason(reason), modes, [reason], {
       referenceCount: 0,
       citationCount: 0,
     }),
@@ -1744,7 +1838,7 @@ async function runScopedGroundedAnswer(
         queryTransformer: createBroadQueryTransformer(model, modelId),
       },
       answerGenerator: generator,
-      referenceReranker: createReferenceReranker(deps, env.store),
+      referenceReranker: referenceRerankerForScope(deps, env.store, selected),
       citationFaithfulness: {
         excerptForReference: (reference): string =>
           readCitationExcerpt(

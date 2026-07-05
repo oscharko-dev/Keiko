@@ -3,9 +3,11 @@ import type {
   DocumentId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 import type {
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
@@ -55,6 +57,7 @@ export interface SeedVectorsOptions {
   readonly contentHash?: string;
   readonly safeDisplayName?: string;
   readonly chunkingOptions?: ChunkingOptions;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 export interface SeededVectors {
@@ -110,6 +113,7 @@ function sampleCapsuleInput(
     id: KnowledgeCapsuleId;
     displayName?: string;
     embeddingModelIdentity: EmbeddingModelIdentity;
+    modelUsePolicy?: KnowledgePodModelUsePolicy;
   }>,
 ): CreateCapsuleInput {
   return {
@@ -119,6 +123,7 @@ function sampleCapsuleInput(
     retrievalEffort: "default" as const,
     outputMode: "answers" as const,
     answerGroundingPolicy: "require-citations" as const,
+    modelUsePolicy: overrides.modelUsePolicy ?? standardPodModelUsePolicy(),
     embeddingModelIdentity: overrides.embeddingModelIdentity,
     lifecycleState: "draft" as const,
     storageReference: "engineering/capsule-1",
@@ -149,6 +154,7 @@ interface ResolvedSeedOptions {
   readonly safeDisplayName: string;
   readonly unit: ParsedUnit;
   readonly chunkingOptions: ChunkingOptions;
+  readonly modelUsePolicy: KnowledgePodModelUsePolicy;
 }
 
 function composeUnit(
@@ -197,6 +203,7 @@ function resolveSeedOptions(options: SeedVectorsOptions): ResolvedSeedOptions {
     safeDisplayName: options.safeDisplayName ?? "sample.txt",
     unit: composeUnit(options.unit, documentId, text.length),
     chunkingOptions: options.chunkingOptions ?? { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    modelUsePolicy: options.modelUsePolicy ?? standardPodModelUsePolicy(),
   };
 }
 
@@ -207,6 +214,7 @@ function insertSeedRows(store: KnowledgeStore, options: ResolvedSeedOptions): vo
       id: options.capsuleId,
       displayName: options.displayName,
       embeddingModelIdentity: options.identity,
+      modelUsePolicy: options.modelUsePolicy,
     }),
   );
   addSourceToCapsule(store, options.capsuleId, sampleSourceInput(options.sourceId));

@@ -13,6 +13,7 @@ import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   createSqliteAuditSink,
   readCitationExcerpt,
+  resolveScopeModelUsePolicy,
   runLocalKnowledgeRetrieval,
   type KnowledgeStore,
   type RetrievalResult,
@@ -58,7 +59,7 @@ import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
 import { currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
-import type { Chat } from "./store/index.js";
+import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
   clarificationUserMessage,
@@ -312,12 +313,33 @@ function invalidRerankMappingDiagnostics(
   };
 }
 
+function policyDeniedRerankDiagnostics(
+  candidateCount: number,
+  keptCount: number,
+): GroundedRerankerDiagnostics {
+  return {
+    status: "disabled",
+    candidateCount,
+    documentCount: 0,
+    keptCount,
+    failureKind: "policy-denied",
+    latencyMs: 0,
+  };
+}
+
 async function rerankHybridSelection(
   ctx: HybridGroundedAskCtx,
   preliminary: readonly SelectedCandidate<HybridPayload>[],
   limits: ReturnType<typeof currentGroundingLimits>,
+  externalRerankingDenied: boolean,
 ): Promise<HybridRerankedSelection> {
   const fallback = selectTopPromptCandidates(preliminary, limits.maxPromptReferences);
+  if (externalRerankingDenied) {
+    return {
+      selected: fallback,
+      diagnostics: policyDeniedRerankDiagnostics(preliminary.length, fallback.length),
+    };
+  }
   const attempt = await requestConfiguredRerank({
     deps: ctx.deps,
     query: ctx.content,
@@ -340,6 +362,14 @@ async function rerankHybridSelection(
     };
   }
   return { selected: reranked, diagnostics: withKeptCount(attempt.diagnostics, reranked.length) };
+}
+
+function connectorsDenyExternalReranking(connectors: readonly RetrievedConnector[]): boolean {
+  return connectors.some(
+    (connector) =>
+      resolveScopeModelUsePolicy(connector.selected.capsules).operations.externalReranking ===
+      "deny",
+  );
 }
 
 // ─── Folder retrieval (mirrors runMultiSourceAsk's loop) ──────────────────────
@@ -1399,8 +1429,14 @@ async function answerAndAssemble(
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
   const { retrieved: folders } = meta.folderResult;
-  const preliminary = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
-  const { selected, diagnostics: reranker } = await rerankHybridSelection(ctx, preliminary, limits);
+  const connectors = meta.connectorResult.retrieved;
+  const preliminary = buildUnifiedSelection(ctx, folders, connectors, store);
+  const { selected, diagnostics: reranker } = await rerankHybridSelection(
+    ctx,
+    preliminary,
+    limits,
+    connectorsDenyExternalReranking(connectors),
+  );
   if (selected.length === 0) {
     return assembleHybridNoEvidenceRoute(ctx, store, meta, selected, limits, reranker);
   }
@@ -1411,12 +1447,7 @@ async function answerAndAssemble(
     await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
   );
   ensureNotCancelled(ctx.signal);
-  const [userMessage, assistantMessage] = persistGroundedExchange(
-    ctx.deps,
-    ctx.chat.id,
-    redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistant.content),
-  );
+  const [userMessage, assistantMessage] = persistHybridGroundedExchange(ctx, assistant.content);
   const answer = assembleHybridAnswer(
     ctx,
     {
@@ -1437,6 +1468,18 @@ async function answerAndAssemble(
   const previewCitations = selectedConnectorPreviewCitations(store, selected, ctx.deps.redactor);
   ctx.deps.store.attachGroundedAnswer(assistantMessage.id, answer, previewCitations);
   return { status: 200, body: answer };
+}
+
+function persistHybridGroundedExchange(
+  ctx: HybridGroundedAskCtx,
+  assistantContent: string,
+): readonly [ChatMessage, ChatMessage] {
+  return persistGroundedExchange(
+    ctx.deps,
+    ctx.chat.id,
+    redactString(ctx.deps.redactor, ctx.content),
+    redactString(ctx.deps.redactor, assistantContent),
+  );
 }
 
 // Issue #154 (GAP-B) — a GatewayError is redacted inside mappedGatewayError (shared with the

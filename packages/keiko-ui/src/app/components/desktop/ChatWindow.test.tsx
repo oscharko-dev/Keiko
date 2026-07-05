@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
+  resolveKnowledgePodModelUsePolicy,
+  standardPodModelUsePolicy,
   type CapsuleSetId,
   type KnowledgeCapsuleId,
   type KnowledgePodSummary,
@@ -232,6 +234,7 @@ function knowledgePodSummary(
       policyPosture: "none",
       managedServiceDependency: false,
     },
+    modelUsePolicy: resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy()),
     compatibility: {
       backingKind: kind === "pod" ? "knowledge-capsule" : "capsule-set",
       capsuleIds: kind === "pod" ? [id as KnowledgeCapsuleId] : [],

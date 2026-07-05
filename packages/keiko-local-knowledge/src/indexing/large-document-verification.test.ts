@@ -3,7 +3,10 @@
 // progressive document + unsupported file) and asserts the routing, plus that no absolute path or
 // secret leaks into the persisted checkpoint or diagnostics.
 
-import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
@@ -50,7 +53,10 @@ beforeEach(() => {
   const fresh = freshStore();
   store = fresh.store;
   cleanup = fresh.cleanup;
-  createCapsule(store, sampleCapsuleInput({ id: capsuleId }));
+  createCapsule(
+    store,
+    sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+  );
   addSourceToCapsule(store, capsuleId, {
     id: sourceId,
     displayName: "mixed",

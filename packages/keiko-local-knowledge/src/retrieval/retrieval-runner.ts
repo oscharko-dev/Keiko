@@ -190,7 +190,8 @@ function finaliseWithGrounding(
     return {
       references: [],
       noEvidence: true,
-      reason: "answer-grounding-rejected",
+      reason:
+        search.noEvidenceReason === "policy-denied" ? "policy-denied" : "answer-grounding-rejected",
       diagnostics: search.diagnostics,
     };
   }

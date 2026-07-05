@@ -1,6 +1,7 @@
 # Local Knowledge: Knowledge Pods
 
-Status: implementation note for Epic #1815 and embedding-space governance in Epic #1818.
+Status: implementation note for Epic #1815, embedding-space governance in Epic #1818,
+and sealed model-use policy in Epic #1819.
 
 ## Product term
 
@@ -163,6 +164,33 @@ pod ids, vector count, dense candidate count, query-embedding participation, and
 lane status such as `searched`, `identity-incompatible`, `embedding-failed`, or
 `no-vectors`. Lane ids are opaque and do not expose provider endpoints, source paths, raw
 queries, vectors, or scores.
+
+## Model-use policy
+
+Knowledge Pods carry an additive `modelUsePolicy` contract that resolves to a
+body-free operation matrix. New UI-created pods default to explicit standard policy so
+existing indexing and grounded-answer behavior remains available when a user creates a
+normal pod. Legacy persisted rows without an explicit policy resolve as `sealed-local`,
+which fails closed for operations that would release pod content to external model
+providers.
+
+The sealed-local default denies:
+
+- external embedding generation for indexing and query-time dense retrieval;
+- external reranking over pod excerpts;
+- answer synthesis and raw-content release to a model context.
+
+It allows local embeddings, local reranking, and redacted evidence persistence so future
+local-only implementations can reuse the same contract without relaxing the boundary.
+When a capsule set or hybrid grounded answer combines multiple pods, deny wins per
+operation. A single sealed pod disables shared external reranking for the combined
+candidate set to avoid leaking sealed excerpts through a cross-source reranker.
+
+Policy denial is surfaced through closed reason codes only. Indexing emits
+`POLICY_DENIED`; retrieval diagnostics use `policy-denied` lanes; grounded answers and
+retrieval activity render denied or degraded pod states with `local-only` and `sealed`
+modes. These projections do not include source text, excerpts, model prompts, provider
+endpoints, or raw diagnostics.
 
 ## Retrieval activity projection
 

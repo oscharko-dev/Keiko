@@ -165,7 +165,7 @@ describe("ConnectorGraph — with capsules", () => {
 
     const badge = await screen.findByText("Reindex recommended");
     const description =
-      "Embedding compatibility: Reindex recommended. Compatibility is unverified; lexical fallback remains available.";
+      "Knowledge Pod guidance: Reindex recommended. Compatibility is unverified; lexical fallback remains available.";
     const row = screen.getByRole("article", { name: "Knowledge Pod: Legacy Vectors" });
     const dragHandle = screen.getByRole("button", {
       name: "Drag Knowledge Pod Legacy Vectors to the workspace",

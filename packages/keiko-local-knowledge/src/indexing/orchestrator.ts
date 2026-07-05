@@ -82,6 +82,7 @@ import {
   chunkDocumentBounded,
   embedDocumentChunksBounded,
 } from "./bounded-indexing.js";
+import { resolveCapsuleModelUsePolicy } from "../model-use-policy.js";
 import { selectExtractionCheckpoint, upsertExtractionCheckpoint } from "./checkpoint-persist.js";
 
 import {
@@ -1830,6 +1831,15 @@ async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobErr
   }
 }
 
+function modelUsePolicyPreflightFailure(state: RunState): IndexingJobError | undefined {
+  const policy = resolveCapsuleModelUsePolicy(state.capsule);
+  if (policy.operations.externalEmbeddings === "allow") return undefined;
+  return {
+    code: "POLICY_DENIED",
+    message: "Knowledge Pod policy denies external embeddings for indexing.",
+  };
+}
+
 function persistStartedJob(state: RunState, sources: readonly KnowledgeSource[]): void {
   insertJobRow(state.options.store._internal.db, {
     id: state.jobId,
@@ -1909,6 +1919,12 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
 
   if (cancellationRequested(state)) {
     yield* finalize(state, undefined);
+    return;
+  }
+  const policyFailure = modelUsePolicyPreflightFailure(state);
+  if (policyFailure !== undefined) {
+    state.lastError = policyFailure;
+    yield* finalize(state, policyFailure);
     return;
   }
   const preflightFailure = await verifyEmbeddingPreflight(state);

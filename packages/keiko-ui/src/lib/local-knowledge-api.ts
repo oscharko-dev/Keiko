@@ -22,7 +22,10 @@ import type {
   LocalKnowledgeCapsuleSetsResponse as CapsuleSetsResponse,
   LocalKnowledgeCapsulesResponse as CapsulesResponse,
   KnowledgePodSummary,
+  KnowledgePodModelUseOperation,
+  KnowledgePodModelUsePolicy,
 } from "@oscharko-dev/keiko-contracts";
+import { KNOWLEDGE_POD_MODEL_USE_OPERATIONS } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
 // Wire shapes
@@ -36,6 +39,9 @@ export interface KnowledgePodUiGuidance {
 
 export interface KnowledgePodUiMetadata {
   readonly readiness: KnowledgePodSummary["readiness"];
+  readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"];
+  readonly sealed?: boolean;
+  readonly deniedModelOperations?: readonly KnowledgePodModelUseOperation[];
   readonly embeddingCompatibilityStatus?: NonNullable<
     KnowledgePodSummary["retrieval"]["embeddingCompatibilityStatus"]
   >;
@@ -67,6 +73,8 @@ function summariesById(
 }
 
 function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+  const policyGuidance = guidanceForPolicy(summary);
+  if (policyGuidance !== undefined) return policyGuidance;
   const status = summary.retrieval.embeddingCompatibilityStatus;
   if (status === "incompatible") {
     return {
@@ -99,13 +107,53 @@ function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidanc
   return undefined;
 }
 
+function deniedModelOperations(
+  summary: KnowledgePodSummary,
+): readonly KnowledgePodModelUseOperation[] {
+  return KNOWLEDGE_POD_MODEL_USE_OPERATIONS.filter(
+    (operation) => summary.modelUsePolicy.operations[operation] === "deny",
+  );
+}
+
+function isSealedPolicy(summary: KnowledgePodSummary): boolean {
+  return (
+    summary.governance.sealingPosture === "sealed-pod-policy" ||
+    summary.modelUsePolicy.mode === "sealed-local"
+  );
+}
+
+function guidanceForPolicy(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+  const operations = summary.modelUsePolicy.operations;
+  if (operations.answerSynthesis === "deny" || operations.rawContentRelease === "deny") {
+    return {
+      label: "Policy denied",
+      description:
+        "This Knowledge Pod blocks grounded answer synthesis or raw-content release; Keiko will return a policy-denied state instead of sending excerpts to a model.",
+      tone: "danger",
+    };
+  }
+  if (operations.externalEmbeddings === "deny" || operations.externalReranking === "deny") {
+    return {
+      label: "Sealed local policy",
+      description:
+        "External embedding or reranking calls are disabled for this Knowledge Pod; retrieval may use lexical or local fallback.",
+      tone: "warning",
+    };
+  }
+  return undefined;
+}
+
 function metadataForSummary(
   summary: KnowledgePodSummary | undefined,
 ): KnowledgePodUiMetadata | undefined {
   if (summary === undefined) return undefined;
   const guidance = guidanceForSummary(summary);
+  const deniedOperations = deniedModelOperations(summary);
   return {
     readiness: summary.readiness,
+    modelUsePolicy: summary.modelUsePolicy,
+    sealed: isSealedPolicy(summary),
+    deniedModelOperations: deniedOperations,
     ...(summary.retrieval.embeddingCompatibilityStatus !== undefined
       ? { embeddingCompatibilityStatus: summary.retrieval.embeddingCompatibilityStatus }
       : {}),
@@ -227,6 +275,7 @@ export async function fetchCapsuleSets(
 export interface CreateCapsuleInput {
   readonly displayName: string;
   readonly description?: string;
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 export async function createCapsule(input: CreateCapsuleInput): Promise<CapsuleDetailResponse> {

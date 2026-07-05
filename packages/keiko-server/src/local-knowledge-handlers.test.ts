@@ -25,6 +25,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -224,6 +225,7 @@ function seedStore(tmp: string): {
     retrievalEffort: "default",
     outputMode: "snippets",
     answerGroundingPolicy: "require-citations",
+    modelUsePolicy: standardPodModelUsePolicy(),
     embeddingModelIdentity: {
       provider: "openai",
       modelId: "text-embedding-3-small",
@@ -2884,6 +2886,7 @@ describe("local-knowledge handlers", () => {
       retrievalEffort: "default",
       outputMode: "snippets",
       answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
       embeddingModelIdentity: {
         provider: embeddingProviderIdentityForTest(baseUrl),
         modelId: upstreamModelId,
