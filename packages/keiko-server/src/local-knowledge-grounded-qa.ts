@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createSqliteAuditSink,
-  buildKnowledgePodSummary,
   getCapsule,
   getCapsuleSet,
   listCapsuleSources,
@@ -35,7 +34,6 @@ import type {
   KnowledgePodRetrievalActivityPod,
   KnowledgePodRetrievalActivityReasonCode,
   KnowledgePodRetrievalActivityState,
-  KnowledgePodSummary,
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
@@ -70,6 +68,7 @@ import { requestConfiguredRerank } from "./grounded-model-reranker.js";
 export const DEFAULT_REFERENCE_BUDGET = 16;
 export const MAX_EXCERPT_CHARS = 900;
 export const MAX_PROMPT_REFERENCES = 16;
+const MAX_RETRIEVAL_ACTIVITY_PODS = 24;
 export const LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWER =
   "No evidence found in the selected knowledge scope.";
 const LEGACY_LOCAL_KNOWLEDGE_NO_EVIDENCE_ANSWERS = [
@@ -948,7 +947,9 @@ function buildLocalKnowledgeAnswer(
   );
   const retrievalActivity = tryBuildKnowledgePodRetrievalActivity({
     store,
-    sources: [{ selected, result: retrievalActivityResultFromScoped(result, citations) }],
+    sources: [
+      { selected, result: retrievalActivityResultFromScoped(result, citations, noEvidenceReason) },
+    ],
   });
   return {
     groundingKind: "local-knowledge",
@@ -1166,17 +1167,30 @@ const UNAVAILABLE_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReason
   "embedding-unavailable",
 ]);
 const ACTIVITY_FALLBACK_DISPLAY_NAME = "Knowledge Pod";
-type ActivitySummaryCache = Map<string, KnowledgePodSummary>;
+interface ActivityCapsuleSummary {
+  readonly id: string;
+  readonly displayName: string;
+  readonly sourceIds: readonly string[];
+  readonly sourceCount: number;
+  readonly documentCount: number;
+  readonly chunkCount: number;
+  readonly vectorCount: number;
+}
+type ActivitySummaryCache = Map<string, ActivityCapsuleSummary>;
 
 export function retrievalActivityResultFromScoped(
   result: ScopedGroundedResult,
   citations: readonly LocalKnowledgeEvidenceCitation[],
+  enforcedReason?: string,
 ): KnowledgePodRetrievalActivityResultInput {
+  const noEvidence = enforcedReason !== undefined || result.noEvidence;
   return {
     references: result.references,
     citationCounts: countCitationsByCapsule(citations),
-    noEvidence: result.noEvidence,
-    ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    noEvidence,
+    ...(enforcedReason !== undefined || result.reason !== undefined
+      ? { reason: enforcedReason ?? result.reason }
+      : {}),
     ...(result.retrievalDiagnostics !== undefined
       ? { retrievalDiagnostics: result.retrievalDiagnostics }
       : {}),
@@ -1325,15 +1339,46 @@ function activityDisplayName(value: string): string {
   return isKnowledgePodRetrievalActivitySafeText(value) ? value : ACTIVITY_FALLBACK_DISPLAY_NAME;
 }
 
+interface ActivityCountRow {
+  readonly n: number;
+}
+
+function activityCountRows(
+  store: KnowledgeStore,
+  table: "documents" | "chunks" | "vectors",
+  capsuleId: KnowledgeCapsuleId,
+): number {
+  const row = store._internal.db
+    .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :capsuleId`)
+    .get({ capsuleId: String(capsuleId) }) as ActivityCountRow | undefined;
+  return row?.n ?? 0;
+}
+
+function buildActivityCapsuleSummary(
+  store: KnowledgeStore,
+  capsule: KnowledgeCapsule,
+): ActivityCapsuleSummary {
+  const sources = listCapsuleSources(store, capsule.id);
+  return {
+    id: String(capsule.id),
+    displayName: capsule.displayName,
+    sourceIds: sources.map((source) => String(source.id)),
+    sourceCount: sources.length,
+    documentCount: activityCountRows(store, "documents", capsule.id),
+    chunkCount: activityCountRows(store, "chunks", capsule.id),
+    vectorCount: activityCountRows(store, "vectors", capsule.id),
+  };
+}
+
 function cachedActivitySummary(
   store: KnowledgeStore,
   cache: ActivitySummaryCache,
   capsule: KnowledgeCapsule,
-): KnowledgePodSummary {
+): ActivityCapsuleSummary {
   const key = String(capsule.id);
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
-  const summary = buildKnowledgePodSummary(store, capsule);
+  const summary = buildActivityCapsuleSummary(store, capsule);
   cache.set(key, summary);
   return summary;
 }
@@ -1349,18 +1394,18 @@ function activityPod(
 ): KnowledgePodRetrievalActivityPod {
   const summary = cachedActivitySummary(store, cache, capsule);
   return {
-    podId: activityPodId(String(summary.id)),
+    podId: activityPodId(summary.id),
     podKind: "pod",
     displayName: activityDisplayName(summary.displayName),
     state,
     modes,
     reasonCodes,
-    sourceIds: activitySourceIds(summary.compatibility.sourceIds),
+    sourceIds: activitySourceIds(summary.sourceIds),
     counts: {
-      sourceCount: summary.counts.sourceCount,
-      documentCount: summary.counts.documentCount,
-      chunkCount: summary.counts.chunkCount,
-      vectorCount: summary.counts.vectorCount,
+      sourceCount: summary.sourceCount,
+      documentCount: summary.documentCount,
+      chunkCount: summary.chunkCount,
+      vectorCount: summary.vectorCount,
       referenceCount: counts.referenceCount,
       citationCount: counts.citationCount,
     },
@@ -1400,6 +1445,56 @@ function podsForSkipped(
       citationCount: 0,
     }),
   );
+}
+
+function sumCollapsedPodCounts(
+  pods: readonly KnowledgePodRetrievalActivityPod[],
+): KnowledgePodRetrievalActivityPod["counts"] {
+  return pods.reduce(
+    (acc, pod) => ({
+      sourceCount: acc.sourceCount + pod.counts.sourceCount,
+      documentCount: acc.documentCount + pod.counts.documentCount,
+      chunkCount: acc.chunkCount + pod.counts.chunkCount,
+      vectorCount: acc.vectorCount + pod.counts.vectorCount,
+      referenceCount: acc.referenceCount + pod.counts.referenceCount,
+      citationCount: acc.citationCount + pod.counts.citationCount,
+    }),
+    {
+      sourceCount: 0,
+      documentCount: 0,
+      chunkCount: 0,
+      vectorCount: 0,
+      referenceCount: 0,
+      citationCount: 0,
+    },
+  );
+}
+
+function collapsedActivityPod(
+  overflowPods: readonly KnowledgePodRetrievalActivityPod[],
+): KnowledgePodRetrievalActivityPod | undefined {
+  if (overflowPods.length === 0) return undefined;
+  return {
+    podId:
+      `pod-overflow-${String(overflowPods.length)}` as KnowledgePodRetrievalActivityPod["podId"],
+    podKind: "pod-set",
+    displayName: `${String(overflowPods.length)} additional Knowledge Pods`,
+    state: "skipped",
+    modes: ["local-only"],
+    reasonCodes: ["max-sources-exceeded"],
+    sourceIds: [],
+    counts: sumCollapsedPodCounts(overflowPods),
+  };
+}
+
+function boundedActivityPods(
+  pods: readonly KnowledgePodRetrievalActivityPod[],
+): readonly KnowledgePodRetrievalActivityPod[] {
+  if (pods.length <= MAX_RETRIEVAL_ACTIVITY_PODS) return pods;
+  const visibleCount = MAX_RETRIEVAL_ACTIVITY_PODS - 1;
+  const visible = pods.slice(0, visibleCount);
+  const collapsed = collapsedActivityPod(pods.slice(visibleCount));
+  return collapsed === undefined ? visible : [...visible, collapsed];
 }
 
 function summaryForActivity(
@@ -1443,6 +1538,7 @@ export function buildKnowledgePodRetrievalActivity(input: {
     ...input.sources.flatMap((source) => podsForSource(input.store, summaryCache, source)),
     ...(input.skipped ?? []).flatMap((source) => podsForSkipped(input.store, summaryCache, source)),
   ];
+  const boundedPods = boundedActivityPods(pods);
   const activity: KnowledgePodRetrievalActivity = {
     schemaVersion: KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
     summary: summaryForActivity(pods, input.sources),
@@ -1453,7 +1549,7 @@ export function buildKnowledgePodRetrievalActivity(input: {
       privatePathsExposed: false,
       directVectorScoreComparison: false,
     },
-    pods,
+    pods: boundedPods,
   };
   const validation = validateKnowledgePodRetrievalActivity(activity);
   if (!validation.ok) {
