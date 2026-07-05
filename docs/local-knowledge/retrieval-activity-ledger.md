@@ -13,6 +13,22 @@ implementation-relevant epic and child issue criterion to the evidence required 
 checkbox can be updated. It is not closure evidence until the status column says `verified` or
 `checked` with concrete command, PR, and issue evidence.
 
+Post-merge audit update on 2026-07-05:
+
+- Epic #1816 and child issues #1832-#1836 are closed as completed with `status: done`.
+- The `Keiko Product Delivery` project fields are `Status=Done`, `Workflow State=Done`,
+  `Owner / Agent=Codex`, `Branch=codex/epic-1816-retrieval-activity`, and
+  `Pull Request=https://github.com/oscharko-dev/Keiko/pull/1850`.
+- PR #1850 merged into `dev` at `bf00609e24843e734232e7c3cfc90acf358a7823` after required
+  GitHub checks passed, including `ci`, `ui`, CodeQL, dependency review, protected branch gate,
+  actionlint, pinned-action verification, and build/scan/SBOM/smoke.
+- A follow-up audit branch `codex/epic-1816-audit-retrieval-activity` added expanded axe coverage
+  for the retrieval activity panel because the original closed-disclosure axe tests did not scan
+  the rendered activity region.
+- The planning tables below are preserved as the initial coordination ledger. The current status is
+  represented by this post-merge update, the implementation snapshot, the verification log, and the
+  GitHub issue/PR evidence.
+
 Fetched source-of-truth state on 2026-07-04:
 
 - Epic #1816 was fetched from GitHub and is open.

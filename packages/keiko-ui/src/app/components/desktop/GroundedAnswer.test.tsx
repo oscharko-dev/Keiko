@@ -470,6 +470,29 @@ describe("GroundedAnswer", () => {
     expect(screen.getAllByText("Not selected").length).toBeGreaterThan(0);
   });
 
+  it("bounds long Knowledge Pod activity lists behind a disclosure control", () => {
+    const pod = retrievalActivityPod();
+    const activity = retrievalActivity({
+      pods: Array.from({ length: 10 }, (_, index) => ({
+        ...pod,
+        podId: `cap-activity-${String(index)}` as typeof pod.podId,
+        displayName: `Activity Pod ${String(index)}`,
+      })),
+    });
+    render(
+      <GroundedAnswer
+        answer={{ ...localKnowledgeAnswer(), retrievalActivity: activity }}
+        busy={false}
+      />,
+    );
+
+    expect(screen.getByText(/Activity Pod 0/)).toBeInTheDocument();
+    expect(screen.getByText(/Activity Pod 7/)).toBeInTheDocument();
+    expect(screen.queryByText(/Activity Pod 8/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show all 10 Knowledge Pods" }));
+    expect(screen.getByText(/Activity Pod 9/)).toBeInTheDocument();
+  });
+
   it("renders folder citations, connector citations, and the hybrid source summary for a hybrid answer", () => {
     const a: GroundedAnswerType = {
       groundingKind: "hybrid",

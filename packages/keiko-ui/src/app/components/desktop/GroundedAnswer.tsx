@@ -291,6 +291,7 @@ function CitationReference({
 // one-sentence answer. Cap the default view at the top-scored chips and put the rest behind
 // an explicit disclosure so the strongest cited evidence references stay findable.
 const CITATION_DISPLAY_CAP = 8;
+const ACTIVITY_POD_DISPLAY_CAP = 8;
 
 function uniqueByStableId<T extends { readonly stableId: string }>(
   items: readonly T[],
@@ -323,6 +324,28 @@ function CitationDisclosureButton({
       onClick={onToggle}
     >
       {expanded ? "Show fewer citations" : `Show all ${String(total)} citations`}
+    </button>
+  );
+}
+
+function ActivityDisclosureButton({
+  total,
+  expanded,
+  onToggle,
+}: {
+  readonly total: number;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
+}): ReactNode {
+  if (total <= ACTIVITY_POD_DISPLAY_CAP) return null;
+  return (
+    <button
+      type="button"
+      className="grounded-citations-more"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      {expanded ? "Show fewer Knowledge Pods" : `Show all ${String(total)} Knowledge Pods`}
     </button>
   );
 }
@@ -456,8 +479,10 @@ function KnowledgePodRetrievalActivityPanel({
 }: {
   readonly activity: KnowledgePodRetrievalActivity | undefined;
 }): ReactNode {
+  const [expanded, setExpanded] = useState(false);
   if (activity === undefined || activity.pods.length === 0) return null;
   const { summary } = activity;
+  const visiblePods = expanded ? activity.pods : activity.pods.slice(0, ACTIVITY_POD_DISPLAY_CAP);
   return (
     <section className="grounded-context-pack" aria-label="Knowledge Pod retrieval activity">
       <div className="grounded-context-pack-headline">Knowledge Pod activity</div>
@@ -465,7 +490,9 @@ function KnowledgePodRetrievalActivityPanel({
         <MetricRow label="Searched" value={formatCount(summary.searchedCount)} />
         <MetricRow label="Skipped" value={formatCount(summary.skippedCount)} />
         <MetricRow label="Degraded" value={formatCount(summary.degradedCount)} />
+        <MetricRow label="Denied" value={formatCount(summary.deniedCount)} />
         <MetricRow label="Unavailable" value={formatCount(summary.unavailableCount)} />
+        <MetricRow label="Not selected" value={formatCount(summary.notSelectedCount)} />
         <MetricRow
           label="Candidates"
           value={`${formatCount(summary.denseCandidateCount)} vector · ${formatCount(summary.lexicalCandidateCount)} lexical · ${formatCount(summary.fusedCandidateCount)} fused`}
@@ -476,18 +503,26 @@ function KnowledgePodRetrievalActivityPanel({
         />
       </dl>
       <ul className="grounded-uncertainty-list" aria-label="Knowledge Pod activity details">
-        {activity.pods.map((pod) => (
+        {visiblePods.map((pod) => (
           <li key={`${pod.podKind}-${pod.podId}`}>
             <span className="grounded-evidence-summary-badge">
               {ACTIVITY_STATE_LABELS[pod.state]}
             </span>{" "}
             {activityPodLine(pod)}
+            {" · "}
             <span className="grounded-meta">
               {`Modes: ${activityModes(pod)} · Reasons: ${activityReasons(pod)}`}
             </span>
           </li>
         ))}
       </ul>
+      <ActivityDisclosureButton
+        total={activity.pods.length}
+        expanded={expanded}
+        onToggle={() => {
+          setExpanded((value) => !value);
+        }}
+      />
     </section>
   );
 }

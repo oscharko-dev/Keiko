@@ -644,6 +644,7 @@ function buildHybridRetrievalActivity(
   connectors: readonly RetrievedConnector[],
   skipped: readonly SkippedConnector[],
   knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[],
+  reranker: GroundedRerankerDiagnostics,
 ): HybridGroundedAnswer["retrievalActivity"] {
   return tryBuildKnowledgePodRetrievalActivity({
     store,
@@ -652,6 +653,7 @@ function buildHybridRetrievalActivity(
       result: retrievalActivityResultFromRetrieval(
         connector.result,
         knowledgeCitationsForConnector(knowledgeCitations, connector),
+        reranker,
       ),
     })),
     skipped: selectedConnectorSkips(skipped),
@@ -1101,6 +1103,7 @@ function assembleHybridAnswer(
     sources.connectors,
     sources.skipped,
     knowledgeCitations,
+    reranker,
   );
   const { firstRunId: evidenceRunId, runIds: evidenceRunIds } = persistFolderEvidence(
     ctx,
