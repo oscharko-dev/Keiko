@@ -63,6 +63,15 @@ describe("release workflow portable asset manifest resolution", () => {
     ).toThrow("stable latest publishes require a reviewed portable asset bundle");
   });
 
+  it("rejects incomplete reviewed artifact bundle inputs", () => {
+    expect(() =>
+      resolvePortableAssetsManifest(
+        latestEnv({ PORTABLE_ASSETS_ARTIFACT_NAME: "", PORTABLE_ASSETS_RUN_ID: "123456789" }),
+        root(),
+      ),
+    ).toThrow("portable_assets_run_id and portable_assets_artifact_name must be provided together");
+  });
+
   it("returns the canonical manifest path inside the downloaded artifact bundle", () => {
     const cwd = root();
     const manifestPath = writeBundleManifest(cwd);
@@ -86,6 +95,15 @@ describe("release workflow portable asset manifest resolution", () => {
     expect(() =>
       resolvePortableAssetsManifest(latestEnv({ PORTABLE_ASSETS_MANIFEST: manifestPath }), cwd),
     ).toThrow("portable_assets_manifest must be relative to the downloaded artifact");
+  });
+
+  it("rejects directory manifest input before publish", () => {
+    const cwd = root();
+    mkdirSync(join(cwd, ".portable-release-assets", "portable-assets.json"), { recursive: true });
+
+    expect(() => resolvePortableAssetsManifest(latestEnv(), cwd)).toThrow(
+      "portable_assets_manifest must point to a regular file",
+    );
   });
 
   it("rejects symlinked manifest input before publish", () => {
