@@ -18,7 +18,9 @@ update notification, and reusable governed update window added in issue #1696.
 - Register row: [`../../governance.md`](../../governance.md).
 - Family: Card / window plus status/feedback patterns from
   [`../../state-matrix.md`](../../state-matrix.md).
-- Styles live in `packages/keiko-ui/src/app/globals.css` and consume only semantic/component tokens.
+- Base styles live in `packages/keiko-ui/src/app/globals.css`; update-window state refinements live
+  in `packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css`. Both layers
+  consume only semantic/component tokens.
 - No raw colors, Tier-1 primitive references, or new `[data-theme="light"]` overrides are introduced
   by #1696.
 
