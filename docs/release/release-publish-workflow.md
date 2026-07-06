@@ -36,6 +36,48 @@ manifest/evidence fields and fails closed for `--policy production`; `--policy d
 `--policy pull-request` may record unsigned non-production artifacts but must not present them as
 portable-complete release assets.
 
+Portable GitHub Release Assets are published by the same `scripts/release-publish.mjs` path, not by
+a second release process. Stable `latest` publishes must provide `--portable-assets-manifest` or
+`KEIKO_PORTABLE_ASSETS_MANIFEST`; beta, next, plan-only, and dry-run executions do not require real
+portable files unless a manifest is supplied. When supplied, the manifest is validated before npm
+publish starts, so a broken portable asset set cannot produce a package release without matching
+GitHub Release Assets.
+
+The portable assets manifest is a content-free operator input:
+
+```json
+{
+  "schemaVersion": 1,
+  "artifacts": [
+    {
+      "platformTarget": "windows-x64",
+      "archivePath": "artifacts/windows-x64/keiko-windows-x64.zip",
+      "manifestPath": "artifacts/windows-x64/manifest/portable-manifest.json"
+    },
+    {
+      "platformTarget": "macos-arm64",
+      "archivePath": "artifacts/macos-arm64/keiko-macos-arm64.zip",
+      "manifestPath": "artifacts/macos-arm64/manifest/portable-manifest.json"
+    },
+    {
+      "platformTarget": "macos-x64",
+      "archivePath": "artifacts/macos-x64/keiko-macos-x64.zip",
+      "manifestPath": "artifacts/macos-x64/manifest/portable-manifest.json"
+    }
+  ]
+}
+```
+
+The publisher requires exactly those three platform targets. For each target it validates the
+production portable manifest, archive name, archive size, SHA-256 digest, manifest/evidence file
+containment, checksums binding, signing/notarization verification state, and optional
+`sidecarRuntimes[]` through the portable manifest contract. After the GitHub Release exists, it
+uploads the three archives plus target-prefixed manifest/checksum/SBOM/license/provenance/signing
+evidence assets with `gh release upload --clobber`, verifies GitHub reports non-zero asset ids and
+HTTPS `browser_download_url` values, and performs unauthenticated ranged download smoke checks for
+every uploaded portable asset. Generated archives and evidence remain release artifacts; they are
+not committed to Git.
+
 Optional coding sidecar runtime payloads are release inputs, not customer-installed tools.
 `scripts/stage-portable-runtime.mjs` may receive controlled local sidecar specs through
 `--sidecar-runtime-spec`; those specs can name a local `sourceRoot`, but only contained relative
@@ -94,6 +136,7 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - select a tag ref that starts with `v`,
 - set `publish` to `true`,
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.2.0-beta.0`,
+- provide `portable_assets_manifest` when publishing the stable `latest` release,
 - provide `NPM_TOKEN` in repository secrets.
 
 The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
@@ -105,9 +148,15 @@ The script:
 - checks release-impact metadata for the current package version,
 - requires portable production artifacts to carry verified signing/notarization sidecar status
   before they may be treated as portable-complete release assets,
+- requires stable `latest` publishes to attach exactly three first-class portable GitHub Release
+  Assets: `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, and `keiko-macos-x64.zip`,
 - rejects portable artifacts with sidecar payload metadata that is unverified, wrong-platform,
   checksum-mismatched, missing executable/license/SBOM evidence, or not contained under
   `runtime/sidecars/<runtime-name>`,
+- uploads target-prefixed portable manifests, checksums, SBOM/license evidence, provenance, and
+  signing verification summaries as GitHub Release Assets,
+- verifies non-zero asset ids, HTTPS `browser_download_url` values, and unauthenticated ranged
+  downloads after upload,
 - generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,

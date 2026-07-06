@@ -1,22 +1,37 @@
 import { spawnSync } from "node:child_process";
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import {
+  closeSync,
+  copyFileSync,
   chmodSync,
   existsSync,
   mkdtempSync,
+  mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
+import {
+  PORTABLE_TARGET_NAMES,
+  PORTABLE_TARGETS,
+  readPortableManifest,
+  validatePortableManifest,
+} from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const packageRegistryScope = scope.slice(0, -1);
+const portableAssetManifestSchemaVersion = 1;
 const supportedDistTags = new Set(["beta", "next", "latest"]);
 const booleanArgHandlers = new Map([
   ["--allow-untagged", (options) => (options.allowUntagged = true)],
@@ -26,6 +41,7 @@ const booleanArgHandlers = new Map([
   ["--skip-smoke", (options) => (options.skipSmoke = true)],
 ]);
 const valueArgFields = new Map([
+  ["--portable-assets-manifest", "portableAssetsManifest"],
   ["--registry", "registry"],
   ["--tag", "tag"],
 ]);
@@ -39,11 +55,16 @@ function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
 }
 
+function readJsonFile(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
 function defaultOptions() {
   return {
     allowUntagged: false,
     dryRun: false,
     planOnly: false,
+    portableAssetsManifest: process.env.KEIKO_PORTABLE_ASSETS_MANIFEST,
     registry: process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/",
     skipGithubRelease: false,
     skipSmoke: false,
@@ -52,7 +73,7 @@ function defaultOptions() {
 }
 
 function applyAssignmentArg(arg, options) {
-  const match = /^(--registry|--tag)=(.*)$/u.exec(arg);
+  const match = /^(--portable-assets-manifest|--registry|--tag)=(.*)$/u.exec(arg);
   if (match === null) return false;
   options[valueArgFields.get(match[1])] = match[2];
   return true;
@@ -97,6 +118,30 @@ function validateDistTag(options) {
   if (options.allowUntagged && options.tag === "latest") {
     fail("--allow-untagged cannot be used with --tag latest.");
   }
+}
+
+function releaseTag(version) {
+  return `v${version}`;
+}
+
+function releaseIsPrerelease(version, tag) {
+  return version.includes("-") || tag !== "latest";
+}
+
+function stableLatestRelease(rootManifest, options) {
+  return options.tag === "latest" && !releaseIsPrerelease(rootManifest.version, options.tag);
+}
+
+function portableUploadEnabled(options) {
+  return !options.skipGithubRelease && !options.dryRun;
+}
+
+function stablePortableAssetsRequired(rootManifest, options) {
+  return !options.planOnly && !options.dryRun && stableLatestRelease(rootManifest, options);
+}
+
+function portableReleasePromotionEnabled(rootManifest, options) {
+  return stableLatestRelease(rootManifest, options);
 }
 
 function normalizeRegistry(options) {
@@ -145,6 +190,13 @@ function githubEnvironment() {
   if (typeof env.GH_TOKEN !== "string" && typeof env.GITHUB_TOKEN === "string") {
     env.GH_TOKEN = env.GITHUB_TOKEN;
   }
+  return env;
+}
+
+function networkEnvironment() {
+  const env = { ...process.env };
+  Reflect.deleteProperty(env, "GH_TOKEN");
+  Reflect.deleteProperty(env, "GITHUB_TOKEN");
   return env;
 }
 
@@ -363,6 +415,288 @@ function githubRepository() {
   fail("could not determine GitHub repository; set GITHUB_REPOSITORY=owner/repo.");
 }
 
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sha256FileSync(path) {
+  const fd = openSync(path, "r");
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(1024 * 1024);
+  try {
+    for (;;) {
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead === 0) return hash.digest("hex");
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function regularFile(path, label, failures) {
+  try {
+    const stat = statSync(path);
+    if (!stat.isFile()) failures.push(`${label} must point to a regular file.`);
+    if (stat.size <= 0) failures.push(`${label} must not be empty.`);
+    return stat;
+  } catch {
+    failures.push(`${label} does not exist.`);
+    return undefined;
+  }
+}
+
+function requiredString(record, key, label, failures) {
+  const value = record?.[key];
+  if (typeof value !== "string" || value.length === 0) {
+    failures.push(`${label}.${key} must be a non-empty string.`);
+    return "";
+  }
+  return value;
+}
+
+function containedLocalPath(root, relativePath, label, failures) {
+  if (typeof relativePath !== "string" || relativePath.length === 0) {
+    failures.push(`${label} must be a non-empty relative path.`);
+    return undefined;
+  }
+  const rootAbsolute = resolve(root);
+  const candidate = resolve(rootAbsolute, relativePath);
+  const contained = candidate.startsWith(
+    rootAbsolute.endsWith("/") ? rootAbsolute : `${rootAbsolute}/`,
+  );
+  if (relativePath.startsWith("/") || !contained) {
+    failures.push(`${label} must stay within the portable stage root.`);
+    return undefined;
+  }
+  return candidate;
+}
+
+function loadPortableAssets(rootManifest, options) {
+  if (stablePortableAssetsRequired(rootManifest, options) && options.skipGithubRelease) {
+    fail("stable latest publishes must attach portable GitHub Release Assets.");
+  }
+  if (typeof options.portableAssetsManifest !== "string" || options.portableAssetsManifest === "") {
+    if (stablePortableAssetsRequired(rootManifest, options)) {
+      fail("stable latest publishes require --portable-assets-manifest.");
+    }
+    return [];
+  }
+  return portableAssetsFromManifest(resolve(options.portableAssetsManifest), rootManifest);
+}
+
+function portableAssetsFromManifest(inputPath, rootManifest) {
+  const manifest = readJsonFile(inputPath);
+  const baseDir = dirname(inputPath);
+  const failures = [];
+  if (!isRecord(manifest)) failures.push("portable assets manifest must be an object.");
+  if (manifest.schemaVersion !== portableAssetManifestSchemaVersion) {
+    failures.push("portable assets manifest schemaVersion must be 1.");
+  }
+  const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
+  if (artifacts.length !== PORTABLE_TARGETS.length) {
+    failures.push("portable assets manifest must list exactly three artifacts.");
+  }
+  const normalized = normalizePortableAssets(artifacts, baseDir, rootManifest, failures);
+  if (failures.length > 0) {
+    fail(`portable assets manifest validation failed:\n  - ${failures.join("\n  - ")}`);
+  }
+  return normalized;
+}
+
+function normalizePortableAssets(artifacts, baseDir, rootManifest, failures) {
+  const byTarget = new Map();
+  for (const entry of artifacts) {
+    const targetName = isRecord(entry) ? entry.platformTarget : undefined;
+    if (typeof targetName !== "string") {
+      failures.push("portable asset entry platformTarget must be a string.");
+      continue;
+    }
+    if (!PORTABLE_TARGET_NAMES.includes(targetName)) {
+      failures.push(`unsupported portable platformTarget ${targetName}.`);
+      continue;
+    }
+    if (byTarget.has(targetName)) failures.push(`duplicate portable platformTarget ${targetName}.`);
+    byTarget.set(targetName, entry);
+  }
+  return PORTABLE_TARGETS.flatMap((target) =>
+    normalizePortableTargetAsset(
+      byTarget.get(target.platformTarget),
+      target,
+      baseDir,
+      rootManifest,
+      failures,
+    ),
+  );
+}
+
+function normalizePortableTargetAsset(entry, target, baseDir, rootManifest, failures) {
+  if (!isRecord(entry)) {
+    failures.push(`missing portable asset entry for ${target.platformTarget}.`);
+    return [];
+  }
+  const archivePath = resolve(
+    baseDir,
+    requiredString(entry, "archivePath", target.platformTarget, failures),
+  );
+  const manifestPath = resolve(
+    baseDir,
+    requiredString(entry, "manifestPath", target.platformTarget, failures),
+  );
+  const archiveStat = regularFile(archivePath, `${target.platformTarget}.archivePath`, failures);
+  regularFile(manifestPath, `${target.platformTarget}.manifestPath`, failures);
+  const manifest = readPortableManifestSafely(manifestPath, target.platformTarget, failures);
+  validatePortableAssetFiles(
+    target,
+    archivePath,
+    archiveStat,
+    manifestPath,
+    manifest,
+    rootManifest,
+    failures,
+  );
+  return [
+    portableAssetRecord(target, archivePath, manifestPath, manifest, entry, baseDir, failures),
+  ];
+}
+
+function readPortableManifestSafely(path, platformTarget, failures) {
+  try {
+    return readPortableManifest(path);
+  } catch {
+    failures.push(`${platformTarget}.manifestPath must contain valid JSON.`);
+    return {};
+  }
+}
+
+function validatePortableAssetFiles(
+  target,
+  archivePath,
+  archiveStat,
+  manifestPath,
+  manifest,
+  rootManifest,
+  failures,
+) {
+  if (basename(archivePath) !== target.assetName) {
+    failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
+  }
+  for (const failure of validatePortableManifest(manifest, { allowUnverified: false })) {
+    failures.push(`${target.platformTarget}.${failure}`);
+  }
+  if (manifest.product?.packageVersion !== rootManifest.version) {
+    failures.push(
+      `${target.platformTarget}.product.packageVersion must match ${rootManifest.version}.`,
+    );
+  }
+  if (manifest.release?.releaseTag !== releaseTag(rootManifest.version)) {
+    failures.push(
+      `${target.platformTarget}.release.releaseTag must match ${releaseTag(rootManifest.version)}.`,
+    );
+  }
+  validatePortableArchiveDigest(target, archivePath, archiveStat, manifest, failures);
+  validatePortableEvidenceFiles(target, dirname(dirname(manifestPath)), manifest, failures);
+}
+
+function validatePortableArchiveDigest(target, archivePath, archiveStat, manifest, failures) {
+  if (archiveStat !== undefined && manifest.artifact?.sizeBytes !== archiveStat.size) {
+    failures.push(`${target.platformTarget}.artifact.sizeBytes must match the archive size.`);
+  }
+  if (existsSync(archivePath) && manifest.artifact?.sha256 !== sha256FileSync(archivePath)) {
+    failures.push(`${target.platformTarget}.artifact.sha256 must match the archive bytes.`);
+  }
+}
+
+function validatePortableEvidenceFiles(target, stageRoot, manifest, failures) {
+  for (const evidence of requiredPortableEvidence(target, stageRoot, manifest, failures)) {
+    regularFile(evidence.sourcePath, `${target.platformTarget}.${evidence.relativePath}`, failures);
+  }
+  const checksumsPath = containedLocalPath(
+    stageRoot,
+    manifest.evidence?.checksumsPath,
+    "checksumsPath",
+    failures,
+  );
+  if (checksumsPath !== undefined && existsSync(checksumsPath)) {
+    const expected = `${manifest.artifact?.sha256}  ${manifest.artifact?.assetName}`;
+    if (!readFileSync(checksumsPath, "utf8").includes(expected)) {
+      failures.push(`${target.platformTarget}.checksumsPath must bind the archive digest.`);
+    }
+  }
+}
+
+function requiredPortableEvidence(target, stageRoot, manifest, failures) {
+  const entries = [
+    ["manifest/portable-manifest.json", `${target.platformTarget}-portable-manifest.json`],
+    [manifest.evidence?.checksumsPath, `${target.platformTarget}-SHA256SUMS.txt`],
+    [manifest.evidence?.sbomPath, `${target.platformTarget}-sbom.cdx.json`],
+    [manifest.evidence?.licenseNoticePath, `${target.platformTarget}-third-party-notices.txt`],
+    [
+      manifest.security?.verificationSummaryPath,
+      `${target.platformTarget}-signing-verification.json`,
+    ],
+    [
+      manifest.provenance?.provenanceStatementPath,
+      `${target.platformTarget}-provenance.intoto.jsonl`,
+    ],
+  ];
+  return entries.flatMap(([relativePath, assetName]) => {
+    const sourcePath = containedLocalPath(stageRoot, relativePath, assetName, failures);
+    return sourcePath === undefined ? [] : [{ assetName, relativePath, sourcePath }];
+  });
+}
+
+function portableAssetRecord(
+  target,
+  archivePath,
+  manifestPath,
+  manifest,
+  entry,
+  baseDir,
+  failures,
+) {
+  const stageRoot = dirname(dirname(manifestPath));
+  return {
+    archiveAssetName: target.assetName,
+    archivePath,
+    evidenceFiles: [
+      ...requiredPortableEvidence(target, stageRoot, manifest, failures),
+      ...extraPortableEvidenceFiles(entry, baseDir, target, failures),
+    ],
+    manifest,
+    platformTarget: target.platformTarget,
+  };
+}
+
+function extraPortableEvidenceFiles(entry, baseDir, target, failures) {
+  if (entry.evidencePaths === undefined) return [];
+  if (!Array.isArray(entry.evidencePaths)) {
+    failures.push(`${target.platformTarget}.evidencePaths must be an array when present.`);
+    return [];
+  }
+  return entry.evidencePaths.flatMap((path, index) => {
+    if (typeof path !== "string" || path.length === 0) {
+      failures.push(`${target.platformTarget}.evidencePaths[${String(index)}] must be a string.`);
+      return [];
+    }
+    const sourcePath = containedLocalPath(
+      baseDir,
+      path,
+      `${target.platformTarget}.evidencePaths[${String(index)}]`,
+      failures,
+    );
+    if (sourcePath === undefined) return [];
+    regularFile(sourcePath, `${target.platformTarget}.evidencePaths[${String(index)}]`, failures);
+    return [
+      {
+        assetName: `${target.platformTarget}-${basename(path)}`,
+        relativePath: path,
+        sourcePath,
+      },
+    ];
+  });
+}
+
 function withPublishApprovalRequirement(enabled, callback) {
   if (!enabled) return callback();
   const previous = process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE;
@@ -381,7 +715,10 @@ function withPublishApprovalRequirement(enabled, callback) {
 function releaseNotes(rootManifest, options) {
   const catalog = readJson("release-impact.catalog.json");
   const result = withPublishApprovalRequirement(!options.planOnly, () =>
-    renderReleaseImpactNotes(catalog, rootManifest, options),
+    renderReleaseImpactNotes(catalog, rootManifest, {
+      ...options,
+      portableReleasePromotion: portableReleasePromotionEnabled(rootManifest, options),
+    }),
   );
   if (!result.ok) {
     fail(`release-impact notes could not be generated:\n  - ${result.failures.join("\n  - ")}`);
@@ -396,18 +733,14 @@ function printReleaseNotesPreview(notes) {
   console.log("-----END KEIKO RELEASE NOTES-----");
 }
 
-function releaseIsPrerelease(version, tag) {
-  return version.includes("-") || tag !== "latest";
-}
-
 function ensureGithubRelease(rootPackage, options, notes) {
+  const tag = releaseTag(rootPackage.version);
   if (options.skipGithubRelease || options.dryRun) {
     console.log("release-publish: GitHub release skipped.");
     printReleaseNotesPreview(notes);
-    return;
+    return { repo: "", tag };
   }
 
-  const tag = `v${rootPackage.version}`;
   const repo = githubRepository();
   const title = `Keiko ${rootPackage.version}`;
   const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
@@ -431,7 +764,7 @@ function ensureGithubRelease(rootPackage, options, notes) {
       ...latestArgs,
       ...prereleaseArgs,
     ]);
-    return;
+    return { repo, tag };
   }
 
   console.log(`release-publish: creating GitHub release ${tag}.`);
@@ -449,6 +782,171 @@ function ensureGithubRelease(rootPackage, options, notes) {
     ...(latestArgs.length > 0 ? latestArgs : ["--latest=false"]),
     ...prereleaseArgs,
   ]);
+  return { repo, tag };
+}
+
+function publishPortableReleaseAssets(options, assets, releaseInfo) {
+  if (assets.length === 0) return;
+  if (!portableUploadEnabled(options)) {
+    console.log("release-publish: portable assets validated; upload skipped.");
+    return;
+  }
+  const upload = preparePortableUploadFiles(assets);
+  try {
+    runGh([
+      "release",
+      "upload",
+      releaseInfo.tag,
+      "--repo",
+      releaseInfo.repo,
+      "--clobber",
+      ...upload.paths,
+    ]);
+    const remoteAssets = githubReleaseAssets(releaseInfo);
+    const expected = expectedPortableReleaseAssets(assets);
+    verifyRemotePortableAssets(remoteAssets, expected, releaseInfo);
+    runPortableDownloadSmoke(remoteAssets, expected);
+    console.log(`release-publish: portable assets uploaded and verified for ${releaseInfo.tag}.`);
+  } finally {
+    rmSync(upload.root, { recursive: true, force: true });
+  }
+}
+
+function preparePortableUploadFiles(assets) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-portable-upload-"));
+  const paths = [];
+  const names = new Set();
+  for (const asset of assets) {
+    addUploadPath(asset.archivePath, asset.archiveAssetName, names, paths);
+    for (const evidence of asset.evidenceFiles) {
+      const destination = join(root, evidence.assetName);
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(evidence.sourcePath, destination);
+      addUploadPath(destination, evidence.assetName, names, paths);
+    }
+  }
+  return { paths, root };
+}
+
+function addUploadPath(path, assetName, names, paths) {
+  if (names.has(assetName)) fail(`duplicate portable release asset name ${assetName}.`);
+  names.add(assetName);
+  if (basename(path) !== assetName) {
+    fail(`portable release asset path ${path} must upload as ${assetName}.`);
+  }
+  paths.push(path);
+}
+
+function githubReleaseAssets(releaseInfo) {
+  const result = runGh([
+    "api",
+    `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`,
+    "--jq",
+    ".assets",
+  ]);
+  try {
+    const assets = JSON.parse(result.stdout);
+    if (Array.isArray(assets)) return assets;
+  } catch {
+    // Fall through to the fail-closed message below.
+  }
+  fail("GitHub release assets response was not a JSON array.");
+}
+
+function expectedPortableReleaseAssets(assets) {
+  return assets.flatMap((asset) => [
+    {
+      assetName: asset.archiveAssetName,
+      expectedSize: asset.manifest.artifact.sizeBytes,
+      firstClassArchive: true,
+    },
+    ...asset.evidenceFiles.map((evidence) => ({
+      assetName: evidence.assetName,
+      expectedSize: statSync(evidence.sourcePath).size,
+      firstClassArchive: false,
+    })),
+  ]);
+}
+
+function verifyRemotePortableAssets(remoteAssets, expectedAssets, releaseInfo) {
+  const failures = [];
+  verifyFirstClassArchiveSet(remoteAssets, failures);
+  const remoteByName = new Map(remoteAssets.map((asset) => [asset.name, asset]));
+  for (const expected of expectedAssets) {
+    verifyRemotePortableAsset(remoteByName.get(expected.assetName), expected, failures);
+  }
+  if (failures.length > 0) {
+    fail(`GitHub Release portable asset verification failed:\n  - ${failures.join("\n  - ")}`);
+  }
+  console.log(
+    `release-publish: GitHub Release ${releaseInfo.tag} has verified portable browser_download_url values.`,
+  );
+}
+
+function verifyFirstClassArchiveSet(remoteAssets, failures) {
+  const expected = new Set(PORTABLE_TARGETS.map((target) => target.assetName));
+  const actual = remoteAssets
+    .map((asset) => asset.name)
+    .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
+  if (actual.length !== expected.size || actual.some((name) => !expected.has(name))) {
+    failures.push("stable portable releases must expose exactly the three first-class ZIP assets.");
+  }
+}
+
+function verifyRemotePortableAsset(remote, expected, failures) {
+  if (!isRecord(remote)) {
+    failures.push(`${expected.assetName} is missing from the GitHub Release.`);
+    return;
+  }
+  if (!Number.isSafeInteger(remote.id) || remote.id <= 0) {
+    failures.push(`${expected.assetName} must have a non-zero GitHub asset id.`);
+  }
+  if (remote.size !== expected.expectedSize) {
+    failures.push(`${expected.assetName} size does not match the reviewed local asset.`);
+  }
+  if (!validBrowserDownloadUrl(remote.browser_download_url)) {
+    failures.push(`${expected.assetName} must expose an HTTPS browser_download_url.`);
+  }
+}
+
+function validBrowserDownloadUrl(value) {
+  try {
+    if (typeof value !== "string" || value.length === 0) return false;
+    const url = new URL(value);
+    return url.protocol === "https:" && url.username === "" && url.password === "";
+  } catch {
+    return false;
+  }
+}
+
+function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
+  const remoteByName = new Map(remoteAssets.map((asset) => [asset.name, asset]));
+  for (const expected of expectedAssets) {
+    const url = remoteByName.get(expected.assetName)?.browser_download_url;
+    if (typeof url !== "string") fail(`${expected.assetName} has no browser_download_url.`);
+    smokePortableDownloadUrl(expected.assetName, url);
+  }
+}
+
+function smokePortableDownloadUrl(assetName, url) {
+  const result = commandResult(
+    "curl",
+    [
+      "--fail",
+      "--silent",
+      "--show-error",
+      "--location",
+      "--range",
+      "0-0",
+      "--output",
+      "/dev/null",
+      url,
+    ],
+    { env: networkEnvironment() },
+  );
+  if (result.error !== undefined || result.status !== 0) {
+    fail(`unauthenticated portable asset download failed for ${assetName}.`);
+  }
 }
 
 function npmViewVersion(pkg, npmEnv, registry) {
@@ -612,6 +1110,7 @@ run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-im
   stdio: "inherit",
 });
 const githubReleaseNotes = releaseNotes(rootManifest, options);
+const portableAssets = loadPortableAssets(rootManifest, options);
 
 if (options.planOnly) {
   printReleaseNotesPreview(githubReleaseNotes);
@@ -638,7 +1137,8 @@ try {
     }
   }
   runRegistrySmoke(rootPackage, options, npmEnv);
-  ensureGithubRelease(rootPackage, options, githubReleaseNotes);
+  const releaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
+  publishPortableReleaseAssets(options, portableAssets, releaseInfo);
   console.log(`release-publish: PASS - ${rootPackage.spec} published as ${options.tag}.`);
 } finally {
   cleanup();

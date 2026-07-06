@@ -20,6 +20,11 @@ on:
           - beta
           - next
           - latest
+      portable_assets_manifest:
+        description: "Path to reviewed portable assets manifest for stable latest publishes"
+        type: string
+        required: false
+        default: ""
 
 permissions: {}
 
@@ -121,6 +126,7 @@ jobs:
       - name: Publish package
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_PORTABLE_ASSETS_MANIFEST: ${{ inputs.portable_assets_manifest }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
