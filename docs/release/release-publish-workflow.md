@@ -30,6 +30,11 @@ without parsing prose.
 
 Portable archive layout, launcher, and manifest rules are documented in
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+Portable artifact signing verification is owned by `scripts/verify-portable-runtime-signing.mjs`
+and the `npm run portable:verify-signing` wrapper. It updates only redacted sidecar
+manifest/evidence fields and fails closed for `--policy production`; `--policy development` and
+`--policy pull-request` may record unsigned non-production artifacts but must not present them as
+portable-complete release assets.
 
 ## Triggering
 
@@ -89,6 +94,8 @@ The script:
 - checks version and publish-manifest consistency,
 - checks workspace SBOM/license policy through the `check:workspace-supply-chain` gate in `prepack`,
 - checks release-impact metadata for the current package version,
+- requires portable production artifacts to carry verified signing/notarization sidecar status
+  before they may be treated as portable-complete release assets,
 - generates GitHub Release notes from reviewed release-impact metadata,
 - requires `HEAD` to match `v<package.json version>` for stable `latest` publishes,
 - rejects `--allow-untagged` when `--tag latest` is selected,

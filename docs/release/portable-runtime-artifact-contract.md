@@ -43,13 +43,14 @@ archive, extracts that runtime into the portable payload, and validates redacted
 It does not perform production signing, macOS notarization, release upload, native launcher
 implementation, first-run setup, or updater swap.
 
-Generated #1948 staging manifests therefore use `signatureVerified: false`,
-`notarizationVerified: false`, and `platformSignatureLocallyVerified: false` under an explicit
-unverified-staging validation mode. They also use `artifact.assetId: 0` because GitHub Release
-asset ids do not exist until #1952 uploads the artifacts. Those artifacts are manual-only staging
-outputs until #1951 replaces the metadata with verified signing/notarization evidence and #1952
-binds real GitHub Release asset ids. The manifest example below remains the production-complete
-contract for artifacts that may be promoted as portable release assets.
+Generated #1948 staging manifests therefore use `verificationPolicy: "staging"`,
+`verificationStatus: "unverified-staging"`, `signatureVerified: false`,
+`notarizationVerified: false`, target-specific `verificationChecks` set to `false`, and
+`platformSignatureLocallyVerified: false`. They also use `artifact.assetId: 0` because GitHub
+Release asset ids do not exist until #1952 uploads the artifacts. Those artifacts are manual-only
+staging outputs until #1951 replaces the metadata with verified signing/notarization evidence and
+#1952 binds real GitHub Release asset ids. The manifest example below remains the
+production-complete contract for artifacts that may be promoted as portable release assets.
 
 ## Archive And Evidence Layout
 
@@ -271,10 +272,17 @@ required contract vocabulary.
     "excludesRepositories": true
   },
   "security": {
+    "verificationPolicy": "production",
+    "verificationStatus": "verified-production",
+    "verificationReasonCodes": [],
     "signatureKind": "authenticode",
     "signatureVerified": true,
     "notarizationRequired": false,
     "notarizationVerified": false,
+    "verificationChecks": {
+      "publisherChainVerified": true,
+      "timestampVerified": true
+    },
     "verificationSummaryPath": "evidence/signing-verification.json"
   },
   "evidence": {
@@ -301,10 +309,18 @@ required contract vocabulary.
       "sbomPath": "evidence/sbom.cdx.json",
       "licenseNoticePath": "evidence/third-party-notices.txt",
       "checksumsPath": "evidence/SHA256SUMS.txt",
+      "verificationPolicy": "production",
+      "verificationStatus": "verified-production",
+      "verificationReasonCodes": [],
+      "platformSignatureLocallyVerified": true,
       "signatureKind": "authenticode",
       "signatureVerified": true,
       "notarizationRequired": false,
-      "notarizationVerified": false
+      "notarizationVerified": false,
+      "verificationChecks": {
+        "publisherChainVerified": true,
+        "timestampVerified": true
+      }
     }
   },
   "updateEligibility": {
@@ -345,6 +361,16 @@ Validation rules:
   are forbidden in manifests.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
+- `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, or
+  `production`; `security.verificationStatus` must match that policy and whether the target's
+  signature/notarization checks are complete.
+- `security.verificationReasonCodes` is a bounded, redacted enum list. It may record policy or
+  failure reasons such as `staging-unverified`, `non-production-unsigned-allowed`, or
+  `macos-staple-unverified`, but it must never store certificate subjects, team ids, account ids,
+  keychain names, private endpoints, or raw signing/notarization output.
+- `security.verificationChecks` stores target-specific redacted booleans only:
+  `publisherChainVerified` and `timestampVerified` for Windows; `developerIdVerified`,
+  `notarizationVerified`, `stapleVerified`, and `assessmentVerified` for both macOS architectures.
 - `updateEligibility.requiredPredicates` must all be true before the one-click portable updater may
   execute. Any missing platform signature/notarization proof or missing crash-safe same-volume
   promotion capability forces a manual-only path.
