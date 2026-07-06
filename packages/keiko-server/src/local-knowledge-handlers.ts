@@ -2122,7 +2122,7 @@ export async function handleListLocalKnowledgeCapsules(
         updatedAt: capsule.updatedAt,
       }));
       if (!shouldIncludeKnowledgePods(ctx)) return { status: 200, body: { capsules } };
-      const knowledgePods = listValidatedKnowledgePodSummaries(env.store);
+      const knowledgePods = listValidatedKnowledgePodSummaries(env.store, "pod");
       return {
         status: 200,
         body: {

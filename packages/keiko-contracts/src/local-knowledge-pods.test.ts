@@ -53,7 +53,7 @@ function happySummary(): KnowledgePodSummary {
     governance: {
       locationKind: "local",
       sealingPosture: "local-store-policy",
-      policyPosture: "none",
+      policyPosture: "not-declared",
       managedServiceDependency: false,
     },
     modelUsePolicy: resolveKnowledgePodModelUsePolicy(undefined),
@@ -105,6 +105,18 @@ describe("validateKnowledgePodSummary", () => {
       "24/7 Support",
     ]) {
       expect(isKnowledgePodEvidenceSafeText(safeText)).toBe(true);
+    }
+  });
+
+  it("redacts single-segment absolute paths embedded mid-string, not only full-string paths", () => {
+    for (const unsafe of [
+      "Indexing failed while reading /private for capsule metadata",
+      "Source root /etc could not be scoped",
+      "Gateway wrote logs under /var while retrying",
+      "Denied access to /home during scan",
+      "/tmp was purged before retry",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
     }
   });
 
@@ -397,7 +409,7 @@ describe("validateKnowledgePodSummary", () => {
       governance: {
         locationKind: "hosted-cloud",
         sealingPosture: "local-store-policy",
-        policyPosture: "none",
+        policyPosture: "not-declared",
         managedServiceDependency: false,
       },
     });
