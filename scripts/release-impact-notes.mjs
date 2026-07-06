@@ -180,6 +180,23 @@ function groupedBullets(entries) {
   return groups;
 }
 
+function addGroupedBullet(groups, key, text) {
+  const group = groups.get(key) ?? [];
+  if (!group.some((bullet) => normalizedNote(bullet) === normalizedNote(text))) {
+    group.push(text);
+  }
+  groups.set(key, group);
+}
+
+function addPortableReleasePromotion(groups, options) {
+  if (options.portableReleasePromotion !== true) return;
+  addGroupedBullet(
+    groups,
+    "normal\u0000new-additions",
+    "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64 so users can download once and start from the bundled launcher; npm remains available for developer and compatibility workflows.",
+  );
+}
+
 function traceability(entry) {
   const references = new Set([`catalog:${entry.id}`, `review:${entry.review.approvalReference}`]);
   for (const bullet of entry.releaseNoteBullets) {
@@ -206,6 +223,7 @@ function renderTechnicalEntry(entry) {
 
 function renderNotes(entries, rootManifest, options) {
   const groups = groupedBullets(entries);
+  addPortableReleasePromotion(groups, options);
   const technicalEntries = publicTechnicalEntries(entries);
   const lines = [`## Keiko ${rootManifest.version} Release Notes`, ""];
 

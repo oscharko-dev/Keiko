@@ -41,6 +41,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -345,7 +346,7 @@ function ghStubBody() {
     "const sub = argv[0];",
     'if (sub === "api") {',
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
-    "    process.stdout.write(JSON.stringify(state().uploadedAssets || []));",
+    "    process.stdout.write(JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
@@ -353,6 +354,8 @@ function ghStubBody() {
     "}",
     'if (sub === "release" && argv[1] === "view") { process.exit(1); }',
     'if (sub === "release" && argv[1] === "upload") {',
+    "  const current = state();",
+    "  if (current.failGhUpload) { process.stderr.write('portable upload failed\\n'); process.exit(42); }",
     "  const tag = argv[2];",
     '  const repoIndex = argv.indexOf("--repo");',
     "  const repo = repoIndex >= 0 ? argv[repoIndex + 1] : 'oscharko-dev/Keiko';",
@@ -361,16 +364,28 @@ function ghStubBody() {
     '    if (index > 0 && entries[index - 1] === "--repo") return false;',
     "    return !entry.startsWith('--');",
     "  });",
-    "  const uploadedAssets = files.map((path, index) => {",
+    "  const byName = new Map((current.uploadedAssets || []).map((asset) => [asset.name, asset]));",
+    "  function nextId() { return 100000 + byName.size; }",
+    "  for (const path of files) {",
     "    const name = path.split(/[\\\\/]/u).at(-1);",
-    "    return {",
-    "      id: 100000 + index,",
+    "    const previous = byName.get(name);",
+    "    const id = previous?.id || nextId();",
+    "    if (name.endsWith('-portable-manifest.json')) {",
+    "      const manifest = JSON.parse(readFileSync(path, 'utf8'));",
+    "      const archive = byName.get(manifest.artifact.assetName);",
+    "      if (!archive || manifest.release.releaseId !== 987654321 || manifest.artifact.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.releaseId !== 987654321) {",
+    "        process.stderr.write('portable manifest was not rebound to the remote GitHub ids\\n');",
+    "        process.exit(44);",
+    "      }",
+    "    }",
+    "    byName.set(name, {",
+    "      id,",
     "      name,",
     "      size: readFileSync(path).byteLength,",
     "      browser_download_url: `https://github.com/${repo}/releases/download/${tag}/${name}`",
-    "    };",
-    "  });",
-    "  setState({ uploadedAssets });",
+    "    });",
+    "  }",
+    "  setState({ uploadedAssets: [...byName.values()] });",
     "  process.exit(0);",
     "}",
     "process.exit(0);",
@@ -402,7 +417,9 @@ function curlStubBody() {
   return ['log("curl");', "process.exit(0);"].join("\n");
 }
 
-function writePortableAssetsFixture(root) {
+function writePortableAssetsFixture(root, options = {}) {
+  const outsideEvidence = join(root, "..", "outside-portable-evidence.txt");
+  writeFileSync(outsideEvidence, "outside evidence must not be uploaded\n");
   const artifacts = PORTABLE_TARGETS.map((target, index) => {
     const targetRoot = join(root, target.platformTarget);
     const archivePath = join(targetRoot, target.assetName);
@@ -412,6 +429,11 @@ function writePortableAssetsFixture(root) {
     writeFileSync(archivePath, `portable archive for ${target.platformTarget}\n`);
     const { manifest, provenanceText } = portableManifest(target, archivePath, 1000 + index);
     writePortableEvidence(targetRoot, manifest, provenanceText);
+    if (options.symlinkEvidenceOutsideRoot === true && index === 0) {
+      const sbomPath = join(targetRoot, "evidence", "sbom.cdx.json");
+      rmSync(sbomPath, { force: true });
+      symlinkSync(outsideEvidence, sbomPath);
+    }
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
     return { archivePath, manifestPath, platformTarget: target.platformTarget };
   });
@@ -440,7 +462,7 @@ function writePortableEvidence(targetRoot, manifest, provenanceText) {
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.
-function runPublish({ npmBody, initState, portableAssets = true }) {
+function runPublish({ npmBody, initState, portableAssets = true, portableFixtureOptions = {} }) {
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
@@ -467,7 +489,10 @@ function runPublish({ npmBody, initState, portableAssets = true }) {
   // GH_TOKEN would be forwarded to the stub gh; drop it so nothing real is carried.
   Reflect.deleteProperty(env, "GH_TOKEN");
   if (portableAssets) {
-    env.KEIKO_PORTABLE_ASSETS_MANIFEST = writePortableAssetsFixture(portableDir);
+    env.KEIKO_PORTABLE_ASSETS_MANIFEST = writePortableAssetsFixture(
+      portableDir,
+      portableFixtureOptions,
+    );
   }
 
   const result = spawnSync(process.execPath, ["scripts/release-publish.mjs", "--tag", "latest"], {
@@ -592,11 +617,55 @@ describe("release-publish pipeline (real orchestrator, stubbed npm/gh/git)", () 
     expect(versionViews).toBeGreaterThanOrEqual(2);
     expect(distTagViews).toBeGreaterThanOrEqual(2);
 
-    const uploadLine = lastRun.calls.find((l) => l.startsWith('gh ["release","upload"'));
+    const uploadLine = lastRun.calls.find(
+      (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),
+    );
     expect(uploadLine).toContain("keiko-windows-x64.zip");
     expect(uploadLine).toContain("keiko-macos-arm64.zip");
     expect(uploadLine).toContain("keiko-macos-x64.zip");
+    expect(indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"'))).toBeLessThan(
+      publishCall,
+    );
     expect(lastRun.calls.filter((l) => l.startsWith("curl [")).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("fails before npm publish when portable upload verification fails", () => {
+    const viewBody = [
+      "  const s = state();",
+      '  if (argv.includes("version")) {',
+      '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+      '    process.stdout.write(VERSION + "\\n");',
+      "    process.exit(0);",
+      "  }",
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    lastRun = runPublish({
+      npmBody: npmStub(viewBody),
+      initState: { failGhUpload: true, published: false },
+    });
+
+    expect(lastRun.status).toBe(1);
+    expect(lastRun.stderr).toContain("portable upload failed");
+    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+  });
+
+  it("rejects symlinked portable evidence before upload or npm publish", () => {
+    const viewBody = [
+      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    lastRun = runPublish({
+      npmBody: npmStub(viewBody, { failOnPublish: true }),
+      initState: { published: true, tagged: true },
+      portableFixtureOptions: { symlinkEvidenceOutsideRoot: true },
+    });
+
+    expect(lastRun.status).toBe(1);
+    expect(lastRun.stderr).toContain("must not be a symbolic link");
+    expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
   });
 
   it("skips publishing when `npm view … version` already reports the target version, yet still verifies the dist-tag", () => {

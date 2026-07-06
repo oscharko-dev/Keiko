@@ -6,12 +6,14 @@ import {
   copyFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -434,12 +436,32 @@ function sha256FileSync(path) {
   }
 }
 
-function regularFile(path, label, failures) {
+function containedPath(root, path) {
+  const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
+  return path === root || path.startsWith(normalizedRoot);
+}
+
+function regularContainedFile(path, root, label, failures) {
   try {
-    const stat = statSync(path);
-    if (!stat.isFile()) failures.push(`${label} must point to a regular file.`);
-    if (stat.size <= 0) failures.push(`${label} must not be empty.`);
-    return stat;
+    const rootRealPath = realpathSync(root);
+    const fileStat = lstatSync(path);
+    if (fileStat.isSymbolicLink()) {
+      failures.push(`${label} must not be a symbolic link.`);
+      return undefined;
+    }
+    if (!fileStat.isFile()) {
+      failures.push(`${label} must point to a regular file.`);
+      return undefined;
+    }
+    if (fileStat.size <= 0) {
+      failures.push(`${label} must not be empty.`);
+      return undefined;
+    }
+    if (!containedPath(rootRealPath, realpathSync(path))) {
+      failures.push(`${label} must stay within the portable stage root.`);
+      return undefined;
+    }
+    return fileStat;
   } catch {
     failures.push(`${label} does not exist.`);
     return undefined;
@@ -462,10 +484,7 @@ function containedLocalPath(root, relativePath, label, failures) {
   }
   const rootAbsolute = resolve(root);
   const candidate = resolve(rootAbsolute, relativePath);
-  const contained = candidate.startsWith(
-    rootAbsolute.endsWith("/") ? rootAbsolute : `${rootAbsolute}/`,
-  );
-  if (relativePath.startsWith("/") || !contained) {
+  if (relativePath.startsWith("/") || !containedPath(rootAbsolute, candidate)) {
     failures.push(`${label} must stay within the portable stage root.`);
     return undefined;
   }
@@ -543,9 +562,22 @@ function normalizePortableTargetAsset(entry, target, baseDir, rootManifest, fail
     baseDir,
     requiredString(entry, "manifestPath", target.platformTarget, failures),
   );
-  const archiveStat = regularFile(archivePath, `${target.platformTarget}.archivePath`, failures);
-  regularFile(manifestPath, `${target.platformTarget}.manifestPath`, failures);
-  const manifest = readPortableManifestSafely(manifestPath, target.platformTarget, failures);
+  const stageRoot = dirname(dirname(manifestPath));
+  const archiveStat = regularContainedFile(
+    archivePath,
+    stageRoot,
+    `${target.platformTarget}.archivePath`,
+    failures,
+  );
+  const manifestStat = regularContainedFile(
+    manifestPath,
+    stageRoot,
+    `${target.platformTarget}.manifestPath`,
+    failures,
+  );
+  const manifest = manifestStat
+    ? readPortableManifestSafely(manifestPath, target.platformTarget, failures)
+    : {};
   validatePortableAssetFiles(
     target,
     archivePath,
@@ -602,14 +634,19 @@ function validatePortableArchiveDigest(target, archivePath, archiveStat, manifes
   if (archiveStat !== undefined && manifest.artifact?.sizeBytes !== archiveStat.size) {
     failures.push(`${target.platformTarget}.artifact.sizeBytes must match the archive size.`);
   }
-  if (existsSync(archivePath) && manifest.artifact?.sha256 !== sha256FileSync(archivePath)) {
+  if (archiveStat !== undefined && manifest.artifact?.sha256 !== sha256FileSync(archivePath)) {
     failures.push(`${target.platformTarget}.artifact.sha256 must match the archive bytes.`);
   }
 }
 
 function validatePortableEvidenceFiles(target, stageRoot, manifest, failures) {
   for (const evidence of requiredPortableEvidence(target, stageRoot, manifest, failures)) {
-    regularFile(evidence.sourcePath, `${target.platformTarget}.${evidence.relativePath}`, failures);
+    regularContainedFile(
+      evidence.sourcePath,
+      stageRoot,
+      `${target.platformTarget}.${evidence.relativePath}`,
+      failures,
+    );
   }
   const checksumsPath = containedLocalPath(
     stageRoot,
@@ -661,14 +698,15 @@ function portableAssetRecord(
     archivePath,
     evidenceFiles: [
       ...requiredPortableEvidence(target, stageRoot, manifest, failures),
-      ...extraPortableEvidenceFiles(entry, baseDir, target, failures),
+      ...extraPortableEvidenceFiles(entry, stageRoot, target, failures),
     ],
     manifest,
     platformTarget: target.platformTarget,
+    stageRoot,
   };
 }
 
-function extraPortableEvidenceFiles(entry, baseDir, target, failures) {
+function extraPortableEvidenceFiles(entry, stageRoot, target, failures) {
   if (entry.evidencePaths === undefined) return [];
   if (!Array.isArray(entry.evidencePaths)) {
     failures.push(`${target.platformTarget}.evidencePaths must be an array when present.`);
@@ -680,13 +718,18 @@ function extraPortableEvidenceFiles(entry, baseDir, target, failures) {
       return [];
     }
     const sourcePath = containedLocalPath(
-      baseDir,
+      stageRoot,
       path,
       `${target.platformTarget}.evidencePaths[${String(index)}]`,
       failures,
     );
     if (sourcePath === undefined) return [];
-    regularFile(sourcePath, `${target.platformTarget}.evidencePaths[${String(index)}]`, failures);
+    regularContainedFile(
+      sourcePath,
+      stageRoot,
+      `${target.platformTarget}.evidencePaths[${String(index)}]`,
+      failures,
+    );
     return [
       {
         assetName: `${target.platformTarget}-${basename(path)}`,
@@ -791,8 +834,9 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
     console.log("release-publish: portable assets validated; upload skipped.");
     return;
   }
-  const upload = preparePortableUploadFiles(assets);
+  const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
+    const archiveUpload = portableArchiveUploadFiles(assets);
     runGh([
       "release",
       "upload",
@@ -800,32 +844,78 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
       "--repo",
       releaseInfo.repo,
       "--clobber",
-      ...upload.paths,
+      ...archiveUpload.paths,
     ]);
-    const remoteAssets = githubReleaseAssets(releaseInfo);
-    const expected = expectedPortableReleaseAssets(assets);
-    verifyRemotePortableAssets(remoteAssets, expected, releaseInfo);
-    runPortableDownloadSmoke(remoteAssets, expected);
+    const archiveSnapshot = githubReleaseSnapshot(releaseInfo);
+    verifyRemotePortableAssets(archiveSnapshot.assets, archiveUpload.expected, releaseInfo);
+    const boundAssets = bindPortableAssetsToRemoteRelease(assets, archiveSnapshot);
+    const boundEvidence = portableEvidenceUploadFiles(boundAssets, evidenceUpload.root);
+    runGh([
+      "release",
+      "upload",
+      releaseInfo.tag,
+      "--repo",
+      releaseInfo.repo,
+      "--clobber",
+      ...boundEvidence.paths,
+    ]);
+    const finalSnapshot = githubReleaseSnapshot(releaseInfo);
+    const expected = [...archiveUpload.expected, ...boundEvidence.expected];
+    verifyRemotePortableAssets(finalSnapshot.assets, expected, releaseInfo);
+    runPortableDownloadSmoke(finalSnapshot.assets, expected);
     console.log(`release-publish: portable assets uploaded and verified for ${releaseInfo.tag}.`);
   } finally {
-    rmSync(upload.root, { recursive: true, force: true });
+    rmSync(evidenceUpload.root, { recursive: true, force: true });
   }
 }
 
-function preparePortableUploadFiles(assets) {
+function preparePortableEvidenceUploadRoot() {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-upload-"));
+  return { root };
+}
+
+function portableArchiveUploadFiles(assets) {
   const paths = [];
   const names = new Set();
+  const expected = [];
   for (const asset of assets) {
     addUploadPath(asset.archivePath, asset.archiveAssetName, names, paths);
+    expected.push({
+      assetName: asset.archiveAssetName,
+      expectedSize: asset.manifest.artifact.sizeBytes,
+      firstClassArchive: true,
+    });
+  }
+  return { expected, paths };
+}
+
+function portableEvidenceUploadFiles(assets, root) {
+  const paths = [];
+  const names = new Set();
+  const expected = [];
+  for (const asset of assets) {
     for (const evidence of asset.evidenceFiles) {
-      const destination = join(root, evidence.assetName);
-      mkdirSync(dirname(destination), { recursive: true });
-      copyFileSync(evidence.sourcePath, destination);
+      const destination = writePortableEvidenceUploadFile(asset, evidence, root);
       addUploadPath(destination, evidence.assetName, names, paths);
+      expected.push({
+        assetName: evidence.assetName,
+        expectedSize: statSync(destination).size,
+        firstClassArchive: false,
+      });
     }
   }
-  return { paths, root };
+  return { expected, paths };
+}
+
+function writePortableEvidenceUploadFile(asset, evidence, root) {
+  const destination = join(root, evidence.assetName);
+  mkdirSync(dirname(destination), { recursive: true });
+  if (evidence.relativePath === "manifest/portable-manifest.json") {
+    writeFileSync(destination, JSON.stringify(asset.manifest, null, 2) + "\n");
+  } else {
+    copyFileSync(evidence.sourcePath, destination);
+  }
+  return destination;
 }
 
 function addUploadPath(path, assetName, names, paths) {
@@ -837,35 +927,54 @@ function addUploadPath(path, assetName, names, paths) {
   paths.push(path);
 }
 
-function githubReleaseAssets(releaseInfo) {
-  const result = runGh([
-    "api",
-    `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`,
-    "--jq",
-    ".assets",
-  ]);
+function githubReleaseSnapshot(releaseInfo) {
+  const result = runGh(["api", `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`]);
   try {
-    const assets = JSON.parse(result.stdout);
-    if (Array.isArray(assets)) return assets;
+    const release = JSON.parse(result.stdout);
+    if (isRecord(release) && Number.isSafeInteger(release.id) && Array.isArray(release.assets)) {
+      return { assets: release.assets, id: release.id };
+    }
   } catch {
     // Fall through to the fail-closed message below.
   }
-  fail("GitHub release assets response was not a JSON array.");
+  fail("GitHub release response did not include a release id and asset array.");
 }
 
-function expectedPortableReleaseAssets(assets) {
-  return assets.flatMap((asset) => [
-    {
-      assetName: asset.archiveAssetName,
-      expectedSize: asset.manifest.artifact.sizeBytes,
-      firstClassArchive: true,
+function bindPortableAssetsToRemoteRelease(assets, releaseSnapshot) {
+  const remoteByName = new Map(releaseSnapshot.assets.map((asset) => [asset.name, asset]));
+  return assets.map((asset) =>
+    bindPortableAssetToRemoteRelease(asset, releaseSnapshot.id, remoteByName),
+  );
+}
+
+function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
+  const remote = remoteByName.get(asset.archiveAssetName);
+  if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
+    fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
+  }
+  const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id);
+  const failures = validatePortableManifest(manifest, { allowUnverified: false }).map(
+    (failure) => `${asset.platformTarget}.${failure}`,
+  );
+  if (failures.length > 0) {
+    fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
+  }
+  return { ...asset, manifest };
+}
+
+function boundPortableManifest(source, releaseId, assetId) {
+  const manifest = JSON.parse(JSON.stringify(source));
+  manifest.release = { ...manifest.release, releaseId };
+  manifest.artifact = { ...manifest.artifact, assetId };
+  manifest.releaseImpact = {
+    ...manifest.releaseImpact,
+    reviewedBinding: {
+      ...manifest.releaseImpact.reviewedBinding,
+      assetId,
+      releaseId,
     },
-    ...asset.evidenceFiles.map((evidence) => ({
-      assetName: evidence.assetName,
-      expectedSize: statSync(evidence.sourcePath).size,
-      firstClassArchive: false,
-    })),
-  ]);
+  };
+  return manifest;
 }
 
 function verifyRemotePortableAssets(remoteAssets, expectedAssets, releaseInfo) {
@@ -1126,6 +1235,13 @@ ensureTrackedTreeIsClean();
 const { cleanup, env: npmEnv } = createNpmEnvironment(options.registry);
 try {
   runReleaseGates();
+  const releaseInfo =
+    portableAssets.length > 0 && portableUploadEnabled(options)
+      ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
+      : undefined;
+  if (releaseInfo !== undefined) {
+    publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+  }
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options);
   }
@@ -1137,8 +1253,10 @@ try {
     }
   }
   runRegistrySmoke(rootPackage, options, npmEnv);
-  const releaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
-  publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+  if (releaseInfo === undefined) {
+    const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
+    publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
+  }
   console.log(`release-publish: PASS - ${rootPackage.spec} published as ${options.tag}.`);
 } finally {
   cleanup();

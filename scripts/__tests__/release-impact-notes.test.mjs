@@ -189,6 +189,21 @@ describe("release-impact release notes", () => {
     expect(result.notes).toContain("observable-internal-release-gate");
   });
 
+  it("adds portable-first wording for stable latest release promotion", () => {
+    const result = renderReleaseImpactNotes(catalog([entry()]), rootManifest(), {
+      portableReleasePromotion: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.notes).toContain("### Normal · New Additions");
+    expect(result.notes).toContain(
+      "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64",
+    );
+    expect(result.notes).toContain(
+      "npm remains available for developer and compatibility workflows",
+    );
+  });
+
   it("fails closed when metadata does not match the package version", () => {
     const result = renderReleaseImpactNotes(
       catalog([entry({ packageVersion: "0.2.10", releaseTag: "v0.2.10" })]),
@@ -235,6 +250,18 @@ describe("release-impact release notes", () => {
     expect(output).toContain(
       "Release-impact metadata and validation now govern stable package publication.",
     );
+    expect(output).toContain("release-publish: PLAN-ONLY complete.");
+  }, 60_000);
+
+  it("prints portable-first latest release notes during plan-only proof", () => {
+    const result = releasePublish(["--plan-only", "--tag", "latest"]);
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).toBe(0);
+    expect(output).toContain(
+      "Keiko now ships first-class portable downloads for Windows x64, macOS arm64, and macOS x64",
+    );
+    expect(output).toContain("npm remains available for developer and compatibility workflows");
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
   }, 60_000);
 });
