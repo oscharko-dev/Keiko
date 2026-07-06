@@ -4,6 +4,7 @@ import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -14,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
+import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import type { CliIo } from "./runner.js";
 
@@ -41,9 +43,11 @@ function makeIo(): Captured {
 }
 
 const tempRoots: string[] = [];
+const NOW = new Date("2026-07-06T00:00:00.000Z");
+const REAL_TMPDIR = realpathSync(tmpdir());
 
 function makeRoot(): string {
-  const root = mkdtempSync(join(tmpdir(), "keiko-uninstall-"));
+  const root = mkdtempSync(join(REAL_TMPDIR, "keiko-uninstall-"));
   tempRoots.push(root);
   return root;
 }
@@ -87,6 +91,82 @@ function installLauncher(root: string): { stateDir: string; shortcut: string } {
   const code = runLauncherCli(["install"], c.io, {}, deps);
   expect(code).toBe(0);
   return { stateDir, shortcut: join(root, ".local", "share", "applications", "keiko.desktop") };
+}
+
+function windowsPortableEnv(home: string): {
+  readonly APPDATA: string;
+  readonly LOCALAPPDATA: string;
+} {
+  return {
+    APPDATA: join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: join(home, "AppData", "Local"),
+  };
+}
+
+function writePortableApp(appRoot: string, version = "0.2.11"): void {
+  mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
+  writeFileSync(
+    join(appRoot, "package.json"),
+    `${JSON.stringify({ name: "@oscharko-dev/keiko", version }, null, 2)}\n`,
+  );
+  writeFileSync(join(appRoot, "dist", "cli", "index.js"), "fixture cli\n");
+}
+
+function writePortableWindowsFixture(root: string, version = "0.2.11"): void {
+  mkdirSync(join(root, "runtime", "node"), { recursive: true });
+  mkdirSync(join(root, ".portable"), { recursive: true });
+  writePortableApp(join(root, "app"), version);
+  writeFileSync(join(root, "runtime", "node", "node.exe"), "fixture node\n");
+  writeFileSync(join(root, "Keiko.exe"), "fixture launcher\n");
+  writeFileSync(
+    join(root, ".portable", "setup-manifest.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        platformTarget: "windows-x64",
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: version,
+        stable: true,
+        primaryLauncher: "Keiko.exe",
+        bootstrapUpdateEligible: false,
+        runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function installPortableWindows(root: string): Promise<{
+  readonly home: string;
+  readonly managedRoot: string;
+  readonly shortcut: string;
+}> {
+  const home = join(root, "portable-home");
+  const source = join(root, "portable-bootstrap");
+  const env = windowsPortableEnv(home);
+  const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
+  writePortableWindowsFixture(source);
+  const c = makeIo();
+  const code = await runPortableCli(
+    [
+      "setup",
+      "--target",
+      "windows-x64",
+      "--portable-root",
+      source,
+      "--managed-root",
+      managedRoot,
+      "--state-dir",
+      join(root, ".keiko"),
+    ],
+    c.io,
+    env,
+    { homedir: () => home, now: () => NOW },
+  );
+  expect(code).toBe(0);
+  return { home, managedRoot, shortcut };
 }
 
 describe("runUninstallCli — usage", () => {
@@ -411,6 +491,48 @@ describe("runUninstallCli — launcher integration", () => {
     const c = makeIo();
     expect(runUninstallCli(["--launchers"], c.io, {}, { cwd: root, homedir: () => root })).toBe(1);
     expect(c.err()).toContain("symlink");
+  });
+});
+
+describe("runUninstallCli — portable managed install", () => {
+  it("removes the attested managed install and user-local Start Menu registration", async () => {
+    const root = makeRoot();
+    const { home, managedRoot, shortcut } = await installPortableWindows(root);
+    const env = windowsPortableEnv(home);
+    const c = makeIo();
+
+    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(0);
+    expect(existsSync(managedRoot)).toBe(false);
+    expect(existsSync(shortcut)).toBe(false);
+    expect(existsSync(join(root, ".keiko"))).toBe(false);
+  });
+
+  it("refuses a modified Start Menu registration and keeps the managed install", async () => {
+    const root = makeRoot();
+    const { home, managedRoot, shortcut } = await installPortableWindows(root);
+    const env = windowsPortableEnv(home);
+    writeFileSync(shortcut, "tampered content\r\n", "utf8");
+    const c = makeIo();
+
+    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    expect(existsSync(managedRoot)).toBe(true);
+    expect(existsSync(shortcut)).toBe(true);
+    expect(c.err()).toContain("portable registration refused unknown artifact");
+  });
+
+  it("refuses a symlink inside the managed install and keeps the portable state", async () => {
+    if (process.platform === "win32") return;
+    const root = makeRoot();
+    const { home, managedRoot } = await installPortableWindows(root);
+    const env = windowsPortableEnv(home);
+    writeFileSync(join(root, "outside.txt"), "keep", "utf8");
+    symlinkSync(join(root, "outside.txt"), join(managedRoot, "app", "rogue-link"));
+    const c = makeIo();
+
+    expect(runUninstallCli(["--state"], c.io, env, { cwd: root, homedir: () => home })).toBe(1);
+    expect(existsSync(managedRoot)).toBe(true);
+    expect(existsSync(join(root, ".keiko", "portable-install-state.json"))).toBe(true);
+    expect(c.err()).toContain("portable managed install refused symlink");
   });
 });
 

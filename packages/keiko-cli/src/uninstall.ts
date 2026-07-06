@@ -22,6 +22,10 @@
 //      unrecognized customer file and any symlink are left in place; a directory (and the
 //      state root) is removed only once no such entry survives beneath it. Nothing
 //      recursively deletes an arbitrary directory or follows a symlink out of `.keiko`.
+//   4. For attested portable-managed installs, `--state` also removes the managed install
+//      tree and its user-local registration artifact, but only after attesting the
+//      recorded install root and refusing any symlink, unknown entry, or tampered
+//      registration artifact.
 //
 // With no scope flag every step runs; `--state` / `--launchers` / `--scripts` narrow
 // it. `--dry-run` reports `would-...` without changing anything.
@@ -35,6 +39,11 @@ import { LauncherError } from "./launcher-platforms.js";
 import { removeLauncherShortcuts } from "./launcher.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import { localPackageRoot } from "./install-layout.js";
+import { attestedPortableInstallRecord } from "./portable-install.js";
+import {
+  removePortableManagedInstall,
+  removePortableRegistrationArtifacts,
+} from "./portable-maintenance.js";
 import {
   classifyPid,
   defaultIsProcessAlive,
@@ -55,7 +64,8 @@ Reverses the runtime artifacts Keiko creates on this machine:
   --scripts    remove the keiko:start / keiko:stop scripts from package.json
   --state      remove Keiko-owned runtime state under .keiko: lifecycle/launcher files,
                UI / Memory / Local-Knowledge databases and their WAL/SHM sidecars,
-               Evidence and Quality-Intelligence records, and the sealed credential vaults
+               Evidence and Quality-Intelligence records, the sealed credential vaults,
+               and any attested portable-managed install + user-local registration
 
 With no scope flag, all three are removed. An unknown (non-Keiko) file under .keiko and any
 symlink are always left in place, and the state directory is removed only once nothing of
@@ -371,6 +381,33 @@ function removeStateStep(opts: UninstallOptions, io: CliIo, stateDir: string): v
   finalizeStateDir(scan, stateDir, io, opts.dryRun);
 }
 
+function removePortableManagedStep(
+  opts: UninstallOptions,
+  io: CliIo,
+  env: EnvSource,
+  stateDir: string,
+  homedir: string,
+): void {
+  if (!opts.scopes.state) return;
+  const record = attestedPortableInstallRecord(stateDir, env, homedir);
+  if (record === undefined || record.registration.status === "setup-failed") return;
+  if (record.layout === undefined || record.managedRoot === undefined) {
+    throw new Error(
+      "recorded portable-managed install could not be attested from user-local registration or default roots",
+    );
+  }
+  removePortableRegistrationArtifacts(
+    record.layout,
+    record.target,
+    record.managedRoot,
+    env,
+    homedir,
+    opts.dryRun,
+    io,
+  );
+  removePortableManagedInstall(record.layout, io, opts.dryRun);
+}
+
 function refuseUnsafeStateRoot(
   opts: UninstallOptions,
   io: CliIo,
@@ -424,6 +461,7 @@ export function runUninstallCli(
     if (ensureServerStoppable(opts, io, resolved, stateDir) === "refused") return 1;
     const launcherRefused = removeLaunchersStep(opts, io, resolved, stateDir);
     removeScriptsStep(opts, io);
+    removePortableManagedStep(opts, io, env, stateDir, resolved.homedir());
     removeStateStep(opts, io, stateDir);
     printPackageGuidance(io, resolved);
     return launcherRefused > 0 ? 1 : 0;

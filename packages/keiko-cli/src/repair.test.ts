@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runRepairCli, type RepairCliDeps } from "./repair.js";
 import { runLauncherCli } from "./launcher.js";
 import { loadState } from "./launcher-state.js";
+import { runPortableCli } from "./portable.js";
 import type { CliIo } from "./runner.js";
 
 // Seeds the encrypted credential vault index next to a config so apiKeySecretRef references are not
@@ -60,6 +61,7 @@ function makeIo(): Captured {
 
 const tempRoots: string[] = [];
 const REAL_TMPDIR = realpathSync(tmpdir());
+const NOW = new Date("2026-07-06T00:00:00.000Z");
 
 function makeRoot(): string {
   const root = mkdtempSync(join(REAL_TMPDIR, "keiko-repair-"));
@@ -111,6 +113,81 @@ function installLauncher(root: string): string {
   );
   expect(code).toBe(0);
   return join(root, ".local", "share", "applications", "keiko.desktop");
+}
+
+function windowsPortableEnv(home: string): {
+  readonly APPDATA: string;
+  readonly LOCALAPPDATA: string;
+} {
+  return {
+    APPDATA: join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: join(home, "AppData", "Local"),
+  };
+}
+
+function writePortableApp(appRoot: string, version = "0.2.11"): void {
+  mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
+  writeFileSync(
+    join(appRoot, "package.json"),
+    `${JSON.stringify({ name: "@oscharko-dev/keiko", version }, null, 2)}\n`,
+  );
+  writeFileSync(join(appRoot, "dist", "cli", "index.js"), "fixture cli\n");
+}
+
+function writePortableWindowsFixture(root: string, version = "0.2.11"): void {
+  mkdirSync(join(root, "runtime", "node"), { recursive: true });
+  mkdirSync(join(root, ".portable"), { recursive: true });
+  writePortableApp(join(root, "app"), version);
+  writeFileSync(join(root, "runtime", "node", "node.exe"), "fixture node\n");
+  writeFileSync(join(root, "Keiko.exe"), "fixture launcher\n");
+  writeFileSync(
+    join(root, ".portable", "setup-manifest.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        platformTarget: "windows-x64",
+        packageName: "@oscharko-dev/keiko",
+        packageVersion: version,
+        stable: true,
+        primaryLauncher: "Keiko.exe",
+        bootstrapUpdateEligible: false,
+        runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      },
+      null,
+      2,
+    )}\n`,
+  );
+}
+
+async function installPortableWindows(root: string): Promise<{
+  readonly managedRoot: string;
+  readonly shortcut: string;
+}> {
+  const home = join(root, "portable-home");
+  const source = join(root, "portable-bootstrap");
+  const env = windowsPortableEnv(home);
+  const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+  const shortcut = join(env.APPDATA, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
+  writePortableWindowsFixture(source);
+  const c = makeIo();
+  const code = await runPortableCli(
+    [
+      "setup",
+      "--target",
+      "windows-x64",
+      "--portable-root",
+      source,
+      "--managed-root",
+      managedRoot,
+      "--state-dir",
+      join(root, ".keiko"),
+    ],
+    c.io,
+    env,
+    { homedir: () => home, now: () => NOW },
+  );
+  expect(code).toBe(0);
+  return { managedRoot, shortcut };
 }
 
 describe("runRepairCli — usage", () => {
@@ -237,6 +314,37 @@ describe("runRepairCli — launcher records", () => {
     const c = makeIo();
     expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
     expect(c.out()).toContain("[action] Launcher records");
+  });
+});
+
+describe("runRepairCli — portable managed install", () => {
+  it("recreates a missing Windows Start Menu registration for an attested portable install", async () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const { shortcut } = await installPortableWindows(root);
+    rmSync(shortcut, { force: true });
+    const c = makeIo();
+
+    expect(
+      runRepairCli([], c.io, windowsPortableEnv(join(root, "portable-home")), healthyDeps(root)),
+    ).toBe(0);
+    expect(c.out()).toContain("Portable registration");
+    expect(c.out()).toContain("repaired 1 user-local registration artifact");
+    expect(existsSync(shortcut)).toBe(true);
+  });
+
+  it("flags a modified Windows Start Menu registration as an action item", async () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const { shortcut } = await installPortableWindows(root);
+    writeFileSync(shortcut, "tampered content\r\n", "utf8");
+    const c = makeIo();
+
+    expect(
+      runRepairCli([], c.io, windowsPortableEnv(join(root, "portable-home")), healthyDeps(root)),
+    ).toBe(1);
+    expect(c.out()).toContain("[action] Portable registration");
+    expect(c.out()).toContain("modified");
   });
 });
 

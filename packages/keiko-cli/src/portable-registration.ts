@@ -17,19 +17,31 @@ import {
   type SetupStatus,
 } from "./portable-shared.js";
 
-interface SetupRegistration {
+interface SetupRegistrationBase {
   readonly schemaVersion: 1;
   readonly status: SetupStatus;
   readonly updateEligible: boolean;
   readonly platformTarget: PortableTarget;
   readonly packageVersion: string;
   readonly stable: boolean;
+  readonly updatedAt: string;
+}
+
+export interface ManagedSetupRegistration extends SetupRegistrationBase {
+  readonly status: "managed";
+  readonly updateEligible: true;
   readonly setupManifestSha256?: string | undefined;
   readonly installRootIdentitySha256?: string | undefined;
   readonly launcherIdentitySha256?: string | undefined;
-  readonly failureReason?: string | undefined;
-  readonly updatedAt: string;
 }
+
+export interface FailedSetupRegistration extends SetupRegistrationBase {
+  readonly status: "setup-failed";
+  readonly updateEligible: false;
+  readonly failureReason?: string | undefined;
+}
+
+export type PortableInstallRegistration = ManagedSetupRegistration | FailedSetupRegistration;
 
 const SETUP_FAILURE_REASON_PATTERNS = [
   [".keiko runtime state", "managed-root-state-conflict"],
@@ -60,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function writeRegistration(stateDir: string, registration: SetupRegistration): void {
+function writeRegistration(stateDir: string, registration: PortableInstallRegistration): void {
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   const path = join(stateDir, REGISTRATION_FILE);
   writeFileSync(path, `${JSON.stringify(registration, null, 2)}\n`, {
@@ -78,7 +90,7 @@ function managedRegistration(input: {
   readonly layout: PortableLayout;
   readonly manifest: SetupManifest;
   readonly now: Date;
-}): SetupRegistration {
+}): ManagedSetupRegistration {
   const realInstallRoot = realpathSync(input.layout.installRoot);
   return {
     schemaVersion: 1,
@@ -126,11 +138,20 @@ export function writeFailedRegistration(
   });
 }
 
-export function readManagedRegistration(stateDir: string): SetupRegistration | undefined {
+export function readPortableInstallRegistration(
+  stateDir: string,
+): PortableInstallRegistration | undefined {
   const path = join(stateDir, REGISTRATION_FILE);
   if (!existsSync(path)) return undefined;
   const raw = readJson(path);
-  return isManagedRegistrationRecord(raw) ? registrationFromRecord(raw) : undefined;
+  if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
+  if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
+  return undefined;
+}
+
+export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {
+  const registration = readPortableInstallRegistration(stateDir);
+  return registration?.status === "managed" ? registration : undefined;
 }
 
 function isManagedRegistrationRecord(value: unknown): value is Record<string, unknown> {
@@ -144,7 +165,7 @@ function isManagedRegistrationRecord(value: unknown): value is Record<string, un
   return typeof value.packageVersion === "string" && typeof value.stable === "boolean";
 }
 
-function registrationFromRecord(raw: Record<string, unknown>): SetupRegistration {
+function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSetupRegistration {
   const platformTarget =
     typeof raw.platformTarget === "string" && isPortableTarget(raw.platformTarget)
       ? raw.platformTarget
@@ -169,8 +190,39 @@ function registrationFromRecord(raw: Record<string, unknown>): SetupRegistration
   };
 }
 
+function isFailedRegistrationRecord(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || value.schemaVersion !== 1) return false;
+  if (value.status !== "setup-failed" || value.updateEligible !== false) return false;
+  if (
+    !isPortableTarget(typeof value.platformTarget === "string" ? value.platformTarget : undefined)
+  ) {
+    return false;
+  }
+  return typeof value.packageVersion === "string" && typeof value.stable === "boolean";
+}
+
+function failedRegistrationFromRecord(raw: Record<string, unknown>): FailedSetupRegistration {
+  const platformTarget =
+    typeof raw.platformTarget === "string" && isPortableTarget(raw.platformTarget)
+      ? raw.platformTarget
+      : undefined;
+  if (platformTarget === undefined) {
+    throw new Error("portable registration target is invalid");
+  }
+  return {
+    schemaVersion: 1,
+    status: "setup-failed",
+    updateEligible: false,
+    platformTarget,
+    packageVersion: String(raw.packageVersion),
+    stable: raw.stable === true,
+    failureReason: typeof raw.failureReason === "string" ? raw.failureReason : undefined,
+    updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
+  };
+}
+
 export function registrationMatches(
-  registration: SetupRegistration,
+  registration: ManagedSetupRegistration,
   layout: PortableLayout,
   manifest: SetupManifest,
 ): boolean {

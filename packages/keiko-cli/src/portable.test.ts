@@ -112,6 +112,16 @@ function writeMacFixture(root: string, target: "macos-arm64" | "macos-x64"): str
   return app;
 }
 
+function windowsPortableEnv(home: string): {
+  readonly APPDATA: string;
+  readonly LOCALAPPDATA: string;
+} {
+  return {
+    APPDATA: join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: join(home, "AppData", "Local"),
+  };
+}
+
 function registration(stateDir: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(
     readFileSync(join(stateDir, "portable-install-state.json"), "utf8"),
@@ -123,10 +133,54 @@ function registration(stateDir: string): Record<string, unknown> {
 }
 
 describe("runPortableCli", () => {
+  it("creates the Windows Start Menu shortcut only during explicit setup and targets the managed install", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const stateDir = join(root, "state");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(env.LOCALAPPDATA, "Programs", "Keiko");
+    const shortcut = join(
+      env.APPDATA,
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Keiko.bat",
+    );
+    writeWindowsFixture(source);
+    const c = capture();
+
+    expect(existsSync(shortcut)).toBe(false);
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "windows-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      env,
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(shortcut)).toBe(true);
+    expect(readFileSync(shortcut, "utf8")).toContain(join(managedRoot, "Keiko.exe"));
+  });
+
   it("promotes a Windows bootstrap payload into a managed root and records content-free state", async () => {
     const root = tempRoot();
+    const home = join(root, "home");
     const source = join(root, "bootstrap");
-    const managedRoot = join(root, "managed", "Keiko");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "managed", "Keiko");
     const stateDir = join(root, "state");
     writeWindowsFixture(source);
     const c = capture();
@@ -144,8 +198,8 @@ describe("runPortableCli", () => {
         stateDir,
       ],
       c.io,
-      {},
-      { now: () => NOW },
+      env,
+      { homedir: () => home, now: () => NOW },
     );
 
     expect(code).toBe(0);
@@ -159,6 +213,43 @@ describe("runPortableCli", () => {
       stable: true,
     });
     expect(readFileSync(join(stateDir, "portable-install-state.json"), "utf8")).not.toContain(root);
+  });
+
+  it("creates the macOS user-local app only during explicit setup", async () => {
+    const root = tempRoot();
+    const home = join(root, "home");
+    const source = join(root, "bootstrap");
+    const managedRoot = join(home, "Applications", "Keiko.app");
+    const stateDir = join(root, "state");
+    writeMacFixture(source, "macos-x64");
+    const c = capture();
+
+    expect(existsSync(managedRoot)).toBe(false);
+
+    const code = await runPortableCli(
+      [
+        "setup",
+        "--target",
+        "macos-x64",
+        "--portable-root",
+        source,
+        "--managed-root",
+        managedRoot,
+        "--state-dir",
+        stateDir,
+      ],
+      c.io,
+      {},
+      { homedir: () => home, now: () => NOW },
+    );
+
+    expect(code).toBe(0);
+    expect(existsSync(join(managedRoot, "Contents", "MacOS", "Keiko"))).toBe(true);
+    expect(registration(stateDir)).toMatchObject({
+      status: "managed",
+      platformTarget: "macos-x64",
+      updateEligible: true,
+    });
   });
 
   it("records setup-failed as not update eligible when validation fails", async () => {
@@ -293,8 +384,10 @@ describe("runPortableCli", () => {
 
   it("launches by promoting the bootstrap payload, writing content-free state, and handing off to the managed launcher", async () => {
     const root = tempRoot();
+    const home = join(root, "home");
     const source = join(root, "bootstrap");
-    const managedRoot = join(root, "managed", "Keiko");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "managed", "Keiko");
     const stateDir = join(root, "state");
     const c = capture();
     const spawns: {
@@ -317,8 +410,9 @@ describe("runPortableCli", () => {
         stateDir,
       ],
       c.io,
-      {},
+      env,
       {
+        homedir: () => home,
         now: () => NOW,
         spawnFn: (command, args, options) => {
           spawns.push({ command, args, options });
@@ -344,8 +438,10 @@ describe("runPortableCli", () => {
 
   it("launches the existing managed install when the bootstrap launcher is clicked after setup", async () => {
     const root = tempRoot();
+    const home = join(root, "home");
     const source = join(root, "bootstrap");
-    const managedRoot = join(root, "managed", "Keiko");
+    const env = windowsPortableEnv(home);
+    const managedRoot = join(home, "managed", "Keiko");
     const stateDir = join(root, "state");
     const spawns: string[] = [];
     const lifecycleStarts: string[] = [];
@@ -364,8 +460,9 @@ describe("runPortableCli", () => {
         stateDir,
       ],
       capture().io,
-      {},
+      env,
       {
+        homedir: () => home,
         now: () => NOW,
         spawnFn: (command) => {
           spawns.push(command);
@@ -388,8 +485,9 @@ describe("runPortableCli", () => {
         stateDir,
       ],
       secondCapture.io,
-      {},
+      env,
       {
+        homedir: () => home,
         now: () => NOW,
         lifecycleFn: (_command, _args, _io, _env, deps) => {
           lifecycleStarts.push(deps.cwd);
