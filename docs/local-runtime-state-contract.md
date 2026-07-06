@@ -45,6 +45,22 @@ or compatibility playbook.
 | Lifecycle state | `--state-dir` → `KEIKO_STATE_DIR` → `.keiko/`                                     |
 | Memory vault    | `memoryDir` → `KEIKO_MEMORY_DIR` → `KEIKO_STATE_DIR/memory/` → `~/.keiko/memory/` |
 
+## Portable install state record
+
+`portable-install-state.json` persists a content-free discriminated union with shared fields
+`schemaVersion: 1`, `platformTarget`, `status`, `updateEligible`, `packageVersion`, `stable`, and
+`updatedAt`.
+
+| Persisted record | Required shape | Status-specific fields |
+| ---------------- | -------------- | ---------------------- |
+| Managed portable install | `status: "managed"` and `updateEligible: true` | Optional `managedRootLocator` with `kind: "default"`, `kind: "home-relative"` plus a bounded relative `path`, or `kind: "absolute-local"` plus a bounded absolute local `path`; managed-only attestation hashes `setupManifestSha256`, `installRootIdentitySha256`, and `launcherIdentitySha256`. |
+| Failed setup | `status: "setup-failed"` and `updateEligible: false` | Optional bounded `failureReason` code only. Managed-root locator and attestation hashes are absent. |
+
+The persisted union does not store portable payload bytes, ZIP archives, customer repositories,
+customer document content, prompts, model output, logs, secrets, or credential material. Reader-side
+attestation refuses a symlinked state file, ignores policy-invalid managed-root candidates, and
+re-attests managed installs plus registration artifacts before repair or uninstall acts on them.
+
 ## Confidentiality classes and controls
 
 Local at-rest confidentiality is enforced by **five distinct controls**. They are independent: one

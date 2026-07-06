@@ -14,6 +14,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import {
   type ManagedRootLocator,
+  type ManagedSetupRegistration,
   readManagedRegistration,
   registrationMatches,
   writeFailedRegistration,
@@ -218,14 +219,9 @@ export function attestedManagedRoot(
   managedRoot: string,
   stateDir: string,
 ): PortableLayout | undefined {
-  try {
-    const { layout, manifest } = validatePortableRoot(target, managedRoot);
-    const registration = readManagedRegistration(stateDir);
-    if (registration === undefined) return undefined;
-    return registrationMatches(registration, layout, manifest) ? layout : undefined;
-  } catch {
-    return undefined;
-  }
+  const registration = readManagedRegistration(stateDir);
+  if (registration === undefined) return undefined;
+  return attestedManagedLayout(registration, managedRoot, stateDir)?.layout;
 }
 
 interface SetupPortableOptions {
@@ -350,6 +346,22 @@ function resolveManagedRootPath(
   return locator.kind === "home-relative" ? resolve(home, locator.path) : resolve(locator.path);
 }
 
+function attestedManagedLayout(
+  registration: ManagedSetupRegistration,
+  managedRoot: string,
+  stateDir: string,
+):
+  | { readonly layout: PortableLayout; readonly manifest: SetupManifest }
+  | undefined {
+  try {
+    assertManagedRootAllowed(managedRoot, stateDir);
+    const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);
+    return registrationMatches(registration, layout, manifest) ? { layout, manifest } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function attestedPortableInstallRecord(
   stateDir: string,
   env: EnvSource,
@@ -375,13 +387,15 @@ export function attestedPortableInstallRecord(
     };
   }
   for (const managedRoot of candidateManagedRoots(registration, env, home)) {
-    try {
-      const { layout, manifest } = validatePortableRoot(registration.platformTarget, managedRoot);
-      if (registrationMatches(registration, layout, manifest)) {
-        return { registration, target: registration.platformTarget, managedRoot, layout, manifest };
-      }
-    } catch {
-      // Keep scanning other candidate roots.
+    const attested = attestedManagedLayout(registration, managedRoot, stateDir);
+    if (attested !== undefined) {
+      return {
+        registration,
+        target: registration.platformTarget,
+        managedRoot,
+        layout: attested.layout,
+        manifest: attested.manifest,
+      };
     }
   }
   return {

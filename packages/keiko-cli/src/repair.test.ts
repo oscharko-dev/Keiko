@@ -1,15 +1,19 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   statSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -88,6 +92,14 @@ function healthyDeps(root: string): RepairCliDeps {
 
 function portableRepairDeps(root: string, home: string): RepairCliDeps {
   return { ...healthyDeps(root), homedir: (): string => home };
+}
+
+function sha256Text(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function sha256File(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 // Mirrors the local-install layout doctor.test.ts builds, so `resolvePreferredInstallLayout`
@@ -257,6 +269,29 @@ async function installPortableMacCustom(root: string): Promise<{
   );
   expect(code).toBe(0);
   return { home, managedRoot };
+}
+
+function tamperPortableRecordToRepoRoot(
+  managedRoot: string,
+  shortcut: string,
+  stateDir: string,
+): string {
+  const invalidBase = mkdtempSync(join(process.cwd(), ".keiko-portable-policy-invalid-"));
+  tempRoots.push(invalidBase);
+  const invalidRoot = join(invalidBase, "Keiko");
+  cpSync(managedRoot, invalidRoot, { recursive: true });
+  unlinkSync(shortcut);
+  const statePath = join(stateDir, "portable-install-state.json");
+  const registration = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+  const realInvalidRoot = realpathSync(invalidRoot);
+  registration.managedRootLocator = { kind: "absolute-local", path: realInvalidRoot };
+  registration.installRootIdentitySha256 = sha256Text(realInvalidRoot);
+  registration.setupManifestSha256 = sha256File(
+    join(invalidRoot, ".portable", "setup-manifest.json"),
+  );
+  registration.launcherIdentitySha256 = sha256File(join(invalidRoot, "Keiko.exe"));
+  writeFileSync(statePath, `${JSON.stringify(registration, null, 2)}\n`, "utf8");
+  return invalidRoot;
 }
 
 describe("runRepairCli — usage", () => {
@@ -459,6 +494,27 @@ describe("runRepairCli — portable managed install", () => {
       "Portable registration: 0 user-local registration artifact(s) verified",
     );
     expect(home).toContain("portable-home");
+  });
+
+  it("refuses a locator tampered toward a policy-invalid repository root even when hashes match", async () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const customRoot = join(root, "portable-home", "PortableApps", "Keiko");
+    const { home, managedRoot, shortcut, env } = await installPortableWindows(root, {
+      managedRoot: customRoot,
+    });
+    const invalidRoot = tamperPortableRecordToRepoRoot(
+      managedRoot,
+      shortcut,
+      join(root, ".keiko"),
+    );
+    const c = makeIo();
+
+    expect(runRepairCli([], c.io, env, portableRepairDeps(root, home))).toBe(1);
+    expect(existsSync(invalidRoot)).toBe(true);
+    expect(existsSync(managedRoot)).toBe(true);
+    expect(c.out()).toContain("[action] Portable managed install");
+    expect(c.out()).toContain("could not be attested");
   });
 });
 
