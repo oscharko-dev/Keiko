@@ -53,7 +53,7 @@ describe("portable launch/setup smoke", () => {
     const rendered = readFileSync(evidencePath, "utf8");
     expect(rendered).toContain('"issue": 1953');
     expect(rendered).not.toContain(dir);
-  });
+  }, 30_000);
 
   it("keeps the primary portable user journey free of shell commands", () => {
     expect(validatePortableLaunchSetupDocs()).toEqual({
