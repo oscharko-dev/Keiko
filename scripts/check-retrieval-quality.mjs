@@ -11,6 +11,8 @@ import { TextEncoder } from "node:util";
 import {
   ALL_FIXTURES,
   PASS_THRESHOLDS,
+  computeRetrievalModeComparison,
+  renderRetrievalModeComparisonReport,
   renderRetrievalEvalQualityGateReport,
   runRetrievalEval,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -572,6 +574,16 @@ function formatLocalKnowledgeFailure(scorecard) {
   )} ndcg=${scorecard.dimensions.ndcg.toFixed(3)}`;
 }
 
+function comparisonFailuresFor(comparison) {
+  return comparison.rows.filter((row) => !row.passed || row.floorHeadroom < 0);
+}
+
+function formatComparisonFailure(row) {
+  return `${row.mode}: fixtures=${row.fixtureIds.join(",")} floor-headroom=${row.floorHeadroom.toFixed(
+    3,
+  )}`;
+}
+
 export async function runLocalKnowledgeQualityCheck(
   log,
   fixtures = ALL_FIXTURES,
@@ -596,11 +608,24 @@ export async function runLocalKnowledgeQualityCheck(
   for (const line of renderRetrievalEvalQualityGateReport(scorecards).split("\n")) {
     log(`local-knowledge-retrieval-quality report: ${line}`);
   }
+  const comparison = computeRetrievalModeComparison(scorecards);
+  for (const line of renderRetrievalModeComparisonReport(comparison).split("\n")) {
+    log(`local-knowledge-retrieval-comparison report: ${line}`);
+  }
   const failed = scorecards.filter((scorecard) => localKnowledgeFailuresFor(scorecard).length > 0);
   for (const scorecard of failed) {
     log(`local-knowledge-retrieval-quality failure: ${formatLocalKnowledgeFailure(scorecard)}`);
   }
-  return { summary, scorecards, ok: failed.length === 0 };
+  const failedComparisonRows = comparisonFailuresFor(comparison);
+  for (const row of failedComparisonRows) {
+    log(`local-knowledge-retrieval-comparison failure: ${formatComparisonFailure(row)}`);
+  }
+  return {
+    summary,
+    scorecards,
+    comparison,
+    ok: failed.length === 0 && failedComparisonRows.length === 0,
+  };
 }
 
 // ─── Non-tautology regression probes ─────────────────────────────────────────
