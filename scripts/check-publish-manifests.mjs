@@ -9,6 +9,7 @@ import {
 } from "./release-workspace-policy.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
+const expectedRepositoryUrl = "https://github.com/oscharko-dev/Keiko";
 const deniedWorkspaceExports = new Map([
   [
     "@oscharko-dev/keiko-model-gateway",
@@ -90,6 +91,11 @@ export function validatePublishManifests(rootManifest, workspaceManifests) {
   }
   if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
     failures.push("root package.json must declare a release version.");
+  }
+  if (rootManifest.repository?.url !== expectedRepositoryUrl) {
+    failures.push(
+      `package.json: repository.url must be ${expectedRepositoryUrl} so npm provenance can validate the GitHub source repository.`,
+    );
   }
 
   const workspaceNames = new Set(workspaceManifests.map(({ manifest }) => manifest.name));
