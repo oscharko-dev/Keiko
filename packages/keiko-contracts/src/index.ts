@@ -1327,6 +1327,7 @@ export {
   DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   isApprovableProposalState,
   detectIndexableManual,
+  applyAuthenticationRequiredOverride,
   summarizeManualOrigin,
   summarizeManualPathPrefix,
   buildManualScopePreview,

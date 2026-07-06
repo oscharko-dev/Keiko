@@ -262,6 +262,62 @@ describe("computeManualRootFingerprint", () => {
     expect(fingerprint).not.toBeNull();
     expect(fingerprint).not.toContain("private-secret");
   });
+
+  it("is stable across case variation of the host and path (#1867)", () => {
+    const upper = computeManualRootFingerprint("HTTPS://INTRANET/DOCS/INDEX.HTML");
+    const lower = computeManualRootFingerprint("https://intranet/docs/index.html");
+    const mixed = computeManualRootFingerprint("https://Intranet/Docs/Other.HTML");
+    expect(upper).not.toBeNull();
+    expect(upper).toBe(lower);
+    expect(upper).toBe(mixed);
+  });
+});
+
+describe("authentication-required override (#1869)", () => {
+  const target = "https://intranet/handbook/index.html";
+
+  it("refuses to propose indexing after the last navigation required authentication", () => {
+    const proposal = resolveManualProposal(target, stubDeps(), () => [], "authentication-required");
+    expect(proposal.state).toBe("authentication-required");
+    expect(proposal.scopePreview).toBeNull();
+  });
+
+  it("still proposes normally when no authentication was required", () => {
+    const proposal = resolveManualProposal(target, stubDeps(), () => [], "rendering-deferred");
+    expect(proposal.state).toBe("likely-manual");
+    expect(proposal.scopePreview).not.toBeNull();
+  });
+
+  it("refuses approval after the last navigation required authentication", () => {
+    const decision = resolveManualApproval(target, stubDeps(), () => [], "authentication-required");
+    expect(decision.ok).toBe(false);
+    if (decision.ok) return;
+    expect(decision.code).toBe("PROPOSAL_NOT_APPROVABLE");
+  });
+
+  it("still approves normally when no authentication was required", () => {
+    const decision = resolveManualApproval(target, stubDeps(), () => [], "rendering-deferred");
+    expect(decision.ok).toBe(true);
+  });
+
+  it("rejects the propose/approve HTTP requests end-to-end when auth was required on the target", async () => {
+    const fx = await fixture();
+    const proposeRes = await post(fx, "propose", {
+      target,
+      lastNavigationReason: "authentication-required",
+    });
+    const proposeBody = (await proposeRes.json()) as DocumentationIndexingProposal;
+    expect(proposeBody.state).toBe("authentication-required");
+    expect(proposeBody.scopePreview).toBeNull();
+
+    const approveRes = await post(fx, "approve", {
+      target,
+      lastNavigationReason: "authentication-required",
+    });
+    expect(approveRes.status).toBe(409);
+    const approveBody = (await approveRes.json()) as { error: { code: string } };
+    expect(approveBody.error.code).toBe("PROPOSAL_NOT_APPROVABLE");
+  });
 });
 
 describe("already-indexed duplicate detection", () => {

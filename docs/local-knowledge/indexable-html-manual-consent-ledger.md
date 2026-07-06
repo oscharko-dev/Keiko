@@ -21,20 +21,21 @@ indexer, model call, or new egress. Actual crawling/indexing is the future Epic 
 
 ## Scenario coverage
 
-| Scenario                              | Expected behavior                                                                      | Regression evidence                                                            |
-| ------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| index.html / doc-path manual          | `likely-manual`, high confidence, scope preview attached                               | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`       |
-| documentation directory / weak signal | `probable-manual`, medium/low confidence; consent still required                       | `documentation-manual-proposal.test.ts`                                        |
-| local index.html                      | `requires-local-file-approval`, local source kind                                      | `documentation-manual-proposal.test.ts`                                        |
-| action / login / dynamic page         | `degraded`, not offered for approval                                                   | `documentation-manual-proposal.test.ts`, `docs-browser-consent-safety.test.ts` |
-| external / unsupported scheme         | `unsupported`, no scope preview, approval refused (409)                                | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`       |
-| credentials in target                 | `denied`; credential never echoed                                                      | `documentation-manual-proposal.test.ts`, `docs-browser-consent-safety.test.ts` |
-| already-indexed root                  | proposal overridden to `already-indexed` with pod id; approval refused (409)           | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`       |
-| bounded scope preview                 | explicit limits, `followRedirects:false`, `estimatedPageCount:null`, denied classes    | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`       |
-| explicit consent → handoff            | approval requires an explicit action; returns redacted `DocumentationIndexingApproval` | `DocumentationBrowserWidget.test.tsx`, `docs-browser-proposal.test.ts`         |
-| cancel / denied / degraded UI         | no "Create Knowledge Pod" action offered; safe copy + remediation                      | `DocumentationBrowserWidget.test.tsx`                                          |
-| pre-consent no side effect            | 0 capsules, 0 indexing jobs, no model-port request across a hostile battery            | `docs-browser-consent-safety.test.ts`                                          |
-| redaction / leakage                   | no raw token/credential/private path/query in any response                             | `docs-browser-consent-safety.test.ts`, `docs-browser-api.test.ts`              |
+| Scenario                              | Expected behavior                                                                      | Regression evidence                                                                                             |
+| ------------------------------------- | -------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| index.html / doc-path manual          | `likely-manual`, high confidence, scope preview attached                               | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`                                        |
+| documentation directory / weak signal | `probable-manual`, medium/low confidence; consent still required                       | `documentation-manual-proposal.test.ts`                                                                         |
+| local index.html                      | `requires-local-file-approval`, local source kind                                      | `documentation-manual-proposal.test.ts`                                                                         |
+| action / login / dynamic page         | `degraded`, not offered for approval                                                   | `documentation-manual-proposal.test.ts`, `docs-browser-consent-safety.test.ts`                                  |
+| auth-walled manual                    | proposal overridden to `authentication-required`; approval refused (409)               | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`, `DocumentationBrowserWidget.test.tsx` |
+| external / unsupported scheme         | `unsupported`, no scope preview, approval refused (409)                                | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`                                        |
+| credentials in target                 | `denied`; credential never echoed                                                      | `documentation-manual-proposal.test.ts`, `docs-browser-consent-safety.test.ts`                                  |
+| already-indexed root                  | proposal overridden to `already-indexed` with pod id; approval refused (409)           | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`                                        |
+| bounded scope preview                 | explicit limits, `followRedirects:false`, `estimatedPageCount:null`, denied classes    | `documentation-manual-proposal.test.ts`, `docs-browser-proposal.test.ts`                                        |
+| explicit consent → handoff            | approval requires an explicit action; returns redacted `DocumentationIndexingApproval` | `DocumentationBrowserWidget.test.tsx`, `docs-browser-proposal.test.ts`                                          |
+| cancel / denied / degraded UI         | no "Create Knowledge Pod" action offered; safe copy + remediation                      | `DocumentationBrowserWidget.test.tsx`                                                                           |
+| pre-consent no side effect            | 0 capsules, 0 indexing jobs, no model-port request across a hostile battery            | `docs-browser-consent-safety.test.ts`                                                                           |
+| redaction / leakage                   | no raw token/credential/private path/query in any response                             | `docs-browser-consent-safety.test.ts`, `docs-browser.test.ts`                                                   |
 
 ## Gate matrix
 

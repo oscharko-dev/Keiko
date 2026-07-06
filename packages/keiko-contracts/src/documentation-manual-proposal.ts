@@ -19,7 +19,9 @@
 
 import {
   classifyDocumentationTarget,
+  DOCUMENTATION_NAVIGATION_REASONS,
   DOCUMENTATION_TARGET_MAX_LENGTH,
+  type DocumentationNavigationReason,
   type DocumentationTargetClass,
 } from "./documentation-browser.js";
 import type { KnowledgePodSummary } from "./local-knowledge-pods.js";
@@ -138,6 +140,15 @@ export const DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES = [
 
 export type DocumentationManualDeniedLinkClass =
   (typeof DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES)[number];
+
+// `cross-origin` and `outside-path-prefix` are HTTP-origin/path-scope concepts that do not exist for a
+// local-file manual (there is no origin and the path is never exposed, per `pathPrefixSummary`).
+// Reporting them for `html-manual-local` would be a misleading exclusion in the pre-consent preview.
+const LOCAL_FILE_DENIED_LINK_CLASSES: readonly DocumentationManualDeniedLinkClass[] = [
+  "unsupported-scheme",
+  "credentialed-url",
+  "path-traversal",
+];
 
 // Bounded, explicit crawl limits. These are the caps the later indexing epic will enforce; surfacing
 // them pre-consent is the trust contract of child issue #1867. They are declarations, not the result
@@ -261,14 +272,25 @@ function isIndexEntry(pathname: string): boolean {
   return INDEX_ENTRY_NAMES.includes(lastPathSegment(pathname).toLowerCase() as never);
 }
 
+// Segment-anchored, not a raw substring test: `/docsarchive/foo.html` must NOT match `/docs` the way
+// `/docs/foo.html` does. Each token is normalised to a bare segment name (strip leading/trailing
+// slashes) and compared against the path split on `/`, so a token only matches a whole segment.
 function hasDocumentationPathToken(pathname: string): boolean {
-  const lower = pathname.toLowerCase();
-  return DOCUMENTATION_PATH_TOKENS.some((token) => lower.includes(token));
+  const segments = pathname.toLowerCase().split("/");
+  return DOCUMENTATION_PATH_TOKENS.some((token) => {
+    const bareToken = token.replace(/^\/|\/$/gu, "");
+    return segments.includes(bareToken);
+  });
 }
 
+// Segment-anchored for the same reason as hasDocumentationPathToken: `/docs/authoring-guide.html`
+// must NOT match `/auth` the way `/auth/callback` does.
 function hasActionPathToken(pathname: string): boolean {
-  const lower = pathname.toLowerCase();
-  return ACTION_PATH_TOKENS.some((token) => lower.includes(token));
+  const segments = pathname.toLowerCase().split("/");
+  return ACTION_PATH_TOKENS.some((token) => {
+    const bareToken = token.replace(/^\/|\/$/gu, "");
+    return segments.includes(bareToken);
+  });
 }
 
 function isDirectoryStyle(pathname: string): boolean {
@@ -337,14 +359,21 @@ function detectHttpManualWeakSignals(
 }
 
 function detectLocalFileManual(pathname: string): DocumentationManualDetection {
-  const confident = isIndexEntry(pathname) || hasHtmlDocumentExtension(pathname);
+  const isIndex = isIndexEntry(pathname);
+  const isHtmlDocument = hasHtmlDocumentExtension(pathname);
+  if (!isIndex && !isHtmlDocument) {
+    return {
+      state: "degraded",
+      sourceKind: null,
+      confidence: "none",
+      reasons: ["unknown-page-shape"],
+    };
+  }
   return {
     state: "requires-local-file-approval",
     sourceKind: "html-manual-local",
-    confidence: confident ? "medium" : "low",
-    reasons: confident
-      ? ["local-file-manual-candidate", "html-document-extension"]
-      : ["local-file-manual-candidate"],
+    confidence: "medium",
+    reasons: ["local-file-manual-candidate", "html-document-extension"],
   };
 }
 
@@ -390,6 +419,26 @@ export function detectIndexableManual(rawTarget: unknown): DocumentationManualDe
         reasons: ["unsupported-scheme"],
       };
   }
+}
+
+/**
+ * Override an otherwise-approvable detection to `authentication-required` when the caller reports
+ * that the last navigation to this same target required credentials Keiko will not collect or
+ * replay. Fails closed toward the stricter state: a detection that is already non-approvable (e.g.
+ * `denied`, `unsupported`) is left as-is, since that state is already at least as restrictive.
+ */
+export function applyAuthenticationRequiredOverride(
+  detection: DocumentationManualDetection,
+  lastNavigationReason: DocumentationNavigationReason | null | undefined,
+): DocumentationManualDetection {
+  if (lastNavigationReason !== "authentication-required") return detection;
+  if (!isApprovableProposalState(detection.state)) return detection;
+  return {
+    state: "authentication-required",
+    sourceKind: null,
+    confidence: "none",
+    reasons: ["authentication-required"],
+  };
 }
 
 function detectionForClassificationFailure(
@@ -484,13 +533,10 @@ export function buildManualScopePreview(input: {
     proposedPodName: proposedPodName(input.sourceKind, input.originSummary),
     estimatedPageCount: null,
     limits,
-    deniedLinkClasses: [
-      "cross-origin",
-      "outside-path-prefix",
-      "unsupported-scheme",
-      "credentialed-url",
-      "path-traversal",
-    ],
+    deniedLinkClasses:
+      input.sourceKind === "html-manual-local"
+        ? LOCAL_FILE_DENIED_LINK_CLASSES
+        : DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES,
     robotsPosture,
   };
 }
@@ -580,6 +626,11 @@ export function asAlreadyIndexedProposal(
 export interface DocumentationManualProposalRequest {
   readonly schemaVersion: typeof DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION;
   readonly target: string;
+  // The reason returned by the most recent navigate call for this same target, if any. Lets the
+  // caller report that the target required authentication so a proposal/approval is never offered
+  // for a target the user was just told Keiko will not sign in to (child issue #1869). Absent or
+  // null when no prior navigation result is available.
+  readonly lastNavigationReason: DocumentationNavigationReason | null;
 }
 
 export type DocumentationManualProposalParse =
@@ -595,6 +646,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * navigation request: a non-empty target string within the length cap. The target itself is
  * re-classified and never echoed back verbatim.
  */
+const KNOWN_NAVIGATION_REASONS: ReadonlySet<string> = new Set(DOCUMENTATION_NAVIGATION_REASONS);
+
+function parseLastNavigationReason(
+  value: unknown,
+  errors: string[],
+): DocumentationNavigationReason | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "string" && KNOWN_NAVIGATION_REASONS.has(value)) {
+    return value as DocumentationNavigationReason;
+  }
+  errors.push("lastNavigationReason must be a known navigation reason or null");
+  return null;
+}
+
 export function parseManualProposalRequest(value: unknown): DocumentationManualProposalParse {
   if (!isRecord(value)) return { ok: false, errors: ["request must be an object"] };
   const target = value.target;
@@ -604,12 +669,14 @@ export function parseManualProposalRequest(value: unknown): DocumentationManualP
   } else if (target.length > DOCUMENTATION_TARGET_MAX_LENGTH) {
     errors.push(`target must be at most ${String(DOCUMENTATION_TARGET_MAX_LENGTH)} characters`);
   }
+  const lastNavigationReason = parseLastNavigationReason(value.lastNavigationReason, errors);
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
     value: {
       schemaVersion: DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
       target: target as string,
+      lastNavigationReason,
     },
   };
 }
@@ -619,11 +686,16 @@ export function parseManualProposalRequest(value: unknown): DocumentationManualP
 const ALLOWED_PATH_PREFIX_SHAPES: ReadonlySet<string> = new Set(["/", "/…"]);
 
 // A redacted summary is safe when it is stable under format-char stripping, carries no absolute path,
-// and contains no userinfo (`@`), query (`?`), or fragment (`#`). A bare `scheme://host[:port]` origin
-// and a host-derived pod label are intentionally allowed; a path/query/credential is not.
+// contains no userinfo (`@`), query (`?`), or fragment (`#`), and carries no embedded newline/carriage
+// return. A bare `scheme://host[:port]` origin and a host-derived pod label are intentionally allowed;
+// a path/query/credential is not. These fields are always single-line, so — unlike other evidence
+// surfaces that legitimately preserve TAB/LF/CR — `stripUnsafeFormatChars` alone is not a strong enough
+// check here: it deliberately preserves LF/CR, which would otherwise let a header-injection-shaped
+// value (e.g. an embedded `\r\nX-Injected: …`) round-trip as "safe".
 function isDocumentationRedactionSafe(value: string): boolean {
   if (stripUnsafeFormatChars(value) !== value) return false;
   if (containsAbsolutePath(value)) return false;
+  if (value.includes("\n") || value.includes("\r")) return false;
   return !value.includes("@") && !value.includes("?") && !value.includes("#");
 }
 
