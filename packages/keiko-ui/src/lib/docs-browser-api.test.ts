@@ -86,7 +86,30 @@ describe("proposeDocumentationIndexing / approveDocumentationIndexing", () => {
     expect(path).toBe("/api/docs-browser/propose");
     expect(init.method).toBe("POST");
     expect(headers["X-Keiko-CSRF"]).toBe("1");
-    expect(init.body).toBe(JSON.stringify({ target: "https://intranet/handbook/index.html" }));
+    expect(init.body).toBe(
+      JSON.stringify({
+        target: "https://intranet/handbook/index.html",
+        lastNavigationReason: null,
+      }),
+    );
+  });
+
+  it("threads the last navigation reason through the propose request body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ state: "authentication-required" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await proposeDocumentationIndexing(
+      "https://intranet/handbook/index.html",
+      "authentication-required",
+    );
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.body).toBe(
+      JSON.stringify({
+        target: "https://intranet/handbook/index.html",
+        lastNavigationReason: "authentication-required",
+      }),
+    );
   });
 
   it("POSTs the target to the approve route with CSRF headers", async () => {

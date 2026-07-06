@@ -11,6 +11,7 @@ import {
   parseDocumentationNavigationRequest,
   resolveDocumentationNavigationReason,
   type DocumentationNavigationReason,
+  type DocumentationTargetClass,
 } from "./documentation-browser.js";
 
 describe("documentation-browser constants", () => {
@@ -65,6 +66,20 @@ describe("classifyDocumentationTarget — accepted", () => {
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.targetClass).toBe("loopback");
+    }
+  });
+
+  it("classifies IPv4-mapped IPv6 loopback and private addresses like their embedded IPv4 form", () => {
+    const cases: readonly (readonly [string, DocumentationTargetClass])[] = [
+      ["http://[::ffff:127.0.0.1]/docs/index.html", "loopback"],
+      ["http://[0:0:0:0:0:ffff:127.0.0.1]/", "loopback"],
+      ["http://[::ffff:10.1.2.3]/manual", "intranet-http"],
+    ];
+    for (const [raw, expectedClass] of cases) {
+      const result = classifyDocumentationTarget(raw);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.targetClass).toBe(expectedClass);
     }
   });
 
