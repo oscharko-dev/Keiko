@@ -31,6 +31,7 @@ import {
   repairCapsuleFailedFiles,
   startIndexing,
   updateCapsuleContextualRetrieval,
+  updateCapsuleModelUsePolicy,
 } from "./local-knowledge-api";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -405,6 +406,7 @@ describe("local knowledge BFF boundary helpers", () => {
       strict: true,
       maxContextChars: 320,
     });
+    await updateCapsuleModelUsePolicy(capsuleId, sealedLocalPodModelUsePolicy());
     await startIndexing(capsuleId);
     await cancelIndexing(capsuleId);
     await connectCapsuleSource(capsuleId, scope, "Release files");
@@ -460,6 +462,13 @@ describe("local knowledge BFF boundary helpers", () => {
             maxContextChars: 320,
           },
         }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ modelUsePolicy: sealedLocalPodModelUsePolicy() }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

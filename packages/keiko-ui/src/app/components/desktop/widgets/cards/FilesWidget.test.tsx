@@ -1746,8 +1746,10 @@ describe("FilesWidget file operations", () => {
   // GEN-PERF-MEMORY-005 — the directories cache is bounded. After expanding far more than the
   // cap, re-expanding the oldest (evicted) directory re-fetches, while a recent one does not.
   it("evicts least-recently-loaded directories beyond the cache cap", async () => {
-    // Root holds 60 sibling directories dir-000 … dir-059; each returns one file when opened.
-    const DIR_COUNT = 60;
+    // Root holds enough sibling directories to cross the production cache cap; each returns one
+    // file when opened. Keeping siblings collapsed after loading proves cache eviction without
+    // leaving the full expanded DOM resident under the coverage runner.
+    const DIR_COUNT = 51;
     const rootEntries = Array.from({ length: DIR_COUNT }, (_, i) => ({
       ...treeEntryBase,
       name: `dir-${String(i).padStart(3, "0")}`,
@@ -1799,16 +1801,22 @@ describe("FilesWidget file operations", () => {
     collapseDir(0);
     expect(innerVisible(0)).toBe(false);
 
-    // Expand dir-001 … dir-(N-1) and leave them expanded (pinned). Each load runs pruning; once
-    // the cache passes the cap, the sole unpinned entry (dir-000) is evicted.
+    // Expand dir-001 … dir-(N-1) and collapse each after it loads. Each load runs pruning; once
+    // the cache passes the cap, the least-recently-loaded unpinned entry (dir-000) is evicted,
+    // while the most recent directory stays cached.
     for (let i = 1; i < DIR_COUNT; i += 1) {
       expandDir(i);
       await screen.findByRole("treeitem", { name: new RegExp(innerName(i)) });
+      collapseDir(i);
+      expect(innerVisible(i)).toBe(false);
     }
 
     const dir000FetchesBefore = vi
       .mocked(fetchFilesTree)
       .mock.calls.filter((call) => call[1] === "dir-000").length;
+    const recentDirFetchesBefore = vi
+      .mocked(fetchFilesTree)
+      .mock.calls.filter((call) => call[1] === dirName(DIR_COUNT - 1)).length;
 
     // Re-expand dir-000: its cache entry was evicted, so it re-fetches.
     expandDir(0);
@@ -1817,10 +1825,13 @@ describe("FilesWidget file operations", () => {
       .mocked(fetchFilesTree)
       .mock.calls.filter((call) => call[1] === "dir-000").length;
     expect(dir000FetchesAfter).toBeGreaterThan(dir000FetchesBefore);
-    // This GEN-PERF-MEMORY-005 test expands 60 directories; it is fast in isolation but CPU-starved
-    // under the full parallel suite on a many-core host (~14 vitest workers contend). The CI quality
-    // job runs test:coverage:packages and test:coverage:ui back-to-back under v8 instrumentation, so
-    // the wall-clock budget is doubled to survive that peak load (GEN-TEST-FLAKE). No assertion is
-    // weakened — the eviction/re-fetch proof (dir000FetchesAfter > dir000FetchesBefore) is unchanged.
+
+    // Re-expand the most recent directory: it stayed cached, so no new fetch is needed.
+    expandDir(DIR_COUNT - 1);
+    await screen.findByRole("treeitem", { name: new RegExp(innerName(DIR_COUNT - 1)) });
+    const recentDirFetchesAfter = vi
+      .mocked(fetchFilesTree)
+      .mock.calls.filter((call) => call[1] === dirName(DIR_COUNT - 1)).length;
+    expect(recentDirFetchesAfter).toBe(recentDirFetchesBefore);
   }, 120_000);
 });
