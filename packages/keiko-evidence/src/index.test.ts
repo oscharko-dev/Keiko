@@ -57,7 +57,7 @@ import type {
 
 describe("keiko-evidence public surface", () => {
   it("exposes the documented value barrel members", () => {
-    expect(evidence.KEIKO_EVIDENCE_VERSION).toBe("0.2.13");
+    expect(evidence.KEIKO_EVIDENCE_VERSION).toBe("0.2.14");
     // Builders and orchestration:
     expect(typeof evidence.buildEvidenceManifest).toBe("function");
     expect(typeof evidence.persistEvidence).toBe("function");

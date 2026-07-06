@@ -447,6 +447,53 @@
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
         "rationale": "The 0.2.13 release branch aligns package metadata and append-only release-impact history before publication; release-owner authority is recorded in PR review #4618551973 and 0.2.13 publication was explicitly authorized locally in this Codex session."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.2.14",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.2.14",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-07-06-keiko-0.2.14-local-knowledge-v2-scope-upgrade",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Local Knowledge stores sealed with the previous v2 encryption scope open again and are upgraded to the current v3 scope instead of showing LOCAL_KNOWLEDGE_UNAVAILABLE.",
+      "affectedStateStores": ["local-knowledge"],
+      "stateImpact": [
+        {
+          "store": "local-knowledge",
+          "description": "Existing encrypted Local Knowledge stores marked with reconstructive-columns/v2 are opened with the configured local key provider and upgraded in place to reconstructive-columns/v3. Unknown future scope markers remain fail-closed.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "releaseNoteBullets": [
+        "Fixes Local Knowledge startup for encrypted stores created with the previous v2 content-encryption scope by upgrading them to the current v3 scope instead of surfacing LOCAL_KNOWLEDGE_UNAVAILABLE."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-07-06",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#1996#4890562769",
+        "rationale": "Issue #1996 records the user-visible regression and the local release-owner decision to ship an immediate 0.2.14 patch after reproducing the failure and verifying the fix against a copied affected Local Knowledge store."
+      }
     }
   ]
 }
