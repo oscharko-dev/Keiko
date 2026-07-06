@@ -164,7 +164,7 @@ describe("rerankAndSelect — byte budget", () => {
     expect(totalBytes).toBeLessThanOrEqual(50);
   });
 
-  it("total selected bytes do not exceed maxExcerptBytes (except single-candidate floor)", () => {
+  it("total selected bytes do not exceed maxExcerptBytes", () => {
     const text = "abc".repeat(20); // 60 bytes each
     const inputs: RerankInput<string>[] = [
       folder("f-a", 0.9, text),
@@ -174,22 +174,19 @@ describe("rerankAndSelect — byte budget", () => {
     const budget: RerankBudget = { maxCandidates: 10, maxExcerptBytes: 100 };
     const selected = rerankAndSelect(inputs, budget);
     const totalBytes = selected.reduce((acc, s) => acc + s.bytes, 0);
-    // At most 1 extra item can push past the limit only if it's the first (floor).
-    // Here first item = 60 bytes < 100, so the invariant holds strictly.
     expect(totalBytes).toBeLessThanOrEqual(100);
   });
 });
 
-// ─── Single-candidate floor ───────────────────────────────────────────────────
+// ─── Byte budget cap ─────────────────────────────────────────────────────────
 
-describe("rerankAndSelect — floor: single oversized candidate is always selected", () => {
-  it("selects one candidate even if it alone exceeds maxExcerptBytes", () => {
+describe("rerankAndSelect — maxExcerptBytes", () => {
+  it("drops a single candidate that exceeds maxExcerptBytes", () => {
     const oversized = "z".repeat(500);
     const inputs: RerankInput<string>[] = [connector("c-a", 0.9, oversized)];
     const budget: RerankBudget = { maxCandidates: 10, maxExcerptBytes: 10 };
     const selected = rerankAndSelect(inputs, budget);
-    expect(selected.length).toBe(1);
-    expect(selected[0]?.bytes).toBe(500);
+    expect(selected).toEqual([]);
   });
 });
 
@@ -353,6 +350,13 @@ describe("applyModelRerankResults", () => {
 
     expect(applyModelRerankResults(preliminary, [{ index: 99 }], 1)).toBeUndefined();
     expect(applyModelRerankResults(preliminary, [], 1)).toBeUndefined();
+    // A duplicate provider index must also reject to undefined so the caller falls back to fused
+    // order instead of double-counting a candidate (#1925 deterministic degradation).
+    const twoCandidates = rerankAndSelect(
+      [connector("a", 0.9), connector("b", 0.8)],
+      GENEROUS_BUDGET,
+    );
+    expect(applyModelRerankResults(twoCandidates, [{ index: 0 }, { index: 0 }], 2)).toBeUndefined();
   });
 });
 

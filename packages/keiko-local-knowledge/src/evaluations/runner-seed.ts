@@ -55,7 +55,7 @@ function seedCapsule(store: KnowledgeStore, capsule: EvalCapsuleSpec): void {
     retrievalEffort: "default",
     outputMode: "answers",
     answerGroundingPolicy: capsule.answerGroundingPolicy,
-    modelUsePolicy: standardPodModelUsePolicy(),
+    modelUsePolicy: capsule.modelUsePolicy ?? standardPodModelUsePolicy(),
     embeddingModelIdentity: capsule.embeddingModelIdentity,
     lifecycleState: "draft",
     storageReference: `eval/${String(capsule.id)}`,

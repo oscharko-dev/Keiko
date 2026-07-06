@@ -1471,7 +1471,7 @@ describe("runIndexingJob — embedding capability preflight", () => {
     }
   });
 
-  it("fails before discovery when a hardened embedding-space fingerprint drifts", async () => {
+  it("continues indexing when only a hardened embedding-space fingerprint drifts", async () => {
     fixture.cleanup();
     const hardenedIdentity: EmbeddingModelIdentity = {
       ...DEFAULT_EMBEDDING,
@@ -1504,18 +1504,18 @@ describe("runIndexingJob — embedding capability preflight", () => {
       runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter, force: true })),
     );
 
-    expect(requestCount).toBe(4);
-    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
-    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    expect(requestCount).toBeGreaterThan(4);
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(true);
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
     const terminal = events.at(-1);
-    expect(terminal?.kind).toBe("job-failed");
-    if (terminal?.kind === "job-failed") {
-      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
-      expect(terminal.error.message).toBe(
-        "embedding model identity changed — existing capsules are no longer compatible",
-      );
-      expect(terminal.result.processedDocuments).toBe(0);
-      expect(terminal.result.vectorsPersisted).toBe(0);
+    expect(terminal?.kind).toBe("job-completed");
+    if (terminal?.kind === "job-completed") {
+      expect(terminal.result.status).toBe("succeeded");
+      expect(terminal.result.processedDocuments).toBe(1);
+      expect(terminal.result.vectorsPersisted).toBeGreaterThan(0);
     }
   });
 

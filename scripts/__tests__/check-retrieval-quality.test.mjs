@@ -48,6 +48,13 @@ function scorecard(fixtureId, dimensions) {
       latencyMs: 1,
       ...dimensions,
     },
+    outcomes: {
+      queryCount: 1,
+      referenceCount: 1,
+      noEvidenceCount: 0,
+      expectedNoEvidenceCount: 0,
+      noEvidenceReasonCounts: {},
+    },
     passed: Object.values(dimensions).every((value) => value >= 1),
   };
 }
@@ -113,6 +120,28 @@ describe("check-retrieval-quality helpers", () => {
     expect(logs.some((line) => line.includes("local-knowledge-retrieval-quality failure"))).toBe(
       true,
     );
+  });
+
+  it("reports mode-specific Local Knowledge comparison rows from the retrieval gate", async () => {
+    const logs = [];
+    const fixtures = [
+      { id: "exact-technical" },
+      { id: "semantic-paraphrase" },
+      { id: "mixed-strategy" },
+    ];
+    const result = await runLocalKnowledgeQualityCheck(
+      (line) => logs.push(line),
+      fixtures,
+      (fixture) => Promise.resolve(scorecard(fixture.id, {})),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(logs).toContain(
+      "local-knowledge-retrieval-comparison report: # Local Knowledge Retrieval Mode Comparison",
+    );
+    expect(logs.some((line) => line.includes("| lexical | exact-technical |"))).toBe(true);
+    expect(logs.some((line) => line.includes("| vector | semantic-paraphrase |"))).toBe(true);
+    expect(logs.some((line) => line.includes("| fused | mixed-strategy |"))).toBe(true);
   });
 
   it("fails the aggregate gate when the Local Knowledge branch regresses", async () => {

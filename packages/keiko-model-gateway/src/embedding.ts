@@ -40,10 +40,13 @@ export type EmbeddingFailureReason =
   | "incompatible-with-stored-identity";
 
 export interface EmbeddingIdentityWarning {
-  readonly code: "model-revision-changed" | "embedding-space-unverified";
+  readonly code:
+    "model-revision-changed" | "embedding-space-unverified" | "embedding-space-fingerprint-drift";
   readonly safeMessage: string;
   readonly previousRevision?: string;
   readonly currentRevision?: string;
+  readonly previousFingerprint?: string;
+  readonly currentFingerprint?: string;
 }
 
 export type EmbeddingCapabilityCheck =
@@ -380,6 +383,23 @@ function buildUnverifiedWarning(): EmbeddingIdentityWarning {
   };
 }
 
+function buildFingerprintDriftWarning(
+  stored: EmbeddingModelIdentity,
+  current: EmbeddingModelIdentity,
+): EmbeddingIdentityWarning {
+  return {
+    code: "embedding-space-fingerprint-drift",
+    safeMessage:
+      "embedding-space fingerprint changed while structural identity stayed compatible; re-validate retrieval quality and re-index when convenient",
+    ...(stored.embeddingSpaceFingerprint !== undefined
+      ? { previousFingerprint: stored.embeddingSpaceFingerprint }
+      : {}),
+    ...(current.embeddingSpaceFingerprint !== undefined
+      ? { currentFingerprint: current.embeddingSpaceFingerprint }
+      : {}),
+  };
+}
+
 function bothDefinedAndDifferent<T>(left: T | undefined, right: T | undefined): boolean {
   return left !== undefined && right !== undefined && left !== right;
 }
@@ -391,8 +411,17 @@ function hardeningFieldsIncompatible(
   return (
     bothDefinedAndDifferent(stored.normalization, current.normalization) ||
     bothDefinedAndDifferent(stored.instructionVersion, current.instructionVersion) ||
-    bothDefinedAndDifferent(stored.embeddingSpaceFingerprint, current.embeddingSpaceFingerprint) ||
     bothDefinedAndDifferent(stored.dimensionsParam, current.dimensionsParam)
+  );
+}
+
+function fingerprintDiffers(
+  stored: EmbeddingModelIdentity,
+  current: EmbeddingModelIdentity,
+): boolean {
+  return bothDefinedAndDifferent(
+    stored.embeddingSpaceFingerprint,
+    current.embeddingSpaceFingerprint,
   );
 }
 
@@ -415,6 +444,9 @@ export function assertCompatibleEmbeddingIdentity(
   }
   if (hardeningFieldsIncompatible(stored, current)) {
     return fail("incompatible-with-stored-identity");
+  }
+  if (fingerprintDiffers(stored, current)) {
+    return { ok: true, identity: current, warning: buildFingerprintDriftWarning(stored, current) };
   }
   if (hardeningNeedsWarning(stored, current)) {
     return { ok: true, identity: current, warning: buildUnverifiedWarning() };

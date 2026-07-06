@@ -1,10 +1,22 @@
+import { createHash } from "node:crypto";
 import type {
   GroundedAnswer,
   LocalKnowledgeGroundedAnswerContextSummary,
   LocalKnowledgeIndexLifecycleSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { KnowledgeCapsule, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  isKnowledgePodRetrievalActivitySafeText,
+  type KnowledgeCapsule,
+  type KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import { getCapsule, type KnowledgeStore } from "@oscharko-dev/keiko-local-knowledge";
+
+function safeLifecycleCapsuleId(capsuleId: KnowledgeCapsuleId): KnowledgeCapsuleId {
+  const value = String(capsuleId);
+  if (isKnowledgePodRetrievalActivitySafeText(value)) return capsuleId;
+  const digest = createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return `capsule-${digest}` as KnowledgeCapsuleId;
+}
 
 export function buildLocalKnowledgeIndexLifecycle(
   capsules: readonly KnowledgeCapsule[],
@@ -14,7 +26,10 @@ export function buildLocalKnowledgeIndexLifecycle(
     schemaVersion: "local-knowledge-index-lifecycle-v1",
     capturedAt,
     capsules: capsules
-      .map((capsule) => ({ capsuleId: capsule.id, updatedAt: capsule.updatedAt }))
+      .map((capsule) => ({
+        capsuleId: safeLifecycleCapsuleId(capsule.id),
+        updatedAt: capsule.updatedAt,
+      }))
       .sort((a, b) => (String(a.capsuleId) < String(b.capsuleId) ? -1 : 1)),
     stale: false,
   };

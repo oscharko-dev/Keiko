@@ -1324,7 +1324,45 @@ export {
   resolveDocumentationNavigationReason,
   parseDocumentationNavigationRequest,
   buildDocumentationNavigationResult,
+  isIndexingProposalEligibleClass,
 } from "./documentation-browser.js";
+
+// ─── Indexable HTML manual proposal + consent (Epic #1852, ADR-0113 extension) ──────
+export type {
+  DocumentationManualSourceKind,
+  DocumentationManualProposalState,
+  DocumentationManualProposalReason,
+  DocumentationManualConfidence,
+  DocumentationManualDetection,
+  DocumentationManualRobotsPosture,
+  DocumentationManualDeniedLinkClass,
+  DocumentationManualScopeLimits,
+  DocumentationManualScopePreview,
+  DocumentationIndexingProposal,
+  DocumentationIndexingApproval,
+  DocumentationManualProposalRequest,
+  DocumentationManualProposalParse,
+  DocumentationManualValidation,
+} from "./documentation-manual-proposal.js";
+export {
+  DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
+  DOCUMENTATION_MANUAL_SOURCE_KINDS,
+  DOCUMENTATION_MANUAL_PROPOSAL_STATES,
+  DOCUMENTATION_MANUAL_PROPOSAL_REASONS,
+  DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES,
+  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+  isApprovableProposalState,
+  detectIndexableManual,
+  summarizeManualOrigin,
+  summarizeManualPathPrefix,
+  buildManualScopePreview,
+  findIndexedManualForFingerprint,
+  buildDocumentationIndexingProposal,
+  asAlreadyIndexedProposal,
+  parseManualProposalRequest,
+  validateDocumentationIndexingProposal,
+  validateDocumentationIndexingApproval,
+} from "./documentation-manual-proposal.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {

@@ -65,7 +65,7 @@ describe("embedding profile compatibility", () => {
     });
   });
 
-  it("marks model, dimension, and fingerprint mismatches incompatible", () => {
+  it("marks model and dimension mismatches incompatible", () => {
     expect(
       compareEmbeddingProfiles(hardenedProfile(), hardenedProfile({ modelId: "other" })).reason,
     ).toBe("model-mismatch");
@@ -73,6 +73,9 @@ describe("embedding profile compatibility", () => {
       compareEmbeddingProfiles(hardenedProfile(), hardenedProfile({ vectorDimensions: 768 }))
         .reason,
     ).toBe("dimension-mismatch");
+  });
+
+  it("treats fingerprint mismatch as unknown rather than structurally incompatible", () => {
     expect(
       compareEmbeddingProfiles(
         hardenedProfile(),
@@ -80,15 +83,21 @@ describe("embedding profile compatibility", () => {
           embeddingSpaceFingerprint:
             "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
         }),
-      ).reason,
-    ).toBe("fingerprint-mismatch");
+      ),
+    ).toMatchObject({
+      status: "unknown",
+      reason: "fingerprint-mismatch",
+      compatible: false,
+      queryEmbeddingAllowed: false,
+      reindexRecommended: true,
+    });
   });
 
   it("pins each single-field mismatch to its own incompatibility reason", () => {
     // Guards the ordered PROFILE_COMPARISONS table against a mutation that deletes or reorders an
     // entry: each override differs from the hardened baseline in exactly one comparison field, so
-    // the reported reason must be that field's reason. (model, dimension, and fingerprint mismatch
-    // are pinned separately above.)
+    // the reported reason must be that field's reason. (model and dimension mismatch are pinned
+    // separately above; fingerprint mismatch is unknown rather than incompatible.)
     const cases: readonly [EmbeddingProfileIdentity, string][] = [
       [hardenedProfile({ provider: "azure-openai" }), "provider-mismatch"],
       [hardenedProfile({ vectorMetric: "dot" }), "metric-mismatch"],

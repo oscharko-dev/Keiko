@@ -447,7 +447,7 @@ describe("assertCompatibleEmbeddingIdentity", () => {
     }
   });
 
-  it("treats embedding-space fingerprint drift as incompatible", () => {
+  it("warns instead of failing when only the embedding-space fingerprint drifts", () => {
     const hardened: EmbeddingModelIdentity = {
       ...STORED,
       normalization: "l2",
@@ -458,9 +458,39 @@ describe("assertCompatibleEmbeddingIdentity", () => {
       ...hardened,
       embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
     });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("incompatible-with-stored-identity");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identity.embeddingSpaceFingerprint).toBe(
+        "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+      );
+      expect(result.warning).toMatchObject({
+        code: "embedding-space-fingerprint-drift",
+        previousFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+        currentFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+      });
+      assertSafeMessage(result.warning?.safeMessage ?? "");
+    }
+  });
+
+  it("still fails closed when a hardened structural field changes", () => {
+    const hardened: EmbeddingModelIdentity = {
+      ...STORED,
+      normalization: "l2",
+      instructionVersion: "keiko-embedding-input-v1",
+      embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+      dimensionsParam: 1536,
+    };
+    const mutations: readonly Partial<EmbeddingModelIdentity>[] = [
+      { normalization: "none" },
+      { instructionVersion: "keiko-embedding-input-v2" },
+      { dimensionsParam: 512 },
+    ];
+    for (const mutation of mutations) {
+      const result = assertCompatibleEmbeddingIdentity(hardened, { ...hardened, ...mutation });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe("incompatible-with-stored-identity");
+      }
     }
   });
 

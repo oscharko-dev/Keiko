@@ -47,6 +47,7 @@ import type {
   EvalCapsuleSpec,
   ModelJudgedRetrievalEvalJudge,
   ModelJudgedRetrievalEvalScores,
+  RetrievalEvalOutcomeSummary,
   RetrievalEvalFixture,
   RetrievalEvalQuery,
   RetrievalEvalScorecard,
@@ -264,6 +265,34 @@ function meanOf(values: readonly number[]): number {
   return sum / values.length;
 }
 
+function recordNoEvidenceReason(
+  counts: Partial<Record<RetrievalNoEvidenceReason, number>>,
+  reason: RetrievalNoEvidenceReason | undefined,
+): void {
+  if (reason === undefined) return;
+  counts[reason] = (counts[reason] ?? 0) + 1;
+}
+
+function buildOutcomeSummary(perQuery: readonly QueryEvaluation[]): RetrievalEvalOutcomeSummary {
+  const noEvidenceReasonCounts: Partial<Record<RetrievalNoEvidenceReason, number>> = {};
+  let referenceCount = 0;
+  let noEvidenceCount = 0;
+  let expectedNoEvidenceCount = 0;
+  for (const evaluation of perQuery) {
+    referenceCount += evaluation.references.length;
+    if (evaluation.noEvidence) noEvidenceCount += 1;
+    if (evaluation.query.expectedNoEvidence === true) expectedNoEvidenceCount += 1;
+    recordNoEvidenceReason(noEvidenceReasonCounts, evaluation.reason);
+  }
+  return {
+    queryCount: perQuery.length,
+    referenceCount,
+    noEvidenceCount,
+    expectedNoEvidenceCount,
+    noEvidenceReasonCounts: Object.freeze({ ...noEvidenceReasonCounts }),
+  };
+}
+
 function buildScorecard(
   fixture: RetrievalEvalFixture,
   runId: string,
@@ -290,9 +319,10 @@ function buildScorecard(
     dimensions.citationQuality >= PASS_THRESHOLDS.citationQuality &&
     dimensions.noEvidenceAccuracy >= PASS_THRESHOLDS.noEvidenceAccuracy &&
     dimensions.contextBudgetFit >= PASS_THRESHOLDS.contextBudgetFit;
+  const outcomes = buildOutcomeSummary(perQuery);
   return modelJudged === undefined
-    ? { fixtureId: fixture.id, runId, dimensions, passed }
-    : { fixtureId: fixture.id, runId, dimensions, passed, modelJudged };
+    ? { fixtureId: fixture.id, runId, dimensions, outcomes, passed }
+    : { fixtureId: fixture.id, runId, dimensions, outcomes, passed, modelJudged };
 }
 
 // ─── Default clock ───────────────────────────────────────────────────────────

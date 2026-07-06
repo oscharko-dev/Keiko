@@ -64,7 +64,7 @@ import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  isSafeDisplaySummary,
+  isKnowledgePodEvidenceSafeText,
   isSafeQualityWarning,
   standardPodModelUsePolicy,
   validateCapsuleContextualRetrievalSettings,
@@ -79,6 +79,7 @@ import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
   Gateway,
+  assertCompatibleEmbeddingIdentity,
   requestOpenAIEmbedding,
   requestOpenAIEmbeddingBatch,
   selectConfiguredModel,
@@ -304,6 +305,27 @@ interface ResolvedCapsuleEmbeddingProvider {
   readonly provider: ModelProviderConfig;
 }
 
+function usesLegacyProviderIdentity(identity: EmbeddingModelIdentity): boolean {
+  return !identity.provider.startsWith("openai-compatible:");
+}
+
+function embeddingIdentityChanged(
+  left: EmbeddingModelIdentity,
+  right: EmbeddingModelIdentity,
+): boolean {
+  return (
+    left.provider !== right.provider ||
+    left.modelId !== right.modelId ||
+    left.modelRevision !== right.modelRevision ||
+    left.vectorDimensions !== right.vectorDimensions ||
+    left.vectorMetric !== right.vectorMetric ||
+    left.normalization !== right.normalization ||
+    left.instructionVersion !== right.instructionVersion ||
+    left.embeddingSpaceFingerprint !== right.embeddingSpaceFingerprint ||
+    left.dimensionsParam !== right.dimensionsParam
+  );
+}
+
 function embeddingIdentityMatchesCapsuleAlias(
   stored: EmbeddingModelIdentity,
   current: EmbeddingModelIdentity,
@@ -363,7 +385,8 @@ async function resolveIndexingProviderForCapsule(
 ): Promise<ResolvedCapsuleEmbeddingProvider | undefined> {
   const exact = configuredProviderForCapsule(deps, capsule);
   if (exact !== undefined) {
-    return { capsule, provider: exact };
+    const verified = await updateCapsuleToCurrentEmbeddingIdentity(deps, store, capsule, exact);
+    return { capsule: verified, provider: exact };
   }
   const providers = configuredEmbeddingProviders(currentGatewayConfig(deps));
   for (const provider of providers) {
@@ -382,6 +405,22 @@ async function resolveIndexingProviderForCapsule(
     }
   }
   return undefined;
+}
+
+async function updateCapsuleToCurrentEmbeddingIdentity(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+  provider: ModelProviderConfig,
+): Promise<KnowledgeCapsule> {
+  if (usesLegacyProviderIdentity(capsule.embeddingModelIdentity)) return capsule;
+  const identity = await probeConfiguredProviderForCapsule(deps, provider, capsule);
+  if (identity === undefined) return capsule;
+  const compatibility = assertCompatibleEmbeddingIdentity(capsule.embeddingModelIdentity, identity);
+  if (!compatibility.ok) return capsule;
+  return embeddingIdentityChanged(capsule.embeddingModelIdentity, compatibility.identity)
+    ? updateCapsuleEmbeddingModelIdentity(store, capsule.id, compatibility.identity)
+    : capsule;
 }
 
 function forceReembedProviderForCapsule(
@@ -1394,8 +1433,8 @@ function parseSourceId(ctx: RouteContext): KnowledgeSourceId {
 
 function requireSafeDisplayText(field: string, value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length === 0 || !isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest(`Field "${field}" must be a browser-safe non-empty string.`);
+  if (trimmed.length === 0 || !isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be an evidence-safe non-empty string.`);
   }
   return trimmed;
 }
@@ -1411,8 +1450,8 @@ function safeOptionalDisplayText(field: string, value: unknown): string | undefi
   if (trimmed.length === 0) {
     return undefined;
   }
-  if (!isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest(`Field "${field}" must be browser-safe when provided.`);
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be evidence-safe when provided.`);
   }
   return trimmed;
 }
@@ -2210,8 +2249,8 @@ function parseDescriptionPatch(value: unknown): string | undefined {
     throw new InvalidRequest('Field "description" must be a string when provided.');
   }
   const trimmed = value.trim();
-  if (!isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest('Field "description" must be browser-safe when provided.');
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest('Field "description" must be evidence-safe when provided.');
   }
   return trimmed;
 }
@@ -2437,8 +2476,8 @@ function parseConnectSourceInput(body: Record<string, unknown>): {
     typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0
       ? requireSafeDisplayText("displayName", displayNameRaw)
       : basename(connectScopeRootPath(scope));
-  if (!isSafeDisplaySummary(displayName)) {
-    throw new InvalidRequest('Field "displayName" must be browser-safe when provided.');
+  if (!isKnowledgePodEvidenceSafeText(displayName)) {
+    throw new InvalidRequest('Field "displayName" must be evidence-safe when provided.');
   }
   return { scope, displayName };
 }

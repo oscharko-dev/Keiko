@@ -642,6 +642,7 @@ function buildNoEvidenceAnswer(
   assistantContent: string,
   scopeKind: "capsule" | "capsule-set",
   scopeLabel: string,
+  redactLabel: (value: string) => string,
   capsules: readonly KnowledgeCapsule[],
   capsuleCount: number,
   sourceCount: number,
@@ -649,6 +650,7 @@ function buildNoEvidenceAnswer(
   limits: ReturnType<typeof currentGroundingLimits>,
   uncertainty: readonly GroundedUncertainty[] = [],
 ): LocalKnowledgeGroundedAnswer {
+  const safeScopeLabel = activityDisplayName(redactLabel(scopeLabel));
   return {
     groundingKind: "local-knowledge",
     userMessageId: `pending-user-${chat.id}`,
@@ -664,7 +666,7 @@ function buildNoEvidenceAnswer(
       kind: "local-knowledge",
       scopeKind,
       scopeId: `lk-${hashString32(`${chat.id}|${scopeLabel}`)}`,
-      scopeLabel,
+      scopeLabel: safeScopeLabel,
       capsuleCount,
       sourceCount,
       citationCount: 0,
@@ -1024,6 +1026,7 @@ function buildStateFailureAnswer(
   selected: SelectedLocalKnowledgeScope,
   persisted: readonly [ChatMessage, ChatMessage],
   stateFailure: { readonly reason: string; readonly message: string },
+  redactLabel: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
 ): GroundedAnswer {
   const [user, assistant] = persisted;
@@ -1032,6 +1035,7 @@ function buildStateFailureAnswer(
     assistant.content,
     selected.scopeKind,
     selected.scopeLabel,
+    redactLabel,
     selected.capsules,
     selected.capsules.length,
     selectedSourceCount(selected),
@@ -1074,7 +1078,9 @@ function redactText(deps: UiHandlerDeps, value: string): string {
   return typeof redacted === "string" ? redacted : stripUnsafeFormatChars(value);
 }
 
-function fallbackReferenceSelection(
+// Exported for deterministic unit coverage of the no-op order-preservation contract (#1922): the
+// no-op / fallback path MUST return references in unchanged fused order, only capped at the budget.
+export function fallbackReferenceSelection(
   references: readonly RetrievalReference[],
   limits: ReturnType<typeof currentGroundingLimits>,
 ): readonly RetrievalReference[] {
@@ -1100,7 +1106,10 @@ function invalidRerankMappingDiagnostics(
   };
 }
 
-function applyReferenceRerankResults(
+// Exported for deterministic unit coverage of the malformed-provider-mapping guard (#1925/#1926):
+// out-of-range, non-integer, or duplicate provider indices MUST reject to undefined so the caller
+// falls back to fused order with invalid-response diagnostics instead of trusting a bad reranker.
+export function applyReferenceRerankResults(
   references: readonly RetrievalReference[],
   results: readonly RerankResult[],
   limits: ReturnType<typeof currentGroundingLimits>,
@@ -1234,6 +1243,10 @@ function referenceRerankerForScope(
   limits: ReturnType<typeof currentGroundingLimits>,
 ): ReferenceReranker {
   const policy = resolveScopeModelUsePolicy(selected.capsules);
+  // Only `externalReranking` is enforced here: it gates the Model-Gateway provider call. The sibling
+  // `localReranking` policy operation is reserved forward-compat surface with NO consumer yet — Keiko
+  // ships no local reranker, so a policy-denied scope degrades to a redacted no-op (fused order
+  // preserved), never a local rerank. A future local reranker MUST also gate on `localReranking` here.
   if (policy.operations.externalReranking === "deny") {
     return createPolicyDeniedReranker(limits);
   }
@@ -1266,7 +1279,10 @@ export interface KnowledgePodRetrievalActivitySkippedInput {
 }
 
 const ACTIVITY_REASON_CODES = new Set<string>(KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES);
-const RERANKER_DEGRADED = new Set<string>(["unavailable", "invalid-response", "not-configured"]);
+// Reranker STATUS values that mean a genuine failure and should degrade the activity row. A
+// "not-configured" reranker (the default install) carries status "disabled" and is suppressed by
+// rerankerForRetrievalActivity before it ever reaches here, so it is intentionally NOT in this set.
+const RERANKER_DEGRADED = new Set<string>(["unavailable", "invalid-response"]);
 const DENIED_ACTIVITY_REASONS = new Set<KnowledgePodRetrievalActivityReasonCode>([
   "answer-grounding-rejected",
   "policy-denied",
@@ -1316,6 +1332,7 @@ export function retrievalActivityResultFromScoped(
   enforcedReason?: string,
 ): KnowledgePodRetrievalActivityResultInput {
   const noEvidence = enforcedReason !== undefined || result.noEvidence;
+  const reranker = rerankerForRetrievalActivity(result.reranker);
   return {
     references: result.references,
     citationCounts: countCitationsByCapsule(citations),
@@ -1327,15 +1344,17 @@ export function retrievalActivityResultFromScoped(
       ? { retrievalDiagnostics: result.retrievalDiagnostics }
       : {}),
     ...(result.embeddingDegraded === true ? { embeddingDegraded: true as const } : {}),
-    ...(result.reranker !== undefined ? { reranker: result.reranker } : {}),
+    ...(reranker !== undefined ? { reranker } : {}),
   };
 }
 
-function rerankerForHybridRetrievalActivity(
+// A reranker that was never configured is the default, fully-supported install state — it must not
+// surface as a degraded Knowledge Pod activity row on ANY grounding path (single-scope or hybrid).
+// Genuine failures keep a non-"disabled" status (unavailable / invalid-response) and still degrade.
+// Applied uniformly by both retrieval-activity projections above.
+function rerankerForRetrievalActivity(
   reranker: GroundedRerankerDiagnostics | undefined,
 ): GroundedRerankerDiagnostics | undefined {
-  // Hybrid answers expose no-reranker configuration at context-pack level; it should not degrade
-  // every otherwise-successful Knowledge Pod activity row.
   if (reranker?.status === "disabled" && reranker.failureKind === "not-configured") {
     return undefined;
   }
@@ -1353,7 +1372,7 @@ export function retrievalActivityResultFromRetrieval(
   citations: readonly LocalKnowledgeEvidenceCitation[],
   reranker?: GroundedRerankerDiagnostics,
 ): KnowledgePodRetrievalActivityResultInput {
-  const activityReranker = rerankerForHybridRetrievalActivity(reranker);
+  const activityReranker = rerankerForRetrievalActivity(reranker);
   return {
     references: result.references,
     citationCounts: countCitationsByCapsule(citations),
@@ -1468,11 +1487,7 @@ function addRerankerReasonCode(
     codes.add("policy-denied");
     return;
   }
-  if (
-    result.reranker === undefined ||
-    (result.reranker.failureKind !== "not-configured" &&
-      !RERANKER_DEGRADED.has(result.reranker.status))
-  ) {
+  if (result.reranker === undefined || !RERANKER_DEGRADED.has(result.reranker.status)) {
     return;
   }
   codes.add(
@@ -2047,6 +2062,7 @@ function stateFailureRoute(
     selected,
     persisted,
     { ...stateFailure, message: redactedMessage },
+    (value: string): string => redactText(deps, value),
     currentGroundingLimits(deps),
   );
   deps.store.attachGroundedAnswer(persisted[1].id, answer);
