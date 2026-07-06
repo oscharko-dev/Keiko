@@ -57,6 +57,16 @@ const DIRECT_PAN_SMOOTHNESS_SCALE = 0;
 // data-view-active gesture flag lingers before the wallpaper draw resumes.
 const VIEW_ACTIVE_SETTLE_MS = 160;
 
+// Persisted view input is hostile: zoom was clamped but x/y only finite-checked,
+// so a tampered keiko.view with e.g. x: 1e300 hydrated a pan the user can never
+// navigate back from (and fed absurd values into every world/pixel conversion).
+// Clamp — not reject — so a slightly out-of-range value recovers usably.
+const MAX_VIEW_PAN = 1_000_000;
+
+function clampViewPan(value: number): number {
+  return Math.max(-MAX_VIEW_PAN, Math.min(MAX_VIEW_PAN, value));
+}
+
 function readView(): View {
   if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
   try {
@@ -72,8 +82,8 @@ function readView(): View {
       const p = parsed as { zoom: number; x?: number; y?: number };
       return {
         zoom: Number.isFinite(p.zoom) ? clampViewZoom(p.zoom) : 1,
-        x: typeof p.x === "number" && Number.isFinite(p.x) ? p.x : 0,
-        y: typeof p.y === "number" && Number.isFinite(p.y) ? p.y : 0,
+        x: typeof p.x === "number" && Number.isFinite(p.x) ? clampViewPan(p.x) : 0,
+        y: typeof p.y === "number" && Number.isFinite(p.y) ? clampViewPan(p.y) : 0,
       };
     }
   } catch {
@@ -538,6 +548,24 @@ function usePanZoom({
   useEffect(() => {
     const el = wsRef.current;
     if (el === null) return;
+    // GEN-PERF-WORKSPACE-005 — the ctrl/cmd-wheel zoom branch re-read
+    // el.getBoundingClientRect() on EVERY wheel event. A Windows trackpad pinch
+    // synthesizes ctrl-wheel at 60-120+Hz, so each step paid a synchronous layout
+    // read (a forced reflow whenever anything — e.g. a streaming chat — dirtied
+    // layout between events). Cache the rect with a TTL matching the view-active
+    // settle window: at most one layout read per 160ms of continuous gesture, and
+    // staleness is bounded by the same window (the workspace rect cannot
+    // meaningfully change mid-pinch; a real resize refreshes within 160ms).
+    let zoomRect: DOMRect | null = null;
+    let zoomRectReadAt = 0;
+    const gestureRect = (): DOMRect => {
+      const now = Date.now();
+      if (zoomRect === null || now - zoomRectReadAt > VIEW_ACTIVE_SETTLE_MS) {
+        zoomRect = el.getBoundingClientRect();
+        zoomRectReadAt = now;
+      }
+      return zoomRect;
+    };
     const onWheel = (e: WheelEvent): void => {
       if (e.metaKey || e.ctrlKey) {
         e.preventDefault();
@@ -551,7 +579,7 @@ function usePanZoom({
           );
           return;
         }
-        const r = el.getBoundingClientRect();
+        const r = gestureRect();
         const v = viewRef.current;
         const delta = normalizeWheelDelta(e);
         const z2 = clampViewZoom(v.zoom * Math.exp(-delta.y * 0.0015));
@@ -696,28 +724,42 @@ async function fetchServerWorkspaceSnapshot(
     const headers: Record<string, string> = { Accept: "application/json" };
     headers["If-None-Match"] = workspaceStateEtag(knownRevision);
     const response = await fetch(WORKSPACE_STATE_API, { headers });
-    if (response.status === 304) return null;
-    if (!response.ok) return null;
+    if (response.status === 304) {
+      noteWorkspaceSyncRecovered();
+      return null;
+    }
+    if (!response.ok) {
+      surfaceWorkspaceSyncFailure("pull", `failed with status ${String(response.status)}`);
+      return null;
+    }
     const body: unknown = await response.json();
     if (typeof body !== "object" || body === null || !("workspace" in body)) return null;
     const workspace = (body as { readonly workspace?: unknown }).workspace;
     if (typeof workspace !== "object" || workspace === null) return null;
     const record = workspace as Record<string, unknown>;
     if (
-      typeof record["revision"] !== "number" ||
+      // Number.isFinite, not typeof: a NaN/Infinity revision passes typeof "number"
+      // and would poison every monotonic revision comparison downstream.
+      !isFiniteRevision(record["revision"]) ||
       !Array.isArray(record["windows"]) ||
       !Array.isArray(record["connections"])
     ) {
       return null;
     }
+    noteWorkspaceSyncRecovered();
     return {
       revision: record["revision"],
       windows: record["windows"],
       connections: record["connections"],
     };
   } catch {
+    surfaceWorkspaceSyncFailure("pull", "failed (network error)");
     return null;
   }
+}
+
+function isFiniteRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 // The fetch keepalive body cap is 64KiB per origin (spec). Use a conservative
@@ -763,6 +805,37 @@ function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   }
 }
 
+// Server sync failures were swallowed by bare `catch { return null; }` — network
+// errors, non-OK statuses (e.g. a 413 over the server body cap) and malformed
+// payloads were indistinguishable and invisible, silently degrading the workspace
+// to localStorage-only persistence. Surface ONE bounded, body-free console.warn
+// per outage (re-armed by the next successful exchange, so a recovered-then-broken
+// sync warns again) — the same bounded-surface pattern as the keepalive overcap
+// above. Never logs snapshot contents. Counter is process-local for tests.
+let workspaceSyncFailureCount = 0;
+let workspaceSyncFailureSurfaced = false;
+export function readWorkspaceSyncFailureCount(): number {
+  return workspaceSyncFailureCount;
+}
+// Reset the sync-failure surface (tests only).
+export function resetWorkspaceSyncFailureSurface(): void {
+  workspaceSyncFailureCount = 0;
+  workspaceSyncFailureSurfaced = false;
+}
+function surfaceWorkspaceSyncFailure(op: "pull" | "put", detail: string): void {
+  workspaceSyncFailureCount += 1;
+  if (workspaceSyncFailureSurfaced) return;
+  workspaceSyncFailureSurfaced = true;
+  if (typeof console !== "undefined" && typeof console.warn === "function") {
+    console.warn(
+      `workspace-state: ${op} ${detail}; workspace changes persist locally until sync recovers`,
+    );
+  }
+}
+function noteWorkspaceSyncRecovered(): void {
+  workspaceSyncFailureSurfaced = false;
+}
+
 async function putServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -784,9 +857,12 @@ async function putServerWorkspaceSnapshot(
   // usually still completes on visibilitychange). Sanitize's data-URL/large-
   // payload dropping upstream keeps this rare; the guard makes it non-silent.
   let keepalive = opts.keepalive === true;
-  if (keepalive && serializedBodyByteLength(serializedBody) > KEEPALIVE_BODY_BUDGET_BYTES) {
-    surfaceWorkspaceKeepaliveOvercap(serializedBodyByteLength(serializedBody));
-    keepalive = false;
+  if (keepalive) {
+    const byteLength = serializedBodyByteLength(serializedBody);
+    if (byteLength > KEEPALIVE_BODY_BUDGET_BYTES) {
+      surfaceWorkspaceKeepaliveOvercap(byteLength);
+      keepalive = false;
+    }
   }
   try {
     const response = await fetch(WORKSPACE_STATE_API, {
@@ -805,12 +881,18 @@ async function putServerWorkspaceSnapshot(
       ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
     });
     if (response.status === 412 || response.status === 428) {
+      // A revision conflict is a handled concurrency signal (the poll converges),
+      // not an outage — and it proves the server is reachable.
+      noteWorkspaceSyncRecovered();
       return {
         kind: "conflict",
         revision: revisionFromWorkspaceEtag(response.headers.get("etag")),
       };
     }
-    if (!response.ok) return null;
+    if (!response.ok) {
+      surfaceWorkspaceSyncFailure("put", `failed with status ${String(response.status)}`);
+      return null;
+    }
     const body: unknown = await response.json();
     const workspace =
       typeof body === "object" && body !== null && "workspace" in body
@@ -818,8 +900,14 @@ async function putServerWorkspaceSnapshot(
         : undefined;
     if (typeof workspace !== "object" || workspace === null) return null;
     const revision = (workspace as Record<string, unknown>)["revision"];
-    return typeof revision === "number" ? { kind: "ok", revision } : null;
+    if (!isFiniteRevision(revision)) return null;
+    noteWorkspaceSyncRecovered();
+    return { kind: "ok", revision };
   } catch {
+    // An aborted PUT is deliberate supersession by a newer snapshot — not a failure.
+    if (opts.signal?.aborted !== true) {
+      surfaceWorkspaceSyncFailure("put", "failed (network error)");
+    }
     return null;
   }
 }
