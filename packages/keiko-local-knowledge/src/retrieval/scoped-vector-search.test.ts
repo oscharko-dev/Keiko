@@ -397,6 +397,96 @@ describe("searchVectorsForScope — composed capsule set", () => {
       "searched",
     ]);
   });
+
+  it("breaks a full cross-lane RRF tie deterministically and stably by chunk id", async () => {
+    const { store } = getFixture();
+    const identityA: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "tie-model-a" };
+    const identityB: EmbeddingModelIdentity = { ...DEFAULT_EMBEDDING, modelId: "tie-model-b" };
+    const seededA = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-tie-a",
+      sourceId: "src-tie-a",
+      documentId: "doc-tie-a",
+      identity: identityA,
+      text: "governed lane evidence alpha",
+      chunkingOptions: { maxTokens: 64, minTokens: 0, overlapTokens: 0 },
+    });
+    const seededB = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-tie-b",
+      sourceId: "src-tie-b",
+      documentId: "doc-tie-b",
+      identity: identityB,
+      text: "governed lane evidence beta",
+      chunkingOptions: { maxTokens: 64, minTokens: 0, overlapTokens: 0 },
+    });
+    const aChunk = seededA.chunkIds[0];
+    const bChunk = seededB.chunkIds[0];
+    if (aChunk === undefined || bChunk === undefined) {
+      throw new Error("expected seeded chunks");
+    }
+    // Drop lexical rows so only the two dense lanes fuse — each contributes a single rank-1
+    // candidate, so both chunks receive exactly rrf(1) and the fused scores are equal. Ordering is
+    // therefore decided purely by the total-order tiebreak in fusedScoreDesc (chunk id), and must
+    // be identical run-to-run.
+    store._internal.db
+      .prepare("DELETE FROM chunk_lexical_index WHERE capsule_id IN (:a, :b)")
+      .run({ a: String(seededA.capsuleId), b: String(seededB.capsuleId) });
+    const denseScore = 0.5;
+    const indexed: VectorIndexAdapter = {
+      searchCapsule: (request) => ({
+        ok: true,
+        candidates:
+          String(request.capsule.id) === "cap-tie-a"
+            ? [
+                {
+                  chunkId: String(aChunk),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededA.sourceId,
+                  score: denseScore,
+                },
+              ]
+            : [
+                {
+                  chunkId: String(bChunk),
+                  capsuleId: request.capsule.id,
+                  sourceId: seededB.sourceId,
+                  score: denseScore,
+                },
+              ],
+        sawDimensionCompatible: true,
+        sawIdentityIncompatible: false,
+        diagnostics: {
+          provider: "sqlite-vec",
+          status: "available",
+          indexName: "tie-break-test-index",
+          vectorCount: 1,
+        },
+      }),
+    };
+    const embeddingAdapter = scriptedAdapter({
+      responder: (req): OpenAIEmbeddingOutcome =>
+        fixedQueryVectorOutcome(req, new Float32Array(vectorBlob(1, 0).buffer)),
+    });
+
+    const run = async (): Promise<readonly string[]> => {
+      const outcome = await searchVectorsForScope(
+        store,
+        embeddingAdapter,
+        { capsuleIds: [seededA.capsuleId, seededB.capsuleId] },
+        "tie-break lane query",
+        { topK: 2, vectorIndex: { adapter: indexed } },
+      );
+      expect(outcome.references).toHaveLength(2);
+      // A genuine full tie: both survivors carry the same fused RRF score.
+      expect(outcome.references[0]?.score).toBe(outcome.references[1]?.score);
+      return outcome.references.map((ref) => String(ref.chunkId));
+    };
+
+    const first = await run();
+    const second = await run();
+    const chunkIdAscending = [...first].sort((left, right) => left.localeCompare(right));
+    expect(first).toEqual(chunkIdAscending);
+    expect(second).toEqual(first);
+  });
 });
 
 describe("searchVectorsForScope — decoded vector cache", () => {

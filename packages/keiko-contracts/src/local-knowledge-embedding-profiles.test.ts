@@ -84,6 +84,57 @@ describe("embedding profile compatibility", () => {
     ).toBe("fingerprint-mismatch");
   });
 
+  it("pins each single-field mismatch to its own incompatibility reason", () => {
+    // Guards the ordered PROFILE_COMPARISONS table against a mutation that deletes or reorders an
+    // entry: each override differs from the hardened baseline in exactly one comparison field, so
+    // the reported reason must be that field's reason. (model, dimension, and fingerprint mismatch
+    // are pinned separately above.)
+    const cases: readonly [EmbeddingProfileIdentity, string][] = [
+      [hardenedProfile({ provider: "azure-openai" }), "provider-mismatch"],
+      [hardenedProfile({ vectorMetric: "dot" }), "metric-mismatch"],
+      [hardenedProfile({ normalization: "none" }), "normalization-mismatch"],
+      [
+        hardenedProfile({ instructionVersion: "keiko-embedding-input-v2" }),
+        "instruction-version-mismatch",
+      ],
+      [hardenedProfile({ dimensionsParam: 512 }), "dimensions-param-mismatch"],
+      [
+        embeddingProfileFromModelIdentity(HARDENED_IDENTITY, { tokenizer: "cl100k_base" }),
+        "tokenizer-mismatch",
+      ],
+    ];
+
+    for (const [right, reason] of cases) {
+      const decision = compareEmbeddingProfiles(hardenedProfile(), right);
+      expect(decision).toMatchObject({
+        status: "incompatible",
+        reason,
+        compatible: false,
+        queryEmbeddingAllowed: false,
+        reindexRecommended: true,
+      });
+    }
+  });
+
+  it("degrades to unknown when either side has no profile identity", () => {
+    const profile = hardenedProfile();
+
+    expect(compareEmbeddingProfiles(undefined, profile)).toMatchObject({
+      status: "unknown",
+      reason: "missing-left-profile",
+      compatible: false,
+      queryEmbeddingAllowed: false,
+      reindexRecommended: true,
+    });
+    expect(compareEmbeddingProfiles(profile, undefined)).toMatchObject({
+      status: "unknown",
+      reason: "missing-right-profile",
+      compatible: false,
+      queryEmbeddingAllowed: false,
+      reindexRecommended: true,
+    });
+  });
+
   it("models opaque and policy-denied spaces without recommending automatic reindex", () => {
     const profile = hardenedProfile();
     const opaque = embeddingProfileFromModelIdentity(HARDENED_IDENTITY, { locality: "opaque" });
