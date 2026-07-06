@@ -39,7 +39,6 @@ function aggregatePolicySource(
   policies: readonly KnowledgePodResolvedModelUsePolicy[],
 ): KnowledgePodModelUsePolicySource {
   if (policies.every((policy) => policy.source === "explicit")) return "explicit";
-  if (policies.every((policy) => policy.source === "sealed-default")) return "sealed-default";
   return "legacy-default";
 }
 

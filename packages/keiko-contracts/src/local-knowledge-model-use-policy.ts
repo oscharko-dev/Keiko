@@ -32,7 +32,7 @@ export type KnowledgePodResolvedModelUsePolicyOperations = Readonly<
   Record<KnowledgePodModelUseOperation, KnowledgePodModelUsePolicyResolvedDecision>
 >;
 
-export type KnowledgePodModelUsePolicySource = "explicit" | "sealed-default" | "legacy-default";
+export type KnowledgePodModelUsePolicySource = "explicit" | "legacy-default";
 
 export interface KnowledgePodModelUsePolicy {
   readonly schemaVersion: typeof KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION;

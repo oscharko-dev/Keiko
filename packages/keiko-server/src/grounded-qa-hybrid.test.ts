@@ -1742,20 +1742,17 @@ describe("RRF anti-dominance — connector selected above folder at equal fused 
   });
 });
 
-// ─── Case 6: Shared byte budget excludes oversized folder excerpt ─────────────
+// ─── Case 6: Shared byte budget excludes oversized evidence ───────────────────
 //
-// When hybridMaxExcerptBytes is set just below the folder excerpt's byte size, the folder
-// candidate is excluded from the selected set while the connector candidate (empty excerpt = 0
-// bytes, always fits first) is kept. This proves the shared budget governs BOTH engines and
-// that a large folder excerpt cannot crowd out a smaller connector excerpt.
+// When hybridMaxExcerptBytes is smaller than every candidate's redacted excerpt, every candidate is
+// excluded and the route returns a deterministic no-evidence answer without calling the model. This
+// proves the shared byte budget governs BOTH engines and has no single-candidate floor.
 
-describe("shared byte budget — oversized folder excerpt excluded in favour of connector", () => {
-  it("excludes a folder excerpt that exceeds the per-budget cap when a connector excerpt fits", async () => {
+describe("shared byte budget — oversized evidence fails closed", () => {
+  it("returns no evidence when every candidate exceeds the shared byte budget", async () => {
     // Arrange: folder excerpt = "evidence for src/big.ts" (23 bytes).
-    // Set hybridMaxExcerptBytes=10 via config.grounding so the folder excerpt doesn't fit after
-    // the connector. Connector excerpt is "" (no real doc in store) = 0 bytes → selected first
-    // (anti-dominance tiebreak). hybridMaxCandidates=2 so both are eligible; the byte budget alone
-    // gates the folder out.
+    // Set hybridMaxExcerptBytes=10 via config.grounding so neither the folder excerpt nor the
+    // connector excerpt fits. hybridMaxCandidates=2 so the byte budget alone gates both out.
     const { capsuleId: capId } = await seedReadyCapsule("Budget Docs");
     const folderScope: ChatConnectedScope = {
       kind: "directory",
@@ -1788,10 +1785,11 @@ describe("shared byte budget — oversized folder excerpt excluded in favour of 
       },
       configPresent: true,
     });
+    const answererCalls = { count: 0 };
     const hybrid: HybridSeam = {
       folderRetriever: folderRetrieverFor(packMap),
       connectorRetrieve: singleConnectorRetrieve(capId),
-      answer: sentinelAnswerer(),
+      answer: sentinelAnswerer(undefined, answererCalls),
     };
 
     // Act
@@ -1806,13 +1804,11 @@ describe("shared byte budget — oversized folder excerpt excluded in favour of 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
 
-    // Connector citation present (0-byte excerpt fits within 10-byte budget)
-    // mutation: removing byte budget enforcement → folder would also appear
-    expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
-
-    // Folder citation absent (23-byte excerpt exceeds remaining budget after connector)
-    // mutation: removing byte budget enforcement → folder citation appears and length > 0
+    expect(answer.content).toBe("No evidence found in the selected connected sources.");
     expect(answer.citations).toHaveLength(0);
+    expect(answer.knowledgeCitations).toHaveLength(0);
+    expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
+    expect(answererCalls.count).toBe(0);
 
     // referencesUsed ≤ referenceBudget invariant holds even under a tight budget
     expect(answer.contextPack.knowledge.referencesUsed).toBeLessThanOrEqual(

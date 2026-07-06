@@ -370,6 +370,40 @@ questions in `scoped-vector-search.test.ts`; the non-tautology regression probes
 accuracy and limitation corrections in this ledger. No retrieval ranking, candidate budget, RRF
 fusion, persisted schema, or Model Gateway behavior was changed.
 
+Production Audit Re-Verification (2026-07-06):
+
+A fresh Epic #1817 production audit re-ran the targeted retrieval/evaluation checks at `origin/dev`
+HEAD `acf222c4` before any repair work. The implementation still satisfied the Local Knowledge
+retrieval-quality criteria, but the audit found two evidence/architecture gaps that required repair:
+this ledger undercounted the current non-tautology probe set, and the server hybrid reranker still
+allowed a single oversized candidate to exceed ADR-0036's shared byte budget.
+
+- `npm test -- --run packages/keiko-local-knowledge/src/retrieval/scoped-vector-search.test.ts packages/keiko-local-knowledge/src/evaluations/runner.test.ts packages/keiko-local-knowledge/src/evaluations/runner-strategy.test.ts packages/keiko-local-knowledge/src/evaluations/fixtures.test.ts scripts/__tests__/check-retrieval-quality.test.mjs`
+  — PASS; 5 files, 99 tests.
+- `npm run check:retrieval-quality` — PASS; workspace retrieval cases: 15 (top1 100.0%, recall@5
+  100.0%, MRR 1.000, nDCG@5 1.000, line-hit 100.0%, generated leaks 0); Local Knowledge fixtures:
+  16 of 16 passed (recall, precision, MRR, nDCG, isolation, and no-evidence all 1.000). The gate now
+  runs four non-tautology regression probes: `multi-space`, `exact-technical`,
+  `semantic-paraphrase`, and `multilingual-retrieval`; all four correctly drop below the pass floors
+  (`observed=below-floors`).
+- `npm run check:grounded-retrieval-quality` — PASS; baseline cases 10; `reranker-reversed` and
+  `embedding-flat` regression controls failed closed.
+- `npm run check:grounded-faithfulness` — PASS; fixtures 8; unsupported detection, citation
+  precision, and abstention-on-empty all 100.0%.
+
+Repair disposition:
+
+- `rerankAndSelect` now enforces `hybridMaxExcerptBytes` strictly: a candidate whose redacted excerpt
+  would exceed the shared byte budget is skipped even when it is the first ranked candidate. This
+  restores ADR-0036 alignment without changing RRF scoring or raw-score separation.
+- `grounded-rerank.test.ts` now proves the single-oversized-candidate case drops to an empty
+  selection instead of exceeding the byte budget. `grounded-qa-hybrid.test.ts` now proves the
+  end-to-end hybrid route returns deterministic no-evidence and does not call the model when every
+  candidate exceeds the shared byte budget.
+- Focused repair verification passed: `npm test -- --run packages/keiko-server/src/grounded-rerank.test.ts packages/keiko-server/src/grounded-qa-hybrid.test.ts packages/keiko-server/src/grounded-retrieval-eval.test.ts`
+  (3 files, 54 tests), `npm run check:grounded-retrieval-quality`, and
+  `npm run check:grounded-faithfulness`.
+
 ## Release Evidence Summary
 
 - Exact technical behavior is covered by `exact-technical` and the low-level hostile-input lexical

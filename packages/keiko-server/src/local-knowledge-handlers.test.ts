@@ -25,7 +25,10 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -963,6 +966,48 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(400);
     expect(JSON.stringify(result.body)).toContain("contextualRetrieval.modelId");
+  });
+
+  it("applies a valid modelUsePolicy PATCH and reflects it in the capsule response", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", { modelUsePolicy: sealedLocalPodModelUsePolicy() }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(
+      (result.body as { readonly capsule: { readonly modelUsePolicy?: unknown } }).capsule
+        .modelUsePolicy,
+    ).toEqual(sealedLocalPodModelUsePolicy());
+  });
+
+  it("rejects a malformed modelUsePolicy PATCH with 400 instead of coercing it", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", {
+          modelUsePolicy: {
+            schemaVersion: "1",
+            mode: "sealed-local",
+            operations: { externalEmbeddings: "maybe" },
+          },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
   });
 
   it("returns 404 when PATCHing a missing capsule", async () => {
