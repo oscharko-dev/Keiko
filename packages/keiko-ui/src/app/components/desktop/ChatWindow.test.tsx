@@ -1243,6 +1243,55 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.queryByText(/client_secret/u)).toBeNull();
   });
 
+  it("distinguishes a sealed-local warning from a policy-denied pod in grounding options", async () => {
+    const user = userEvent.setup();
+    const capsuleId = makeCapsuleId("cap-sealed-local");
+    fetchCapsulesMock.mockResolvedValueOnce({
+      capsules: [
+        {
+          id: capsuleId,
+          displayName: "Sealed Local Source",
+          lifecycleState: "ready",
+          sourceCount: 1,
+          updatedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        {
+          ...knowledgePodSummary(capsuleId, "pod", "Knowledge Pod"),
+          governance: {
+            locationKind: "local",
+            sealingPosture: "sealed-pod-policy",
+            policyPosture: "policy-pack",
+            managedServiceDependency: false,
+          },
+          modelUsePolicy: {
+            source: "explicit",
+            mode: "custom",
+            operations: {
+              externalEmbeddings: "deny",
+              localEmbeddings: "allow",
+              externalReranking: "deny",
+              localReranking: "allow",
+              answerSynthesis: "allow",
+              rawContentRelease: "allow",
+              evidencePersistence: "allow",
+            },
+          },
+        },
+      ],
+    });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+
+    renderWindow(makeSession({ activeChat: makeChat() }));
+
+    await openCombobox(user, "Grounding mode");
+
+    expect(screen.getByText("Sealed local policy")).toBeVisible();
+    expect(screen.getByText(/External embedding or reranking calls are disabled/u)).toBeVisible();
+    expect(screen.queryByText("Policy denied")).toBeNull();
+  });
+
   it("switches from Files grounding to a ready knowledge capsule and clears file scopes", async () => {
     const user = userEvent.setup();
     const replaceChat = vi.fn();
