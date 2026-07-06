@@ -309,6 +309,33 @@ describe("UpdateSessionManager", () => {
     });
   });
 
+  it("keeps portable activation non-terminal while remediation remains pending", async () => {
+    const completedTargets: string[] = [];
+    const manager = createUpdateSessionManager({
+      detector: () => portableMode(),
+      facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+      idFactory: () => "session-1",
+      portableStager: { stage: vi.fn().mockResolvedValue(portableStageSummary()) },
+      portableActivator: { activate: vi.fn().mockResolvedValue(portableActivationSummary()) },
+      portableCompletionGate: (session) => {
+        completedTargets.push(session.targetVersion);
+        return false;
+      },
+    });
+
+    manager.start({ targetVersion: "0.2.12" });
+    await waitForPhase(manager, "restart-required");
+
+    expect(completedTargets).toEqual(["0.2.12"]);
+    expect(manager.getStatus().activeSession).toMatchObject({
+      phase: "restart-required",
+      restartRequired: false,
+      portableActivation: { activationId: "activation-1", status: "activated" },
+      message:
+        "Keiko is now running 0.2.12. Complete remaining remediation before the update is marked successful.",
+    });
+  });
+
   it("attaches duplicate starts and rejects conflicting concurrent starts", () => {
     const gate = deferred();
     const manager = createUpdateSessionManager({
