@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
-import type { ReleaseImpactCatalog, ReleaseImpactEntry } from "@oscharko-dev/keiko-contracts";
+import {
+  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
+  type ReleaseImpactCatalog,
+  type ReleaseImpactEntry,
+  type UpdateInstallMode,
+  type UpdatePortableTarget,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import {
@@ -13,12 +19,27 @@ import {
 import type { RouteContext } from "./routes.js";
 
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
+const ARCHIVE_SHA = "a".repeat(64);
+const REVIEWED_COMMIT = "c".repeat(40);
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function textResponse(body: string, status = 200): Response {
+  return new Response(body, {
+    status,
+    headers: { "content-type": "text/plain" },
+  });
+}
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
 }
 
 function baseCatalog(): ReleaseImpactCatalog {
@@ -165,6 +186,121 @@ function depsWith(fetchImpl: typeof fetch): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     gatewayReadinessFetch: fetchImpl,
+  };
+}
+
+function portableMode(target: UpdatePortableTarget = "macos-arm64"): UpdateInstallMode {
+  return {
+    schemaVersion: "1",
+    status: "supported",
+    packageName: "@oscharko-dev/keiko",
+    installKind: "portable-managed",
+    portable: {
+      status: "managed",
+      target,
+      updateEligible: true,
+      packageVersion: "0.2.10",
+      stable: true,
+    },
+    recommendedAction: "portable-managed-update",
+  };
+}
+
+function portableBootstrapMode(target: UpdatePortableTarget = "macos-arm64"): UpdateInstallMode {
+  return {
+    schemaVersion: "1",
+    status: "unsupported",
+    packageName: "@oscharko-dev/keiko",
+    installKind: "portable-bootstrap",
+    portable: {
+      status: "bootstrap",
+      target,
+      updateEligible: false,
+      packageVersion: "0.2.10",
+      stable: true,
+    },
+    recommendedAction: "portable-bootstrap-setup",
+    reason: "portable-bootstrap",
+    manualInstructions: "Run portable setup before using in-app updates.",
+  };
+}
+
+function portableAsset(name: string, id: number, size = 10_000): Record<string, unknown> {
+  return {
+    id,
+    name,
+    size,
+    browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v0.2.11/${name}`,
+  };
+}
+
+function portableRelease(target: UpdatePortableTarget): Record<string, unknown> {
+  const archiveName = UPDATE_PORTABLE_TARGET_ASSET_NAMES[target];
+  return {
+    id: 987_654_321,
+    tag_name: "v0.2.11",
+    name: "Keiko 0.2.11",
+    html_url: "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.11",
+    published_at: "2026-07-01T12:00:00.000Z",
+    draft: false,
+    prerelease: false,
+    body: "- Portable update metadata",
+    assets: [
+      portableAsset("keiko-windows-x64.zip", 10),
+      portableAsset("keiko-macos-arm64.zip", 11),
+      portableAsset("keiko-macos-x64.zip", 12),
+      portableAsset(`${target}-portable-manifest.json`, 101, 2_048),
+      portableAsset(`${target}-SHA256SUMS.txt`, 102, 128),
+    ].map((asset) => (asset.name === archiveName ? { ...asset, id: 42, size: 99_000 } : asset)),
+  };
+}
+
+function portableManifest(target: UpdatePortableTarget): Record<string, unknown> {
+  const archiveName = UPDATE_PORTABLE_TARGET_ASSET_NAMES[target];
+  return {
+    schemaVersion: 1,
+    product: {
+      packageName: "@oscharko-dev/keiko",
+      packageVersion: "0.2.11",
+    },
+    release: {
+      releaseId: 987_654_321,
+      releaseTag: "v0.2.11",
+      stable: true,
+      commitSha: REVIEWED_COMMIT,
+    },
+    artifact: {
+      platformTarget: target,
+      assetId: 42,
+      assetName: archiveName,
+      archiveFormat: "zip",
+      sizeBytes: 99_000,
+      sha256: ARCHIVE_SHA,
+    },
+    releaseImpact: {
+      entryPackageVersion: "0.2.11",
+      entryReleaseTag: "v0.2.11",
+      reviewedBinding: {
+        releaseId: 987_654_321,
+        releaseTag: "v0.2.11",
+        assetId: 42,
+        assetName: archiveName,
+        assetSizeBytes: 99_000,
+        platformTarget: target,
+        packageVersion: "0.2.11",
+        archiveSha256: ARCHIVE_SHA,
+      },
+    },
+    updateEligibility: {
+      stableOnly: true,
+      rollbackSupported: false,
+      eligibleAfterSetupOnly: true,
+      requiredPredicates: {
+        artifactShaVerified: true,
+        manifestReleaseImpactBound: true,
+        platformSignatureLocallyVerified: true,
+      },
+    },
   };
 }
 
@@ -349,6 +485,263 @@ describe("update preflight service", () => {
       Accept: "application/vnd.github+json",
       "User-Agent": "Keiko",
     });
+    deps.store.close();
+  });
+
+  it("uses GitHub Release Assets instead of the npm registry for portable-managed preflight", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(portableManifest(target))));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.status).toBe("update-available");
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.installabilitySource).toBe("github-release-asset");
+    expect(report.targetVersion).toBe("0.2.11");
+    expect(report.portableAsset).toMatchObject({
+      source: "github-release-asset",
+      target,
+      status: "eligible",
+      asset: {
+        assetId: 42,
+        releaseId: 987_654_321,
+        sha256: ARCHIVE_SHA,
+        checksumVerified: true,
+      },
+    });
+    expect(report.oneClickEligible).toBe(true);
+    expect(fetchImpl.mock.calls.map((call) => requestUrl(call[0]))).toEqual([
+      "https://api.github.com/repos/oscharko-dev/keiko/releases/latest",
+      `https://github.com/oscharko-dev/Keiko/releases/download/v0.2.11/${target}-portable-manifest.json`,
+      `https://github.com/oscharko-dev/Keiko/releases/download/v0.2.11/${target}-SHA256SUMS.txt`,
+    ]);
+    deps.store.close();
+  });
+
+  it("blocks portable one-click readiness when the matching asset set is incomplete", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const release = portableRelease(target);
+    const assets = release.assets as readonly Record<string, unknown>[];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...release,
+            assets: assets.filter(
+              (asset) => asset.name !== UPDATE_PORTABLE_TARGET_ASSET_NAMES[target],
+            ),
+          }),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.updateAvailable).toBe(true);
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.manualUpdateRequired).toBe(true);
+    expect(report.portableAsset).toMatchObject({ target, status: "missing" });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-asset-missing" }),
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    deps.store.close();
+  });
+
+  it("blocks portable one-click readiness when release-impact metadata is missing", async () => {
+    const target: UpdatePortableTarget = "macos-x64";
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(portableManifest(target))));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: { schemaVersion: 1, entries: baseCatalog().entries.slice(0, 1) },
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.updateAvailable).toBe(true);
+    expect(report.portableAsset?.status).toBe("eligible");
+    expect(report.impact).toBeUndefined();
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.manualUpdateRequired).toBe(true);
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "release-impact-missing" }),
+    );
+    deps.store.close();
+  });
+
+  it("blocks portable one-click readiness when manifest binding is malformed", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const manifest = portableManifest(target);
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(
+          textResponse(
+            JSON.stringify({
+              ...manifest,
+              releaseImpact: {
+                ...(manifest.releaseImpact as Record<string, unknown>),
+                reviewedBinding: {
+                  archiveSha256: "b".repeat(64),
+                },
+              },
+            }),
+          ),
+        );
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.updateAvailable).toBe(true);
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-manifest-malformed" }),
+    );
+    deps.store.close();
+  });
+
+  it("blocks portable one-click readiness when checksum binding does not match", async () => {
+    const target: UpdatePortableTarget = "windows-x64";
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest"))
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(portableManifest(target))));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${"b".repeat(64)}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.updateAvailable).toBe(true);
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.portableAsset).toMatchObject({ target, status: "malformed" });
+    expect(report.oneClickEligible).toBe(false);
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-checksum-mismatch" }),
+    );
+    deps.store.close();
+  });
+
+  it("fails closed on prerelease portable GitHub metadata without consulting npm", async () => {
+    const target: UpdatePortableTarget = "windows-x64";
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(
+          jsonResponse({
+            ...portableRelease(target),
+            tag_name: "v0.2.12-beta.1",
+            prerelease: true,
+          }),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.status).toBe("degraded");
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.releaseMetadataStatus).toBe("malformed");
+    expect(report.updateAvailable).toBe(false);
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-release-malformed" }),
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    deps.store.close();
+  });
+
+  it("does not fall back to npm preflight for portable bootstrap folders", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const fetchImpl = vi.fn<typeof fetch>();
+    const deps = depsWith(fetchImpl);
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableBootstrapMode(target),
+    });
+
+    expect(report.status).toBe("degraded");
+    expect(report.registryStatus).toBe("not-used");
+    expect(report.portableAsset).toMatchObject({ target, status: "install-mode-ineligible" });
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-install-mode-ineligible" }),
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
     deps.store.close();
   });
 
