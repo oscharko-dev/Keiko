@@ -1,3 +1,9 @@
+// Scope: this file pins ONLY the eval-runner forwarding contract — that a `RetrievalEvalQuery`'s
+// `strategy`/`topK` overrides reach `runLocalKnowledgeRetrieval` unchanged. It mocks the retrieval
+// module, so it deliberately does NOT prove that the strategies produce different budgets or
+// rankings; that behavioural proof lives in `../retrieval/scoped-vector-search.test.ts`
+// (per-strategy budget diagnostics, auto-classification, and RRF fusion tests).
+
 import { describe, expect, it, vi } from "vitest";
 
 import type {

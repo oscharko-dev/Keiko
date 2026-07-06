@@ -477,9 +477,13 @@ function setRetrieval(
 }
 
 function capsuleEmbeddingProfile(capsule: KnowledgeCapsule): EmbeddingProfileIdentity {
+  const modelUsePolicy = capsuleModelUsePolicySummary(capsule);
   return embeddingProfileFromModelIdentity(capsule.embeddingModelIdentity, {
     locality: "provider",
-    policyCapabilities: ["query-embedding"],
+    policyCapabilities:
+      modelUsePolicy.operations.externalEmbeddings === "allow"
+        ? ["query-embedding"]
+        : ["external-denied"],
   });
 }
 

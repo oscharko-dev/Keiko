@@ -31,6 +31,7 @@ import {
   repairCapsuleFailedFiles,
   startIndexing,
   updateCapsuleContextualRetrieval,
+  updateCapsuleModelUsePolicy,
 } from "./local-knowledge-api";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -45,7 +46,16 @@ function podSummary(
   kind: KnowledgePodSummary["kind"],
   displayName: string,
   overrides: Partial<
-    Pick<KnowledgePodSummary, "readiness" | "retrieval" | "governance" | "modelUsePolicy">
+    Pick<
+      KnowledgePodSummary,
+      | "readiness"
+      | "retrieval"
+      | "governance"
+      | "modelUsePolicy"
+      | "counts"
+      | "setReadiness"
+      | "sourceKinds"
+    >
   > = {},
 ): KnowledgePodSummary {
   const modelUsePolicy =
@@ -57,8 +67,15 @@ function podSummary(
     displayName,
     tags: [],
     readiness: overrides.readiness ?? "ready",
-    counts: { capsuleCount: 1, sourceCount: 0, documentCount: 0, chunkCount: 0, vectorCount: 0 },
-    sourceKinds: [],
+    counts: overrides.counts ?? {
+      capsuleCount: 1,
+      sourceCount: 0,
+      documentCount: 0,
+      chunkCount: 0,
+      vectorCount: 0,
+    },
+    sourceKinds: overrides.sourceKinds ?? [],
+    ...(overrides.setReadiness !== undefined ? { setReadiness: overrides.setReadiness } : {}),
     retrieval: {
       lexicalIndex: false,
       vectorIndex: false,
@@ -341,6 +358,95 @@ describe("local knowledge BFF boundary helpers", () => {
     expect(capsuleSet?.knowledgePod?.guidance?.description).toContain("affected members");
   });
 
+  it("maps Knowledge Pod Set readiness reasons into UI guidance", () => {
+    const setId = "set-readiness-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Readiness guidance set",
+          capsuleCount: 3,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Readiness guidance set", {
+          readiness: "degraded",
+          counts: {
+            capsuleCount: 3,
+            sourceCount: 1,
+            documentCount: 1,
+            chunkCount: 1,
+            vectorCount: 0,
+          },
+          setReadiness: {
+            readyCount: 1,
+            draftCount: 0,
+            degradedCount: 0,
+            unavailableCount: 1,
+            deniedCount: 0,
+            indexingCount: 1,
+            staleCount: 0,
+            errorCount: 0,
+            missingCount: 1,
+            reasonCodes: ["member-indexing", "missing-member", "no-vectors"],
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Members unavailable",
+      tone: "danger",
+      description: expect.stringContaining("missing, failed, or unavailable"),
+    });
+  });
+
+  it("maps future Knowledge Pod Set placeholders into UI guidance", () => {
+    const setId = "set-future-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Future guidance set",
+          capsuleCount: 1,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Future guidance set", {
+          readiness: "unavailable",
+          sourceKinds: ["remote"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 0,
+            documentCount: 0,
+            chunkCount: 0,
+            vectorCount: 0,
+          },
+          setReadiness: {
+            readyCount: 0,
+            draftCount: 0,
+            degradedCount: 0,
+            unavailableCount: 1,
+            deniedCount: 0,
+            indexingCount: 0,
+            staleCount: 0,
+            errorCount: 0,
+            missingCount: 0,
+            reasonCodes: ["future-remote-member"],
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Future member placeholder",
+      tone: "warning",
+      description: expect.stringContaining("not active retrieval sources yet"),
+    });
+  });
+
   it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {
     const capsuleId = "cap-legacy-policy" as KnowledgeCapsuleId;
     const legacySummary = podSummary(capsuleId, "pod", "Legacy policy");
@@ -405,6 +511,7 @@ describe("local knowledge BFF boundary helpers", () => {
       strict: true,
       maxContextChars: 320,
     });
+    await updateCapsuleModelUsePolicy(capsuleId, sealedLocalPodModelUsePolicy());
     await startIndexing(capsuleId);
     await cancelIndexing(capsuleId);
     await connectCapsuleSource(capsuleId, scope, "Release files");
@@ -460,6 +567,13 @@ describe("local knowledge BFF boundary helpers", () => {
             maxContextChars: 320,
           },
         }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/capsules/cap%201",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ modelUsePolicy: sealedLocalPodModelUsePolicy() }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(

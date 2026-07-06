@@ -1,0 +1,291 @@
+.lazyWidgetScope {
+  --lazy-widget-scope: 1;
+}
+
+.lazyWidgetScope:global(.docbrowser) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.lazyWidgetScope :global(.db-bar) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-faint);
+}
+
+.lazyWidgetScope :global(.db-dot) {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.lazyWidgetScope :global(.db-field) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lazyWidgetScope :global(.db-field-target) {
+  flex: 1;
+  min-width: 140px;
+}
+
+.lazyWidgetScope :global(.db-field-label) {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.lazyWidgetScope :global(.db-input) {
+  flex: 1;
+  min-width: 120px;
+  background: var(--input-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--input-text);
+}
+
+.lazyWidgetScope :global(.db-input):focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.lazyWidgetScope :global(.db-input):disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lazyWidgetScope :global(.db-actions) {
+  display: flex;
+  gap: 6px;
+}
+
+.lazyWidgetScope :global(.db-btn) {
+  background: var(--surface-inset);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--button-secondary-text);
+  cursor: pointer;
+  min-height: 28px;
+  min-width: 64px;
+}
+
+.lazyWidgetScope :global(.db-btn):hover:not(:disabled) {
+  border-color: var(--accent-line);
+}
+
+.lazyWidgetScope :global(.db-btn):focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.lazyWidgetScope :global(.db-btn):disabled,
+.lazyWidgetScope :global(.db-btn[aria-disabled="true"]) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.lazyWidgetScope :global(.db-btn[aria-disabled="true"]):hover {
+  border-color: var(--button-secondary-border);
+  filter: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lazyWidgetScope :global(.db-btn) {
+    transition:
+      background 0.12s,
+      color 0.12s,
+      border-color 0.12s,
+      filter 0.12s;
+  }
+}
+
+.lazyWidgetScope :global(.db-btn-primary) {
+  background: var(--accent);
+  color: var(--button-primary-text);
+  border-color: var(--accent);
+}
+
+.lazyWidgetScope :global(.db-btn-primary):hover:not(:disabled) {
+  filter: brightness(1.06);
+  border-color: var(--accent);
+}
+
+.lazyWidgetScope :global(.db-btn-ghost) {
+  background: transparent;
+}
+
+.lazyWidgetScope :global(.db-target) {
+  padding: 6px 10px;
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.lazyWidgetScope :global(.db-error) {
+  padding: 8px 10px;
+  background: color-mix(in oklch, var(--danger) 12%, var(--card));
+  color: var(--fg);
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.lazyWidgetScope :global(.db-view) {
+  flex: 1;
+  position: relative;
+  overflow: auto;
+  min-height: 96px;
+}
+
+.lazyWidgetScope :global(.db-overlay) {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12px;
+  color: var(--fg-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  width: max-content;
+  max-width: 85%;
+  text-align: center;
+}
+
+.lazyWidgetScope :global(.db-state) {
+  margin: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--surface-inset);
+}
+
+.lazyWidgetScope :global(.db-state-ready) {
+  border-color: color-mix(in oklch, var(--ok) 45%, var(--line-soft));
+  background: color-mix(in oklch, var(--ok) 10%, var(--surface-inset));
+}
+
+.lazyWidgetScope :global(.db-state-error) {
+  border-color: color-mix(in oklch, var(--danger) 45%, var(--line-soft));
+  background: color-mix(in oklch, var(--danger) 10%, var(--surface-inset));
+}
+
+.lazyWidgetScope :global(.db-state-title) {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.lazyWidgetScope :global(.db-state-detail) {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.lazyWidgetScope :global(.db-state-action) {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.lazyWidgetScope :global(.db-future) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--line-soft);
+  flex-wrap: wrap;
+}
+
+.lazyWidgetScope :global(.db-future-note) {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+
+/* Epic #1852 — indexing proposal + consent surface (component-scoped, not globals.css). */
+.lazyWidgetScope :global(.db-indexing) {
+  padding: 10px 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+.lazyWidgetScope :global(.db-proposal) {
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  padding: 12px 14px;
+}
+
+.lazyWidgetScope :global(.db-proposal-title) {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.lazyWidgetScope :global(.db-proposal-detail) {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.lazyWidgetScope :global(.db-proposal-confidence) {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--fg-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.lazyWidgetScope :global(.db-scope) {
+  margin: 10px 0 0;
+  display: grid;
+  gap: 4px;
+}
+
+.lazyWidgetScope :global(.db-scope-row) {
+  display: flex;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.lazyWidgetScope :global(.db-scope-row) dt {
+  flex: none;
+  width: 120px;
+  color: var(--fg-muted);
+}
+
+.lazyWidgetScope :global(.db-scope-row) dd {
+  margin: 0;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+.lazyWidgetScope :global(.db-consent-actions) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}

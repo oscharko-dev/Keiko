@@ -22,10 +22,12 @@ import type {
   DocumentId,
   EmbeddingModelIdentity,
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   KnowledgeSourceId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
 import type {
+  RetrievalDiagnostics,
   RetrievalNoEvidenceReason,
   RetrievalReference,
   RetrievalStrategy,
@@ -86,6 +88,11 @@ export interface EvalCapsuleSpec {
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly sources: readonly EvalSourceSpec[];
+  // Optional pod model-use policy. When omitted the runner seeds the standard (all-allow)
+  // policy so every existing fixture keeps its current behaviour. A fixture sets this to a
+  // sealed-local policy to prove that governance denial surfaces as `policy-denied`
+  // no-evidence at the scorecard level rather than as a retrieval-quality miss (#1819/#2011).
+  readonly modelUsePolicy?: KnowledgePodModelUsePolicy;
 }
 
 // Discriminator on retrieval scope. The runner translates this into either a `capsuleId`
@@ -169,10 +176,25 @@ export interface ModelJudgedRetrievalEvalJudge {
   readonly judge: (input: ModelJudgedRetrievalEvalInput) => Promise<ModelJudgedRetrievalEvalScores>;
 }
 
+export interface RetrievalEvalOutcomeSummary {
+  readonly queryCount: number;
+  readonly referenceCount: number;
+  readonly noEvidenceCount: number;
+  readonly expectedNoEvidenceCount: number;
+  readonly noEvidenceReasonCounts: Readonly<Partial<Record<RetrievalNoEvidenceReason, number>>>;
+  // Counts of the production `RetrievalDiagnostics.mode` tag actually observed per query —
+  // "hybrid" | "dense-only" | "lexical-only" | "lexical-degraded". Redacted (an enum tag,
+  // never a body). This is the evidence the fused-mode comparison (#2010 fix) checks to
+  // prove a "fused" fixture's queries actually exercised BOTH retrieval legs at least once,
+  // rather than trusting the fixture's taxonomy label alone.
+  readonly retrievalModeCounts: Readonly<Partial<Record<RetrievalDiagnostics["mode"], number>>>;
+}
+
 export interface RetrievalEvalScorecard {
   readonly fixtureId: string;
   readonly runId: string;
   readonly dimensions: RetrievalEvalDimensionScores;
+  readonly outcomes: RetrievalEvalOutcomeSummary;
   readonly passed: boolean;
   readonly modelJudged?: ModelJudgedRetrievalEvalScores;
 }

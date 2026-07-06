@@ -33,6 +33,24 @@ const LEGACY_EMBEDDING = {
   vectorMetric: "cosine",
 } as const;
 
+// Two hardened embedding spaces that agree on every identity field except the space fingerprint.
+// `provider`/`modelId`/`vectorDimensions`/`vectorMetric` match `seedIndexedDocument`'s vector rows
+// so the seed is consistent; the divergent fingerprint is what makes the pair incompatible.
+const HARDENED_EMBEDDING_A = {
+  provider: "openai",
+  modelId: "text-embedding-3-small",
+  vectorDimensions: 1536,
+  vectorMetric: "cosine",
+  normalization: "l2",
+  instructionVersion: "keiko-embedding-input-v1",
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+} as const;
+
+const HARDENED_EMBEDDING_B = {
+  ...HARDENED_EMBEDDING_A,
+  embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:bbbbbbbbbbbbbbbbbbbbbbbb",
+} as const;
+
 function seedIndexedDocument(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -117,9 +135,9 @@ describe("Knowledge Pod compatibility projection", () => {
           hybridGrounding: true,
           crossSpaceScoreMixing: false,
           embeddingProvider: "openai",
-          embeddingCompatibilityStatus: "unknown",
-          embeddingCompatibilityReason: "legacy-unverified-profile",
-          reindexRecommended: true,
+          embeddingCompatibilityStatus: "unavailable",
+          embeddingCompatibilityReason: "policy-denied",
+          reindexRecommended: false,
           queryEmbeddingAllowed: false,
         },
         privacy: {
@@ -156,6 +174,81 @@ describe("Knowledge Pod compatibility projection", () => {
       });
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
       expect(JSON.stringify(summary)).not.toContain("/Users/alice");
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("keeps a legacy standard-policy profile unknown with explicit local reindex guidance", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-legacy-standard" as KnowledgeCapsuleId;
+      const sourceId = "src-legacy-standard" as KnowledgeSourceId;
+      const capsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: capsuleId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: LEGACY_EMBEDDING,
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      addSourceToCapsule(env.store, capsuleId, sampleSourceInput(sourceId));
+      seedIndexedDocument(env.store, capsuleId, sourceId, "legacy-standard");
+
+      const summary = buildKnowledgePodSummary(env.store, capsule);
+
+      expect(summary.retrieval).toMatchObject({
+        embeddingCompatibilityStatus: "unknown",
+        embeddingCompatibilityReason: "legacy-unverified-profile",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+      });
+      expect(summary.degradationReasons).toEqual(
+        expect.arrayContaining([
+          "Embedding profile compatibility is unverified; full re-embed is recommended.",
+        ]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("marks a hardened sealed-policy pod unavailable instead of query eligible", () => {
+    const env = freshStore();
+    try {
+      const capsuleId = "cap-hardened-sealed" as KnowledgeCapsuleId;
+      const sourceId = "src-hardened-sealed" as KnowledgeSourceId;
+      const capsule = createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: capsuleId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+          modelUsePolicy: sealedLocalPodModelUsePolicy(),
+        }),
+      );
+      addSourceToCapsule(env.store, capsuleId, sampleSourceInput(sourceId));
+      seedIndexedDocument(env.store, capsuleId, sourceId, "hardened-sealed");
+
+      const summary = buildKnowledgePodSummary(env.store, capsule);
+
+      expect(summary).toMatchObject({
+        readiness: "degraded",
+        retrieval: {
+          embeddingCompatibilityStatus: "unavailable",
+          embeddingCompatibilityReason: "policy-denied",
+          reindexRecommended: false,
+          queryEmbeddingAllowed: false,
+        },
+      });
+      expect(summary.degradationReasons).toEqual(
+        expect.arrayContaining([
+          "Embedding profile cannot run semantic retrieval under the current policy.",
+        ]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
     } finally {
       env.cleanup();
     }
@@ -214,9 +307,9 @@ describe("Knowledge Pod compatibility projection", () => {
           lexicalIndex: true,
           vectorIndex: true,
           crossSpaceScoreMixing: false,
-          embeddingCompatibilityStatus: "unknown",
-          embeddingCompatibilityReason: "legacy-unverified-profile",
-          reindexRecommended: true,
+          embeddingCompatibilityStatus: "unavailable",
+          embeddingCompatibilityReason: "policy-denied",
+          reindexRecommended: false,
           queryEmbeddingAllowed: false,
         },
         governance: {
@@ -238,6 +331,71 @@ describe("Knowledge Pod compatibility projection", () => {
         },
       });
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+    } finally {
+      env.cleanup();
+    }
+  });
+
+  it("surfaces incompatible embedding spaces across pod-set members instead of silently mixing them", () => {
+    const env = freshStore();
+    try {
+      const aId = "cap-space-a" as KnowledgeCapsuleId;
+      const bId = "cap-space-b" as KnowledgeCapsuleId;
+      const aSourceId = "src-space-a" as KnowledgeSourceId;
+      const bSourceId = "src-space-b" as KnowledgeSourceId;
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: aId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_A,
+          modelUsePolicy: standardPodModelUsePolicy(),
+        }),
+      );
+      createCapsule(
+        env.store,
+        sampleCapsuleInput({
+          id: bId,
+          lifecycleState: "ready",
+          embeddingModelIdentity: HARDENED_EMBEDDING_B,
+          modelUsePolicy: standardPodModelUsePolicy(),
+          storageReference: "engineering/space-b",
+        }),
+      );
+      addSourceToCapsule(env.store, aId, sampleSourceInput(aSourceId));
+      addSourceToCapsule(env.store, bId, sampleSourceInput(bSourceId));
+      seedIndexedDocument(env.store, aId, aSourceId, "space-a");
+      seedIndexedDocument(env.store, bId, bSourceId, "space-b");
+      const set = createCapsuleSet(env.store, {
+        id: "set-cross-space" as CapsuleSetId,
+        displayName: "Cross Space Set",
+        tags: [],
+        capsuleIds: [aId, bId],
+      });
+
+      const summary = buildKnowledgePodSetSummary(env.store, set);
+
+      // The two members are each internally consistent (self-`same`), so the incompatibility is a
+      // cross-member property the set-level decision must surface — never a silent fall-through to
+      // a compatible/query-eligible state.
+      expect(summary.retrieval).toMatchObject({
+        crossSpaceScoreMixing: false,
+        embeddingCompatibilityStatus: "unknown",
+        embeddingCompatibilityReason: "fingerprint-mismatch",
+        reindexRecommended: true,
+        queryEmbeddingAllowed: false,
+      });
+      expect(summary.setReadiness?.reasonCodes).toEqual(
+        expect.arrayContaining(["embedding-unknown"]),
+      );
+      expect(summary.degradationReasons).toEqual(
+        expect.arrayContaining([
+          "Embedding profile compatibility is unverified; full re-embed is recommended.",
+        ]),
+      );
+      expect(validateKnowledgePodSummary(summary).ok).toBe(true);
+      // The raw space fingerprints are the discriminator, but they must never reach the wire.
+      expect(JSON.stringify(summary)).not.toContain("keiko-embedding-space-fingerprint-v1:");
     } finally {
       env.cleanup();
     }
@@ -271,6 +429,11 @@ describe("Knowledge Pod compatibility projection", () => {
             answerSynthesis: "allow",
             rawContentRelease: "allow",
           },
+        },
+        retrieval: {
+          embeddingCompatibilityStatus: "same",
+          reindexRecommended: false,
+          queryEmbeddingAllowed: true,
         },
       });
       expect(validateKnowledgePodSummary(summary).ok).toBe(true);

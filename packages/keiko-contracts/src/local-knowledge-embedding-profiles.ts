@@ -1,3 +1,11 @@
+// Embedding profile identity and compatibility contract for Knowledge Pod retrieval (Epic #1818,
+// Issue #1843). A profile is the narrow, redaction-safe identity of the embedding space a pod's
+// vectors live in. `compareEmbeddingProfiles` decides whether two spaces are the *same* space and
+// may therefore share a query embedding; it fails closed to `unknown`/`incompatible`/`unavailable`/
+// `opaque` for anything short of an exact hardened match. Raw vector scores are only comparable
+// inside one space — cross-space evidence is fused by rank, never by raw score (see
+// docs/adr/ADR-0036-hybrid-grounding-reciprocal-rank-fusion.md).
+
 import type {
   EmbeddingModelIdentity,
   EmbeddingVectorMetric,
@@ -279,6 +287,13 @@ function profileMismatchReason(
   return PROFILE_COMPARISONS.find((comparison) => !comparison.matches(left, right))?.reason;
 }
 
+function profileMismatchDecision(
+  reason: EmbeddingProfileCompatibilityReason | undefined,
+): EmbeddingProfileCompatibilityDecision | undefined {
+  if (reason === undefined) return undefined;
+  return reason === "fingerprint-mismatch" ? unknown(reason) : incompatible(reason);
+}
+
 export function compareEmbeddingProfiles(
   left: EmbeddingProfileIdentity | undefined,
   right: EmbeddingProfileIdentity | undefined,
@@ -288,8 +303,8 @@ export function compareEmbeddingProfiles(
   if (left.locality === "opaque" || right.locality === "opaque") return opaqueDecision();
   if (!profileHasQueryEmbedding(left) || !profileHasQueryEmbedding(right))
     return unavailableDecision();
-  const mismatch = profileMismatchReason(left, right);
-  if (mismatch !== undefined) return incompatible(mismatch);
+  const mismatch = profileMismatchDecision(profileMismatchReason(left, right));
+  if (mismatch !== undefined) return mismatch;
   if (legacyOrUnverified(left) || legacyOrUnverified(right)) {
     return unknown("legacy-unverified-profile");
   }

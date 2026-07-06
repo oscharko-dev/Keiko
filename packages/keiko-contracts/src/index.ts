@@ -17,13 +17,13 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.13" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.2.14" as const;
 
 // Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
 // response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
 // package so every consumer reaches it through one stable import path. Bump in lockstep
 // with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.13" as const;
+export const KEIKO_PRODUCT_VERSION = "0.2.14" as const;
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export { clampUnit } from "./numeric.js";
@@ -1278,6 +1278,73 @@ export {
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
+
+// ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
+export type {
+  DocumentationTargetClass,
+  DocumentationTargetClassification,
+  DocumentationTargetClassificationOk,
+  DocumentationTargetClassificationFail,
+  DocumentationNavigationReason,
+  DocumentationReasonSeverity,
+  DocumentationNavigationRequest,
+  DocumentationNavigationResult,
+  DocumentationNavigationResultInput,
+  DocumentationBrowserCapability,
+  DocumentationNavigationParse,
+  DocumentationNavigationParseOk,
+  DocumentationNavigationParseFail,
+} from "./documentation-browser.js";
+export {
+  DOCUMENTATION_BROWSER_SCHEMA_VERSION,
+  DOCUMENTATION_TARGET_CLASSES,
+  DOCUMENTATION_TARGET_MAX_LENGTH,
+  DOCUMENTATION_NAVIGATION_REASONS,
+  DOCUMENTATION_NAVIGATION_REASON_SEVERITY,
+  classifyDocumentationTarget,
+  mapBrowserErrorToDocumentationReason,
+  resolveDocumentationNavigationReason,
+  parseDocumentationNavigationRequest,
+  buildDocumentationNavigationResult,
+  isIndexingProposalEligibleClass,
+} from "./documentation-browser.js";
+
+// ─── Indexable HTML manual proposal + consent (Epic #1852, ADR-0113 extension) ──────
+export type {
+  DocumentationManualSourceKind,
+  DocumentationManualProposalState,
+  DocumentationManualProposalReason,
+  DocumentationManualConfidence,
+  DocumentationManualDetection,
+  DocumentationManualRobotsPosture,
+  DocumentationManualDeniedLinkClass,
+  DocumentationManualScopeLimits,
+  DocumentationManualScopePreview,
+  DocumentationIndexingProposal,
+  DocumentationIndexingApproval,
+  DocumentationManualProposalRequest,
+  DocumentationManualProposalParse,
+  DocumentationManualValidation,
+} from "./documentation-manual-proposal.js";
+export {
+  DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
+  DOCUMENTATION_MANUAL_SOURCE_KINDS,
+  DOCUMENTATION_MANUAL_PROPOSAL_STATES,
+  DOCUMENTATION_MANUAL_PROPOSAL_REASONS,
+  DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES,
+  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
+  isApprovableProposalState,
+  detectIndexableManual,
+  summarizeManualOrigin,
+  summarizeManualPathPrefix,
+  buildManualScopePreview,
+  findIndexedManualForFingerprint,
+  buildDocumentationIndexingProposal,
+  asAlreadyIndexedProposal,
+  parseManualProposalRequest,
+  validateDocumentationIndexingProposal,
+  validateDocumentationIndexingApproval,
+} from "./documentation-manual-proposal.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {

@@ -8,7 +8,9 @@ import {
   ndcgAtK,
   recallAtK,
   reciprocalRank,
+  regressFixtureExpectations,
   runLocalKnowledgeQualityCheck,
+  runLocalKnowledgeRegressionProbes,
   runRetrievalQualityCheck,
   uniquePathsInOrder,
 } from "../check-retrieval-quality.mjs";
@@ -30,7 +32,7 @@ function budgetFile() {
   return { dir, path };
 }
 
-function scorecard(fixtureId, dimensions) {
+function scorecard(fixtureId, dimensions, retrievalModeCounts = {}) {
   return {
     fixtureId,
     runId: `eval-${fixtureId}`,
@@ -45,6 +47,14 @@ function scorecard(fixtureId, dimensions) {
       contextBudgetFit: 1,
       latencyMs: 1,
       ...dimensions,
+    },
+    outcomes: {
+      queryCount: 1,
+      referenceCount: 1,
+      noEvidenceCount: 0,
+      expectedNoEvidenceCount: 0,
+      noEvidenceReasonCounts: {},
+      retrievalModeCounts,
     },
     passed: Object.values(dimensions).every((value) => value >= 1),
   };
@@ -113,6 +123,50 @@ describe("check-retrieval-quality helpers", () => {
     );
   });
 
+  it("reports mode-specific Local Knowledge comparison rows from the retrieval gate", async () => {
+    const logs = [];
+    const fixtures = [
+      { id: "exact-technical" },
+      { id: "semantic-paraphrase" },
+      { id: "mixed-strategy" },
+    ];
+    // `mixed-strategy` maps to the "fused" row, which requires at least one query where both
+    // the lexical and dense lanes contributed ("hybrid" diagnostics mode) — see comparison.ts's
+    // fusion-evidence gate. Without it a perfect-recall scorecard alone would not be enough to
+    // prove fusion actually happened, matching what production reports for this fixture.
+    const retrievalModeCountsFor = (fixtureId) =>
+      fixtureId === "mixed-strategy" ? { hybrid: 1 } : {};
+    const result = await runLocalKnowledgeQualityCheck(
+      (line) => logs.push(line),
+      fixtures,
+      (fixture) => Promise.resolve(scorecard(fixture.id, {}, retrievalModeCountsFor(fixture.id))),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(logs).toContain(
+      "local-knowledge-retrieval-comparison report: # Local Knowledge Retrieval Mode Comparison",
+    );
+    expect(logs.some((line) => line.includes("| lexical | exact-technical |"))).toBe(true);
+    expect(logs.some((line) => line.includes("| vector | semantic-paraphrase |"))).toBe(true);
+    expect(logs.some((line) => line.includes("| fused | mixed-strategy |"))).toBe(true);
+  });
+
+  it("fails the fused comparison row when no query shows genuine hybrid fusion", async () => {
+    const logs = [];
+    const fixtures = [{ id: "mixed-strategy" }];
+    const result = await runLocalKnowledgeQualityCheck(
+      (line) => logs.push(line),
+      fixtures,
+      (fixture) => Promise.resolve(scorecard(fixture.id, {}, { "dense-only": 1 })),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(
+      logs.some((line) => line.includes("local-knowledge-retrieval-comparison failure: fused:")),
+    ).toBe(true);
+    expect(logs.some((line) => line.includes("hybrid-queries=0"))).toBe(true);
+  });
+
   it("fails the aggregate gate when the Local Knowledge branch regresses", async () => {
     const { dir, path } = budgetFile();
     const failures = [];
@@ -128,11 +182,121 @@ describe("check-retrieval-quality helpers", () => {
             summary: { failedFixtureIds: ["fixture-a"] },
             scorecards: [],
           }),
+        regressionProbes: () => Promise.resolve({ ok: true, tautological: [], probed: 1 }),
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
 
     expect(failures).toEqual(["local knowledge quality failed: fixture-a"]);
+  });
+});
+
+function probeFixture(id) {
+  return {
+    id,
+    description: "regression probe sample",
+    capsules: [
+      {
+        id: "cap-probe",
+        displayName: "Probe",
+        answerGroundingPolicy: "best-effort",
+        embeddingModelIdentity: { provider: "eval", modelId: "m", vectorDimensions: 16 },
+        sources: [
+          {
+            id: "src-probe",
+            documents: [
+              {
+                id: "doc-probe",
+                safeDisplayName: "probe.md",
+                parsedUnits: [],
+                chunks: [
+                  { id: "c-gold", text: "gold" },
+                  { id: "c-decoy", text: "decoy" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    queries: [
+      {
+        id: "q-probe",
+        text: "probe",
+        scope: { kind: "capsule", capsuleId: "cap-probe" },
+        expectedChunkIds: ["c-gold"],
+        topK: 1,
+      },
+    ],
+  };
+}
+
+describe("check-retrieval-quality regression probes", () => {
+  it("repoints ground-truth expectations at a decoy chunk in the same corpus", () => {
+    const regressed = regressFixtureExpectations(probeFixture("exact-technical"));
+
+    expect(regressed.id).toBe("exact-technical-regression-probe");
+    expect(regressed.queries).toHaveLength(1);
+    expect(regressed.queries[0].expectedChunkIds).toEqual(["c-decoy"]);
+  });
+
+  it("passes when every regressed probe drops below the pass floors", async () => {
+    const logs = [];
+    const result = await runLocalKnowledgeRegressionProbes(
+      (line) => logs.push(line),
+      [probeFixture("exact-technical")],
+      () => Promise.resolve(scorecard("exact-technical-regression-probe", { recall: 0, ndcg: 0 })),
+      ["exact-technical"],
+    );
+
+    expect(result).toEqual({ ok: true, tautological: [], probed: 1 });
+    expect(logs.some((line) => line.includes("observed=below-floors"))).toBe(true);
+  });
+
+  it("flags a tautological gate when a regressed probe still clears the floors", async () => {
+    const result = await runLocalKnowledgeRegressionProbes(
+      () => undefined,
+      [probeFixture("semantic-paraphrase")],
+      () => Promise.resolve(scorecard("semantic-paraphrase-regression-probe", {})),
+      ["semantic-paraphrase"],
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.tautological).toEqual(["semantic-paraphrase"]);
+  });
+
+  it("reports probed=0 when no probe fixtures match the registry", async () => {
+    const result = await runLocalKnowledgeRegressionProbes(
+      () => undefined,
+      [probeFixture("unrelated-fixture")],
+      () => Promise.reject(new Error("runner must not be called")),
+      ["exact-technical"],
+    );
+
+    expect(result).toEqual({ ok: false, tautological: [], probed: 0 });
+  });
+
+  it("fails the aggregate gate when the regression probes are tautological", async () => {
+    const { dir, path } = budgetFile();
+    const failures = [];
+    try {
+      await runRetrievalQualityCheck({
+        budgetPath: path,
+        workspaceCases: [],
+        log: () => undefined,
+        fail: (message) => failures.push(message),
+        localKnowledgeQualityCheck: () =>
+          Promise.resolve({ ok: true, summary: { failedFixtureIds: [] }, scorecards: [] }),
+        regressionProbes: () =>
+          Promise.resolve({ ok: false, tautological: ["exact-technical"], probed: 1 }),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(failures).toEqual([
+      "local knowledge regression probes were tautological: exact-technical",
+    ]);
   });
 });

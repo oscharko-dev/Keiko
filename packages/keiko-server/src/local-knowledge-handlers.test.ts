@@ -25,7 +25,10 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -781,6 +784,47 @@ describe("local-knowledge handlers", () => {
     expect(result.status).toBe(400);
   });
 
+  it("rejects capsule-set display metadata that is not evidence-safe", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", {
+        displayName: "https://gateway.example.test/v1?client_secret=value",
+        description: "/Users/alice/private/customer.pdf",
+        capsuleIds: ["cap-1"],
+      }),
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(400);
+    expect(body).toContain("evidence-safe");
+    expect(body).not.toContain("gateway.example.test");
+    expect(body).not.toContain("client_secret");
+    expect(body).not.toContain("/Users/alice");
+  });
+
+  it("rejects capsule-set descriptions that are not evidence-safe", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", {
+        displayName: "Quarterly Review",
+        description: "/Users/alice/private/customer.pdf?client_secret=value",
+        capsuleIds: ["cap-1"],
+      }),
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(400);
+    expect(body).toContain("evidence-safe");
+    expect(body).not.toContain("client_secret");
+    expect(body).not.toContain("/Users/alice");
+  });
+
   it("rejects a capsule set with an empty capsuleIds array", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -963,6 +1007,69 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(400);
     expect(JSON.stringify(result.body)).toContain("contextualRetrieval.modelId");
+  });
+
+  it("applies a valid modelUsePolicy PATCH and reflects it in the capsule response", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", { modelUsePolicy: sealedLocalPodModelUsePolicy() }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(
+      (result.body as { readonly capsule: { readonly modelUsePolicy?: unknown } }).capsule
+        .modelUsePolicy,
+    ).toEqual(sealedLocalPodModelUsePolicy());
+  });
+
+  it("rejects policy PATCH payloads that would echo unsafe capsule labels", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", {
+          displayName: "/Users/alice/private/customer.pdf?client_secret=value",
+          modelUsePolicy: sealedLocalPodModelUsePolicy(),
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("displayName");
+    expect(JSON.stringify(result.body)).toContain("evidence-safe");
+  });
+
+  it("rejects a malformed modelUsePolicy PATCH with 400 instead of coercing it", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", {
+          modelUsePolicy: {
+            schemaVersion: "1",
+            mode: "sealed-local",
+            operations: { externalEmbeddings: "maybe" },
+          },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
   });
 
   it("returns 404 when PATCHing a missing capsule", async () => {
@@ -1168,6 +1275,31 @@ describe("local-knowledge handlers", () => {
       ],
     });
     expect(JSON.stringify(result.body)).not.toContain("knowledgePods");
+  });
+
+  it("redacts legacy capsule-set display names in default list responses", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "/Users/alice/private/customer.pdf?client_secret=value",
+      tags: ["audit"],
+      capsuleIds: [capId],
+    });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsuleSets: [{ id: "set-1", displayName: "Knowledge Pod Set" }],
+    });
+    expect(body).not.toContain("/Users/alice");
+    expect(body).not.toContain("client_secret");
+    expect(body).not.toContain("customer.pdf");
+    expect(body).not.toContain("knowledgePods");
   });
 
   it("lists persisted capsule sets with opt-in additive pod-set summaries", async () => {
@@ -1841,6 +1973,78 @@ describe("local-knowledge handlers", () => {
       .get({ c: capId }) as { readonly n: number };
     verify.close();
     expect(jobs.n).toBe(1);
+  });
+
+  it("refreshes compatible embedding fingerprint drift before normal indexing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "policy.md"), "# Policy\n\nConnected source.\n", "utf8");
+
+    const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
+    const store = openKnowledgeStore({ dbPath });
+    const baseUrl = "https://gateway.example.test/v1";
+    const capId = "cap-fingerprint-drift" as KnowledgeCapsuleId;
+    createCapsule(store, {
+      id: capId,
+      displayName: "Fingerprint Drift",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: embeddingProviderIdentityForTest(baseUrl),
+        modelId: "text-embedding-3-large",
+        vectorDimensions: 3072,
+        vectorMetric: "cosine",
+        normalization: "l2",
+        instructionVersion: "keiko-embedding-input-v1",
+        embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-fingerprint-drift",
+    });
+    addSourceToCapsule(store, capId, {
+      id: "src-fingerprint-drift" as KnowledgeSourceId,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: String(capId) } },
+      depsFor(tmp, "text-embedding-3-large"),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const verify = openKnowledgeStore({ dbPath });
+    const capsule = getCapsule(verify, capId);
+    const vectorRows = verify._internal.db
+      .prepare(
+        "SELECT embedding_space_fingerprint FROM vectors WHERE capsule_id = :c ORDER BY id ASC",
+      )
+      .all({ c: capId }) as unknown as readonly {
+      readonly embedding_space_fingerprint: string | null;
+    }[];
+    verify.close();
+
+    expect(capsule?.embeddingModelIdentity.embeddingSpaceFingerprint).toMatch(
+      /^keiko-embedding-space-fingerprint-v1:[a-f0-9]{24}$/u,
+    );
+    expect(capsule?.embeddingModelIdentity.embeddingSpaceFingerprint).not.toBe(
+      "keiko-embedding-space-fingerprint-v1:aaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    expect(vectorRows.length).toBeGreaterThan(0);
+    expect(
+      vectorRows.every(
+        (row) =>
+          row.embedding_space_fingerprint ===
+          capsule?.embeddingModelIdentity.embeddingSpaceFingerprint,
+      ),
+    ).toBe(true);
   });
 
   it("rejects capsule indexing before any source is attached", async () => {

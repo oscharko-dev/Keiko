@@ -231,9 +231,9 @@ describe("release-impact release notes", () => {
 
     expect(result.status).toBe(0);
     expect(output).toContain("-----BEGIN KEIKO RELEASE NOTES-----");
-    expect(output).toContain("## Keiko 0.2.13 Release Notes");
+    expect(output).toContain("## Keiko 0.2.14 Release Notes");
     expect(output).toContain(
-      "Adds governed Knowledge Pod Sets with sealed model-use policy, embedding-space governance, hybrid retrieval quality controls, and retrieval-activity evidence.",
+      "Fixes Local Knowledge startup for encrypted stores created with the previous v2 content-encryption scope by upgrading them to the current v3 scope instead of surfacing LOCAL_KNOWLEDGE_UNAVAILABLE.",
     );
     expect(output).toContain("release-publish: PLAN-ONLY complete.");
   }, 60_000);

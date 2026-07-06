@@ -11,6 +11,7 @@ const packageSpec =
 const registry = process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/";
 const timeoutMs = Number.parseInt(process.env.KEIKO_REGISTRY_INSTALL_TIMEOUT_MS ?? "300000", 10);
 const skipYarn = process.env.KEIKO_REGISTRY_INSTALL_SKIP_YARN === "1";
+const forceYarn = process.env.KEIKO_REGISTRY_INSTALL_FORCE_YARN === "1";
 
 function fail(message) {
   console.error(`registry-install-smoke failed: ${message}`);
@@ -35,6 +36,35 @@ function assertTlsVerificationEnabled() {
     "registry install smoke requires an HTTPS registry URL. " +
       "Only loopback HTTP is allowed with KEIKO_REGISTRY_INSTALL_ALLOW_INSECURE_LOOPBACK=1.",
   );
+}
+
+function rootPackageSpec() {
+  return `${rootManifest.name}@${rootManifest.version}`;
+}
+
+function isInternalRuntimeDependency(name) {
+  return name.startsWith("@oscharko-dev/keiko-");
+}
+
+function hasRootOnlyBundledRuntimeWorkspaces() {
+  const dependencies =
+    rootManifest.dependencies && typeof rootManifest.dependencies === "object"
+      ? Object.keys(rootManifest.dependencies)
+      : [];
+  const bundled = Array.isArray(rootManifest.bundleDependencies)
+    ? new Set(rootManifest.bundleDependencies)
+    : new Set();
+  const internalDependencies = dependencies.filter(isInternalRuntimeDependency);
+  return internalDependencies.length > 0 && internalDependencies.every((name) => bundled.has(name));
+}
+
+function yarnSkipReason() {
+  if (skipYarn) return "KEIKO_REGISTRY_INSTALL_SKIP_YARN=1";
+  if (forceYarn) return undefined;
+  if (packageSpec === rootPackageSpec() && hasRootOnlyBundledRuntimeWorkspaces()) {
+    return "root-only package bundles private runtime workspaces";
+  }
+  return undefined;
 }
 
 function run(cmd, args, options = {}) {
@@ -126,10 +156,9 @@ async function npmSmoke() {
 }
 
 async function yarnSmoke() {
-  if (skipYarn) {
-    console.log(
-      "registry-install-smoke: yarn check skipped by KEIKO_REGISTRY_INSTALL_SKIP_YARN=1.",
-    );
+  const skipReason = yarnSkipReason();
+  if (skipReason !== undefined) {
+    console.log(`registry-install-smoke: yarn check skipped (${skipReason}).`);
     return;
   }
   const projectDir = mkdtempSync(join(tmpdir(), "keiko-registry-yarn-"));

@@ -50,7 +50,9 @@ describe("installable-package-smoke script", () => {
   it("allows a longer bounded `npm install` timeout on Windows runners", () => {
     const source = readFileSync(scriptPath, "utf8");
     expect(source).toContain("DEFAULT_NPM_INSTALL_TIMEOUT_MS = 90_000");
-    expect(source).toContain("WINDOWS_NPM_INSTALL_TIMEOUT_MS = 300_000");
+    expect(source).toContain("WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000");
+    expect(source).toContain("KEIKO_SMOKE_INSTALL_TIMEOUT_MS");
+    expect(source).toContain("must be a positive integer number of milliseconds");
     expect(source).toMatch(/process\.platform\s*===\s*"win32"/);
   });
 

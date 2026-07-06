@@ -61,11 +61,17 @@ P0 audit branch `codex/audit-knowledge-pods-p0` reviewed the merged Knowledge Po
   Knowledge Pod Set terminology while keeping internal `KnowledgeCapsule` and `CapsuleSet`
   contracts unchanged.
 
-Current GitHub state observed during the audit:
+GitHub state observed during the original delivery audit:
 
-- #1818 and child issues #1843-#1848 remain open with `status: ready for human review`.
-- No issue, project, PR, or board status was changed by this audit because the human-control
-  invariant leaves closure and merge actions to an explicit maintainer step.
+- At delivery time #1818 and child issues #1843-#1848 were open with
+  `status: ready for human review`; no issue, project, PR, or board status was changed by the
+  audit because the human-control invariant leaves closure and merge actions to an explicit
+  maintainer step.
+
+Post-merge update (2026-07-06): the delivery was subsequently merged to `dev` by an explicit
+maintainer step, and #1818 plus child issues #1843-#1848 are now closed with `status: done`. This
+ledger row is corrected here to remove the stale "remain open" claim; the closure remained a human
+action, consistent with the invariant above.
 
 Additional local verification from the audit branch:
 

@@ -97,6 +97,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
       "new-files",
       "new-editor",
       "new-agents",
+      "new-docbrowser",
     ]);
     expect(newCommands.find((c) => c.id === "new-editor")).toBeDefined();
     expect(newCommands.find((c) => c.id === "new-figma")).toBeUndefined();

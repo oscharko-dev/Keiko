@@ -47,12 +47,13 @@ import type {
   EvalCapsuleSpec,
   ModelJudgedRetrievalEvalJudge,
   ModelJudgedRetrievalEvalScores,
+  RetrievalEvalOutcomeSummary,
   RetrievalEvalFixture,
   RetrievalEvalQuery,
   RetrievalEvalScorecard,
 } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
-import type { RetrievalNoEvidenceReason } from "../retrieval/types.js";
+import type { RetrievalDiagnostics, RetrievalNoEvidenceReason } from "../retrieval/types.js";
 
 // ─── Public dependency surface ───────────────────────────────────────────────
 
@@ -153,6 +154,10 @@ interface QueryEvaluation {
   readonly references: Awaited<ReturnType<typeof runLocalKnowledgeRetrieval>>["references"];
   readonly noEvidence: boolean;
   readonly reason?: RetrievalNoEvidenceReason;
+  // The production `RetrievalDiagnostics.mode` for this query, when the search ran far
+  // enough to report one. Threaded through unchanged from `runLocalKnowledgeRetrieval` —
+  // this file adds no retrieval logic of its own.
+  readonly retrievalMode?: RetrievalDiagnostics["mode"];
 }
 
 function scopeCapsuleIds(query: RetrievalEvalQuery): readonly KnowledgeCapsuleId[] {
@@ -207,6 +212,7 @@ async function runOneQuery(
     references: result.references,
     noEvidence: result.noEvidence,
     ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    ...(result.diagnostics !== undefined ? { retrievalMode: result.diagnostics.mode } : {}),
     scores: {
       recall: scoreRecall(result.references, expected),
       precision: scorePrecision(result.references, expected),
@@ -264,6 +270,45 @@ function meanOf(values: readonly number[]): number {
   return sum / values.length;
 }
 
+function recordNoEvidenceReason(
+  counts: Partial<Record<RetrievalNoEvidenceReason, number>>,
+  reason: RetrievalNoEvidenceReason | undefined,
+): void {
+  if (reason === undefined) return;
+  counts[reason] = (counts[reason] ?? 0) + 1;
+}
+
+function recordRetrievalMode(
+  counts: Partial<Record<RetrievalDiagnostics["mode"], number>>,
+  mode: RetrievalDiagnostics["mode"] | undefined,
+): void {
+  if (mode === undefined) return;
+  counts[mode] = (counts[mode] ?? 0) + 1;
+}
+
+function buildOutcomeSummary(perQuery: readonly QueryEvaluation[]): RetrievalEvalOutcomeSummary {
+  const noEvidenceReasonCounts: Partial<Record<RetrievalNoEvidenceReason, number>> = {};
+  const retrievalModeCounts: Partial<Record<RetrievalDiagnostics["mode"], number>> = {};
+  let referenceCount = 0;
+  let noEvidenceCount = 0;
+  let expectedNoEvidenceCount = 0;
+  for (const evaluation of perQuery) {
+    referenceCount += evaluation.references.length;
+    if (evaluation.noEvidence) noEvidenceCount += 1;
+    if (evaluation.query.expectedNoEvidence === true) expectedNoEvidenceCount += 1;
+    recordNoEvidenceReason(noEvidenceReasonCounts, evaluation.reason);
+    recordRetrievalMode(retrievalModeCounts, evaluation.retrievalMode);
+  }
+  return {
+    queryCount: perQuery.length,
+    referenceCount,
+    noEvidenceCount,
+    expectedNoEvidenceCount,
+    noEvidenceReasonCounts: Object.freeze({ ...noEvidenceReasonCounts }),
+    retrievalModeCounts: Object.freeze({ ...retrievalModeCounts }),
+  };
+}
+
 function buildScorecard(
   fixture: RetrievalEvalFixture,
   runId: string,
@@ -290,9 +335,10 @@ function buildScorecard(
     dimensions.citationQuality >= PASS_THRESHOLDS.citationQuality &&
     dimensions.noEvidenceAccuracy >= PASS_THRESHOLDS.noEvidenceAccuracy &&
     dimensions.contextBudgetFit >= PASS_THRESHOLDS.contextBudgetFit;
+  const outcomes = buildOutcomeSummary(perQuery);
   return modelJudged === undefined
-    ? { fixtureId: fixture.id, runId, dimensions, passed }
-    : { fixtureId: fixture.id, runId, dimensions, passed, modelJudged };
+    ? { fixtureId: fixture.id, runId, dimensions, outcomes, passed }
+    : { fixtureId: fixture.id, runId, dimensions, outcomes, passed, modelJudged };
 }
 
 // ─── Default clock ───────────────────────────────────────────────────────────

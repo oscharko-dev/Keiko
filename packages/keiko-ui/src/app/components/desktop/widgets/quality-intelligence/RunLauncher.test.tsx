@@ -20,7 +20,14 @@ import { fireEvent, render, screen, waitFor, act, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
+import {
+  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+  resolveKnowledgePodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import type {
+  CapsuleSetId,
+  KnowledgePodSummary,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceRunStreamMessage,
 } from "@oscharko-dev/keiko-contracts";
@@ -175,8 +182,60 @@ function fakeFetchCapsules(capsules: readonly unknown[]): FetchCapsulesFn {
   return vi.fn().mockResolvedValue({ capsules }) as unknown as FetchCapsulesFn;
 }
 
-function fakeFetchCapsuleSets(capsuleSets: readonly unknown[]): FetchCapsuleSetsFn {
-  return vi.fn().mockResolvedValue({ capsuleSets }) as unknown as FetchCapsuleSetsFn;
+function fakeFetchCapsuleSets(
+  capsuleSets: readonly unknown[],
+  knowledgePods: readonly unknown[] = [],
+): FetchCapsuleSetsFn {
+  return vi.fn().mockResolvedValue({ capsuleSets, knowledgePods }) as unknown as FetchCapsuleSetsFn;
+}
+
+function knowledgePodSetSummary(
+  id: CapsuleSetId,
+  displayName: string,
+  overrides: Partial<Pick<KnowledgePodSummary, "readiness" | "setReadiness">> = {},
+): KnowledgePodSummary {
+  return {
+    schemaVersion: "1",
+    id,
+    kind: "pod-set",
+    displayName,
+    tags: [],
+    readiness: overrides.readiness ?? "ready",
+    counts: { capsuleCount: 1, sourceCount: 0, documentCount: 0, chunkCount: 0, vectorCount: 0 },
+    sourceKinds: [],
+    ...(overrides.setReadiness !== undefined ? { setReadiness: overrides.setReadiness } : {}),
+    retrieval: {
+      lexicalIndex: false,
+      vectorIndex: false,
+      hybridGrounding: true,
+      crossSpaceScoreMixing: false,
+    },
+    privacy: {
+      localFirst: true,
+      modelOpen: true,
+      rawContentExposed: false,
+      privatePathsExposed: false,
+      evidenceMode: "counts-hashes-and-status",
+      storageLocation: "local-runtime-state",
+    },
+    governance: {
+      locationKind: "local",
+      sealingPosture: "local-store-policy",
+      policyPosture: "none",
+      managedServiceDependency: false,
+    },
+    modelUsePolicy: resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy()),
+    compatibility: {
+      backingKind: "capsule-set",
+      capsuleIds: [],
+      sourceIds: [],
+      localKnowledgeSchemaVersion: LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+      migrationRequired: false,
+      persistedStateRenamed: false,
+    },
+    updatedAt: 1,
+    degradationReasons: [],
+  };
 }
 
 const treeEntryBase = {
@@ -641,6 +700,53 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       capsuleSetId: "set-audit-1",
       label: "Audit Knowledge Pod Set",
     });
+  });
+
+  it("surfaces selected Knowledge Pod Set readiness guidance before starting a run", async () => {
+    const user = userEvent.setup();
+    const setId = "set-warning-1" as CapsuleSetId;
+    render(
+      <RunLauncher
+        fetchCapsulesImpl={fakeFetchCapsules([])}
+        fetchCapsuleSetsImpl={fakeFetchCapsuleSets(
+          [
+            {
+              id: setId,
+              displayName: "Warning Knowledge Pod Set",
+              capsuleCount: 2,
+              composedAt: 1,
+            },
+          ],
+          [
+            knowledgePodSetSummary(setId, "Warning Knowledge Pod Set", {
+              readiness: "degraded",
+              setReadiness: {
+                readyCount: 1,
+                draftCount: 0,
+                degradedCount: 0,
+                unavailableCount: 1,
+                deniedCount: 0,
+                indexingCount: 0,
+                staleCount: 0,
+                errorCount: 0,
+                missingCount: 1,
+                reasonCodes: ["missing-member"],
+              },
+            }),
+          ],
+        )}
+      />,
+    );
+
+    await chooseSourceType(user, "Knowledge Pod Set");
+    await screen.findByText("Warning Knowledge Pod Set (2 pods)");
+
+    const guidance = await screen.findByTestId("qi-source-guidance");
+    expect(guidance).toHaveTextContent("Members unavailable");
+    expect(guidance).toHaveTextContent("missing, failed, or unavailable");
+    expect(
+      screen.getByRole("combobox", { name: /knowledge pod set/i }),
+    ).toHaveAccessibleDescription(/missing, failed, or unavailable/i);
   });
 
   it("passes the selected profileId to startImpl", async () => {

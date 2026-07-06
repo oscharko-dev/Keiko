@@ -829,6 +829,67 @@ describe("fail-closed diagnostics", () => {
     expect(afterBytes.includes(Buffer.from(SECTION_LABEL, "utf8"))).toBe(false);
     expect(afterBytes.includes(Buffer.from(HEADING_LABEL, "utf8"))).toBe(false);
   });
+
+  it("upgrades an already-marked v2 encrypted store by sealing document blobs", async () => {
+    const dbPath = join(tmp, "capsules.db");
+    const blobBytes = Buffer.from("PDF preview blob ZGRZZY-V2-BLOB-4242", "utf8");
+    const store = openKnowledgeStore({ dbPath, protection: encryptedProtection(7) });
+    const seeded = await seedCapsuleWithVectors(store);
+    store.close();
+
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw
+        .prepare("UPDATE schema_meta SET value = ? WHERE key = ?")
+        .run("reconstructive-columns/v2", STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeKey);
+      raw
+        .prepare(
+          [
+            "INSERT INTO document_blobs",
+            "(capsule_id, content_hash, byte_length, media_type, storage_kind, seal_version,",
+            " blob_bytes, created_at, created_source_id, created_document_id)",
+            "VALUES (:capsule_id, :content_hash, :byte_length, 'application/pdf',",
+            " 'plaintext', NULL, :blob_bytes, 1, :source_id, :document_id)",
+          ].join(" "),
+        )
+        .run({
+          capsule_id: seeded.capsuleId,
+          content_hash: "v2-blob-hash",
+          byte_length: blobBytes.byteLength,
+          blob_bytes: blobBytes,
+          source_id: seeded.sourceId,
+          document_id: seeded.documentId,
+        });
+    } finally {
+      raw.close();
+    }
+
+    expect(readAllStoreBytes(dbPath).includes(blobBytes)).toBe(true);
+
+    const upgraded = openKnowledgeStore({ dbPath, protection: encryptedProtection(7) });
+    upgraded.close();
+
+    expect(readAllStoreBytes(dbPath).includes(blobBytes)).toBe(false);
+    const verified = new DatabaseSync(dbPath);
+    try {
+      const row = verified
+        .prepare("SELECT storage_kind, seal_version, blob_bytes FROM document_blobs")
+        .get() as {
+        readonly storage_kind: string;
+        readonly seal_version: string;
+        readonly blob_bytes: Uint8Array;
+      };
+      const scope = verified
+        .prepare("SELECT value FROM schema_meta WHERE key = ?")
+        .get(STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeKey) as { readonly value: string };
+      expect(row.storage_kind).toBe("sealed");
+      expect(row.seal_version).toBe(STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.markerValue);
+      expect(Buffer.from(row.blob_bytes).equals(blobBytes)).toBe(false);
+      expect(scope.value).toBe(STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue);
+    } finally {
+      verified.close();
+    }
+  });
 });
 
 describe("encrypted large-document windowed span read", () => {

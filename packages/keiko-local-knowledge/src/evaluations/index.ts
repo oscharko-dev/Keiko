@@ -14,9 +14,11 @@ export {
   mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
+  multiSpaceFixture,
   multilingualFixture,
   noEvidenceFixture,
   semanticParaphraseFixture,
+  sealedPodFixture,
   singleTopicFixture,
   staleIndexFixture,
   structuredFileFixture,
@@ -48,6 +50,15 @@ export { renderRetrievalEvalQualityGateReport } from "./report.js";
 export { runRetrievalEval, type RunRetrievalEvalDeps } from "./runner.js";
 
 export {
+  RETRIEVAL_COMPARISON_MODE_MAP,
+  computeRetrievalModeComparison,
+  renderRetrievalModeComparisonReport,
+  type RetrievalComparisonMode,
+  type RetrievalComparisonRow,
+  type RetrievalModeComparison,
+} from "./comparison.js";
+
+export {
   PASS_THRESHOLDS,
   type EvalCapsuleSpec,
   type EvalChunkSpec,
@@ -61,6 +72,7 @@ export {
   type ModelJudgedRetrievalEvalScores,
   type RetrievalEvalDimensionScores,
   type RetrievalEvalFixture,
+  type RetrievalEvalOutcomeSummary,
   type RetrievalEvalQuery,
   type RetrievalEvalScorecard,
   type RetrievalEvalThresholds,
