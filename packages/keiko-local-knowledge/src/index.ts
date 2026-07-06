@@ -210,3 +210,47 @@ export type { SourceRoutingValidationCode } from "./source-routing-validation.js
 // `QualityIntelligenceLocalKnowledgeCapsuleEnvelope` instances for QI ingestion. No
 // new retrieval logic; consumes only existing local-knowledge / contract types.
 export * as QualityIntelligenceHandoff from "./qualityIntelligence/index.js";
+
+// ─── Static HTML manual crawl (Epic #1853, Issues #1872/#1873) ─────────────────
+// Pure, egress-free link-graph crawler + scope guard. Turns an approved `HtmlManualSource`
+// into a bounded page set for the existing indexing pipeline; byte retrieval is delegated to
+// an injected `ManualCrawlFetcher` (ADR-0019 trust-9).
+export {
+  crawlManual,
+  createInMemoryManualFetcher,
+  createWorkspaceFsManualFetcher,
+  evaluateManualCrawlLink,
+  extractManualLinks,
+  extractManualTitle,
+  type CrawledManualPage,
+  type CrawlLinkDecision,
+  type EvaluateManualCrawlLinkInput,
+  type InMemoryManualPage,
+  type ManualCrawlDenyReason,
+  type ManualCrawlDeps,
+  type ManualCrawlEvent,
+  type ManualCrawlFetcher,
+  type ManualCrawlResult,
+  type ManualCrawlStatus,
+  type ManualFetchResult,
+  type ManualFetchTarget,
+  type WorkspaceFsManualFetcherDeps,
+} from "./crawl/index.js";
+export { createManualPageWorkspaceFs } from "./crawl/index.js";
+
+// ─── HTML manual → Knowledge Pod integration (Epic #1853, Issue #1874) ─────────
+// Reuses createCapsule + addSourceToCapsule + runIndexingJob + buildKnowledgePodSummary end to
+// end; adds no second store or retrieval path. Byte retrieval is injected (trust-9).
+export {
+  createHtmlManualPod,
+  type CreateHtmlManualPodDeps,
+  type CreateHtmlManualPodResult,
+} from "./manual-pod.js";
+export {
+  buildHtmlManualIndexingProgress,
+  type HtmlManualIndexingProgress,
+  type ManualCrawlProgress,
+  type ManualIndexingCounts,
+  type ManualIndexingPhase,
+  type ManualRemediation,
+} from "./manual-pod-progress.js";

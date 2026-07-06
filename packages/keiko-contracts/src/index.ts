@@ -1338,6 +1338,28 @@ export {
   validateDocumentationIndexingApproval,
 } from "./documentation-manual-proposal.js";
 
+// ─── HTML Manual Knowledge Pod source (Epic #1853, Issue #1871) ──────────────────────
+export type {
+  HtmlManualCrawlScope,
+  HtmlManualSourceKind,
+  HtmlManualSource,
+  HtmlManualSourceSummary,
+  DeriveHtmlManualSourceInput,
+} from "./html-manual-source.js";
+export {
+  HTML_MANUAL_SOURCE_SCHEMA_VERSION,
+  HTML_MANUAL_INCLUDE_GLOBS,
+  isSafeManualOrigin,
+  isSafeManualPathPrefix,
+  validateHtmlManualCrawlScope,
+  validateHtmlManualScopeLimits,
+  validateHtmlManualSource,
+  deriveHtmlManualSource,
+  summarizeHtmlManualSource,
+  htmlManualLocalFolderScope,
+  htmlManualReachableFilesScope,
+} from "./html-manual-source.js";
+
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
   SelectedScopeKind,
