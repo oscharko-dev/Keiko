@@ -97,8 +97,10 @@ The summary contract records compatibility explicitly:
 - `persistedStateRenamed: false`
 - `compatibility.backingKind: "knowledge-capsule"` or `"capsule-set"`
 - `governance.locationKind: "local"`
-- `governance.sealingPosture: "local-store-policy"`
-- `governance.policyPosture: "none"`
+- `governance.sealingPosture: "local-store-policy"` for a standard local pod, or
+  `"sealed-pod-policy"` when the model-use policy seals an operation
+- `governance.policyPosture: "not-declared"` for a legacy or default pod, or `"policy-pack"`
+  when an explicit model-use policy is present
 - `governance.managedServiceDependency: false`
 
 Opening Keiko after this change must not require reindexing, vector regeneration, store

@@ -11,8 +11,10 @@ remediation, progress, restart, failure, and success.
 
 Canonical product sources:
 `packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx`,
-`packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx`, and the `.upd*` /
-`.update-notice*` rules in `packages/keiko-ui/src/app/globals.css`.
+`packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx`, the `.upd*` /
+`.update-notice*` rules in `packages/keiko-ui/src/app/globals.css`, and the token-based
+component-scoped refinements in
+`packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css`.
 
 ## When (not) to use
 
