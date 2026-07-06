@@ -19,6 +19,7 @@ export type ManualCrawlDenyReason =
   | "page-limit"
   | "depth-limit"
   | "byte-budget"
+  | "time-limit"
   | "oversized-page"
   | "fetch-failed"
   | "redirect"
@@ -36,7 +37,9 @@ export interface ManualFetchOptions {
 }
 
 // Result of a single fetch. Body-free on failure; on success carries only the bytes, the reported
-// content type, and (for http) whether the origin returned a redirect the crawler must refuse.
+// content type, whether the origin returned a redirect the crawler must refuse, and whether the
+// bytes were cut short by the per-page cap (the crawler denies a truncated page rather than
+// indexing malformed, mid-tag-truncated HTML).
 export type ManualFetchResult =
   | {
       readonly ok: true;
@@ -44,6 +47,7 @@ export type ManualFetchResult =
       readonly contentType: string | null;
       readonly status?: number;
       readonly redirected?: boolean;
+      readonly truncated?: boolean;
     }
   | { readonly ok: false; readonly reason: ManualCrawlDenyReason };
 

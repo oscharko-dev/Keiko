@@ -91,13 +91,14 @@ describe("crawlManual — http link graph", () => {
     expect(result.stats.accepted).toBe(4);
   });
 
-  it("stops at the page limit", async () => {
+  it("stops at the page limit and tallies a page-limit denial so the truncation is not silent", async () => {
     const result = await crawlManual(
       { fetcher: createInMemoryManualFetcher(HTTP_PAGES) },
       httpSource({ maxPages: 2 }),
     );
     expect(result.pages).toHaveLength(2);
     expect(result.status).toBe("limit-reached");
+    expect(reasons(result).has("page-limit")).toBe(true);
   });
 
   it("does not descend past the depth limit", async () => {
@@ -125,6 +126,7 @@ describe("crawlManual — http link graph", () => {
     );
     expect(result.pages).toHaveLength(1);
     expect(result.status).toBe("limit-reached");
+    expect(reasons(result).has("byte-budget")).toBe(true);
   });
 
   it("refuses redirected pages with a redirect reason", async () => {
@@ -190,10 +192,14 @@ describe("crawlManual — local link graph via injected fetcher", () => {
   });
 });
 
-// Minimal in-memory WorkspaceFs for the local fetcher (bytes-only, no symlinks).
-function fakeWorkspaceFs(files: Readonly<Record<string, string>>): WorkspaceFs {
-  const stat = (): WorkspaceStat => ({
-    size: 0,
+// Minimal in-memory WorkspaceFs for the local fetcher (bytes-only, no symlinks by default).
+// `realPath` may be overridden per-test to simulate a resolved symlink.
+function fakeWorkspaceFs(
+  files: Readonly<Record<string, string>>,
+  realPath: (path: string) => string = (path): string => path,
+): WorkspaceFs {
+  const stat = (path: string): WorkspaceStat => ({
+    size: new TextEncoder().encode(files[path] ?? "").length,
     isFile: true,
     isDirectory: false,
     isSymbolicLink: false,
@@ -202,7 +208,7 @@ function fakeWorkspaceFs(files: Readonly<Record<string, string>>): WorkspaceFs {
     readFileUtf8: (path: string): string => files[path] ?? "",
     stat,
     readDir: (): readonly WorkspaceDirEntry[] => [],
-    realPath: (path: string): string => path,
+    realPath,
     exists: (path: string): boolean => path in files,
     readFileBytes: (path: string, maxBytes: number): Promise<Uint8Array> => {
       const content = files[path];
@@ -238,5 +244,34 @@ describe("createWorkspaceFsManualFetcher", () => {
       { maxBytes: 1000 },
     );
     expect(result).toEqual({ ok: false, reason: "fetch-failed" });
+  });
+
+  it("denies a symlink whose realpath escapes to a sibling directory sharing a string prefix with the root", async () => {
+    // /ws/manuals/x-secrets is a SIBLING of /ws/manuals/x: it shares the root string as a prefix
+    // but is NOT contained by it. A bare `startsWith` would wrongly accept this.
+    const escapedPath = "/ws/manuals/x-secrets/leaked.html";
+    const fs = fakeWorkspaceFs(
+      { [escapedPath]: "<title>Leaked</title>" },
+      (): string => escapedPath,
+    );
+    const fetcher = createWorkspaceFsManualFetcher({ fs, rootAbsolutePath: "/ws/manuals/x" });
+    const result = await fetcher.fetchManualPage(
+      { kind: "local", rootPath: "manuals/x", relativePath: "escape/leaked.html" },
+      { maxBytes: 1000 },
+    );
+    expect(result).toEqual({ ok: false, reason: "path-traversal" });
+  });
+
+  it("denies a page whose real size exceeds the per-page byte cap instead of silently truncating it", async () => {
+    const fs = fakeWorkspaceFs({ "/ws/manuals/x/big.html": "<title>Big</title><p>filler</p>" });
+    const fetcher = createWorkspaceFsManualFetcher({ fs, rootAbsolutePath: "/ws/manuals/x" });
+    const result = await fetcher.fetchManualPage(
+      { kind: "local", rootPath: "manuals/x", relativePath: "big.html" },
+      { maxBytes: 5 },
+    );
+    if (!result.ok) throw new Error("expected an ok (truncated) result");
+    expect(result.bytes.length).toBeLessThanOrEqual(5);
+    expect(result.contentType).toBe("text/html");
+    expect(result.truncated).toBe(true);
   });
 });

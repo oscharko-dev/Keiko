@@ -121,12 +121,16 @@ function evaluateHttpLink(
   }
   if (hasActionToken(url.pathname)) return { allow: false, reason: "action-link" };
   if (!isHtmlDocumentPath(url.pathname)) return { allow: false, reason: "non-html" };
-  const canonicalKey = `${url.origin}${url.pathname}`;
+  const relativePath = httpPathToRelative(url.pathname);
   return {
     allow: true,
-    target: { kind: "http", url: canonicalKey },
-    canonicalKey,
-    relativePath: httpPathToRelative(url.pathname),
+    target: { kind: "http", url: `${url.origin}${url.pathname}` },
+    // Canonicalised through the same dir/index normalisation as `relativePath`, so a directory-style
+    // link ("/", "/chapters/") and its explicit-index equivalent ("/index.html",
+    // "/chapters/index.html") dedup to one fetch instead of silently double-fetching the same page
+    // under two seen-set keys.
+    canonicalKey: `${url.origin}/${relativePath}`,
+    relativePath,
     depth: input.baseDepth + 1,
   };
 }
