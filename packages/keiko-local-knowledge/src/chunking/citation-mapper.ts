@@ -50,6 +50,7 @@ interface ParsedUnitHopRow {
   readonly page_label: string | null;
   readonly section_path_json: string | null;
   readonly heading_path_json: string | null;
+  readonly anchor_id: string | null;
   readonly json_pointer: string | null;
   readonly table_name: string | null;
   readonly row_index: number | null;
@@ -72,7 +73,8 @@ const SELECT_CHUNK_SQL =
 
 const SELECT_PARSED_UNIT_SQL = [
   "SELECT kind, page_number, page_label, section_path_json,",
-  "  heading_path_json, json_pointer, table_name, row_index, character_start, character_end",
+  "  heading_path_json, anchor_id, json_pointer, table_name, row_index,",
+  "  character_start, character_end",
   "FROM parsed_units",
   "WHERE capsule_id = :c AND id = :id",
 ].join(" ");
@@ -150,6 +152,7 @@ interface HopFields {
   readonly jsonPointer: string | undefined;
   readonly tableName: string | undefined;
   readonly rowIndex: number | undefined;
+  readonly anchorId: string | undefined;
   readonly characterStart: number | undefined;
   readonly characterEnd: number | undefined;
 }
@@ -162,6 +165,7 @@ function baseHopFields(unit: ParsedUnitHopRow): HopFields {
     jsonPointer: undefined,
     tableName: undefined,
     rowIndex: undefined,
+    anchorId: undefined,
     characterStart: unit.character_start ?? undefined,
     characterEnd: unit.character_end ?? undefined,
   };
@@ -194,6 +198,8 @@ const HOP_FIELDS_BY_KIND = new Map<string, HopFieldsBuilder>([
     (unit, base, cipher): HopFields => ({
       ...base,
       sectionPath: parseStringArray(unit.heading_path_json, cipher),
+      // anchor_id is sealed at rest; open it so a manual citation can deep-link the exact section.
+      anchorId: unit.anchor_id === null ? undefined : cipher.openText(unit.anchor_id),
     }),
   ],
   [
@@ -265,6 +271,7 @@ function buildCitation(
     ...(hop.jsonPointer !== undefined ? { jsonPointer: hop.jsonPointer } : {}),
     ...(hop.tableName !== undefined ? { tableName: hop.tableName } : {}),
     ...(hop.rowIndex !== undefined ? { rowIndex: hop.rowIndex } : {}),
+    ...(hop.anchorId !== undefined ? { anchorId: hop.anchorId } : {}),
     ...(hop.characterStart !== undefined ? { characterStart: hop.characterStart } : {}),
     ...(hop.characterEnd !== undefined ? { characterEnd: hop.characterEnd } : {}),
   };

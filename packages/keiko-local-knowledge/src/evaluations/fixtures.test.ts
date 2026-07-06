@@ -14,6 +14,7 @@ import {
   broadQueryDiversityFixture,
   contextBudgetFixture,
   exactTechnicalFixture,
+  htmlManualStructureFixture,
   mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
@@ -68,6 +69,7 @@ describe("fixtures — registry", () => {
       multilingualFixture.id,
       mixedStrategyFixture.id,
       sealedPodFixture.id,
+      htmlManualStructureFixture.id,
     ]);
   });
 

@@ -50,7 +50,7 @@ export const DEFAULT_OVERLAP_TOKENS = 50;
 export const DEFAULT_MAX_CHUNKS = 50_000;
 export const MAX_CHUNK_TOKENS = 2_048;
 export const MAX_OVERLAP_TOKENS = 1_024;
-export const CHUNKING_STRATEGY_VERSION = "boundary-v3" as const;
+export const CHUNKING_STRATEGY_VERSION = "boundary-v4" as const;
 export const DEFAULT_INDEXING_TEXT_STRATEGY_KEY = "indexed-text=raw-v1" as const;
 export const CONSERVATIVE_TOKENIZER_ID = "keiko-conservative-estimator-v2" as const;
 export const CUSTOM_TOKEN_ESTIMATOR_ID = "custom-token-estimator-v1" as const;

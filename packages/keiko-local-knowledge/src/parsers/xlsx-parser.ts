@@ -9,6 +9,7 @@ import {
   emptyResult,
   objectLimitDiagnostic,
   oversizeDiagnostic,
+  readAttribute,
   shouldStop,
 } from "./_internal.js";
 import type {
@@ -290,10 +291,10 @@ function decodeXml(value: string): string {
   return decodeXmlEntities(value);
 }
 
+// Delegates to the shared `readAttribute` (Epic #1855 promoted the single-tag attribute reader to
+// `_internal.ts` so the HTML and XLSX parsers share one implementation instead of two regexes).
 function attribute(tag: string, name: string): string | undefined {
-  const pattern = new RegExp(`(?:^|\\s)${name}="([^"]*)"`, "u");
-  const match = pattern.exec(tag);
-  return match?.[1] === undefined ? undefined : decodeXml(match[1]);
+  return readAttribute(tag, name);
 }
 
 function xmlTextContent(value: string): string {

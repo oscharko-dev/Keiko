@@ -49,6 +49,10 @@ const WHITESPACE_PATTERN = /\s+/gu;
 const SINGLE_WHITESPACE_PATTERN = /\s/u;
 const INFORMATIVE_CHARACTER_PATTERN = /[\p{L}\p{N}]/u;
 const WORD_CHARACTER_PATTERN = /[\p{L}\p{N}_]/u;
+// A newline that begins a non-blank line. For technical manual structures — preserved code blocks
+// and one-per-line table/definition rows — this lets a too-large unit split at a row/line start
+// instead of mid-line, keeping serialized rows and code lines intact (#1855, Issue #1887).
+const LINE_BOUNDARY_PATTERN = /\n(?=\S)/g;
 const PARAGRAPH_BOUNDARY_PATTERN = /\n[ \t]*\n+/g;
 const MARKDOWN_HEADING_PATTERN = /\n[ \t]*#{1,6}[ \t]+\S/g;
 const HTML_HEADING_PATTERN = /\n?[ \t]*<\/?h[1-6](?:\s|>|$)/gi;
@@ -331,6 +335,14 @@ function chooseChunkEnd(
     maxEnd,
   );
   if (sentence !== undefined) return sentence;
+  // Prefer a line/row start over a mid-line hard cut so preserved code lines and serialized
+  // table/definition rows are not sliced apart when a unit exceeds the token budget.
+  const line = lastBoundaryAtOrAfter(
+    collectBoundaryMatches(sourceText, start, maxEnd, LINE_BOUNDARY_PATTERN, "after-match"),
+    minBoundaryEnd,
+    maxEnd,
+  );
+  if (line !== undefined) return line;
   return adjustedHardEnd(sourceText, minBoundaryEnd, maxEnd);
 }
 

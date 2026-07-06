@@ -339,4 +339,49 @@ describe("mapChunkToCitation", () => {
     expect(citation?.tableName).toBe("scores");
     expect(citation?.rowIndex).toBe(3);
   });
+
+  // Epic #1855 / Issue #1887: an html-block manual anchor round-trips through the sealed
+  // parsed_units column into the citation so an answer can deep-link the exact section.
+  it("surfaces the html-block anchorId and heading sectionPath on the citation", () => {
+    const text = "E_TIMEOUT means the request expired before a response arrived.";
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "html-block",
+      documentId: "doc-1" as never,
+      headingPath: ["Reference", "Error Codes"],
+      anchorId: "error-codes",
+      characterStart: 0,
+      characterEnd: text.length,
+    });
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: text,
+    });
+    const chunkId = result.chunkIds[0] ?? ("" as never);
+    const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
+    expect(citation?.sectionPath).toEqual(["Reference", "Error Codes"]);
+    expect(citation?.anchorId).toBe("error-codes");
+  });
+
+  it("omits anchorId on the citation for an html-block without an anchor", () => {
+    const text = "A section with a heading but no anchor id.";
+    seedParsedUnit(fixture.store, fixture.capsuleId, "u-1", {
+      kind: "html-block",
+      documentId: "doc-1" as never,
+      headingPath: ["Guide"],
+      characterStart: 0,
+      characterEnd: text.length,
+    });
+    const result = chunkDocument(fixture.store, {
+      capsuleId: fixture.capsuleId,
+      sourceId: "src-1" as never,
+      documentId: "doc-1" as never,
+      sourceText: text,
+    });
+    const chunkId = result.chunkIds[0] ?? ("" as never);
+    const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
+    expect(citation?.sectionPath).toEqual(["Guide"]);
+    expect(citation?.anchorId).toBeUndefined();
+  });
 });

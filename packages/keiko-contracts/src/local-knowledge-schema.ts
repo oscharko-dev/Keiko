@@ -8,7 +8,7 @@
 // --------------------
 //   * `LOCAL_KNOWLEDGE_SCHEMA_VERSION` (string `"1"`, from `local-knowledge.ts`) pins the
 //     *in-memory* type-contract surface. A breaking type change adds a new literal member.
-//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `24`, here) pins the *on-disk* DDL and is
+//   * `LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION` (integer `25`, here) pins the *on-disk* DDL and is
 //     stored via `PRAGMA user_version`. The two evolve independently — a new column with a
 //     non-breaking JS-side mapping bumps only the DB version; a contract-breaking type
 //     addition bumps only the string version.
@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 24 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 25 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -286,7 +286,37 @@ CREATE TABLE sections (
 ) STRICT;
 `.trim();
 
+// Fresh-install DDL for parsed_units, carrying the full current column set including the
+// v25 additive `anchor_id`. Applied via KNOWLEDGE_CAPSULE_DDL. `CREATE_PARSED_UNITS_V1`
+// below is the frozen v1 shape (no `anchor_id`) used by the v1 migration; the v25 migration
+// then `ALTER TABLE ... ADD COLUMN anchor_id` so a migrated store converges to this shape.
 const CREATE_PARSED_UNITS = `
+CREATE TABLE parsed_units (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  page_number INTEGER,
+  page_label TEXT,
+  section_path_json TEXT,
+  json_pointer TEXT,
+  table_name TEXT,
+  row_index INTEGER,
+  heading_path_json TEXT,
+  anchor_id TEXT,
+  unsupported_reason TEXT,
+  character_start INTEGER,
+  character_end INTEGER,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+// Frozen v1 shape of parsed_units (no `anchor_id`). The v1 migration must reproduce the
+// original on-disk shape exactly; the v25 migration is the delta that adds `anchor_id`, so an
+// existing v1 store upgrades to the same shape a fresh install gets from CREATE_PARSED_UNITS.
+const CREATE_PARSED_UNITS_V1 = `
 CREATE TABLE parsed_units (
   id TEXT PRIMARY KEY NOT NULL,
   capsule_id TEXT NOT NULL,
@@ -855,7 +885,7 @@ const V1_DDL_WITHOUT_V2: readonly string[] = [
   CREATE_DOCUMENTS_V14,
   CREATE_PAGES,
   CREATE_SECTIONS_V1,
-  CREATE_PARSED_UNITS,
+  CREATE_PARSED_UNITS_V1,
   CREATE_CHUNKS_V1,
   CREATE_VECTORS_V17,
   CREATE_PARSER_DIAGNOSTICS,
@@ -1175,6 +1205,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     version: 24,
     reason: "Persist additive Knowledge Pod model-use policy JSON for sealed local pod behavior.",
     up: ["ALTER TABLE capsules ADD COLUMN model_use_policy_json TEXT;"],
+  },
+  {
+    version: 25,
+    reason:
+      "Persist additive html-block anchor_id (in-document fragment id) for high-quality technical HTML manual retrieval and anchor-precise citations (#1855).",
+    up: ["ALTER TABLE parsed_units ADD COLUMN anchor_id TEXT;"],
   },
 ] as const;
 

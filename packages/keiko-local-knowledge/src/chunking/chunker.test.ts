@@ -293,4 +293,24 @@ describe("chunkParsedUnit — pure", () => {
     expect(chunks[0]?.characterEnd).toBe(60);
     expect(chunks[0]?.safeExcerptHash).toBe(sha256Hex("yyyyyyyyyy"));
   });
+
+  // Epic #1855 / Issue #1887: a too-large code block or one-per-line table must split at line
+  // starts, not mid-line, so preserved code lines and serialized rows stay intact. Lines are kept
+  // short relative to the token budget so a line boundary is always available within budget.
+  it("splits an oversized code/table unit at line boundaries, never mid-line", () => {
+    const lines = Array.from({ length: 30 }, (_, index) => `k${String(index % 10)}`);
+    const sourceText = lines.join("\n");
+    const unit = pageUnit(0, sourceText.length);
+    const chunks = chunkParsedUnit(unit, sourceText, {
+      minTokens: 1,
+      maxTokens: 4,
+      overlapTokens: 0,
+    });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      if (chunk.characterEnd >= sourceText.length) continue;
+      // Chunk boundary lands exactly after a newline (the start of the next line), never mid-line.
+      expect(sourceText.charAt(chunk.characterEnd - 1)).toBe("\n");
+    }
+  });
 });

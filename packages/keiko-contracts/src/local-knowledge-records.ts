@@ -106,6 +106,11 @@ export type ParsedUnit =
       readonly kind: "html-block";
       readonly documentId: DocumentId;
       readonly headingPath?: readonly string[];
+      // In-document fragment anchor (an element `id`/`name` slug, e.g. `"error-codes"`) for the
+      // block, when the manual markup carries one (Epic #1855, Issue #1885). Never a full URL or
+      // path — a fragment identifier only, so a citation can deep-link to the exact manual section
+      // without surfacing a raw href. Optional so existing html-block producers stay valid.
+      readonly anchorId?: string;
       readonly characterStart: number;
       readonly characterEnd: number;
     }
@@ -167,6 +172,11 @@ export interface CitationReference {
   readonly jsonPointer?: string;
   readonly tableName?: string;
   readonly rowIndex?: number;
+  // In-document fragment anchor projected from the cited html-block ParsedUnit (Epic #1855,
+  // Issue #1887). A fragment identifier only (never a raw href/path), so a citation surface can
+  // deep-link a technical-manual answer to the exact section. Reused by sibling Epic #1854's
+  // citation-metadata child #1879 rather than defining a competing shape.
+  readonly anchorId?: string;
   readonly characterStart?: number;
   readonly characterEnd?: number;
   readonly safeDisplayName: string;
