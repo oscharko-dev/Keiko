@@ -1319,6 +1319,105 @@ describe("local-knowledge reranker diagnostics", () => {
     });
     expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
   });
+
+  it.each([
+    {
+      kind: "timeout" as const,
+      status: "unavailable" as const,
+      reasonCode: "reranker-unavailable",
+    },
+    {
+      kind: "invalid-response" as const,
+      status: "invalid-response" as const,
+      reasonCode: "reranker-invalid-response",
+    },
+  ])(
+    "preserves fused order and degrades activity when the configured reranker returns $kind",
+    async ({ kind, status, reasonCode }) => {
+      const embeddingModelId = "text-embedding-3-small";
+      const knowledgeStore = openKnowledgeStore({
+        dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+      });
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Failed Reranker Capsule",
+        capsuleId: `cap-reranker-${kind}` as KnowledgeCapsuleId,
+        sourceId: `src-reranker-${kind}` as KnowledgeSourceId,
+        text: "alpha beta failed reranker first. alpha beta failed reranker second.",
+        chunkingOptions: { maxTokens: 4, minTokens: 0, overlapTokens: 0 },
+      });
+      updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+      knowledgeStore.close();
+
+      const project = rescueStore.createProject(rescueTmp, `reranker-${kind}-project`);
+      const created = rescueStore.createChat(project.path, `Reranker ${kind}`, "chat-model");
+      const chat = rescueStore.updateChat(created.id, {
+        localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+      });
+      let rerankCalls = 0;
+      const deps: UiHandlerDeps = {
+        config: {
+          providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+          circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+          capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+          grounding: { maxPromptReferences: 2 },
+          reranker: {
+            modelId: "qwen3-reranker",
+            baseUrl: "https://reranker.example/v1",
+            apiKey: "reranker-test-key",
+            timeoutMs: 30_000,
+          },
+        },
+        configPresent: true,
+        evidenceStore: {
+          put: () => "",
+          list: () => [],
+          get: () => undefined,
+          delete: () => undefined,
+        },
+        env: {},
+        redactor: (value: unknown): unknown => value,
+        registry: createRunRegistry(),
+        modelPortFactory: () => answerModel("Alpha beta [1]. Alpha beta [2].", `reranker-${kind}`),
+        store: rescueStore,
+        uiDbPath: join(rescueTmp, "keiko-ui.db"),
+        localKnowledgeEmbeddingRequest: scriptedAdapter().request,
+        rerankRequest: (request) => {
+          rerankCalls += 1;
+          expect(request.documents).toHaveLength(2);
+          return Promise.resolve({ ok: false, kind });
+        },
+      };
+
+      const result = await handleLocalKnowledgeGroundedAsk(
+        chat,
+        { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+        deps,
+        new AbortController().signal,
+      );
+
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      const answer = result.body as Extract<
+        GroundedAnswer,
+        { readonly groundingKind: "local-knowledge" }
+      >;
+      expect(rerankCalls).toBe(1);
+      expect(answer.citations.map((citation) => citation.marker)).toEqual(["[1]", "[2]"]);
+      expect(answer.contextPack.reranker).toMatchObject({
+        status,
+        mode: "provider-backed",
+        failureKind: kind,
+        candidateCount: 2,
+        documentCount: 2,
+        keptCount: 2,
+      });
+      expect(JSON.stringify(answer.contextPack.reranker)).not.toContain("reranker.example");
+      expect(JSON.stringify(answer.contextPack.reranker)).not.toContain("reranker-test-key");
+      expect(answer.retrievalActivity?.pods[0]).toMatchObject({
+        state: "degraded",
+        reasonCodes: ["searched", reasonCode],
+      });
+    },
+  );
 });
 
 describe("reranker reference selection helpers (#1922 / #1925 / #1926)", () => {
@@ -1465,11 +1564,13 @@ describe("local-knowledge retrieval activity", () => {
   it("returns redacted not-ready activity when unsafe state-failure metadata is present", async () => {
     const unsafeCapsuleId = "state-owner@example.com" as KnowledgeCapsuleId;
     const unsafeSourceId = "state-source@example.com" as KnowledgeSourceId;
+    const unsafeDisplayName =
+      "state-owner@example.com /Users/alice/private/pod.md https://reranker.example/v1 sk-rerank-secret";
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
     });
     await seedCapsuleWithVectors(knowledgeStore, {
-      displayName: "state-owner@example.com",
+      displayName: unsafeDisplayName,
       capsuleId: unsafeCapsuleId,
       sourceId: unsafeSourceId,
     });
@@ -1519,8 +1620,13 @@ describe("local-knowledge retrieval activity", () => {
       reasonCodes: ["indexing-in-progress"],
     });
     expect(answer.retrievalActivity?.pods[0]?.podId).toMatch(/^pod-[a-f0-9]{16}$/u);
-    expect(JSON.stringify(answer.retrievalActivity)).not.toContain("state-owner@example.com");
-    expect(JSON.stringify(answer.retrievalActivity)).not.toContain("state-source@example.com");
+    expect(answer.contextPack.scopeLabel).toBe("Knowledge Pod");
+    const serialized = JSON.stringify(answer);
+    expect(serialized).not.toContain("state-owner@example.com");
+    expect(serialized).not.toContain("state-source@example.com");
+    expect(serialized).not.toContain("/Users/alice/private");
+    expect(serialized).not.toContain("reranker.example");
+    expect(serialized).not.toContain("sk-rerank-secret");
   });
 
   it("maps retrieval diagnostics modes to activity modes", async () => {
