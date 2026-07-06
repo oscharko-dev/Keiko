@@ -1,8 +1,8 @@
 # Portable Runtime Artifact Contract
 
-Status: Contract baseline for Issue #1947. This document defines the release artifact shape that
-later portable delivery children must implement and verify. It does not build artifacts, publish
-assets, or change updater execution logic.
+Status: Contract baseline for Issue #1947 and staging baseline for Issue #1948. This document
+defines the release artifact shape that later portable delivery children must implement and verify.
+It does not publish assets or change updater execution logic.
 
 Governing decisions:
 
@@ -36,26 +36,37 @@ portable assets as a release-blocking set:
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
 
-## Archive Layout
+## Current Staging Status
 
-All archives extract into one top-level `Keiko/` directory. That directory is a bootstrap payload,
-not the long-lived self-update target until first-run setup attests and promotes a managed install.
+Issue #1948 stages the packed Keiko package, acquires and verifies the target Node.js runtime
+archive, extracts that runtime into the portable payload, and validates redacted sidecar manifests.
+It does not perform production signing, macOS notarization, release upload, native launcher
+implementation, first-run setup, or updater swap.
+
+Generated #1948 staging manifests therefore use `signatureVerified: false`,
+`notarizationVerified: false`, and `platformSignatureLocallyVerified: false` under an explicit
+unverified-staging validation mode. They also use `artifact.assetId: 0` because GitHub Release
+asset ids do not exist until #1952 uploads the artifacts. Those artifacts are manual-only staging
+outputs until #1951 replaces the metadata with verified signing/notarization evidence and #1952
+binds real GitHub Release asset ids. The manifest example below remains the production-complete
+contract for artifacts that may be promoted as portable release assets.
+
+## Archive And Evidence Layout
+
+Portable staging produces a target directory containing the final ZIP asset, a payload tree for
+layout inspection, and sidecar manifest/evidence records. The sidecars bind the ZIP bytes by hash
+and size; they are sidecars rather than in-archive records so `artifact.sha256` can describe the
+actual release asset without a self-referential manifest checksum.
+
+Every ZIP asset extracts into one top-level `Keiko/` directory. That directory is a bootstrap
+payload, not the long-lived self-update target until first-run setup attests and promotes a managed
+install.
 
 Windows archive:
 
 ```text
-Keiko/
-  Keiko.exe
-  app/
-    package.json
-    dist/
-    node_modules/
-    release-impact.catalog.json
-  runtime/
-    node/
-      node.exe
-      LICENSE
-      NOTICE
+windows-x64/
+  keiko-windows-x64.zip
   manifest/
     portable-manifest.json
   evidence/
@@ -63,39 +74,57 @@ Keiko/
     sbom.cdx.json
     third-party-notices.txt
     signing-verification.json
-  support/
-    keiko-support.cmd
+  payload/
+    Keiko/
+      Keiko.exe
+      app/
+        package.json
+        dist/
+        node_modules/
+        release-impact.catalog.json
+      runtime/
+        node/
+          node.exe
+          LICENSE
+          NOTICE
+          NODE_RUNTIME_SOURCE.json
+      support/
+        keiko-support.cmd
 ```
 
 macOS archive:
 
 ```text
-Keiko/
-  Keiko.app/
-    Contents/
-      Info.plist
-      MacOS/
-        Keiko
-      Resources/
-        app/
-          package.json
-          dist/
-          node_modules/
-          release-impact.catalog.json
-        runtime/
-          node/
-            bin/node
-            LICENSE
-            NOTICE
-        manifest/
-          portable-manifest.json
-        evidence/
-          SHA256SUMS.txt
-          sbom.cdx.json
-          third-party-notices.txt
-          signing-verification.json
-  support/
-    keiko-support.sh
+macos-arm64/
+  keiko-macos-arm64.zip
+  manifest/
+    portable-manifest.json
+  evidence/
+    SHA256SUMS.txt
+    sbom.cdx.json
+    third-party-notices.txt
+    signing-verification.json
+  payload/
+    Keiko/
+      Keiko.app/
+        Contents/
+          Info.plist
+          MacOS/
+            Keiko
+          Resources/
+            app/
+              package.json
+              dist/
+              node_modules/
+              release-impact.catalog.json
+            runtime/
+              node/
+                bin/node
+                LICENSE
+                NOTICE
+                NODE_RUNTIME_SOURCE.json
+      support/
+        keiko-support.sh
 ```
 
 Layout rules:
@@ -106,12 +135,14 @@ Layout rules:
   referenced from default install/start copy.
 - `app/` contains the built root `@oscharko-dev/keiko` product surface from the same source package
   contract as npm publication, not ad hoc copied workspace source.
-- `runtime/node/` contains the pinned Node.js runtime for the exact platform target. It is private
-  to this Keiko artifact and must not be installed globally.
-- `manifest/portable-manifest.json` is the artifact contract record for build, setup, release, and
-  updater children.
-- `evidence/` contains release artifact evidence only. It must be content-free with respect to
-  customer data.
+- `runtime/node/` contains the extracted pinned Node.js runtime for the exact platform target, not
+  only the source archive. It is private to this Keiko artifact and must not be installed globally.
+- `runtime/node/NODE_RUNTIME_SOURCE.json` records the content-free source archive identity, target,
+  version, and SHA-256 digest used to populate the runtime payload.
+- `manifest/portable-manifest.json` is the sidecar artifact contract record for build, setup,
+  release, and updater children.
+- `evidence/` contains sidecar release artifact evidence only. It must be content-free with
+  respect to customer data.
 
 ## Managed Install Layout
 
@@ -289,12 +320,14 @@ Validation rules:
 - `schemaVersion` is `1` until a later issue deliberately revises the schema.
 - `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
+- `artifact.assetId` must be a real non-zero GitHub Release asset id for production manifests.
+  `0` is reserved for #1948 unverified staging manifests only.
 - `artifact.sha256`, `runtime.nodeArchiveSha256`, and `release.commitSha` are digests, not paths.
 - `provenance.sourceCommitSha`, `provenance.rootPackageTarballSha256`,
   `provenance.packagedAppTreeSha256`, and `provenance.provenanceStatementSha256` bind the packaged
   application surface to the same reviewed release artifact; gate names alone are not provenance.
-- All path fields are relative to the archive root or app bundle resource root. Absolute paths are
-  forbidden in manifests.
+- All path fields are relative to the sidecar staging root or payload resource root. Absolute paths
+  are forbidden in manifests.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
 - `updateEligibility.requiredPredicates` must all be true before the one-click portable updater may
