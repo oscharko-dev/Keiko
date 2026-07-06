@@ -87,6 +87,69 @@ function sessionStatus(overrides: Partial<UpdateSessionStatus> = {}): UpdateSess
   };
 }
 
+function portableManagedStatus(overrides: Partial<UpdateSessionStatus> = {}): UpdateSessionStatus {
+  return sessionStatus({
+    installMode: {
+      schemaVersion: "1",
+      status: "supported",
+      packageName: "@oscharko-dev/keiko",
+      installKind: "portable-managed",
+      installRoot: "/Users/private/Keiko",
+      recommendedAction: "portable-managed-update",
+      portable: {
+        status: "managed",
+        target: "macos-arm64",
+        updateEligible: true,
+        packageVersion: "0.2.9",
+        stable: true,
+        managedRootKind: "home-relative",
+      },
+      asset: {
+        target: "macos-arm64",
+        fileName: "keiko-macos-arm64.zip",
+        packageVersion: "0.2.10",
+        verificationStatus: "verified",
+      },
+    },
+    ...overrides,
+  });
+}
+
+function portableReleaseReport(
+  overrides: Partial<UpdatePreflightReport> = {},
+): UpdatePreflightReport {
+  return preflight({
+    installabilitySource: "github-release-asset",
+    portableAsset: {
+      source: "github-release-asset",
+      target: "macos-arm64",
+      requiredAssetName: "keiko-macos-arm64.zip",
+      status: "eligible",
+      asset: {
+        target: "macos-arm64",
+        assetName: "keiko-macos-arm64.zip",
+        assetId: 120,
+        releaseId: 12,
+        sizeBytes: 48_000_000,
+        sha256: "0".repeat(64),
+        manifestAssetName: "macos-arm64-portable-manifest.json",
+        manifestSha256: "1".repeat(64),
+        checksumAssetName: "macos-arm64-SHA256SUMS.txt",
+        checksumVerified: true,
+      },
+    },
+    release: {
+      source: "github-release",
+      tag: "v0.2.10",
+      title: "Keiko 0.2.10",
+      summary: "Portable update.",
+      notes: ["Portable update."],
+      url: "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
+    },
+    ...overrides,
+  });
+}
+
 function remediation(
   overrides: Partial<UpdateRemediationStatusReport> = {},
 ): UpdateRemediationStatusReport {
@@ -164,6 +227,94 @@ describe("UpdateWindow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Install update" }));
     await waitFor(() => {
       expect(api.startSession).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
+    });
+  });
+
+  it("uses one explicit Update action for eligible portable-managed updates", async () => {
+    const api = apiFor({
+      report: portableReleaseReport(),
+      status: portableManagedStatus(),
+    });
+
+    const { container } = render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Click Update. Keiko will download, verify, apply, relaunch, and verify the new version.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update Keiko" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Install update" })).toBeNull();
+    expect(screen.queryByText("Manual update path")).toBeNull();
+    expect(screen.queryByText("npm")).toBeNull();
+    expect(screen.queryByText("Yarn")).toBeNull();
+    expect(await axe(container)).toHaveNoViolations();
+
+    fireEvent.click(screen.getByRole("button", { name: "Update Keiko" }));
+    await waitFor(() => {
+      expect(api.startSession).toHaveBeenCalledWith({ targetVersion: "0.2.10" });
+    });
+  });
+
+  it("limits blocked portable-managed updates to retry, current, details, and manual download", async () => {
+    const api = apiFor({
+      report: portableReleaseReport({
+        manualUpdateRequired: true,
+        oneClickEligible: false,
+        userActionRequired: true,
+        portableAsset: {
+          source: "github-release-asset",
+          target: "macos-arm64",
+          requiredAssetName: "keiko-macos-arm64.zip",
+          status: "malformed",
+        },
+        blockers: [
+          {
+            code: "portable-checksum-mismatch",
+            severity: "high",
+            message: "The release asset checksum did not match the manifest.",
+            userActionRequired: true,
+          },
+        ],
+      }),
+      status: portableManagedStatus(),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByRole("heading", { name: "Update available" })).toBeInTheDocument();
+    expect(screen.getByText("Portable update needs attention")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Keiko cannot complete this portable update automatically right now. The current version remains usable.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Keep using the current Keiko version; this update has not replaced it."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Open technical details below for the redacted reason Keiko blocked the update.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Manual update instructions")).toBeNull();
+    expect(screen.queryByLabelText("Package-manager commands")).toBeNull();
+    expect(screen.queryByText("npm")).toBeNull();
+    expect(screen.queryByText("Yarn")).toBeNull();
+
+    const download = screen.getByRole("link", { name: "Open manual download" });
+    expect(download).toHaveAttribute(
+      "href",
+      "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
+    );
+    fireEvent.click(screen.getByText("Technical details and logs"));
+    expect(
+      screen.getByText("The release asset checksum did not match the manifest."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => {
+      expect(api.checkPreflight).toHaveBeenCalledTimes(1);
     });
   });
 

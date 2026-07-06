@@ -36,6 +36,9 @@ import {
   featureStateLabel,
   impactInput,
   isManualUpdatePath,
+  isPortableManagedInstall,
+  isPortableManagedManualPath,
+  isPortableManagedOneClickPath,
   isSessionInProgress,
   isUpdateCheckUnavailable,
   remediationLabel,
@@ -343,6 +346,7 @@ function primaryActionText(
   if (remediation.overallStatus === "manual-review-required") {
     return t("updates.primary.manualReview");
   }
+  if (isPortableManagedOneClickPath(report, session)) return t("updates.primary.portableAvailable");
   if (report.updateAvailable) return t("updates.primary.available");
   return t("updates.primary.current");
 }
@@ -427,6 +431,7 @@ function PrimaryActions({
   const visibleSession = sessionForDisplay(session, report);
   const disabled = busy !== undefined;
   const manual = isManualUpdatePath(report, session);
+  const portableManaged = isPortableManagedOneClickPath(report, session);
   if (visibleSession?.phase === "restart-required") {
     return (
       <>
@@ -481,7 +486,7 @@ function PrimaryActions({
       disabled={disabled || report.targetVersion === undefined}
       onClick={onStart}
     >
-      {t("updates.action.install")}
+      {portableManaged ? t("updates.action.updatePortable") : t("updates.action.install")}
     </button>
   );
 }
@@ -853,6 +858,9 @@ function ManualPath({
 }): ReactNode {
   const t = useTranslate();
   if (!isManualUpdatePath(report, session)) return null;
+  if (isPortableManagedManualPath(report, session)) {
+    return <PortableManualPath report={report} busy={busy} onCheck={onCheck} />;
+  }
   const instructions = session.installMode.manualInstructions ?? t("updates.manual.default");
   const commands = manualPackageManagerCommands(session, report.targetVersion);
   const releaseUrl = report.release?.url;
@@ -910,6 +918,50 @@ function ManualPath({
       {releaseUrl !== undefined ? (
         <a className="upd-link" href={releaseUrl} target="_blank" rel="noopener noreferrer">
           {t("updates.manual.releaseLink")}
+          <Icons.external size={13} aria-hidden="true" />
+        </a>
+      ) : null}
+    </section>
+  );
+}
+
+function PortableManualPath({
+  report,
+  busy,
+  onCheck,
+}: {
+  readonly report: UpdatePreflightReport;
+  readonly busy: BusyAction;
+  readonly onCheck: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const releaseUrl = report.release?.url;
+  return (
+    <section className="upd-panel upd-manual" aria-labelledby="updates-portable-manual-title">
+      <div className="upd-panel-head">
+        <strong id="updates-portable-manual-title">{t("updates.portableManual.title")}</strong>
+        <span>{t("updates.portableManual.body")}</span>
+      </div>
+      <ul className="upd-manual-steps">
+        <li>{t("updates.portableManual.retry")}</li>
+        <li>{t("updates.portableManual.current")}</li>
+        <li>{t("updates.portableManual.details")}</li>
+        <li>{t("updates.portableManual.download")}</li>
+      </ul>
+      <div className="upd-manual-finish">
+        <span>{t("updates.portableManual.finish")}</span>
+        <button
+          type="button"
+          className="upd-secondary-btn"
+          disabled={busy !== undefined}
+          onClick={onCheck}
+        >
+          {t("updates.action.check")}
+        </button>
+      </div>
+      {releaseUrl !== undefined ? (
+        <a className="upd-link" href={releaseUrl} target="_blank" rel="noopener noreferrer">
+          {t("updates.portableManual.releaseLink")}
           <Icons.external size={13} aria-hidden="true" />
         </a>
       ) : null}
@@ -1016,7 +1068,11 @@ function TechnicalDetails({
           </div>
           <div>
             <dt>{t("updates.details.installMode")}</dt>
-            <dd>{session.installMode.status}</dd>
+            <dd>
+              {isPortableManagedInstall(session)
+                ? t("updates.details.installModePortableManaged")
+                : session.installMode.status}
+            </dd>
           </div>
           <div>
             <dt>{t("updates.details.remediation")}</dt>

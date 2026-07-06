@@ -167,6 +167,33 @@ describe("UpdateStartupNotice", () => {
     expect(screen.queryByText("Update available")).toBeNull();
   });
 
+  it("uses portable update wording for eligible release assets", async () => {
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () =>
+          report({
+            installabilitySource: "github-release-asset",
+            portableAsset: {
+              source: "github-release-asset",
+              target: "macos-x64",
+              requiredAssetName: "keiko-macos-x64.zip",
+              status: "eligible",
+            },
+          }),
+        )}
+      />,
+    );
+
+    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Version 0.2.10 is ready. Open updates, then click Update when you are ready.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("uses alert treatment and visible critical wording for critical updates", async () => {
     render(
       <UpdateStartupNotice
