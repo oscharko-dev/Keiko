@@ -36,6 +36,10 @@ const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 const NODE_VERSION = "24.14.0";
 const STAGE_COMMAND_TIMEOUT_MS = 300_000;
 const VERIFY_SIGNING_SCRIPT = "scripts/verify-portable-runtime-signing.mjs";
+const ROOT_MANIFEST = JSON.parse(readFileSync("package.json", "utf8"));
+const ROOT_PACKAGE_VERSION = ROOT_MANIFEST.version;
+const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
+const PORTABLE_RELEASE_IMPACT_ENTRY_ID = `2026-07-06-keiko-${ROOT_PACKAGE_VERSION}-portable-runtime-staging-contract`;
 let packageSurfacePreparedForTest = false;
 
 const BASE_MANIFEST = {
@@ -43,11 +47,11 @@ const BASE_MANIFEST = {
   product: {
     name: "Keiko",
     packageName: "@oscharko-dev/keiko",
-    packageVersion: "0.2.11",
+    packageVersion: ROOT_PACKAGE_VERSION,
   },
   release: {
     releaseId: 123456789,
-    releaseTag: "v0.2.11",
+    releaseTag: ROOT_RELEASE_TAG,
     stable: true,
     commitSha: COMMIT_SHA,
   },
@@ -61,7 +65,7 @@ const BASE_MANIFEST = {
   },
   provenance: {
     sourceCommitSha: COMMIT_SHA,
-    rootPackageVersion: "0.2.11",
+    rootPackageVersion: ROOT_PACKAGE_VERSION,
     rootPackageTarballSha256: DIGEST_B,
     packagedAppTreeSha256: DIGEST_C,
     buildWorkflowRunId: 123456789,
@@ -122,16 +126,16 @@ const BASE_MANIFEST = {
   releaseImpact: {
     catalogPath: "app/release-impact.catalog.json",
     entryId: "release-impact-entry-id",
-    entryPackageVersion: "0.2.11",
-    entryReleaseTag: "v0.2.11",
+    entryPackageVersion: ROOT_PACKAGE_VERSION,
+    entryReleaseTag: ROOT_RELEASE_TAG,
     reviewedBinding: {
       releaseId: 123456789,
-      releaseTag: "v0.2.11",
+      releaseTag: ROOT_RELEASE_TAG,
       assetId: 123456789,
       assetName: "keiko-windows-x64.zip",
       assetSizeBytes: 12345678,
       platformTarget: "windows-x64",
-      packageVersion: "0.2.11",
+      packageVersion: ROOT_PACKAGE_VERSION,
       nodeRuntimeIdentity: "node-v24.0.0-win32-x64",
       archiveSha256: DIGEST_A,
       provenanceStatementSha256: DIGEST_D,
@@ -408,7 +412,7 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
       nodeVersion: NODE_VERSION,
       outDir,
       releaseId: 123456789,
-      releaseTag: "v0.2.11",
+      releaseTag: ROOT_RELEASE_TAG,
       sidecarRuntimeSpecs,
       target,
     },
@@ -541,7 +545,7 @@ function stageArgs(dir, platformTarget, nodeArchive, sidecarSpec) {
     "--release-id",
     "123456789",
     "--release-tag",
-    "v0.2.11",
+    ROOT_RELEASE_TAG,
     "--node-cache-dir",
     join(dir, "cache"),
     "--out-dir",
@@ -1160,9 +1164,7 @@ describe("stage-portable-runtime", () => {
     });
     expect(manifest.artifact.assetId).toBe(0);
     expect(manifest.releaseImpact.reviewedBinding.assetId).toBe(0);
-    expect(manifest.releaseImpact.entryId).toBe(
-      "2026-07-05-keiko-0.2.11-portable-runtime-staging-contract",
-    );
+    expect(manifest.releaseImpact.entryId).toBe(PORTABLE_RELEASE_IMPACT_ENTRY_ID);
     expect(manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified).toBe(
       false,
     );
@@ -1262,7 +1264,7 @@ describe("stage-portable-runtime", () => {
       schemaVersion: 1,
       platformTarget: "macos-arm64",
       packageName: "@oscharko-dev/keiko",
-      packageVersion: "0.2.11",
+      packageVersion: ROOT_PACKAGE_VERSION,
       primaryLauncher: "Keiko.app",
       bootstrapUpdateEligible: false,
     });
@@ -1508,7 +1510,7 @@ describe("stage-portable-runtime", () => {
       "--release-id",
       "123456789",
       "--release-tag",
-      "v0.2.11",
+      ROOT_RELEASE_TAG,
       "--node-cache-dir",
       join(dir, "cache"),
       "--out-dir",
@@ -1539,7 +1541,7 @@ describe("stage-portable-runtime", () => {
       "--release-id",
       "123456789",
       "--release-tag",
-      "v0.2.11",
+      ROOT_RELEASE_TAG,
       "--node-cache-dir",
       join(dir, "cache"),
       "--out-dir",
@@ -1570,7 +1572,7 @@ describe("stage-portable-runtime", () => {
       "--release-id",
       "123456789",
       "--release-tag",
-      "v0.2.11",
+      ROOT_RELEASE_TAG,
       "--node-cache-dir",
       join(dir, "cache"),
       "--out-dir",
@@ -1602,7 +1604,7 @@ describe("stage-portable-runtime", () => {
       "--release-id",
       "123456789",
       "--release-tag",
-      "v0.2.11",
+      ROOT_RELEASE_TAG,
       "--node-cache-dir",
       join(dir, "cache"),
       "--out-dir",
@@ -1631,7 +1633,7 @@ describe("stage-portable-runtime", () => {
       "--release-id",
       "123456789",
       "--release-tag",
-      "v0.2.11-beta.1",
+      `${ROOT_RELEASE_TAG}-beta.1`,
       "--node-cache-dir",
       join(dir, "cache"),
       "--out-dir",

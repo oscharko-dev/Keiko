@@ -162,12 +162,12 @@
       }
     },
     {
-      "id": "2026-07-05-keiko-0.2.11-portable-runtime-staging-contract",
+      "id": "2026-07-06-keiko-0.2.14-portable-runtime-staging-contract",
       "packageName": "@oscharko-dev/keiko",
-      "packageVersion": "0.2.11",
+      "packageVersion": "0.2.14",
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
-      "releaseTag": "v0.2.11",
+      "releaseTag": "v0.2.14",
       "releaseNoteCategory": "internal-only",
       "releaseNotePriority": "internal",
       "userVisibleChange": "none",
@@ -202,10 +202,10 @@
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
-        "reviewedAt": "2026-07-05",
+        "reviewedAt": "2026-07-06",
         "humanApproved": true,
         "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
-        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.11 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
+        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. It extends the reviewed 0.2.14 release-impact catalog with package/runtime binding semantics without promoting public portable release assets before signing and upload children complete; release-owner approval is recorded in PR review #4606286126."
       }
     },
     {
