@@ -43,6 +43,33 @@ export const PORTABLE_TARGETS = Object.freeze([
 export const PORTABLE_TARGET_NAMES = Object.freeze(
   PORTABLE_TARGETS.map((target) => target.platformTarget),
 );
+export const PORTABLE_VERIFICATION_POLICIES = Object.freeze([
+  "staging",
+  "development",
+  "pull-request",
+  "production",
+]);
+export const PORTABLE_VERIFICATION_STATUSES = Object.freeze([
+  "unverified-staging",
+  "unsigned-non-production",
+  "verified-non-production",
+  "verified-production",
+  "verification-failed",
+]);
+export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
+  "credential-unavailable",
+  "macos-assessment-unverified",
+  "macos-developer-id-unverified",
+  "macos-notarization-unverified",
+  "macos-staple-unverified",
+  "non-production-artifact",
+  "non-production-unsigned-allowed",
+  "staging-unverified",
+  "verification-input-missing",
+  "verification-tool-unavailable",
+  "windows-publisher-chain-unverified",
+  "windows-timestamp-unverified",
+]);
 
 const SECRET_PATTERN =
   /(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|BEGIN [A-Z ]*PRIVATE KEY|password=|token=)/iu;
@@ -133,8 +160,53 @@ function digestAt(record, key, path, failures, options) {
   return value;
 }
 
+function stringArrayAt(record, key, path, failures) {
+  const value = at(record, key, path, failures);
+  if (
+    !Array.isArray(value) ||
+    value.some((entry) => typeof entry !== "string" || entry.length === 0)
+  ) {
+    push(failures, `${path}.${key}`, "must be a string array");
+    return [];
+  }
+  return value;
+}
+
 export function portableTargetByName(platformTarget) {
   return PORTABLE_TARGETS.find((target) => target.platformTarget === platformTarget);
+}
+
+function verificationCheckTemplate(target, verified) {
+  if (target.nodePlatform === "win32") {
+    return {
+      publisherChainVerified: verified,
+      timestampVerified: verified,
+    };
+  }
+  return {
+    developerIdVerified: verified,
+    notarizationVerified: verified,
+    stapleVerified: verified,
+    assessmentVerified: verified,
+  };
+}
+
+export function createPortableVerificationChecks(platformTarget, verified = false) {
+  const target = portableTargetByName(platformTarget);
+  if (target === undefined) throw new Error(`unsupported portable target: ${platformTarget}`);
+  return verificationCheckTemplate(target, verified);
+}
+
+function verificationCheckKeys(target) {
+  return target?.nodePlatform === "win32"
+    ? ["publisherChainVerified", "timestampVerified"]
+    : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+}
+
+function forbiddenVerificationCheckKeys(target) {
+  return target?.nodePlatform === "win32"
+    ? ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"]
+    : ["publisherChainVerified", "timestampVerified"];
 }
 
 function validateProduct(manifest, failures) {
@@ -288,18 +360,137 @@ function validateStateExclusion(manifest, failures) {
 function validateSecurity(manifest, failures, options) {
   const security = recordAt(manifest, "security", "manifest", failures);
   const target = portableTargetByName(manifest.artifact?.platformTarget);
+  const policy = stringAt(security, "verificationPolicy", "security", failures);
+  const status = stringAt(security, "verificationStatus", "security", failures);
+  const reasonCodes = stringArrayAt(security, "verificationReasonCodes", "security", failures);
   const signatureKind = stringAt(security, "signatureKind", "security", failures);
   const signatureVerified = booleanAt(security, "signatureVerified", "security", failures);
   const notarizationRequired = booleanAt(security, "notarizationRequired", "security", failures);
   const notarizationVerified = booleanAt(security, "notarizationVerified", "security", failures);
+  const verificationChecks = validateVerificationChecks(security, target, failures);
   if (target !== undefined && signatureKind !== target.signatureKind) {
     push(failures, "security.signatureKind", `must be ${target.signatureKind}`);
   }
   if (!options.allowUnverified && !signatureVerified) {
     push(failures, "security.signatureVerified", "must be true");
   }
+  validateVerificationPolicy(policy, status, reasonCodes, failures);
+  validateVerificationCheckConsistency(
+    target,
+    signatureVerified,
+    notarizationVerified,
+    verificationChecks,
+    failures,
+  );
+  validateVerificationState(manifest, policy, status, reasonCodes, failures);
   validateTargetNotarization(target, notarizationRequired, notarizationVerified, failures, options);
   relativePathAt(security, "verificationSummaryPath", "security", failures);
+}
+
+function validateVerificationChecks(security, target, failures) {
+  const checks = recordAt(security, "verificationChecks", "security", failures);
+  if (target === undefined) return checks;
+  for (const key of verificationCheckKeys(target)) {
+    booleanAt(checks, key, "security.verificationChecks", failures);
+  }
+  for (const key of forbiddenVerificationCheckKeys(target)) {
+    if (key in checks) push(failures, `security.verificationChecks.${key}`, "is not allowed");
+  }
+  return checks;
+}
+
+function validateVerificationPolicy(policy, status, reasonCodes, failures) {
+  if (!PORTABLE_VERIFICATION_POLICIES.includes(policy)) {
+    push(failures, "security.verificationPolicy", "is unsupported");
+  }
+  if (!PORTABLE_VERIFICATION_STATUSES.includes(status)) {
+    push(failures, "security.verificationStatus", "is unsupported");
+  }
+  if (new Set(reasonCodes).size !== reasonCodes.length) {
+    push(failures, "security.verificationReasonCodes", "must not contain duplicates");
+  }
+  for (const code of reasonCodes) {
+    if (!PORTABLE_VERIFICATION_REASON_CODES.includes(code)) {
+      push(failures, "security.verificationReasonCodes", `contains unsupported code ${code}`);
+    }
+  }
+}
+
+function validateVerificationCheckConsistency(
+  target,
+  signatureVerified,
+  notarizationVerified,
+  verificationChecks,
+  failures,
+) {
+  if (target === undefined) return;
+  if (target.nodePlatform === "win32") {
+    const windowsVerified =
+      verificationChecks.publisherChainVerified === true &&
+      verificationChecks.timestampVerified === true;
+    if (signatureVerified !== windowsVerified) {
+      push(
+        failures,
+        "security.signatureVerified",
+        "must match Windows publisher-chain and timestamp verification",
+      );
+    }
+    return;
+  }
+  if (signatureVerified !== (verificationChecks.developerIdVerified === true)) {
+    push(failures, "security.signatureVerified", "must match macOS Developer ID verification");
+  }
+  if (notarizationVerified !== (verificationChecks.notarizationVerified === true)) {
+    push(failures, "security.notarizationVerified", "must match macOS notarization verification");
+  }
+}
+
+function validateVerificationState(manifest, policy, status, reasonCodes, failures) {
+  if (!PORTABLE_VERIFICATION_POLICIES.includes(policy)) return;
+  const verified = platformSignatureVerified(manifest);
+  if (policy === "staging") {
+    requireVerificationStatus(status, "unverified-staging", failures);
+    requireReasonCode(reasonCodes, "staging-unverified", failures);
+    if (verified) push(failures, "security.verificationStatus", "must stay unverified for staging");
+    return;
+  }
+  if (policy === "production") {
+    if (verified) {
+      requireVerificationStatus(status, "verified-production", failures);
+      if (reasonCodes.length > 0) {
+        push(failures, "security.verificationReasonCodes", "must be empty for verified production");
+      }
+      return;
+    }
+    requireVerificationStatus(status, "verification-failed", failures);
+    if (reasonCodes.length === 0) {
+      push(
+        failures,
+        "security.verificationReasonCodes",
+        "must describe failed production verification",
+      );
+    }
+    return;
+  }
+  requireReasonCode(reasonCodes, "non-production-artifact", failures);
+  if (verified) {
+    requireVerificationStatus(status, "verified-non-production", failures);
+    return;
+  }
+  requireVerificationStatus(status, "unsigned-non-production", failures);
+  requireReasonCode(reasonCodes, "non-production-unsigned-allowed", failures);
+}
+
+function requireVerificationStatus(actual, expected, failures) {
+  if (actual !== expected) {
+    push(failures, "security.verificationStatus", `must be ${expected}`);
+  }
+}
+
+function requireReasonCode(reasonCodes, expected, failures) {
+  if (!reasonCodes.includes(expected)) {
+    push(failures, "security.verificationReasonCodes", `must include ${expected}`);
+  }
 }
 
 function validateTargetNotarization(target, required, verified, failures, options) {
@@ -348,9 +539,24 @@ function validateReleaseImpact(manifest, failures) {
 
 function validateReviewedBinding(manifest, binding, failures) {
   for (const [key, expected] of reviewedBindingChecks(manifest)) {
-    if (binding[key] !== expected)
+    if (!bindingValuesMatch(binding[key], expected))
       push(failures, `releaseImpact.reviewedBinding.${key}`, "does not match manifest");
   }
+}
+
+function bindingValuesMatch(actual, expected) {
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    if (!Array.isArray(actual) || !Array.isArray(expected) || actual.length !== expected.length) {
+      return false;
+    }
+    return actual.every((entry, index) => bindingValuesMatch(entry, expected[index]));
+  }
+  if (isRecord(actual) || isRecord(expected)) {
+    if (!isRecord(actual) || !isRecord(expected)) return false;
+    const keys = [...new Set([...Object.keys(actual), ...Object.keys(expected)])];
+    return keys.every((key) => bindingValuesMatch(actual[key], expected[key]));
+  }
+  return actual === expected;
 }
 
 function reviewedBindingChecks(manifest) {
@@ -393,10 +599,15 @@ function evidenceBindingChecks(manifest) {
 
 function securityBindingChecks(manifest) {
   return [
+    ["verificationPolicy", manifest.security?.verificationPolicy],
+    ["verificationStatus", manifest.security?.verificationStatus],
+    ["verificationReasonCodes", manifest.security?.verificationReasonCodes],
+    ["platformSignatureLocallyVerified", platformSignatureVerified(manifest)],
     ["signatureKind", manifest.security?.signatureKind],
     ["signatureVerified", manifest.security?.signatureVerified],
     ["notarizationRequired", manifest.security?.notarizationRequired],
     ["notarizationVerified", manifest.security?.notarizationVerified],
+    ["verificationChecks", manifest.security?.verificationChecks],
   ];
 }
 
@@ -414,11 +625,12 @@ function validateUpdateEligibility(manifest, failures, options) {
   if (!booleanAt(update, "eligibleAfterSetupOnly", "updateEligibility", failures))
     push(failures, "updateEligibility.eligibleAfterSetupOnly", "must be true");
   validateUpdatePredicates(manifest, update, failures, options);
-  validateManualOnlyWhen(update, failures, options);
+  validateManualOnlyWhen(update, failures);
 }
 
 function validateUpdatePredicates(manifest, update, failures, options) {
   const predicates = recordAt(update, "requiredPredicates", "updateEligibility", failures);
+  const verified = platformSignatureVerified(manifest);
   for (const key of [
     "managedRootAttested",
     "artifactShaVerified",
@@ -428,15 +640,15 @@ function validateUpdatePredicates(manifest, update, failures, options) {
     "relaunchVersionVerificationAvailable",
   ]) {
     const value = booleanAt(predicates, key, "updateEligibility.requiredPredicates", failures);
-    if (!expectedUpdatePredicate(key, value, options)) {
+    if (!expectedUpdatePredicate(key, value, verified)) {
       push(
         failures,
         `updateEligibility.requiredPredicates.${key}`,
-        expectedUpdatePredicateMessage(key, options),
+        expectedUpdatePredicateMessage(key, verified),
       );
     }
   }
-  if (!options.allowUnverified && !platformSignatureVerified(manifest)) {
+  if (!options.allowUnverified && !verified) {
     push(
       failures,
       "updateEligibility.requiredPredicates.platformSignatureLocallyVerified",
@@ -445,39 +657,59 @@ function validateUpdatePredicates(manifest, update, failures, options) {
   }
 }
 
-function validateManualOnlyWhen(update, failures, options) {
+function validateManualOnlyWhen(update, failures) {
   if (!Array.isArray(update.manualOnlyWhen) || update.manualOnlyWhen.length === 0) {
     push(failures, "updateEligibility.manualOnlyWhen", "must list manual-only blockers");
   } else if (
     update.manualOnlyWhen.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
     push(failures, "updateEligibility.manualOnlyWhen", "must contain non-empty strings");
-  } else if (
-    options.allowUnverified &&
-    !update.manualOnlyWhen.includes("signature-or-notarization-cannot-be-verified")
-  ) {
+  } else if (!update.manualOnlyWhen.includes("signature-or-notarization-cannot-be-verified")) {
     push(failures, "updateEligibility.manualOnlyWhen", "must include signature blocker");
   }
 }
 
-function expectedUpdatePredicate(key, value, options) {
-  if (options.allowUnverified && key === "platformSignatureLocallyVerified") return !value;
+function expectedUpdatePredicate(key, value, verified) {
+  if (key === "platformSignatureLocallyVerified") return value === verified;
   return value;
 }
 
-function expectedUpdatePredicateMessage(key, options) {
-  if (options.allowUnverified && key === "platformSignatureLocallyVerified") {
-    return "must be false until platform signature evidence is verified";
+function expectedUpdatePredicateMessage(key, verified) {
+  if (key === "platformSignatureLocallyVerified") {
+    return verified
+      ? "must be backed by verified platform signature evidence"
+      : "must stay false until platform signature evidence is verified";
   }
   return "must be true";
 }
 
 function platformSignatureVerified(manifest) {
   const target = portableTargetByName(manifest.artifact?.platformTarget);
-  if (target === undefined || manifest.security?.signatureKind !== target.signatureKind)
-    return false;
+  if (!verificationTargetMatches(manifest, target)) return false;
+  const checks = manifest.security?.verificationChecks;
+  if (!isRecord(checks)) return false;
   if (manifest.security?.signatureVerified !== true) return false;
-  return target.nodePlatform !== "darwin" || manifest.security.notarizationVerified === true;
+  return target.nodePlatform === "win32"
+    ? windowsSignatureVerified(checks)
+    : macosSignatureVerified(manifest, checks);
+}
+
+function verificationTargetMatches(manifest, target) {
+  return target !== undefined && manifest.security?.signatureKind === target.signatureKind;
+}
+
+function windowsSignatureVerified(checks) {
+  return checks.publisherChainVerified === true && checks.timestampVerified === true;
+}
+
+function macosSignatureVerified(manifest, checks) {
+  return (
+    manifest.security.notarizationVerified === true &&
+    checks.developerIdVerified === true &&
+    checks.notarizationVerified === true &&
+    checks.stapleVerified === true &&
+    checks.assessmentVerified === true
+  );
 }
 
 function scanForbidden(value, path, failures) {
@@ -536,6 +768,28 @@ export function validatePortableManifest(manifest, options = {}) {
   validateUpdateEligibility(manifest, failures, options);
   scanForbidden(manifest, "manifest", failures);
   return failures;
+}
+
+export function findPortableMetadataRedactionFailures(value, path = "metadata") {
+  const failures = [];
+  scanForbidden(value, path, failures);
+  return failures;
+}
+
+export function portableVerificationSummaryForManifest(manifest) {
+  const security = manifest.security ?? {};
+  return {
+    policy: security.verificationPolicy,
+    status: security.verificationStatus,
+    target: manifest.artifact?.platformTarget,
+    signatureKind: security.signatureKind,
+    signatureVerified: security.signatureVerified,
+    notarizationRequired: security.notarizationRequired,
+    notarizationVerified: security.notarizationVerified,
+    platformSignatureLocallyVerified: platformSignatureVerified(manifest),
+    reasonCodes: security.verificationReasonCodes ?? [],
+    verificationChecks: security.verificationChecks ?? {},
+  };
 }
 
 export function findForbiddenPortablePaths(paths) {

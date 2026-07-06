@@ -20,9 +20,11 @@ import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
+  createPortableVerificationChecks,
   hashDirectoryTree,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
+  portableVerificationSummaryForManifest,
   sha256File,
   validatePortableManifest,
   verifySha256File,
@@ -585,18 +587,7 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
   );
   writeFileSync(
     join(evidenceRoot, "signing-verification.json"),
-    JSON.stringify(
-      {
-        notarizationRequired: manifest.security.notarizationRequired,
-        notarizationVerified: manifest.security.notarizationVerified,
-        signatureKind: manifest.security.signatureKind,
-        signatureVerified: manifest.security.signatureVerified,
-        status: "unverified-staging",
-        target: manifest.artifact.platformTarget,
-      },
-      null,
-      2,
-    ) + "\n",
+    JSON.stringify(portableVerificationSummaryForManifest(manifest), null, 2) + "\n",
   );
   writeFileSync(join(evidenceRoot, "provenance.intoto.jsonl"), provenanceStatement);
 }
@@ -867,10 +858,14 @@ function manifestStateExclusion() {
 
 function manifestSecurity(target) {
   return {
+    verificationPolicy: "staging",
+    verificationStatus: "unverified-staging",
+    verificationReasonCodes: ["staging-unverified"],
     signatureKind: target.signatureKind,
     signatureVerified: false,
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified: false,
+    verificationChecks: createPortableVerificationChecks(target.platformTarget, false),
     verificationSummaryPath: "evidence/signing-verification.json",
   };
 }
@@ -898,10 +893,15 @@ function manifestReviewedBinding(options, target, digests, nodeIdentity, securit
     sbomPath: "evidence/sbom.cdx.json",
     licenseNoticePath: "evidence/third-party-notices.txt",
     checksumsPath: "evidence/SHA256SUMS.txt",
+    verificationPolicy: security.verificationPolicy,
+    verificationStatus: security.verificationStatus,
+    verificationReasonCodes: security.verificationReasonCodes,
+    platformSignatureLocallyVerified: false,
     signatureKind: security.signatureKind,
     signatureVerified: security.signatureVerified,
     notarizationRequired: security.notarizationRequired,
     notarizationVerified: security.notarizationVerified,
+    verificationChecks: security.verificationChecks,
   };
 }
 
