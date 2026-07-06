@@ -64,7 +64,7 @@ import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import {
   CAPSULE_SET_MAX_MEMBERS,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-  isSafeDisplaySummary,
+  isKnowledgePodEvidenceSafeText,
   isSafeQualityWarning,
   standardPodModelUsePolicy,
   validateCapsuleContextualRetrievalSettings,
@@ -1434,8 +1434,8 @@ function parseSourceId(ctx: RouteContext): KnowledgeSourceId {
 
 function requireSafeDisplayText(field: string, value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length === 0 || !isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest(`Field "${field}" must be a browser-safe non-empty string.`);
+  if (trimmed.length === 0 || !isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be an evidence-safe non-empty string.`);
   }
   return trimmed;
 }
@@ -1451,8 +1451,8 @@ function safeOptionalDisplayText(field: string, value: unknown): string | undefi
   if (trimmed.length === 0) {
     return undefined;
   }
-  if (!isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest(`Field "${field}" must be browser-safe when provided.`);
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest(`Field "${field}" must be evidence-safe when provided.`);
   }
   return trimmed;
 }
@@ -2278,8 +2278,8 @@ function parseDescriptionPatch(value: unknown): string | undefined {
     throw new InvalidRequest('Field "description" must be a string when provided.');
   }
   const trimmed = value.trim();
-  if (!isSafeDisplaySummary(trimmed)) {
-    throw new InvalidRequest('Field "description" must be browser-safe when provided.');
+  if (!isKnowledgePodEvidenceSafeText(trimmed)) {
+    throw new InvalidRequest('Field "description" must be evidence-safe when provided.');
   }
   return trimmed;
 }
@@ -2505,8 +2505,8 @@ function parseConnectSourceInput(body: Record<string, unknown>): {
     typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0
       ? requireSafeDisplayText("displayName", displayNameRaw)
       : basename(connectScopeRootPath(scope));
-  if (!isSafeDisplaySummary(displayName)) {
-    throw new InvalidRequest('Field "displayName" must be browser-safe when provided.');
+  if (!isKnowledgePodEvidenceSafeText(displayName)) {
+    throw new InvalidRequest('Field "displayName" must be evidence-safe when provided.');
   }
   return { scope, displayName };
 }

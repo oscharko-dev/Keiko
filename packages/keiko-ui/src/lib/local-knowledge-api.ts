@@ -467,6 +467,16 @@ export async function updateCapsuleContextualRetrieval(
   );
 }
 
+export async function updateCapsuleModelUsePolicy(
+  capsuleId: KnowledgeCapsuleId,
+  modelUsePolicy: KnowledgePodModelUsePolicy,
+): Promise<CapsuleDetail> {
+  return fetchJson<CapsuleDetail>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "PATCH", body: JSON.stringify({ modelUsePolicy }) },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/local-knowledge/capsules/:id/index
 // ---------------------------------------------------------------------------

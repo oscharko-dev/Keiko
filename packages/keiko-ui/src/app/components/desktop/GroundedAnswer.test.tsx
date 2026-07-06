@@ -399,6 +399,9 @@ describe("GroundedAnswer", () => {
     };
     render(<GroundedAnswer answer={a} busy={false} />);
     expect(screen.getByText("Knowledge scope: Alpha Capsule")).toBeInTheDocument();
+    const summary = screen.getByRole("region", { name: "Knowledge scope summary" });
+    expect(within(summary).getByText("Knowledge Pod")).toBeInTheDocument();
+    expect(within(summary).queryByText("capsule")).toBeNull();
     expect(
       screen.getByText(/\[1\] Alpha Capsule \/ Product Manual · alpha\.md · section 1/),
     ).toBeInTheDocument();

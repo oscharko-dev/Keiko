@@ -2733,6 +2733,9 @@ interface ScopeOption {
   readonly description?: string;
 }
 
+const UNAVAILABLE_CAPSULE_LABEL = "Knowledge Pod";
+const UNAVAILABLE_CAPSULE_SET_LABEL = "Knowledge Pod Set";
+
 function capsuleOptions(
   chat: Chat,
   capsules: readonly CapsuleListEntry[],
@@ -2755,7 +2758,6 @@ function capsuleOptions(
   if (options.some((option) => option.value === selectedValue)) {
     return options;
   }
-  const capsuleId = selectedValue.slice("capsule:".length);
   return [
     ...options,
     {
@@ -2763,7 +2765,7 @@ function capsuleOptions(
       // uiux-fix F041 (C173) — "(unavailable)" matches the capsule-set degraded
       // suffix; two different words previously named the same state.
       label: t("chat.grounding.unavailable", {
-        label: t("chat.grounding.capsule", { name: capsuleId }),
+        label: UNAVAILABLE_CAPSULE_LABEL,
       }),
     },
   ];
@@ -2791,13 +2793,12 @@ function capsuleSetOptions(
   if (options.some((option) => option.value === selectedValue)) {
     return options;
   }
-  const capsuleSetId = selectedValue.slice("capsule-set:".length);
   return [
     ...options,
     {
       value: selectedValue,
       label: t("chat.grounding.unavailable", {
-        label: t("chat.grounding.capsuleSet", { name: capsuleSetId }),
+        label: UNAVAILABLE_CAPSULE_SET_LABEL,
       }),
     },
   ];

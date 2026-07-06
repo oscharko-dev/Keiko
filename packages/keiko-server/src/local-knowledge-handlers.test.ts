@@ -1029,6 +1029,27 @@ describe("local-knowledge handlers", () => {
     ).toEqual(sealedLocalPodModelUsePolicy());
   });
 
+  it("rejects policy PATCH payloads that would echo unsafe capsule labels", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", {
+          displayName: "/Users/alice/private/customer.pdf?client_secret=value",
+          modelUsePolicy: sealedLocalPodModelUsePolicy(),
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("displayName");
+    expect(JSON.stringify(result.body)).toContain("evidence-safe");
+  });
+
   it("rejects a malformed modelUsePolicy PATCH with 400 instead of coercing it", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
