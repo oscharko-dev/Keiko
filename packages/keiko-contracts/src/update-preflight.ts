@@ -1,4 +1,5 @@
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
+import type { UpdatePortableTarget } from "./update-session.js";
 
 export const UPDATE_PREFLIGHT_SCHEMA_VERSION = 1 as const;
 
@@ -10,9 +11,34 @@ export const UPDATE_PREFLIGHT_SEVERITIES = ["none", "low", "normal", "high", "cr
 
 export type UpdatePreflightSeverity = (typeof UPDATE_PREFLIGHT_SEVERITIES)[number];
 
-export const UPDATE_PREFLIGHT_REGISTRY_STATUSES = ["ok", "unavailable", "malformed"] as const;
+export const UPDATE_PREFLIGHT_REGISTRY_STATUSES = [
+  "ok",
+  "unavailable",
+  "malformed",
+  "not-used",
+] as const;
 
 export type UpdatePreflightRegistryStatus = (typeof UPDATE_PREFLIGHT_REGISTRY_STATUSES)[number];
+
+export const UPDATE_PREFLIGHT_INSTALLABILITY_SOURCES = [
+  "npm-registry",
+  "github-release-asset",
+] as const;
+
+export type UpdatePreflightInstallabilitySource =
+  (typeof UPDATE_PREFLIGHT_INSTALLABILITY_SOURCES)[number];
+
+export const UPDATE_PREFLIGHT_PORTABLE_ASSET_STATUSES = [
+  "not-needed",
+  "eligible",
+  "missing",
+  "malformed",
+  "unavailable",
+  "install-mode-ineligible",
+] as const;
+
+export type UpdatePreflightPortableAssetStatus =
+  (typeof UPDATE_PREFLIGHT_PORTABLE_ASSET_STATUSES)[number];
 
 export const UPDATE_PREFLIGHT_RELEASE_METADATA_STATUSES = [
   "not-needed",
@@ -36,6 +62,15 @@ export const UPDATE_PREFLIGHT_BLOCKER_CODES = [
   "manual-review-required",
   "breaking-exception-manual",
   "one-click-ineligible",
+  "portable-install-mode-ineligible",
+  "portable-release-unavailable",
+  "portable-release-malformed",
+  "portable-asset-missing",
+  "portable-asset-malformed",
+  "portable-manifest-missing",
+  "portable-manifest-malformed",
+  "portable-checksum-missing",
+  "portable-checksum-mismatch",
 ] as const;
 
 export type UpdatePreflightBlockerCode = (typeof UPDATE_PREFLIGHT_BLOCKER_CODES)[number];
@@ -56,6 +91,27 @@ export interface UpdatePreflightReleaseSummary {
   readonly noteSections?: readonly UpdatePreflightPatchNoteSection[];
   readonly url?: string;
   readonly publishedAt?: string;
+}
+
+export interface UpdatePreflightPortableAssetSummary {
+  readonly target: UpdatePortableTarget;
+  readonly assetName: string;
+  readonly assetId: number;
+  readonly releaseId: number;
+  readonly sizeBytes: number;
+  readonly sha256: string;
+  readonly manifestAssetName: string;
+  readonly manifestSha256: string;
+  readonly checksumAssetName: string;
+  readonly checksumVerified: boolean;
+}
+
+export interface UpdatePreflightPortableInstallability {
+  readonly source: "github-release-asset";
+  readonly target: UpdatePortableTarget;
+  readonly requiredAssetName: string;
+  readonly status: UpdatePreflightPortableAssetStatus;
+  readonly asset?: UpdatePreflightPortableAssetSummary;
 }
 
 export interface UpdatePreflightPatchNoteSection {
@@ -101,6 +157,8 @@ export interface UpdatePreflightReport {
   readonly severity: UpdatePreflightSeverity;
   readonly registryStatus: UpdatePreflightRegistryStatus;
   readonly releaseMetadataStatus: UpdatePreflightReleaseMetadataStatus;
+  readonly installabilitySource?: UpdatePreflightInstallabilitySource;
+  readonly portableAsset?: UpdatePreflightPortableInstallability;
   readonly userActionRequired: boolean;
   readonly affectedStateStores: readonly string[];
   readonly blockers: readonly UpdatePreflightBlocker[];

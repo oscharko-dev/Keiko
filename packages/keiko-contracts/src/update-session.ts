@@ -16,6 +16,13 @@ export const UPDATE_PORTABLE_TARGETS: readonly UpdatePortableTarget[] = Object.f
   "macos-x64",
 ] as const satisfies readonly UpdatePortableTarget[]);
 
+export const UPDATE_PORTABLE_TARGET_ASSET_NAMES: Readonly<Record<UpdatePortableTarget, string>> =
+  Object.freeze({
+    "windows-x64": "keiko-windows-x64.zip",
+    "macos-arm64": "keiko-macos-arm64.zip",
+    "macos-x64": "keiko-macos-x64.zip",
+  } as const satisfies Readonly<Record<UpdatePortableTarget, string>>);
+
 export type UpdateInstallModeKind =
   | "package-manager"
   | "portable-managed"

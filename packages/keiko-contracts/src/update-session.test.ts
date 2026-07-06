@@ -3,6 +3,7 @@ import {
   UPDATE_INSTALL_MODE_KINDS,
   UPDATE_PORTABLE_ASSET_VERIFICATION_STATUSES,
   UPDATE_PORTABLE_INSTALL_STATUSES,
+  UPDATE_PORTABLE_TARGET_ASSET_NAMES,
   UPDATE_PORTABLE_TARGETS,
   UPDATE_RECOMMENDED_ACTIONS,
   UPDATE_UNSUPPORTED_REASONS,
@@ -14,6 +15,11 @@ import {
 describe("update session portable contract", () => {
   it("pins portable install-mode vocabulary", () => {
     expect(UPDATE_PORTABLE_TARGETS).toEqual(["windows-x64", "macos-arm64", "macos-x64"]);
+    expect(UPDATE_PORTABLE_TARGET_ASSET_NAMES).toEqual({
+      "windows-x64": "keiko-windows-x64.zip",
+      "macos-arm64": "keiko-macos-arm64.zip",
+      "macos-x64": "keiko-macos-x64.zip",
+    });
     expect(UPDATE_INSTALL_MODE_KINDS).toContain("portable-managed");
     expect(UPDATE_PORTABLE_INSTALL_STATUSES).toEqual([
       "managed",
