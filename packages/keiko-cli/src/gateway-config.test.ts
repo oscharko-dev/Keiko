@@ -41,10 +41,10 @@ function makeConfig(): string {
 }
 
 describe("loadGatewayConfigFromFile", () => {
-  it("resolves apiKeySecretRef values from the provider credential vault", () => {
+  it("resolves apiKeySecretRef values from the provider credential vault", async () => {
     const configPath = makeConfig();
 
-    const config = loadGatewayConfigFromFile(configPath, {
+    const config = await loadGatewayConfigFromFile(configPath, {
       KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY,
     });
 

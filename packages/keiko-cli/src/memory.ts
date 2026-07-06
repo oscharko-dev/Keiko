@@ -17,26 +17,17 @@ import {
   resolveMemoryDir,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
-import {
-  createMemoryEmbedder,
-  exportMemoryDiagnostics,
-  runMemoryMaintenance,
-  type MemoryEmbedder,
-} from "@oscharko-dev/keiko-server";
-import {
-  createAuditRedactor,
-  createNodeEvidenceStore,
-  resolveEvidenceDir,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-evidence";
-import {
-  requestOpenAIEmbedding,
-  GatewayError,
-  type EnvSource,
-} from "@oscharko-dev/keiko-model-gateway";
+import type { MemoryEmbedder } from "@oscharko-dev/keiko-server";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
 import { loadGatewayConfigFromFile } from "./gateway-config.js";
+// GEN-PERF-CLI-001 — server/evidence/gateway graphs load per subcommand at dispatch;
+// the memory-vault import above is a light leaf (contracts+security only) and stays static.
+import { loadEvidence, loadModelGateway, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
+
+type ServerModule = typeof import("@oscharko-dev/keiko-server");
 
 const USAGE = `Usage:
   keiko memory maintain [--memory-dir PATH] [--evidence-dir PATH]
@@ -153,7 +144,7 @@ function renderStats(records: readonly MemoryRecord[]): string {
   );
 }
 
-function renderMaintenanceReport(counts: ReturnType<typeof runMemoryMaintenance>): string {
+function renderMaintenanceReport(counts: ReturnType<ServerModule["runMemoryMaintenance"]>): string {
   return [
     "Memory maintenance complete.",
     `  promoted:          ${String(counts.promoted)}`,
@@ -187,17 +178,18 @@ function parseLastAuditEvents(args: readonly string[]): number | undefined {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-function runDiagnostics(
+async function runDiagnostics(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
   deps: MemoryCliDeps,
-): number {
+): Promise<number> {
+  const [{ exportMemoryDiagnostics }, evidence] = await Promise.all([loadServer(), loadEvidence()]);
   const vault = resolveVault(args, env, deps);
   const memoryDir = resolveMemoryDir(flagValue(args, "--memory-dir"), env);
-  const evidenceDir = resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
-  const evidenceStore = deps.evidenceStore ?? createNodeEvidenceStore(evidenceDir);
-  const redactString = deps.redactString ?? createAuditRedactor({}, env);
+  const evidenceDir = evidence.resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
+  const evidenceStore = deps.evidenceStore ?? evidence.createNodeEvidenceStore(evidenceDir);
+  const redactString = deps.redactString ?? evidence.createAuditRedactor({}, env);
   try {
     const records = vault.listMemoriesAcrossScopes(vault.listMemoryScopes(), {
       includeExpired: true,
@@ -219,15 +211,16 @@ function runDiagnostics(
   }
 }
 
-function runMaintain(
+async function runMaintain(
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
   deps: MemoryCliDeps,
-): number {
+): Promise<number> {
+  const [{ runMemoryMaintenance }, evidence] = await Promise.all([loadServer(), loadEvidence()]);
   const vault = resolveVault(args, env, deps);
-  const evidenceDir = resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
-  const evidenceStore = deps.evidenceStore ?? createNodeEvidenceStore(evidenceDir);
+  const evidenceDir = evidence.resolveEvidenceDir(flagValue(args, "--evidence-dir"), env);
+  const evidenceStore = deps.evidenceStore ?? evidence.createNodeEvidenceStore(evidenceDir);
   try {
     const counts = runMemoryMaintenance(vault, evidenceStore);
     io.out(renderMaintenanceReport(counts));
@@ -241,18 +234,22 @@ function runMaintain(
 // null when no config source is available, the config cannot be loaded, or no embedding-capable
 // model is configured. The test seam (deps.embedText) short-circuits this entirely. A GatewayError
 // is treated as "no model" (best-effort backfill never hard-fails on a config problem).
-function resolveEmbedder(
+async function resolveEmbedder(
   args: readonly string[],
   env: EnvSource,
   deps: MemoryCliDeps,
-): MemoryEmbedder | null {
+): Promise<MemoryEmbedder | null> {
   if (deps.embedText !== undefined) return deps.embedText;
   const configPath = flagValue(args, "--config") ?? env.KEIKO_CONFIG_FILE;
   if (configPath === undefined) return null;
+  const [{ createMemoryEmbedder }, gateway] = await Promise.all([loadServer(), loadModelGateway()]);
   try {
-    return createMemoryEmbedder(loadGatewayConfigFromFile(configPath, env), requestOpenAIEmbedding);
+    return createMemoryEmbedder(
+      await loadGatewayConfigFromFile(configPath, env),
+      gateway.requestOpenAIEmbedding,
+    );
   } catch (error) {
-    if (error instanceof GatewayError) return null;
+    if (error instanceof gateway.GatewayError) return null;
     throw error;
   }
 }
@@ -313,7 +310,7 @@ async function reembed(
   env: EnvSource,
   deps: MemoryCliDeps,
 ): Promise<number> {
-  const embed = resolveEmbedder(args, env, deps);
+  const embed = await resolveEmbedder(args, env, deps);
   if (embed === null) {
     io.out(
       "No embedding model is configured — skipping re-embedding. " +
@@ -347,18 +344,20 @@ async function runReembed(
   }
 }
 
-function dispatchSubcommand(
+async function dispatchSubcommand(
   sub: string,
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
   deps: MemoryCliDeps,
-): number | Promise<number> {
+): Promise<number> {
+  // Await inside the try so async rejections surface as exit 1 exactly like the
+  // previous synchronous throws did.
   try {
-    if (sub === "maintain") return runMaintain(args, io, env, deps);
+    if (sub === "maintain") return await runMaintain(args, io, env, deps);
     if (sub === "stats") return runStats(args, io, env, deps);
-    if (sub === "diagnostics") return runDiagnostics(args, io, env, deps);
-    if (sub === "reembed") return runReembed(args, io, env, deps);
+    if (sub === "diagnostics") return await runDiagnostics(args, io, env, deps);
+    if (sub === "reembed") return await runReembed(args, io, env, deps);
   } catch (error) {
     io.err(`keiko memory: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;

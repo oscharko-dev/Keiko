@@ -7,25 +7,20 @@ import {
   type UpdateSession,
   type UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
-import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import {
-  buildRedactor,
-  createStateDirUpdateSessionLock,
-  createInMemoryUiStore,
-  createRunRegistry,
-  createUpdateLocalStateManager,
-  createUpdatePreflightService,
-  createUpdateRemediationManager,
-  createUpdateSessionManager,
-  UpdateSessionError,
-  type UiHandlerDeps,
-  type UpdatePreflightService,
-  type UpdateRemediationManager,
-  type UpdateSessionManager,
+import type {
+  UiHandlerDeps,
+  UpdatePreflightService,
+  UpdateRemediationManager,
+  UpdateSessionManager,
 } from "@oscharko-dev/keiko-server";
+// GEN-PERF-CLI-001 — server/evidence graphs load at dispatch; module scope stays type-only.
+import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import { renderApplyTerminal, renderUpdateStatus } from "./update-output.js";
+
+type ServerModule = typeof import("@oscharko-dev/keiko-server");
+type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
 
 const USAGE = `Usage:
   keiko update status
@@ -85,8 +80,8 @@ function resolveStateDir(cwd: string, env: EnvSource): string {
   return isAbsolute(requested) ? requested : resolve(cwd, requested);
 }
 
-function stringRedactor(env: EnvSource): (input: string) => string {
-  const redact = buildRedactor(env);
+function stringRedactor(env: EnvSource, server: ServerModule): (input: string) => string {
+  const redact = server.buildRedactor(env);
   return (input: string): string => {
     const redacted = redact(input);
     return typeof redacted === "string" ? redacted : "[redacted]";
@@ -103,36 +98,42 @@ function bindPreflight(
   };
 }
 
-function createHandlerDeps(env: EnvSource, fetchImpl: typeof fetch | undefined): UiHandlerDeps {
+function createHandlerDeps(
+  env: EnvSource,
+  fetchImpl: typeof fetch | undefined,
+  server: ServerModule,
+  evidence: EvidenceModule,
+): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
-    evidenceStore: createInMemoryEvidenceStore(),
+    evidenceStore: evidence.createInMemoryEvidenceStore(),
     env,
-    redactor: buildRedactor(env),
-    registry: createRunRegistry(),
+    redactor: server.buildRedactor(env),
+    registry: server.createRunRegistry(),
     modelPortFactory: () => undefined,
-    store: createInMemoryUiStore(),
+    store: server.createInMemoryUiStore(),
     ...(fetchImpl === undefined ? {} : { gatewayReadinessFetch: fetchImpl }),
   };
 }
 
-function createRuntime(env: EnvSource, deps: UpdateCliDeps): UpdateRuntime {
-  const handlerDeps = createHandlerDeps(env, deps.fetchImpl);
+async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<UpdateRuntime> {
+  const [server, evidence] = await Promise.all([loadServer(), loadEvidence()]);
+  const handlerDeps = createHandlerDeps(env, deps.fetchImpl, server, evidence);
   const stateDir = resolveStateDir(deps.cwd ?? process.cwd(), env);
-  const localState = createUpdateLocalStateManager({ stateDir });
+  const localState = server.createUpdateLocalStateManager({ stateDir });
   const processEnv = processEnvFrom(env);
-  const service = createUpdatePreflightService();
+  const service = server.createUpdatePreflightService();
   return {
     preflight: deps.preflight ?? bindPreflight(service, handlerDeps),
     session:
       deps.session ??
-      createUpdateSessionManager({
+      server.createUpdateSessionManager({
         processEnv,
-        lock: createStateDirUpdateSessionLock(stateDir),
-        redactor: stringRedactor(env),
+        lock: server.createStateDirUpdateSessionLock(stateDir),
+        redactor: stringRedactor(env, server),
       }),
-    remediation: deps.remediation ?? createUpdateRemediationManager({ localState }),
+    remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
     close: (): void => {
       handlerDeps.store.close();
     },
@@ -341,8 +342,8 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
   return successfulApply(terminal) ? 0 : 1;
 }
 
-function safeErrorMessage(error: unknown): string {
-  if (error instanceof UpdateSessionError) return error.message;
+function safeErrorMessage(error: unknown, server: ServerModule | undefined): string {
+  if (server !== undefined && error instanceof server.UpdateSessionError) return error.message;
   return "Unexpected update command failure.";
 }
 
@@ -362,13 +363,15 @@ export async function runUpdateCli(
     return 2;
   }
   let runtime: UpdateRuntime | undefined;
+  let server: ServerModule | undefined;
   try {
-    runtime = createRuntime(env, deps);
+    server = await loadServer();
+    runtime = await createRuntime(env, deps);
     if (subcommand === "status") return await runStatus(runtime, io);
     if (subcommand === "check") return await runCheck(runtime, io);
     return await runApply(runtime, io, deps);
   } catch (error) {
-    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error)}\n`);
+    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, server)}\n`);
     return 1;
   } finally {
     runtime?.close();

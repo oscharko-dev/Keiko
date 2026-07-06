@@ -21,6 +21,11 @@ export function startSseHeartbeat(res: ServerResponse, intervalMs = 15000): () =
     if (res.destroyed || res.writableEnded) return;
     res.write(": keep-alive\n\n");
   }, intervalMs);
+  // The heartbeat must never be what keeps the process alive: on shutdown the
+  // socket teardown fires `close` and clears it, but an un-unref'd interval
+  // would otherwise pin the event loop between ticks (the voice-realtime
+  // heartbeat established this pattern).
+  timer.unref();
   const stop = (): void => {
     clearInterval(timer);
   };
