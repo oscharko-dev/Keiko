@@ -51,7 +51,7 @@ function podFixture(overrides: Partial<KnowledgePodSummary>): KnowledgePodSummar
     },
     governance: {
       locationKind: "local",
-      sealingPosture: "not-declared",
+      sealingPosture: "local-store-policy",
       policyPosture: "not-declared",
       managedServiceDependency: false,
     },

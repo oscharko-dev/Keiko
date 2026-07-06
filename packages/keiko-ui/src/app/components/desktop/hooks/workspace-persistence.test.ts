@@ -524,4 +524,88 @@ describe("workspace-persistence", () => {
       { id: "c-3", a: "files-1", b: "chat-1" },
     ]);
   });
+
+  it("clamps hostile geometry magnitudes instead of trusting persisted numbers", () => {
+    // Finite but absurd values passed the old Number.isFinite-only checks and
+    // reached layout math; a z beyond safe-integer precision even froze focus
+    // ordering (zc.current + 1 === zc.current at 1e18).
+    const persisted = sanitizePersistedWindows([
+      win({ id: "files-1", type: "files", x: -1e300, y: 5e15, w: 1e15, h: -400, z: 1e18 }),
+    ]);
+    expect(persisted).toHaveLength(1);
+    const clamped = persisted[0]!;
+    expect(clamped.x).toBe(-1_000_000);
+    expect(clamped.y).toBe(1_000_000);
+    expect(clamped.w).toBe(32_768);
+    expect(clamped.h).toBe(1);
+    expect(clamped.z).toBe(1_000_000_000);
+  });
+
+  it("clamps restored prev geometry with the same bounds", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "files-1", type: "files", prev: { x: 9e9, y: -9e9, w: 0, h: 1e9 } }),
+    ]);
+    expect(persisted[0]?.prev).toEqual({ x: 1_000_000, y: -1_000_000, w: 1, h: 32_768 });
+  });
+
+  it("bounds window and connection counts to the server snapshot caps", () => {
+    // Mirrors the server's MAX_WORKSPACE_WINDOWS/MAX_WORKSPACE_CONNECTIONS: the
+    // localStorage parse path otherwise accepted unbounded arrays the server
+    // would reject, leaving local state permanently divergent.
+    const many = Array.from({ length: 150 }, (_, i) =>
+      win({ id: `files-${String(i)}`, type: "files" }),
+    );
+    const persisted = sanitizePersistedWindows(many);
+    expect(persisted).toHaveLength(128);
+
+    const endpoints = [win({ id: "files-1", type: "files" }), win({ id: "chat-1", type: "chat" })];
+    const conns: Connection[] = Array.from({ length: 600 }, (_, i) => ({
+      id: `c-${String(i)}`,
+      a: "files-1",
+      b: "chat-1",
+    }));
+    expect(sanitizePersistedConnections(conns, endpoints)).toHaveLength(512);
+  });
+
+  it("rejects over-length generic text cfg values (reject, not truncate)", () => {
+    const longPath = `src/${"a".repeat(3000)}.ts`;
+    const okPath = "src/components/app.ts";
+    const persisted = sanitizePersistedWindows([
+      win({ id: "files-1", type: "files", cfg: { activeFilePath: longPath, root: okPath } }),
+    ]);
+    expect(persisted[0]?.cfg).toEqual({ root: okPath });
+  });
+
+  it("fails closed on absurdly deep editor split trees", () => {
+    const pane = { id: "p1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] };
+    const deepLayout = (depth: number): string => {
+      let node: unknown = { type: "pane", paneId: "p1" };
+      for (let i = 0; i < depth; i += 1) {
+        node = {
+          type: "split",
+          id: `s${String(i)}`,
+          direction: "row",
+          ratio: 50,
+          first: node,
+          second: { type: "pane", paneId: "p1" },
+        };
+      }
+      return JSON.stringify({
+        schemaVersion: 2,
+        activePaneId: "p1",
+        tree: node,
+        panes: { p1: pane },
+      });
+    };
+
+    const shallow = sanitizePersistedWindows([
+      win({ id: "editor-1", type: "editor", cfg: { layoutJson: deepLayout(8) } }),
+    ]);
+    expect(shallow[0]?.cfg["layoutJson"]).toBeDefined();
+
+    const hostile = sanitizePersistedWindows([
+      win({ id: "editor-1", type: "editor", cfg: { layoutJson: deepLayout(64) } }),
+    ]);
+    expect(hostile[0]?.cfg["layoutJson"]).toBeUndefined();
+  });
 });

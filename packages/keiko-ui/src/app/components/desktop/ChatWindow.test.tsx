@@ -232,7 +232,7 @@ function knowledgePodSummary(
     governance: {
       locationKind: "local",
       sealingPosture: "local-store-policy",
-      policyPosture: "none",
+      policyPosture: "not-declared",
       managedServiceDependency: false,
     },
     modelUsePolicy: resolveKnowledgePodModelUsePolicy(standardPodModelUsePolicy()),

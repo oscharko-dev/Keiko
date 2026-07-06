@@ -94,7 +94,7 @@ function podSummary(
     governance: overrides.governance ?? {
       locationKind: "local",
       sealingPosture: "local-store-policy",
-      policyPosture: "none",
+      policyPosture: "not-declared",
       managedServiceDependency: false,
     },
     modelUsePolicy,

@@ -343,3 +343,50 @@ describe("useWorkspace wheel zoom routing", () => {
     });
   });
 });
+
+describe("useWorkspace wheel zoom layout-read coalescing (GEN-PERF-WORKSPACE-005)", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  it("reads the workspace rect at most once per zoom-gesture settle window", async () => {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+    render(<Harness />);
+    const workspace = screen.getByTestId("workspace");
+    const rectSpy = vi.spyOn(workspace, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      right: 1000,
+      bottom: 800,
+      width: 1000,
+      height: 800,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1"));
+    rectSpy.mockClear(); // ignore mount/hydration reads
+
+    // A trackpad pinch synthesizes ctrl-wheel at 60-120+Hz. The old code paid one
+    // synchronous getBoundingClientRect per event; the gesture cache must collapse
+    // a continuous burst to a single layout read within the 160ms settle window.
+    for (let i = 0; i < 6; i += 1) {
+      fireEvent.wheel(workspace, {
+        bubbles: true,
+        cancelable: true,
+        clientX: 500,
+        clientY: 400,
+        ctrlKey: true,
+        deltaY: -30,
+      });
+    }
+
+    await waitFor(() =>
+      expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1),
+    );
+    expect(rectSpy).toHaveBeenCalledTimes(1);
+  });
+});
