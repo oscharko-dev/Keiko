@@ -65,7 +65,7 @@ export function updateTone(
   session: UpdateSession | undefined,
   remediation: UpdateRemediationStatusReport,
 ): UpdateTone {
-  if (session?.phase === "failed" || remediation.overallStatus === "failed") return "danger";
+  if (session?.phase === "failed") return "danger";
   if (report.severity === "critical" || report.blockers.some((item) => item.userActionRequired)) {
     return "warning";
   }
