@@ -29,6 +29,9 @@ const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 const DIGEST_D = "d".repeat(64);
+const DIGEST_E = "e".repeat(64);
+const DIGEST_F = "f".repeat(64);
+const DIGEST_1 = "1".repeat(64);
 const COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567";
 const NODE_VERSION = "24.14.0";
 const STAGE_COMMAND_TIMEOUT_MS = 300_000;
@@ -327,6 +330,13 @@ function syncReviewedBinding(candidate) {
     notarizationVerified: candidate.security.notarizationVerified,
     verificationChecks: { ...candidate.security.verificationChecks },
   };
+  if (Array.isArray(candidate.sidecarRuntimes) && candidate.sidecarRuntimes.length > 0) {
+    candidate.releaseImpact.reviewedBinding.sidecarRuntimes = JSON.parse(
+      JSON.stringify(candidate.sidecarRuntimes),
+    );
+  } else {
+    delete candidate.releaseImpact.reviewedBinding.sidecarRuntimes;
+  }
   candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified =
     platformSignatureLocallyVerified(candidate);
 }
@@ -386,7 +396,7 @@ function preparePackageSurfaceForTest() {
   packageSurfacePreparedForTest = true;
 }
 
-async function assembleStageForTest(target, nodeArchive, outDir, dir) {
+async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRuntimeSpecs = []) {
   return assemblePortableStage(
     {
       commitSha: COMMIT_SHA,
@@ -399,6 +409,7 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir) {
       outDir,
       releaseId: 123456789,
       releaseTag: "v0.2.11",
+      sidecarRuntimeSpecs,
       target,
     },
     {
@@ -410,6 +421,113 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir) {
 
 function writePrimaryLauncherFixture(target, destination) {
   writeFileSync(destination, `fixture native launcher for ${target.platformTarget}\n`);
+}
+
+function sidecarRuntimeFor(platformTarget, overrides = {}) {
+  const target = portableTarget(platformTarget);
+  const name = overrides.name ?? "opencode-compatible";
+  const payloadRootPath = `runtime/sidecars/${name}`;
+  return {
+    name,
+    kind: "coding-runtime",
+    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      protocolVersion: "coding-sidecar-v1",
+    },
+    platformTarget,
+    payloadRootPath,
+    executablePath: sidecarExecutablePath(payloadRootPath, target),
+    payloadSha256: DIGEST_E,
+    sizeBytes: 1234,
+    licenseEvidence: { path: `${payloadRootPath}/LICENSE.txt`, sha256: DIGEST_F },
+    sbomEvidence: { path: `${payloadRootPath}/evidence/sbom.cdx.json`, sha256: DIGEST_1 },
+    signing: verifiedSidecarSigning(target),
+    ...overrides,
+  };
+}
+
+function sidecarExecutablePath(payloadRootPath, target) {
+  return target.nodePlatform === "win32"
+    ? `${payloadRootPath}/opencode.cmd`
+    : `${payloadRootPath}/bin/opencode`;
+}
+
+function verifiedSidecarSigning(target) {
+  const verificationChecks =
+    target.nodePlatform === "win32" ? windowsVerificationChecks() : macVerificationChecks();
+  return {
+    verificationPolicy: "production",
+    verificationStatus: "verified-production",
+    verificationReasonCodes: [],
+    signatureKind: target.signatureKind,
+    signatureVerified: true,
+    notarizationRequired: target.nodePlatform === "darwin",
+    notarizationVerified: target.nodePlatform === "darwin",
+    verificationChecks,
+  };
+}
+
+function addSidecarRuntime(candidate, platformTarget, overrides = {}) {
+  candidate.sidecarRuntimes = [sidecarRuntimeFor(platformTarget, overrides)];
+  syncReviewedBinding(candidate);
+}
+
+function createSidecarFixture(dir, platformTarget, overrides = {}) {
+  const target = portableTarget(platformTarget);
+  const sourceRoot = join(dir, `sidecar-${platformTarget}`);
+  const executablePath = target.nodePlatform === "win32" ? "opencode.cmd" : "bin/opencode";
+  mkdirSync(join(sourceRoot, "bin"), { recursive: true });
+  mkdirSync(join(sourceRoot, "evidence"), { recursive: true });
+  writeFileSync(join(sourceRoot, executablePath), `fixture opencode for ${platformTarget}\n`);
+  writeFileSync(join(sourceRoot, "LICENSE.txt"), "OpenCode-compatible fixture license\n");
+  writeFileSync(join(sourceRoot, "evidence", "sbom.cdx.json"), '{"bomFormat":"CycloneDX"}\n');
+  return sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, overrides);
+}
+
+function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, overrides) {
+  return {
+    name: "opencode-compatible",
+    kind: "coding-runtime",
+    upstream: { name: "OpenCode-compatible", version: "1.0.0" },
+    adapterCompatibility: {
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "1",
+      protocolVersion: "coding-sidecar-v1",
+    },
+    platformTarget,
+    sourceRoot,
+    executablePath,
+    licenseEvidencePath: "LICENSE.txt",
+    sbomEvidencePath: "evidence/sbom.cdx.json",
+    ...overrides,
+  };
+}
+
+function stageArgs(dir, platformTarget, nodeArchive, sidecarSpec) {
+  return [
+    "--target",
+    platformTarget,
+    "--node-archive",
+    nodeArchive.path,
+    "--node-sha256",
+    nodeArchive.sha256,
+    "--node-version",
+    NODE_VERSION,
+    "--commit-sha",
+    COMMIT_SHA,
+    "--release-id",
+    "123456789",
+    "--release-tag",
+    "v0.2.11",
+    "--node-cache-dir",
+    join(dir, "cache"),
+    "--out-dir",
+    join(dir, "out"),
+    "--sidecar-runtime-spec",
+    JSON.stringify(sidecarSpec),
+  ];
 }
 
 describe("portable runtime target contract", () => {
@@ -457,6 +575,72 @@ describe("verifySha256File", () => {
 describe("validatePortableManifest", () => {
   it("accepts a complete production manifest", () => {
     expect(validatePortableManifest(manifest())).toEqual([]);
+  });
+
+  it("accepts manifests with absent or empty sidecar runtimes", () => {
+    expect(validatePortableManifest(manifest())).toEqual([]);
+    const candidate = manifest();
+    candidate.sidecarRuntimes = [];
+
+    expect(validatePortableManifest(candidate)).toEqual([]);
+  });
+
+  it("accepts generic sidecar runtime metadata for every portable target", () => {
+    for (const platformTarget of ["windows-x64", "macos-arm64", "macos-x64"]) {
+      const candidate = manifest();
+      setManifestTarget(candidate, platformTarget);
+      setVerificationState(candidate);
+      addSidecarRuntime(candidate, platformTarget);
+
+      expect(validatePortableManifest(candidate)).toEqual([]);
+    }
+  });
+
+  it("rejects sidecar platform drift, missing evidence, and production signing gaps", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "macos-arm64");
+    delete candidate.sidecarRuntimes[0].licenseEvidence;
+    candidate.sidecarRuntimes[0].signing.signatureVerified = false;
+
+    const failures = validatePortableManifest(candidate).join("\n");
+    expect(failures).toContain("sidecarRuntimes[0].platformTarget: must match artifact");
+    expect(failures).toContain("sidecarRuntimes[0].licenseEvidence: is required");
+    expect(failures).toContain("sidecarRuntimes[0].signing.signatureVerified: must be true");
+  });
+
+  it("rejects sidecar runtimes without production signing metadata", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    delete candidate.sidecarRuntimes[0].signing;
+    syncReviewedBinding(candidate);
+
+    const failures = validatePortableManifest(candidate).join("\n");
+    expect(failures).toContain("sidecarRuntimes[0].signing: is required");
+  });
+
+  it("rejects sidecar path traversal and release-impact binding drift", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64", {
+      executablePath: "../opencode.cmd",
+    });
+    candidate.releaseImpact.reviewedBinding.sidecarRuntimes[0].payloadSha256 = DIGEST_A;
+
+    const failures = validatePortableManifest(candidate).join("\n");
+    expect(failures).toContain("sidecarRuntimes[0].executablePath");
+    expect(failures).toContain("releaseImpact.reviewedBinding.sidecarRuntimes");
+  });
+
+  it("rejects sidecar metadata that carries private or forbidden payload references", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    candidate.sidecarRuntimes[0].upstream.name = "/Users/customer/opencode";
+    candidate.sidecarRuntimes[0].sbomEvidence.path =
+      "runtime/sidecars/opencode-compatible/.keiko/sbom.cdx.json";
+    syncReviewedBinding(candidate);
+
+    const failures = validatePortableManifest(candidate).join("\n");
+    expect(failures).toContain("sidecarRuntimes[0].upstream.name");
+    expect(failures).toContain("contains forbidden payload reference .keiko");
   });
 
   it("rejects target and asset mismatches", () => {
@@ -607,7 +791,7 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain('["run", "check:package-surface"]');
     expect(
       source.indexOf("(hooks.preparePackageSurface ?? preparePackageSurface)();"),
-    ).toBeLessThan(source.indexOf("const tarball = packRoot(tmp);"));
+    ).toBeLessThan(source.indexOf("const tarball = packRoot(dirname(paths.extractRoot));"));
     expect(source).toContain("await assemblePortableStage(options);");
     expect(source).not.toContain('["install"');
   });
@@ -750,9 +934,10 @@ describe("stage-portable-runtime", () => {
   it("stages macOS resources under the app bundle and binds the sidecar manifest to ZIP bytes", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "macos-arm64");
+    const sidecarSpec = createSidecarFixture(dir, "macos-arm64");
     const outDir = join(dir, "out");
 
-    await assembleStageForTest("macos-arm64", nodeArchive, outDir, dir);
+    await assembleStageForTest("macos-arm64", nodeArchive, outDir, dir, [sidecarSpec]);
     const root = join(outDir, "macos-arm64");
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
@@ -763,6 +948,18 @@ describe("stage-portable-runtime", () => {
     expect(manifest.runtime.nodeVersion).toBe(NODE_VERSION);
     expect(manifest.releaseImpact.reviewedBinding.nodeRuntimeIdentity).toBe(
       `node-v${NODE_VERSION}-darwin-arm64`,
+    );
+    expect(manifest.sidecarRuntimes).toHaveLength(1);
+    expect(manifest.sidecarRuntimes[0]).toMatchObject({
+      name: "opencode-compatible",
+      kind: "coding-runtime",
+      platformTarget: "macos-arm64",
+      payloadRootPath: "runtime/sidecars/opencode-compatible",
+      executablePath: "runtime/sidecars/opencode-compatible/bin/opencode",
+    });
+    expect(manifest.sidecarRuntimes[0].sourceRoot).toBeUndefined();
+    expect(manifest.releaseImpact.reviewedBinding.sidecarRuntimes).toEqual(
+      manifest.sidecarRuntimes,
     );
     expect(manifest.security.signatureVerified).toBe(false);
     expect(manifest.security.notarizationVerified).toBe(false);
@@ -788,6 +985,10 @@ describe("stage-portable-runtime", () => {
     );
     expect(
       JSON.parse(readFileSync(join(root, "evidence", "signing-verification.json"), "utf8")).status,
+    ).toBe("unverified-staging");
+    expect(
+      JSON.parse(readFileSync(join(root, "evidence", "signing-verification.json"), "utf8"))
+        .sidecarRuntimes[0].signingStatus,
     ).toBe("unverified-staging");
     expect(
       JSON.parse(readFileSync(join(root, "evidence", "signing-verification.json"), "utf8")).policy,
@@ -838,6 +1039,23 @@ describe("stage-portable-runtime", () => {
     });
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          root,
+          "payload",
+          "Keiko",
+          "Keiko.app",
+          "Contents",
+          "Resources",
+          "runtime",
+          "sidecars",
+          "opencode-compatible",
+          "bin",
+          "opencode",
+        ),
+      ),
     ).toBe(true);
     const setupManifest = JSON.parse(
       readFileSync(
@@ -920,14 +1138,25 @@ describe("stage-portable-runtime", () => {
   it("stages Windows resources with an extracted bundled Node runtime", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
     const outDir = join(dir, "out");
 
-    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir);
+    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir, [sidecarSpec]);
 
     const runtimeRoot = join(outDir, "windows-x64", "payload", "Keiko", "runtime", "node");
+    const sidecarRoot = join(
+      outDir,
+      "windows-x64",
+      "payload",
+      "Keiko",
+      "runtime",
+      "sidecars",
+      "opencode-compatible",
+    );
     expect(existsSync(join(runtimeRoot, "node.exe"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "NOTICE"))).toBe(true);
+    expect(existsSync(join(sidecarRoot, "opencode.cmd"))).toBe(true);
     expect(
       JSON.parse(
         readFileSync(
@@ -952,7 +1181,112 @@ describe("stage-portable-runtime", () => {
       publisherChainVerified: false,
       timestampVerified: false,
     });
+    expect(manifest.sidecarRuntimes[0]).toMatchObject({
+      platformTarget: "windows-x64",
+      executablePath: "runtime/sidecars/opencode-compatible/opencode.cmd",
+      signing: {
+        signatureKind: "authenticode",
+        signatureVerified: false,
+      },
+    });
   }, 360_000);
+
+  it("stages an OpenCode-compatible sidecar fixture for macOS x64", async () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "macos-x64");
+    const sidecarSpec = createSidecarFixture(dir, "macos-x64");
+    const outDir = join(dir, "out");
+
+    await assembleStageForTest("macos-x64", nodeArchive, outDir, dir, [sidecarSpec]);
+
+    const manifest = JSON.parse(
+      readFileSync(join(outDir, "macos-x64", "manifest", "portable-manifest.json"), "utf8"),
+    );
+    expect(manifest.sidecarRuntimes[0]).toMatchObject({
+      platformTarget: "macos-x64",
+      executablePath: "runtime/sidecars/opencode-compatible/bin/opencode",
+      signing: {
+        signatureKind: "developer-id-notarized",
+        notarizationRequired: true,
+      },
+    });
+  }, 360_000);
+
+  it("fails closed when a sidecar spec points at the wrong platform", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "macos-arm64");
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar platformTarget must match --target");
+  });
+
+  it("fails closed when a sidecar executable path traverses out of the source root", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64", {
+      executablePath: "../opencode.cmd",
+    });
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar executablePath must be a contained relative path");
+  });
+
+  it("fails closed when a sidecar executable is missing", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64", {
+      executablePath: "missing-opencode.cmd",
+    });
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar executablePath is missing");
+  });
+
+  it("fails closed when a sidecar expected digest does not match the payload", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64", {
+      expectedPayloadSha256: DIGEST_A,
+    });
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar expected digest does not match payload");
+  });
+
+  it("fails closed when sidecar license or SBOM evidence is incomplete", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64", {
+      sbomEvidencePath: "evidence/missing-sbom.cdx.json",
+    });
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("sidecar sbomEvidencePath is missing");
+  });
+
+  it("fails closed when a sidecar source tree contains forbidden Keiko state paths", () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
+    mkdirSync(join(sidecarSpec.sourceRoot, ".keiko"), { recursive: true });
+    writeFileSync(join(sidecarSpec.sourceRoot, ".keiko", "memory.db"), "forbidden\n");
+
+    const result = runStage(stageArgs(dir, "windows-x64", nodeArchive, sidecarSpec));
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("forbidden portable payload paths");
+  });
 
   it("fails closed when a local Node archive name does not match the target runtime", () => {
     const dir = tempDir();
