@@ -343,7 +343,12 @@ const FUTURE_POD_REASON_BY_KIND: Record<
   ephemeral: "future-ephemeral-member",
 };
 
-const ABSOLUTE_PATH_RE = /(?:^|[[\s("'`<{}])(?:~[\\/]|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^\s"'`<>)]*/u;
+// Redact filesystem paths wherever they appear, not only at a string boundary — an earlier
+// anchored form let `report=/Users/alice/secret.pdf`, `a/Users/…`, and non-ASCII-prefixed paths
+// leak. Matches Windows drive paths, UNC shares, home (`~/`), parent traversal (`../`), any
+// leading absolute path, and any multi-segment POSIX path (`/seg/…`). A single lone slash
+// (`UI/UX`, `TCP/IP`, `Q3 / Finance`) is intentionally not treated as a path.
+const FILESYSTEM_PATH_RE = /[A-Za-z]:[\\/]|\\\\|~[\\/]|\.\.[\\/]|\/[^/\s]+\/|^\s*\/[^/\s]/u;
 const SECRET_RE =
   /(?:sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-|AKIA[0-9A-Z]{12,}|Bearer\s+[A-Za-z0-9._~+/=-]{12,}|BEGIN (?:RSA |EC |OPENSSH |PRIVATE )?KEY)/u;
 const TOKEN_QUERY_KEYS = new Set([
@@ -620,7 +625,7 @@ function isSafePodText(value: unknown, allowEmpty: boolean): value is string {
   if (!allowEmpty && value.trim().length === 0) return false;
   return (
     isSafeDisplaySummary(value) &&
-    !ABSOLUTE_PATH_RE.test(value) &&
+    !FILESYSTEM_PATH_RE.test(value) &&
     !SECRET_RE.test(value) &&
     !containsTokenParameterKey(value) &&
     !containsEndpointLikeText(value)

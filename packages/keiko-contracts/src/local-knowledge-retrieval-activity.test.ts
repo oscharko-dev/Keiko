@@ -154,10 +154,30 @@ function happyPod(): KnowledgePodRetrievalActivity["pods"][number] {
 
 const UNSAFE_ACTIVITY_TEXTS = [
   "/Users/alice/private/customer.pdf",
+  // Filesystem paths that do not start the string still leak the location and must be redacted.
+  "report=/Users/alice/private/customer.pdf",
+  "内部/Users/alice/secret.pdf",
+  "../../etc/passwd",
+  "~/secrets/keys.txt",
   "https://gateway.example.test/v1",
   "Bearer secret-token-value",
   "alice@example.com",
+  // Underscore-domain email and a phone number trailed by a word must still be caught as PII.
+  "name@ex_ample.com",
+  "Call +1 (415) 555-2671 now",
   "555-11-2222",
+] as const;
+
+// Names that legitimately contain a single slash or short numbers must NOT be over-redacted; this
+// locks the false-positive boundary of the filesystem-path and phone heuristics.
+const SAFE_ACTIVITY_TEXTS = [
+  "Policy Pod",
+  "UI/UX Guidelines",
+  "TCP/IP Reference",
+  "read/write access",
+  "Q3 2024 / Finance",
+  "24/7 Support Runbook",
+  "Release 2.4.1 Notes",
 ] as const;
 
 describe("validateKnowledgePodRetrievalActivity", () => {
@@ -237,6 +257,18 @@ describe("validateKnowledgePodRetrievalActivity", () => {
     expect(isKnowledgePodRetrievalActivitySafeText("Policy Pod")).toBe(true);
     expect(isKnowledgePodRetrievalActivitySafeText("https://example.test/path")).toBe(false);
     expect(isKnowledgePodRetrievalActivitySafeText("alice@example.com")).toBe(false);
+  });
+
+  it("redacts every leakage class: embedded paths, traversal, home, endpoints, tokens, and PII", () => {
+    for (const unsafeText of UNSAFE_ACTIVITY_TEXTS) {
+      expect(isKnowledgePodRetrievalActivitySafeText(unsafeText)).toBe(false);
+    }
+  });
+
+  it("does not over-redact benign display names that contain a single slash or short numbers", () => {
+    for (const safeText of SAFE_ACTIVITY_TEXTS) {
+      expect(isKnowledgePodRetrievalActivitySafeText(safeText)).toBe(true);
+    }
   });
 
   it("rejects path, endpoint, token, and PII-like pod and source identifiers", () => {
