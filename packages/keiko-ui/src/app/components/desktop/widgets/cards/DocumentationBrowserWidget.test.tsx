@@ -5,6 +5,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../../../../lib/api";
 import { navigateDocumentation } from "../../../../../lib/docs-browser-api";
@@ -166,5 +167,45 @@ describe("DocumentationBrowserWidget", () => {
     await user.click(screen.getByRole("button", { name: "Open" }));
     await waitFor(() => expect(document.querySelector(".db-state")).toBeInTheDocument());
     expect(document.querySelector(".db-target")).toBeInTheDocument();
+  });
+});
+
+describe("DocumentationBrowserWidget — a11y (jest-axe, #1861/#1864)", () => {
+  it("has no axe violations in the initial (pre-navigation) state", async () => {
+    const { container } = render(<DocumentationBrowserWidget />);
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations when the empty-address error alert is shown", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<DocumentationBrowserWidget />);
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations in a governed limitation state", async () => {
+    const user = userEvent.setup();
+    mockNavigate.mockResolvedValue(result("rendering-deferred", "limitation"));
+    const { container } = render(<DocumentationBrowserWidget />);
+    await user.type(screen.getByRole("textbox", { name: "Documentation address" }), "https://x");
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await waitFor(() => expect(screen.getByText("Opened for inspection")).toBeInTheDocument());
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("has no axe violations in the loopback-ready preview state", async () => {
+    const user = userEvent.setup();
+    mockNavigate.mockResolvedValue(result("preview-available", "ready", "http://127.0.0.1:8080"));
+    const { container } = render(<DocumentationBrowserWidget />);
+    await user.type(
+      screen.getByRole("textbox", { name: "Documentation address" }),
+      "http://127.0.0.1:8080/docs",
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await waitFor(() =>
+      expect(screen.getByText("Local documentation reachable")).toBeInTheDocument(),
+    );
+    expect(await axe(container)).toHaveNoViolations();
   });
 });
