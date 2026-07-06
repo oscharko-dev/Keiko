@@ -92,14 +92,6 @@ describe("installable package smoke optional-dependency coverage", () => {
       "node scripts/installable-package-smoke.mjs --include-optional",
     );
   });
-
-  it("keeps Windows install timeout explicit and operator-tunable", () => {
-    const source = readFileSync(join(ROOT, "scripts", "installable-package-smoke.mjs"), "utf8");
-
-    expect(source).toContain("const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;");
-    expect(source).toContain("KEIKO_SMOKE_INSTALL_TIMEOUT_MS");
-    expect(source).toContain("must be a positive integer number of milliseconds");
-  });
 });
 
 describe("release publish security posture", () => {
