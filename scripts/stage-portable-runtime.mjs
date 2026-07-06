@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -65,6 +66,7 @@ function parseArgs(argv) {
   const options = {
     commitSha: process.env.GITHUB_SHA,
     dryRun: false,
+    launcherBinary: undefined,
     nodeArchive: undefined,
     nodeArchiveUrl: undefined,
     nodeCacheDir: join(repoRoot, ".portable-runtime", "cache", "node"),
@@ -97,6 +99,7 @@ function applyArg(argv, index, options) {
   }
   const fields = new Map([
     ["--commit-sha", "commitSha"],
+    ["--launcher-binary", "launcherBinary"],
     ["--node-archive", "nodeArchive"],
     ["--node-archive-url", "nodeArchiveUrl"],
     ["--node-cache-dir", "nodeCacheDir"],
@@ -635,14 +638,83 @@ function launcherPath(target, stageRoot) {
   return join(stageRoot, "Keiko.app", "Contents", "MacOS", "Keiko");
 }
 
-function stageLauncher(target, stageRoot) {
+function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
   const path = launcherPath(target, stageRoot);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `Portable launcher placeholder for ${target.platformTarget}.\n`);
+  (hooks.buildPrimaryLauncher ?? buildNativeLauncher)(target, path, options);
+  chmodLauncher(path);
   if (target.nodePlatform === "darwin") {
     writeFileSync(join(stageRoot, "Keiko.app", "Contents", "Info.plist"), macInfoPlist(target));
   }
+  stageSetupManifest(target, resourceRoot);
   stageSupportLauncher(target, stageRoot);
+}
+
+function buildNativeLauncher(target, destination, options) {
+  if (options.launcherBinary !== undefined) {
+    copyFileSync(resolve(options.launcherBinary), destination);
+    return;
+  }
+  if (target.nodePlatform === "darwin" && process.platform === "darwin") {
+    compileMacLauncher(target, destination);
+    return;
+  }
+  if (target.nodePlatform === "win32" && process.platform === "win32") {
+    compileWindowsLauncher(target, destination);
+    return;
+  }
+  fail(
+    `pass --launcher-binary for ${target.platformTarget}, or run portable staging on a native ${target.nodePlatform} builder`,
+  );
+}
+
+function chmodLauncher(path) {
+  try {
+    chmodSync(path, 0o755);
+  } catch {
+    // Best-effort on Windows.
+  }
+}
+
+function nativeLauncherSource() {
+  return join(repoRoot, "native", "portable-launcher", "keiko-portable-launcher.c");
+}
+
+function nativeLauncherTargetDefine(target) {
+  return `KEIKO_PORTABLE_TARGET="${target.platformTarget}"`;
+}
+
+function macCompilerArch(target) {
+  return target.nodeArchitecture === "arm64" ? "arm64" : "x86_64";
+}
+
+function compileMacLauncher(target, destination) {
+  run("cc", [
+    "-Os",
+    "-Wall",
+    "-Wextra",
+    "-arch",
+    macCompilerArch(target),
+    `-D${nativeLauncherTargetDefine(target)}`,
+    nativeLauncherSource(),
+    "-o",
+    destination,
+  ]);
+}
+
+function compileWindowsLauncher(target, destination) {
+  run("cl", [
+    "/nologo",
+    "/O2",
+    "/DUNICODE",
+    "/D_UNICODE",
+    `/D${nativeLauncherTargetDefine(target)}`,
+    `/Fe:${destination}`,
+    nativeLauncherSource(),
+    "/link",
+    "/SUBSYSTEM:WINDOWS",
+    "/ENTRY:wmainCRTStartup",
+  ]);
 }
 
 function stageSupportLauncher(target, stageRoot) {
@@ -655,6 +727,31 @@ function stageSupportLauncher(target, stageRoot) {
   writeFileSync(
     join(supportRoot, "keiko-support.sh"),
     '#!/bin/sh\nexec ../Keiko.app/Contents/MacOS/Keiko "$@"\n',
+  );
+}
+
+function stageSetupManifest(target, resourceRoot) {
+  const manifestRoot = join(resourceRoot, ".portable");
+  mkdirSync(manifestRoot, { recursive: true });
+  writeFileSync(
+    join(manifestRoot, "setup-manifest.json"),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        platformTarget: target.platformTarget,
+        packageName: rootPackage.name,
+        packageVersion: rootPackage.version,
+        stable: !rootPackage.version.includes("-"),
+        primaryLauncher: target.primaryLauncher,
+        bootstrapUpdateEligible: false,
+        runtime: {
+          nodePlatform: target.nodePlatform,
+          nodeArchitecture: target.nodeArchitecture,
+        },
+      },
+      null,
+      2,
+    ) + "\n",
   );
 }
 
@@ -853,7 +950,7 @@ function manifestFor(options, target, digests) {
     packageSurface: manifestPackageSurface(),
     entrypoints: {
       primaryLauncher: target.primaryLauncher,
-      supportLaunchers: [],
+      supportLaunchers: supportLaunchersFor(target),
     },
     installLayout: manifestInstallLayout(),
     stateExclusion: manifestStateExclusion(),
@@ -869,6 +966,12 @@ function manifestFor(options, target, digests) {
     ),
     updateEligibility: manifestUpdateEligibility(),
   };
+}
+
+function supportLaunchersFor(target) {
+  return target.nodePlatform === "win32"
+    ? ["support/keiko-support.cmd"]
+    : ["support/keiko-support.sh"];
 }
 
 function reviewedReleaseImpactEntry(options) {
@@ -927,7 +1030,7 @@ export async function assemblePortableStage(options, hooks = {}) {
     (hooks.preparePackageSurface ?? preparePackageSurface)();
     const tarball = packRoot(tmp);
     stagePackedPackage(tarball, extractRoot, resourceRoot);
-    stageLauncher(target, payloadRoot);
+    stageLauncher(target, payloadRoot, resourceRoot, options, hooks);
     const appTreeSha256 = hashDirectoryTree(join(resourceRoot, "app"));
     const tarballSha256 = await sha256File(tarball);
     const assetPath = createZipArchive(payloadContainer, target.assetName, stageRoot);

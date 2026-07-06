@@ -259,8 +259,15 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir) {
       releaseTag: "v0.2.11",
       target,
     },
-    { preparePackageSurface: preparePackageSurfaceForTest },
+    {
+      buildPrimaryLauncher: writePrimaryLauncherFixture,
+      preparePackageSurface: preparePackageSurfaceForTest,
+    },
   );
+}
+
+function writePrimaryLauncherFixture(target, destination) {
+  writeFileSync(destination, `fixture native launcher for ${target.platformTarget}\n`);
 }
 
 describe("portable runtime target contract", () => {
@@ -513,6 +520,29 @@ describe("stage-portable-runtime", () => {
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
     ).toBe(true);
+    const setupManifest = JSON.parse(
+      readFileSync(
+        join(
+          root,
+          "payload",
+          "Keiko",
+          "Keiko.app",
+          "Contents",
+          "Resources",
+          ".portable",
+          "setup-manifest.json",
+        ),
+        "utf8",
+      ),
+    );
+    expect(setupManifest).toMatchObject({
+      schemaVersion: 1,
+      platformTarget: "macos-arm64",
+      packageName: "@oscharko-dev/keiko",
+      packageVersion: "0.2.11",
+      primaryLauncher: "Keiko.app",
+      bootstrapUpdateEligible: false,
+    });
     expect(
       existsSync(
         join(
@@ -573,6 +603,18 @@ describe("stage-portable-runtime", () => {
     expect(existsSync(join(runtimeRoot, "node.exe"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "NOTICE"))).toBe(true);
+    expect(
+      JSON.parse(
+        readFileSync(
+          join(outDir, "windows-x64", "payload", "Keiko", ".portable", "setup-manifest.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      platformTarget: "windows-x64",
+      primaryLauncher: "Keiko.exe",
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    });
   }, 360_000);
 
   it("fails closed when a local Node archive name does not match the target runtime", () => {

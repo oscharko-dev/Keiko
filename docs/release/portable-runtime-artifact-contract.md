@@ -77,6 +77,8 @@ windows-x64/
   payload/
     Keiko/
       Keiko.exe
+      .portable/
+        setup-manifest.json
       app/
         package.json
         dist/
@@ -112,6 +114,8 @@ macos-arm64/
           MacOS/
             Keiko
           Resources/
+            .portable/
+              setup-manifest.json
             app/
               package.json
               dist/
@@ -141,6 +145,10 @@ Layout rules:
   version, and SHA-256 digest used to populate the runtime payload.
 - `manifest/portable-manifest.json` is the sidecar artifact contract record for build, setup,
   release, and updater children.
+- `.portable/setup-manifest.json` is the payload-local first-run setup manifest. It contains the
+  non-self-referential subset needed by the launcher/setup path: platform target, package version,
+  primary launcher name, bootstrap update ineligibility, and bundled Node runtime target. It does not
+  contain archive bytes, absolute paths, customer data, credentials, or release-asset URLs.
 - `evidence/` contains sidecar release artifact evidence only. It must be content-free with
   respect to customer data.
 

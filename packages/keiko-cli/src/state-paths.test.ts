@@ -129,6 +129,7 @@ describe("KEIKO_STATE_FILES", () => {
     expect(KEIKO_STATE_FILES).toContain("ui.pid");
     expect(KEIKO_STATE_FILES).toContain("ui.log");
     expect(KEIKO_STATE_FILES).toContain("launcher-state.json");
+    expect(KEIKO_STATE_FILES).toContain("portable-install-state.json");
   });
 });
 
@@ -152,6 +153,7 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
   touch(join(stateDir, "launcher-state.json"));
+  touch(join(stateDir, "portable-install-state.json"));
   touch(join(stateDir, "keiko-ui.db"));
   touch(join(stateDir, "keiko-ui.db-wal"));
   touch(join(stateDir, "keiko-ui.db-shm"));
@@ -250,6 +252,7 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(scan.present).toBe(true);
     expect(categoryOf(scan, "ui.pid")).toBe("lifecycle");
     expect(categoryOf(scan, "launcher-state.json")).toBe("launcher");
+    expect(categoryOf(scan, "portable-install-state.json")).toBe("launcher");
     expect(categoryOf(scan, "keiko-ui.db")).toBe("ui-database");
     expect(categoryOf(scan, "keiko-ui.db-wal")).toBe("ui-database");
     expect(categoryOf(scan, "keiko.config.json")).toBe("gateway-config");
