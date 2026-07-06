@@ -3,6 +3,9 @@
 // fixture so a typo in `expectedChunkIds` is caught at unit-test time rather than during
 // a runner integration failure that would be harder to diagnose.
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -11,6 +14,7 @@ import {
   broadQueryDiversityFixture,
   contextBudgetFixture,
   exactTechnicalFixture,
+  htmlManualStructureFixture,
   mixedStrategyFixture,
   multiCapsuleFixture,
   multiPageFixture,
@@ -65,6 +69,7 @@ describe("fixtures — registry", () => {
       multilingualFixture.id,
       mixedStrategyFixture.id,
       sealedPodFixture.id,
+      htmlManualStructureFixture.id,
     ]);
   });
 
@@ -160,6 +165,25 @@ describe("fixtures — internal consistency", () => {
           }
         }
       }
+    }
+  });
+});
+
+describe("fixtures — goldset ledger taxonomy stays complete (#2008)", () => {
+  it("every ALL_FIXTURES id is named in the ledger's goldset taxonomy table", () => {
+    const docPath = fileURLToPath(
+      new URL(
+        "../../../../docs/local-knowledge/knowledge-pod-retrieval-goldset-ledger.md",
+        import.meta.url,
+      ),
+    );
+    const ledger = readFileSync(docPath, "utf8");
+    const taxonomySection = ledger.slice(
+      ledger.indexOf("## Goldset taxonomy"),
+      ledger.indexOf("### Fixture safety rules"),
+    );
+    for (const fixture of ALL_FIXTURES) {
+      expect(taxonomySection).toMatch(new RegExp(`\`${fixture.id}\``));
     }
   });
 });

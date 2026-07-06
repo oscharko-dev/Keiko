@@ -14,6 +14,7 @@ import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
+import { useLinkRevision } from "./hooks/useLinkRevision";
 import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
@@ -596,6 +597,13 @@ function AppShellInner(): ReactNode {
   });
   wsWinsForBindingRef.current = ws.wins;
 
+  // GEN-PERF-WORKSPACE-007 — this rebind scan only depends on the connection set
+  // and each endpoint window's type/cfg (filesChatBindScope derives from cfg paths,
+  // never geometry), yet keying it on ws.wins/winsById re-ran the O(conns) scan on
+  // every drag/resize rAF frame (wins identity churns per geometry commit). Key it
+  // on the same linkRevision the WindowFrame memo contract uses: it bumps exactly
+  // when conns, the window set, or any window's cfg identity change.
+  const workspaceLinkRevision = useLinkRevision(ws.wins, ws.conns);
   useEffect(() => {
     if (ws.wins === null) return;
     for (const conn of ws.conns) {
@@ -613,7 +621,8 @@ function AppShellInner(): ReactNode {
         if (accepted) ws.api.updateConnBoundScope(conn.id, nextScope);
       });
     }
-  }, [replaceFilesScope, ws.api, ws.conns, ws.wins, ws.winsById]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- workspaceLinkRevision is the cfg/conn-change signal; ws.wins/winsById/conns are read fresh when it bumps (geometry-only frames must not re-run the scan)
+  }, [replaceFilesScope, ws.api, workspaceLinkRevision]);
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);

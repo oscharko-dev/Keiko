@@ -128,10 +128,13 @@ function rowToHtmlBlockUnit(
     row.heading_path_json === null
       ? undefined
       : parseStringArrayField(row.heading_path_json, "heading_path_json", row.id, cipher);
+  // anchor_id is sealed at rest (persist.ts) — open it here before it re-enters the ParsedUnit.
+  const anchorId = row.anchor_id === null ? undefined : cipher.openText(row.anchor_id);
   return {
     kind: "html-block",
     documentId,
     ...(heading !== undefined ? { headingPath: heading } : {}),
+    ...(anchorId !== undefined ? { anchorId } : {}),
     characterStart: expectNumber(row.character_start, "character_start", row.id),
     characterEnd: expectNumber(row.character_end, "character_end", row.id),
   };

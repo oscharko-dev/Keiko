@@ -487,6 +487,12 @@ export function RunLauncher({
   const hasConnected = connectedSources.length > 0;
   const selectedCapsule = capsules.find((c) => c.id === capsuleId);
   const selectedCapsuleSet = capsuleSets.find((s) => s.id === capsuleSetId);
+  const selectedSourceGuidance =
+    sourceKind === "capsule"
+      ? selectedCapsule?.knowledgePod?.guidance
+      : sourceKind === "capsule-set"
+        ? selectedCapsuleSet?.knowledgePod?.guidance
+        : undefined;
   const pathReady = path.trim().length > 0;
   const manualReady =
     sourceKind === "requirements"
@@ -542,6 +548,7 @@ export function RunLauncher({
   const labelHintId = useId();
   const sourceTypeLabelId = useId();
   const sourcePathLabelId = useId();
+  const sourceGuidanceId = useId();
   const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
   const pickerMode = sourceKind === "workspace" || sourceKind === "file" ? sourceKind : null;
 
@@ -982,6 +989,7 @@ export function RunLauncher({
           className="qi-select"
           value={isCapsule ? capsuleId : capsuleSetId}
           disabled={running || connectorLoading || connectorError !== null || options.length === 0}
+          aria-describedby={selectedSourceGuidance !== undefined ? sourceGuidanceId : undefined}
           onChange={(e) => {
             if (isCapsule) setCapsuleId(e.target.value);
             else setCapsuleSetId(e.target.value);
@@ -1005,6 +1013,16 @@ export function RunLauncher({
                 </option>
               ))}
         </select>
+        {selectedSourceGuidance !== undefined ? (
+          <span
+            className="qi-field-hint"
+            id={sourceGuidanceId}
+            role="note"
+            data-testid="qi-source-guidance"
+          >
+            {selectedSourceGuidance.label}: {selectedSourceGuidance.description}
+          </span>
+        ) : null}
       </label>
     );
   }

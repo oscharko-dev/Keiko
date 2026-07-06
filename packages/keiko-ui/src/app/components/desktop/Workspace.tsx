@@ -27,6 +27,7 @@ import { WIN_TYPES } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection } from "./windows/types";
 import { MAX_ZOOM, MIN_ZOOM } from "./hooks/useWorkspace";
+import { useLinkRevision } from "./hooks/useLinkRevision";
 import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
@@ -269,63 +270,27 @@ function ConnectAnnouncer({ wins, connecting, conns }: ConnectAnnouncerProps): R
   );
 }
 
-const EMPTY_CFGS: readonly object[] = [];
-
-// Issue #1580 — a monotonic revision that changes ONLY when the cross-window link
-// context can change: the connection set, the set/order/types of windows, or any
-// window's cfg object identity. Geometry/z/min/max/content-zoom changes (which fire
-// on every drag and pan/zoom rAF frame) deliberately do NOT bump it. This is what
-// lets memoized WindowFrames stay un-rendered during gestures while a folder switch
-// in a connected Files window or a newly drawn edge still propagates to every
-// dependent window's linked* context. Comparison is by reference only (no
-// stringify), so it stays cheap even for windows whose cfg holds large data URLs.
-function useLinkRevision(wins: readonly AppWindow[] | null, conns: readonly Connection[]): number {
-  const revRef = useRef(0);
-  const prevRef = useRef<{
-    readonly conns: readonly Connection[];
-    readonly keys: string;
-    readonly cfgs: readonly object[];
-  } | null>(null);
-  const { keys, cfgs } = useMemo(
-    () =>
-      wins === null
-        ? { keys: "", cfgs: EMPTY_CFGS }
-        : {
-            keys: wins.map((w) => `${w.id}:${w.type}`).join("|"),
-            cfgs: wins.map((w) => w.cfg),
-          },
-    [wins],
-  );
-  const prev = prevRef.current;
-  const changed =
-    prev === null ||
-    prev.conns !== conns ||
-    prev.keys !== keys ||
-    prev.cfgs.length !== cfgs.length ||
-    cfgs.some((cfg, i) => cfg !== prev.cfgs[i]);
-  if (changed) {
-    revRef.current += 1;
-    prevRef.current = { conns, keys, cfgs };
-  }
-  return revRef.current;
-}
-
-// Issue #1580 — true while a workspace zoom gesture is in flight. The scene is then
-// composited with transform:scale (no per-step relayout of all N windows); ~160ms
-// after the last zoom change it flips false so the scene re-renders with crisp CSS
-// `zoom` (#305 anti-blur). Pan-only changes (zoom unchanged) never set it.
+// Issue #1580/#2004 — the zoom value the scene's CSS `zoom` property is pinned to.
+// It trails the live view.zoom by a short settle delay: while a zoom gesture is in
+// flight the pinned value does NOT change (so the layout-affecting `zoom` property
+// stays byte-identical and NO relayout fires at gesture start); ~160ms after the
+// last zoom change it catches up, which is the single crisp re-layout per gesture
+// (#305 anti-blur). A gesture that returns to the settled zoom triggers no layout
+// at all. Pan-only changes (zoom unchanged) never touch it.
 const ZOOM_SETTLE_MS = 160;
 
-function useZoomActive(zoom: number): boolean {
-  const [active, setActive] = useState(false);
+function useSettledZoom(zoom: number): number {
+  const [settled, setSettled] = useState(zoom);
   const prevZoomRef = useRef(zoom);
   const idleRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (zoom === prevZoomRef.current) return;
     prevZoomRef.current = zoom;
-    setActive(true);
     if (idleRef.current !== null) clearTimeout(idleRef.current);
-    idleRef.current = setTimeout(() => setActive(false), ZOOM_SETTLE_MS);
+    idleRef.current = setTimeout(() => {
+      idleRef.current = null;
+      setSettled(zoom);
+    }, ZOOM_SETTLE_MS);
   }, [zoom]);
   useEffect(
     () => () => {
@@ -333,7 +298,7 @@ function useZoomActive(zoom: number): boolean {
     },
     [],
   );
-  return active;
+  return settled;
 }
 
 export function Workspace({
@@ -354,7 +319,7 @@ export function Workspace({
   const [panning, setPanning] = useState(false);
   const [handTool, setHandTool] = useState(false);
   const handToolRef = useRef(false);
-  const zoomActive = useZoomActive(view.zoom);
+  const settledZoom = useSettledZoom(view.zoom);
   const visibleWins = useMemo(
     () => (wins === null ? null : wins.filter((w) => w.minimized !== true)),
     [wins],
@@ -463,28 +428,27 @@ export function Workspace({
   // outer-pixel pan is divided by the zoom to keep the visual mapping:
   //   worldPt -> workspaceLeft + view.x + worldPt * view.zoom.
   //
-  // Issue #1580 — DURING an active zoom gesture, render the same mapping with
-  // `transform: translate(view.x, view.y) scale(view.zoom)` instead. Both forms
-  // place a child at world point p on screen at `view.x + p * view.zoom` (verified:
-  // CSS zoom folds into the translate, transform scale composes after layout), so
-  // ALL drag/resize/world math (which reads the committed view.zoom) stays exact —
-  // only the rasterization differs. transform:scale is a compositor-only operation,
-  // so a continuous wheel-zoom no longer relayouts every window each step; the crisp
-  // CSS `zoom` snaps back ~160ms after the gesture settles.
-  const sceneStyle: CSSProperties = useMemo(
-    () =>
-      zoomActive
-        ? {
-            transform: `translate(${String(view.x)}px, ${String(view.y)}px) scale(${String(view.zoom)})`,
-            transformOrigin: "0 0",
-          }
-        : {
-            transform: `translate(${String(view.x / view.zoom)}px, ${String(view.y / view.zoom)}px)`,
-            transformOrigin: "0 0",
-            zoom: view.zoom,
-          },
-    [view, zoomActive],
-  );
+  // Issue #1580/#2004 — the CSS `zoom` property is PINNED to the settled zoom at
+  // all times; a gesture's in-flight zoom renders as a compositor-only
+  // `scale(view.zoom / settledZoom)` correction on top. Under `zoom: zS` a child at
+  // world point p lays out at p·zS device px and the translate is multiplied by zS,
+  // so `translate(view.x/zS) scale(view.zoom/zS)` places it at
+  // `view.x + p·view.zoom` — byte-identical to the settled mapping, only the
+  // rasterization differs. Because the layout-affecting `zoom` value never changes
+  // while the gesture runs, a wheel-zoom triggers ZERO relayouts at gesture start
+  // and exactly ONE when the settled zoom catches up ~160ms after the last step
+  // (none at all if the gesture ends back on the settled zoom) — the previous form
+  // dropped/re-added the `zoom` property per gesture, forcing two full relayouts of
+  // every window, which is the stutter reported in #2004.
+  const sceneStyle: CSSProperties = useMemo(() => {
+    const scale = view.zoom / settledZoom;
+    const translate = `translate(${String(view.x / settledZoom)}px, ${String(view.y / settledZoom)}px)`;
+    return {
+      transform: scale === 1 ? translate : `${translate} scale(${String(scale)})`,
+      transformOrigin: "0 0",
+      zoom: settledZoom,
+    };
+  }, [view, settledZoom]);
 
   const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (workspaceInteractionLocked()) return;

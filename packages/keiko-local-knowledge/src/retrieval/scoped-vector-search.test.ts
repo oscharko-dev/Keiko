@@ -366,6 +366,41 @@ describe("searchVectorsForScope — composed capsule set", () => {
     expect(laneStatuses).toContain("searched");
   });
 
+  // Regression for #2011 audit finding: a sealed pod's dense lane is policy-gated
+  // (`isExternalEmbeddingAllowed`), but the lexical/BM25 lane read raw FTS rows with no
+  // policy check at all. A query that lexically matches the sealed content (rather than
+  // the fixture's deliberately-disjoint governance query) returned the chunk as a normal
+  // reference. Before the fix this test fails with `referenceCount > 0` and
+  // `noEvidenceReason` unset.
+  it("denies the lexical lane too: a sealed capsule cannot leak via a lexically-matching query", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-sealed",
+      sourceId: "src-sealed",
+      documentId: "doc-sealed",
+      modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      text: "restricted compliance dossier body retained inside the sealed capsule",
+      // A single full-text chunk, matching how `readFtsCandidatesForCapsule` is exercised
+      // elsewhere in this file — the default small chunking would split the phrase across
+      // multiple 2-token chunks and mask the lexical match this test needs.
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const scope: RetrievalScopeInput = { capsuleIds: ["cap-sealed" as KnowledgeCapsuleId] };
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      scope,
+      // Exact lexical overlap with the seeded text — the dense lane is denied by policy,
+      // so the only route to the chunk is the (previously ungated) lexical lane.
+      "restricted compliance dossier body",
+      { topK: 20 },
+    );
+
+    expect(outcome.references).toHaveLength(0);
+    expect(outcome.noEvidenceReason).toBe("policy-denied");
+  });
+
   it("preserves configured gateway egress on the actual query embedding request", async () => {
     const { store } = getFixture();
     await seedCapsuleWithVectors(store, {

@@ -191,7 +191,31 @@ function isEmailDomainCode(code: number): boolean {
   return isAsciiAlphaNumericCode(code) || code === 45 || code === 46 || code === 95;
 }
 
+function isDigitsOnlyRun(value: string, start: number, end: number): boolean {
+  if (end <= start) return false;
+  for (let i = start; i < end; i += 1) {
+    if (!isAsciiDigitCode(value.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+// An IPv4-shaped domain (`alice@192.168.1.1`) has no letters-only final label, so it is still an
+// email-like construct that identifies someone and must be treated as PII, not just the
+// letter-TLD form the dotted-suffix scan below checks for.
+function isIpLikeDomain(value: string, start: number, end: number): boolean {
+  let labelStart = start;
+  let labelCount = 0;
+  for (let i = start; i <= end; i += 1) {
+    if (i !== end && value.charCodeAt(i) !== 46) continue;
+    if (!isDigitsOnlyRun(value, labelStart, i)) return false;
+    labelCount += 1;
+    labelStart = i + 1;
+  }
+  return labelCount === 4;
+}
+
 function hasEmailDomainSuffix(value: string, start: number, end: number): boolean {
+  if (isIpLikeDomain(value, start, end)) return true;
   let finalDot = -1;
   for (let i = start; i < end; i += 1) {
     if (value.charCodeAt(i) === 46) finalDot = i;

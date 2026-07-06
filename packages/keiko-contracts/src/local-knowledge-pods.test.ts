@@ -53,7 +53,7 @@ function happySummary(): KnowledgePodSummary {
     governance: {
       locationKind: "local",
       sealingPosture: "local-store-policy",
-      policyPosture: "none",
+      policyPosture: "not-declared",
       managedServiceDependency: false,
     },
     modelUsePolicy: resolveKnowledgePodModelUsePolicy(undefined),
@@ -105,6 +105,42 @@ describe("validateKnowledgePodSummary", () => {
       "24/7 Support",
     ]) {
       expect(isKnowledgePodEvidenceSafeText(safeText)).toBe(true);
+    }
+  });
+
+  it("redacts single-segment absolute paths embedded mid-string, not only full-string paths", () => {
+    for (const unsafe of [
+      "Indexing failed while reading /private for capsule metadata",
+      "Source root /etc could not be scoped",
+      "Gateway wrote logs under /var while retrying",
+      "Denied access to /home during scan",
+      "/tmp was purged before retry",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
+    }
+  });
+
+  it("redacts single-segment absolute paths after any punctuation boundary, not only whitespace or brackets", () => {
+    // A prior fix (PR #1973) enumerated a fixed set of boundary characters before a single-segment
+    // path; a follow-up audit (PR #2031) then had to add another. Both left gaps for separators
+    // outside the enumerated set — a negative-lookbehind-for-word-char rule closes the whole class.
+    for (const unsafe of [
+      "path=/etc",
+      "key:/etc",
+      "a,/etc,b",
+      "a;/etc;b",
+      "a|/etc|b",
+      "flag-/etc",
+      ")/etc leaked",
+      "See report at D:/secret.pdf",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
+    }
+  });
+
+  it("redacts single-backslash Windows-style paths, not only UNC double-backslash paths", () => {
+    for (const unsafe of ["See \\Users\\alice\\secret.pdf", "Restore from \\Backups\\latest"]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
     }
   });
 
@@ -360,6 +396,36 @@ describe("validateKnowledgePodSummary", () => {
     }
   });
 
+  it("rejects a bare key=value token assignment even without a leading ? or # query marker", () => {
+    // containsTokenParameterKey previously only scanned text following a literal `?` or `#`, so a
+    // plain assignment fragment (e.g. from a config dump or error message) reached evidence text
+    // untouched.
+    for (const unsafe of [
+      "password=hunter2",
+      "Failed with password=hunter2 for retry",
+      "aws_secret_access_key=AKIAABCDEFGHIJKLMNOP",
+      "a=b, token=abc123",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
+    }
+  });
+
+  it("keeps benign key=value-shaped text evidence-safe", () => {
+    for (const safeText of ["x=y", "email=redacted", "ratio=1"]) {
+      expect(isKnowledgePodEvidenceSafeText(safeText)).toBe(true);
+    }
+  });
+
+  it("redacts newer secret shapes: GitHub fine-grained PATs, lowercase bearer, and JWT-shaped tokens", () => {
+    for (const unsafe of [
+      "github_pat_11ABCDEFG0123456789abcdefghijklmno",
+      "authorization: bearer sk-live-abcdef123456",
+      "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+    ]) {
+      expect(isKnowledgePodEvidenceSafeText(unsafe)).toBe(false);
+    }
+  });
+
   it("checks endpoint and token parameter text without regex backtracking", () => {
     const repeatedSafeText = `${"pod-reference ".repeat(200)}example`;
     const repeatedEndpoint = `${"http://".repeat(200)}example.test/path`;
@@ -368,6 +434,11 @@ describe("validateKnowledgePodSummary", () => {
     const encodedTokenEndpoint = "gateway.internal/v1?%61ccess_token=secret-value";
     const encodedSecretEndpoint = "gateway.internal/v1?%63lient_secret=secret-value";
     const fragmentTokenText = "pod metadata #access_token=secret-value";
+    const repeatedBareAssignment = `${"a=b ".repeat(2_000)}token=abc123`;
+    // The exact adversarial shape a polynomial key=value regex would choke on: a long run of a
+    // single repeated key-body character with no `=` in sight, so the backward scan from every
+    // `=` (there are none) never fires and the whole value-safety check must still return quickly.
+    const repeatedKeyBodyNoAssignment = "A".repeat(3_000);
 
     expect(isKnowledgePodEvidenceSafeText(repeatedSafeText)).toBe(true);
     expect(isKnowledgePodEvidenceSafeText(repeatedEndpoint)).toBe(false);
@@ -376,6 +447,8 @@ describe("validateKnowledgePodSummary", () => {
     expect(isKnowledgePodEvidenceSafeText(encodedTokenEndpoint)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(encodedSecretEndpoint)).toBe(false);
     expect(isKnowledgePodEvidenceSafeText(fragmentTokenText)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(repeatedBareAssignment)).toBe(false);
+    expect(isKnowledgePodEvidenceSafeText(repeatedKeyBodyNoAssignment)).toBe(true);
   });
 
   it("requires compatibility to keep persisted Local Knowledge state unmigrated", () => {
@@ -397,7 +470,7 @@ describe("validateKnowledgePodSummary", () => {
       governance: {
         locationKind: "hosted-cloud",
         sealingPosture: "local-store-policy",
-        policyPosture: "none",
+        policyPosture: "not-declared",
         managedServiceDependency: false,
       },
     });

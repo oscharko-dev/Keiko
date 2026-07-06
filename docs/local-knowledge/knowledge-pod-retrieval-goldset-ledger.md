@@ -28,22 +28,24 @@ or gate that already owns it, and its outcome class. Outcome classes separate re
 from policy, degradation, and evidence-shape outcomes so a governance failure is never hidden
 inside an aggregate relevance score.
 
-| Scenario                  | Risk detected                                                  | Owning fixture / gate                                                     | Outcome class          |
-| ------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------- |
-| Exact technical lookup    | Wrong file for exact ADR ids, API names, error codes           | `exact-technical` (`check:retrieval-quality`)                             | relevance              |
-| Semantic paraphrase       | Misses evidence when wording differs from the corpus           | `semantic-paraphrase` (`check:retrieval-quality`)                         | relevance              |
-| Multilingual retrieval    | Misses cross-language evidence                                 | `multilingual-retrieval` (`check:retrieval-quality`)                      | relevance              |
-| Local capsule baseline    | The shipped local-only capsule and capsule-set path drifts     | `single-topic`, `multi-capsule` (`check:retrieval-quality`)               | relevance              |
-| Hybrid fusion coverage    | One retrieval leg silently masks another                       | `mixed-strategy`, `broad-query-diversity`, mode comparison (#2010)        | relevance              |
-| Cross-space rank fusion   | Invalid raw-score comparison across embedding spaces           | `multi-space` (Epic #1818)                                                | relevance              |
-| Reranking regression      | Reranker suppresses the expected grounded result               | `reranker-off` / `reranker-reversed` (`check:grounded-retrieval-quality`) | relevance              |
-| Sealed-pod access denial  | Policy bypass, content leak, or denial shown as a quality miss | `sealed-pod` (new, #2011) + `model-use-policy.test.ts` (Epic #1819)       | policy                 |
-| Source isolation          | Cross-pod evidence leak                                        | `source-isolation` (`check:retrieval-quality`)                            | policy / evidence      |
-| No-evidence / wrong scope | Hallucination when nothing relevant is in scope                | `no-evidence`, `wrong-scope` (`check:retrieval-quality`)                  | evidence-shape         |
-| Stale embedding identity  | Serving vectors under an incompatible query identity           | `stale-index` (`check:retrieval-quality`)                                 | degradation            |
-| Structured citations      | Malformed or missing citation fields per unit kind             | `structured-files`, `multi-page` (`check:retrieval-quality`)              | evidence-shape         |
-| Context-budget fit        | Grounding context overflows a bounded window                   | `context-budget` (`check:retrieval-quality`)                              | degradation            |
-| Remote-pod degradation    | Remote timeout / unavailable / denied / opaque-score behaviour | Deferred — no owning fixture; blocked on Epic #1822 (see #2012)           | degradation (deferred) |
+| Scenario                   | Risk detected                                                                                                       | Owning fixture / gate                                                     | Outcome class              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------- |
+| Exact technical lookup     | Wrong file for exact ADR ids, API names, error codes                                                                | `exact-technical` (`check:retrieval-quality`)                             | relevance                  |
+| Semantic paraphrase        | Misses evidence when wording differs from the corpus                                                                | `semantic-paraphrase` (`check:retrieval-quality`)                         | relevance                  |
+| Multilingual retrieval     | Misses cross-language evidence                                                                                      | `multilingual-retrieval` (`check:retrieval-quality`)                      | relevance                  |
+| Local capsule baseline     | The shipped local-only capsule and capsule-set path drifts                                                          | `single-topic`, `multi-capsule` (`check:retrieval-quality`)               | relevance                  |
+| Hybrid fusion coverage     | One retrieval leg silently masks another                                                                            | `mixed-strategy`, `broad-query-diversity`, mode comparison (#2010)        | relevance                  |
+| Ambiguous / tied relevance | Recall drops when multiple chunks are equally acceptable and only one comes back                                    | `ambiguous-query` (`check:retrieval-quality`)                             | relevance                  |
+| Cross-space rank fusion    | Invalid raw-score comparison across embedding spaces                                                                | `multi-space` (Epic #1818)                                                | relevance                  |
+| Reranking regression       | Reranker suppresses the expected grounded result                                                                    | `reranker-off` / `reranker-reversed` (`check:grounded-retrieval-quality`) | relevance                  |
+| Sealed-pod access denial   | Policy bypass, content leak, or denial shown as a quality miss                                                      | `sealed-pod` (new, #2011) + `model-use-policy.test.ts` (Epic #1819)       | policy                     |
+| Source isolation           | Cross-pod evidence leak                                                                                             | `source-isolation` (`check:retrieval-quality`)                            | policy / evidence          |
+| No-evidence / wrong scope  | Hallucination when nothing relevant is in scope                                                                     | `no-evidence`, `wrong-scope` (`check:retrieval-quality`)                  | evidence-shape             |
+| Stale embedding identity   | Serving vectors under an incompatible query identity                                                                | `stale-index` (`check:retrieval-quality`)                                 | degradation                |
+| Structured citations       | Malformed or missing citation fields per unit kind                                                                  | `structured-files`, `multi-page` (`check:retrieval-quality`)              | evidence-shape             |
+| Context-budget fit         | Grounding context overflows a bounded window                                                                        | `context-budget` (`check:retrieval-quality`)                              | degradation                |
+| Remote-pod degradation     | Remote timeout / unavailable / denied / opaque-score behaviour                                                      | Deferred — no owning fixture; blocked on Epic #1822 (see #2012)           | degradation (deferred)     |
+| Technical HTML structure   | Structure-preserving HTML manual extraction (table rows, anchors, definitions, multilingual) stops being recallable | `html-manual-structure` (`check:retrieval-quality`, Epic #1855)           | relevance / evidence-shape |
 
 ### Fixture safety rules
 
@@ -97,18 +99,30 @@ aggregate ranking metrics plus its headroom above the gate floor. Reranking is i
 scope here — its regression control is owned by `check:grounded-retrieval-quality` and must not be
 duplicated.
 
-| Mode    | Fixtures                                           | Recall | Precision |   MRR |  nDCG | Floor headroom | Pass |
-| ------- | -------------------------------------------------- | -----: | --------: | ----: | ----: | -------------: | ---- |
-| lexical | exact-technical                                    |  1.000 |     1.000 | 1.000 | 1.000 |          0.100 | PASS |
-| vector  | semantic-paraphrase, multilingual-retrieval        |  1.000 |     1.000 | 1.000 | 1.000 |          0.100 | PASS |
-| fused   | multi-space, broad-query-diversity, mixed-strategy |  1.000 |     1.000 | 1.000 | 1.000 |          0.100 | PASS |
+| Mode    | Fixtures                                           | Recall | Precision |   MRR |  nDCG | Floor headroom | Hybrid queries | Pass |
+| ------- | -------------------------------------------------- | -----: | --------: | ----: | ----: | -------------: | -------------: | ---- |
+| lexical | exact-technical                                    |  1.000 |     1.000 | 1.000 | 1.000 |          0.100 |              0 | PASS |
+| vector  | semantic-paraphrase, multilingual-retrieval        |  1.000 |     1.000 | 1.000 | 1.000 |          0.100 |              0 | PASS |
+| fused   | multi-space, broad-query-diversity, mixed-strategy |  1.000 |     1.000 | 1.000 | 1.000 |          0.100 |             >0 | PASS |
 
 Floor headroom is the smallest margin of the ranking metrics above their pass floors. A negative
-value marks a mode-specific regression. `comparison.test.ts` fails closed by repointing a leg's
-ground-truth expectations at a decoy chunk and asserting the affected mode row drops below the
-floor — the same injected-regression technique the shipping quality gate uses. A mode-specific
-regression is acceptable only when a dedicated issue documents the ranking change and the reason
-the trade-off improves overall answer quality.
+value marks a mode-specific regression. For the `lexical` and `vector` rows, `comparison.test.ts`
+fails closed by repointing that leg's ground-truth expectations at a decoy chunk and asserting the
+row drops below the floor — the same injected-regression technique the shipping quality gate uses
+("surfaces a lexical-leg regression", "surfaces a vector-leg regression"). The `fused` row needs a
+second, independent regression proof: floor headroom alone cannot detect RRF fusion silently
+degrading to a single surviving lane, because a fused-labelled fixture's expected chunk can still be
+found by whichever single lane survives, holding recall/precision/MRR/nDCG at a perfect 1.0. To
+close that gap, the `fused` row also requires `hybridQueryCount > 0` — direct evidence, read from
+the production `RetrievalDiagnostics.mode` tag that `runLocalKnowledgeRetrieval` already reports per
+query, that at least one query actually exercised both the lexical and dense lanes together
+("hybrid" mode). `comparison.test.ts` proves this closes the gap with a synthetic-scorecard
+regression case ("surfaces a silent fusion regression even when recall/precision/MRR/nDCG stay
+perfect"): every fused-labelled fixture is given a perfect score but `retrievalModeCounts` records
+only a single surviving lane, and the row is asserted to fail (`passed: false`) despite clearing the
+floor — proving the fused row cannot pass on the floor check alone. A mode-specific regression is
+acceptable only when a dedicated issue documents the ranking change and the reason the trade-off
+improves overall answer quality.
 
 ## Governance fixtures (#2011)
 
@@ -134,6 +148,19 @@ scorecard layer the way `multi-space` is — is closed by the new `sealed-pod` g
 - `sealed-pod.test.ts` adds a mutation witness: flipping the pod to `standardPodModelUsePolicy()`
   retrieves the chunk, drops `noEvidenceAccuracy` to 0, and fails the card — proving the fixture is
   non-tautological.
+- The primary fixture query is deliberately lexically disjoint from the chunk body, so on its own
+  it only ever proves the dense lane is gated — it cannot detect a policy gap in the lexical/BM25
+  lane. An independent audit of this ledger (#2011 finding) confirmed the lexical lane was in fact
+  ungated: `collectLexicalCandidatesForCapsule` read raw FTS rows with no `rawContentRelease`
+  check, so a query that lexically matched the sealed chunk body leaked it as a normal reference
+  (`referenceCount: 1`) instead of a `policy-denied` no-evidence outcome. This is now closed at the
+  owning layer in `scoped-vector-search.ts` (`isRawContentReleaseAllowed`, threaded through
+  `LexicalCollection.policyDenied` into `selectTopCandidates`/`hasEmbeddingDegradation`), with
+  regression coverage that fails before the fix and passes after: `sealed-pod.test.ts` ("also
+  denies a lexically-matching query"), `scoped-vector-search.test.ts` ("denies the lexical lane
+  too"), and `retrieval-runner.test.ts` ("denies the lexical lane too when a sealed pod has
+  lexically-matching candidates"). The `Sealed-pod access denial` taxonomy row's "content leak"
+  risk is scorecard-visible across both lanes only as of this fix.
 - The quality-gate report renders only fixture ids, numeric metrics, pass state, and body-free
   outcome counts/statuses (`policy-denied:1` for the sealed fixture). The sealed-pod report test
   asserts the body and query text are absent.

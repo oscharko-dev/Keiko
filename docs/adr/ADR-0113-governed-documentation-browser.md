@@ -160,6 +160,66 @@ and no crawler, indexer, model call, or new egress.
 Actual rendering or capture of a manual, and the crawler/indexer that consumes the approval handoff,
 remain out of scope and still require the separately security-reviewed, CSP-scoped path noted above.
 
+## Extension: crawler trust boundary for static HTML manuals (Epic #1853)
+
+Accepted as an extension of this ADR (Epic #1853, Issues #1871–#1877, 2026-07-06). Epic #1853 consumes
+the `DocumentationIndexingApproval` handoff and turns an approved static HTML manual into a local
+Knowledge Pod. It introduces the first outbound network egress into the Local Knowledge domain, so its
+trust boundary is recorded here rather than in a new, collision-prone ADR number, following the pattern
+Epic #1852 set for its consent boundary. No constraint above is weakened.
+
+- **The crawler is egress-free where it lives; egress is injected.** `keiko-local-knowledge` is bound
+  to zero network egress (ADR-0019 trust-9). The link-graph crawler (`crawl/crawl-runner.ts`), the scope
+  guard (`crawl/scope-guard.ts`), and the link extractor (`crawl/link-extract.ts`) are therefore pure:
+  they resolve, canonicalise, deduplicate, and bound the traversal, but byte retrieval is delegated to an
+  injected `ManualCrawlFetcher` port — the same injection pattern the indexing layer already uses for the
+  `WorkspaceFs` filesystem port and the embedding adapter. A local manual is read through `WorkspaceFs`
+  (realpath-contained); an intranet manual is fetched by a `keiko-server` implementation backed by
+  `gatewayFetch`. The crawler opens no socket itself.
+- **One pure scope guard precedes every read/fetch, and fails closed.** `evaluateManualCrawlLink` is the
+  single decision every candidate link is routed through before it is fetched or read. It layers an
+  approved origin / path-prefix / local-root allowlist on top of the base scope and refuses every
+  scope-expansion vector with a stable, body-free reason code: cross-origin links, parent-directory
+  escapes in the raw link text, unsupported schemes (`mailto:`, `javascript:`, `data:`, …), credentialed
+  URLs, login/logout/action links, non-HTML assets, and hidden/credential files (`.env`, `.git`,
+  `.htpasswd`, `id_rsa`, …). Because every accepted http link is proven same-origin as the approved — and
+  never metadata — origin, a cloud-metadata or link-local link is always refused as `cross-origin` before
+  any address is contacted. Query strings and fragments are stripped during canonicalisation so
+  query-token proliferation cannot expand the crawl. This guard is purely string/URL-based — it has no
+  filesystem access, so it cannot and does not defend against a symlink escape.
+- **Symlink escapes are refused by the WorkspaceFs-backed local fetcher, not by the scope guard.** For a
+  local manual, the injected fetcher (`crawl/fetchers.ts`'s `createWorkspaceFsManualFetcher`) resolves
+  every candidate path with `WorkspaceFs.realPath` and confirms the resolved path is still contained
+  under the approved manual root before reading it — the same trailing-separator-safe containment check
+  `discovery/walk.ts` already uses, reused here rather than re-implemented, so a symlink whose target
+  merely shares a string prefix with the root (e.g. a sibling directory) is correctly refused.
+- **The DNS-rebinding defence is reused, not reinvented.** The (follow-up) intranet http fetcher
+  reuses the shared outbound egress engine (`gatewayFetch` / `egress-policy.ts`, ADR-0038), whose
+  `enforceOutboundTargetPolicy` re-checks the DNS-resolved address on the direct path — so a hostname
+  that resolves to a private/metadata address after the literal check is still blocked (rebinding
+  defence). The shared engine's `allowPrivateNetwork` opt-in is intentionally all-or-nothing and MUST
+  NOT be globally narrowed here: the gateway-setup flow relies on it to reach an operator-approved
+  link-local or metadata-hosted model gateway. Instead, to reach an approved intranet origin while
+  keeping the cloud-metadata address (`169.254.169.254`) unreachable, the fetcher must layer a
+  crawler-local address check (an additive `denyMetadata` egress option or a resolved-IP re-check with
+  `classifyOutboundHost`) on top of the approved-origin allowlist. Within Local Knowledge itself the
+  guard needs none of this: every accepted http link is proven same-origin as the approved,
+  non-metadata origin, so a metadata or link-local link is always refused as `cross-origin` before any
+  address is contacted.
+- **Every crawl is bounded and fails closed on expansion.** The crawler reuses
+  `DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS` (200 pages, depth 4, 25 MB, 64-link sample, 15 s,
+  `followRedirects: false`) and may narrow but never widen them. It executes no JavaScript and captures
+  no rendered DOM — this remains the static ingestion boundary; rendered capture is still the separately
+  security-reviewed path noted above. Redirects are refused, not followed.
+- **Evidence stays body-free.** Crawl and indexing diagnostics report counts, statuses, redacted
+  summaries, and denied-link reason codes only — never a raw URL, local path, query token, page body,
+  credential, or cookie. The manual pod's redacted origin/path summary and opaque `manualSourceFingerprint`
+  are the only manual-derived values that reach a browser surface, reusing the #1852 redaction guards.
+
+The crawler consumes the pre-validated, redacted approval and never re-detects, re-summarises, or
+re-approves a target. The `keiko-server` egress route and any user-facing UI that drives the crawl remain
+the concern of later, separately governed work (chat-attach Epic #1854 and siblings).
+
 ## References
 
 - ADR-0017 (browser tool over CDP), ADR-0019 (package boundaries), ADR-0029 (workspace descriptor

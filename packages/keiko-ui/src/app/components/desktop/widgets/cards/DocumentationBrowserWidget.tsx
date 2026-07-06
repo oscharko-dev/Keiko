@@ -395,6 +395,12 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
   // "proposing"/"approving" state has flushed and disabled the button, which would send a second
   // propose/approve request. The ref bails out immediately regardless of render timing.
   const indexingBusyRef = useRef<boolean>(false);
+  // Mirrors nav.lastTarget for synchronous reads inside an in-flight propose/approve continuation.
+  // A stale closure over nav.lastTarget would keep pointing at the target the call was started for;
+  // this ref always reflects the currently displayed target so a late-resolving call can detect that
+  // the user has since navigated away (#1868 cross-target race).
+  const navTargetRef = useRef<string | null>(nav.lastTarget);
+  navTargetRef.current = nav.lastTarget;
 
   const runNavigate = useCallback(
     async (raw: string): Promise<void> => {
@@ -405,33 +411,45 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
   );
 
   const handleOpen = useCallback((): void => {
-    if (nav.working) return;
+    if (nav.working || indexingBusyRef.current) return;
     void runNavigate(nav.targetInput);
   }, [nav.working, nav.targetInput, runNavigate]);
 
   const handleReload = useCallback((): void => {
-    if (nav.working || nav.lastTarget === null) return;
+    if (nav.working || nav.lastTarget === null || indexingBusyRef.current) return;
     void runNavigate(nav.lastTarget);
   }, [nav.working, nav.lastTarget, runNavigate]);
 
   const runIndexingCall = useCallback(
     async <T,>(
-      call: (target: string) => Promise<T>,
+      call: (
+        target: string,
+        lastNavigationReason: DocumentationNavigationReason | null,
+      ) => Promise<T>,
       onOk: (value: T) => IndexingPhase,
       pending: IndexingPhase,
     ): Promise<void> => {
       if (nav.lastTarget === null || indexingBusyRef.current) return;
+      // Capture the target this call was started for. A navigation to a different target while the
+      // call is in flight must not let its result resurrect a stale proposal/approval for the
+      // manual that is no longer displayed as the current target (#1868 cross-target race).
+      const callTarget = nav.lastTarget;
       indexingBusyRef.current = true;
       setIndexing(pending);
       try {
-        setIndexing(onOk(await call(nav.lastTarget)));
+        const value = await call(callTarget, nav.result?.reason ?? null);
+        if (navTargetRef.current === callTarget) {
+          setIndexing(onOk(value));
+        }
       } catch (err) {
-        setIndexing({ kind: "error", error: errorFromUnknown(err) });
+        if (navTargetRef.current === callTarget) {
+          setIndexing({ kind: "error", error: errorFromUnknown(err) });
+        }
       } finally {
         indexingBusyRef.current = false;
       }
     },
-    [nav.lastTarget],
+    [nav.lastTarget, nav.result],
   );
 
   const handlePrepare = useCallback((): void => {
@@ -452,10 +470,13 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
 
   const handleCancel = useCallback((): void => setIndexing({ kind: "idle" }), []);
 
-  const reloadDisabled = nav.working || nav.lastTarget === null;
-  const copy = nav.result === null ? null : REASON_COPY[nav.result.reason];
-  const proposalEligible = nav.result?.capability.indexingProposalAvailable ?? false;
   const indexingBusy = indexing.kind === "proposing" || indexing.kind === "approving";
+  const openDisabled = nav.working || indexingBusy;
+  const reloadDisabled = nav.working || nav.lastTarget === null || indexingBusy;
+  const copy = nav.result === null ? null : REASON_COPY[nav.result.reason];
+  const proposalEligible =
+    (nav.result?.capability.indexingProposalAvailable ?? false) &&
+    nav.result?.reason !== "authentication-required";
   const announcement = announce(nav.working, nav.targetInput, nav.error, copy);
 
   return (
@@ -494,7 +515,7 @@ export function DocumentationBrowserWidget(props: DocumentationBrowserWidgetProp
             type="button"
             className="db-btn db-btn-primary"
             onClick={handleOpen}
-            aria-disabled={nav.working}
+            aria-disabled={openDisabled}
           >
             Open
           </button>

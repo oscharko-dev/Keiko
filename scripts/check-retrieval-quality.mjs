@@ -581,7 +581,7 @@ function comparisonFailuresFor(comparison) {
 function formatComparisonFailure(row) {
   return `${row.mode}: fixtures=${row.fixtureIds.join(",")} floor-headroom=${row.floorHeadroom.toFixed(
     3,
-  )}`;
+  )} hybrid-queries=${String(row.hybridQueryCount)}`;
 }
 
 export async function runLocalKnowledgeQualityCheck(
@@ -644,6 +644,9 @@ export const REGRESSION_PROBE_FIXTURE_IDS = [
   // tautological either. The fixture's corpus is exactly its expected chunks, so the probe
   // repoints expectations at the ABSENT_CHUNK_SENTINEL and asserts recall drops below floors.
   "multi-space",
+  // #1855 technical HTML structure: prove the new manual-structure axis is non-tautological —
+  // repointing each query at a different-topic decoy row must drop recall below the floors.
+  "html-manual-structure",
 ];
 
 const ABSENT_CHUNK_SENTINEL = "__keiko_regression_absent_chunk__";

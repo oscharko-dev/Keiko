@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
 import type { KnowledgePodSummary } from "./local-knowledge-pods.js";
 import {
+  applyAuthenticationRequiredOverride,
   asAlreadyIndexedProposal,
   buildDocumentationIndexingProposal,
   buildManualScopePreview,
@@ -50,7 +51,7 @@ function podFixture(overrides: Partial<KnowledgePodSummary>): KnowledgePodSummar
     },
     governance: {
       locationKind: "local",
-      sealingPosture: "not-declared",
+      sealingPosture: "local-store-policy",
       policyPosture: "not-declared",
       managedServiceDependency: false,
     },
@@ -156,6 +157,77 @@ describe("detectIndexableManual — approvable manual shapes", () => {
   });
 });
 
+describe("detectIndexableManual — segment-anchored path tokens (#1866)", () => {
+  it("does not treat a near-miss path as documentation at high confidence", () => {
+    for (const target of [
+      "https://intranet/docsarchive/foo.html",
+      "https://intranet/manualsforcars/x.html",
+      "https://intranet/helpdesk/ticket.html",
+    ]) {
+      const detection = detectIndexableManual(target);
+      expect(detection.state).not.toBe("likely-manual");
+      expect(detection.reasons).not.toContain("documentation-path-pattern");
+    }
+  });
+
+  it("still treats a genuine documentation segment as a likely manual", () => {
+    const detection = detectIndexableManual("https://intranet/docs/foo.html");
+    expect(detection.state).toBe("likely-manual");
+    expect(detection.reasons).toContain("documentation-path-pattern");
+  });
+
+  it("does not treat a near-miss action-token path as a dynamic/action page", () => {
+    for (const target of [
+      "https://intranet/docs/authoring-guide.html",
+      "https://intranet/manuals/session-notes.html",
+      "https://intranet/help/search-results.html",
+    ]) {
+      const detection = detectIndexableManual(target);
+      expect(detection.reasons).not.toContain("dynamic-or-action-page");
+      expect(detection.state).not.toBe("degraded");
+    }
+  });
+
+  it("still treats a genuine documentation segment with a near-miss action token as a likely manual", () => {
+    const detection = detectIndexableManual("https://intranet/docs/authoring-guide.html");
+    expect(detection.state).toBe("likely-manual");
+    expect(detection.reasons).toContain("documentation-path-pattern");
+  });
+
+  it("still declines a genuine action-token segment as a dynamic/action page", () => {
+    for (const target of [
+      "https://intranet/auth/callback",
+      "https://intranet/docs/session",
+      "https://intranet/search",
+    ]) {
+      const detection = detectIndexableManual(target);
+      expect(detection.reasons).toContain("dynamic-or-action-page");
+      expect(detection.state).toBe("degraded");
+    }
+  });
+});
+
+describe("detectIndexableManual — local file shape gate (#1866, #1867)", () => {
+  it("does not offer approval for a non-HTML local file", () => {
+    for (const target of [
+      "file:///Users/alice/Documents/random-notes.txt",
+      "file:///Users/alice/Documents/report.pdf",
+      "file:///Users/alice/Documents/noextension",
+    ]) {
+      const detection = detectIndexableManual(target);
+      expect(detection.state).toBe("degraded");
+      expect(detection.sourceKind).toBeNull();
+      expect(isApprovableProposalState(detection.state)).toBe(false);
+    }
+  });
+
+  it("still offers approval for a genuine local HTML manual", () => {
+    const detection = detectIndexableManual("file:///opt/manuals/chapter.html");
+    expect(detection.state).toBe("requires-local-file-approval");
+    expect(detection.sourceKind).toBe("html-manual-local");
+  });
+});
+
 describe("detectIndexableManual — fail closed", () => {
   it("declines an action/login page as degraded, not offered", () => {
     const detection = detectIndexableManual("https://intranet/docs/login");
@@ -202,6 +274,65 @@ describe("detectIndexableManual — fail closed", () => {
         expect(known.has(reason)).toBe(true);
       }
     }
+  });
+});
+
+describe("applyAuthenticationRequiredOverride (#1869)", () => {
+  it("overrides an approvable detection to authentication-required", () => {
+    const detection = detectIndexableManual("https://intranet/docs/index.html");
+    expect(isApprovableProposalState(detection.state)).toBe(true);
+    const overridden = applyAuthenticationRequiredOverride(detection, "authentication-required");
+    expect(overridden.state).toBe("authentication-required");
+    expect(overridden.sourceKind).toBeNull();
+    expect(isApprovableProposalState(overridden.state)).toBe(false);
+    expect(overridden.reasons).toEqual(["authentication-required"]);
+  });
+
+  it("leaves the detection untouched for any other or absent navigation reason", () => {
+    const detection = detectIndexableManual("https://intranet/docs/index.html");
+    expect(applyAuthenticationRequiredOverride(detection, "rendering-deferred")).toEqual(detection);
+    expect(applyAuthenticationRequiredOverride(detection, null)).toEqual(detection);
+    expect(applyAuthenticationRequiredOverride(detection, undefined)).toEqual(detection);
+  });
+
+  it("does not relax an already non-approvable detection", () => {
+    const detection = detectIndexableManual("https://example.com/docs/index.html");
+    expect(detection.state).toBe("unsupported");
+    expect(applyAuthenticationRequiredOverride(detection, "authentication-required")).toEqual(
+      detection,
+    );
+  });
+});
+
+describe("parseManualProposalRequest — lastNavigationReason (#1869)", () => {
+  it("accepts a null or omitted lastNavigationReason", () => {
+    const withNull = parseManualProposalRequest({
+      target: "https://intranet/docs/",
+      lastNavigationReason: null,
+    });
+    expect(withNull.ok).toBe(true);
+    if (withNull.ok) expect(withNull.value.lastNavigationReason).toBeNull();
+
+    const omitted = parseManualProposalRequest({ target: "https://intranet/docs/" });
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) expect(omitted.value.lastNavigationReason).toBeNull();
+  });
+
+  it("accepts a known navigation reason", () => {
+    const parsed = parseManualProposalRequest({
+      target: "https://intranet/docs/",
+      lastNavigationReason: "authentication-required",
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.lastNavigationReason).toBe("authentication-required");
+  });
+
+  it("rejects an unknown lastNavigationReason value", () => {
+    const parsed = parseManualProposalRequest({
+      target: "https://intranet/docs/",
+      lastNavigationReason: "not-a-real-reason",
+    });
+    expect(parsed.ok).toBe(false);
   });
 });
 
@@ -252,6 +383,17 @@ describe("buildManualScopePreview", () => {
     });
     expect(preview.proposedPodName).toBe("Local HTML manual");
     expect(preview.robotsPosture).toBe("not-applicable");
+  });
+
+  it("omits origin/path-scope exclusions that do not apply to a local file manual (#1867)", () => {
+    const preview = buildManualScopePreview({
+      sourceKind: "html-manual-local",
+      originSummary: "local file",
+      pathPrefixSummary: null,
+    });
+    expect(preview.deniedLinkClasses).not.toContain("cross-origin");
+    expect(preview.deniedLinkClasses).not.toContain("outside-path-prefix");
+    expect(preview.deniedLinkClasses).toContain("path-traversal");
   });
 });
 
@@ -328,6 +470,29 @@ describe("validateDocumentationIndexingProposal — fail closed", () => {
 
   it("rejects a non-shape path prefix", () => {
     const tampered = { ...baseProposal(), pathPrefixSummary: "/secret/deep" };
+    expect(validateDocumentationIndexingProposal(tampered).ok).toBe(false);
+  });
+
+  it("rejects an embedded newline in the origin summary (#1865)", () => {
+    const tampered = {
+      ...baseProposal(),
+      originSummary: "https://intranet\nX-Injected: evil",
+    };
+    expect(validateDocumentationIndexingProposal(tampered).ok).toBe(false);
+  });
+
+  it("rejects a non-approvable proposal tampered to carry a scope preview (#1865)", () => {
+    const approvable = baseProposal();
+    const tampered = {
+      ...approvable,
+      state: "unsupported" as const,
+      scopePreview: approvable.scopePreview,
+    };
+    expect(validateDocumentationIndexingProposal(tampered).ok).toBe(false);
+  });
+
+  it("rejects a proposal tampered to carry alreadyIndexedPodId outside the already-indexed state (#1865)", () => {
+    const tampered = { ...baseProposal(), alreadyIndexedPodId: "capsule-9" };
     expect(validateDocumentationIndexingProposal(tampered).ok).toBe(false);
   });
 });

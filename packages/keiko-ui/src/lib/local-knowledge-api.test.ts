@@ -46,7 +46,16 @@ function podSummary(
   kind: KnowledgePodSummary["kind"],
   displayName: string,
   overrides: Partial<
-    Pick<KnowledgePodSummary, "readiness" | "retrieval" | "governance" | "modelUsePolicy">
+    Pick<
+      KnowledgePodSummary,
+      | "readiness"
+      | "retrieval"
+      | "governance"
+      | "modelUsePolicy"
+      | "counts"
+      | "setReadiness"
+      | "sourceKinds"
+    >
   > = {},
 ): KnowledgePodSummary {
   const modelUsePolicy =
@@ -58,8 +67,15 @@ function podSummary(
     displayName,
     tags: [],
     readiness: overrides.readiness ?? "ready",
-    counts: { capsuleCount: 1, sourceCount: 0, documentCount: 0, chunkCount: 0, vectorCount: 0 },
-    sourceKinds: [],
+    counts: overrides.counts ?? {
+      capsuleCount: 1,
+      sourceCount: 0,
+      documentCount: 0,
+      chunkCount: 0,
+      vectorCount: 0,
+    },
+    sourceKinds: overrides.sourceKinds ?? [],
+    ...(overrides.setReadiness !== undefined ? { setReadiness: overrides.setReadiness } : {}),
     retrieval: {
       lexicalIndex: false,
       vectorIndex: false,
@@ -78,7 +94,7 @@ function podSummary(
     governance: overrides.governance ?? {
       locationKind: "local",
       sealingPosture: "local-store-policy",
-      policyPosture: "none",
+      policyPosture: "not-declared",
       managedServiceDependency: false,
     },
     modelUsePolicy,
@@ -340,6 +356,95 @@ describe("local knowledge BFF boundary helpers", () => {
       description: expect.stringContaining("This Knowledge Pod Set blocks"),
     });
     expect(capsuleSet?.knowledgePod?.guidance?.description).toContain("affected members");
+  });
+
+  it("maps Knowledge Pod Set readiness reasons into UI guidance", () => {
+    const setId = "set-readiness-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Readiness guidance set",
+          capsuleCount: 3,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Readiness guidance set", {
+          readiness: "degraded",
+          counts: {
+            capsuleCount: 3,
+            sourceCount: 1,
+            documentCount: 1,
+            chunkCount: 1,
+            vectorCount: 0,
+          },
+          setReadiness: {
+            readyCount: 1,
+            draftCount: 0,
+            degradedCount: 0,
+            unavailableCount: 1,
+            deniedCount: 0,
+            indexingCount: 1,
+            staleCount: 0,
+            errorCount: 0,
+            missingCount: 1,
+            reasonCodes: ["member-indexing", "missing-member", "no-vectors"],
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Members unavailable",
+      tone: "danger",
+      description: expect.stringContaining("missing, failed, or unavailable"),
+    });
+  });
+
+  it("maps future Knowledge Pod Set placeholders into UI guidance", () => {
+    const setId = "set-future-guidance" as CapsuleSetId;
+    const capsuleSet = capsuleSetsForKnowledgePodUi({
+      capsuleSets: [
+        {
+          id: setId,
+          displayName: "Future guidance set",
+          capsuleCount: 1,
+          composedAt: 1,
+        },
+      ],
+      knowledgePods: [
+        podSummary(setId, "pod-set", "Future guidance set", {
+          readiness: "unavailable",
+          sourceKinds: ["remote"],
+          counts: {
+            capsuleCount: 1,
+            sourceCount: 0,
+            documentCount: 0,
+            chunkCount: 0,
+            vectorCount: 0,
+          },
+          setReadiness: {
+            readyCount: 0,
+            draftCount: 0,
+            degradedCount: 0,
+            unavailableCount: 1,
+            deniedCount: 0,
+            indexingCount: 0,
+            staleCount: 0,
+            errorCount: 0,
+            missingCount: 0,
+            reasonCodes: ["future-remote-member"],
+          },
+        }),
+      ],
+    })[0];
+
+    expect(capsuleSet?.knowledgePod?.guidance).toMatchObject({
+      label: "Future member placeholder",
+      tone: "warning",
+      description: expect.stringContaining("not active retrieval sources yet"),
+    });
   });
 
   it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {

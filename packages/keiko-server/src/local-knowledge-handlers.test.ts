@@ -784,6 +784,47 @@ describe("local-knowledge handlers", () => {
     expect(result.status).toBe(400);
   });
 
+  it("rejects capsule-set display metadata that is not evidence-safe", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", {
+        displayName: "https://gateway.example.test/v1?client_secret=value",
+        description: "/Users/alice/private/customer.pdf",
+        capsuleIds: ["cap-1"],
+      }),
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(400);
+    expect(body).toContain("evidence-safe");
+    expect(body).not.toContain("gateway.example.test");
+    expect(body).not.toContain("client_secret");
+    expect(body).not.toContain("/Users/alice");
+  });
+
+  it("rejects capsule-set descriptions that are not evidence-safe", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleCreateLocalKnowledgeCapsuleSet(
+      baseCtx(tmp, "POST", {
+        displayName: "Quarterly Review",
+        description: "/Users/alice/private/customer.pdf?client_secret=value",
+        capsuleIds: ["cap-1"],
+      }),
+      depsFor(tmp),
+    );
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(400);
+    expect(body).toContain("evidence-safe");
+    expect(body).not.toContain("client_secret");
+    expect(body).not.toContain("/Users/alice");
+  });
+
   it("rejects a capsule set with an empty capsuleIds array", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -1210,6 +1251,37 @@ describe("local-knowledge handlers", () => {
     expect(JSON.stringify(result.body)).not.toContain("published");
   });
 
+  it("does not fail closed on the capsules endpoint when an unrelated capsule set is corrupt", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "Audit Pod Set",
+      tags: [],
+      capsuleIds: [capId],
+    });
+    store._internal.db
+      .prepare("UPDATE schema_meta SET key = 'capsule_set:/tmp/set-1' WHERE key = :k")
+      .run({ k: "capsule_set:set-1" });
+    store._internal.db
+      .prepare("UPDATE capsule_set_members SET set_id = '/tmp/set-1' WHERE set_id = :s")
+      .run({ s: "set-1" });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsules(
+      knowledgePodsCtx(tmp, "GET"),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsules: [{ id: capId, displayName: "Audit Capsule" }],
+      knowledgePods: [{ id: capId, kind: "pod" }],
+    });
+    expect(JSON.stringify(result.body)).not.toContain("/tmp/set-1");
+  });
+
   it("lists persisted capsule sets without pod projection by default", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -1234,6 +1306,31 @@ describe("local-knowledge handlers", () => {
       ],
     });
     expect(JSON.stringify(result.body)).not.toContain("knowledgePods");
+  });
+
+  it("redacts legacy capsule-set display names in default list responses", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    createCapsuleSet(store, {
+      id: "set-1" as CapsuleSetId,
+      displayName: "/Users/alice/private/customer.pdf?client_secret=value",
+      tags: ["audit"],
+      capsuleIds: [capId],
+    });
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsuleSets(baseCtx(tmp, "GET"), depsFor(tmp));
+    const body = JSON.stringify(result.body);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsuleSets: [{ id: "set-1", displayName: "Knowledge Pod Set" }],
+    });
+    expect(body).not.toContain("/Users/alice");
+    expect(body).not.toContain("client_secret");
+    expect(body).not.toContain("customer.pdf");
+    expect(body).not.toContain("knowledgePods");
   });
 
   it("lists persisted capsule sets with opt-in additive pod-set summaries", async () => {

@@ -128,6 +128,7 @@ export type ParserErrorCode =
   | "NESTING_LIMIT_REACHED"
   | "OBJECT_LIMIT_REACHED"
   | "MALFORMED_INPUT"
+  | "HTML_CHARSET_MISMATCH"
   | "UNSUPPORTED_FORMAT";
 
 export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
@@ -138,6 +139,7 @@ export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
   "NESTING_LIMIT_REACHED",
   "OBJECT_LIMIT_REACHED",
   "MALFORMED_INPUT",
+  "HTML_CHARSET_MISMATCH",
   "UNSUPPORTED_FORMAT",
 ] as const;
 

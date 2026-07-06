@@ -9,6 +9,7 @@ import { bffFetchJson } from "./http";
 import type {
   DocumentationIndexingApproval,
   DocumentationIndexingProposal,
+  DocumentationNavigationReason,
   DocumentationNavigationResult,
 } from "./types";
 
@@ -24,26 +25,32 @@ export async function navigateDocumentation(
 /**
  * Ask the BFF whether an opened target looks like an indexable HTML manual (Epic #1852). Returns a
  * redacted proposal with a bounded scope preview; it starts no crawl or index and grants no consent.
+ * `lastNavigationReason` should be the reason from the most recent navigate call for this same
+ * target, if any, so the BFF can refuse to propose indexing a target that just required
+ * authentication Keiko will not collect or replay.
  */
 export async function proposeDocumentationIndexing(
   target: string,
+  lastNavigationReason: DocumentationNavigationReason | null = null,
 ): Promise<DocumentationIndexingProposal> {
   return bffFetchJson<DocumentationIndexingProposal>("/api/docs-browser/propose", {
     method: "POST",
-    body: JSON.stringify({ target }),
+    body: JSON.stringify({ target, lastNavigationReason }),
   });
 }
 
 /**
  * Record the user's explicit consent to index an approvable manual and receive the redaction-safe
  * handoff for the governed indexing pipeline. This is the only consent action; it still performs no
- * crawl or index in this milestone.
+ * crawl or index in this milestone. `lastNavigationReason` mirrors the propose call so approval is
+ * refused under the same authentication-required condition.
  */
 export async function approveDocumentationIndexing(
   target: string,
+  lastNavigationReason: DocumentationNavigationReason | null = null,
 ): Promise<DocumentationIndexingApproval> {
   return bffFetchJson<DocumentationIndexingApproval>("/api/docs-browser/approve", {
     method: "POST",
-    body: JSON.stringify({ target }),
+    body: JSON.stringify({ target, lastNavigationReason }),
   });
 }
