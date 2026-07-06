@@ -76,6 +76,12 @@ export function humanizeToken(value: string): string {
   return value.replaceAll("-", " ");
 }
 
+function localKnowledgeScopeKindLabel(
+  scopeKind: LocalKnowledgeGroundedAnswerContextSummary["scopeKind"],
+): string {
+  return scopeKind === "capsule-set" ? "Knowledge Pod Set" : "Knowledge Pod";
+}
+
 function pluralize(value: number, singular: string, plural = `${singular}s`): string {
   return value === 1 ? singular : plural;
 }
@@ -803,7 +809,7 @@ function LocalKnowledgeContextPackSummary({
     <section className="grounded-context-pack" aria-label="Knowledge scope summary">
       <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
       <dl className="grounded-context-pack-dl">
-        <MetricRow label="Mode" value={humanizeToken(contextPack.scopeKind)} />
+        <MetricRow label="Mode" value={localKnowledgeScopeKindLabel(contextPack.scopeKind)} />
         <MetricRow label="Knowledge Pods" value={String(contextPack.capsuleCount)} />
         <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
         <MetricRow label="Citations" value={String(contextPack.citationCount)} />
