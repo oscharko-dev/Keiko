@@ -24,6 +24,11 @@ For contributors adding new entries, use the
 [troubleshooting entry template](./_template.md). Do not include API
 keys, customer data, internal endpoints, or private logs in examples.
 
+Portable launch/setup issues are covered in the dedicated
+[Portable Launch And Setup Troubleshooting](portable-launch-setup.md) entry. Use that page for
+Windows SmartScreen, macOS Gatekeeper, managed install root, proxy, firewall, local port, and
+organization-managed rollout blockers.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a
