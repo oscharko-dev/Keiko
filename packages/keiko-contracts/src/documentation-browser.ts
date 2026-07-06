@@ -138,13 +138,15 @@ export interface DocumentationNavigationRequest {
   readonly cdpPort?: number;
 }
 
-// Capability flags the UI uses to decide which affordances to enable. `indexingProposalAvailable` is
-// always false in this milestone: the field proves the affordance is modelled without implying any
-// indexing has occurred (child issue #1860 acceptance criterion 4).
+// Capability flags the UI uses to decide which affordances to enable. `indexingProposalAvailable` was
+// hard-`false` in the #1851 browser-only milestone; Epic #1852 widens it to a boolean that is true only
+// for proposal-eligible target classes (local file, loopback, intranet manuals). It gates whether the
+// UI may OFFER to check a target for indexing — it never implies a proposal was accepted or a manual
+// was crawled or indexed (both remain explicit, consent-gated, later steps).
 export interface DocumentationBrowserCapability {
   readonly previewAvailable: boolean;
   readonly backendAvailable: boolean;
-  readonly indexingProposalAvailable: false;
+  readonly indexingProposalAvailable: boolean;
 }
 
 export interface DocumentationNavigationResult {
@@ -378,6 +380,16 @@ export function parseDocumentationNavigationRequest(value: unknown): Documentati
   };
 }
 
+// Proposal-eligible target classes (Epic #1852). A local file, loopback documentation server, or
+// intranet manual MAY be offered for indexing review; a public/external target and an unsupported
+// scheme never are. Eligibility only gates whether the UI shows the "check for indexing" affordance —
+// it is not detection and it is not consent.
+export function isIndexingProposalEligibleClass(targetClass: DocumentationTargetClass): boolean {
+  return (
+    targetClass === "local-file" || targetClass === "loopback" || targetClass === "intranet-http"
+  );
+}
+
 // ─── Result construction ──────────────────────────────────────────────────────────
 
 export interface DocumentationNavigationResultInput {
@@ -407,7 +419,7 @@ export function buildDocumentationNavigationResult(
     capability: {
       previewAvailable,
       backendAvailable: input.backendAvailable,
-      indexingProposalAvailable: false,
+      indexingProposalAvailable: isIndexingProposalEligibleClass(input.targetClass),
     },
   };
 }

@@ -407,6 +407,21 @@ export type {
   DocumentationBrowserCapability,
 } from "@oscharko-dev/keiko-contracts";
 
+// Indexable HTML manual proposal + consent wire types (Epic #1852). Re-exported so the documentation
+// browser widget shares the canonical contract shapes rather than redeclaring them.
+export type {
+  DocumentationManualProposalState,
+  DocumentationManualProposalReason,
+  DocumentationManualConfidence,
+  DocumentationManualSourceKind,
+  DocumentationManualScopePreview,
+  DocumentationManualScopeLimits,
+  DocumentationManualDeniedLinkClass,
+  DocumentationManualRobotsPosture,
+  DocumentationIndexingProposal,
+  DocumentationIndexingApproval,
+} from "@oscharko-dev/keiko-contracts";
+
 // ─── Prompt Enhancer wire types (Epic #1307 / Issue #1314) ──────────────────────────
 export type {
   PromptEnhancementWireRequest,
