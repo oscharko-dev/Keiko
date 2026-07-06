@@ -1810,6 +1810,107 @@ describe("local-knowledge retrieval activity", () => {
     }
   });
 
+  it("fails closed by omitting the activity when a projected count breaks the contract", async () => {
+    const sourceId = "src-fail-closed" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Fail Closed Capsule",
+        capsuleId: "cap-fail-closed",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      // A negative citation count violates the non-negative-integer contract, so the builder must
+      // throw and the wrapper must omit the activity rather than emit an invalid projection.
+      const input = {
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(seeded.capsuleId, sourceId)],
+              citationCounts: new Map([[String(seeded.capsuleId), -1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+      } as const;
+      expect(() => buildKnowledgePodRetrievalActivity(input)).toThrow(
+        "Knowledge Pod retrieval activity validation failed.",
+      );
+      expect(tryBuildKnowledgePodRetrievalActivity(input)).toBeUndefined();
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("degrades pods and records reranker reason codes on reranker failures", async () => {
+    const sourceId = "src-reranker" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Reranker Capsule",
+        capsuleId: "cap-reranker",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const selected = selectedActivityScope(capsuleValue);
+      const reference = retrievalActivityReference(seeded.capsuleId, sourceId);
+      const citationCounts = new Map([[String(seeded.capsuleId), 1]]);
+
+      const invalidResponse = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [reference],
+              citationCounts,
+              noEvidence: false,
+              reranker: {
+                status: "invalid-response",
+                candidateCount: 3,
+                documentCount: 3,
+                keptCount: 0,
+              },
+            },
+          },
+        ],
+      });
+      const policyDenied = buildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected,
+            result: {
+              references: [reference],
+              citationCounts,
+              noEvidence: false,
+              reranker: {
+                status: "unavailable",
+                candidateCount: 3,
+                documentCount: 3,
+                keptCount: 0,
+                failureKind: "policy-denied",
+              },
+            },
+          },
+        ],
+      });
+
+      expect(invalidResponse.pods[0]?.state).toBe("degraded");
+      expect(invalidResponse.pods[0]?.reasonCodes).toContain("reranker-invalid-response");
+      expect(policyDenied.pods[0]?.state).toBe("degraded");
+      expect(policyDenied.pods[0]?.reasonCodes).toContain("policy-denied");
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
   it("maps embedding lane diagnostics to the affected pod only", async () => {
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),

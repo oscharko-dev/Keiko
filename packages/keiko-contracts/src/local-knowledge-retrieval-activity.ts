@@ -71,6 +71,10 @@ export interface KnowledgePodRetrievalActivityPrivacy {
   readonly directVectorScoreComparison: false;
 }
 
+// Summary counts describe the full retrieval (every pod that participated), while `pods` below is
+// bounded to a display cap and may collapse the tail into a single overflow pod. The counts here
+// can therefore exceed the per-state totals visible in `pods`; that is intentional so the summary
+// never under-reports what was searched, skipped, degraded, or denied.
 export interface KnowledgePodRetrievalActivitySummary {
   readonly searchedCount: number;
   readonly skippedCount: number;
@@ -181,7 +185,10 @@ function isEmailLocalCode(code: number): boolean {
 }
 
 function isEmailDomainCode(code: number): boolean {
-  return isAsciiAlphaNumericCode(code) || code === 45 || code === 46;
+  // Underscore is not valid in a real hostname, but treating it as a domain-body character keeps
+  // the dotted-suffix scan from stopping early on inputs like `name@ex_ample.com`, which must still
+  // be redacted as PII-like text rather than leaking verbatim.
+  return isAsciiAlphaNumericCode(code) || code === 45 || code === 46 || code === 95;
 }
 
 function hasEmailDomainSuffix(value: string, start: number, end: number): boolean {
@@ -251,15 +258,16 @@ function isPhoneBodyCode(code: number): boolean {
 }
 
 function scanPhoneLikeText(value: string, start: number): boolean {
+  // Count digits across the phone-shaped run (digits plus the `()-. ` separators). A trailing
+  // separator or word must not defeat detection, so the verdict depends only on how many digits
+  // the bounded run carries — the leading digit boundary is already enforced by the caller.
   let digits = 0;
-  let lastWasDigit = false;
   const first = value.charCodeAt(start);
   let index = first === 43 ? start + 1 : start;
   for (; index < value.length && isPhoneBodyCode(value.charCodeAt(index)); index += 1) {
-    lastWasDigit = isAsciiDigitCode(value.charCodeAt(index));
-    if (lastWasDigit) digits += 1;
+    if (isAsciiDigitCode(value.charCodeAt(index))) digits += 1;
   }
-  return digits >= 8 && lastWasDigit && isDigitBoundary(value, index);
+  return digits >= 8;
 }
 
 function containsPhoneLikeText(value: string): boolean {
