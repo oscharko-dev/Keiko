@@ -4,6 +4,10 @@
   "description": "Enterprise model-agnostic developer-assist coding agent for regulated engineering workflows.",
   "type": "module",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oscharko-dev/Keiko"
+  },
   "engines": {
     "node": ">=22",
     "npm": ">=10.9.0"
