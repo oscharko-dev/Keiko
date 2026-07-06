@@ -307,7 +307,7 @@ describe("ConnectorGraph — with capsules", () => {
           readyCount: 0,
           draftCount: 0,
           degradedCount: 1,
-          unavailableCount: 0,
+          unavailableCount: 1,
           deniedCount: 1,
           indexingCount: 1,
           staleCount: 0,
@@ -315,6 +315,7 @@ describe("ConnectorGraph — with capsules", () => {
           missingCount: 1,
           reasonCodes: [
             "member-indexing",
+            "member-unavailable",
             "missing-member",
             "policy-denied",
             "embedding-incompatible",
@@ -364,7 +365,7 @@ describe("ConnectorGraph — with capsules", () => {
     expect(within(row).getByText("Degraded")).toBeInTheDocument();
     expect(within(row).getByText("Reindex recommended")).toBeInTheDocument();
     expect(row).toHaveAccessibleDescription(
-      /3 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 0 ready \/ 1 degraded \/ 1 policy denied \/ 1 missing \/ reasons: indexing, missing, policy denied, embedding mismatch, no vectors/i,
+      /3 pods \/ 3 sources \/ 4 docs \/ 5 chunks \/ 6 vectors \/ 0 ready \/ 1 degraded \/ 1 unavailable \/ 1 policy denied \/ 1 indexing \/ 0 stale \/ 0 error \/ 1 missing \/ reasons: indexing, unavailable, missing, policy denied, embedding mismatch, no vectors/i,
     );
     expect(screen.getByRole("status")).toHaveTextContent("1 Knowledge Pod, 1 Knowledge Pod Set");
 
