@@ -6,7 +6,9 @@ import { fatalProcessLine, installProcessGuards } from "./process-guards.js";
 describe("fatalProcessLine", () => {
   it("names the error kind and message without a stack", () => {
     const line = fatalProcessLine("uncaught exception", new TypeError("boom at /tmp/x"));
-    expect(line).toBe("keiko: fatal uncaught exception (TypeError: boom at /tmp/x). The process will exit.\n");
+    expect(line).toBe(
+      "keiko: fatal uncaught exception (TypeError: boom at /tmp/x). The process will exit.\n",
+    );
     expect(line).not.toContain("    at ");
   });
 
@@ -25,11 +27,9 @@ describe("installProcessGuards", () => {
     try {
       installProcessGuards({ err, exit });
       const uncaught = onSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1] as
-        | ((error: Error) => void)
-        | undefined;
+        ((error: Error) => void) | undefined;
       const rejection = onSpy.mock.calls.find(([event]) => event === "unhandledRejection")?.[1] as
-        | ((reason: unknown) => void)
-        | undefined;
+        ((reason: unknown) => void) | undefined;
       expect(uncaught).toBeDefined();
       expect(rejection).toBeDefined();
 

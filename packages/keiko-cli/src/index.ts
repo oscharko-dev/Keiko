@@ -7,11 +7,7 @@
 // Explicit-named re-exports (no `export *`) keep the surface auditable.
 
 export { runCli, type CliIo } from "./runner.js";
-export {
-  fatalProcessLine,
-  installProcessGuards,
-  type ProcessGuardSink,
-} from "./process-guards.js";
+export { fatalProcessLine, installProcessGuards, type ProcessGuardSink } from "./process-guards.js";
 export { runAgentCli } from "./run.js";
 export { runGenTestsCli } from "./gen-tests.js";
 export { runInvestigateCli } from "./investigate.js";
