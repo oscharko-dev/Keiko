@@ -719,6 +719,46 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     expect(uniqueLabels.size).toBe(2);
   });
 
+  it("redacts an unsafe connector display name from the hybrid knowledge scope label", async () => {
+    // The joined multi-connector scopeLabel previously had NO redaction or safe-text gate at
+    // all — worse than the single-connector local-knowledge path, which at least ran the
+    // audit/secret redactor. A pod display name containing a filesystem path or PII reached this
+    // client-facing field verbatim.
+    const unsafeName = "owner@example.com /Users/alice/private/plan.pdf";
+    const { capsuleId: capA } = await seedReadyCapsule(unsafeName);
+    const { capsuleId: capB } = await seedReadyCapsule("Gamma Docs");
+
+    const chatId = makeHybridChat(
+      [],
+      [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    );
+
+    const hybrid: HybridSeam = {
+      connectorRetrieve: dualConnectorRetrieve(capA, capB),
+      answer: sentinelAnswerer(),
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What is in the private plan?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    // Scoped to the field this fix owns: knowledgeCitations[].source carries its own,
+    // pre-existing (not #1816) redaction path and is out of scope for this regression test.
+    expect(answer.contextPack.knowledge.scopeLabel).not.toContain("owner@example.com");
+    expect(answer.contextPack.knowledge.scopeLabel).not.toContain("/Users/alice/private");
+    expect(answer.contextPack.knowledge.scopeLabel).toContain("Knowledge Pod");
+    expect(answer.contextPack.knowledge.scopeLabel).toContain("Gamma Docs");
+  });
+
   it("maps a planner ClarificationNeededError to an actionable 400, not a 500 (GRD-016)", async () => {
     const { capsuleId: capId } = await seedReadyCapsule("Clarify Docs");
     const folderScope: ChatConnectedScope = {

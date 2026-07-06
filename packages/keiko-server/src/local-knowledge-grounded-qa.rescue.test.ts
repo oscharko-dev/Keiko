@@ -1561,6 +1561,72 @@ describe("local-knowledge retrieval activity", () => {
     }
   });
 
+  it("redacts an unsafe scope label in the context pack on the real-evidence path, not only no-evidence", async () => {
+    // buildNoEvidenceAnswer already gated its scopeLabel through the evidence-safe-text predicate;
+    // buildLocalKnowledgeContextPack (the real-evidence/happy path) only whitespace-collapsed and
+    // ran the audit/secret redactor, so a pod display name containing a filesystem path or PII
+    // (not a known secret shape) reached this client-facing field verbatim.
+    const unsafeDisplayName = "owner@example.com /Users/alice/private/plan.pdf";
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      displayName: unsafeDisplayName,
+      capsuleId: "cap-unsafe-scope-label",
+      sourceId: "src-unsafe-scope-label",
+      text: "alpha beta unsafe scope label evidence",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+
+    const project = rescueStore.createProject(rescueTmp, "unsafe-scope-label-project");
+    const created = rescueStore.createChat(project.path, "Unsafe scope label", "chat-model");
+    const chat = rescueStore.updateChat(created.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
+    });
+    const embeddingModelId = "text-embedding-3-small";
+    const deps: UiHandlerDeps = {
+      config: {
+        providers: [testProvider("chat-model"), testProvider(embeddingModelId)],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [chatCapability("chat-model"), embeddingCapability(embeddingModelId)],
+      },
+      configPresent: true,
+      evidenceStore: {
+        put: () => "",
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      env: {},
+      redactor: (value: unknown): unknown => value,
+      registry: createRunRegistry(),
+      modelPortFactory: () =>
+        answerModel("Alpha beta unsafe scope label [1].", "unsafe-scope-label"),
+      store: rescueStore,
+      uiDbPath: join(rescueTmp, "keiko-ui.db"),
+      localKnowledgeEmbeddingRequest: scriptedAdapter().request,
+    };
+
+    const result = await handleLocalKnowledgeGroundedAsk(
+      chat,
+      { chatId: chat.id, content: "alpha beta", modelId: "chat-model" },
+      deps,
+      new AbortController().signal,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = result.body as Extract<
+      GroundedAnswer,
+      { readonly groundingKind: "local-knowledge" }
+    >;
+    expect(answer.noEvidence).toBe(false);
+    expect(answer.contextPack.scopeLabel).toBe("Knowledge Pod");
+    const serialized = JSON.stringify(answer);
+    expect(serialized).not.toContain("owner@example.com");
+    expect(serialized).not.toContain("/Users/alice/private");
+  });
+
   it("returns redacted not-ready activity when unsafe state-failure metadata is present", async () => {
     const unsafeCapsuleId = "state-owner@example.com" as KnowledgeCapsuleId;
     const unsafeSourceId = "state-source@example.com" as KnowledgeSourceId;
