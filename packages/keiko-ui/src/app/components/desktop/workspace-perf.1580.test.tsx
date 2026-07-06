@@ -284,10 +284,10 @@ describe("Issue #1580 — scene zoom rendering mode", () => {
     vi.useRealTimers();
   });
 
-  it("composites with transform:scale during a zoom gesture, then snaps to crisp CSS zoom", () => {
-    const api = makeApi({ x: 10, y: 20, zoom: 1 });
+  function renderScene(view: View) {
+    const api = makeApi(view);
     const wins = [appWindow({ id: "agents-1", type: "agents" })];
-    const ws = workspace(api, { wins, view: { x: 10, y: 20, zoom: 1 } });
+    const ws = workspace(api, { wins, view });
     const wsRef = createRef<HTMLDivElement>();
     const openPalette = (): void => undefined;
     const { container, rerender } = render(
@@ -298,22 +298,26 @@ describe("Issue #1580 — scene zoom rendering mode", () => {
       if (el === null) throw new Error("scene not found");
       return el;
     };
+    const setView = (next: View): void => {
+      act(() => {
+        rerender(<Workspace ws={{ ...ws, view: next }} wsRef={wsRef} openPalette={openPalette} />);
+      });
+    };
+    return { scene, setView };
+  }
+
+  it("composites with transform:scale during a zoom gesture, then snaps to crisp CSS zoom", () => {
+    const { scene, setView } = renderScene({ x: 10, y: 20, zoom: 1 });
 
     // At rest: crisp CSS zoom, no scale().
     expect(scene().style.zoom).toBe("1");
     expect(scene().style.transform).not.toContain("scale(");
 
-    // Zoom changes → gesture active → compositor transform:scale, CSS zoom dropped.
-    act(() => {
-      rerender(
-        <Workspace
-          ws={{ ...ws, view: { x: 10, y: 20, zoom: 1.4 } }}
-          wsRef={wsRef}
-          openPalette={openPalette}
-        />,
-      );
-    });
-    expect(scene().style.zoom).toBe("");
+    // Zoom changes → gesture active → compositor transform:scale on top of the
+    // PINNED CSS zoom (issue #2004: the layout-affecting `zoom` property must not
+    // change at gesture start — dropping it forced a full relayout of every window).
+    setView({ x: 10, y: 20, zoom: 1.4 });
+    expect(scene().style.zoom).toBe("1");
     expect(scene().style.transform).toContain("scale(1.4)");
 
     // ~160ms after the last zoom change → snap back to crisp CSS zoom.
@@ -322,5 +326,67 @@ describe("Issue #1580 — scene zoom rendering mode", () => {
     });
     expect(scene().style.zoom).toBe("1.4");
     expect(scene().style.transform).not.toContain("scale(");
+  });
+
+  it("keeps the settled CSS zoom pinned through consecutive gesture steps (#2004)", () => {
+    const { scene, setView } = renderScene({ x: 0, y: 0, zoom: 1.4 });
+    // Mount at a non-1 zoom: settled immediately, translate divided by the zoom.
+    expect(scene().style.zoom).toBe("1.4");
+
+    // A multi-step wheel gesture: every step keeps zoom pinned at the settled 1.4
+    // and expresses the in-flight zoom as a compositor-only scale correction.
+    setView({ x: 12, y: 8, zoom: 1.6 });
+    expect(scene().style.zoom).toBe("1.4");
+    expect(scene().style.transform).toContain(`scale(${String(1.6 / 1.4)})`);
+    act(() => {
+      vi.advanceTimersByTime(80); // still inside the settle window
+    });
+    setView({ x: 20, y: 14, zoom: 1.8 });
+    expect(scene().style.zoom).toBe("1.4");
+    expect(scene().style.transform).toContain(`scale(${String(1.8 / 1.4)})`);
+
+    // Settle: exactly one flip of the layout-affecting zoom, scale dropped.
+    act(() => {
+      vi.advanceTimersByTime(220);
+    });
+    expect(scene().style.zoom).toBe("1.8");
+    expect(scene().style.transform).not.toContain("scale(");
+  });
+
+  it("never touches the CSS zoom when a gesture returns to the settled zoom (#2004)", () => {
+    const { scene, setView } = renderScene({ x: 0, y: 0, zoom: 1 });
+    expect(scene().style.zoom).toBe("1");
+
+    // Zoom in … and back out to the starting zoom within one gesture.
+    setView({ x: -30, y: -18, zoom: 1.2 });
+    expect(scene().style.zoom).toBe("1");
+    setView({ x: 0, y: 0, zoom: 1 });
+    // Back on the settled zoom: the scale correction is gone immediately …
+    expect(scene().style.zoom).toBe("1");
+    expect(scene().style.transform).not.toContain("scale(");
+
+    // … and the settle timer firing is a no-op: zoom stays byte-identical, so the
+    // in-and-back-out cycle causes ZERO layout-affecting style changes.
+    act(() => {
+      vi.advanceTimersByTime(220);
+    });
+    expect(scene().style.zoom).toBe("1");
+    expect(scene().style.transform).not.toContain("scale(");
+  });
+
+  it("keeps pan translate anchored to the settled zoom during a gesture (#2004)", () => {
+    const { scene, setView } = renderScene({ x: 12, y: 34, zoom: 1.75 });
+    // Settled mapping (#305): translate divided by the zoom the CSS property holds.
+    expect(scene().style.transform).toBe(
+      `translate(${String(12 / 1.75)}px, ${String(34 / 1.75)}px)`,
+    );
+
+    // During the gesture the divisor must stay the SETTLED zoom (the CSS zoom that
+    // multiplies the translate), not the in-flight zoom — otherwise the scene
+    // drifts while the compositor scale is applied.
+    setView({ x: 40, y: 60, zoom: 2 });
+    expect(scene().style.transform).toBe(
+      `translate(${String(40 / 1.75)}px, ${String(60 / 1.75)}px) scale(${String(2 / 1.75)})`,
+    );
   });
 });
